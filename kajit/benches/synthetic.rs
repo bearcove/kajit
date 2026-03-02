@@ -25,6 +25,71 @@ struct Person {
     address: Address,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Metadata {
+    version: u32,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    author: String,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Document {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    title: String,
+    #[facet(flatten)]
+    meta: Metadata,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(u8)]
+enum Animal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+    Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(tag = "type", content = "data")]
+#[repr(u8)]
+enum AdjAnimal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+    Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(tag = "type")]
+#[repr(u8)]
+enum IntAnimal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(untagged)]
+#[repr(u8)]
+enum UntaggedAnimal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+    Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(untagged)]
+#[repr(u8)]
+enum UntaggedConfig {
+    Database { host: String, port: u32 },
+    Redis { host: String, db: u32 },
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct SuccessPayload {
+    items: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct ErrorPayload {
+    message: String,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(untagged)]
+#[repr(u8)]
+enum ApiResponse {
+    Success { status: u32, data: SuccessPayload },
+    Error { status: u32, data: ErrorPayload },
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Inner {
     x: u32,
 }

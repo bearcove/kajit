@@ -40,6 +40,81 @@ pub(crate) fn types_rs() -> TokenStream {
         }
 
         #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct Metadata {
+            version: u32,
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+            author: String,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct Document {
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+            title: String,
+            #[facet(flatten)]
+            meta: Metadata,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[repr(u8)]
+        enum Animal {
+            Cat,
+            Dog { name: String, good_boy: bool },
+            Parrot(String),
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[facet(tag = "type", content = "data")]
+        #[repr(u8)]
+        enum AdjAnimal {
+            Cat,
+            Dog { name: String, good_boy: bool },
+            Parrot(String),
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[facet(tag = "type")]
+        #[repr(u8)]
+        enum IntAnimal {
+            Cat,
+            Dog { name: String, good_boy: bool },
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[facet(untagged)]
+        #[repr(u8)]
+        enum UntaggedAnimal {
+            Cat,
+            Dog { name: String, good_boy: bool },
+            Parrot(String),
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[facet(untagged)]
+        #[repr(u8)]
+        enum UntaggedConfig {
+            Database { host: String, port: u32 },
+            Redis { host: String, db: u32 },
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        struct SuccessPayload {
+            items: u32,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        struct ErrorPayload {
+            message: String,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[facet(untagged)]
+        #[repr(u8)]
+        enum ApiResponse {
+            Success { status: u32, data: SuccessPayload },
+            Error { status: u32, data: ErrorPayload },
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Inner {
             x: u32,
         }
@@ -259,6 +334,103 @@ pub(crate) fn cases() -> Vec<Case> {
 
 fn json_input_cases() -> Vec<JsonInputCase> {
     vec![
+        JsonInputCase {
+            name: "reversed_key_order",
+            ty: quote!(Friend),
+            input: r#"{"name": "Alice", "age": 42}"#,
+            expected: Some(quote!(Friend {
+                age: 42,
+                name: "Alice".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "nested_struct_reversed_keys",
+            ty: quote!(Person),
+            input: r#"{"address": {"zip": 97201, "city": "Portland"}, "age": 30, "name": "Alice"}"#,
+            expected: Some(quote!(Person {
+                name: "Alice".into(),
+                age: 30,
+                address: Address {
+                    city: "Portland".into(),
+                    zip: 97201
+                }
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "flatten_reversed_keys",
+            ty: quote!(Document),
+            input: r#"{"author": "Amos", "version": 1, "title": "Hello"}"#,
+            expected: Some(quote!(Document {
+                title: "Hello".into(),
+                meta: Metadata {
+                    version: 1,
+                    author: "Amos".into()
+                }
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "enum_struct_variant_reversed_keys",
+            ty: quote!(Animal),
+            input: r#"{"Dog": {"good_boy": true, "name": "Rex"}}"#,
+            expected: Some(quote!(Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "adjacent_struct_variant_reversed_fields",
+            ty: quote!(AdjAnimal),
+            input: r#"{"type": "Dog", "data": {"good_boy": true, "name": "Rex"}}"#,
+            expected: Some(quote!(AdjAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "internal_struct_variant_reversed_fields",
+            ty: quote!(IntAnimal),
+            input: r#"{"type": "Dog", "good_boy": true, "name": "Rex"}"#,
+            expected: Some(quote!(IntAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "untagged_struct_reversed_keys",
+            ty: quote!(UntaggedAnimal),
+            input: r#"{"good_boy": false, "name": "Rex"}"#,
+            expected: Some(quote!(UntaggedAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: false
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "untagged_solver_key_order_independent",
+            ty: quote!(UntaggedConfig),
+            input: r#"{"db": 0, "host": "localhost"}"#,
+            expected: Some(quote!(UntaggedConfig::Redis {
+                host: "localhost".into(),
+                db: 0
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "untagged_nested_key_order_independent",
+            ty: quote!(ApiResponse),
+            input: r#"{"data": {"items": 5}, "status": 200}"#,
+            expected: Some(quote!(ApiResponse::Success {
+                status: 200,
+                data: SuccessPayload { items: 5 }
+            })),
+            expected_error_code: None,
+        },
         JsonInputCase {
             name: "option_some_scalar",
             ty: quote!(WithOptU32),

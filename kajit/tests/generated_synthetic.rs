@@ -26,6 +26,71 @@ struct Person {
     address: Address,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Metadata {
+    version: u32,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    author: String,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Document {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    title: String,
+    #[facet(flatten)]
+    meta: Metadata,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[repr(u8)]
+enum Animal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+    Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(tag = "type", content = "data")]
+#[repr(u8)]
+enum AdjAnimal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+    Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(tag = "type")]
+#[repr(u8)]
+enum IntAnimal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(untagged)]
+#[repr(u8)]
+enum UntaggedAnimal {
+    Cat,
+    Dog { name: String, good_boy: bool },
+    Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(untagged)]
+#[repr(u8)]
+enum UntaggedConfig {
+    Database { host: String, port: u32 },
+    Redis { host: String, db: u32 },
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct SuccessPayload {
+    items: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct ErrorPayload {
+    message: String,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(untagged)]
+#[repr(u8)]
+enum ApiResponse {
+    Success { status: u32, data: SuccessPayload },
+    Error { status: u32, data: ErrorPayload },
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Inner {
     x: u32,
 }
@@ -678,6 +743,121 @@ mod prop {
 }
 mod json_input {
     use super::*;
+    #[test]
+    fn reversed_key_order() {
+        assert_json_input_case::<
+            Friend,
+        >(
+            b"{\"name\": \"Alice\", \"age\": 42}",
+            Friend {
+                age: 42,
+                name: "Alice".into(),
+            },
+        );
+    }
+    #[test]
+    fn nested_struct_reversed_keys() {
+        assert_json_input_case::<
+            Person,
+        >(
+            b"{\"address\": {\"zip\": 97201, \"city\": \"Portland\"}, \"age\": 30, \"name\": \"Alice\"}",
+            Person {
+                name: "Alice".into(),
+                age: 30,
+                address: Address {
+                    city: "Portland".into(),
+                    zip: 97201,
+                },
+            },
+        );
+    }
+    #[test]
+    fn flatten_reversed_keys() {
+        assert_json_input_case::<
+            Document,
+        >(
+            b"{\"author\": \"Amos\", \"version\": 1, \"title\": \"Hello\"}",
+            Document {
+                title: "Hello".into(),
+                meta: Metadata {
+                    version: 1,
+                    author: "Amos".into(),
+                },
+            },
+        );
+    }
+    #[test]
+    fn enum_struct_variant_reversed_keys() {
+        assert_json_input_case::<
+            Animal,
+        >(
+            b"{\"Dog\": {\"good_boy\": true, \"name\": \"Rex\"}}",
+            Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        );
+    }
+    #[test]
+    fn adjacent_struct_variant_reversed_fields() {
+        assert_json_input_case::<
+            AdjAnimal,
+        >(
+            b"{\"type\": \"Dog\", \"data\": {\"good_boy\": true, \"name\": \"Rex\"}}",
+            AdjAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        );
+    }
+    #[test]
+    fn internal_struct_variant_reversed_fields() {
+        assert_json_input_case::<
+            IntAnimal,
+        >(
+            b"{\"type\": \"Dog\", \"good_boy\": true, \"name\": \"Rex\"}",
+            IntAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        );
+    }
+    #[test]
+    fn untagged_struct_reversed_keys() {
+        assert_json_input_case::<
+            UntaggedAnimal,
+        >(
+            b"{\"good_boy\": false, \"name\": \"Rex\"}",
+            UntaggedAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: false,
+            },
+        );
+    }
+    #[test]
+    fn untagged_solver_key_order_independent() {
+        assert_json_input_case::<
+            UntaggedConfig,
+        >(
+            b"{\"db\": 0, \"host\": \"localhost\"}",
+            UntaggedConfig::Redis {
+                host: "localhost".into(),
+                db: 0,
+            },
+        );
+    }
+    #[test]
+    fn untagged_nested_key_order_independent() {
+        assert_json_input_case::<
+            ApiResponse,
+        >(
+            b"{\"data\": {\"items\": 5}, \"status\": 200}",
+            ApiResponse::Success {
+                status: 200,
+                data: SuccessPayload { items: 5 },
+            },
+        );
+    }
     #[test]
     fn option_some_scalar() {
         assert_json_input_case::<

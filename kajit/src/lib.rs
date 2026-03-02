@@ -598,21 +598,6 @@ mod tests {
         );
     }
 
-    // r[verify deser.json.struct]
-    #[test]
-    fn json_reversed_key_order() {
-        let input = br#"{"name": "Alice", "age": 42}"#;
-        let deser = compile_decoder(Friend::SHAPE, &json::KajitJson);
-        let result: Friend = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Friend {
-                age: 42,
-                name: "Alice".into()
-            }
-        );
-    }
-
     // r[verify deser.json.struct.unknown-keys]
     #[test]
     fn json_unknown_keys_skipped() {
@@ -1201,27 +1186,6 @@ mod tests {
         );
     }
 
-    // r[verify deser.nested-struct]
-    #[test]
-    fn json_nested_struct_reversed_keys() {
-        let input =
-            br#"{"address": {"zip": 97201, "city": "Portland"}, "age": 30, "name": "Alice"}"#;
-        let deser = compile_decoder(Person::SHAPE, &json::KajitJson);
-        let result: Person = deserialize(&deser, input).unwrap();
-
-        assert_eq!(
-            result,
-            Person {
-                name: "Alice".into(),
-                age: 30,
-                address: Address {
-                    city: "Portland".into(),
-                    zip: 97201,
-                },
-            }
-        );
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct Inner {
         x: u32,
@@ -1593,21 +1557,7 @@ mod tests {
 
     // r[verify deser.json.enum.external.struct-variant]
     #[test]
-    fn json_enum_struct_variant_reversed_keys() {
-        let input = br#"{"Dog": {"good_boy": true, "name": "Rex"}}"#;
-        let deser = compile_decoder(Animal::SHAPE, &json::KajitJson);
-        let result: Animal = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Animal::Dog {
-                name: "Rex".into(),
-                good_boy: true
-            }
-        );
-    }
-
     // --- Milestone 7: Flatten ---
-
     #[derive(Facet, Debug, PartialEq)]
     struct Metadata {
         version: u32,
@@ -1627,24 +1577,6 @@ mod tests {
     #[test]
     fn json_flatten_basic() {
         let input = br#"{"title": "Hello", "version": 1, "author": "Amos"}"#;
-        let deser = compile_decoder(Document::SHAPE, &json::KajitJson);
-        let result: Document = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Document {
-                title: "Hello".into(),
-                meta: Metadata {
-                    version: 1,
-                    author: "Amos".into(),
-                },
-            }
-        );
-    }
-
-    // r[verify deser.flatten]
-    #[test]
-    fn json_flatten_reversed_keys() {
-        let input = br#"{"author": "Amos", "version": 1, "title": "Hello"}"#;
         let deser = compile_decoder(Document::SHAPE, &json::KajitJson);
         let result: Document = deserialize(&deser, input).unwrap();
         assert_eq!(
@@ -1750,21 +1682,6 @@ mod tests {
     }
 
     // r[verify deser.json.enum.adjacent]
-    #[test]
-    fn json_adjacent_struct_variant_reversed_fields() {
-        let input = br#"{"type": "Dog", "data": {"good_boy": true, "name": "Rex"}}"#;
-        let deser = compile_decoder(AdjAnimal::SHAPE, &json::KajitJson);
-        let result: AdjAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            AdjAnimal::Dog {
-                name: "Rex".into(),
-                good_boy: true,
-            }
-        );
-    }
-
-    // r[verify deser.json.enum.adjacent]
     // r[verify deser.json.enum.adjacent.tuple-variant]
     #[test]
     fn json_adjacent_tuple_variant() {
@@ -1818,21 +1735,6 @@ mod tests {
     #[test]
     fn json_internal_struct_variant() {
         let input = br#"{"type": "Dog", "name": "Rex", "good_boy": true}"#;
-        let deser = compile_decoder(IntAnimal::SHAPE, &json::KajitJson);
-        let result: IntAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            IntAnimal::Dog {
-                name: "Rex".into(),
-                good_boy: true,
-            }
-        );
-    }
-
-    // r[verify deser.json.enum.internal]
-    #[test]
-    fn json_internal_struct_variant_reversed_fields() {
-        let input = br#"{"type": "Dog", "good_boy": true, "name": "Rex"}"#;
         let deser = compile_decoder(IntAnimal::SHAPE, &json::KajitJson);
         let result: IntAnimal = deserialize(&deser, input).unwrap();
         assert_eq!(
@@ -1927,21 +1829,6 @@ mod tests {
         assert_eq!(result, Untagged::Parrot("Polly".into()));
     }
 
-    // r[verify deser.json.enum.untagged]
-    #[test]
-    fn json_untagged_struct_reversed_keys() {
-        let input = br#"{"good_boy": true, "name": "Rex"}"#;
-        let deser = compile_decoder(Untagged::SHAPE, &json::KajitJson);
-        let result: Untagged = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Untagged::Dog {
-                name: "Rex".into(),
-                good_boy: true,
-            }
-        );
-    }
-
     // Multi-struct solver test
     #[derive(Facet, Debug, PartialEq)]
     #[facet(untagged)]
@@ -1970,22 +1857,6 @@ mod tests {
     #[test]
     fn json_untagged_solver_redis() {
         let input = br#"{"host": "localhost", "db": 0}"#;
-        let deser = compile_decoder(Config::SHAPE, &json::KajitJson);
-        let result: Config = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Config::Redis {
-                host: "localhost".into(),
-                db: 0,
-            }
-        );
-    }
-
-    // r[verify deser.json.enum.untagged.object-solver]
-    #[test]
-    fn json_untagged_solver_key_order_independent() {
-        // Key order doesn't matter — "db" narrows to Redis regardless of position
-        let input = br#"{"db": 0, "host": "localhost"}"#;
         let deser = compile_decoder(Config::SHAPE, &json::KajitJson);
         let result: Config = deserialize(&deser, input).unwrap();
         assert_eq!(
@@ -2149,41 +2020,6 @@ mod tests {
                 data: ErrorPayload {
                     message: "fail".into()
                 }
-            }
-        );
-    }
-
-    // r[verify deser.json.enum.untagged.nested-key]
-    #[test]
-    fn json_untagged_nested_key_order_independent() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct SuccessPayload {
-            items: u32,
-        }
-
-        #[derive(Facet, Debug, PartialEq)]
-        struct ErrorPayload {
-            message: String,
-        }
-
-        #[derive(Facet, Debug, PartialEq)]
-        #[facet(untagged)]
-        #[repr(u8)]
-        enum ApiResponse {
-            Success { status: u32, data: SuccessPayload },
-            Error { status: u32, data: ErrorPayload },
-        }
-
-        let deser = compile_decoder(ApiResponse::SHAPE, &json::KajitJson);
-
-        // data before status — key order shouldn't matter
-        let input = br#"{"data": {"items": 5}, "status": 200}"#;
-        let result: ApiResponse = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            ApiResponse::Success {
-                status: 200,
-                data: SuccessPayload { items: 5 }
             }
         );
     }
