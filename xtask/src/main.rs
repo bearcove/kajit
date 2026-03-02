@@ -50,11 +50,6 @@ impl CaseBuilder {
         }
     }
 
-    fn value(mut self, value: TokenStream) -> Self {
-        self.case.values.push(value);
-        self
-    }
-
     fn input_ok(
         mut self,
         format: WireFormat,
