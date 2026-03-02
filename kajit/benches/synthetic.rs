@@ -5,6 +5,7 @@ use facet::Facet;
 use std::hint::black_box;
 use std::sync::Arc;
 use serde::{Serialize, Deserialize};
+use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
     age: u32,
@@ -216,6 +217,27 @@ struct ScalarVec {
         strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
     )]
     values: Vec<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct ConfigMap {
+    #[proptest(
+        strategy = "proptest::collection::hash_map(proptest::string::string_regex(\"[a-z]{1,8}\").unwrap(), proptest::arbitrary::any::<u32>(), 0..32)"
+    )]
+    scores: HashMap<String, u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct EnvMap {
+    #[proptest(
+        strategy = "proptest::collection::hash_map(proptest::string::string_regex(\"[A-Z_]{1,8}\").unwrap(), proptest::string::string_regex(\"(?s).{0,16}\").unwrap(), 0..32)"
+    )]
+    vars: HashMap<String, String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct BTreeConfigMap {
+    #[proptest(
+        strategy = "proptest::collection::btree_map(proptest::string::string_regex(\"[a-z]{1,8}\").unwrap(), proptest::arbitrary::any::<u32>(), 0..32)"
+    )]
+    scores: BTreeMap<String, u32>,
 }
 #[allow(dead_code)]
 type Pair = (u32, String);

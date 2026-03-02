@@ -16,6 +16,7 @@ struct JsonInputCase {
 pub(crate) fn types_rs() -> TokenStream {
     quote! {
         use serde::{Serialize, Deserialize};
+        use std::collections::{BTreeMap, HashMap};
 
         #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Friend {
@@ -255,6 +256,24 @@ pub(crate) fn types_rs() -> TokenStream {
         struct ScalarVec {
             #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
             values: Vec<u32>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct ConfigMap {
+            #[proptest(strategy = "proptest::collection::hash_map(proptest::string::string_regex(\"[a-z]{1,8}\").unwrap(), proptest::arbitrary::any::<u32>(), 0..32)")]
+            scores: HashMap<String, u32>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct EnvMap {
+            #[proptest(strategy = "proptest::collection::hash_map(proptest::string::string_regex(\"[A-Z_]{1,8}\").unwrap(), proptest::string::string_regex(\"(?s).{0,16}\").unwrap(), 0..32)")]
+            vars: HashMap<String, String>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct BTreeConfigMap {
+            #[proptest(strategy = "proptest::collection::btree_map(proptest::string::string_regex(\"[a-z]{1,8}\").unwrap(), proptest::arbitrary::any::<u32>(), 0..32)")]
+            scores: BTreeMap<String, u32>,
         }
 
         #[allow(dead_code)]
@@ -792,6 +811,186 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected: Some(quote!(SkipWithCustomDefault {
                 value: 10,
                 magic: 42
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_escape_newline",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "hello\nworld"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "hello\nworld".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_escape_tab",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "hello\tworld"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "hello\tworld".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_escape_backslash",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "hello\\world"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "hello\\world".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_escape_quote",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "hello\"world"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "hello\"world".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_escape_all_simple",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "a\"b\\c\/d\be\ff\ng\rh\ti"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "a\"b\\c/d\x08e\x0Cf\ng\rh\ti".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_unicode_escape_bmp",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "\u0041lice"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "Alice".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_unicode_escape_non_ascii",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "caf\u00E9"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "caf\u{00E9}".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_unicode_surrogate_pair",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "\uD83D\uDE00"}"#,
+            expected: Some(quote!(Friend {
+                age: 1,
+                name: "\u{1F600}".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "key_with_unicode_escape",
+            ty: quote!(Friend),
+            input: r#"{"age": 42, "na\u006De": "Alice"}"#,
+            expected: Some(quote!(Friend {
+                age: 42,
+                name: "Alice".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "string_invalid_escape",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "hello\xworld"}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::InvalidEscapeSequence)),
+        },
+        JsonInputCase {
+            name: "string_lone_high_surrogate",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "\uD800"}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::InvalidEscapeSequence)),
+        },
+        JsonInputCase {
+            name: "string_truncated_unicode",
+            ty: quote!(Friend),
+            input: r#"{"age": 1, "name": "\u00"}"#,
+            expected: None,
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "skip_value_with_unicode_escape",
+            ty: quote!(Friend),
+            input: r#"{"age": 42, "extra": "test\uD83D\uDE00end", "name": "Alice"}"#,
+            expected: Some(quote!(Friend {
+                age: 42,
+                name: "Alice".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "skip_value_with_backslash_escape",
+            ty: quote!(Friend),
+            input: r#"{"age": 42, "extra": "test\n\t\\end", "name": "Alice"}"#,
+            expected: Some(quote!(Friend {
+                age: 42,
+                name: "Alice".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "map_string_to_u32",
+            ty: quote!(ConfigMap),
+            input: r#"{"scores": {"alice": 42, "bob": 7}}"#,
+            expected: Some(quote!(ConfigMap {
+                scores: std::collections::HashMap::from([
+                    ("alice".to_string(), 42u32),
+                    ("bob".to_string(), 7u32),
+                ])
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "map_empty",
+            ty: quote!(ConfigMap),
+            input: r#"{"scores": {}}"#,
+            expected: Some(quote!(ConfigMap {
+                scores: std::collections::HashMap::new()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "map_string_to_string",
+            ty: quote!(EnvMap),
+            input: r#"{"vars": {"HOME": "/root", "PATH": "/usr/bin"}}"#,
+            expected: Some(quote!(EnvMap {
+                vars: std::collections::HashMap::from([
+                    ("HOME".to_string(), "/root".to_string()),
+                    ("PATH".to_string(), "/usr/bin".to_string()),
+                ])
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "map_growth",
+            ty: quote!(ConfigMap),
+            input: r#"{"scores": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6}}"#,
+            expected: Some(quote!(ConfigMap {
+                scores: std::collections::HashMap::from([
+                    ("a".to_string(), 1u32),
+                    ("b".to_string(), 2u32),
+                    ("c".to_string(), 3u32),
+                    ("d".to_string(), 4u32),
+                    ("e".to_string(), 5u32),
+                    ("f".to_string(), 6u32),
+                ])
             })),
             expected_error_code: None,
         },
