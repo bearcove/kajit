@@ -5,14 +5,6 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::LitByteStr;
 
-struct InputCaseSpec {
-    name: &'static str,
-    ty: TokenStream,
-    input: &'static str,
-    expected: Option<TokenStream>,
-    expected_error_code: Option<TokenStream>,
-}
-
 pub(crate) fn types_rs() -> TokenStream {
     quote! {
         use serde::{Serialize, Deserialize};
@@ -830,9 +822,45 @@ fn all_cases() -> Vec<Case> {
     out
 }
 
+macro_rules! json_case_spec {
+    (
+        name: $name:expr,
+        ty: $ty:expr,
+        input: $input:expr,
+        expected: Some($expected:expr),
+        expected_error_code: None $(,)?
+    ) => {
+        CaseBuilder::new($name, $ty)
+            .json_ok($name, $input, $expected)
+            .build()
+    };
+    (
+        name: $name:expr,
+        ty: $ty:expr,
+        input: $input:expr,
+        expected: None,
+        expected_error_code: Some($err:expr) $(,)?
+    ) => {
+        CaseBuilder::new($name, $ty)
+            .json_err($name, $input, $err)
+            .build()
+    };
+    (
+        name: $name:expr,
+        ty: $ty:expr,
+        input: $input:expr,
+        expected: None,
+        expected_error_code: None $(,)?
+    ) => {
+        CaseBuilder::new($name, $ty)
+            .json_err_any($name, $input)
+            .build()
+    };
+}
+
 fn input_cases() -> Vec<Case> {
     vec![
-        InputCaseSpec {
+        json_case_spec! {
             name: "reversed_key_order",
             ty: quote!(Friend),
             input: r#"{"name": "Alice", "age": 42}"#,
@@ -842,7 +870,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "unknown_keys_skipped",
             ty: quote!(Friend),
             input: r#"{"age": 42, "extra": true, "name": "Alice"}"#,
@@ -852,14 +880,14 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "empty_object_missing_fields",
             ty: quote!(Friend),
             input: r#"{}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::MissingRequiredField)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "nested_struct_reversed_keys",
             ty: quote!(Person),
             input: r#"{"address": {"zip": 97201, "city": "Portland"}, "age": 30, "name": "Alice"}"#,
@@ -873,7 +901,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "flatten_reversed_keys",
             ty: quote!(Document),
             input: r#"{"author": "Amos", "version": 1, "title": "Hello"}"#,
@@ -886,7 +914,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "enum_struct_variant_reversed_keys",
             ty: quote!(Animal),
             input: r#"{"Dog": {"good_boy": true, "name": "Rex"}}"#,
@@ -896,14 +924,14 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "enum_unit_as_string",
             ty: quote!(Animal),
             input: r#""Cat""#,
             expected: Some(quote!(Animal::Cat)),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "enum_struct_variant",
             ty: quote!(Animal),
             input: r#"{"Dog": {"name": "Rex", "good_boy": true}}"#,
@@ -913,42 +941,42 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "enum_tuple_variant",
             ty: quote!(Animal),
             input: r#"{"Parrot": "Polly"}"#,
             expected: Some(quote!(Animal::Parrot("Polly".into()))),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "enum_unit_in_object",
             ty: quote!(Animal),
             input: r#"{"Cat": null}"#,
             expected: Some(quote!(Animal::Cat)),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "enum_unknown_variant",
             ty: quote!(Animal),
             input: r#""Snake""#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "adjacent_unit_no_content",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Cat"}"#,
             expected: Some(quote!(AdjAnimal::Cat)),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "adjacent_unit_with_null_content",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Cat", "data": null}"#,
             expected: Some(quote!(AdjAnimal::Cat)),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "adjacent_struct_variant",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Dog", "data": {"name": "Rex", "good_boy": true}}"#,
@@ -958,7 +986,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "adjacent_struct_variant_reversed_fields",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Dog", "data": {"good_boy": true, "name": "Rex"}}"#,
@@ -968,28 +996,28 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "adjacent_tuple_variant",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Parrot", "data": "Polly"}"#,
             expected: Some(quote!(AdjAnimal::Parrot("Polly".into()))),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "adjacent_unknown_variant",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Snake", "data": null}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "adjacent_wrong_first_key",
             ty: quote!(AdjAnimal),
             input: r#"{"data": null, "type": "Cat"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::ExpectedTagKey)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "internal_struct_variant_reversed_fields",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Dog", "good_boy": true, "name": "Rex"}"#,
@@ -999,14 +1027,14 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "internal_unit_variant",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Cat"}"#,
             expected: Some(quote!(IntAnimal::Cat)),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "internal_struct_variant",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Dog", "name": "Rex", "good_boy": true}"#,
@@ -1016,21 +1044,21 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "internal_unknown_variant",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Snake"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "internal_wrong_first_key",
             ty: quote!(IntAnimal),
             input: r#"{"name": "Rex", "type": "Dog", "good_boy": true}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::ExpectedTagKey)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "untagged_struct_reversed_keys",
             ty: quote!(UntaggedAnimal),
             input: r#"{"good_boy": false, "name": "Rex"}"#,
@@ -1040,7 +1068,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "untagged_solver_key_order_independent",
             ty: quote!(UntaggedConfig),
             input: r#"{"db": 0, "host": "localhost"}"#,
@@ -1050,7 +1078,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "untagged_nested_key_order_independent",
             ty: quote!(ApiResponse),
             input: r#"{"data": {"items": 5}, "status": 200}"#,
@@ -1060,14 +1088,14 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "option_some_scalar",
             ty: quote!(WithOptU32),
             input: r#"{"value": 42}"#,
             expected: Some(quote!(WithOptU32 { value: Some(42) })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "option_some_string",
             ty: quote!(WithOptStr),
             input: r#"{"name": "Alice"}"#,
@@ -1076,7 +1104,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "option_some_struct",
             ty: quote!(WithOptAddr),
             input: r#"{"addr": {"city": "Portland", "zip": 97201}}"#,
@@ -1088,28 +1116,28 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "option_none_struct",
             ty: quote!(WithOptAddr),
             input: r#"{"addr": null}"#,
             expected: Some(quote!(WithOptAddr { addr: None })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "option_none_scalar",
             ty: quote!(WithOptU32),
             input: r#"{"value": null}"#,
             expected: Some(quote!(WithOptU32 { value: None })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "option_none_string",
             ty: quote!(WithOptStr),
             input: r#"{"name": null}"#,
             expected: Some(quote!(WithOptStr { name: None })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "option_reversed_keys",
             ty: quote!(MultiOpt),
             input: r#"{"c": "world", "b": "hello", "a": null}"#,
@@ -1120,7 +1148,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "rc_scalar",
             ty: quote!(RcScalar),
             input: r#"{"value": 77}"#,
@@ -1129,7 +1157,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "rename_field",
             ty: quote!(RenameField),
             input: r#"{"user_name": "Alice", "age": 30}"#,
@@ -1139,14 +1167,14 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "rename_field_original_name_rejected",
             ty: quote!(RenameField),
             input: r#"{"name": "Alice", "age": 30}"#,
             expected: None,
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "rename_all_camel_case",
             ty: quote!(CamelCaseStruct),
             input: r#"{"userName": "Bob", "birthYear": 1990}"#,
@@ -1156,21 +1184,21 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "deny_unknown_fields_rejects",
             ty: quote!(Strict),
             input: r#"{"x": 1, "y": 2, "z": 3}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownField)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "deny_unknown_fields_allows_known",
             ty: quote!(Strict),
             input: r#"{"x": 1, "y": 2}"#,
             expected: Some(quote!(Strict { x: 1, y: 2 })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "default_field_missing",
             ty: quote!(WithDefault),
             input: r#"{"name": "Alice"}"#,
@@ -1180,7 +1208,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "default_field_present",
             ty: quote!(WithDefault),
             input: r#"{"name": "Alice", "score": 99}"#,
@@ -1190,14 +1218,14 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "default_field_required_still_errors",
             ty: quote!(WithDefault),
             input: r#"{"score": 50}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::MissingRequiredField)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "default_string_field",
             ty: quote!(WithDefaultString),
             input: r#"{"value": 42}"#,
@@ -1207,21 +1235,21 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "container_default_empty_object",
             ty: quote!(AllDefault),
             input: r#"{}"#,
             expected: Some(quote!(AllDefault { x: 0, y: 0 })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "container_default_partial",
             ty: quote!(AllDefault),
             input: r#"{"x": 5}"#,
             expected: Some(quote!(AllDefault { x: 5, y: 0 })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "skip_field",
             ty: quote!(WithSkip),
             input: r#"{"name": "Alice"}"#,
@@ -1231,7 +1259,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "skip_field_in_input_treated_as_unknown",
             ty: quote!(WithSkip),
             input: r#"{"name": "Alice", "cached": 99}"#,
@@ -1241,7 +1269,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "skip_deserializing_field",
             ty: quote!(WithSkipDeser),
             input: r#"{"name": "Bob"}"#,
@@ -1251,7 +1279,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "skip_with_custom_default",
             ty: quote!(SkipWithCustomDefault),
             input: r#"{"value": 10}"#,
@@ -1261,7 +1289,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "arc_scalar",
             ty: quote!(ArcScalar),
             input: r#"{"value": 99}"#,
@@ -1270,21 +1298,21 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "u8_out_of_range",
             ty: quote!(Tiny),
             input: r#"{"val": 256}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::NumberOutOfRange)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "float_scientific",
             ty: quote!(Floats),
             input: r#"{"a": 1.5e2, "b": -3.14}"#,
             expected: Some(quote!(Floats { a: 150.0, b: -3.14 })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_escape_newline",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\nworld"}"#,
@@ -1294,7 +1322,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_escape_tab",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\tworld"}"#,
@@ -1304,7 +1332,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_escape_backslash",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\\world"}"#,
@@ -1314,7 +1342,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_escape_quote",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\"world"}"#,
@@ -1324,7 +1352,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_escape_all_simple",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "a\"b\\c\/d\be\ff\ng\rh\ti"}"#,
@@ -1334,7 +1362,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_unicode_escape_bmp",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\u0041lice"}"#,
@@ -1344,7 +1372,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_unicode_escape_non_ascii",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "caf\u00E9"}"#,
@@ -1354,7 +1382,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_unicode_surrogate_pair",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\uD83D\uDE00"}"#,
@@ -1364,7 +1392,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "key_with_unicode_escape",
             ty: quote!(Friend),
             input: r#"{"age": 42, "na\u006De": "Alice"}"#,
@@ -1374,28 +1402,28 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_invalid_escape",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\xworld"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::InvalidEscapeSequence)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_lone_high_surrogate",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\uD800"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::InvalidEscapeSequence)),
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "string_truncated_unicode",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\u00"}"#,
             expected: None,
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "skip_value_with_unicode_escape",
             ty: quote!(Friend),
             input: r#"{"age": 42, "extra": "test\uD83D\uDE00end", "name": "Alice"}"#,
@@ -1405,7 +1433,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "skip_value_with_backslash_escape",
             ty: quote!(Friend),
             input: r#"{"age": 42, "extra": "test\n\t\\end", "name": "Alice"}"#,
@@ -1415,7 +1443,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "map_string_to_u32",
             ty: quote!(ConfigMap),
             input: r#"{"scores": {"alice": 42, "bob": 7}}"#,
@@ -1427,7 +1455,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "map_empty",
             ty: quote!(ConfigMap),
             input: r#"{"scores": {}}"#,
@@ -1436,7 +1464,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "map_string_to_string",
             ty: quote!(EnvMap),
             input: r#"{"vars": {"HOME": "/root", "PATH": "/usr/bin"}}"#,
@@ -1448,7 +1476,7 @@ fn input_cases() -> Vec<Case> {
             })),
             expected_error_code: None,
         },
-        InputCaseSpec {
+        json_case_spec! {
             name: "map_growth",
             ty: quote!(ConfigMap),
             input: r#"{"scores": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6}}"#,
@@ -1465,18 +1493,6 @@ fn input_cases() -> Vec<Case> {
             expected_error_code: None,
         },
     ]
-    .into_iter()
-    .map(|case| {
-        let builder = CaseBuilder::new(case.name, case.ty);
-        if let Some(expected) = case.expected {
-            builder.json_ok(case.name, case.input, expected).build()
-        } else if let Some(err_code) = case.expected_error_code {
-            builder.json_err(case.name, case.input, err_code).build()
-        } else {
-            builder.json_err_any(case.name, case.input).build()
-        }
-    })
-    .collect()
 }
 
 pub(crate) fn render_bench_file() -> String {
