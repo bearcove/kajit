@@ -167,7 +167,7 @@ fn tests_prefix() -> PathBuf {
 
 fn generate_synthetic() {
     let bench_path = benches_prefix().join("synthetic.rs");
-    let test_path = tests_prefix().join("generated_synthetic.rs");
+    let test_path = tests_prefix().join("corpus.rs");
     write_file(&bench_path, &cases::render_bench_file());
     write_file(&test_path, &cases::render_test_file());
     println!(
