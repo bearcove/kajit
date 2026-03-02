@@ -1906,7 +1906,6 @@ pub fn compile_decoder_via_ir_dyn(
     ir_decoder: &dyn IrDecoder,
 ) -> CompiledDecoder {
     let mut func = build_decoder_ir(shape, ir_decoder);
-    crate::ir_passes::run_default_passes(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     compile_linear_ir_decoder(&linear, decoder.supports_trusted_utf8_input())
 }

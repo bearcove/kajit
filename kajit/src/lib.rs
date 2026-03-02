@@ -393,6 +393,79 @@ mod tests {
     }
 
     #[test]
+    fn postcard_long_varints_via_ir() {
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, Facet)]
+        struct Address {
+            city: String,
+            zip: u32,
+        }
+
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, Facet)]
+        struct Person {
+            name: String,
+            age: u32,
+            address: Address,
+        }
+
+        let source = Person {
+            name: "a".repeat(128),
+            age: 128,
+            address: Address {
+                city: "b".repeat(128),
+                zip: 128,
+            },
+        };
+        let encoded = ::postcard::to_allocvec(&source).unwrap();
+        let legacy = compile_decoder_legacy(Person::SHAPE, &postcard::KajitPostcard);
+        let via_ir = compile_decoder_via_ir(Person::SHAPE, &postcard::KajitPostcard);
+        let legacy_out: Person = deserialize(&legacy, &encoded).unwrap();
+        let ir_out: Person = deserialize(&via_ir, &encoded).unwrap();
+        assert_eq!(legacy_out, source);
+        assert_eq!(ir_out, source);
+    }
+
+    #[test]
+    fn postcard_all_integers_wide_via_ir() {
+        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, Facet)]
+        struct AllIntegers {
+            a_u8: u8,
+            a_u16: u16,
+            a_u32: u32,
+            a_u64: u64,
+            a_u128: u128,
+            a_usize: usize,
+            a_i8: i8,
+            a_i16: i16,
+            a_i32: i32,
+            a_i64: i64,
+            a_i128: i128,
+            a_isize: isize,
+        }
+
+        let source = AllIntegers {
+            a_u8: 0,
+            a_u16: 128,
+            a_u32: 128,
+            a_u64: 128,
+            a_u128: 0,
+            a_usize: 2_310_817_621_330_714usize,
+            a_i8: 82,
+            a_i16: -27_214,
+            a_i32: -753_462_665,
+            a_i64: 5_113_149_701_919_602_663,
+            a_i128: 111_719_190_169_970_084_407_522_330_417_561_111_272i128,
+            a_isize: 5_474_093_000_439_056_201isize,
+        };
+        let encoded = ::postcard::to_allocvec(&source).unwrap();
+        let legacy = compile_decoder_legacy(AllIntegers::SHAPE, &postcard::KajitPostcard);
+        let via_ir = compile_decoder_via_ir(AllIntegers::SHAPE, &postcard::KajitPostcard);
+        let legacy_out: AllIntegers = deserialize(&legacy, &encoded).unwrap();
+        let ir_out: AllIntegers = deserialize(&via_ir, &encoded).unwrap();
+        assert_eq!(legacy_out, source);
+        assert_eq!(ir_out, source);
+    }
+
+    #[test]
     fn postcard_legacy_and_ir_match() {
         let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
         let legacy = compile_decoder_legacy(Friend::SHAPE, &postcard::KajitPostcard);

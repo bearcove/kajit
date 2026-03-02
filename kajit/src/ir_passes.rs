@@ -186,12 +186,7 @@ fn hoist_theta_loop_invariants_for_node(func: &mut IrFunc, theta: NodeId) -> boo
             continue;
         }
         if func.nodes[node_id].inputs.iter().all(|inp| {
-            source_is_theta_invariant(
-                inp.source,
-                body_region,
-                &body_node_set,
-                &hoistable_set,
-            )
+            source_is_theta_invariant(inp.source, body_region, &body_node_set, &hoistable_set)
         }) {
             hoistable_set.insert(node_id);
             hoistable_nodes.push(node_id);
@@ -240,7 +235,9 @@ fn hoist_theta_loop_invariants_for_node(func: &mut IrFunc, theta: NodeId) -> boo
     }
 
     for (idx, node_id) in inserted.iter().copied().enumerate() {
-        func.regions[parent_region].nodes.insert(theta_pos + idx, node_id);
+        func.regions[parent_region]
+            .nodes
+            .insert(theta_pos + idx, node_id);
     }
 
     for old_node in hoistable_nodes.iter().copied() {
@@ -322,6 +319,7 @@ fn inline_apply_pass(func: &mut IrFunc) {
         let lambda_owner = build_region_owner_map(func);
         let call_sites = count_apply_call_sites(func, &live_nodes);
         let lambda_sizes = lambda_sizes(func);
+        let lambda_has_control_flow = lambda_has_control_flow(func);
         let mut changed = false;
 
         let candidates: Vec<NodeId> = func
@@ -337,7 +335,13 @@ fn inline_apply_pass(func: &mut IrFunc) {
                 let caller_lambda = *lambda_owner
                     .get(&node.region)
                     .expect("every region should belong to exactly one lambda");
-                if should_inline(caller_lambda, target, &call_sites, &lambda_sizes) {
+                if should_inline(
+                    caller_lambda,
+                    target,
+                    &call_sites,
+                    &lambda_sizes,
+                    &lambda_has_control_flow,
+                ) {
                     Some(nid)
                 } else {
                     None
@@ -362,8 +366,16 @@ fn should_inline(
     target: LambdaId,
     call_sites: &HashMap<LambdaId, usize>,
     lambda_sizes: &HashMap<LambdaId, usize>,
+    lambda_has_control_flow: &HashMap<LambdaId, bool>,
 ) -> bool {
     if caller_lambda == target {
+        return false;
+    }
+    if lambda_has_control_flow
+        .get(&target)
+        .copied()
+        .unwrap_or(false)
+    {
         return false;
     }
     let size = lambda_sizes.get(&target).copied().unwrap_or(0);
@@ -374,6 +386,41 @@ fn should_inline(
     } else {
         size <= MAX_INLINE_NODES_MULTI_USE && uses <= MAX_INLINE_CALL_SITES_MULTI_USE
     }
+}
+
+fn lambda_has_control_flow(func: &IrFunc) -> HashMap<LambdaId, bool> {
+    let mut out = HashMap::new();
+    for (idx, node_id) in func.lambdas.iter().copied().enumerate() {
+        let lambda = LambdaId::new(idx as u32);
+        let body = match &func.nodes[node_id].kind {
+            NodeKind::Lambda { body, .. } => *body,
+            _ => unreachable!("lambda registry must only contain lambda nodes"),
+        };
+        out.insert(lambda, region_has_control_flow(func, body));
+    }
+    out
+}
+
+fn region_has_control_flow(func: &IrFunc, region: RegionId) -> bool {
+    let mut stack = vec![region];
+    while let Some(rid) = stack.pop() {
+        for &nid in &func.regions[rid].nodes {
+            match &func.nodes[nid].kind {
+                NodeKind::Gamma { regions } => {
+                    for &sub in regions {
+                        stack.push(sub);
+                    }
+                    return true;
+                }
+                NodeKind::Theta { body } => {
+                    stack.push(*body);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 fn count_apply_call_sites(func: &IrFunc, live_nodes: &HashSet<NodeId>) -> HashMap<LambdaId, usize> {
@@ -859,10 +906,10 @@ mod tests {
     // r[verify ir.passes.pre-regalloc.loop-invariants]
     #[test]
     fn hoists_theta_invariant_expression_tree_out_of_body() {
-        let is_invariant_tree_node = |func: &IrFunc, nid: NodeId| {
-            match &func.nodes[nid].kind {
-                NodeKind::Simple(IrOp::Const { .. }) | NodeKind::Simple(IrOp::Xor) => true,
-                NodeKind::Simple(IrOp::Add) => func.nodes[nid].inputs.iter().all(|inp| match inp.source {
+        let is_invariant_tree_node = |func: &IrFunc, nid: NodeId| match &func.nodes[nid].kind {
+            NodeKind::Simple(IrOp::Const { .. }) | NodeKind::Simple(IrOp::Xor) => true,
+            NodeKind::Simple(IrOp::Add) => {
+                func.nodes[nid].inputs.iter().all(|inp| match inp.source {
                     PortSource::Node(out) => matches!(
                         func.nodes[out.node].kind,
                         NodeKind::Simple(IrOp::Const { .. })
@@ -870,9 +917,9 @@ mod tests {
                             | NodeKind::Simple(IrOp::Xor)
                     ),
                     PortSource::RegionArg(_) => false,
-                }),
-                _ => false,
+                })
             }
+            _ => false,
         };
 
         let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
@@ -969,25 +1016,23 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let mut func = parse_ir(input, <u8 as facet::Facet>::SHAPE, &registry)
-            .expect("text IR should parse");
+        let mut func =
+            parse_ir(input, <u8 as facet::Facet>::SHAPE, &registry).expect("text IR should parse");
 
-        let is_invariant_tree_node = |func: &IrFunc, nid: NodeId| {
-            match &func.nodes[nid].kind {
-                NodeKind::Simple(IrOp::Const { .. }) | NodeKind::Simple(IrOp::Xor) => true,
-                NodeKind::Simple(IrOp::Add) => {
-                    func.nodes[nid].inputs.iter().all(|inp| match inp.source {
-                        PortSource::Node(out) => matches!(
-                            func.nodes[out.node].kind,
-                            NodeKind::Simple(IrOp::Const { .. })
-                                | NodeKind::Simple(IrOp::Add)
-                                | NodeKind::Simple(IrOp::Xor)
-                        ),
-                        PortSource::RegionArg(_) => false,
-                    })
-                }
-                _ => false,
+        let is_invariant_tree_node = |func: &IrFunc, nid: NodeId| match &func.nodes[nid].kind {
+            NodeKind::Simple(IrOp::Const { .. }) | NodeKind::Simple(IrOp::Xor) => true,
+            NodeKind::Simple(IrOp::Add) => {
+                func.nodes[nid].inputs.iter().all(|inp| match inp.source {
+                    PortSource::Node(out) => matches!(
+                        func.nodes[out.node].kind,
+                        NodeKind::Simple(IrOp::Const { .. })
+                            | NodeKind::Simple(IrOp::Add)
+                            | NodeKind::Simple(IrOp::Xor)
+                    ),
+                    PortSource::RegionArg(_) => false,
+                })
             }
+            _ => false,
         };
 
         let root = func.root_body();

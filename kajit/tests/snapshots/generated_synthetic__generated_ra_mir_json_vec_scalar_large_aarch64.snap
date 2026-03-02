@@ -19,8 +19,8 @@ ra_func @0 {
   block b2 [params: v0, v35] (preds: b0):
     advance(1)
     v34:gpr = copy v0:gpr
-    term: branch b32
-    succs: b32 [v0, v35]
+    term: branch b22
+    succs: b22 [v0, v35]
   block b3 [params: v0, v35] (preds: b1):
     v8:gpr = const(0x0)
     v9:gpr = const(0x<ptr>)
@@ -31,7 +31,7 @@ ra_func @0 {
     v71:gpr = copy v0:gpr
     term: branch b4
     succs: b4 [v8, v9, v10, v13, v22, v35, v71]
-  block b4 [params: v8, v9, v10, v13, v22, v35, v71] (preds: b3, b30):
+  block b4 [params: v8, v9, v10, v13, v22, v35, v71] (preds: b3, b20):
     v4:gpr = slot_addr(0)
     v5:gpr = slot_addr(1)
     call_intrinsic(0x<ptr>, fo=0) v4:gpr, v5:gpr !gpr,simd
@@ -48,178 +48,98 @@ ra_func @0 {
   block b6 [params: v8, v9, v10, v13, v22, v35, v71] (preds: b4):
     v18:gpr = copy v71:gpr
     v19:gpr = copy v8:gpr
-    term: branch b18
-    succs: b18 [v8, v9, v10, v13, v18, v19, v22, v35]
+    term: branch b8
+    succs: b8 [v8, v9, v10, v13, v18, v19, v22, v35]
   block b7 [params: v8, v9, v10, v13, v22, v35, v71] (preds: b5):
-    call_intrinsic(0x<ptr>, fo=0) !gpr,simd
-    v38:gpr = slot_addr(2)
-    v40:gpr = const(0x5d)
+    call_lambda(@1) !gpr,simd
     v15:gpr = const(0x1)
     v17:gpr = const(0x1)
-    call_intrinsic(0x<ptr>, fo=0) v38:gpr !gpr,simd
     v16:gpr = Or v71:gpr, v15:gpr
-    v39:gpr = read_slot(2)
-    v41:gpr = CmpNe v39:gpr, v40:gpr
-    term: branch_if_zero v41 -> b9, fallthrough b8
-    succs: b9 [v8, v9, v10, v13, v16, v17, v22, v35] b8 [v8, v9, v10, v13, v16, v17, v22, v35]
-  block b8 [params: v8, v9, v10, v13, v16, v17, v22, v35] (preds: b7):
-    term: branch b10
-    succs: b10 [v8, v9, v10, v13, v16, v17, v22, v35]
-  block b9 [params: v8, v9, v10, v13, v16, v17, v22, v35] (preds: b7):
-    advance(1)
-    v42:gpr = const(0x4)
-    v43:gpr = const(0x0)
-    store([8:W8]) v42:gpr
-    store([16:W8]) v43:gpr
-    store([0:W8]) v43:gpr
-    term: branch b17
-    succs: b17 [v8, v9, v10, v13, v16, v17, v22, v35]
-  block b10 [params: v8, v9, v10, v13, v16, v17, v22, v35] (preds: b8):
-    v44:gpr = const(0x4)
-    v45:gpr = const(0x4)
-    v46:gpr = const(0x4)
-    v48:gpr = const(0x0)
-    v58:gpr = const(0x1)
-    v60:gpr = const(0x4)
-    v47:gpr = call_intrinsic(0x<ptr>, fo=0) v44:gpr, v45:gpr, v46:gpr !gpr,simd
-    v49:gpr = save_out_ptr
-    set_out_ptr v47:gpr
-    v92:gpr = copy v47:gpr
-    v93:gpr = copy v47:gpr
-    v94:gpr = copy v48:gpr
-    v95:gpr = copy v44:gpr
-    term: branch b11
-    succs: b11 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v60, v92, v93, v94, v95]
-  block b11 [params: v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v60, v92, v93, v94, v95] (preds: b10, b15):
-    v50:gpr = CmpNe v94:gpr, v95:gpr
-    v59:gpr = Add v94:gpr, v58:gpr
-    v61:gpr = Add v93:gpr, v60:gpr
-    v62:gpr = slot_addr(2)
-    term: branch_if_zero v50 -> b13, fallthrough b12
-    succs: b13 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v59, v60, v61, v62, v92, v93, v94, v95] b12 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v59, v60, v61, v62, v92, v93, v95]
-  block b12 [params: v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v59, v60, v61, v62, v92, v93, v95] (preds: b11):
-    term: branch b14
-    succs: b14 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v59, v60, v61, v62, v92, v93, v95]
-  block b13 [params: v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v59, v60, v61, v62, v92, v93, v94, v95] (preds: b11):
-    v51:gpr = const(0x1)
-    v53:gpr = const(0x4)
-    v54:gpr = const(0x4)
-    v52:gpr = Shl v95:gpr, v51:gpr
-    v55:gpr = call_intrinsic(0x<ptr>, fo=0) v92:gpr, v94:gpr, v95:gpr, v52:gpr, v53:gpr, v54:gpr !gpr,simd
-    v56:gpr = copy v55:gpr
-    v57:gpr = copy v52:gpr
-    term: branch b15
-    succs: b15 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v56, v52, v58, v59, v60, v61, v62, v93]
-  block b14 [params: v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v59, v60, v61, v62, v92, v93, v95] (preds: b12):
-    v56:gpr = copy v92:gpr
-    v57:gpr = copy v95:gpr
-    term: branch b15
-    succs: b15 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v56, v57, v58, v59, v60, v61, v62, v93]
-  block b15 [params: v8, v9, v10, v13, v16, v17, v22, v35, v49, v56, v57, v58, v59, v60, v61, v62, v93] (preds: b13, b14):
-    set_out_ptr v93:gpr
-    call_intrinsic(0x<ptr>, fo=0) !gpr,simd
-    call_intrinsic(0x<ptr>, fo=0) v62:gpr !gpr,simd
-    v63:gpr = read_slot(2)
-    v64:gpr = CmpNe v63:gpr, v58:gpr
-    v92:gpr = copy v56:gpr
-    v93:gpr = copy v61:gpr
-    v94:gpr = copy v59:gpr
-    v95:gpr = copy v57:gpr
-    term: branch_if v64 -> b11, fallthrough b16
-    succs: b11 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v58, v60, v92, v93, v94, v95] b16 [v8, v9, v10, v13, v16, v17, v22, v35, v49, v92, v94, v95]
-  block b16 [params: v8, v9, v10, v13, v16, v17, v22, v35, v49, v92, v94, v95] (preds: b15):
-    set_out_ptr v49:gpr
-    store([8:W8]) v92:gpr
-    store([16:W8]) v94:gpr
-    store([0:W8]) v95:gpr
-    term: branch b17
-    succs: b17 [v8, v9, v10, v13, v16, v17, v22, v35]
-  block b17 [params: v8, v9, v10, v13, v16, v17, v22, v35] (preds: b9, b16):
     v18:gpr = copy v16:gpr
     v19:gpr = copy v17:gpr
-    term: branch b18
-    succs: b18 [v8, v9, v10, v13, v18, v19, v22, v35]
-  block b18 [params: v8, v9, v10, v13, v18, v19, v22, v35] (preds: b6, b17):
-    term: branch_if_zero v19 -> b20, fallthrough b19
-    succs: b20 [v8, v9, v10, v13, v18, v22, v35] b19 [v8, v9, v10, v13, v18, v22, v35]
-  block b19 [params: v8, v9, v10, v13, v18, v22, v35] (preds: b18):
-    term: branch b21
-    succs: b21 [v8, v9, v10, v13, v18, v22, v35]
-  block b20 [params: v8, v9, v10, v13, v18, v22, v35] (preds: b18):
+    term: branch b8
+    succs: b8 [v8, v9, v10, v13, v18, v19, v22, v35]
+  block b8 [params: v8, v9, v10, v13, v18, v19, v22, v35] (preds: b6, b7):
+    term: branch_if_zero v19 -> b10, fallthrough b9
+    succs: b10 [v8, v9, v10, v13, v18, v22, v35] b9 [v8, v9, v10, v13, v18, v22, v35]
+  block b9 [params: v8, v9, v10, v13, v18, v22, v35] (preds: b8):
+    term: branch b11
+    succs: b11 [v8, v9, v10, v13, v18, v22, v35]
+  block b10 [params: v8, v9, v10, v13, v18, v22, v35] (preds: b8):
     call_intrinsic(0x<ptr>, fo=0) !gpr,simd
     v20:gpr = copy v18:gpr
-    term: branch b22
-    succs: b22 [v8, v9, v10, v13, v18, v22, v35]
-  block b21 [params: v8, v9, v10, v13, v18, v22, v35] (preds: b19):
+    term: branch b12
+    succs: b12 [v8, v9, v10, v13, v18, v22, v35]
+  block b11 [params: v8, v9, v10, v13, v18, v22, v35] (preds: b9):
     v20:gpr = copy v18:gpr
-    term: branch b22
-    succs: b22 [v8, v9, v10, v13, v20, v22, v35]
-  block b22 [params: v8, v9, v10, v13, v20, v22, v35] (preds: b20, b21):
+    term: branch b12
+    succs: b12 [v8, v9, v10, v13, v20, v22, v35]
+  block b12 [params: v8, v9, v10, v13, v20, v22, v35] (preds: b10, b11):
     call_intrinsic(0x<ptr>, fo=0) !gpr,simd
     bounds_check(1)
     v21:gpr = read_bytes(1)
     v23:gpr = CmpNe v21:gpr, v22:gpr
-    term: branch_if_zero v23 -> b24, fallthrough b23
-    succs: b24 [v8, v9, v10, v13, v20, v22, v35] b23 [v8, v9, v10, v13, v20, v21, v22, v35]
-  block b23 [params: v8, v9, v10, v13, v20, v21, v22, v35] (preds: b22):
-    term: branch b25
-    succs: b25 [v8, v9, v10, v13, v20, v21, v22, v35]
-  block b24 [params: v8, v9, v10, v13, v20, v22, v35] (preds: b22):
+    term: branch_if_zero v23 -> b14, fallthrough b13
+    succs: b14 [v8, v9, v10, v13, v20, v22, v35] b13 [v8, v9, v10, v13, v20, v21, v22, v35]
+  block b13 [params: v8, v9, v10, v13, v20, v21, v22, v35] (preds: b12):
+    term: branch b15
+    succs: b15 [v8, v9, v10, v13, v20, v21, v22, v35]
+  block b14 [params: v8, v9, v10, v13, v20, v22, v35] (preds: b12):
     v24:gpr = const(0x1)
     v31:gpr = copy v24:gpr
     v32:gpr = copy v20:gpr
-    term: branch b30
-    succs: b30 [v8, v9, v10, v13, v22, v31, v20, v35]
-  block b25 [params: v8, v9, v10, v13, v20, v21, v22, v35] (preds: b23):
+    term: branch b20
+    succs: b20 [v8, v9, v10, v13, v22, v31, v20, v35]
+  block b15 [params: v8, v9, v10, v13, v20, v21, v22, v35] (preds: b13):
     v80:gpr = copy v20:gpr
     v25:gpr = const(0x7d)
     v26:gpr = CmpNe v21:gpr, v25:gpr
-    term: branch_if_zero v26 -> b27, fallthrough b26
-    succs: b27 [v8, v9, v10, v13, v22, v35, v80] b26 [v8, v9, v10, v13, v22, v35, v80]
-  block b26 [params: v8, v9, v10, v13, v22, v35, v80] (preds: b25):
-    term: branch b28
-    succs: b28 [v8, v9, v10, v13, v22, v35, v80]
-  block b27 [params: v8, v9, v10, v13, v22, v35, v80] (preds: b25):
+    term: branch_if_zero v26 -> b17, fallthrough b16
+    succs: b17 [v8, v9, v10, v13, v22, v35, v80] b16 [v8, v9, v10, v13, v22, v35, v80]
+  block b16 [params: v8, v9, v10, v13, v22, v35, v80] (preds: b15):
+    term: branch b18
+    succs: b18 [v8, v9, v10, v13, v22, v35, v80]
+  block b17 [params: v8, v9, v10, v13, v22, v35, v80] (preds: b15):
     v27:gpr = const(0x0)
     v29:gpr = copy v27:gpr
     v30:gpr = copy v80:gpr
-    term: branch b29
-    succs: b29 [v8, v9, v10, v13, v22, v29, v80, v35]
-  block b28 [params: v8, v9, v10, v13, v22, v35, v80] (preds: b26):
+    term: branch b19
+    succs: b19 [v8, v9, v10, v13, v22, v29, v80, v35]
+  block b18 [params: v8, v9, v10, v13, v22, v35, v80] (preds: b16):
     call_intrinsic(0x<ptr>, fo=0) !gpr,simd
     v28:gpr = const(0x0)
     v29:gpr = copy v28:gpr
     v30:gpr = copy v80:gpr
-    term: branch b29
-    succs: b29 [v8, v9, v10, v13, v22, v29, v30, v35]
-  block b29 [params: v8, v9, v10, v13, v22, v29, v30, v35] (preds: b27, b28):
+    term: branch b19
+    succs: b19 [v8, v9, v10, v13, v22, v29, v30, v35]
+  block b19 [params: v8, v9, v10, v13, v22, v29, v30, v35] (preds: b17, b18):
     v31:gpr = copy v29:gpr
     v32:gpr = copy v30:gpr
-    term: branch b30
-    succs: b30 [v8, v9, v10, v13, v22, v31, v32, v35]
-  block b30 [params: v8, v9, v10, v13, v22, v31, v32, v35] (preds: b24, b29):
+    term: branch b20
+    succs: b20 [v8, v9, v10, v13, v22, v31, v32, v35]
+  block b20 [params: v8, v9, v10, v13, v22, v31, v32, v35] (preds: b14, b19):
     v71:gpr = copy v32:gpr
-    term: branch_if v31 -> b4, fallthrough b31
-    succs: b4 [v8, v9, v10, v13, v22, v35, v71] b31 [v35, v71]
-  block b31 [params: v35, v71] (preds: b30):
+    term: branch_if v31 -> b4, fallthrough b21
+    succs: b4 [v8, v9, v10, v13, v22, v35, v71] b21 [v35, v71]
+  block b21 [params: v35, v71] (preds: b20):
     v34:gpr = copy v71:gpr
-    term: branch b32
-    succs: b32 [v34, v35]
-  block b32 [params: v34, v35] (preds: b2, b31):
+    term: branch b22
+    succs: b22 [v34, v35]
+  block b22 [params: v34, v35] (preds: b2, b21):
     v36:gpr = And v34:gpr, v35:gpr
     v37:gpr = CmpNe v36:gpr, v35:gpr
-    term: branch_if_zero v37 -> b34, fallthrough b33
-    succs: b34 b33
-  block b33 (preds: b32):
-    term: branch b35
-    succs: b35
-  block b34 (preds: b32):
-    term: branch b36
-    succs: b36
-  block b35 (preds: b33):
+    term: branch_if_zero v37 -> b24, fallthrough b23
+    succs: b24 b23
+  block b23 (preds: b22):
+    term: branch b25
+    succs: b25
+  block b24 (preds: b22):
+    term: branch b26
+    succs: b26
+  block b25 (preds: b23):
     term: error_exit(MissingRequiredField)
     succs: (none)
-  block b36 (preds: b34):
+  block b26 (preds: b24):
     term: return
     succs: (none)
 }

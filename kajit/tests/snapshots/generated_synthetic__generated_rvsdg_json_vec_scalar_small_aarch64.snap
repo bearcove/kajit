@@ -58,89 +58,11 @@ lambda @0 (shape: "ScalarVec") {
                 branch 1:
                   region {
                     args: [arg0, arg1, %cs, %os]
-                    n99 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
-                    n100 = SlotAddr(2) [] -> [v38]
-                    n101 = CallIntrinsic(0x<ptr>, field_offset=0) [v38, %cs:n99, %os:n99] -> [%cs, %os]
-                    n102 = ReadFromSlot(2) [%cs:n101] -> [v39, %cs]
-                    n103 = Const(0x5d) [] -> [v40]
-                    n104 = CmpNe [v39, v40] -> [v41]
-                    n140 = gamma [
-                      pred: v41
-                      in0: %cs:n102
-                      in1: %os:n101
-                    ] {
-                      branch 0:
-                        region {
-                          args: [%cs, %os]
-                          n105 = AdvanceCursor(1) [%cs:arg] -> [%cs]
-                          n106 = Const(0x4) [] -> [v42]
-                          n107 = Const(0x0) [] -> [v43]
-                          n108 = WriteToField(offset=8, W8) [v42, %os:arg] -> [%os]
-                          n109 = WriteToField(offset=16, W8) [v43, %os:n108] -> [%os]
-                          n110 = WriteToField(offset=0, W8) [v43, %os:n109] -> [%os]
-                          results: [%cs:n105, %os:n110]
-                        }
-                      branch 1:
-                        region {
-                          args: [%cs, %os]
-                          n111 = Const(0x4) [] -> [v44]
-                          n112 = Const(0x4) [] -> [v45]
-                          n113 = Const(0x4) [] -> [v46]
-                          n114 = CallIntrinsic(0x<ptr>, field_offset=0) [v44, v45, v46, %cs:arg, %os:arg] -> [v47, %cs, %os]
-                          n115 = Const(0x0) [] -> [v48]
-                          n116 = SaveOutPtr [%os:n114] -> [v49, %os]
-                          n117 = SetOutPtr [v47, %os:n116] -> [%os]
-                          n118 = Const(0x1) [] -> [v58]
-                          n119 = Const(0x4) [] -> [v60]
-                          n135 = theta [v47, v47, v48, v44, %cs:n114, %os:n117] {
-                            region {
-                              args: [arg0, arg1, arg2, arg3, %cs, %os]
-                              n120 = CmpNe [arg2, arg3] -> [v50]
-                              n126 = gamma [
-                                pred: v50
-                                in0: arg0
-                                in1: arg3
-                                in2: %cs:arg
-                                in3: %os:arg
-                              ] {
-                                branch 0:
-                                  region {
-                                    args: [arg0, arg1, %cs, %os]
-                                    n121 = Const(0x1) [] -> [v51]
-                                    n122 = Shl [arg1, v51] -> [v52]
-                                    n123 = Const(0x4) [] -> [v53]
-                                    n124 = Const(0x4) [] -> [v54]
-                                    n125 = CallIntrinsic(0x<ptr>, field_offset=0) [arg0, arg2, arg1, v52, v53, v54, %cs:arg, %os:arg] -> [v55, %cs, %os]
-                                    results: [v55, v52, %cs:n125, %os:n125]
-                                  }
-                                branch 1:
-                                  region {
-                                    args: [arg0, arg1, %cs, %os]
-                                    results: [arg0, arg1, %cs:arg, %os:arg]
-                                  }
-                              } -> [v56, v57, %cs, %os]
-                              n127 = SetOutPtr [arg1, %os:n126] -> [%os]
-                              n128 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:n126, %os:n127] -> [%cs, %os]
-                              n129 = Add [arg2, v58] -> [v59]
-                              n130 = Add [arg1, v60] -> [v61]
-                              n131 = SlotAddr(2) [] -> [v62]
-                              n132 = CallIntrinsic(0x<ptr>, field_offset=0) [v62, %cs:n128, %os:n128] -> [%cs, %os]
-                              n133 = ReadFromSlot(2) [%cs:n132] -> [v63, %cs]
-                              n134 = CmpNe [v63, v58] -> [v64]
-                              results: [v64, v56, v61, v59, v57, %cs:n133, %os:n132]
-                            }
-                          } -> [v65, v66, v67, v68, %cs, %os]
-                          n136 = SetOutPtr [v49, %os:n135] -> [%os]
-                          n137 = WriteToField(offset=8, W8) [v65, %os:n136] -> [%os]
-                          n138 = WriteToField(offset=16, W8) [v67, %os:n137] -> [%os]
-                          n139 = WriteToField(offset=0, W8) [v68, %os:n138] -> [%os]
-                          results: [%cs:n135, %os:n139]
-                        }
-                    } -> [%cs, %os]
+                    n22 = apply @1 [%cs:arg, %os:arg] -> [%cs, %os]
                     n23 = Const(0x1) [] -> [v15]
                     n24 = Or [arg0, v15] -> [v16]
                     n25 = Const(0x1) [] -> [v17]
-                    results: [v16, v17, %cs:n140, %os:n140]
+                    results: [v16, v17, %cs:n22, %os:n22]
                   }
               } -> [v18, v19, %cs, %os]
               n28 = gamma [

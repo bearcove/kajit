@@ -781,13 +781,13 @@ impl IrDecoder for KajitPostcard {
                 lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W8, false, 64);
             }
             ScalarType::I16 => {
-                lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W2, true, 16);
+                builder.call_intrinsic(ifn(intrinsics::kajit_read_i16 as _), &[], offset, false);
             }
             ScalarType::I32 => {
-                lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W4, true, 32);
+                builder.call_intrinsic(ifn(intrinsics::kajit_read_i32 as _), &[], offset, false);
             }
             ScalarType::I64 => {
-                lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W8, true, 64);
+                builder.call_intrinsic(ifn(intrinsics::kajit_read_i64 as _), &[], offset, false);
             }
 
             ScalarType::Bool => {
