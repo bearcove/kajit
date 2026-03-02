@@ -2,7 +2,7 @@
 source: kajit/tests/generated_synthetic.rs
 expression: ir_text
 ---
-lambda @0 (shape: "(Ã¢ÂÂ¦)") {
+lambda @0 (shape: "(ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¦)") {
   region {
     args: [%cs, %os]
     n1 = BoundsCheck(1) [%cs:arg] -> [%cs]

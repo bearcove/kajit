@@ -1,0 +1,902 @@
+---
+source: kajit/tests/generated_synthetic.rs
+expression: disasm
+---
+> sub sp, sp, #0x210
+  stp x29, x30, [sp]
+  stp x19, x20, [sp, #0x10]
+  stp x21, x22, [sp, #0x20]
+  stp x23, x24, [sp, #0x30]
+  stp x25, x26, [sp, #0x40]
+  mov x29, sp
+  mov x21, x0
+  mov x22, x1
+  ldr x19, [x22]
+  ldr x20, [x22, #0x8]
+  str x19, [x22]
+  mov x0, x22
+  add x1, x21, #0x1c
+  mov x16, #<imm>
+  movk x16, #<imm>, lsl #16
+  movk x16, #<imm>, lsl #32
+  blr x16
+  ldr x19, [x22]
+  ldr w9, [x22, #0x10]
+  cbnz w9, $+0xd9c
+  mov x9, #<imm>
+  mov x2, x9
+  mov x9, #<imm>
+  mov x7, x9
+  mov x9, #<imm>
+  mov x8, x9
+  mov x9, #<imm>
+  mov x12, x9
+  str x12, [sp, #0x80]
+  mov x9, #<imm>
+  mov x6, x9
+  str x6, [sp, #0x88]
+  mov x9, #<imm>
+  mov x5, x9
+  str x5, [sp, #0x90]
+  mov x9, #<imm>
+  mov x4, x9
+  str x4, [sp, #0x98]
+  mov x9, #<imm>
+  mov x1, x9
+  str x1, [sp, #0xa0]
+  mov x9, #<imm>
+  mov x3, x9
+  str x3, [sp, #0xa8]
+  mov x9, #<imm>
+  mov x17, x9
+  mov x6, x17
+  mov x9, #<imm>
+  mov x11, x9
+  str x11, [sp, #0xe0]
+  mov x9, #<imm>
+  mov x0, x9
+  mov x4, x0
+  mov x9, #<imm>
+  mov x15, x9
+  str x15, [sp, #0xe8]
+  mov x9, #<imm>
+  mov x14, x9
+  str x14, [sp, #0xf0]
+  mov x9, #<imm>
+  mov x13, x9
+  str x13, [sp, #0xf8]
+  mov x9, #<imm>
+  mov x17, x9
+  str x17, [sp, #0x130]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x138]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x140]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x148]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x168]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x170]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x178]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x180]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x188]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x190]
+  mov x9, #<imm>
+  mov x23, x9
+  str x23, [sp, #0x198]
+  mov x9, #<imm>
+  mov x26, x9
+  str x26, [sp, #0x1a0]
+  mov x9, #<imm>
+  mov x25, x9
+  str x25, [sp, #0x1a8]
+  mov x9, #<imm>
+  mov x24, x9
+  str x24, [sp, #0x1b0]
+  mov x9, #<imm>
+  mov x26, x9
+  str x26, [sp, #0x1b8]
+  mov x9, #<imm>
+  mov x25, x9
+  str x25, [sp, #0x1c0]
+  mov x9, #<imm>
+  mov x17, x9
+  str x17, [sp, #0x1c8]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0xc10
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0xbf8
+  ldrb w9, [x19]
+  mov x11, x9
+  add x19, x19, #0x1
+  mov x5, x11
+  and x5, x5, x2
+  and x11, x11, x7
+  cmp x11, x8
+  b.ne $+0x28
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x7, x5
+  mov x12, x11
+  mov x12, x11
+  ldr x11, [sp, #0x80]
+  b $+0x14c
+  mov x9, #<imm>
+  mov x13, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x7, x9
+  str x7, [sp, #0x50]
+  mov x9, #<imm>
+  mov x8, x9
+  str x8, [sp, #0x58]
+  mov x9, #<imm>
+  mov x1, x9
+  str x1, [sp, #0x60]
+  mov x9, #<imm>
+  mov x3, x9
+  str x3, [sp, #0x68]
+  mov x9, #<imm>
+  mov x1, x9
+  str x1, [sp, #0x70]
+  mov x9, #<imm>
+  mov x11, x9
+  str x11, [sp, #0x78]
+  mov x2, x5
+  str x2, [sp, #0x1d0]
+  mov x3, x13
+  str x3, [sp, #0x1d8]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0xb2c
+  ldr x3, [sp, #0x1d8]
+  ldr x8, [sp, #0x58]
+  mov x13, x3
+  add x13, x13, x8
+  ldr x1, [sp, #0x60]
+  ldr x2, [sp, #0x1e0]
+  mov x23, x2
+  sub x23, x23, x1
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0xaf4
+  ldrb w9, [x19]
+  mov x11, x9
+  add x19, x19, #0x1
+  ldr x3, [sp, #0x78]
+  cmp x23, x3
+  cset x0, ne
+  ldr x1, [sp, #0x50]
+  mov x14, x11
+  and x14, x14, x1
+  ldr x1, [sp, #0x68]
+  mov x24, x11
+  and x24, x24, x1
+  ldr x12, [sp, #0x1d8]
+  mov x25, x14
+  lsl x25, x25, x12
+  ldr x3, [sp, #0x70]
+  cmp x24, x3
+  cset x15, ne
+  ldr x11, [sp, #0x1d0]
+  mov x24, x11
+  orr x24, x24, x25
+  and x0, x0, x15
+  mov x11, x24
+  str x11, [sp, #0x1d0]
+  mov x12, x13
+  str x12, [sp, #0x1d8]
+  mov x2, x23
+  str x2, [sp, #0x1e0]
+  mov x11, x14
+  mov x11, x15
+  cbnz x0, $+0xa94
+  ldr x15, [sp, #0x1d0]
+  mov x7, x15
+  mov x12, x11
+  cmp x12, x11
+  cset x12, ne
+  ldr x11, [sp, #0x88]
+  mov x9, x7
+  mov x10, x11
+  lsr x9, x9, x10
+  mov x11, x9
+  cbnz x12, $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0xa3c
+  ldr x12, [sp, #0x90]
+  cmp x11, x12
+  cset x11, ne
+  cbnz x11, $+0x8
+  b $+0x10
+  mov w9, #0xc
+  str w9, [x22, #0x10]
+  b $+0xa1c
+  mov x9, x7
+  strh w9, [x21, #0x18]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x9fc
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x9e4
+  ldrb w9, [x19]
+  mov x11, x9
+  add x19, x19, #0x1
+  ldr x12, [sp, #0x98]
+  mov x7, x11
+  and x7, x7, x12
+  ldr x12, [sp, #0xa0]
+  and x11, x11, x12
+  ldr x12, [sp, #0xa8]
+  cmp x11, x12
+  cset x11, ne
+  cbnz x11, $+0x28
+  mov x9, #<imm>
+  mov x14, x9
+  mov x9, #<imm>
+  mov x23, x9
+  mov x1, x7
+  mov x11, x23
+  mov x11, x23
+  mov x12, x6
+  b $+0x144
+  mov x9, #<imm>
+  mov x13, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x25, x9
+  mov x9, #<imm>
+  mov x2, x9
+  str x2, [sp, #0xb0]
+  mov x9, #<imm>
+  mov x3, x9
+  str x3, [sp, #0xb8]
+  mov x9, #<imm>
+  mov x17, x9
+  str x17, [sp, #0xc0]
+  mov x9, #<imm>
+  mov x11, x9
+  str x11, [sp, #0xc8]
+  mov x9, #<imm>
+  mov x1, x9
+  str x1, [sp, #0xd0]
+  mov x9, #<imm>
+  mov x11, x9
+  str x11, [sp, #0xd8]
+  mov x2, x7
+  str x2, [sp, #0x1e8]
+  mov x3, x13
+  str x3, [sp, #0x1f0]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x908
+  ldr x3, [sp, #0x1f0]
+  ldr x11, [sp, #0xb8]
+  mov x13, x3
+  add x13, x13, x11
+  ldr x1, [sp, #0xc0]
+  ldr x2, [sp, #0x1f8]
+  mov x11, x2
+  sub x11, x11, x1
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x8d0
+  ldrb w9, [x19]
+  mov x12, x9
+  add x19, x19, #0x1
+  ldr x2, [sp, #0xd8]
+  cmp x11, x2
+  cset x0, ne
+  ldr x3, [sp, #0xb0]
+  mov x14, x12
+  and x14, x14, x3
+  ldr x1, [sp, #0xc8]
+  and x12, x12, x1
+  ldr x23, [sp, #0x1f0]
+  mov x9, x14
+  mov x10, x23
+  lsl x9, x9, x10
+  mov x23, x9
+  ldr x3, [sp, #0xd0]
+  cmp x12, x3
+  cset x15, ne
+  ldr x12, [sp, #0x1e8]
+  orr x12, x12, x23
+  and x0, x0, x15
+  str x12, [sp, #0x1e8]
+  mov x12, x13
+  str x12, [sp, #0x1f0]
+  mov x2, x11
+  str x2, [sp, #0x1f8]
+  mov x11, x14
+  mov x11, x15
+  cbnz x0, $+0x8cc
+  ldr x15, [sp, #0x1e8]
+  mov x1, x15
+  cmp x11, x12
+  cset x13, ne
+  ldr x3, [sp, #0xe0]
+  mov x23, x1
+  lsr x23, x23, x3
+  cbnz x13, $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x828
+  mov x2, x4
+  cmp x23, x2
+  cset x23, ne
+  cbnz x23, $+0x8
+  b $+0x10
+  mov w9, #0xc
+  str w9, [x22, #0x10]
+  b $+0x808
+  mov x9, x1
+  str w9, [x21, #0x10]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x7e8
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x7d0
+  ldrb w9, [x19]
+  mov x11, x9
+  add x19, x19, #0x1
+  ldr x12, [sp, #0xe8]
+  mov x1, x11
+  and x1, x1, x12
+  ldr x12, [sp, #0xf0]
+  and x11, x11, x12
+  ldr x12, [sp, #0xf8]
+  cmp x11, x12
+  cset x11, ne
+  cbnz x11, $+0x30
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x15, x9
+  mov x23, x1
+  mov x14, x11
+  mov x13, x1
+  mov x11, x15
+  mov x11, x15
+  ldr x15, [sp, #0x130]
+  b $+0x13c
+  mov x9, #<imm>
+  mov x2, x9
+  mov x9, #<imm>
+  mov x3, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x13, x9
+  str x13, [sp, #0x100]
+  mov x9, #<imm>
+  mov x14, x9
+  str x14, [sp, #0x108]
+  mov x9, #<imm>
+  mov x15, x9
+  str x15, [sp, #0x110]
+  mov x9, #<imm>
+  mov x12, x9
+  str x12, [sp, #0x118]
+  mov x9, #<imm>
+  mov x0, x9
+  str x0, [sp, #0x120]
+  mov x9, #<imm>
+  mov x14, x9
+  str x14, [sp, #0x128]
+  mov x25, x1
+  mov x13, x25
+  mov x11, x2
+  mov x25, x11
+  mov x12, x3
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x6e8
+  mov x3, x25
+  ldr x15, [sp, #0x108]
+  mov x4, x3
+  add x4, x4, x15
+  ldr x15, [sp, #0x110]
+  mov x23, x12
+  sub x23, x23, x15
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x6b4
+  ldrb w9, [x19]
+  mov x11, x9
+  add x19, x19, #0x1
+  ldr x15, [sp, #0x128]
+  cmp x23, x15
+  cset x7, ne
+  ldr x12, [sp, #0x100]
+  mov x5, x11
+  and x5, x5, x12
+  ldr x0, [sp, #0x118]
+  mov x24, x11
+  and x24, x24, x0
+  mov x25, x5
+  lsl x25, x25, x3
+  ldr x1, [sp, #0x120]
+  cmp x24, x1
+  cset x6, ne
+  mov x2, x13
+  mov x24, x2
+  orr x24, x24, x25
+  mov x2, x24
+  mov x3, x4
+  mov x12, x23
+  mov x4, x5
+  mov x11, x6
+  cbz x6, $+0x8
+  cbnz x7, $+0x714
+  mov x23, x2
+  mov x14, x12
+  mov x13, x4
+  cmp x11, x15
+  b.ne $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x624
+  cbnz x14, $+0x38
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x11, x9
+  and x12, x12, x13
+  mov x10, #<imm>
+  cmp x12, x10
+  b.ne $+0x8
+  b $+0x14
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x5f0
+  b $+0x4
+  mov x9, x23
+  str x9, [x21]
+  str x19, [x22]
+  mov x0, x22
+  add x1, x21, #0x1d
+  mov x16, #<imm>
+  movk x16, #<imm>, lsl #16
+  movk x16, #<imm>, lsl #32
+  blr x16
+  ldr x19, [x22]
+  ldr w9, [x22, #0x10]
+  cbnz w9, $+0x5bc
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x5a4
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x58c
+  ldrb w9, [x19]
+  mov x11, x9
+  add x19, x19, #0x1
+  ldr x15, [sp, #0x138]
+  mov x17, x11
+  and x17, x17, x15
+  ldr x0, [sp, #0x140]
+  mov x23, x11
+  and x23, x23, x0
+  ldr x1, [sp, #0x148]
+  cmp x23, x1
+  cset x23, ne
+  cbnz x23, $+0x28
+  mov x9, #<imm>
+  mov x24, x9
+  mov x9, #<imm>
+  mov x26, x9
+  mov x11, x17
+  mov x12, x26
+  ldr x7, [sp, #0x168]
+  mov x12, x26
+  b $+0xfc
+  mov x9, #<imm>
+  mov x2, x9
+  mov x9, #<imm>
+  mov x3, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x23, x9
+  str x23, [sp, #0x150]
+  mov x9, #<imm>
+  mov x14, x9
+  str x14, [sp, #0x158]
+  mov x9, #<imm>
+  mov x15, x9
+  mov x9, #<imm>
+  mov x0, x9
+  mov x9, #<imm>
+  mov x1, x9
+  str x1, [sp, #0x160]
+  mov x1, x17
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x4c4
+  ldr x11, [sp, #0x150]
+  mov x4, x2
+  add x4, x4, x11
+  ldr x14, [sp, #0x158]
+  sub x3, x3, x14
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x498
+  ldrb w9, [x19]
+  mov x11, x9
+  add x19, x19, #0x1
+  ldr x13, [sp, #0x160]
+  cmp x3, x13
+  cset x7, ne
+  mov x5, x11
+  and x5, x5, x12
+  and x11, x11, x15
+  mov x13, x5
+  lsl x13, x13, x2
+  cmp x11, x0
+  cset x6, ne
+  mov x11, x1
+  orr x11, x11, x13
+  mov x1, x11
+  mov x2, x4
+  mov x11, x5
+  mov x13, x6
+  cbz x6, $+0x8
+  cbnz x7, $+0x55c
+  mov x11, x1
+  mov x12, x13
+  cmp x12, x7
+  cset x23, ne
+  ldr x17, [sp, #0x170]
+  mov x26, x11
+  lsr x26, x26, x17
+  mov x9, x11
+  lsr w10, w9, #0x1
+  and w16, w9, #0x1
+  neg w16, w16
+  eor w9, w10, w16
+  mov x11, x9
+  cbnz x23, $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x3fc
+  ldr x24, [sp, #0x178]
+  cmp x26, x24
+  cset x12, ne
+  cbnz x12, $+0x8
+  b $+0x10
+  mov w9, #0xc
+  str w9, [x22, #0x10]
+  b $+0x3dc
+  mov x9, x11
+  strh w9, [x21, #0x1a]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x3bc
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x3a4
+  ldrb w9, [x19]
+  mov x12, x9
+  add x19, x19, #0x1
+  ldr x11, [sp, #0x180]
+  mov x1, x12
+  and x1, x1, x11
+  ldr x14, [sp, #0x188]
+  mov x11, x12
+  and x11, x11, x14
+  ldr x13, [sp, #0x190]
+  cmp x11, x13
+  cset x11, ne
+  cbnz x11, $+0x28
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x11, x1
+  mov x23, x12
+  ldr x8, [sp, #0x198]
+  mov x23, x12
+  b $+0xdc
+  mov x9, #<imm>
+  mov x2, x9
+  mov x9, #<imm>
+  mov x3, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x15, x9
+  mov x9, #<imm>
+  mov x13, x9
+  mov x9, #<imm>
+  mov x14, x9
+  mov x9, #<imm>
+  mov x0, x9
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x2ec
+  mov x4, x2
+  add x4, x4, x12
+  sub x3, x3, x15
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x2c8
+  ldrb w9, [x19]
+  mov x23, x9
+  add x19, x19, #0x1
+  cmp x3, x0
+  cset x7, ne
+  mov x5, x23
+  and x5, x5, x11
+  and x23, x23, x13
+  mov x26, x5
+  lsl x26, x26, x2
+  cmp x23, x14
+  cset x6, ne
+  mov x23, x1
+  orr x23, x23, x26
+  mov x1, x23
+  mov x2, x4
+  mov x23, x5
+  mov x23, x6
+  cbz x6, $+0x8
+  cbnz x7, $+0x3c8
+  mov x11, x1
+  cmp x23, x8
+  cset x13, ne
+  ldr x26, [sp, #0x1a0]
+  mov x12, x11
+  lsr x12, x12, x26
+  mov x9, x11
+  lsr w10, w9, #0x1
+  and w16, w9, #0x1
+  neg w16, w16
+  eor w9, w10, w16
+  mov x11, x9
+  cbnz x13, $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x234
+  ldr x25, [sp, #0x1a8]
+  cmp x12, x25
+  cset x12, ne
+  cbnz x12, $+0x8
+  b $+0x10
+  mov w9, #0xc
+  str w9, [x22, #0x10]
+  b $+0x214
+  mov x9, x11
+  str w9, [x21, #0x14]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x1f4
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x1dc
+  ldrb w9, [x19]
+  mov x12, x9
+  add x19, x19, #0x1
+  ldr x4, [sp, #0x1b0]
+  mov x25, x12
+  and x25, x25, x4
+  ldr x5, [sp, #0x1b8]
+  mov x23, x12
+  and x23, x23, x5
+  ldr x6, [sp, #0x1c0]
+  cmp x23, x6
+  cset x23, ne
+  cbnz x23, $+0x30
+  mov x9, #<imm>
+  mov x26, x9
+  mov x9, #<imm>
+  mov x14, x9
+  mov x11, x25
+  mov x13, x26
+  mov x12, x25
+  mov x15, x14
+  mov x15, x14
+  ldr x23, [sp, #0x1c8]
+  b $+0xec
+  mov x9, #<imm>
+  mov x26, x9
+  mov x9, #<imm>
+  mov x0, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x13, x9
+  mov x9, #<imm>
+  mov x14, x9
+  mov x9, #<imm>
+  mov x15, x9
+  mov x9, #<imm>
+  mov x24, x9
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x11c
+  mov x1, x26
+  add x1, x1, x12
+  sub x0, x0, x13
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0xf8
+  ldrb w9, [x19]
+  mov x23, x9
+  add x19, x19, #0x1
+  cmp x0, x24
+  cset x5, ne
+  mov x2, x23
+  and x2, x2, x11
+  and x23, x23, x14
+  mov x9, x2
+  mov x10, x26
+  lsl x9, x9, x10
+  mov x26, x9
+  cmp x23, x15
+  cset x7, ne
+  mov x23, x25
+  orr x23, x23, x26
+  mov x25, x23
+  mov x26, x1
+  mov x1, x7
+  cbz x7, $+0x8
+  cbnz x5, $+0x214
+  mov x11, x25
+  mov x13, x0
+  mov x12, x2
+  mov x15, x1
+  cmp x15, x23
+  mov x9, x11
+  lsr x10, x9, #0x1
+  and x16, x9, #0x1
+  neg x16, x16
+  eor x9, x10, x16
+  mov x11, x9
+  b.ne $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x64
+  cbnz x13, $+0x38
+  mov x9, #<imm>
+  mov x14, x9
+  mov x9, #<imm>
+  mov x13, x9
+  and x12, x12, x14
+  mov x10, #<imm>
+  cmp x12, x10
+  b.ne $+0x8
+  b $+0x14
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x30
+  b $+0x4
+  mov x9, x11
+  str x9, [x21, #0x8]
+  str x19, [x22]
+  ldp x25, x26, [sp, #0x40]
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x210
+  ret
+  ldp x25, x26, [sp, #0x40]
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x210
+  ret

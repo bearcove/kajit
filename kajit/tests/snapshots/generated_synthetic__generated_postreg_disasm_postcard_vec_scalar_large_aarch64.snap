@@ -1,6 +1,5 @@
 ---
-source: kajit/tests/postreg_vec_hotpath_corpus.rs
-assertion_line: 108
+source: kajit/tests/generated_synthetic.rs
 expression: disasm
 ---
 > sub sp, sp, #0xa0

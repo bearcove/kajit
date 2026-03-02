@@ -1,0 +1,5 @@
+---
+source: kajit/tests/generated_synthetic.rs
+expression: "format!(\"{edits}\")"
+---
+26

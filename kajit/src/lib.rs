@@ -145,10 +145,18 @@ fn scrub_volatile_intrinsic_addrs(text: &str) -> String {
     // Display dumps include intrinsic function pointer addresses which are process-local and
     // unstable across runs. Replace only those pointer fields to keep snapshots deterministic.
     let text = scrub_hex_after_prefix(text, "CallIntrinsic(0x");
-    scrub_hex_after_prefix(&text, "call_intrinsic(0x")
+    let text = scrub_hex_after_prefix(&text, "call_intrinsic(0x");
+    let text = scrub_hex_after_prefix(&text, "CallPure(0x");
+    let text = scrub_hex_after_prefix(&text, "call_pure(0x");
+    let text = scrub_hex_after_prefix_with_min_len(&text, "Const(0x", 9);
+    scrub_hex_after_prefix_with_min_len(&text, "const(0x", 9)
 }
 
 fn scrub_hex_after_prefix(input: &str, prefix: &str) -> String {
+    scrub_hex_after_prefix_with_min_len(input, prefix, 1)
+}
+
+fn scrub_hex_after_prefix_with_min_len(input: &str, prefix: &str, min_hex_len: usize) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();
     let prefix_bytes = prefix.as_bytes();
@@ -166,8 +174,10 @@ fn scrub_hex_after_prefix(input: &str, prefix: &str) -> String {
                 i += 1;
             }
 
-            if i > start {
+            if i - start >= min_hex_len {
                 out.push_str("<ptr>");
+            } else {
+                out.push_str(&input[start..i]);
             }
             continue;
         }

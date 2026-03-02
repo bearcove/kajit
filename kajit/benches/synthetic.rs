@@ -54,6 +54,7 @@ struct BoolField {
 struct ScalarVec {
     values: Vec<u32>,
 }
+#[allow(dead_code)]
 type Pair = (u32, String);
 fn register_bench_case<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
 where

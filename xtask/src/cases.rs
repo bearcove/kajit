@@ -66,6 +66,7 @@ pub(crate) fn types_rs() -> TokenStream {
             values: Vec<u32>,
         }
 
+        #[allow(dead_code)]
         type Pair = (u32, String);
     }
 }
@@ -316,10 +317,12 @@ pub(crate) fn render_test_file() -> String {
         .map(|case| {
             let test_name = format_ident!("generated_json_{}", case.name);
             let value = case.value.clone();
+            let case_name = case.name;
             quote! {
                 #[test]
                 fn #test_name() {
                     let value = #value;
+                    assert_codegen_snapshots("json", #case_name, &kajit::json::KajitJson, &value);
                     assert_json_case(value);
                 }
             }
@@ -335,14 +338,18 @@ pub(crate) fn render_test_file() -> String {
                 #[test]
                 fn #test_name() {
                     let value = #value;
-                    assert_ir_ra_snapshots("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
-                    assert_postcard_case(value, true);
+                    assert_codegen_snapshots("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
+                    assert_postcard_case(value);
                 }
             }
         })
         .collect();
     let file_tokens = quote! {
         use facet::Facet;
+        use std::fmt::Write;
+        #[cfg(target_arch = "x86_64")]
+        use yaxpeax_arch::LengthedInstruction;
+        use yaxpeax_arch::{Decoder, U8Reader};
 
         #types
 
@@ -357,7 +364,7 @@ pub(crate) fn render_test_file() -> String {
             assert_eq!(got, expected);
         }
 
-        fn assert_postcard_case<T>(value: T, with_ir: bool)
+        fn assert_postcard_case<T>(value: T)
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
         {
@@ -366,24 +373,104 @@ pub(crate) fn render_test_file() -> String {
             let legacy = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
             let legacy_out: T = kajit::deserialize(&legacy, &encoded).unwrap();
             assert_eq!(legacy_out, expected);
-            if with_ir {
-                let ir = kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
-                let ir_out: T = kajit::deserialize(&ir, &encoded).unwrap();
-                assert_eq!(ir_out, expected);
-            }
+            let ir = kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let ir_out: T = kajit::deserialize(&ir, &encoded).unwrap();
+            assert_eq!(ir_out, expected);
         }
 
-        fn assert_ir_ra_snapshots<T>(
+        fn disasm_bytes(code: &[u8], marker_offset: Option<usize>) -> String {
+            let mut out = String::new();
+
+            #[cfg(target_arch = "aarch64")]
+            {
+                use yaxpeax_arm::armv8::a64::InstDecoder;
+
+                let decoder = InstDecoder::default();
+                let mut reader = U8Reader::new(code);
+                let mut offset = 0usize;
+                let mut ret_count = 0u32;
+
+                while offset + 4 <= code.len() {
+                    let prefix = if marker_offset == Some(offset) { "> " } else { "  " };
+                    match decoder.decode(&mut reader) {
+                        Ok(inst) => {
+                            let text = kajit::disasm_normalize::normalize_inst(&format!("{inst}"));
+                            writeln!(&mut out, "{prefix}{text}").unwrap();
+                            if text.trim() == "ret" {
+                                ret_count += 1;
+                                if ret_count >= 2 {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            let word = u32::from_le_bytes(code[offset..offset + 4].try_into().unwrap());
+                            writeln!(&mut out, "{prefix}<{e}> (0x{word:08x})").unwrap();
+                        }
+                    }
+                    offset += 4;
+                }
+            }
+
+            #[cfg(target_arch = "x86_64")]
+            {
+                use yaxpeax_x86::amd64::InstDecoder;
+
+                let decoder = InstDecoder::default();
+                let mut reader = U8Reader::new(code);
+                let mut offset = 0usize;
+                let mut ret_count = 0u32;
+
+                while offset < code.len() {
+                    let prefix = if marker_offset == Some(offset) { "> " } else { "  " };
+                    match decoder.decode(&mut reader) {
+                        Ok(inst) => {
+                            let len = inst.len().to_const() as usize;
+                            let text = kajit::disasm_normalize::normalize_inst(&format!("{inst}"));
+                            writeln!(&mut out, "{prefix}{text}").unwrap();
+                            if text.trim() == "ret" {
+                                ret_count += 1;
+                                if ret_count >= 2 {
+                                    break;
+                                }
+                            }
+                            offset += len;
+                        }
+                        Err(_) => {
+                            writeln!(&mut out, "{prefix}<decode error> (0x{:02x})", code[offset]).unwrap();
+                            offset += 1;
+                        }
+                    }
+                }
+            }
+
+            out
+        }
+
+        fn codegen_artifacts<T, F>(decoder: &F) -> (String, String, usize, String)
+        where
+            for<'input> T: Facet<'input>,
+            F: kajit::format::Decoder + kajit::format::IrDecoder,
+        {
+            let shape = T::SHAPE;
+            let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
+            let edits = kajit::regalloc_edit_count_via_ir(shape, decoder);
+            let compiled = kajit::compile_decoder_with_backend(shape, decoder, kajit::DecoderBackend::Ir);
+            let disasm = disasm_bytes(compiled.code(), Some(compiled.entry_offset()));
+            (ir_text, ra_text, edits, disasm)
+        }
+
+        fn assert_codegen_snapshots<T, F>(
             format_label: &str,
             case: &str,
-            decoder: &dyn kajit::format::IrDecoder,
+            decoder: &F,
             _marker: &T,
         )
         where
             for<'input> T: Facet<'input>,
+            F: kajit::format::Decoder + kajit::format::IrDecoder,
         {
-            let shape = T::SHAPE;
-            let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
+            let (ir_text, ra_text, edits, disasm) = codegen_artifacts::<T, F>(decoder);
             insta::assert_snapshot!(
                 format!(
                     "generated_rvsdg_{}_{}_{}",
@@ -401,6 +488,52 @@ pub(crate) fn render_test_file() -> String {
                     std::env::consts::ARCH
                 ),
                 ra_text
+            );
+            insta::assert_snapshot!(
+                format!(
+                    "generated_postreg_disasm_{}_{}_{}",
+                    format_label,
+                    case,
+                    std::env::consts::ARCH
+                ),
+                disasm
+            );
+            insta::assert_snapshot!(
+                format!(
+                    "generated_postreg_edits_{}_{}_{}",
+                    format_label,
+                    case,
+                    std::env::consts::ARCH
+                ),
+                format!("{edits}")
+            );
+        }
+
+        #[test]
+        fn generated_postreg_hotpath_asserts_postcard_vec_scalar_large() {
+            let (ir_text, ra_text, edits, disasm) =
+                codegen_artifacts::<ScalarVec, _>(&kajit::postcard::KajitPostcard);
+
+            assert!(ir_text.contains("theta"), "expected loop (`theta`) in IR");
+            assert!(
+                ra_text.contains("branch_if"),
+                "expected loop backedge in RA-MIR"
+            );
+            assert!(
+                ra_text.contains("call_intrinsic"),
+                "expected intrinsic-heavy vec decode path in RA-MIR"
+            );
+            assert!(edits <= 128, "expected edit budget <= 128, got {edits}");
+
+            #[cfg(target_arch = "aarch64")]
+            assert!(
+                disasm.contains("blr x16"),
+                "expected intrinsic call sites in aarch64 disasm"
+            );
+            #[cfg(target_arch = "x86_64")]
+            assert!(
+                disasm.contains("call"),
+                "expected intrinsic call sites in x86_64 disasm"
             );
         }
 
