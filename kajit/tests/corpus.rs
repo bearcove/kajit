@@ -2827,6 +2827,42 @@ mod format_specific {
     use super::*;
     use std::borrow::Cow;
     #[test]
+    fn compile_decoder_with_backend_ir_supports_json_scalars() {
+        let via_ir = kajit::compile_decoder_with_backend(
+            <u32 as facet::Facet>::SHAPE,
+            &kajit::json::KajitJson,
+            kajit::DecoderBackend::Ir,
+        );
+        let got: u32 = kajit::from_str(&via_ir, "42").unwrap();
+        assert_eq!(got, 42);
+    }
+    #[test]
+    fn compile_decoder_with_backend_ir_supports_json_structs() {
+        let via_ir = kajit::compile_decoder_with_backend(
+            Friend::SHAPE,
+            &kajit::json::KajitJson,
+            kajit::DecoderBackend::Ir,
+        );
+        let got: Friend = kajit::from_str(&via_ir, r#"{"name":"Alice","age":42}"#)
+            .unwrap();
+        assert_eq!(got, Friend { age : 42, name : "Alice".into(), });
+    }
+    #[test]
+    #[should_panic(expected = "field name collision")]
+    fn flatten_name_collision() {
+        #[derive(Facet)]
+        struct Collider {
+            x: u32,
+        }
+        #[derive(Facet)]
+        struct HasCollision {
+            x: u32,
+            #[facet(flatten)]
+            inner: Collider,
+        }
+        kajit::compile_decoder(HasCollision::SHAPE, &kajit::json::KajitJson);
+    }
+    #[test]
     fn postcard_nested_struct_ir_uses_apply_nodes() {
         let (ir_text, _ra_text) = kajit::debug_ir_and_ra_mir_text(
             Outer::SHAPE,
