@@ -3763,7 +3763,7 @@ mod tests {
         };
         let bytes = postcard::to_allocvec(&expected).expect("serialize vec");
 
-        let ir = crate::compile_decoder_via_ir(ScalarVec::SHAPE, &crate::postcard::KajitPostcard);
+        let ir = crate::compile_decoder(ScalarVec::SHAPE, &crate::postcard::KajitPostcard);
 
         let ir_out = crate::deserialize::<ScalarVec>(&ir, &bytes).expect("ir decode");
         let serde_out = postcard::from_bytes::<ScalarVec>(&bytes).expect("serde decode");

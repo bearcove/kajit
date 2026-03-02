@@ -23,7 +23,7 @@ macro_rules! load_imm64 {
     }};
 }
 
-/// Base frame size for legacy lowering: 3 pairs of callee-saved registers = 48 bytes.
+/// Base frame size: 3 pairs of callee-saved registers = 48 bytes.
 pub const BASE_FRAME: u32 = 48;
 /// Maximum base frame size for regalloc-aware lowering when saving x23..x28.
 pub const REGALLOC_BASE_FRAME: u32 = 96;

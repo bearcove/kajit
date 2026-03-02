@@ -32,29 +32,12 @@ pub fn compile_decoder(
     shape: &'static facet::Shape,
     decoder: &dyn format::Decoder,
 ) -> CompiledDecoder {
-    let ir_decoder = decoder.as_ir_decoder().unwrap_or_else(|| {
-        panic!(
-            "format {:?} does not implement IrDecoder",
-            core::any::type_name_of_val(decoder)
-        )
-    });
-    compiler::compile_decoder_via_ir_dyn(shape, decoder, ir_decoder)
-}
-
-/// Compile a deserializer using IR lowering + linearization + backend adapter.
-pub fn compile_decoder_via_ir<F: format::Decoder + format::IrDecoder>(
-    shape: &'static facet::Shape,
-    decoder: &F,
-) -> CompiledDecoder {
-    compiler::compile_decoder_via_ir(shape, decoder)
+    compiler::compile_decoder(shape, decoder)
 }
 
 /// Return the number of regalloc edit instructions produced by IR lowering.
-pub fn regalloc_edit_count_via_ir<F: format::IrDecoder>(
-    shape: &'static facet::Shape,
-    decoder: &F,
-) -> usize {
-    compiler::regalloc_edit_count_via_ir(shape, decoder)
+pub fn regalloc_edit_count<F: format::Decoder>(shape: &'static facet::Shape, decoder: &F) -> usize {
+    compiler::regalloc_edit_count(shape, decoder)
 }
 
 /// Compile a deserializer from already-linearized IR.
@@ -70,7 +53,7 @@ pub fn compile_decoder_linear_ir(
 /// Intended for snapshot tests and debugging.
 pub fn debug_ir_and_ra_mir_text(
     shape: &'static facet::Shape,
-    ir_decoder: &dyn format::IrDecoder,
+    ir_decoder: &dyn format::Decoder,
 ) -> (String, String) {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     ir_passes::run_default_passes(&mut func);
@@ -86,7 +69,7 @@ pub fn debug_ir_and_ra_mir_text(
 /// Intended for snapshot tests and debugging.
 pub fn debug_linear_ir_text(
     shape: &'static facet::Shape,
-    ir_decoder: &dyn format::IrDecoder,
+    ir_decoder: &dyn format::Decoder,
 ) -> String {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     ir_passes::run_default_passes(&mut func);

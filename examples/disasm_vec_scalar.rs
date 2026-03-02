@@ -12,8 +12,8 @@ struct ScalarVec {
 }
 
 fn main() {
-    let legacy = kajit::compile_decoder_legacy(ScalarVec::SHAPE, &kajit::postcard::KajitPostcard);
-    let ir = kajit::compile_decoder_via_ir(ScalarVec::SHAPE, &kajit::postcard::KajitPostcard);
+    let legacy = kajit::compile_decoder(ScalarVec::SHAPE, &kajit::postcard::KajitPostcard);
+    let ir = kajit::compile_decoder(ScalarVec::SHAPE, &kajit::postcard::KajitPostcard);
 
     println!("=== kajit postcard ScalarVec (legacy) ===");
     println!(

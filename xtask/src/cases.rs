@@ -2175,11 +2175,11 @@ pub(crate) fn render_test_file() -> String {
         fn codegen_artifacts<T, F>(decoder: &F) -> (String, String, usize, String)
         where
             for<'input> T: Facet<'input>,
-            F: kajit::format::Decoder + kajit::format::IrDecoder,
+            F: kajit::format::Decoder,
         {
             let shape = T::SHAPE;
             let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
-            let edits = kajit::regalloc_edit_count_via_ir(shape, decoder);
+            let edits = kajit::regalloc_edit_count(shape, decoder);
             let compiled = kajit::compile_decoder(shape, decoder);
             let disasm = disasm_bytes(compiled.code(), Some(compiled.entry_offset()));
             (ir_text, ra_text, edits, disasm)
@@ -2193,7 +2193,7 @@ pub(crate) fn render_test_file() -> String {
         )
         where
             for<'input> T: Facet<'input>,
-            F: kajit::format::Decoder + kajit::format::IrDecoder,
+            F: kajit::format::Decoder,
         {
             let (ir_text, ra_text, edits, disasm) = codegen_artifacts::<T, F>(decoder);
             insta::assert_snapshot!(
