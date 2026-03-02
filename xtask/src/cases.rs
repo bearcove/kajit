@@ -1666,13 +1666,9 @@ pub(crate) fn render_bench_file() -> String {
 
             let json_decoder =
                 Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson));
-            let json_encoder =
-                Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::json::KajitJsonEncoder));
 
             let postcard_decoder =
                 Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard));
-            let postcard_encoder =
-                Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::postcard::KajitPostcard));
 
             let json_prefix = format!("{group}/json");
             let postcard_prefix = format!("{group}/postcard");
@@ -1712,19 +1708,6 @@ pub(crate) fn render_bench_file() -> String {
                     }
                 }),
             });
-            v.push(harness::Bench {
-                name: format!("{json_prefix}/kajit_dynasm_ser"),
-                func: Box::new({
-                    let value = Arc::clone(&value);
-                    let encoder = Arc::clone(&json_encoder);
-                    move |runner| {
-                        let encoder = &*encoder;
-                        runner.run(|| {
-                            black_box(kajit::serialize(encoder, black_box(&*value)));
-                        });
-                    }
-                }),
-            });
 
             v.push(harness::Bench {
                 name: format!("{postcard_prefix}/serde_deser"),
@@ -1757,19 +1740,6 @@ pub(crate) fn render_bench_file() -> String {
                     move |runner| {
                         runner.run(|| {
                             black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
-                        });
-                    }
-                }),
-            });
-            v.push(harness::Bench {
-                name: format!("{postcard_prefix}/kajit_dynasm_ser"),
-                func: Box::new({
-                    let value = Arc::clone(&value);
-                    let encoder = Arc::clone(&postcard_encoder);
-                    move |runner| {
-                        let encoder = &*encoder;
-                        runner.run(|| {
-                            black_box(kajit::serialize(encoder, black_box(&*value)));
                         });
                     }
                 }),

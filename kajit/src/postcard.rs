@@ -1,115 +1,14 @@
 use facet::ScalarType;
 
-use crate::arch::EmitCtx;
-use crate::format::{Decoder, Encoder, FieldEncodeInfo, FieldLowerInfo};
+use crate::format::{Decoder, FieldLowerInfo};
 use crate::intrinsics;
 use crate::ir::{IntrinsicFn, IrOp, PortSource, RegionBuilder, SlotId};
-use crate::recipe::{self, Width};
 
 // r[impl deser.postcard.struct]
 
 /// Postcard wire format — fields in declaration order, varint-encoded integers,
 /// length-prefixed strings.
 pub struct KajitPostcard;
-
-impl Encoder for KajitPostcard {
-    fn supports_inline_nested(&self) -> bool {
-        true
-    }
-
-    fn emit_encode_struct_fields(
-        &self,
-        ectx: &mut EmitCtx,
-        fields: &[FieldEncodeInfo],
-        emit_field: &mut dyn FnMut(&mut EmitCtx, &FieldEncodeInfo),
-    ) {
-        // Postcard: fields in declaration order, no framing.
-        for field in fields {
-            emit_field(ectx, field);
-        }
-    }
-
-    fn emit_encode_scalar(&self, ectx: &mut EmitCtx, offset: usize, scalar_type: ScalarType) {
-        let offset = offset as u32;
-        match scalar_type {
-            // Fixed-size: raw bytes, no varint.
-            ScalarType::U8 | ScalarType::I8 | ScalarType::Bool => {
-                ectx.emit_recipe(&recipe::encode_raw(offset, Width::W1));
-            }
-            ScalarType::F32 => {
-                ectx.emit_recipe(&recipe::encode_raw(offset, Width::W4));
-            }
-            ScalarType::F64 => {
-                ectx.emit_recipe(&recipe::encode_raw(offset, Width::W8));
-            }
-
-            // Varint-encoded unsigned integers.
-            ScalarType::U16 => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W2, false));
-            }
-            ScalarType::U32 => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W4, false));
-            }
-            ScalarType::U64 => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W8, false));
-            }
-            ScalarType::USize => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W8, false));
-            }
-
-            // Zigzag + varint signed integers.
-            ScalarType::I16 => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W2, true));
-            }
-            ScalarType::I32 => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W4, true));
-            }
-            ScalarType::I64 => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W8, true));
-            }
-            ScalarType::ISize => {
-                ectx.emit_recipe(&recipe::encode_varint(offset, Width::W8, true));
-            }
-
-            // Multi-byte varints — intrinsic calls.
-            ScalarType::U128 => {
-                ectx.emit_enc_call_intrinsic_with_input(
-                    intrinsics::kajit_encode_u128 as *const u8,
-                    offset,
-                );
-            }
-            ScalarType::I128 => {
-                ectx.emit_enc_call_intrinsic_with_input(
-                    intrinsics::kajit_encode_i128 as *const u8,
-                    offset,
-                );
-            }
-            ScalarType::Char => {
-                ectx.emit_enc_call_intrinsic_with_input(
-                    intrinsics::kajit_encode_char as *const u8,
-                    offset,
-                );
-            }
-
-            _ => panic!("unsupported postcard encode scalar: {:?}", scalar_type),
-        }
-    }
-
-    fn emit_encode_string(
-        &self,
-        ectx: &mut EmitCtx,
-        offset: usize,
-        _scalar_type: ScalarType,
-        _string_offsets: &crate::malum::StringOffsets,
-    ) {
-        // All string-like types (String, &str, Cow<str>) share the same (ptr, len)
-        // layout. The intrinsic reads ptr and len using discovered offsets.
-        ectx.emit_enc_call_intrinsic_with_input(
-            intrinsics::kajit_encode_postcard_string as *const u8,
-            offset as u32,
-        );
-    }
-}
 
 // =============================================================================
 // IR lowering — produce RVSDG nodes instead of machine code

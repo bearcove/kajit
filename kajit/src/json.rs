@@ -1,8 +1,7 @@
 use facet::ScalarType;
 
-use crate::arch::EmitCtx;
 use crate::context::ErrorCode;
-use crate::format::{Decoder, Encoder, FieldEncodeInfo, FieldLowerInfo};
+use crate::format::{Decoder, FieldLowerInfo};
 use crate::intrinsics;
 use crate::ir::{IntrinsicFn, RegionBuilder};
 use crate::json_intrinsics;
@@ -413,86 +412,5 @@ impl Decoder for KajitJson {
             }
             _ => unreachable!(),
         });
-    }
-}
-
-// ── JSON Encoder// ── JSON Encoder ────────────────────────────────────────────────────
-
-/// Compact JSON encoder — no whitespace between tokens.
-pub struct KajitJsonEncoder;
-
-impl Encoder for KajitJsonEncoder {
-    fn supports_inline_nested(&self) -> bool {
-        false // JSON needs `{`/`}` framing per struct level
-    }
-
-    fn emit_encode_struct_fields(
-        &self,
-        ectx: &mut EmitCtx,
-        fields: &[FieldEncodeInfo],
-        emit_field: &mut dyn FnMut(&mut EmitCtx, &FieldEncodeInfo),
-    ) {
-        for (i, field) in fields.iter().enumerate() {
-            // Build the literal prefix for this field:
-            // First field:  {"fieldname":
-            // Subsequent:   ,"fieldname":
-            let mut prefix = Vec::new();
-            if i == 0 {
-                prefix.push(b'{');
-            } else {
-                prefix.push(b',');
-            }
-            prefix.push(b'"');
-            prefix.extend_from_slice(field.name.as_bytes());
-            prefix.push(b'"');
-            prefix.push(b':');
-
-            ectx.emit_recipe(&crate::recipe::write_literal(&prefix));
-            emit_field(ectx, field);
-        }
-
-        if fields.is_empty() {
-            // Empty struct: just "{}"
-            ectx.emit_recipe(&crate::recipe::write_literal(b"{}"));
-        } else {
-            ectx.emit_recipe(&crate::recipe::write_literal(b"}"));
-        }
-    }
-
-    fn emit_encode_scalar(&self, ectx: &mut EmitCtx, offset: usize, scalar_type: ScalarType) {
-        let fn_ptr: *const u8 = match scalar_type {
-            ScalarType::U8 => json_intrinsics::kajit_json_write_u8 as _,
-            ScalarType::U16 => json_intrinsics::kajit_json_write_u16 as _,
-            ScalarType::U32 => json_intrinsics::kajit_json_write_u32 as _,
-            ScalarType::U64 => json_intrinsics::kajit_json_write_u64 as _,
-            ScalarType::U128 => json_intrinsics::kajit_json_write_u128 as _,
-            ScalarType::USize => json_intrinsics::kajit_json_write_usize as _,
-            ScalarType::I8 => json_intrinsics::kajit_json_write_i8 as _,
-            ScalarType::I16 => json_intrinsics::kajit_json_write_i16 as _,
-            ScalarType::I32 => json_intrinsics::kajit_json_write_i32 as _,
-            ScalarType::I64 => json_intrinsics::kajit_json_write_i64 as _,
-            ScalarType::I128 => json_intrinsics::kajit_json_write_i128 as _,
-            ScalarType::ISize => json_intrinsics::kajit_json_write_isize as _,
-            ScalarType::F32 => json_intrinsics::kajit_json_write_f32 as _,
-            ScalarType::F64 => json_intrinsics::kajit_json_write_f64 as _,
-            ScalarType::Bool => json_intrinsics::kajit_json_write_bool as _,
-            ScalarType::Char => json_intrinsics::kajit_json_write_char as _,
-            ScalarType::Unit => json_intrinsics::kajit_json_write_unit as _,
-            _ => panic!("unsupported JSON scalar for encode: {:?}", scalar_type),
-        };
-        ectx.emit_enc_call_intrinsic_with_input(fn_ptr, offset as u32);
-    }
-
-    fn emit_encode_string(
-        &self,
-        ectx: &mut EmitCtx,
-        offset: usize,
-        _scalar_type: ScalarType,
-        _string_offsets: &crate::malum::StringOffsets,
-    ) {
-        ectx.emit_enc_call_intrinsic_with_input(
-            json_intrinsics::kajit_json_write_string as *const u8,
-            offset as u32,
-        );
     }
 }
