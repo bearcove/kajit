@@ -516,6 +516,110 @@ pub(crate) fn cases() -> Vec<Case> {
             inputs: vec![],
         },
         Case {
+            name: "scalar_u16",
+            ty: quote!(u16),
+            values: vec![
+                quote!(0u16),
+                quote!(1u16),
+                quote!(127u16),
+                quote!(128u16),
+                quote!(255u16),
+                quote!(16383u16),
+                quote!(16384u16),
+                quote!(u16::MAX),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "scalar_u32",
+            ty: quote!(u32),
+            values: vec![
+                quote!(0u32),
+                quote!(1u32),
+                quote!(127u32),
+                quote!(128u32),
+                quote!(16383u32),
+                quote!(16384u32),
+                quote!((1u32 << 21) - 1),
+                quote!(1u32 << 21),
+                quote!(u32::MAX),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "scalar_u64",
+            ty: quote!(u64),
+            values: vec![
+                quote!(0u64),
+                quote!(1u64),
+                quote!(127u64),
+                quote!(128u64),
+                quote!(16383u64),
+                quote!(16384u64),
+                quote!((1u64 << 21) - 1),
+                quote!(1u64 << 21),
+                quote!(u64::MAX),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "scalar_i16",
+            ty: quote!(i16),
+            values: vec![
+                quote!(i16::MIN),
+                quote!(-16384i16),
+                quote!(-129i16),
+                quote!(-128i16),
+                quote!(-1i16),
+                quote!(0i16),
+                quote!(1i16),
+                quote!(127i16),
+                quote!(128i16),
+                quote!(i16::MAX),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "scalar_i32",
+            ty: quote!(i32),
+            values: vec![
+                quote!(i32::MIN),
+                quote!(-1_000_000i32),
+                quote!(-16384i32),
+                quote!(-129i32),
+                quote!(-128i32),
+                quote!(-1i32),
+                quote!(0i32),
+                quote!(1i32),
+                quote!(127i32),
+                quote!(128i32),
+                quote!(16384i32),
+                quote!(1_000_000i32),
+                quote!(i32::MAX),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "scalar_i64",
+            ty: quote!(i64),
+            values: vec![
+                quote!(i64::MIN),
+                quote!(-1_000_000_000_000i64),
+                quote!(-16384i64),
+                quote!(-129i64),
+                quote!(-128i64),
+                quote!(-1i64),
+                quote!(0i64),
+                quote!(1i64),
+                quote!(127i64),
+                quote!(128i64),
+                quote!(16384i64),
+                quote!(1_000_000_000_000i64),
+                quote!(i64::MAX),
+            ],
+            inputs: vec![],
+        },
+        Case {
             name: "bool_field",
             ty: quote!(BoolField),
             values: vec![quote!(BoolField { value: true })],
@@ -1561,14 +1665,12 @@ pub(crate) fn render_bench_file() -> String {
             let value = Arc::new(value);
 
             let json_decoder =
-                Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson));
+                Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson));
             let json_encoder =
                 Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::json::KajitJsonEncoder));
 
             let postcard_decoder =
-                Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard));
-            let postcard_ir_decoder =
-                Arc::new(kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard));
+                Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard));
             let postcard_encoder =
                 Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::postcard::KajitPostcard));
 
@@ -1640,19 +1742,6 @@ pub(crate) fn render_bench_file() -> String {
                 func: Box::new({
                     let data = Arc::clone(&postcard_data);
                     let decoder = Arc::clone(&postcard_decoder);
-                    move |runner| {
-                        let decoder = &*decoder;
-                        runner.run(|| {
-                            black_box(kajit::deserialize::<T>(decoder, black_box(&data[..])).unwrap());
-                        });
-                    }
-                }),
-            });
-            v.push(harness::Bench {
-                name: format!("{postcard_prefix}/kajit_ir_deser"),
-                func: Box::new({
-                    let data = Arc::clone(&postcard_data);
-                    let decoder = Arc::clone(&postcard_ir_decoder);
                     move |runner| {
                         let decoder = &*decoder;
                         runner.run(|| {
@@ -1903,7 +1992,7 @@ pub(crate) fn render_test_file() -> String {
         {
             let encoded = serde_json::to_string(&value).unwrap();
             let expected: T = serde_json::from_str(&encoded).unwrap();
-            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let got: T = kajit::from_str(&decoder, &encoded).unwrap();
             assert_eq!(got, expected);
         }
@@ -1914,19 +2003,16 @@ pub(crate) fn render_test_file() -> String {
         {
             let encoded = ::postcard::to_allocvec(&value).unwrap();
             let expected: T = ::postcard::from_bytes(&encoded).unwrap();
-            let legacy = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
-            let legacy_out: T = kajit::deserialize(&legacy, &encoded).unwrap();
-            assert_eq!(legacy_out, expected);
-            let ir = kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
-            let ir_out: T = kajit::deserialize(&ir, &encoded).unwrap();
-            assert_eq!(ir_out, expected);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let got: T = kajit::deserialize(&decoder, &encoded).unwrap();
+            assert_eq!(got, expected);
         }
 
         fn assert_json_input_case<T>(input: &[u8], expected: T)
         where
             for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
         {
-            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let got: T = kajit::deserialize(&decoder, input).unwrap();
             assert_eq!(got, expected);
         }
@@ -1935,7 +2021,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
-            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let out = kajit::deserialize::<T>(&decoder, input);
             assert!(out.is_err(), "expected json decode failure");
         }
@@ -1944,7 +2030,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
-            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let out = kajit::deserialize::<T>(&decoder, input);
             let err = match out {
                 Ok(_) => panic!("expected json decode failure"),
@@ -1957,7 +2043,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
         {
-            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let got: T = kajit::from_str(&decoder, input).unwrap();
             assert_eq!(got, expected);
@@ -1968,7 +2054,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
-            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let out = kajit::from_str::<T>(&decoder, input);
             assert!(out.is_err(), "expected postcard decode failure");
@@ -1978,7 +2064,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
-            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let out = kajit::from_str::<T>(&decoder, input);
             let err = match out {
@@ -1992,11 +2078,9 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug + Arbitrary + 'static,
         {
-            let json_decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
-            let postcard_legacy =
-                kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
-            let postcard_ir =
-                kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let json_decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+            let postcard_decoder =
+                kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {
                 cases: 64,
                 ..proptest::test_runner::Config::default()
@@ -2011,13 +2095,9 @@ pub(crate) fn render_test_file() -> String {
 
                     let postcard_encoded = ::postcard::to_allocvec(&value).unwrap();
                     let postcard_expected: T = ::postcard::from_bytes(&postcard_encoded).unwrap();
-                    let postcard_legacy_out: T =
-                        kajit::deserialize(&postcard_legacy, &postcard_encoded).unwrap();
-                    assert_eq!(postcard_legacy_out, postcard_expected);
-
-                    let postcard_ir_out: T =
-                        kajit::deserialize(&postcard_ir, &postcard_encoded).unwrap();
-                    assert_eq!(postcard_ir_out, postcard_expected);
+                    let postcard_got: T =
+                        kajit::deserialize(&postcard_decoder, &postcard_encoded).unwrap();
+                    assert_eq!(postcard_got, postcard_expected);
                     Ok(())
                 })
                 .unwrap();
@@ -2100,7 +2180,7 @@ pub(crate) fn render_test_file() -> String {
             let shape = T::SHAPE;
             let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
             let edits = kajit::regalloc_edit_count_via_ir(shape, decoder);
-            let compiled = kajit::compile_decoder_with_backend(shape, decoder, kajit::DecoderBackend::Ir);
+            let compiled = kajit::compile_decoder(shape, decoder);
             let disasm = disasm_bytes(compiled.code(), Some(compiled.entry_offset()));
             (ir_text, ra_text, edits, disasm)
         }

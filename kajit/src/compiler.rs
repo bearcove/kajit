@@ -151,10 +151,35 @@ impl<'fmt> DecoderCompiler<'fmt> {
             Type::User(UserType::Enum(enum_type)) => {
                 self.compile_enum(shape, enum_type, entry_label);
             }
-            _ => panic!("unsupported shape: {}", shape.type_identifier),
+            _ => match shape.scalar_type() {
+                Some(_) => self.compile_root_scalar(shape, entry_label),
+                None => panic!("unsupported shape: {}", shape.type_identifier),
+            },
         }
 
         entry_label
+    }
+
+    /// Compile a scalar root shape into a function.
+    fn compile_root_scalar(&mut self, shape: &'static Shape, entry_label: DynamicLabel) {
+        let key = shape as *const Shape;
+        let scalar_type = shape
+            .scalar_type()
+            .unwrap_or_else(|| panic!("expected scalar root shape: {}", shape.type_identifier));
+
+        self.ectx.bind_label(entry_label);
+        let (entry_offset, error_exit) = self.ectx.begin_func();
+
+        if is_string_like_scalar(scalar_type) {
+            self.decoder
+                .emit_read_string(&mut self.ectx, 0, scalar_type, &self.string_offsets);
+        } else {
+            self.decoder
+                .emit_read_scalar(&mut self.ectx, 0, scalar_type);
+        }
+
+        self.ectx.end_func(error_exit);
+        self.shapes.get_mut(&key).unwrap().offset = Some(entry_offset);
     }
 
     /// Compile a struct shape into a function.
@@ -1470,7 +1495,7 @@ pub fn compile_decoder(shape: &'static Shape, decoder: &dyn Decoder) -> Compiled
                 }
                 max_extra
             }
-            _ => panic!("unsupported root shape: {}", shape.type_identifier),
+            _ => decoder.extra_stack_space(&[]),
         }
     };
 
@@ -2170,10 +2195,37 @@ impl<'fmt> EncoderCompiler<'fmt> {
             Type::User(UserType::Enum(enum_type)) => {
                 self.compile_enum(shape, enum_type, entry_label);
             }
-            _ => panic!("unsupported shape for encode: {}", shape.type_identifier),
+            _ => match shape.scalar_type() {
+                Some(_) => self.compile_root_scalar(shape, entry_label),
+                None => panic!("unsupported shape for encode: {}", shape.type_identifier),
+            },
         }
 
         entry_label
+    }
+
+    fn compile_root_scalar(&mut self, shape: &'static Shape, entry_label: DynamicLabel) {
+        let key = shape as *const Shape;
+        let scalar_type = shape.scalar_type().unwrap_or_else(|| {
+            panic!(
+                "expected scalar root shape for encode: {}",
+                shape.type_identifier
+            )
+        });
+
+        self.ectx.bind_label(entry_label);
+        let (entry_offset, error_exit) = self.ectx.begin_encode_func();
+
+        if is_string_like_scalar(scalar_type) {
+            self.encoder
+                .emit_encode_string(&mut self.ectx, 0, scalar_type, &self.string_offsets);
+        } else {
+            self.encoder
+                .emit_encode_scalar(&mut self.ectx, 0, scalar_type);
+        }
+
+        self.ectx.end_encode_func(error_exit);
+        self.shapes.get_mut(&key).unwrap().offset = Some(entry_offset);
     }
 
     fn compile_struct(&mut self, shape: &'static Shape, entry_label: DynamicLabel) {

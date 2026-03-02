@@ -18,6 +18,23 @@ cargo nextest list <test_name> --message-format json-pretty
 Then copy `rust-suites.kajit.binary-path` (for unit tests this is usually
 `target/debug/deps/kajit-<hash>`).
 
+Practical binary-path extraction examples:
+```bash
+# Integration test binary (corpus suite)
+cargo nextest list -p kajit --test corpus --message-format json-pretty \
+  | jq -r '.["rust-suites"]["kajit::corpus"]["binary-path"]'
+
+# Quick fallback without jq
+cargo nextest list -p kajit --test corpus --message-format json-pretty \
+  | rg '"binary-path"'
+```
+
+For `nextest` names like `kajit::corpus prop::all_scalars`, run that test from
+the binary as:
+```text
+run --exact prop::all_scalars --nocapture
+```
+
 3. Start LLDB on the test binary:
 ```bash
 lldb target/debug/deps/kajit-<hash>

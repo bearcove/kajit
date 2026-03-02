@@ -374,7 +374,7 @@ where
 {
     let encoded = serde_json::to_string(&value).unwrap();
     let expected: T = serde_json::from_str(&encoded).unwrap();
-    let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let got: T = kajit::from_str(&decoder, &encoded).unwrap();
     assert_eq!(got, expected);
 }
@@ -385,21 +385,15 @@ where
 {
     let encoded = ::postcard::to_allocvec(&value).unwrap();
     let expected: T = ::postcard::from_bytes(&encoded).unwrap();
-    let legacy = kajit::compile_decoder_legacy(
-        T::SHAPE,
-        &kajit::postcard::KajitPostcard,
-    );
-    let legacy_out: T = kajit::deserialize(&legacy, &encoded).unwrap();
-    assert_eq!(legacy_out, expected);
-    let ir = kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
-    let ir_out: T = kajit::deserialize(&ir, &encoded).unwrap();
-    assert_eq!(ir_out, expected);
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+    let got: T = kajit::deserialize(&decoder, &encoded).unwrap();
+    assert_eq!(got, expected);
 }
 fn assert_json_input_case<T>(input: &[u8], expected: T)
 where
     for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
 {
-    let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let got: T = kajit::deserialize(&decoder, input).unwrap();
     assert_eq!(got, expected);
 }
@@ -407,7 +401,7 @@ fn assert_json_input_err<T>(input: &[u8])
 where
     for<'input> T: Facet<'input>,
 {
-    let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     assert!(out.is_err(), "expected json decode failure");
 }
@@ -415,7 +409,7 @@ fn assert_json_input_err_code<T>(input: &[u8], expected_code: kajit::context::Er
 where
     for<'input> T: Facet<'input>,
 {
-    let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     let err = match out {
         Ok(_) => panic!("expected json decode failure"),
@@ -427,10 +421,7 @@ fn assert_postcard_input_case<T>(input: &[u8], expected: T)
 where
     for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
 {
-    let decoder = kajit::compile_decoder_legacy(
-        T::SHAPE,
-        &kajit::postcard::KajitPostcard,
-    );
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input = core::str::from_utf8(input)
         .expect("postcard input must be valid utf-8 for from_str path");
     let got: T = kajit::from_str(&decoder, input).unwrap();
@@ -441,10 +432,7 @@ fn assert_postcard_input_err<T>(input: &[u8])
 where
     for<'input> T: Facet<'input>,
 {
-    let decoder = kajit::compile_decoder_legacy(
-        T::SHAPE,
-        &kajit::postcard::KajitPostcard,
-    );
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input = core::str::from_utf8(input)
         .expect("postcard input must be valid utf-8 for from_str path");
     let out = kajit::from_str::<T>(&decoder, input);
@@ -457,10 +445,7 @@ fn assert_postcard_input_err_code<T>(
 where
     for<'input> T: Facet<'input>,
 {
-    let decoder = kajit::compile_decoder_legacy(
-        T::SHAPE,
-        &kajit::postcard::KajitPostcard,
-    );
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input = core::str::from_utf8(input)
         .expect("postcard input must be valid utf-8 for from_str path");
     let out = kajit::from_str::<T>(&decoder, input);
@@ -475,12 +460,8 @@ where
     for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
         + PartialEq + std::fmt::Debug + Arbitrary + 'static,
 {
-    let json_decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
-    let postcard_legacy = kajit::compile_decoder_legacy(
-        T::SHAPE,
-        &kajit::postcard::KajitPostcard,
-    );
-    let postcard_ir = kajit::compile_decoder_via_ir(
+    let json_decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+    let postcard_decoder = kajit::compile_decoder(
         T::SHAPE,
         &kajit::postcard::KajitPostcard,
     );
@@ -500,18 +481,12 @@ where
                 let postcard_encoded = ::postcard::to_allocvec(&value).unwrap();
                 let postcard_expected: T = ::postcard::from_bytes(&postcard_encoded)
                     .unwrap();
-                let postcard_legacy_out: T = kajit::deserialize(
-                        &postcard_legacy,
+                let postcard_got: T = kajit::deserialize(
+                        &postcard_decoder,
                         &postcard_encoded,
                     )
                     .unwrap();
-                assert_eq!(postcard_legacy_out, postcard_expected);
-                let postcard_ir_out: T = kajit::deserialize(
-                        &postcard_ir,
-                        &postcard_encoded,
-                    )
-                    .unwrap();
-                assert_eq!(postcard_ir_out, postcard_expected);
+                assert_eq!(postcard_got, postcard_expected);
                 Ok(())
             },
         )
@@ -595,11 +570,7 @@ where
     let shape = T::SHAPE;
     let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
     let edits = kajit::regalloc_edit_count_via_ir(shape, decoder);
-    let compiled = kajit::compile_decoder_with_backend(
-        shape,
-        decoder,
-        kajit::DecoderBackend::Ir,
-    );
+    let compiled = kajit::compile_decoder(shape, decoder);
     let disasm = disasm_bytes(compiled.code(), Some(compiled.entry_offset()));
     (ir_text, ra_text, edits, disasm)
 }
@@ -744,6 +715,688 @@ mod json {
         assert_codegen_snapshots(
             "json",
             "integer_boundaries",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v0() {
+        let value = 0u16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v1() {
+        let value = 1u16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v2() {
+        let value = 127u16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v2",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v3() {
+        let value = 128u16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v3",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v4() {
+        let value = 255u16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v4",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v5() {
+        let value = 16383u16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v5",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v6() {
+        let value = 16384u16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v6",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u16_v7() {
+        let value = u16::MAX;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u16__v7",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v0() {
+        let value = 0u32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v1() {
+        let value = 1u32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v2() {
+        let value = 127u32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v2",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v3() {
+        let value = 128u32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v3",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v4() {
+        let value = 16383u32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v4",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v5() {
+        let value = 16384u32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v5",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v6() {
+        let value = (1u32 << 21) - 1;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v6",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v7() {
+        let value = 1u32 << 21;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v7",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u32_v8() {
+        let value = u32::MAX;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u32__v8",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v0() {
+        let value = 0u64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v1() {
+        let value = 1u64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v2() {
+        let value = 127u64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v2",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v3() {
+        let value = 128u64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v3",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v4() {
+        let value = 16383u64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v4",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v5() {
+        let value = 16384u64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v5",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v6() {
+        let value = (1u64 << 21) - 1;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v6",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v7() {
+        let value = 1u64 << 21;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v7",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_u64_v8() {
+        let value = u64::MAX;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_u64__v8",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v0() {
+        let value = i16::MIN;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v1() {
+        let value = -16384i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v2() {
+        let value = -129i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v2",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v3() {
+        let value = -128i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v3",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v4() {
+        let value = -1i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v4",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v5() {
+        let value = 0i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v5",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v6() {
+        let value = 1i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v6",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v7() {
+        let value = 127i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v7",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v8() {
+        let value = 128i16;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v8",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i16_v9() {
+        let value = i16::MAX;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i16__v9",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v0() {
+        let value = i32::MIN;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v1() {
+        let value = -1_000_000i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v2() {
+        let value = -16384i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v2",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v3() {
+        let value = -129i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v3",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v4() {
+        let value = -128i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v4",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v5() {
+        let value = -1i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v5",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v6() {
+        let value = 0i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v6",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v7() {
+        let value = 1i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v7",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v8() {
+        let value = 127i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v8",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v9() {
+        let value = 128i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v9",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v10() {
+        let value = 16384i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v10",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v11() {
+        let value = 1_000_000i32;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v11",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i32_v12() {
+        let value = i32::MAX;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i32__v12",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v0() {
+        let value = i64::MIN;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v1() {
+        let value = -1_000_000_000_000i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v2() {
+        let value = -16384i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v2",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v3() {
+        let value = -129i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v3",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v4() {
+        let value = -128i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v4",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v5() {
+        let value = -1i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v5",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v6() {
+        let value = 0i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v6",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v7() {
+        let value = 1i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v7",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v8() {
+        let value = 127i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v8",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v9() {
+        let value = 128i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v9",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v10() {
+        let value = 16384i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v10",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v11() {
+        let value = 1_000_000_000_000i64;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v11",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn scalar_i64_v12() {
+        let value = i64::MAX;
+        assert_codegen_snapshots(
+            "json",
+            "scalar_i64__v12",
             &kajit::json::KajitJson,
             &value,
         );
@@ -1310,6 +1963,688 @@ mod postcard {
         assert_codegen_snapshots(
             "postcard",
             "integer_boundaries",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v0() {
+        let value = 0u16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v1() {
+        let value = 1u16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v2() {
+        let value = 127u16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v2",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v3() {
+        let value = 128u16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v3",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v4() {
+        let value = 255u16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v4",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v5() {
+        let value = 16383u16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v5",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v6() {
+        let value = 16384u16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v6",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u16_v7() {
+        let value = u16::MAX;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u16__v7",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v0() {
+        let value = 0u32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v1() {
+        let value = 1u32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v2() {
+        let value = 127u32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v2",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v3() {
+        let value = 128u32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v3",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v4() {
+        let value = 16383u32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v4",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v5() {
+        let value = 16384u32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v5",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v6() {
+        let value = (1u32 << 21) - 1;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v6",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v7() {
+        let value = 1u32 << 21;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v7",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u32_v8() {
+        let value = u32::MAX;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u32__v8",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v0() {
+        let value = 0u64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v1() {
+        let value = 1u64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v2() {
+        let value = 127u64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v2",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v3() {
+        let value = 128u64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v3",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v4() {
+        let value = 16383u64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v4",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v5() {
+        let value = 16384u64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v5",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v6() {
+        let value = (1u64 << 21) - 1;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v6",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v7() {
+        let value = 1u64 << 21;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v7",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_u64_v8() {
+        let value = u64::MAX;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_u64__v8",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v0() {
+        let value = i16::MIN;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v1() {
+        let value = -16384i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v2() {
+        let value = -129i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v2",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v3() {
+        let value = -128i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v3",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v4() {
+        let value = -1i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v4",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v5() {
+        let value = 0i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v5",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v6() {
+        let value = 1i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v6",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v7() {
+        let value = 127i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v7",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v8() {
+        let value = 128i16;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v8",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i16_v9() {
+        let value = i16::MAX;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i16__v9",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v0() {
+        let value = i32::MIN;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v1() {
+        let value = -1_000_000i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v2() {
+        let value = -16384i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v2",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v3() {
+        let value = -129i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v3",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v4() {
+        let value = -128i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v4",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v5() {
+        let value = -1i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v5",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v6() {
+        let value = 0i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v6",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v7() {
+        let value = 1i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v7",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v8() {
+        let value = 127i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v8",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v9() {
+        let value = 128i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v9",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v10() {
+        let value = 16384i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v10",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v11() {
+        let value = 1_000_000i32;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v11",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i32_v12() {
+        let value = i32::MAX;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i32__v12",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v0() {
+        let value = i64::MIN;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v1() {
+        let value = -1_000_000_000_000i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v2() {
+        let value = -16384i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v2",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v3() {
+        let value = -129i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v3",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v4() {
+        let value = -128i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v4",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v5() {
+        let value = -1i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v5",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v6() {
+        let value = 0i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v6",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v7() {
+        let value = 1i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v7",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v8() {
+        let value = 127i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v8",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v9() {
+        let value = 128i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v9",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v10() {
+        let value = 16384i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v10",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v11() {
+        let value = 1_000_000_000_000i64;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v11",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn scalar_i64_v12() {
+        let value = i64::MAX;
+        assert_codegen_snapshots(
+            "postcard",
+            "scalar_i64__v12",
             &kajit::postcard::KajitPostcard,
             &value,
         );
@@ -1892,6 +3227,36 @@ mod prop {
             i16_min: -32768,
             i32_min: -2147483648,
         };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn scalar_u16() {
+        let marker = 0u16;
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn scalar_u32() {
+        let marker = 0u32;
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn scalar_u64() {
+        let marker = 0u64;
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn scalar_i16() {
+        let marker = i16::MIN;
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn scalar_i32() {
+        let marker = i32::MIN;
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn scalar_i64() {
+        let marker = i64::MIN;
         assert_prop_case(&marker);
     }
     #[test]

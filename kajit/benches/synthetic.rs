@@ -375,16 +375,13 @@ where
     let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
     let value = Arc::new(value);
     let json_decoder = Arc::new(
-        kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson),
+        kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson),
     );
     let json_encoder = Arc::new(
         kajit::compile_encoder(T::SHAPE, &kajit::json::KajitJsonEncoder),
     );
     let postcard_decoder = Arc::new(
-        kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard),
-    );
-    let postcard_ir_decoder = Arc::new(
-        kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard),
+        kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard),
     );
     let postcard_encoder = Arc::new(
         kajit::compile_encoder(T::SHAPE, &kajit::postcard::KajitPostcard),
@@ -467,23 +464,6 @@ where
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             let decoder = Arc::clone(&postcard_decoder);
-            move |runner| {
-                let decoder = &*decoder;
-                runner
-                    .run(|| {
-                        black_box(
-                            kajit::deserialize::<T>(decoder, black_box(&data[..]))
-                                .unwrap(),
-                        );
-                    });
-            }
-        }),
-    });
-    v.push(harness::Bench {
-        name: format!("{postcard_prefix}/kajit_ir_deser"),
-        func: Box::new({
-            let data = Arc::clone(&postcard_data);
-            let decoder = Arc::clone(&postcard_ir_decoder);
             move |runner| {
                 let decoder = &*decoder;
                 runner
@@ -610,6 +590,68 @@ fn main() {
             i32_min: -2147483648,
         },
     );
+    register_bench_case(&mut v, "scalar_u16__v0", 0u16);
+    register_bench_case(&mut v, "scalar_u16__v1", 1u16);
+    register_bench_case(&mut v, "scalar_u16__v2", 127u16);
+    register_bench_case(&mut v, "scalar_u16__v3", 128u16);
+    register_bench_case(&mut v, "scalar_u16__v4", 255u16);
+    register_bench_case(&mut v, "scalar_u16__v5", 16383u16);
+    register_bench_case(&mut v, "scalar_u16__v6", 16384u16);
+    register_bench_case(&mut v, "scalar_u16__v7", u16::MAX);
+    register_bench_case(&mut v, "scalar_u32__v0", 0u32);
+    register_bench_case(&mut v, "scalar_u32__v1", 1u32);
+    register_bench_case(&mut v, "scalar_u32__v2", 127u32);
+    register_bench_case(&mut v, "scalar_u32__v3", 128u32);
+    register_bench_case(&mut v, "scalar_u32__v4", 16383u32);
+    register_bench_case(&mut v, "scalar_u32__v5", 16384u32);
+    register_bench_case(&mut v, "scalar_u32__v6", (1u32 << 21) - 1);
+    register_bench_case(&mut v, "scalar_u32__v7", 1u32 << 21);
+    register_bench_case(&mut v, "scalar_u32__v8", u32::MAX);
+    register_bench_case(&mut v, "scalar_u64__v0", 0u64);
+    register_bench_case(&mut v, "scalar_u64__v1", 1u64);
+    register_bench_case(&mut v, "scalar_u64__v2", 127u64);
+    register_bench_case(&mut v, "scalar_u64__v3", 128u64);
+    register_bench_case(&mut v, "scalar_u64__v4", 16383u64);
+    register_bench_case(&mut v, "scalar_u64__v5", 16384u64);
+    register_bench_case(&mut v, "scalar_u64__v6", (1u64 << 21) - 1);
+    register_bench_case(&mut v, "scalar_u64__v7", 1u64 << 21);
+    register_bench_case(&mut v, "scalar_u64__v8", u64::MAX);
+    register_bench_case(&mut v, "scalar_i16__v0", i16::MIN);
+    register_bench_case(&mut v, "scalar_i16__v1", -16384i16);
+    register_bench_case(&mut v, "scalar_i16__v2", -129i16);
+    register_bench_case(&mut v, "scalar_i16__v3", -128i16);
+    register_bench_case(&mut v, "scalar_i16__v4", -1i16);
+    register_bench_case(&mut v, "scalar_i16__v5", 0i16);
+    register_bench_case(&mut v, "scalar_i16__v6", 1i16);
+    register_bench_case(&mut v, "scalar_i16__v7", 127i16);
+    register_bench_case(&mut v, "scalar_i16__v8", 128i16);
+    register_bench_case(&mut v, "scalar_i16__v9", i16::MAX);
+    register_bench_case(&mut v, "scalar_i32__v0", i32::MIN);
+    register_bench_case(&mut v, "scalar_i32__v1", -1_000_000i32);
+    register_bench_case(&mut v, "scalar_i32__v2", -16384i32);
+    register_bench_case(&mut v, "scalar_i32__v3", -129i32);
+    register_bench_case(&mut v, "scalar_i32__v4", -128i32);
+    register_bench_case(&mut v, "scalar_i32__v5", -1i32);
+    register_bench_case(&mut v, "scalar_i32__v6", 0i32);
+    register_bench_case(&mut v, "scalar_i32__v7", 1i32);
+    register_bench_case(&mut v, "scalar_i32__v8", 127i32);
+    register_bench_case(&mut v, "scalar_i32__v9", 128i32);
+    register_bench_case(&mut v, "scalar_i32__v10", 16384i32);
+    register_bench_case(&mut v, "scalar_i32__v11", 1_000_000i32);
+    register_bench_case(&mut v, "scalar_i32__v12", i32::MAX);
+    register_bench_case(&mut v, "scalar_i64__v0", i64::MIN);
+    register_bench_case(&mut v, "scalar_i64__v1", -1_000_000_000_000i64);
+    register_bench_case(&mut v, "scalar_i64__v2", -16384i64);
+    register_bench_case(&mut v, "scalar_i64__v3", -129i64);
+    register_bench_case(&mut v, "scalar_i64__v4", -128i64);
+    register_bench_case(&mut v, "scalar_i64__v5", -1i64);
+    register_bench_case(&mut v, "scalar_i64__v6", 0i64);
+    register_bench_case(&mut v, "scalar_i64__v7", 1i64);
+    register_bench_case(&mut v, "scalar_i64__v8", 127i64);
+    register_bench_case(&mut v, "scalar_i64__v9", 128i64);
+    register_bench_case(&mut v, "scalar_i64__v10", 16384i64);
+    register_bench_case(&mut v, "scalar_i64__v11", 1_000_000_000_000i64);
+    register_bench_case(&mut v, "scalar_i64__v12", i64::MAX);
     register_bench_case(&mut v, "bool_field", BoolField { value: true });
     register_bench_case(&mut v, "enum_external__v0", Animal::Cat);
     register_bench_case(

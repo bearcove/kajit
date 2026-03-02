@@ -621,8 +621,11 @@ unsafe fn json_parse_signed(ctx: &mut DeserContext) -> i64 {
             ctx.error.code = ErrorCode::NumberOutOfRange as u32;
             return 0;
         }
-        // Wrapping negate handles i64::MIN correctly
-        -(raw as i64)
+        if raw == (i64::MAX as u64) + 1 {
+            i64::MIN
+        } else {
+            -(raw as i64)
+        }
     } else {
         if raw > i64::MAX as u64 {
             ctx.error.code = ErrorCode::NumberOutOfRange as u32;

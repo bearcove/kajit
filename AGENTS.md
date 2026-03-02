@@ -6,6 +6,7 @@
 ## Compiler architecture principles
 - Expand backend capabilities to support required IR semantics; do not work around backend limitations in lowering or intrinsic selection.
 - Prefer explicit backend/ABI support (for example, dedicated pure-call ABI support) over adapters that hide contract mismatches.
+- If you catch yourself thinking "workaround", stop and implement the proper fix in backend/compiler/runtime instead.
 
 ## Test policy
 - Always run tests after making code changes.

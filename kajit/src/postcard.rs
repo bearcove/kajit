@@ -51,6 +51,7 @@ impl Decoder for KajitPostcard {
     fn emit_read_scalar(&self, ectx: &mut EmitCtx, offset: usize, scalar_type: ScalarType) {
         let offset = offset as u32;
         match scalar_type {
+            ScalarType::Unit => {}
             // Tier 1: fixed-size, fully inlined
             ScalarType::U8 | ScalarType::I8 => ectx.emit_inline_read_byte(offset),
             ScalarType::Bool => ectx.emit_inline_read_bool(offset),
@@ -771,6 +772,8 @@ impl IrDecoder for KajitPostcard {
         let offset = offset as u32;
 
         match scalar_type {
+            // Postcard unit is encoded as zero bytes.
+            ScalarType::Unit => {}
             ScalarType::U16 => {
                 lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W2, false, 16);
             }
@@ -781,13 +784,13 @@ impl IrDecoder for KajitPostcard {
                 lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W8, false, 64);
             }
             ScalarType::I16 => {
-                builder.call_intrinsic(ifn(intrinsics::kajit_read_i16 as _), &[], offset, false);
+                lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W2, true, 16);
             }
             ScalarType::I32 => {
-                builder.call_intrinsic(ifn(intrinsics::kajit_read_i32 as _), &[], offset, false);
+                lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W4, true, 32);
             }
             ScalarType::I64 => {
-                builder.call_intrinsic(ifn(intrinsics::kajit_read_i64 as _), &[], offset, false);
+                lower_postcard_varint_scalar(builder, offset, crate::ir::Width::W8, true, 64);
             }
 
             ScalarType::Bool => {

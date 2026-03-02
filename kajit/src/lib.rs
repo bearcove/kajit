@@ -26,79 +26,19 @@ pub mod solver;
 
 use compiler::{CompiledDecoder, CompiledEncoder};
 use context::{DeserContext, ErrorCode};
-use std::sync::OnceLock;
-
-// r[impl api.compile]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecoderBackend {
-    Legacy,
-    Ir,
-}
-
-impl DecoderBackend {
-    fn parse_env(s: &str) -> Option<Self> {
-        if s.eq_ignore_ascii_case("legacy") {
-            Some(Self::Legacy)
-        } else if s.eq_ignore_ascii_case("ir") {
-            Some(Self::Ir)
-        } else {
-            None
-        }
-    }
-}
-
-static DECODER_BACKEND: OnceLock<DecoderBackend> = OnceLock::new();
-
-/// Returns the default backend used by [`compile_decoder`].
-///
-/// Read once from `KAJIT_DECODER_BACKEND` (`legacy` or `ir`), then cached.
-/// When unset, defaults to `legacy`.
-pub fn decoder_backend() -> DecoderBackend {
-    *DECODER_BACKEND.get_or_init(|| match std::env::var("KAJIT_DECODER_BACKEND") {
-        Ok(value) => DecoderBackend::parse_env(&value).unwrap_or_else(|| {
-            panic!("invalid KAJIT_DECODER_BACKEND={value:?}; expected \"legacy\" or \"ir\"")
-        }),
-        Err(std::env::VarError::NotPresent) => DecoderBackend::Legacy,
-        Err(std::env::VarError::NotUnicode(_)) => {
-            panic!("KAJIT_DECODER_BACKEND must be valid UTF-8")
-        }
-    })
-}
 
 /// Compile a deserializer for the given shape and format.
 pub fn compile_decoder(
     shape: &'static facet::Shape,
     decoder: &dyn format::Decoder,
 ) -> CompiledDecoder {
-    compile_decoder_with_backend(shape, decoder, decoder_backend())
-}
-
-/// Compile a deserializer with an explicit backend choice.
-pub fn compile_decoder_with_backend(
-    shape: &'static facet::Shape,
-    decoder: &dyn format::Decoder,
-    backend: DecoderBackend,
-) -> CompiledDecoder {
-    match backend {
-        DecoderBackend::Legacy => compile_decoder_legacy(shape, decoder),
-        DecoderBackend::Ir => {
-            let ir_decoder = decoder.as_ir_decoder().unwrap_or_else(|| {
-                panic!(
-                    "IR backend requested for format {:?}, but it does not implement IrDecoder",
-                    core::any::type_name_of_val(decoder)
-                )
-            });
-            compiler::compile_decoder_via_ir_dyn(shape, decoder, ir_decoder)
-        }
-    }
-}
-
-/// Compile a deserializer using the legacy direct dynasm emission path.
-pub fn compile_decoder_legacy(
-    shape: &'static facet::Shape,
-    decoder: &dyn format::Decoder,
-) -> CompiledDecoder {
-    compiler::compile_decoder(shape, decoder)
+    let ir_decoder = decoder.as_ir_decoder().unwrap_or_else(|| {
+        panic!(
+            "format {:?} does not implement IrDecoder",
+            core::any::type_name_of_val(decoder)
+        )
+    });
+    compiler::compile_decoder_via_ir_dyn(shape, decoder, ir_decoder)
 }
 
 /// Compile a deserializer using IR lowering + linearization + backend adapter.

@@ -3757,23 +3757,18 @@ mod tests {
     }
 
     #[test]
-    fn linear_backend_vec_u32_matches_legacy_and_serde() {
+    fn linear_backend_vec_u32_matches_serde() {
         let expected = ScalarVec {
             values: (0..2048).map(|i| i as u32).collect(),
         };
         let bytes = postcard::to_allocvec(&expected).expect("serialize vec");
 
-        let legacy =
-            crate::compile_decoder_legacy(ScalarVec::SHAPE, &crate::postcard::KajitPostcard);
         let ir = crate::compile_decoder_via_ir(ScalarVec::SHAPE, &crate::postcard::KajitPostcard);
 
-        let legacy_out = crate::deserialize::<ScalarVec>(&legacy, &bytes).expect("legacy decode");
         let ir_out = crate::deserialize::<ScalarVec>(&ir, &bytes).expect("ir decode");
         let serde_out = postcard::from_bytes::<ScalarVec>(&bytes).expect("serde decode");
 
-        assert_eq!(legacy_out, expected);
         assert_eq!(ir_out, expected);
         assert_eq!(serde_out, expected);
-        assert_eq!(ir_out, legacy_out);
     }
 }
