@@ -83,35 +83,35 @@ pub(crate) fn cases() -> Vec<Case> {
     vec![
         Case {
             name: "flat_struct",
-            value: quote!(Friend {
+            values: vec![quote!(Friend {
                 age: 42,
                 name: "Alice".into()
-            }),
+            })],
         },
         Case {
             name: "nested_struct",
-            value: quote!(Person {
+            values: vec![quote!(Person {
                 name: "Alice".into(),
                 age: 30,
                 address: Address {
                     city: "Portland".into(),
                     zip: 97201
                 }
-            }),
+            })],
         },
         Case {
             name: "deep_struct",
-            value: quote!(Outer {
+            values: vec![quote!(Outer {
                 middle: Middle {
                     inner: Inner { x: 1 },
                     y: 2
                 },
                 z: 3
-            }),
+            })],
         },
         Case {
             name: "all_integers",
-            value: quote!(AllIntegers {
+            values: vec![quote!(AllIntegers {
                 a_u8: 255,
                 a_u16: 65535,
                 a_u32: 1_000_000,
@@ -124,27 +124,27 @@ pub(crate) fn cases() -> Vec<Case> {
                 a_i64: -1_000_000_000_000,
                 a_i128: -170141183460469231731687303715884105728i128,
                 a_isize: -123_456isize
-            }),
+            })],
         },
         Case {
             name: "bool_field",
-            value: quote!(BoolField { value: true }),
+            values: vec![quote!(BoolField { value: true })],
         },
         Case {
             name: "tuple_pair",
-            value: quote!((42u32, "Alice".to_string())),
+            values: vec![quote!((42u32, "Alice".to_string()))],
         },
         Case {
             name: "vec_scalar_small",
-            value: quote!(ScalarVec {
+            values: vec![quote!(ScalarVec {
                 values: (0..16).map(|i| i as u32).collect()
-            }),
+            })],
         },
         Case {
             name: "vec_scalar_large",
-            value: quote!(ScalarVec {
+            values: vec![quote!(ScalarVec {
                 values: (0..2048).map(|i| i as u32).collect()
-            }),
+            })],
         },
     ]
 }
@@ -154,12 +154,18 @@ pub(crate) fn render_bench_file() -> String {
     let types = types_rs();
     let bench_calls: Vec<TokenStream> = cases
         .iter()
-        .map(|case| {
-            let case_name = case.name;
-            let value = case.value.clone();
-            quote! {
-                register_bench_case(&mut v, #case_name, #value);
-            }
+        .flat_map(|case| {
+            case.values.iter().enumerate().map(|(sample_idx, value)| {
+                let sample_name = if case.values.len() == 1 {
+                    case.name.to_string()
+                } else {
+                    format!("{}__v{}", case.name, sample_idx)
+                };
+                let value = value.clone();
+                quote! {
+                    register_bench_case(&mut v, #sample_name, #value);
+                }
+            })
         })
         .collect();
     let file_tokens = quote! {
@@ -326,41 +332,71 @@ pub(crate) fn render_test_file() -> String {
     let types = types_rs();
     let json_tests: Vec<TokenStream> = cases
         .iter()
-        .map(|case| {
-            let test_name = format_ident!("generated_json_{}", case.name);
-            let value = case.value.clone();
-            let case_name = case.name;
-            quote! {
-                #[test]
-                fn #test_name() {
-                    let value = #value;
-                    assert_codegen_snapshots("json", #case_name, &kajit::json::KajitJson, &value);
-                    assert_json_case(value);
-                }
-            }
+        .flat_map(|case| {
+            case.values
+                .iter()
+                .enumerate()
+                .map(|(sample_idx, value)| {
+                    let test_name = if case.values.len() == 1 {
+                        format_ident!("generated_json_{}", case.name)
+                    } else {
+                        format_ident!("generated_json_{}_v{}", case.name, sample_idx)
+                    };
+                    let case_name = if case.values.len() == 1 {
+                        case.name.to_string()
+                    } else {
+                        format!("{}__v{}", case.name, sample_idx)
+                    };
+                    let value = value.clone();
+                    quote! {
+                        #[test]
+                        fn #test_name() {
+                            let value = #value;
+                            assert_codegen_snapshots("json", #case_name, &kajit::json::KajitJson, &value);
+                            assert_json_case(value);
+                        }
+                    }
+                })
         })
         .collect();
     let postcard_tests: Vec<TokenStream> = cases
         .iter()
-        .map(|case| {
-            let test_name = format_ident!("generated_postcard_{}", case.name);
-            let value = case.value.clone();
-            let case_name = case.name;
-            quote! {
-                #[test]
-                fn #test_name() {
-                    let value = #value;
-                    assert_codegen_snapshots("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
-                    assert_postcard_case(value);
-                }
-            }
+        .flat_map(|case| {
+            case.values
+                .iter()
+                .enumerate()
+                .map(|(sample_idx, value)| {
+                    let test_name = if case.values.len() == 1 {
+                        format_ident!("generated_postcard_{}", case.name)
+                    } else {
+                        format_ident!("generated_postcard_{}_v{}", case.name, sample_idx)
+                    };
+                    let case_name = if case.values.len() == 1 {
+                        case.name.to_string()
+                    } else {
+                        format!("{}__v{}", case.name, sample_idx)
+                    };
+                    let value = value.clone();
+                    quote! {
+                        #[test]
+                        fn #test_name() {
+                            let value = #value;
+                            assert_codegen_snapshots("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
+                            assert_postcard_case(value);
+                        }
+                    }
+                })
         })
         .collect();
     let prop_tests: Vec<TokenStream> = cases
         .iter()
         .map(|case| {
             let test_name = format_ident!("generated_prop_{}", case.name);
-            let value = case.value.clone();
+            let value = case
+                .values
+                .first()
+                .cloned()
+                .expect("each case should define at least one sample value");
             quote! {
                 #[test]
                 fn #test_name() {

@@ -10,7 +10,7 @@ mod ir_postreg_cases;
 
 struct Case {
     name: &'static str,
-    value: TokenStream,
+    values: Vec<TokenStream>,
 }
 
 struct IrOptCase {
