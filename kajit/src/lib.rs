@@ -554,21 +554,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn postcard_from_str_entrypoint() {
-        let bytes = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-        let input = core::str::from_utf8(&bytes).unwrap();
-        let deser = compile_decoder(Friend::SHAPE, &postcard::KajitPostcard);
-        let result: Friend = from_str(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Friend {
-                age: 42,
-                name: "Alice".into()
-            }
-        );
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct BorrowedFriend<'a> {
         age: u32,
@@ -835,17 +820,6 @@ mod tests {
         Cat,
         Dog { name: String, good_boy: bool },
         Parrot(String),
-    }
-
-    // r[verify deser.postcard.enum.dispatch]
-    #[test]
-    fn postcard_enum_unknown_discriminant() {
-        // Discriminant 99 doesn't exist
-        let input = [99u8];
-        let deser = compile_decoder(Animal::SHAPE, &postcard::KajitPostcard);
-        let result = deserialize::<Animal>(&deser, &input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::UnknownVariant);
     }
 
     // --- Milestone 7: Flatten ---

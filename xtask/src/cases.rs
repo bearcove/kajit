@@ -814,6 +814,29 @@ fn all_cases() -> Vec<Case> {
         };
         out.push(case);
     }
+    out.push(
+        CaseBuilder::new("from_str_entrypoint", quote!(Friend))
+            .input_ok(
+                WireFormat::Postcard,
+                "postcard",
+                b"*\x05Alice",
+                quote!(Friend {
+                    age: 42,
+                    name: "Alice".into()
+                }),
+            )
+            .build(),
+    );
+    out.push(
+        CaseBuilder::new("enum_unknown_discriminant", quote!(Animal))
+            .input_err(
+                WireFormat::Postcard,
+                "postcard",
+                b"\x63",
+                quote!(kajit::context::ErrorCode::UnknownVariant),
+            )
+            .build(),
+    );
     out
 }
 
@@ -1757,6 +1780,51 @@ pub(crate) fn render_test_file() -> String {
                 })
         })
         .collect();
+    let postcard_input_tests: Vec<TokenStream> = cases
+        .iter()
+        .flat_map(|case| {
+            case.inputs
+                .iter()
+                .filter(|input| input.format == WireFormat::Postcard)
+                .map(|input| {
+                    let test_name = if case.inputs.len() == 1 {
+                        format_ident!("{}", case.name)
+                    } else {
+                        format_ident!("{}_{}", case.name, input.name)
+                    };
+                    let ty = case.ty.clone();
+                    let input_bytes = LitByteStr::new(input.input, Span::call_site());
+                    match &input.expect {
+                        DecodeExpectation::Ok(expected) => {
+                            let expected = expected.clone();
+                            quote! {
+                                #[test]
+                                fn #test_name() {
+                                    assert_postcard_input_case::<#ty>(#input_bytes, #expected);
+                                }
+                            }
+                        }
+                        DecodeExpectation::Err(expected_error_code) => {
+                            let expected_error_code = expected_error_code.clone();
+                            quote! {
+                                #[test]
+                                fn #test_name() {
+                                    assert_postcard_input_err_code::<#ty>(#input_bytes, #expected_error_code);
+                                }
+                            }
+                        }
+                        DecodeExpectation::AnyErr => {
+                            quote! {
+                                #[test]
+                                fn #test_name() {
+                                    assert_postcard_input_err::<#ty>(#input_bytes);
+                                }
+                            }
+                        }
+                    }
+                })
+        })
+        .collect();
     let file_tokens = quote! {
         use facet::Facet;
         use proptest::arbitrary::Arbitrary;
@@ -1818,6 +1886,41 @@ pub(crate) fn render_test_file() -> String {
             let out = kajit::deserialize::<T>(&decoder, input);
             let err = match out {
                 Ok(_) => panic!("expected json decode failure"),
+                Err(err) => err,
+            };
+            assert_eq!(err.code, expected_code);
+        }
+
+        fn assert_postcard_input_case<T>(input: &[u8], expected: T)
+        where
+            for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
+        {
+            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
+            let got: T = kajit::from_str(&decoder, input).unwrap();
+            assert_eq!(got, expected);
+        }
+
+        #[allow(dead_code)]
+        fn assert_postcard_input_err<T>(input: &[u8])
+        where
+            for<'input> T: Facet<'input>,
+        {
+            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
+            let out = kajit::from_str::<T>(&decoder, input);
+            assert!(out.is_err(), "expected postcard decode failure");
+        }
+
+        fn assert_postcard_input_err_code<T>(input: &[u8], expected_code: kajit::context::ErrorCode)
+        where
+            for<'input> T: Facet<'input>,
+        {
+            let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
+            let out = kajit::from_str::<T>(&decoder, input);
+            let err = match out {
+                Ok(_) => panic!("expected postcard decode failure"),
                 Err(err) => err,
             };
             assert_eq!(err.code, expected_code);
@@ -2007,6 +2110,11 @@ pub(crate) fn render_test_file() -> String {
         mod json_input {
             use super::*;
             #(#json_input_tests)*
+        }
+
+        mod postcard_input {
+            use super::*;
+            #(#postcard_input_tests)*
         }
 
         mod postreg {
