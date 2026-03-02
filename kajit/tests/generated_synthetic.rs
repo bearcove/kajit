@@ -817,10 +817,58 @@ mod json_input {
         );
     }
     #[test]
+    fn enum_unit_as_string() {
+        assert_json_input_case::<Animal>(b"\"Cat\"", Animal::Cat);
+    }
+    #[test]
+    fn enum_struct_variant() {
+        assert_json_input_case::<
+            Animal,
+        >(
+            b"{\"Dog\": {\"name\": \"Rex\", \"good_boy\": true}}",
+            Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        );
+    }
+    #[test]
+    fn enum_tuple_variant() {
+        assert_json_input_case::<
+            Animal,
+        >(b"{\"Parrot\": \"Polly\"}", Animal::Parrot("Polly".into()));
+    }
+    #[test]
+    fn enum_unit_in_object() {
+        assert_json_input_case::<Animal>(b"{\"Cat\": null}", Animal::Cat);
+    }
+    #[test]
     fn enum_unknown_variant() {
         assert_json_input_err_code::<
             Animal,
         >(b"\"Snake\"", kajit::context::ErrorCode::UnknownVariant);
+    }
+    #[test]
+    fn adjacent_unit_no_content() {
+        assert_json_input_case::<AdjAnimal>(b"{\"type\": \"Cat\"}", AdjAnimal::Cat);
+    }
+    #[test]
+    fn adjacent_unit_with_null_content() {
+        assert_json_input_case::<
+            AdjAnimal,
+        >(b"{\"type\": \"Cat\", \"data\": null}", AdjAnimal::Cat);
+    }
+    #[test]
+    fn adjacent_struct_variant() {
+        assert_json_input_case::<
+            AdjAnimal,
+        >(
+            b"{\"type\": \"Dog\", \"data\": {\"name\": \"Rex\", \"good_boy\": true}}",
+            AdjAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        );
     }
     #[test]
     fn adjacent_struct_variant_reversed_fields() {
@@ -832,6 +880,15 @@ mod json_input {
                 name: "Rex".into(),
                 good_boy: true,
             },
+        );
+    }
+    #[test]
+    fn adjacent_tuple_variant() {
+        assert_json_input_case::<
+            AdjAnimal,
+        >(
+            b"{\"type\": \"Parrot\", \"data\": \"Polly\"}",
+            AdjAnimal::Parrot("Polly".into()),
         );
     }
     #[test]
@@ -858,6 +915,22 @@ mod json_input {
             IntAnimal,
         >(
             b"{\"type\": \"Dog\", \"good_boy\": true, \"name\": \"Rex\"}",
+            IntAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        );
+    }
+    #[test]
+    fn internal_unit_variant() {
+        assert_json_input_case::<IntAnimal>(b"{\"type\": \"Cat\"}", IntAnimal::Cat);
+    }
+    #[test]
+    fn internal_struct_variant() {
+        assert_json_input_case::<
+            IntAnimal,
+        >(
+            b"{\"type\": \"Dog\", \"name\": \"Rex\", \"good_boy\": true}",
             IntAnimal::Dog {
                 name: "Rex".into(),
                 good_boy: true,

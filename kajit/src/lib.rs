@@ -1450,52 +1450,6 @@ mod tests {
     }
 
     // r[verify deser.json.enum.external]
-    // r[verify deser.json.enum.external.unit-as-string]
-    #[test]
-    fn json_enum_unit_as_string() {
-        let input = br#""Cat""#;
-        let deser = compile_decoder(Animal::SHAPE, &json::KajitJson);
-        let result: Animal = deserialize(&deser, input).unwrap();
-        assert_eq!(result, Animal::Cat);
-    }
-
-    // r[verify deser.json.enum.external]
-    // r[verify deser.json.enum.external.struct-variant]
-    #[test]
-    fn json_enum_struct_variant() {
-        let input = br#"{"Dog": {"name": "Rex", "good_boy": true}}"#;
-        let deser = compile_decoder(Animal::SHAPE, &json::KajitJson);
-        let result: Animal = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Animal::Dog {
-                name: "Rex".into(),
-                good_boy: true
-            }
-        );
-    }
-
-    // r[verify deser.json.enum.external]
-    // r[verify deser.json.enum.external.tuple-variant]
-    #[test]
-    fn json_enum_tuple_variant() {
-        let input = br#"{"Parrot": "Polly"}"#;
-        let deser = compile_decoder(Animal::SHAPE, &json::KajitJson);
-        let result: Animal = deserialize(&deser, input).unwrap();
-        assert_eq!(result, Animal::Parrot("Polly".into()));
-    }
-
-    // r[verify deser.json.enum.external]
-    #[test]
-    fn json_enum_unit_in_object() {
-        // Unit variant inside object form: { "Cat": null }
-        let input = br#"{"Cat": null}"#;
-        let deser = compile_decoder(Animal::SHAPE, &json::KajitJson);
-        let result: Animal = deserialize(&deser, input).unwrap();
-        assert_eq!(result, Animal::Cat);
-    }
-
-    // r[verify deser.json.enum.external]
     #[test]
     fn json_enum_as_struct_field() {
         #[derive(Facet, Debug, PartialEq)]
@@ -1610,51 +1564,6 @@ mod tests {
         Parrot(String),
     }
 
-    // r[verify deser.json.enum.adjacent]
-    // r[verify deser.json.enum.adjacent.unit-variant]
-    #[test]
-    fn json_adjacent_unit_no_content() {
-        let input = br#"{"type": "Cat"}"#;
-        let deser = compile_decoder(AdjAnimal::SHAPE, &json::KajitJson);
-        let result: AdjAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(result, AdjAnimal::Cat);
-    }
-
-    // r[verify deser.json.enum.adjacent]
-    // r[verify deser.json.enum.adjacent.unit-variant]
-    #[test]
-    fn json_adjacent_unit_with_null_content() {
-        let input = br#"{"type": "Cat", "data": null}"#;
-        let deser = compile_decoder(AdjAnimal::SHAPE, &json::KajitJson);
-        let result: AdjAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(result, AdjAnimal::Cat);
-    }
-
-    // r[verify deser.json.enum.adjacent]
-    #[test]
-    fn json_adjacent_struct_variant() {
-        let input = br#"{"type": "Dog", "data": {"name": "Rex", "good_boy": true}}"#;
-        let deser = compile_decoder(AdjAnimal::SHAPE, &json::KajitJson);
-        let result: AdjAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            AdjAnimal::Dog {
-                name: "Rex".into(),
-                good_boy: true,
-            }
-        );
-    }
-
-    // r[verify deser.json.enum.adjacent]
-    // r[verify deser.json.enum.adjacent.tuple-variant]
-    #[test]
-    fn json_adjacent_tuple_variant() {
-        let input = br#"{"type": "Parrot", "data": "Polly"}"#;
-        let deser = compile_decoder(AdjAnimal::SHAPE, &json::KajitJson);
-        let result: AdjAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(result, AdjAnimal::Parrot("Polly".into()));
-    }
-
     // --- Milestone 7: Internally tagged enums ---
 
     #[derive(Facet, Debug, PartialEq)]
@@ -1663,31 +1572,6 @@ mod tests {
     enum IntAnimal {
         Cat,
         Dog { name: String, good_boy: bool },
-    }
-
-    // r[verify deser.json.enum.internal]
-    // r[verify deser.json.enum.internal.unit-variant]
-    #[test]
-    fn json_internal_unit_variant() {
-        let input = br#"{"type": "Cat"}"#;
-        let deser = compile_decoder(IntAnimal::SHAPE, &json::KajitJson);
-        let result: IntAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(result, IntAnimal::Cat);
-    }
-
-    // r[verify deser.json.enum.internal]
-    #[test]
-    fn json_internal_struct_variant() {
-        let input = br#"{"type": "Dog", "name": "Rex", "good_boy": true}"#;
-        let deser = compile_decoder(IntAnimal::SHAPE, &json::KajitJson);
-        let result: IntAnimal = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            IntAnimal::Dog {
-                name: "Rex".into(),
-                good_boy: true,
-            }
-        );
     }
 
     // r[verify deser.json.enum.internal.struct-only]

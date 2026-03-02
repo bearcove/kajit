@@ -399,11 +399,66 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected_error_code: None,
         },
         JsonInputCase {
+            name: "enum_unit_as_string",
+            ty: quote!(Animal),
+            input: r#""Cat""#,
+            expected: Some(quote!(Animal::Cat)),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "enum_struct_variant",
+            ty: quote!(Animal),
+            input: r#"{"Dog": {"name": "Rex", "good_boy": true}}"#,
+            expected: Some(quote!(Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "enum_tuple_variant",
+            ty: quote!(Animal),
+            input: r#"{"Parrot": "Polly"}"#,
+            expected: Some(quote!(Animal::Parrot("Polly".into()))),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "enum_unit_in_object",
+            ty: quote!(Animal),
+            input: r#"{"Cat": null}"#,
+            expected: Some(quote!(Animal::Cat)),
+            expected_error_code: None,
+        },
+        JsonInputCase {
             name: "enum_unknown_variant",
             ty: quote!(Animal),
             input: r#""Snake""#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
+        },
+        JsonInputCase {
+            name: "adjacent_unit_no_content",
+            ty: quote!(AdjAnimal),
+            input: r#"{"type": "Cat"}"#,
+            expected: Some(quote!(AdjAnimal::Cat)),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "adjacent_unit_with_null_content",
+            ty: quote!(AdjAnimal),
+            input: r#"{"type": "Cat", "data": null}"#,
+            expected: Some(quote!(AdjAnimal::Cat)),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "adjacent_struct_variant",
+            ty: quote!(AdjAnimal),
+            input: r#"{"type": "Dog", "data": {"name": "Rex", "good_boy": true}}"#,
+            expected: Some(quote!(AdjAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true
+            })),
+            expected_error_code: None,
         },
         JsonInputCase {
             name: "adjacent_struct_variant_reversed_fields",
@@ -413,6 +468,13 @@ fn json_input_cases() -> Vec<JsonInputCase> {
                 name: "Rex".into(),
                 good_boy: true
             })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "adjacent_tuple_variant",
+            ty: quote!(AdjAnimal),
+            input: r#"{"type": "Parrot", "data": "Polly"}"#,
+            expected: Some(quote!(AdjAnimal::Parrot("Polly".into()))),
             expected_error_code: None,
         },
         JsonInputCase {
@@ -433,6 +495,23 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             name: "internal_struct_variant_reversed_fields",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Dog", "good_boy": true, "name": "Rex"}"#,
+            expected: Some(quote!(IntAnimal::Dog {
+                name: "Rex".into(),
+                good_boy: true
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "internal_unit_variant",
+            ty: quote!(IntAnimal),
+            input: r#"{"type": "Cat"}"#,
+            expected: Some(quote!(IntAnimal::Cat)),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "internal_struct_variant",
+            ty: quote!(IntAnimal),
+            input: r#"{"type": "Dog", "name": "Rex", "good_boy": true}"#,
             expected: Some(quote!(IntAnimal::Dog {
                 name: "Rex".into(),
                 good_boy: true
