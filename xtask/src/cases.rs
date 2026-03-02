@@ -8,61 +8,69 @@ pub(crate) fn types_rs() -> TokenStream {
     quote! {
         use serde::{Serialize, Deserialize};
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Friend {
             age: u32,
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
             name: String,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Address {
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
             city: String,
             zip: u32,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Person {
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
             name: String,
             age: u32,
             address: Address,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Inner {
             x: u32,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Middle {
             inner: Inner,
             y: u32,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct Outer {
             middle: Middle,
             z: u32,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct AllIntegers {
             a_u8: u8,
             a_u16: u16,
             a_u32: u32,
             a_u64: u64,
+            a_u128: u128,
+            a_usize: usize,
             a_i8: i8,
             a_i16: i16,
             a_i32: i32,
             a_i64: i64,
+            a_i128: i128,
+            a_isize: isize,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct BoolField {
             value: bool,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct ScalarVec {
+            #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
             values: Vec<u32>,
         }
 
@@ -108,10 +116,14 @@ pub(crate) fn cases() -> Vec<Case> {
                 a_u16: 65535,
                 a_u32: 1_000_000,
                 a_u64: 1_000_000_000_000,
+                a_u128: 340282366920938463463374607431768211455u128,
+                a_usize: 123_456usize,
                 a_i8: -128,
                 a_i16: -32768,
                 a_i32: -1_000_000,
-                a_i64: -1_000_000_000_000
+                a_i64: -1_000_000_000_000,
+                a_i128: -170141183460469231731687303715884105728i128,
+                a_isize: -123_456isize
             }),
         },
         Case {
@@ -344,8 +356,23 @@ pub(crate) fn render_test_file() -> String {
             }
         })
         .collect();
+    let prop_tests: Vec<TokenStream> = cases
+        .iter()
+        .map(|case| {
+            let test_name = format_ident!("generated_prop_{}", case.name);
+            let value = case.value.clone();
+            quote! {
+                #[test]
+                fn #test_name() {
+                    let marker = #value;
+                    assert_prop_case(&marker);
+                }
+            }
+        })
+        .collect();
     let file_tokens = quote! {
         use facet::Facet;
+        use proptest::arbitrary::Arbitrary;
         use std::fmt::Write;
         #[cfg(target_arch = "x86_64")]
         use yaxpeax_arch::LengthedInstruction;
@@ -376,6 +403,41 @@ pub(crate) fn render_test_file() -> String {
             let ir = kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
             let ir_out: T = kajit::deserialize(&ir, &encoded).unwrap();
             assert_eq!(ir_out, expected);
+        }
+
+        fn assert_prop_case<T>(_marker: &T)
+        where
+            for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug + Arbitrary + 'static,
+        {
+            let json_decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+            let postcard_legacy =
+                kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let postcard_ir =
+                kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {
+                cases: 64,
+                ..proptest::test_runner::Config::default()
+            });
+            let strategy = proptest::arbitrary::any::<T>();
+            runner
+                .run(&strategy, |value| {
+                    let json_encoded = serde_json::to_string(&value).unwrap();
+                    let json_expected: T = serde_json::from_str(&json_encoded).unwrap();
+                    let json_got: T = kajit::from_str(&json_decoder, &json_encoded).unwrap();
+                    assert_eq!(json_got, json_expected);
+
+                    let postcard_encoded = postcard::to_allocvec(&value).unwrap();
+                    let postcard_expected: T = postcard::from_bytes(&postcard_encoded).unwrap();
+                    let postcard_legacy_out: T =
+                        kajit::deserialize(&postcard_legacy, &postcard_encoded).unwrap();
+                    assert_eq!(postcard_legacy_out, postcard_expected);
+
+                    let postcard_ir_out: T =
+                        kajit::deserialize(&postcard_ir, &postcard_encoded).unwrap();
+                    assert_eq!(postcard_ir_out, postcard_expected);
+                    Ok(())
+                })
+                .unwrap();
         }
 
         fn disasm_bytes(code: &[u8], marker_offset: Option<usize>) -> String {
@@ -539,6 +601,7 @@ pub(crate) fn render_test_file() -> String {
 
         #(#json_tests)*
         #(#postcard_tests)*
+        #(#prop_tests)*
     };
     let file: syn::File =
         syn::parse2(file_tokens).expect("generated synthetic test file should parse");

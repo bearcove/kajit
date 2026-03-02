@@ -5,53 +5,63 @@ use facet::Facet;
 use std::hint::black_box;
 use std::sync::Arc;
 use serde::{Serialize, Deserialize};
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
     age: u32,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
     name: String,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Address {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
     city: String,
     zip: u32,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Person {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
     name: String,
     age: u32,
     address: Address,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Inner {
     x: u32,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Middle {
     inner: Inner,
     y: u32,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Outer {
     middle: Middle,
     z: u32,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct AllIntegers {
     a_u8: u8,
     a_u16: u16,
     a_u32: u32,
     a_u64: u64,
+    a_u128: u128,
+    a_usize: usize,
     a_i8: i8,
     a_i16: i16,
     a_i32: i32,
     a_i64: i64,
+    a_i128: i128,
+    a_isize: isize,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct BoolField {
     value: bool,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
+    )]
     values: Vec<u32>,
 }
 #[allow(dead_code)]
@@ -254,10 +264,14 @@ fn main() {
             a_u16: 65535,
             a_u32: 1_000_000,
             a_u64: 1_000_000_000_000,
+            a_u128: 340282366920938463463374607431768211455u128,
+            a_usize: 123_456usize,
             a_i8: -128,
             a_i16: -32768,
             a_i32: -1_000_000,
             a_i64: -1_000_000_000_000,
+            a_i128: -170141183460469231731687303715884105728i128,
+            a_isize: -123_456isize,
         },
     );
     register_bench_case(&mut v, "bool_field", BoolField { value: true });

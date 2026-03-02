@@ -28,6 +28,8 @@ yaxpeax-x86 = { version = "2", default-features = false, features = ["std", "fmt
 yaxpeax-arch = { version = "0.3", default-features = false, features = ["std"] }
 brotli = "8"
 insta = "1"
+proptest = "1"
+proptest-derive = "0.5"
 
 [[bench]]
 name = "synthetic"
