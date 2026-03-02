@@ -141,6 +141,19 @@ pub fn debug_ir_and_ra_mir_text(
     (ir_text, ra_text)
 }
 
+/// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
+///
+/// Intended for snapshot tests and debugging.
+pub fn debug_linear_ir_text(
+    shape: &'static facet::Shape,
+    ir_decoder: &dyn format::IrDecoder,
+) -> String {
+    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    ir_passes::run_default_passes(&mut func);
+    let linear = linearize::linearize(&mut func);
+    scrub_volatile_intrinsic_addrs(&format!("{linear}"))
+}
+
 fn scrub_volatile_intrinsic_addrs(text: &str) -> String {
     // Display dumps include intrinsic function pointer addresses which are process-local and
     // unstable across runs. Replace only those pointer fields to keep snapshots deterministic.
@@ -281,8 +294,6 @@ pub fn serialize<T: facet::Facet<'static>>(encoder: &CompiledEncoder, value: &T)
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Cow;
-
     use super::*;
     use facet::Facet;
 
@@ -290,128 +301,6 @@ mod tests {
     struct Friend {
         age: u32,
         name: String,
-    }
-
-    #[test]
-    fn postcard_nested_struct_ir_uses_apply_nodes() {
-        #[derive(Facet)]
-        struct Inner {
-            x: u32,
-        }
-
-        #[derive(Facet)]
-        struct Outer {
-            inner: Inner,
-            y: u32,
-        }
-
-        let func = crate::compiler::build_decoder_ir(Outer::SHAPE, &postcard::KajitPostcard);
-        assert!(
-            func.lambdas.len() >= 2,
-            "expected at least root + nested lambda"
-        );
-        let apply_count = func
-            .nodes
-            .iter()
-            .filter(|(_, n)| matches!(&n.kind, crate::ir::NodeKind::Apply { .. }))
-            .count();
-        assert!(
-            apply_count >= 1,
-            "expected at least one apply node for nested shape"
-        );
-    }
-
-    #[test]
-    fn postcard_long_varints_via_ir() {
-        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, Facet)]
-        struct Address {
-            city: String,
-            zip: u32,
-        }
-
-        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, Facet)]
-        struct Person {
-            name: String,
-            age: u32,
-            address: Address,
-        }
-
-        let source = Person {
-            name: "a".repeat(128),
-            age: 128,
-            address: Address {
-                city: "b".repeat(128),
-                zip: 128,
-            },
-        };
-        let encoded = ::postcard::to_allocvec(&source).unwrap();
-        let legacy = compile_decoder_legacy(Person::SHAPE, &postcard::KajitPostcard);
-        let via_ir = compile_decoder_via_ir(Person::SHAPE, &postcard::KajitPostcard);
-        let legacy_out: Person = deserialize(&legacy, &encoded).unwrap();
-        let ir_out: Person = deserialize(&via_ir, &encoded).unwrap();
-        assert_eq!(legacy_out, source);
-        assert_eq!(ir_out, source);
-    }
-
-    #[test]
-    fn postcard_all_integers_wide_via_ir() {
-        #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize, Facet)]
-        struct AllIntegers {
-            a_u8: u8,
-            a_u16: u16,
-            a_u32: u32,
-            a_u64: u64,
-            a_u128: u128,
-            a_usize: usize,
-            a_i8: i8,
-            a_i16: i16,
-            a_i32: i32,
-            a_i64: i64,
-            a_i128: i128,
-            a_isize: isize,
-        }
-
-        let source = AllIntegers {
-            a_u8: 0,
-            a_u16: 128,
-            a_u32: 128,
-            a_u64: 128,
-            a_u128: 0,
-            a_usize: 2_310_817_621_330_714usize,
-            a_i8: 82,
-            a_i16: -27_214,
-            a_i32: -753_462_665,
-            a_i64: 5_113_149_701_919_602_663,
-            a_i128: 111_719_190_169_970_084_407_522_330_417_561_111_272i128,
-            a_isize: 5_474_093_000_439_056_201isize,
-        };
-        let encoded = ::postcard::to_allocvec(&source).unwrap();
-        let legacy = compile_decoder_legacy(AllIntegers::SHAPE, &postcard::KajitPostcard);
-        let via_ir = compile_decoder_via_ir(AllIntegers::SHAPE, &postcard::KajitPostcard);
-        let legacy_out: AllIntegers = deserialize(&legacy, &encoded).unwrap();
-        let ir_out: AllIntegers = deserialize(&via_ir, &encoded).unwrap();
-        assert_eq!(legacy_out, source);
-        assert_eq!(ir_out, source);
-    }
-
-    #[test]
-    fn postcard_compile_decoder_with_backend_routes_to_selected_path() {
-        let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-
-        let legacy = compile_decoder_with_backend(
-            Friend::SHAPE,
-            &postcard::KajitPostcard,
-            DecoderBackend::Legacy,
-        );
-        let via_ir = compile_decoder_with_backend(
-            Friend::SHAPE,
-            &postcard::KajitPostcard,
-            DecoderBackend::Ir,
-        );
-
-        let a: Friend = deserialize(&legacy, &input).unwrap();
-        let b: Friend = deserialize(&via_ir, &input).unwrap();
-        assert_eq!(a, b);
     }
 
     #[test]
@@ -439,109 +328,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn json_struct_ir_orders_key_read_before_key_compare() {
-        let mut func = compiler::build_decoder_ir(Friend::SHAPE, &json::KajitJson);
-        ir_passes::run_default_passes(&mut func);
-        let linear = linearize::linearize(&mut func);
-        let linear_text = format!("{linear}");
-
-        let read_key_pat = format!(
-            "call_intrinsic 0x{:x}",
-            json_intrinsics::kajit_json_read_key as *const () as usize
-        );
-        let key_eq_pat = format!(
-            "call_pure 0x{:x}",
-            json_intrinsics::kajit_json_key_equals as *const () as usize
-        );
-        let slot_read_pat = " = slot[0]";
-
-        let read_key_pos = linear_text
-            .find(&read_key_pat)
-            .unwrap_or_else(|| panic!("missing read_key call in linear IR:\n{linear_text}"));
-        let slot_read_pos = linear_text
-            .find(slot_read_pat)
-            .unwrap_or_else(|| panic!("missing slot read in linear IR:\n{linear_text}"));
-        let key_eq_pos = linear_text
-            .find(&key_eq_pat)
-            .unwrap_or_else(|| panic!("missing key_equals call in linear IR:\n{linear_text}"));
-
-        assert!(
-            read_key_pos < slot_read_pos && slot_read_pos < key_eq_pos,
-            "expected read_key -> slot_read -> key_compare order in linear IR:\n{linear_text}"
-        );
-    }
-
-    #[derive(Facet, Debug, PartialEq)]
-    struct BorrowedFriend<'a> {
-        age: u32,
-        name: &'a str,
-    }
-
-    #[derive(Facet, Debug, PartialEq)]
-    struct CowFriend<'a> {
-        age: u32,
-        name: Cow<'a, str>,
-    }
-
-    #[test]
-    fn postcard_borrowed_str_zero_copy() {
-        let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-        let deser = compile_decoder(BorrowedFriend::SHAPE, &postcard::KajitPostcard);
-        let result: BorrowedFriend<'_> = deserialize(&deser, &input).unwrap();
-        assert_eq!(result.age, 42);
-        assert_eq!(result.name, "Alice");
-        assert_eq!(result.name.as_ptr(), unsafe { input.as_ptr().add(2) });
-    }
-
-    #[test]
-    fn postcard_cow_str_borrowed_zero_copy() {
-        let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-        let deser = compile_decoder(CowFriend::SHAPE, &postcard::KajitPostcard);
-        let result: CowFriend<'_> = deserialize(&deser, &input).unwrap();
-        assert_eq!(result.age, 42);
-        assert!(matches!(result.name, Cow::Borrowed("Alice")));
-    }
-
-    #[test]
-    fn json_borrowed_str_zero_copy_fast_path() {
-        let input = br#"{"age":42,"name":"Alice"}"#;
-        let name_start = input.windows(5).position(|w| w == b"Alice").unwrap();
-        let deser = compile_decoder(BorrowedFriend::SHAPE, &json::KajitJson);
-        let result: BorrowedFriend<'_> = deserialize(&deser, input).unwrap();
-        assert_eq!(result.age, 42);
-        assert_eq!(result.name, "Alice");
-        assert_eq!(result.name.as_ptr(), unsafe {
-            input.as_ptr().add(name_start)
-        });
-    }
-
-    #[test]
-    fn json_borrowed_str_escape_is_error() {
-        let input = br#"{"age":42,"name":"A\nB"}"#;
-        let deser = compile_decoder(BorrowedFriend::SHAPE, &json::KajitJson);
-        let err = deserialize::<BorrowedFriend<'_>>(&deser, input).unwrap_err();
-        assert_eq!(err.code, context::ErrorCode::InvalidEscapeSequence);
-    }
-
-    #[test]
-    fn json_cow_str_fast_path_borrowed() {
-        let input = br#"{"age":42,"name":"Alice"}"#;
-        let deser = compile_decoder(CowFriend::SHAPE, &json::KajitJson);
-        let result: CowFriend<'_> = deserialize(&deser, input).unwrap();
-        assert_eq!(result.age, 42);
-        assert!(matches!(result.name, Cow::Borrowed("Alice")));
-    }
-
-    #[test]
-    fn json_cow_str_escape_slow_path_owned() {
-        let input = br#"{"age":42,"name":"A\nB"}"#;
-        let deser = compile_decoder(CowFriend::SHAPE, &json::KajitJson);
-        let result: CowFriend<'_> = deserialize(&deser, input).unwrap();
-        assert_eq!(result.age, 42);
-        assert!(matches!(result.name, Cow::Owned(ref s) if s == "A\nB"));
-    }
-
     // --- Milestone 4: All scalar types ---
 
     #[derive(Facet, Debug, PartialEq)]
@@ -563,139 +349,6 @@ mod tests {
         a_f64: f64,
         a_char: char,
         a_name: String,
-    }
-
-    // r[verify deser.json.scalar.float]
-    // r[verify deser.json.scalar.float.sign]
-    // r[verify deser.json.scalar.float.digits]
-    // r[verify deser.json.scalar.float.overflow-digits]
-    // r[verify deser.json.scalar.float.dot]
-    // r[verify deser.json.scalar.float.exponent]
-    // r[verify deser.json.scalar.float.zero]
-    // r[verify deser.json.scalar.float.exact-int]
-    // r[verify deser.json.scalar.float.uscale]
-    // r[verify deser.json.scalar.float.pack]
-    // r[verify deser.json.scalar.float.pack.subnormal]
-    // r[verify deser.json.scalar.float.pack.overflow]
-    #[test]
-    fn json_f64_edge_cases() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct F {
-            x: f64,
-        }
-
-        let cases: &[(&[u8], f64)] = &[
-            // Exact integers
-            (br#"{"x":0}"#, 0.0),
-            (br#"{"x":1}"#, 1.0),
-            (br#"{"x":42}"#, 42.0),
-            (br#"{"x":9007199254740992}"#, 9007199254740992.0), // 2^53
-            // Simple decimals
-            (br#"{"x":0.5}"#, 0.5),
-            (br#"{"x":1.0}"#, 1.0),
-            #[allow(clippy::approx_constant)]
-            (br#"{"x":3.14}"#, 3.14),
-            (br#"{"x":2.718281828459045}"#, 2.718281828459045),
-            // Negative values
-            (br#"{"x":-1.0}"#, -1.0),
-            (br#"{"x":-0.0}"#, -0.0_f64),
-            (br#"{"x":-3.14}"#, -3.14),
-            // Scientific notation
-            (br#"{"x":1e10}"#, 1e10),
-            (br#"{"x":1.5e2}"#, 150.0),
-            (br#"{"x":1e-10}"#, 1e-10),
-            (br#"{"x":1E10}"#, 1e10),
-            (br#"{"x":1e+10}"#, 1e10),
-            (br#"{"x":1e0}"#, 1.0),
-            // Leading zeros (valid JSON numbers can have 0.xxx)
-            (br#"{"x":0.001}"#, 0.001),
-            (br#"{"x":0.0000000000000000000001}"#, 1e-22),
-            // Large/small exponents
-            (br#"{"x":1e308}"#, 1e308),
-            (br#"{"x":1.7976931348623157e308}"#, f64::MAX),
-            (br#"{"x":1e-308}"#, 1e-308),
-            // Min normal
-            (br#"{"x":2.2250738585072014e-308}"#, 2.2250738585072014e-308),
-            // Overflow → infinity
-            (br#"{"x":1e309}"#, f64::INFINITY),
-            (br#"{"x":-1e309}"#, f64::NEG_INFINITY),
-            // Underflow → zero
-            (br#"{"x":1e-400}"#, 0.0),
-            // > 19 significant digits (overflow digits get dropped)
-            (br#"{"x":12345678901234567890.0}"#, 12345678901234567890.0),
-            // With leading whitespace after colon (tests ws skip)
-            (br#"{"x": 1.0}"#, 1.0),
-            (br#"{"x":	1.0}"#, 1.0), // tab
-        ];
-
-        let deser = compile_decoder(F::SHAPE, &json::KajitJson);
-        for (input, expected) in cases {
-            let result: F = deserialize(&deser, input).unwrap();
-            assert_eq!(
-                result.x.to_bits(),
-                expected.to_bits(),
-                "input={:?}: got {} ({:#018x}), expected {} ({:#018x})",
-                std::str::from_utf8(input).unwrap(),
-                result.x,
-                result.x.to_bits(),
-                expected,
-                expected.to_bits(),
-            );
-        }
-    }
-
-    // r[verify deser.json.scalar.float.uscale.table]
-    // r[verify deser.json.scalar.float.uscale.mul128]
-    // r[verify deser.json.scalar.float.uscale.clz]
-    #[test]
-    fn json_f64_canada_roundtrip() {
-        #[derive(Facet, Debug)]
-        struct Coord {
-            v: f64,
-        }
-
-        let compressed = include_bytes!("../fixtures/canada.json.br");
-        let mut json_bytes = Vec::new();
-        brotli::BrotliDecompress(&mut std::io::Cursor::new(compressed), &mut json_bytes).unwrap();
-
-        let deser = compile_decoder(Coord::SHAPE, &json::KajitJson);
-
-        let mut mismatches = 0;
-        let mut total = 0;
-        let mut i = 0;
-        while i < json_bytes.len() {
-            if json_bytes[i] == b'-' || json_bytes[i].is_ascii_digit() {
-                let start = i;
-                i += 1;
-                while i < json_bytes.len() {
-                    match json_bytes[i] {
-                        b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-' => i += 1,
-                        _ => break,
-                    }
-                }
-                let s = &json_bytes[start..i];
-                if s.contains(&b'.') || s.contains(&b'e') || s.contains(&b'E') {
-                    total += 1;
-                    let std_val: f64 = std::str::from_utf8(s).unwrap().parse().unwrap();
-                    let json_input = format!(r#"{{"v":{}}}"#, std::str::from_utf8(s).unwrap());
-                    let result: Coord = deserialize(&deser, json_input.as_bytes()).unwrap();
-                    if std_val.to_bits() != result.v.to_bits() {
-                        if mismatches < 10 {
-                            eprintln!(
-                                "MISMATCH: {:?} → std={std_val:?} jit={:?}",
-                                std::str::from_utf8(s).unwrap(),
-                                result.v,
-                            );
-                        }
-                        mismatches += 1;
-                    }
-                }
-            } else {
-                i += 1;
-            }
-        }
-        eprintln!("{total} floats checked, {mismatches} mismatches");
-        assert_eq!(mismatches, 0, "{mismatches}/{total} values differ from std");
     }
 
     // --- Milestone 5: Nested structs ---
@@ -771,41 +424,6 @@ mod tests {
         }
 
         compile_decoder(HasCollision::SHAPE, &json::KajitJson);
-    }
-
-    // r[verify ir.regalloc.regressions]
-    #[test]
-    fn postcard_vec_u32_medium_large_ir_matches_legacy_and_serde() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct Nums {
-            vals: Vec<u32>,
-        }
-
-        #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
-        struct NumsSerde {
-            vals: Vec<u32>,
-        }
-
-        let legacy = compile_decoder_legacy(Nums::SHAPE, &postcard::KajitPostcard);
-        let ir = compile_decoder_via_ir(Nums::SHAPE, &postcard::KajitPostcard);
-
-        for len in [100usize, 10_000usize] {
-            let source = NumsSerde {
-                vals: (0..len as u32).collect(),
-            };
-            let encoded = ::postcard::to_allocvec(&source).unwrap();
-
-            let serde_val: NumsSerde = ::postcard::from_bytes(&encoded).unwrap();
-            let legacy_val: Nums = deserialize(&legacy, &encoded).unwrap();
-            let ir_val: Nums = deserialize(&ir, &encoded).unwrap();
-
-            assert_eq!(
-                legacy_val.vals, serde_val.vals,
-                "legacy mismatch at len={len}"
-            );
-            assert_eq!(ir_val.vals, serde_val.vals, "ir mismatch at len={len}");
-            assert_eq!(ir_val, legacy_val, "legacy/ir mismatch at len={len}");
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════

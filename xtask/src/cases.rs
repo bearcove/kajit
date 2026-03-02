@@ -5,7 +5,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::LitByteStr;
 
-struct JsonInputCase {
+struct InputCaseSpec {
     name: &'static str,
     ty: TokenStream,
     input: &'static str,
@@ -803,17 +803,7 @@ pub(crate) fn cases() -> Vec<Case> {
 
 fn all_cases() -> Vec<Case> {
     let mut out = cases();
-    for case in json_input_cases() {
-        let builder = CaseBuilder::new(case.name, case.ty);
-        let case = if let Some(expected) = case.expected {
-            builder.json_ok(case.name, case.input, expected).build()
-        } else if let Some(err_code) = case.expected_error_code {
-            builder.json_err(case.name, case.input, err_code).build()
-        } else {
-            builder.json_err_any(case.name, case.input).build()
-        };
-        out.push(case);
-    }
+    out.extend(input_cases());
     out.push(
         CaseBuilder::new("from_str_entrypoint", quote!(Friend))
             .input_ok(
@@ -840,9 +830,9 @@ fn all_cases() -> Vec<Case> {
     out
 }
 
-fn json_input_cases() -> Vec<JsonInputCase> {
+fn input_cases() -> Vec<Case> {
     vec![
-        JsonInputCase {
+        InputCaseSpec {
             name: "reversed_key_order",
             ty: quote!(Friend),
             input: r#"{"name": "Alice", "age": 42}"#,
@@ -852,7 +842,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "unknown_keys_skipped",
             ty: quote!(Friend),
             input: r#"{"age": 42, "extra": true, "name": "Alice"}"#,
@@ -862,14 +852,14 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "empty_object_missing_fields",
             ty: quote!(Friend),
             input: r#"{}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::MissingRequiredField)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "nested_struct_reversed_keys",
             ty: quote!(Person),
             input: r#"{"address": {"zip": 97201, "city": "Portland"}, "age": 30, "name": "Alice"}"#,
@@ -883,7 +873,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "flatten_reversed_keys",
             ty: quote!(Document),
             input: r#"{"author": "Amos", "version": 1, "title": "Hello"}"#,
@@ -896,7 +886,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "enum_struct_variant_reversed_keys",
             ty: quote!(Animal),
             input: r#"{"Dog": {"good_boy": true, "name": "Rex"}}"#,
@@ -906,14 +896,14 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "enum_unit_as_string",
             ty: quote!(Animal),
             input: r#""Cat""#,
             expected: Some(quote!(Animal::Cat)),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "enum_struct_variant",
             ty: quote!(Animal),
             input: r#"{"Dog": {"name": "Rex", "good_boy": true}}"#,
@@ -923,42 +913,42 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "enum_tuple_variant",
             ty: quote!(Animal),
             input: r#"{"Parrot": "Polly"}"#,
             expected: Some(quote!(Animal::Parrot("Polly".into()))),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "enum_unit_in_object",
             ty: quote!(Animal),
             input: r#"{"Cat": null}"#,
             expected: Some(quote!(Animal::Cat)),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "enum_unknown_variant",
             ty: quote!(Animal),
             input: r#""Snake""#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "adjacent_unit_no_content",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Cat"}"#,
             expected: Some(quote!(AdjAnimal::Cat)),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "adjacent_unit_with_null_content",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Cat", "data": null}"#,
             expected: Some(quote!(AdjAnimal::Cat)),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "adjacent_struct_variant",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Dog", "data": {"name": "Rex", "good_boy": true}}"#,
@@ -968,7 +958,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "adjacent_struct_variant_reversed_fields",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Dog", "data": {"good_boy": true, "name": "Rex"}}"#,
@@ -978,28 +968,28 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "adjacent_tuple_variant",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Parrot", "data": "Polly"}"#,
             expected: Some(quote!(AdjAnimal::Parrot("Polly".into()))),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "adjacent_unknown_variant",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Snake", "data": null}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "adjacent_wrong_first_key",
             ty: quote!(AdjAnimal),
             input: r#"{"data": null, "type": "Cat"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::ExpectedTagKey)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "internal_struct_variant_reversed_fields",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Dog", "good_boy": true, "name": "Rex"}"#,
@@ -1009,14 +999,14 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "internal_unit_variant",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Cat"}"#,
             expected: Some(quote!(IntAnimal::Cat)),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "internal_struct_variant",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Dog", "name": "Rex", "good_boy": true}"#,
@@ -1026,21 +1016,21 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "internal_unknown_variant",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Snake"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "internal_wrong_first_key",
             ty: quote!(IntAnimal),
             input: r#"{"name": "Rex", "type": "Dog", "good_boy": true}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::ExpectedTagKey)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "untagged_struct_reversed_keys",
             ty: quote!(UntaggedAnimal),
             input: r#"{"good_boy": false, "name": "Rex"}"#,
@@ -1050,7 +1040,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "untagged_solver_key_order_independent",
             ty: quote!(UntaggedConfig),
             input: r#"{"db": 0, "host": "localhost"}"#,
@@ -1060,7 +1050,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "untagged_nested_key_order_independent",
             ty: quote!(ApiResponse),
             input: r#"{"data": {"items": 5}, "status": 200}"#,
@@ -1070,14 +1060,14 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "option_some_scalar",
             ty: quote!(WithOptU32),
             input: r#"{"value": 42}"#,
             expected: Some(quote!(WithOptU32 { value: Some(42) })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "option_some_string",
             ty: quote!(WithOptStr),
             input: r#"{"name": "Alice"}"#,
@@ -1086,7 +1076,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "option_some_struct",
             ty: quote!(WithOptAddr),
             input: r#"{"addr": {"city": "Portland", "zip": 97201}}"#,
@@ -1098,28 +1088,28 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "option_none_struct",
             ty: quote!(WithOptAddr),
             input: r#"{"addr": null}"#,
             expected: Some(quote!(WithOptAddr { addr: None })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "option_none_scalar",
             ty: quote!(WithOptU32),
             input: r#"{"value": null}"#,
             expected: Some(quote!(WithOptU32 { value: None })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "option_none_string",
             ty: quote!(WithOptStr),
             input: r#"{"name": null}"#,
             expected: Some(quote!(WithOptStr { name: None })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "option_reversed_keys",
             ty: quote!(MultiOpt),
             input: r#"{"c": "world", "b": "hello", "a": null}"#,
@@ -1130,7 +1120,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "rc_scalar",
             ty: quote!(RcScalar),
             input: r#"{"value": 77}"#,
@@ -1139,7 +1129,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "rename_field",
             ty: quote!(RenameField),
             input: r#"{"user_name": "Alice", "age": 30}"#,
@@ -1149,14 +1139,14 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "rename_field_original_name_rejected",
             ty: quote!(RenameField),
             input: r#"{"name": "Alice", "age": 30}"#,
             expected: None,
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "rename_all_camel_case",
             ty: quote!(CamelCaseStruct),
             input: r#"{"userName": "Bob", "birthYear": 1990}"#,
@@ -1166,21 +1156,21 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "deny_unknown_fields_rejects",
             ty: quote!(Strict),
             input: r#"{"x": 1, "y": 2, "z": 3}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownField)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "deny_unknown_fields_allows_known",
             ty: quote!(Strict),
             input: r#"{"x": 1, "y": 2}"#,
             expected: Some(quote!(Strict { x: 1, y: 2 })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "default_field_missing",
             ty: quote!(WithDefault),
             input: r#"{"name": "Alice"}"#,
@@ -1190,7 +1180,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "default_field_present",
             ty: quote!(WithDefault),
             input: r#"{"name": "Alice", "score": 99}"#,
@@ -1200,14 +1190,14 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "default_field_required_still_errors",
             ty: quote!(WithDefault),
             input: r#"{"score": 50}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::MissingRequiredField)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "default_string_field",
             ty: quote!(WithDefaultString),
             input: r#"{"value": 42}"#,
@@ -1217,21 +1207,21 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "container_default_empty_object",
             ty: quote!(AllDefault),
             input: r#"{}"#,
             expected: Some(quote!(AllDefault { x: 0, y: 0 })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "container_default_partial",
             ty: quote!(AllDefault),
             input: r#"{"x": 5}"#,
             expected: Some(quote!(AllDefault { x: 5, y: 0 })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "skip_field",
             ty: quote!(WithSkip),
             input: r#"{"name": "Alice"}"#,
@@ -1241,7 +1231,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "skip_field_in_input_treated_as_unknown",
             ty: quote!(WithSkip),
             input: r#"{"name": "Alice", "cached": 99}"#,
@@ -1251,7 +1241,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "skip_deserializing_field",
             ty: quote!(WithSkipDeser),
             input: r#"{"name": "Bob"}"#,
@@ -1261,7 +1251,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "skip_with_custom_default",
             ty: quote!(SkipWithCustomDefault),
             input: r#"{"value": 10}"#,
@@ -1271,7 +1261,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "arc_scalar",
             ty: quote!(ArcScalar),
             input: r#"{"value": 99}"#,
@@ -1280,21 +1270,21 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "u8_out_of_range",
             ty: quote!(Tiny),
             input: r#"{"val": 256}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::NumberOutOfRange)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "float_scientific",
             ty: quote!(Floats),
             input: r#"{"a": 1.5e2, "b": -3.14}"#,
             expected: Some(quote!(Floats { a: 150.0, b: -3.14 })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_escape_newline",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\nworld"}"#,
@@ -1304,7 +1294,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_escape_tab",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\tworld"}"#,
@@ -1314,7 +1304,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_escape_backslash",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\\world"}"#,
@@ -1324,7 +1314,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_escape_quote",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\"world"}"#,
@@ -1334,7 +1324,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_escape_all_simple",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "a\"b\\c\/d\be\ff\ng\rh\ti"}"#,
@@ -1344,7 +1334,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_unicode_escape_bmp",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\u0041lice"}"#,
@@ -1354,7 +1344,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_unicode_escape_non_ascii",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "caf\u00E9"}"#,
@@ -1364,7 +1354,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_unicode_surrogate_pair",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\uD83D\uDE00"}"#,
@@ -1374,7 +1364,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "key_with_unicode_escape",
             ty: quote!(Friend),
             input: r#"{"age": 42, "na\u006De": "Alice"}"#,
@@ -1384,28 +1374,28 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_invalid_escape",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "hello\xworld"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::InvalidEscapeSequence)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_lone_high_surrogate",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\uD800"}"#,
             expected: None,
             expected_error_code: Some(quote!(kajit::context::ErrorCode::InvalidEscapeSequence)),
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "string_truncated_unicode",
             ty: quote!(Friend),
             input: r#"{"age": 1, "name": "\u00"}"#,
             expected: None,
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "skip_value_with_unicode_escape",
             ty: quote!(Friend),
             input: r#"{"age": 42, "extra": "test\uD83D\uDE00end", "name": "Alice"}"#,
@@ -1415,7 +1405,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "skip_value_with_backslash_escape",
             ty: quote!(Friend),
             input: r#"{"age": 42, "extra": "test\n\t\\end", "name": "Alice"}"#,
@@ -1425,7 +1415,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "map_string_to_u32",
             ty: quote!(ConfigMap),
             input: r#"{"scores": {"alice": 42, "bob": 7}}"#,
@@ -1437,7 +1427,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "map_empty",
             ty: quote!(ConfigMap),
             input: r#"{"scores": {}}"#,
@@ -1446,7 +1436,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "map_string_to_string",
             ty: quote!(EnvMap),
             input: r#"{"vars": {"HOME": "/root", "PATH": "/usr/bin"}}"#,
@@ -1458,7 +1448,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             })),
             expected_error_code: None,
         },
-        JsonInputCase {
+        InputCaseSpec {
             name: "map_growth",
             ty: quote!(ConfigMap),
             input: r#"{"scores": {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6}}"#,
@@ -1475,6 +1465,18 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected_error_code: None,
         },
     ]
+    .into_iter()
+    .map(|case| {
+        let builder = CaseBuilder::new(case.name, case.ty);
+        if let Some(expected) = case.expected {
+            builder.json_ok(case.name, case.input, expected).build()
+        } else if let Some(err_code) = case.expected_error_code {
+            builder.json_err(case.name, case.input, err_code).build()
+        } else {
+            builder.json_err_any(case.name, case.input).build()
+        }
+    })
+    .collect()
 }
 
 pub(crate) fn render_bench_file() -> String {
@@ -2115,6 +2117,317 @@ pub(crate) fn render_test_file() -> String {
         mod postcard_input {
             use super::*;
             #(#postcard_input_tests)*
+        }
+
+        mod format_specific {
+            use super::*;
+            use std::borrow::Cow;
+
+            #[test]
+            fn postcard_nested_struct_ir_uses_apply_nodes() {
+                let (ir_text, _ra_text) =
+                    kajit::debug_ir_and_ra_mir_text(Outer::SHAPE, &kajit::postcard::KajitPostcard);
+                assert!(ir_text.contains("Apply("), "expected at least one apply node for nested shape");
+            }
+
+            #[test]
+            fn postcard_long_varints_via_ir() {
+                let source = Person {
+                    name: "a".repeat(128),
+                    age: 128,
+                    address: Address {
+                        city: "b".repeat(128),
+                        zip: 128,
+                    },
+                };
+                let encoded = ::postcard::to_allocvec(&source).unwrap();
+                let legacy = kajit::compile_decoder_legacy(Person::SHAPE, &kajit::postcard::KajitPostcard);
+                let via_ir = kajit::compile_decoder_via_ir(Person::SHAPE, &kajit::postcard::KajitPostcard);
+                let legacy_out: Person = kajit::deserialize(&legacy, &encoded).unwrap();
+                let ir_out: Person = kajit::deserialize(&via_ir, &encoded).unwrap();
+                assert_eq!(legacy_out, source);
+                assert_eq!(ir_out, source);
+            }
+
+            #[test]
+            fn postcard_all_integers_wide_via_ir() {
+                let source = AllIntegers {
+                    a_u8: 0,
+                    a_u16: 128,
+                    a_u32: 128,
+                    a_u64: 128,
+                    a_u128: 0,
+                    a_usize: 2_310_817_621_330_714usize,
+                    a_i8: 82,
+                    a_i16: -27_214,
+                    a_i32: -753_462_665,
+                    a_i64: 5_113_149_701_919_602_663,
+                    a_i128: 111_719_190_169_970_084_407_522_330_417_561_111_272i128,
+                    a_isize: 5_474_093_000_439_056_201isize,
+                };
+                let encoded = ::postcard::to_allocvec(&source).unwrap();
+                let legacy = kajit::compile_decoder_legacy(AllIntegers::SHAPE, &kajit::postcard::KajitPostcard);
+                let via_ir = kajit::compile_decoder_via_ir(AllIntegers::SHAPE, &kajit::postcard::KajitPostcard);
+                let legacy_out: AllIntegers = kajit::deserialize(&legacy, &encoded).unwrap();
+                let ir_out: AllIntegers = kajit::deserialize(&via_ir, &encoded).unwrap();
+                assert_eq!(legacy_out, source);
+                assert_eq!(ir_out, source);
+            }
+
+            #[test]
+            fn postcard_compile_decoder_with_backend_routes_to_selected_path() {
+                let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
+                let legacy = kajit::compile_decoder_with_backend(
+                    Friend::SHAPE,
+                    &kajit::postcard::KajitPostcard,
+                    kajit::DecoderBackend::Legacy,
+                );
+                let via_ir = kajit::compile_decoder_with_backend(
+                    Friend::SHAPE,
+                    &kajit::postcard::KajitPostcard,
+                    kajit::DecoderBackend::Ir,
+                );
+                let a: Friend = kajit::deserialize(&legacy, &input).unwrap();
+                let b: Friend = kajit::deserialize(&via_ir, &input).unwrap();
+                assert_eq!(a, b);
+            }
+
+            #[test]
+            fn json_struct_ir_orders_key_read_before_key_compare() {
+                let linear_text =
+                    kajit::debug_linear_ir_text(Friend::SHAPE, &kajit::json::KajitJson);
+
+                let read_key_pat = format!(
+                    "call_intrinsic 0x{:x}",
+                    kajit::json_intrinsics::kajit_json_read_key as *const () as usize
+                );
+                let key_eq_pat = format!(
+                    "call_pure 0x{:x}",
+                    kajit::json_intrinsics::kajit_json_key_equals as *const () as usize
+                );
+                let slot_read_pat = " = slot[0]";
+
+                let read_key_pos = linear_text
+                    .find(&read_key_pat)
+                    .unwrap_or_else(|| panic!("missing read_key call in linear IR:\n{linear_text}"));
+                let slot_read_pos = linear_text
+                    .find(slot_read_pat)
+                    .unwrap_or_else(|| panic!("missing slot read in linear IR:\n{linear_text}"));
+                let key_eq_pos = linear_text
+                    .find(&key_eq_pat)
+                    .unwrap_or_else(|| panic!("missing key_equals call in linear IR:\n{linear_text}"));
+
+                assert!(
+                    read_key_pos < slot_read_pos && slot_read_pos < key_eq_pos,
+                    "expected read_key -> slot_read -> key_compare order in linear IR:\n{linear_text}"
+                );
+            }
+
+            #[derive(Facet, Debug, PartialEq)]
+            struct BorrowedFriend<'a> {
+                age: u32,
+                name: &'a str,
+            }
+
+            #[derive(Facet, Debug, PartialEq)]
+            struct CowFriend<'a> {
+                age: u32,
+                name: Cow<'a, str>,
+            }
+
+            #[test]
+            fn postcard_borrowed_str_zero_copy() {
+                let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
+                let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, &kajit::postcard::KajitPostcard);
+                let result: BorrowedFriend<'_> = kajit::deserialize(&deser, &input).unwrap();
+                assert_eq!(result.age, 42);
+                assert_eq!(result.name, "Alice");
+                assert_eq!(result.name.as_ptr(), unsafe { input.as_ptr().add(2) });
+            }
+
+            #[test]
+            fn postcard_cow_str_borrowed_zero_copy() {
+                let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
+                let deser = kajit::compile_decoder(CowFriend::SHAPE, &kajit::postcard::KajitPostcard);
+                let result: CowFriend<'_> = kajit::deserialize(&deser, &input).unwrap();
+                assert_eq!(result.age, 42);
+                assert!(matches!(result.name, Cow::Borrowed("Alice")));
+            }
+
+            #[test]
+            fn json_borrowed_str_zero_copy_fast_path() {
+                let input = br#"{"age":42,"name":"Alice"}"#;
+                let name_start = input.windows(5).position(|w| w == b"Alice").unwrap();
+                let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, &kajit::json::KajitJson);
+                let result: BorrowedFriend<'_> = kajit::deserialize(&deser, input).unwrap();
+                assert_eq!(result.age, 42);
+                assert_eq!(result.name, "Alice");
+                assert_eq!(result.name.as_ptr(), unsafe { input.as_ptr().add(name_start) });
+            }
+
+            #[test]
+            fn json_borrowed_str_escape_is_error() {
+                let input = br#"{"age":42,"name":"A\nB"}"#;
+                let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, &kajit::json::KajitJson);
+                let err = kajit::deserialize::<BorrowedFriend<'_>>(&deser, input).unwrap_err();
+                assert_eq!(err.code, kajit::context::ErrorCode::InvalidEscapeSequence);
+            }
+
+            #[test]
+            fn json_cow_str_fast_path_borrowed() {
+                let input = br#"{"age":42,"name":"Alice"}"#;
+                let deser = kajit::compile_decoder(CowFriend::SHAPE, &kajit::json::KajitJson);
+                let result: CowFriend<'_> = kajit::deserialize(&deser, input).unwrap();
+                assert_eq!(result.age, 42);
+                assert!(matches!(result.name, Cow::Borrowed("Alice")));
+            }
+
+            #[test]
+            fn json_cow_str_escape_slow_path_owned() {
+                let input = br#"{"age":42,"name":"A\nB"}"#;
+                let deser = kajit::compile_decoder(CowFriend::SHAPE, &kajit::json::KajitJson);
+                let result: CowFriend<'_> = kajit::deserialize(&deser, input).unwrap();
+                assert_eq!(result.age, 42);
+                assert!(matches!(result.name, Cow::Owned(ref s) if s == "A\nB"));
+            }
+
+            #[test]
+            fn json_f64_edge_cases() {
+                #[derive(Facet, Debug, PartialEq)]
+                struct F {
+                    x: f64,
+                }
+
+                let cases: &[(&[u8], f64)] = &[
+                    (br#"{"x":0}"#, 0.0),
+                    (br#"{"x":1}"#, 1.0),
+                    (br#"{"x":42}"#, 42.0),
+                    (br#"{"x":9007199254740992}"#, 9007199254740992.0),
+                    (br#"{"x":0.5}"#, 0.5),
+                    (br#"{"x":1.0}"#, 1.0),
+                    (br#"{"x":3.14}"#, 3.14),
+                    (br#"{"x":2.718281828459045}"#, 2.718281828459045),
+                    (br#"{"x":-1.0}"#, -1.0),
+                    (br#"{"x":-0.0}"#, -0.0_f64),
+                    (br#"{"x":-3.14}"#, -3.14),
+                    (br#"{"x":1e10}"#, 1e10),
+                    (br#"{"x":1.5e2}"#, 150.0),
+                    (br#"{"x":1e-10}"#, 1e-10),
+                    (br#"{"x":1E10}"#, 1e10),
+                    (br#"{"x":1e+10}"#, 1e10),
+                    (br#"{"x":1e0}"#, 1.0),
+                    (br#"{"x":0.001}"#, 0.001),
+                    (br#"{"x":0.0000000000000000000001}"#, 1e-22),
+                    (br#"{"x":1e308}"#, 1e308),
+                    (br#"{"x":1.7976931348623157e308}"#, f64::MAX),
+                    (br#"{"x":1e-308}"#, 1e-308),
+                    (br#"{"x":2.2250738585072014e-308}"#, 2.2250738585072014e-308),
+                    (br#"{"x":1e309}"#, f64::INFINITY),
+                    (br#"{"x":-1e309}"#, f64::NEG_INFINITY),
+                    (br#"{"x":1e-400}"#, 0.0),
+                    (br#"{"x":12345678901234567890.0}"#, 12345678901234567890.0),
+                    (br#"{"x": 1.0}"#, 1.0),
+                    (br#"{"x":	1.0}"#, 1.0),
+                ];
+
+                let deser = kajit::compile_decoder(F::SHAPE, &kajit::json::KajitJson);
+                for (input, expected) in cases {
+                    let result: F = kajit::deserialize(&deser, input).unwrap();
+                    assert_eq!(
+                        result.x.to_bits(),
+                        expected.to_bits(),
+                        "input={:?}: got {} ({:#018x}), expected {} ({:#018x})",
+                        std::str::from_utf8(input).unwrap(),
+                        result.x,
+                        result.x.to_bits(),
+                        expected,
+                        expected.to_bits(),
+                    );
+                }
+            }
+
+            #[test]
+            fn json_f64_canada_roundtrip() {
+                #[derive(Facet, Debug)]
+                struct Coord {
+                    v: f64,
+                }
+
+                let compressed = include_bytes!("../fixtures/canada.json.br");
+                let mut json_bytes = Vec::new();
+                brotli::BrotliDecompress(&mut std::io::Cursor::new(compressed), &mut json_bytes)
+                    .unwrap();
+
+                let deser = kajit::compile_decoder(Coord::SHAPE, &kajit::json::KajitJson);
+
+                let mut mismatches = 0;
+                let mut total = 0;
+                let mut i = 0;
+                while i < json_bytes.len() {
+                    if json_bytes[i] == b'-' || json_bytes[i].is_ascii_digit() {
+                        let start = i;
+                        i += 1;
+                        while i < json_bytes.len() {
+                            match json_bytes[i] {
+                                b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-' => i += 1,
+                                _ => break,
+                            }
+                        }
+                        let s = &json_bytes[start..i];
+                        if s.contains(&b'.') || s.contains(&b'e') || s.contains(&b'E') {
+                            total += 1;
+                            let std_val: f64 = std::str::from_utf8(s).unwrap().parse().unwrap();
+                            let json_input = format!(r#"{{"v":{}}}"#, std::str::from_utf8(s).unwrap());
+                            let result: Coord = kajit::deserialize(&deser, json_input.as_bytes()).unwrap();
+                            if std_val.to_bits() != result.v.to_bits() {
+                                if mismatches < 10 {
+                                    eprintln!(
+                                        "MISMATCH: {:?} -> std={std_val:?} jit={:?}",
+                                        std::str::from_utf8(s).unwrap(),
+                                        result.v,
+                                    );
+                                }
+                                mismatches += 1;
+                            }
+                        }
+                    } else {
+                        i += 1;
+                    }
+                }
+                eprintln!("{total} floats checked, {mismatches} mismatches");
+                assert_eq!(mismatches, 0, "{mismatches}/{total} values differ from std");
+            }
+
+            #[test]
+            fn postcard_vec_u32_medium_large_ir_matches_legacy_and_serde() {
+                #[derive(Facet, Debug, PartialEq)]
+                struct Nums {
+                    vals: Vec<u32>,
+                }
+
+                #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+                struct NumsSerde {
+                    vals: Vec<u32>,
+                }
+
+                let legacy = kajit::compile_decoder_legacy(Nums::SHAPE, &kajit::postcard::KajitPostcard);
+                let ir = kajit::compile_decoder_via_ir(Nums::SHAPE, &kajit::postcard::KajitPostcard);
+
+                for len in [100usize, 10_000usize] {
+                    let source = NumsSerde {
+                        vals: (0..len as u32).collect(),
+                    };
+                    let encoded = ::postcard::to_allocvec(&source).unwrap();
+
+                    let serde_val: NumsSerde = ::postcard::from_bytes(&encoded).unwrap();
+                    let legacy_val: Nums = kajit::deserialize(&legacy, &encoded).unwrap();
+                    let ir_val: Nums = kajit::deserialize(&ir, &encoded).unwrap();
+
+                    assert_eq!(legacy_val.vals, serde_val.vals, "legacy mismatch at len={len}");
+                    assert_eq!(ir_val.vals, serde_val.vals, "ir mismatch at len={len}");
+                    assert_eq!(ir_val, legacy_val, "legacy/ir mismatch at len={len}");
+                }
+            }
         }
 
         mod postreg {
