@@ -338,9 +338,9 @@ pub(crate) fn render_test_file() -> String {
                 .enumerate()
                 .map(|(sample_idx, value)| {
                     let test_name = if case.values.len() == 1 {
-                        format_ident!("generated_json_{}", case.name)
+                        format_ident!("{}", case.name)
                     } else {
-                        format_ident!("generated_json_{}_v{}", case.name, sample_idx)
+                        format_ident!("{}_v{}", case.name, sample_idx)
                     };
                     let case_name = if case.values.len() == 1 {
                         case.name.to_string()
@@ -367,9 +367,9 @@ pub(crate) fn render_test_file() -> String {
                 .enumerate()
                 .map(|(sample_idx, value)| {
                     let test_name = if case.values.len() == 1 {
-                        format_ident!("generated_postcard_{}", case.name)
+                        format_ident!("{}", case.name)
                     } else {
-                        format_ident!("generated_postcard_{}_v{}", case.name, sample_idx)
+                        format_ident!("{}_v{}", case.name, sample_idx)
                     };
                     let case_name = if case.values.len() == 1 {
                         case.name.to_string()
@@ -391,7 +391,7 @@ pub(crate) fn render_test_file() -> String {
     let prop_tests: Vec<TokenStream> = cases
         .iter()
         .map(|case| {
-            let test_name = format_ident!("generated_prop_{}", case.name);
+            let test_name = format_ident!("{}", case.name);
             let value = case
                 .values
                 .first()
@@ -431,8 +431,8 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
         {
-            let encoded = postcard::to_allocvec(&value).unwrap();
-            let expected: T = postcard::from_bytes(&encoded).unwrap();
+            let encoded = ::postcard::to_allocvec(&value).unwrap();
+            let expected: T = ::postcard::from_bytes(&encoded).unwrap();
             let legacy = kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard);
             let legacy_out: T = kajit::deserialize(&legacy, &encoded).unwrap();
             assert_eq!(legacy_out, expected);
@@ -462,8 +462,8 @@ pub(crate) fn render_test_file() -> String {
                     let json_got: T = kajit::from_str(&json_decoder, &json_encoded).unwrap();
                     assert_eq!(json_got, json_expected);
 
-                    let postcard_encoded = postcard::to_allocvec(&value).unwrap();
-                    let postcard_expected: T = postcard::from_bytes(&postcard_encoded).unwrap();
+                    let postcard_encoded = ::postcard::to_allocvec(&value).unwrap();
+                    let postcard_expected: T = ::postcard::from_bytes(&postcard_encoded).unwrap();
                     let postcard_legacy_out: T =
                         kajit::deserialize(&postcard_legacy, &postcard_encoded).unwrap();
                     assert_eq!(postcard_legacy_out, postcard_expected);
@@ -607,31 +607,46 @@ pub(crate) fn render_test_file() -> String {
             );
         }
 
-        #[test]
-        fn generated_postreg_hotpath_asserts_postcard_vec_scalar_large() {
-            let (ir_text, ra_text, edits, disasm) =
-                codegen_artifacts::<ScalarVec, _>(&kajit::postcard::KajitPostcard);
-
-            assert!(
-                ir_text.contains("theta") || ir_text.contains("apply @"),
-                "expected loop form (`theta`) or outlined loop body (`apply`) in IR"
-            );
-            assert!(
-                ra_text.contains("branch_if"),
-                "expected loop backedge in RA-MIR"
-            );
-            assert!(
-                ra_text.contains("call_intrinsic"),
-                "expected intrinsic-heavy vec decode path in RA-MIR"
-            );
-            assert!(edits <= 128, "expected edit budget <= 128, got {edits}");
-
-            assert!(!disasm.is_empty(), "expected non-empty disassembly artifact");
+        mod json {
+            use super::*;
+            #(#json_tests)*
         }
 
-        #(#json_tests)*
-        #(#postcard_tests)*
-        #(#prop_tests)*
+        mod postcard {
+            use super::*;
+            #(#postcard_tests)*
+        }
+
+        mod prop {
+            use super::*;
+            #(#prop_tests)*
+        }
+
+        mod postreg {
+            use super::*;
+
+            #[test]
+            fn vec_scalar_large_hotpath_asserts() {
+                let (ir_text, ra_text, edits, disasm) =
+                    codegen_artifacts::<ScalarVec, _>(&kajit::postcard::KajitPostcard);
+
+                assert!(
+                    ir_text.contains("theta") || ir_text.contains("apply @"),
+                    "expected loop form (`theta`) or outlined loop body (`apply`) in IR"
+                );
+                assert!(
+                    ra_text.contains("branch_if"),
+                    "expected loop backedge in RA-MIR"
+                );
+                assert!(
+                    ra_text.contains("call_intrinsic"),
+                    "expected intrinsic-heavy vec decode path in RA-MIR"
+                );
+                assert!(edits <= 128, "expected edit budget <= 128, got {edits}");
+
+                assert!(!disasm.is_empty(), "expected non-empty disassembly artifact");
+            }
+        }
     };
     let file: syn::File =
         syn::parse2(file_tokens).expect("generated synthetic test file should parse");

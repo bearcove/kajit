@@ -83,8 +83,8 @@ where
     for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
         + PartialEq + std::fmt::Debug,
 {
-    let encoded = postcard::to_allocvec(&value).unwrap();
-    let expected: T = postcard::from_bytes(&encoded).unwrap();
+    let encoded = ::postcard::to_allocvec(&value).unwrap();
+    let expected: T = ::postcard::from_bytes(&encoded).unwrap();
     let legacy = kajit::compile_decoder_legacy(
         T::SHAPE,
         &kajit::postcard::KajitPostcard,
@@ -122,8 +122,8 @@ where
                 let json_expected: T = serde_json::from_str(&json_encoded).unwrap();
                 let json_got: T = kajit::from_str(&json_decoder, &json_encoded).unwrap();
                 assert_eq!(json_got, json_expected);
-                let postcard_encoded = postcard::to_allocvec(&value).unwrap();
-                let postcard_expected: T = postcard::from_bytes(&postcard_encoded)
+                let postcard_encoded = ::postcard::to_allocvec(&value).unwrap();
+                let postcard_expected: T = ::postcard::from_bytes(&postcard_encoded)
                     .unwrap();
                 let postcard_legacy_out: T = kajit::deserialize(
                         &postcard_legacy,
@@ -256,306 +256,328 @@ where
         std::env::consts::ARCH), format!("{edits}")
     );
 }
-#[test]
-fn generated_postreg_hotpath_asserts_postcard_vec_scalar_large() {
-    let (ir_text, ra_text, edits, disasm) = codegen_artifacts::<
-        ScalarVec,
-        _,
-    >(&kajit::postcard::KajitPostcard);
-    assert!(
-        ir_text.contains("theta") || ir_text.contains("apply @"),
-        "expected loop form (`theta`) or outlined loop body (`apply`) in IR"
-    );
-    assert!(ra_text.contains("branch_if"), "expected loop backedge in RA-MIR");
-    assert!(
-        ra_text.contains("call_intrinsic"),
-        "expected intrinsic-heavy vec decode path in RA-MIR"
-    );
-    assert!(edits <= 128, "expected edit budget <= 128, got {edits}");
-    assert!(! disasm.is_empty(), "expected non-empty disassembly artifact");
+mod json {
+    use super::*;
+    #[test]
+    fn flat_struct() {
+        let value = Friend {
+            age: 42,
+            name: "Alice".into(),
+        };
+        assert_codegen_snapshots("json", "flat_struct", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn nested_struct() {
+        let value = Person {
+            name: "Alice".into(),
+            age: 30,
+            address: Address {
+                city: "Portland".into(),
+                zip: 97201,
+            },
+        };
+        assert_codegen_snapshots(
+            "json",
+            "nested_struct",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn deep_struct() {
+        let value = Outer {
+            middle: Middle {
+                inner: Inner { x: 1 },
+                y: 2,
+            },
+            z: 3,
+        };
+        assert_codegen_snapshots("json", "deep_struct", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn all_integers() {
+        let value = AllIntegers {
+            a_u8: 255,
+            a_u16: 65535,
+            a_u32: 1_000_000,
+            a_u64: 1_000_000_000_000,
+            a_u128: 340282366920938463463374607431768211455u128,
+            a_usize: 123_456usize,
+            a_i8: -128,
+            a_i16: -32768,
+            a_i32: -1_000_000,
+            a_i64: -1_000_000_000_000,
+            a_i128: -170141183460469231731687303715884105728i128,
+            a_isize: -123_456isize,
+        };
+        assert_codegen_snapshots(
+            "json",
+            "all_integers",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn bool_field() {
+        let value = BoolField { value: true };
+        assert_codegen_snapshots("json", "bool_field", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn tuple_pair() {
+        let value = (42u32, "Alice".to_string());
+        assert_codegen_snapshots("json", "tuple_pair", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_scalar_small() {
+        let value = ScalarVec {
+            values: (0..16).map(|i| i as u32).collect(),
+        };
+        assert_codegen_snapshots(
+            "json",
+            "vec_scalar_small",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_scalar_large() {
+        let value = ScalarVec {
+            values: (0..2048).map(|i| i as u32).collect(),
+        };
+        assert_codegen_snapshots(
+            "json",
+            "vec_scalar_large",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
 }
-#[test]
-fn generated_json_flat_struct() {
-    let value = Friend {
-        age: 42,
-        name: "Alice".into(),
-    };
-    assert_codegen_snapshots("json", "flat_struct", &kajit::json::KajitJson, &value);
-    assert_json_case(value);
+mod postcard {
+    use super::*;
+    #[test]
+    fn flat_struct() {
+        let value = Friend {
+            age: 42,
+            name: "Alice".into(),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "flat_struct",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn nested_struct() {
+        let value = Person {
+            name: "Alice".into(),
+            age: 30,
+            address: Address {
+                city: "Portland".into(),
+                zip: 97201,
+            },
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "nested_struct",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn deep_struct() {
+        let value = Outer {
+            middle: Middle {
+                inner: Inner { x: 1 },
+                y: 2,
+            },
+            z: 3,
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "deep_struct",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn all_integers() {
+        let value = AllIntegers {
+            a_u8: 255,
+            a_u16: 65535,
+            a_u32: 1_000_000,
+            a_u64: 1_000_000_000_000,
+            a_u128: 340282366920938463463374607431768211455u128,
+            a_usize: 123_456usize,
+            a_i8: -128,
+            a_i16: -32768,
+            a_i32: -1_000_000,
+            a_i64: -1_000_000_000_000,
+            a_i128: -170141183460469231731687303715884105728i128,
+            a_isize: -123_456isize,
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "all_integers",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn bool_field() {
+        let value = BoolField { value: true };
+        assert_codegen_snapshots(
+            "postcard",
+            "bool_field",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn tuple_pair() {
+        let value = (42u32, "Alice".to_string());
+        assert_codegen_snapshots(
+            "postcard",
+            "tuple_pair",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_scalar_small() {
+        let value = ScalarVec {
+            values: (0..16).map(|i| i as u32).collect(),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_scalar_small",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_scalar_large() {
+        let value = ScalarVec {
+            values: (0..2048).map(|i| i as u32).collect(),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_scalar_large",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
 }
-#[test]
-fn generated_json_nested_struct() {
-    let value = Person {
-        name: "Alice".into(),
-        age: 30,
-        address: Address {
-            city: "Portland".into(),
-            zip: 97201,
-        },
-    };
-    assert_codegen_snapshots("json", "nested_struct", &kajit::json::KajitJson, &value);
-    assert_json_case(value);
+mod prop {
+    use super::*;
+    #[test]
+    fn flat_struct() {
+        let marker = Friend {
+            age: 42,
+            name: "Alice".into(),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn nested_struct() {
+        let marker = Person {
+            name: "Alice".into(),
+            age: 30,
+            address: Address {
+                city: "Portland".into(),
+                zip: 97201,
+            },
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn deep_struct() {
+        let marker = Outer {
+            middle: Middle {
+                inner: Inner { x: 1 },
+                y: 2,
+            },
+            z: 3,
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn all_integers() {
+        let marker = AllIntegers {
+            a_u8: 255,
+            a_u16: 65535,
+            a_u32: 1_000_000,
+            a_u64: 1_000_000_000_000,
+            a_u128: 340282366920938463463374607431768211455u128,
+            a_usize: 123_456usize,
+            a_i8: -128,
+            a_i16: -32768,
+            a_i32: -1_000_000,
+            a_i64: -1_000_000_000_000,
+            a_i128: -170141183460469231731687303715884105728i128,
+            a_isize: -123_456isize,
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn bool_field() {
+        let marker = BoolField { value: true };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn tuple_pair() {
+        let marker = (42u32, "Alice".to_string());
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn vec_scalar_small() {
+        let marker = ScalarVec {
+            values: (0..16).map(|i| i as u32).collect(),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn vec_scalar_large() {
+        let marker = ScalarVec {
+            values: (0..2048).map(|i| i as u32).collect(),
+        };
+        assert_prop_case(&marker);
+    }
 }
-#[test]
-fn generated_json_deep_struct() {
-    let value = Outer {
-        middle: Middle {
-            inner: Inner { x: 1 },
-            y: 2,
-        },
-        z: 3,
-    };
-    assert_codegen_snapshots("json", "deep_struct", &kajit::json::KajitJson, &value);
-    assert_json_case(value);
-}
-#[test]
-fn generated_json_all_integers() {
-    let value = AllIntegers {
-        a_u8: 255,
-        a_u16: 65535,
-        a_u32: 1_000_000,
-        a_u64: 1_000_000_000_000,
-        a_u128: 340282366920938463463374607431768211455u128,
-        a_usize: 123_456usize,
-        a_i8: -128,
-        a_i16: -32768,
-        a_i32: -1_000_000,
-        a_i64: -1_000_000_000_000,
-        a_i128: -170141183460469231731687303715884105728i128,
-        a_isize: -123_456isize,
-    };
-    assert_codegen_snapshots("json", "all_integers", &kajit::json::KajitJson, &value);
-    assert_json_case(value);
-}
-#[test]
-fn generated_json_bool_field() {
-    let value = BoolField { value: true };
-    assert_codegen_snapshots("json", "bool_field", &kajit::json::KajitJson, &value);
-    assert_json_case(value);
-}
-#[test]
-fn generated_json_tuple_pair() {
-    let value = (42u32, "Alice".to_string());
-    assert_codegen_snapshots("json", "tuple_pair", &kajit::json::KajitJson, &value);
-    assert_json_case(value);
-}
-#[test]
-fn generated_json_vec_scalar_small() {
-    let value = ScalarVec {
-        values: (0..16).map(|i| i as u32).collect(),
-    };
-    assert_codegen_snapshots(
-        "json",
-        "vec_scalar_small",
-        &kajit::json::KajitJson,
-        &value,
-    );
-    assert_json_case(value);
-}
-#[test]
-fn generated_json_vec_scalar_large() {
-    let value = ScalarVec {
-        values: (0..2048).map(|i| i as u32).collect(),
-    };
-    assert_codegen_snapshots(
-        "json",
-        "vec_scalar_large",
-        &kajit::json::KajitJson,
-        &value,
-    );
-    assert_json_case(value);
-}
-#[test]
-fn generated_postcard_flat_struct() {
-    let value = Friend {
-        age: 42,
-        name: "Alice".into(),
-    };
-    assert_codegen_snapshots(
-        "postcard",
-        "flat_struct",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_postcard_nested_struct() {
-    let value = Person {
-        name: "Alice".into(),
-        age: 30,
-        address: Address {
-            city: "Portland".into(),
-            zip: 97201,
-        },
-    };
-    assert_codegen_snapshots(
-        "postcard",
-        "nested_struct",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_postcard_deep_struct() {
-    let value = Outer {
-        middle: Middle {
-            inner: Inner { x: 1 },
-            y: 2,
-        },
-        z: 3,
-    };
-    assert_codegen_snapshots(
-        "postcard",
-        "deep_struct",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_postcard_all_integers() {
-    let value = AllIntegers {
-        a_u8: 255,
-        a_u16: 65535,
-        a_u32: 1_000_000,
-        a_u64: 1_000_000_000_000,
-        a_u128: 340282366920938463463374607431768211455u128,
-        a_usize: 123_456usize,
-        a_i8: -128,
-        a_i16: -32768,
-        a_i32: -1_000_000,
-        a_i64: -1_000_000_000_000,
-        a_i128: -170141183460469231731687303715884105728i128,
-        a_isize: -123_456isize,
-    };
-    assert_codegen_snapshots(
-        "postcard",
-        "all_integers",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_postcard_bool_field() {
-    let value = BoolField { value: true };
-    assert_codegen_snapshots(
-        "postcard",
-        "bool_field",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_postcard_tuple_pair() {
-    let value = (42u32, "Alice".to_string());
-    assert_codegen_snapshots(
-        "postcard",
-        "tuple_pair",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_postcard_vec_scalar_small() {
-    let value = ScalarVec {
-        values: (0..16).map(|i| i as u32).collect(),
-    };
-    assert_codegen_snapshots(
-        "postcard",
-        "vec_scalar_small",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_postcard_vec_scalar_large() {
-    let value = ScalarVec {
-        values: (0..2048).map(|i| i as u32).collect(),
-    };
-    assert_codegen_snapshots(
-        "postcard",
-        "vec_scalar_large",
-        &kajit::postcard::KajitPostcard,
-        &value,
-    );
-    assert_postcard_case(value);
-}
-#[test]
-fn generated_prop_flat_struct() {
-    let marker = Friend {
-        age: 42,
-        name: "Alice".into(),
-    };
-    assert_prop_case(&marker);
-}
-#[test]
-fn generated_prop_nested_struct() {
-    let marker = Person {
-        name: "Alice".into(),
-        age: 30,
-        address: Address {
-            city: "Portland".into(),
-            zip: 97201,
-        },
-    };
-    assert_prop_case(&marker);
-}
-#[test]
-fn generated_prop_deep_struct() {
-    let marker = Outer {
-        middle: Middle {
-            inner: Inner { x: 1 },
-            y: 2,
-        },
-        z: 3,
-    };
-    assert_prop_case(&marker);
-}
-#[test]
-fn generated_prop_all_integers() {
-    let marker = AllIntegers {
-        a_u8: 255,
-        a_u16: 65535,
-        a_u32: 1_000_000,
-        a_u64: 1_000_000_000_000,
-        a_u128: 340282366920938463463374607431768211455u128,
-        a_usize: 123_456usize,
-        a_i8: -128,
-        a_i16: -32768,
-        a_i32: -1_000_000,
-        a_i64: -1_000_000_000_000,
-        a_i128: -170141183460469231731687303715884105728i128,
-        a_isize: -123_456isize,
-    };
-    assert_prop_case(&marker);
-}
-#[test]
-fn generated_prop_bool_field() {
-    let marker = BoolField { value: true };
-    assert_prop_case(&marker);
-}
-#[test]
-fn generated_prop_tuple_pair() {
-    let marker = (42u32, "Alice".to_string());
-    assert_prop_case(&marker);
-}
-#[test]
-fn generated_prop_vec_scalar_small() {
-    let marker = ScalarVec {
-        values: (0..16).map(|i| i as u32).collect(),
-    };
-    assert_prop_case(&marker);
-}
-#[test]
-fn generated_prop_vec_scalar_large() {
-    let marker = ScalarVec {
-        values: (0..2048).map(|i| i as u32).collect(),
-    };
-    assert_prop_case(&marker);
+mod postreg {
+    use super::*;
+    #[test]
+    fn vec_scalar_large_hotpath_asserts() {
+        let (ir_text, ra_text, edits, disasm) = codegen_artifacts::<
+            ScalarVec,
+            _,
+        >(&kajit::postcard::KajitPostcard);
+        assert!(
+            ir_text.contains("theta") || ir_text.contains("apply @"),
+            "expected loop form (`theta`) or outlined loop body (`apply`) in IR"
+        );
+        assert!(ra_text.contains("branch_if"), "expected loop backedge in RA-MIR");
+        assert!(
+            ra_text.contains("call_intrinsic"),
+            "expected intrinsic-heavy vec decode path in RA-MIR"
+        );
+        assert!(edits <= 128, "expected edit budget <= 128, got {edits}");
+        assert!(! disasm.is_empty(), "expected non-empty disassembly artifact");
+    }
 }
