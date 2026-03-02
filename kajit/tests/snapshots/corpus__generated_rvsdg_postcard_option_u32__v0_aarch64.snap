@@ -1,0 +1,12 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 471
+expression: ir_text
+---
+lambda @0 (shape: "WithOptU32") {
+  region {
+    args: [%cs, %os]
+    n2 = apply @1 [%cs:arg, %os:arg] -> [%cs, %os]
+    results: [%cs:n2, %os:n2]
+  }
+}

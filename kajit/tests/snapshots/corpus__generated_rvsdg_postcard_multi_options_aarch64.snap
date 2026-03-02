@@ -1,0 +1,117 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 471
+expression: ir_text
+---
+lambda @0 (shape: "MultiOpt") {
+  region {
+    args: [%cs, %os]
+    n3 = SaveOutPtr [%os:arg] -> [v0, %os]
+    n4 = Const(0x30) [] -> [v1]
+    n5 = Add [v0, v1] -> [v2]
+    n6 = SetOutPtr [v2, %os:n3] -> [%os]
+    n7 = apply @1 [%cs:arg, %os:n6] -> [%cs, %os]
+    n8 = SetOutPtr [v0, %os:n7] -> [%os]
+    n9 = BoundsCheck(1) [%cs:n7] -> [%cs]
+    n10 = ReadBytes(1) [%cs:n9] -> [v3, %cs]
+    n11 = Const(0x7f) [] -> [v4]
+    n12 = And [v3, v4] -> [v5]
+    n13 = Const(0x80) [] -> [v6]
+    n14 = And [v3, v6] -> [v7]
+    n15 = Const(0x0) [] -> [v8]
+    n16 = CmpNe [v7, v8] -> [v9]
+    n40 = gamma [
+      pred: v9
+      in0: v5
+      in1: %cs:n10
+      in2: %os:n8
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n17 = Const(0x4) [] -> [v10]
+          n18 = Const(0x0) [] -> [v11]
+          results: [arg0, v10, arg0, v11, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n19 = Const(0x7) [] -> [v12]
+          n20 = Const(0x4) [] -> [v13]
+          n21 = Const(0x1) [] -> [v14]
+          n166 = Const(0x7f) [] -> [v16]
+          n167 = Const(0x7) [] -> [v20]
+          n168 = Const(0x1) [] -> [v22]
+          n169 = Const(0x80) [] -> [v24]
+          n170 = Const(0x0) [] -> [v26]
+          n171 = Const(0x0) [] -> [v28]
+          n39 = theta [arg0, v12, v13, arg0, v14, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n22 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n23 = ReadBytes(1) [%cs:n22] -> [v15, %cs]
+              n25 = And [v15, v16] -> [v17]
+              n26 = Shl [v17, arg1] -> [v18]
+              n27 = Or [arg0, v18] -> [v19]
+              n29 = Add [arg1, v20] -> [v21]
+              n31 = Sub [arg2, v22] -> [v23]
+              n33 = And [v15, v24] -> [v25]
+              n35 = CmpNe [v25, v26] -> [v27]
+              n37 = CmpNe [v23, v28] -> [v29]
+              n38 = And [v27, v29] -> [v30]
+              results: [v30, v19, v21, v23, v17, v27, %cs:n23, %os:arg]
+            }
+          } -> [v31, v32, v33, v34, v35, %cs, %os]
+          results: [v31, v33, v34, v35, %cs:n39, %os:n39]
+        }
+    } -> [v36, v37, v38, v39, %cs, %os]
+    n41 = Const(0x0) [] -> [v40]
+    n42 = CmpNe [v39, v40] -> [v41]
+    n44 = gamma [
+      pred: v41
+      in0: %cs:n40
+      in1: %os:n40
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n43 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n45 = Const(0x20) [] -> [v42]
+    n46 = Shr [v36, v42] -> [v43]
+    n47 = Const(0x0) [] -> [v44]
+    n48 = CmpNe [v43, v44] -> [v45]
+    n50 = gamma [
+      pred: v45
+      in0: %cs:n44
+      in1: %os:n44
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n49 = ErrorExit(NumberOutOfRange) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n51 = CallIntrinsic(0x<ptr>, field_offset=0) [v36, %cs:n50, %os:n50] -> [%cs, %os]
+    n52 = SaveOutPtr [%os:n51] -> [v46, %os]
+    n53 = Const(0x18) [] -> [v47]
+    n54 = Add [v46, v47] -> [v48]
+    n55 = SetOutPtr [v48, %os:n52] -> [%os]
+    n56 = apply @2 [%cs:n51, %os:n55] -> [%cs, %os]
+    n57 = SetOutPtr [v46, %os:n56] -> [%os]
+    results: [%cs:n56, %os:n57]
+  }
+}

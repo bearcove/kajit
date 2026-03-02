@@ -1,0 +1,12 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 471
+expression: ir_text
+---
+lambda @0 (shape: "AddressList") {
+  region {
+    args: [%cs, %os]
+    n3 = apply @1 [%cs:arg, %os:arg] -> [%cs, %os]
+    results: [%cs:n3, %os:n3]
+  }
+}

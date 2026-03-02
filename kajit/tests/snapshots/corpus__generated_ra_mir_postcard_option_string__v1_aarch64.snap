@@ -1,0 +1,129 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 481
+expression: ra_text
+---
+ra_func @0 {
+  block b0:
+    call_lambda(@1) !gpr,simd
+    term: return
+    succs: (none)
+}
+ra_func @1 {
+  block b0:
+    bounds_check(1)
+    v0:gpr = read_bytes(1)
+    term: branch_if_zero v0 -> b2, fallthrough b1
+    succs: b2 b1
+  block b1 (preds: b0):
+    term: branch b3
+    succs: b3
+  block b2 (preds: b0):
+    v1:gpr = const(0x<ptr>)
+    call_intrinsic(0x<ptr>, fo=0) v1:gpr !gpr,simd
+    term: branch b18
+    succs: b18
+  block b3 (preds: b1):
+    v2:gpr = save_out_ptr
+    v3:gpr = slot_addr(0)
+    bounds_check(1)
+    v5:gpr = const(0x7f)
+    v7:gpr = const(0x80)
+    v9:gpr = const(0x0)
+    v41:gpr = const(0x0)
+    v43:gpr = const(0x20)
+    v45:gpr = const(0x0)
+    v47:gpr = const(0x<ptr>)
+    set_out_ptr v3:gpr
+    v4:gpr = read_bytes(1)
+    v6:gpr = And v4:gpr, v5:gpr
+    v8:gpr = And v4:gpr, v7:gpr
+    v10:gpr = CmpNe v8:gpr, v9:gpr
+    term: branch_if_zero v10 -> b5, fallthrough b4
+    succs: b5 [v2, v3, v6, v41, v43, v45, v47] b4 [v2, v3, v6, v41, v43, v45, v47]
+  block b4 [params: v2, v3, v6, v41, v43, v45, v47] (preds: b3):
+    term: branch b6
+    succs: b6 [v2, v3, v6, v41, v43, v45, v47]
+  block b5 [params: v2, v3, v6, v41, v43, v45, v47] (preds: b3):
+    v11:gpr = const(0x4)
+    v12:gpr = const(0x0)
+    v37:gpr = copy v6:gpr
+    v40:gpr = copy v12:gpr
+    term: branch b9
+    succs: b9 [v2, v3, v37, v12, v41, v43, v45, v47]
+  block b6 [params: v2, v3, v6, v41, v43, v45, v47] (preds: b4):
+    v13:gpr = const(0x7)
+    v14:gpr = const(0x4)
+    v15:gpr = const(0x1)
+    v17:gpr = const(0x7f)
+    v21:gpr = const(0x7)
+    v23:gpr = const(0x1)
+    v25:gpr = const(0x80)
+    v27:gpr = const(0x0)
+    v29:gpr = const(0x0)
+    v50:gpr = copy v6:gpr
+    v51:gpr = copy v13:gpr
+    v52:gpr = copy v14:gpr
+    term: branch b7
+    succs: b7 [v2, v3, v17, v21, v23, v25, v27, v29, v41, v43, v45, v47, v50, v51, v52]
+  block b7 [params: v2, v3, v17, v21, v23, v25, v27, v29, v41, v43, v45, v47, v50, v51, v52] (preds: b6, b7):
+    bounds_check(1)
+    v22:gpr = Add v51:gpr, v21:gpr
+    v24:gpr = Sub v52:gpr, v23:gpr
+    v16:gpr = read_bytes(1)
+    v30:gpr = CmpNe v24:gpr, v29:gpr
+    v18:gpr = And v16:gpr, v17:gpr
+    v26:gpr = And v16:gpr, v25:gpr
+    v19:gpr = Shl v18:gpr, v51:gpr
+    v28:gpr = CmpNe v26:gpr, v27:gpr
+    v20:gpr = Or v50:gpr, v19:gpr
+    v31:gpr = And v28:gpr, v30:gpr
+    v50:gpr = copy v20:gpr
+    v51:gpr = copy v22:gpr
+    v52:gpr = copy v24:gpr
+    v53:gpr = copy v18:gpr
+    v54:gpr = copy v28:gpr
+    term: branch_if v31 -> b7, fallthrough b8
+    succs: b7 [v2, v3, v17, v21, v23, v25, v27, v29, v41, v43, v45, v47, v50, v51, v52] b8 [v2, v3, v41, v43, v45, v47, v50, v54]
+  block b8 [params: v2, v3, v41, v43, v45, v47, v50, v54] (preds: b7):
+    v37:gpr = copy v50:gpr
+    v40:gpr = copy v54:gpr
+    term: branch b9
+    succs: b9 [v2, v3, v37, v40, v41, v43, v45, v47]
+  block b9 [params: v2, v3, v37, v40, v41, v43, v45, v47] (preds: b5, b8):
+    v42:gpr = CmpNe v40:gpr, v41:gpr
+    v44:gpr = Shr v37:gpr, v43:gpr
+    term: branch_if_zero v42 -> b11, fallthrough b10
+    succs: b11 [v2, v3, v37, v44, v45, v47] b10
+  block b10 (preds: b9):
+    term: branch b12
+    succs: b12
+  block b11 [params: v2, v3, v37, v44, v45, v47] (preds: b9):
+    term: branch b13
+    succs: b13 [v2, v3, v37, v44, v45, v47]
+  block b12 (preds: b10):
+    term: error_exit(InvalidVarint)
+    succs: (none)
+  block b13 [params: v2, v3, v37, v44, v45, v47] (preds: b11):
+    v46:gpr = CmpNe v44:gpr, v45:gpr
+    term: branch_if_zero v46 -> b15, fallthrough b14
+    succs: b15 [v2, v3, v37, v47] b14
+  block b14 (preds: b13):
+    term: branch b16
+    succs: b16
+  block b15 [params: v2, v3, v37, v47] (preds: b13):
+    term: branch b17
+    succs: b17 [v2, v3, v37, v47]
+  block b16 (preds: b14):
+    term: error_exit(NumberOutOfRange)
+    succs: (none)
+  block b17 [params: v2, v3, v37, v47] (preds: b15):
+    call_intrinsic(0x<ptr>, fo=0) v37:gpr !gpr,simd
+    set_out_ptr v2:gpr
+    call_intrinsic(0x<ptr>, fo=0) v47:gpr, v3:gpr !gpr,simd
+    term: branch b18
+    succs: b18
+  block b18 (preds: b2, b17):
+    term: return
+    succs: (none)
+}

@@ -1,0 +1,18 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 471
+expression: ir_text
+---
+lambda @0 (shape: "TwoAddresses") {
+  region {
+    args: [%cs, %os]
+    n2 = apply @1 [%cs:arg, %os:arg] -> [%cs, %os]
+    n3 = SaveOutPtr [%os:n2] -> [v0, %os]
+    n4 = Const(0x20) [] -> [v1]
+    n5 = Add [v0, v1] -> [v2]
+    n6 = SetOutPtr [v2, %os:n3] -> [%os]
+    n7 = apply @1 [%cs:n2, %os:n6] -> [%cs, %os]
+    n8 = SetOutPtr [v0, %os:n7] -> [%os]
+    results: [%cs:n7, %os:n8]
+  }
+}
