@@ -947,7 +947,7 @@ fn compile_linear_ir_aarch64(
 ) -> LinearBackendResult {
     use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
     use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet};
 
     use crate::arch::{BASE_FRAME, EmitCtx};
     use crate::ir::Width;
@@ -962,14 +962,14 @@ fn compile_linear_ir_aarch64(
 
     #[derive(Default)]
     struct LambdaEditMap {
-        before: HashMap<usize, Vec<(Allocation, Allocation)>>,
-        after: HashMap<usize, Vec<(Allocation, Allocation)>>,
+        before: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
+        after: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
     }
 
     #[derive(Default)]
     struct LambdaEdgeEditMap {
-        before: HashMap<(usize, usize), Vec<(Allocation, Allocation)>>,
-        after: HashMap<(usize, usize), Vec<(Allocation, Allocation)>>,
+        before: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
+        after: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
     }
 
     struct EdgeTrampoline {
@@ -987,12 +987,12 @@ fn compile_linear_ir_aarch64(
         entry: Option<AssemblyOffset>,
         current_func: Option<FunctionCtx>,
         const_vregs: Vec<Option<u64>>,
-        edits_by_lambda: HashMap<u32, LambdaEditMap>,
-        edge_edits_by_lambda: HashMap<u32, LambdaEdgeEditMap>,
-        forward_branch_labels_by_lambda: HashMap<u32, HashMap<LabelId, (usize, LabelId)>>,
-        allocs_by_lambda: HashMap<u32, HashMap<usize, Vec<Allocation>>>,
-        return_result_allocs_by_lambda: HashMap<u32, Vec<Allocation>>,
-        edge_trampoline_labels: HashMap<(u32, usize, usize), DynamicLabel>,
+        edits_by_lambda: BTreeMap<u32, LambdaEditMap>,
+        edge_edits_by_lambda: BTreeMap<u32, LambdaEdgeEditMap>,
+        forward_branch_labels_by_lambda: BTreeMap<u32, BTreeMap<LabelId, (usize, LabelId)>>,
+        allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
+        return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
+        edge_trampoline_labels: BTreeMap<(u32, usize, usize), DynamicLabel>,
         edge_trampolines: Vec<EdgeTrampoline>,
         current_inst_allocs: Option<Vec<Allocation>>,
         current_lambda_linear_op_index: usize,
@@ -1311,7 +1311,7 @@ fn compile_linear_ir_aarch64(
                 (0..=lambda_max).map(|_| ectx.new_label()).collect();
 
             let mut forward_branch_labels_by_lambda =
-                HashMap::<u32, HashMap<LabelId, (usize, LabelId)>>::new();
+                BTreeMap::<u32, BTreeMap<LabelId, (usize, LabelId)>>::new();
             let mut current_lambda_id = None::<u32>;
             let mut current_linear_op_index = 0usize;
             let mut pending_labels = Vec::<LabelId>::new();
@@ -1353,10 +1353,10 @@ fn compile_linear_ir_aarch64(
                 }
             }
 
-            let mut edits_by_lambda = HashMap::<u32, LambdaEditMap>::new();
-            let mut edge_edits_by_lambda = HashMap::<u32, LambdaEdgeEditMap>::new();
-            let mut allocs_by_lambda = HashMap::<u32, HashMap<usize, Vec<Allocation>>>::new();
-            let mut return_result_allocs_by_lambda = HashMap::<u32, Vec<Allocation>>::new();
+            let mut edits_by_lambda = BTreeMap::<u32, LambdaEditMap>::new();
+            let mut edge_edits_by_lambda = BTreeMap::<u32, LambdaEdgeEditMap>::new();
+            let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<Allocation>>>::new();
+            let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
             for func in &alloc.functions {
                 let lambda_id = func.lambda_id.index() as u32;
                 let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
@@ -1419,7 +1419,7 @@ fn compile_linear_ir_aarch64(
                 forward_branch_labels_by_lambda,
                 allocs_by_lambda,
                 return_result_allocs_by_lambda,
-                edge_trampoline_labels: HashMap::new(),
+                edge_trampoline_labels: BTreeMap::new(),
                 edge_trampolines: Vec::new(),
                 current_inst_allocs: None,
                 current_lambda_linear_op_index: 0,
@@ -2682,7 +2682,7 @@ fn compile_linear_ir_aarch64(
 
         fn run(mut self, ir: &LinearIr) -> LinearBackendResult {
             let mut fused_cmpne_cond = None::<(usize, crate::ir::VReg)>;
-            let mut skipped_ops = HashSet::<usize>::new();
+            let mut skipped_ops = BTreeSet::<usize>::new();
             let mut pending_and_branch = None::<(usize, crate::ir::VReg, Allocation, Allocation)>;
             for (op_index, op) in ir.ops.iter().enumerate() {
                 if let Some((expected_branch_op_index, expected_cond)) = fused_cmpne_cond {

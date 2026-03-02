@@ -1,5 +1,6 @@
 ---
 source: kajit/tests/postreg_vec_hotpath_corpus.rs
+assertion_line: 127
 expression: disasm
 ---
 > sub sp, sp, #0xa0
@@ -167,8 +168,8 @@ expression: disasm
   mov x1, x23
   mov x2, x11
   mov x3, x12
-  mov x16, #0x9ae8
-  movk x16, #0xd2, lsl #16
+  mov x16, #0x21c0
+  movk x16, #0xed, lsl #16
   movk x16, #0x1, lsl #32
   blr x16
   ldr x19, [x22]

@@ -142,10 +142,10 @@ pub(crate) fn render_bench_file() -> String {
     let bench_calls: Vec<TokenStream> = cases
         .iter()
         .map(|case| {
-            let bench_name = format_ident!("{}", case.name);
+            let case_name = case.name;
             let value = case.value.clone();
             quote! {
-                bench!(v, #bench_name, #value, +ser, +ir);
+                register_bench_case(&mut v, #case_name, #value);
             }
         })
         .collect();
@@ -153,13 +153,146 @@ pub(crate) fn render_bench_file() -> String {
         #[path = "harness.rs"]
         mod harness;
 
-        #[macro_use]
-        #[path = "common/bench_macros.rs"]
-        mod bench_macros;
-
         use facet::Facet;
+        use std::hint::black_box;
+        use std::sync::Arc;
 
         #types
+
+        fn register_bench_case<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+        where
+            for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+        {
+            let json_data = Arc::new(serde_json::to_string(&value).unwrap());
+            let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
+            let value = Arc::new(value);
+
+            let json_decoder =
+                Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson));
+            let json_encoder =
+                Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::json::KajitJsonEncoder));
+
+            let postcard_decoder =
+                Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard));
+            let postcard_ir_decoder =
+                Arc::new(kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard));
+            let postcard_encoder =
+                Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::postcard::KajitPostcard));
+
+            let json_prefix = format!("{group}/json");
+            let postcard_prefix = format!("{group}/postcard");
+
+            v.push(harness::Bench {
+                name: format!("{json_prefix}/serde_deser"),
+                func: Box::new({
+                    let data = Arc::clone(&json_data);
+                    move |runner| {
+                        runner.run(|| {
+                            black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
+                        });
+                    }
+                }),
+            });
+            v.push(harness::Bench {
+                name: format!("{json_prefix}/kajit_dynasm_deser"),
+                func: Box::new({
+                    let data = Arc::clone(&json_data);
+                    let decoder = Arc::clone(&json_decoder);
+                    move |runner| {
+                        let decoder = &*decoder;
+                        runner.run(|| {
+                            black_box(kajit::from_str::<T>(decoder, black_box(data.as_str())).unwrap());
+                        });
+                    }
+                }),
+            });
+            v.push(harness::Bench {
+                name: format!("{json_prefix}/serde_ser"),
+                func: Box::new({
+                    let value = Arc::clone(&value);
+                    move |runner| {
+                        runner.run(|| {
+                            black_box(serde_json::to_vec(black_box(&*value)).unwrap());
+                        });
+                    }
+                }),
+            });
+            v.push(harness::Bench {
+                name: format!("{json_prefix}/kajit_dynasm_ser"),
+                func: Box::new({
+                    let value = Arc::clone(&value);
+                    let encoder = Arc::clone(&json_encoder);
+                    move |runner| {
+                        let encoder = &*encoder;
+                        runner.run(|| {
+                            black_box(kajit::serialize(encoder, black_box(&*value)));
+                        });
+                    }
+                }),
+            });
+
+            v.push(harness::Bench {
+                name: format!("{postcard_prefix}/serde_deser"),
+                func: Box::new({
+                    let data = Arc::clone(&postcard_data);
+                    move |runner| {
+                        runner.run(|| {
+                            black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                        });
+                    }
+                }),
+            });
+            v.push(harness::Bench {
+                name: format!("{postcard_prefix}/kajit_dynasm_deser"),
+                func: Box::new({
+                    let data = Arc::clone(&postcard_data);
+                    let decoder = Arc::clone(&postcard_decoder);
+                    move |runner| {
+                        let decoder = &*decoder;
+                        runner.run(|| {
+                            black_box(kajit::deserialize::<T>(decoder, black_box(&data[..])).unwrap());
+                        });
+                    }
+                }),
+            });
+            v.push(harness::Bench {
+                name: format!("{postcard_prefix}/kajit_ir_deser"),
+                func: Box::new({
+                    let data = Arc::clone(&postcard_data);
+                    let decoder = Arc::clone(&postcard_ir_decoder);
+                    move |runner| {
+                        let decoder = &*decoder;
+                        runner.run(|| {
+                            black_box(kajit::deserialize::<T>(decoder, black_box(&data[..])).unwrap());
+                        });
+                    }
+                }),
+            });
+            v.push(harness::Bench {
+                name: format!("{postcard_prefix}/serde_ser"),
+                func: Box::new({
+                    let value = Arc::clone(&value);
+                    move |runner| {
+                        runner.run(|| {
+                            black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
+                        });
+                    }
+                }),
+            });
+            v.push(harness::Bench {
+                name: format!("{postcard_prefix}/kajit_dynasm_ser"),
+                func: Box::new({
+                    let value = Arc::clone(&value);
+                    let encoder = Arc::clone(&postcard_encoder);
+                    move |runner| {
+                        let encoder = &*encoder;
+                        runner.run(|| {
+                            black_box(kajit::serialize(encoder, black_box(&*value)));
+                        });
+                    }
+                }),
+            });
+        }
 
         fn main() {
             let mut v: Vec<harness::Bench> = Vec::new();
