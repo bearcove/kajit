@@ -712,7 +712,9 @@ fn lower_postcard_varint_value(builder: &mut RegionBuilder<'_>, bits: u32) -> Po
 
     if bits == 64 {
         // 10th byte may only carry one payload bit for u64.
-        builder.gamma(rem, &[last_low], 2, |branch_idx, rb| {
+        let zero = builder.const_val(0);
+        let rem_nonzero = builder.binop(IrOp::CmpNe, rem, zero);
+        builder.gamma(rem_nonzero, &[last_low], 2, |branch_idx, rb| {
             let args = rb.region_args(1);
             if branch_idx == 0 {
                 let mask_7e = rb.const_val(0x7e);

@@ -7,8 +7,8 @@ use crate::format::{
     Decoder, Encoder, FieldEmitInfo, FieldEncodeInfo, FieldLowerInfo, IrDecoder, VariantEmitInfo,
     VariantKind,
 };
-use crate::ir::{IntrinsicFn, RegionBuilder};
 use crate::intrinsics;
+use crate::ir::{IntrinsicFn, RegionBuilder};
 use crate::json_intrinsics;
 use crate::malum::VecOffsets;
 use crate::solver::{JsonValueType, LoweredSolver};
@@ -1392,11 +1392,16 @@ impl IrDecoder for KajitJson {
             );
         }
 
-        let required_mask = fields.iter().fold(0u64, |mask, field| {
-            mask | (1u64 << field.required_index)
-        });
+        let required_mask = fields
+            .iter()
+            .fold(0u64, |mask, field| mask | (1u64 << field.required_index));
 
-        builder.call_intrinsic(ifn(json_intrinsics::kajit_json_expect_object_start as _), &[], 0, false);
+        builder.call_intrinsic(
+            ifn(json_intrinsics::kajit_json_expect_object_start as _),
+            &[],
+            0,
+            false,
+        );
 
         let key_ptr_slot = builder.alloc_slot();
         let key_len_slot = builder.alloc_slot();
@@ -1557,15 +1562,13 @@ impl IrDecoder for KajitJson {
             let required = builder.const_val(required_mask);
             let present = builder.binop(crate::ir::IrOp::And, seen_mask, required);
             let missing = builder.binop(crate::ir::IrOp::CmpNe, present, required);
-            builder.gamma(missing, &[], 2, |idx, rb| {
-                match idx {
-                    0 => rb.set_results(&[]),
-                    1 => {
-                        rb.error_exit(ErrorCode::MissingRequiredField);
-                        rb.set_results(&[]);
-                    }
-                    _ => unreachable!(),
+            builder.gamma(missing, &[], 2, |idx, rb| match idx {
+                0 => rb.set_results(&[]),
+                1 => {
+                    rb.error_exit(ErrorCode::MissingRequiredField);
+                    rb.set_results(&[]);
                 }
+                _ => unreachable!(),
             });
         }
     }
@@ -1578,7 +1581,12 @@ impl IrDecoder for KajitJson {
     ) {
         let offset = offset as u32;
         if scalar_type == ScalarType::Unit {
-            builder.call_intrinsic(ifn(json_intrinsics::kajit_json_skip_value as _), &[], 0, false);
+            builder.call_intrinsic(
+                ifn(json_intrinsics::kajit_json_skip_value as _),
+                &[],
+                0,
+                false,
+            );
             return;
         }
 
@@ -1622,6 +1630,141 @@ impl IrDecoder for KajitJson {
         };
 
         builder.call_intrinsic(func, &[], offset as u32, false);
+    }
+
+    fn lower_vec(
+        &self,
+        builder: &mut RegionBuilder<'_>,
+        offset: usize,
+        elem_shape: &'static facet::Shape,
+        vec_offsets: &crate::malum::VecOffsets,
+        lower_elem: &mut dyn FnMut(&mut RegionBuilder<'_>),
+    ) {
+        let offset = offset as u32;
+        let elem_layout = elem_shape
+            .layout
+            .sized_layout()
+            .expect("Vec element must be Sized");
+        let elem_size = elem_layout.size() as u64;
+        let elem_align = elem_layout.align() as u64;
+        let usize_width = if core::mem::size_of::<usize>() == 8 {
+            crate::ir::Width::W8
+        } else {
+            crate::ir::Width::W4
+        };
+
+        builder.call_intrinsic(
+            ifn(json_intrinsics::kajit_json_expect_array_start as _),
+            &[],
+            0,
+            false,
+        );
+
+        let sep_slot = builder.alloc_slot();
+        let sep_addr = builder.slot_addr(sep_slot);
+        builder.call_intrinsic(
+            ifn(json_intrinsics::kajit_json_peek_after_ws as _),
+            &[sep_addr],
+            0,
+            false,
+        );
+        let first = builder.read_from_slot(sep_slot);
+        let close = builder.const_val(b']' as u64);
+        let has_entries = builder.binop(crate::ir::IrOp::CmpNe, first, close);
+
+        builder.gamma(has_entries, &[], 2, |branch_idx, rb| match branch_idx {
+            0 => {
+                rb.advance_cursor(1);
+                let ptr = rb.const_val(elem_align);
+                let zero = rb.const_val(0);
+                rb.write_to_field(ptr, offset + vec_offsets.ptr_offset, usize_width);
+                rb.write_to_field(zero, offset + vec_offsets.len_offset, usize_width);
+                rb.write_to_field(zero, offset + vec_offsets.cap_offset, usize_width);
+                rb.set_results(&[]);
+            }
+            1 => {
+                let initial_cap = rb.const_val(4);
+                let size_arg = rb.const_val(elem_size);
+                let align_arg = rb.const_val(elem_align);
+                let buf = rb
+                    .call_intrinsic(
+                        ifn(intrinsics::kajit_vec_alloc as _),
+                        &[initial_cap, size_arg, align_arg],
+                        0,
+                        true,
+                    )
+                    .expect("vec_alloc should produce a result");
+
+                let zero = rb.const_val(0);
+                let saved_out = rb.save_out_ptr();
+                rb.set_out_ptr(buf);
+
+                let loop_out = rb.theta(&[buf, buf, zero, initial_cap], |tb| {
+                    let args = tb.region_args(4);
+                    let buf = args[0];
+                    let cursor = args[1];
+                    let len = args[2];
+                    let cap = args[3];
+
+                    let len_ne_cap = tb.binop(crate::ir::IrOp::CmpNe, len, cap);
+                    let grown = tb.gamma(len_ne_cap, &[buf, cap], 2, |idx, gb| {
+                        let pass = gb.region_args(2);
+                        let buf = pass[0];
+                        let cap = pass[1];
+                        match idx {
+                            0 => {
+                                let one = gb.const_val(1);
+                                let new_cap = gb.binop(crate::ir::IrOp::Shl, cap, one);
+                                let size_arg = gb.const_val(elem_size);
+                                let align_arg = gb.const_val(elem_align);
+                                let grown_buf = gb
+                                    .call_intrinsic(
+                                        ifn(intrinsics::kajit_vec_grow as _),
+                                        &[buf, len, cap, new_cap, size_arg, align_arg],
+                                        0,
+                                        true,
+                                    )
+                                    .expect("vec_grow should produce a result");
+                                gb.set_results(&[grown_buf, new_cap]);
+                            }
+                            1 => gb.set_results(&[buf, cap]),
+                            _ => unreachable!(),
+                        }
+                    });
+                    let buf = grown[0];
+                    let cap = grown[1];
+
+                    tb.set_out_ptr(cursor);
+                    lower_elem(tb);
+
+                    let one = tb.const_val(1);
+                    let len2 = tb.binop(crate::ir::IrOp::Add, len, one);
+                    let elem_size = tb.const_val(elem_size);
+                    let cursor2 = tb.binop(crate::ir::IrOp::Add, cursor, elem_size);
+
+                    let sep_addr = tb.slot_addr(sep_slot);
+                    tb.call_intrinsic(
+                        ifn(json_intrinsics::kajit_json_comma_or_end_array as _),
+                        &[sep_addr],
+                        0,
+                        false,
+                    );
+                    let sep = tb.read_from_slot(sep_slot);
+                    let continue_loop = tb.binop(crate::ir::IrOp::CmpNe, sep, one);
+                    tb.set_results(&[continue_loop, buf, cursor2, len2, cap]);
+                });
+
+                let buf = loop_out[0];
+                let len = loop_out[2];
+                let cap = loop_out[3];
+                rb.set_out_ptr(saved_out);
+                rb.write_to_field(buf, offset + vec_offsets.ptr_offset, usize_width);
+                rb.write_to_field(len, offset + vec_offsets.len_offset, usize_width);
+                rb.write_to_field(cap, offset + vec_offsets.cap_offset, usize_width);
+                rb.set_results(&[]);
+            }
+            _ => unreachable!(),
+        });
     }
 }
 
