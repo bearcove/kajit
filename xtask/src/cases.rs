@@ -70,45 +70,68 @@ pub(crate) fn types_rs() -> TokenStream {
     }
 }
 
-pub(crate) const CASES: &[Case] = &[
-    Case {
-        name: "flat_struct",
-        ty: "Friend",
-        value: r#"Friend { age: 42, name: "Alice".into() }"#,
-    },
-    Case {
-        name: "nested_struct",
-        ty: "Person",
-        value: r#"Person { name: "Alice".into(), age: 30, address: Address { city: "Portland".into(), zip: 97201 } }"#,
-    },
-    Case {
-        name: "deep_struct",
-        ty: "Outer",
-        value: r#"Outer { middle: Middle { inner: Inner { x: 1 }, y: 2 }, z: 3 }"#,
-    },
-    Case {
-        name: "all_integers",
-        ty: "AllIntegers",
-        value: r#"AllIntegers { a_u8: 255, a_u16: 65535, a_u32: 1_000_000, a_u64: 1_000_000_000_000, a_i8: -128, a_i16: -32768, a_i32: -1_000_000, a_i64: -1_000_000_000_000 }"#,
-    },
-    Case {
-        name: "bool_field",
-        ty: "BoolField",
-        value: r#"BoolField { value: true }"#,
-    },
-    Case {
-        name: "tuple_pair",
-        ty: "Pair",
-        value: r#"(42u32, "Alice".to_string())"#,
-    },
-    Case {
-        name: "vec_scalar_small",
-        ty: "ScalarVec",
-        value: r#"ScalarVec { values: (0..16).map(|i| i as u32).collect() }"#,
-    },
-    Case {
-        name: "vec_scalar_large",
-        ty: "ScalarVec",
-        value: r#"ScalarVec { values: (0..2048).map(|i| i as u32).collect() }"#,
-    },
-];
+pub(crate) fn cases() -> Vec<Case> {
+    vec![
+        Case {
+            name: "flat_struct",
+            value: quote!(Friend {
+                age: 42,
+                name: "Alice".into()
+            }),
+        },
+        Case {
+            name: "nested_struct",
+            value: quote!(Person {
+                name: "Alice".into(),
+                age: 30,
+                address: Address {
+                    city: "Portland".into(),
+                    zip: 97201
+                }
+            }),
+        },
+        Case {
+            name: "deep_struct",
+            value: quote!(Outer {
+                middle: Middle {
+                    inner: Inner { x: 1 },
+                    y: 2
+                },
+                z: 3
+            }),
+        },
+        Case {
+            name: "all_integers",
+            value: quote!(AllIntegers {
+                a_u8: 255,
+                a_u16: 65535,
+                a_u32: 1_000_000,
+                a_u64: 1_000_000_000_000,
+                a_i8: -128,
+                a_i16: -32768,
+                a_i32: -1_000_000,
+                a_i64: -1_000_000_000_000
+            }),
+        },
+        Case {
+            name: "bool_field",
+            value: quote!(BoolField { value: true }),
+        },
+        Case {
+            name: "tuple_pair",
+            value: quote!((42u32, "Alice".to_string())),
+        },
+        Case {
+            name: "vec_scalar_small",
+            value: quote!(ScalarVec {
+                values: (0..16).map(|i| i as u32).collect()
+            }),
+        },
+        Case {
+            name: "vec_scalar_large",
+            value: quote!(ScalarVec {
+                values: (0..2048).map(|i| i as u32).collect()
+            }),
+        },
+    ]
+}

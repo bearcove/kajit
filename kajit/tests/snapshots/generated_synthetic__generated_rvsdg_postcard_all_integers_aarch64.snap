@@ -1,0 +1,613 @@
+---
+source: kajit/tests/generated_synthetic.rs
+expression: ir_text
+---
+lambda @0 (shape: "AllIntegers") {
+  region {
+    args: [%cs, %os]
+    n1 = CallIntrinsic(0x<ptr>, field_offset=28) [%cs:arg, %os:arg] -> [%cs, %os]
+    n2 = BoundsCheck(1) [%cs:n1] -> [%cs]
+    n3 = ReadBytes(1) [%cs:n2] -> [v0, %cs]
+    n4 = Const(0x7f) [] -> [v1]
+    n5 = And [v0, v1] -> [v2]
+    n6 = Const(0x80) [] -> [v3]
+    n7 = And [v0, v3] -> [v4]
+    n8 = Const(0x0) [] -> [v5]
+    n9 = CmpNe [v4, v5] -> [v6]
+    n33 = gamma [
+      pred: v6
+      in0: v2
+      in1: %cs:n3
+      in2: %os:n1
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n10 = Const(0x2) [] -> [v7]
+          n11 = Const(0x0) [] -> [v8]
+          results: [arg0, v7, arg0, v8, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n12 = Const(0x7) [] -> [v9]
+          n13 = Const(0x2) [] -> [v10]
+          n14 = Const(0x1) [] -> [v11]
+          n266 = Const(0x7f) [] -> [v13]
+          n267 = Const(0x7) [] -> [v17]
+          n268 = Const(0x1) [] -> [v19]
+          n269 = Const(0x80) [] -> [v21]
+          n270 = Const(0x0) [] -> [v23]
+          n271 = Const(0x0) [] -> [v25]
+          n32 = theta [arg0, v9, v10, arg0, v11, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n15 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n16 = ReadBytes(1) [%cs:n15] -> [v12, %cs]
+              n18 = And [v12, v13] -> [v14]
+              n19 = Shl [v14, arg1] -> [v15]
+              n20 = Or [arg0, v15] -> [v16]
+              n22 = Add [arg1, v17] -> [v18]
+              n24 = Sub [arg2, v19] -> [v20]
+              n26 = And [v12, v21] -> [v22]
+              n28 = CmpNe [v22, v23] -> [v24]
+              n30 = CmpNe [v20, v25] -> [v26]
+              n31 = And [v24, v26] -> [v27]
+              results: [v27, v16, v18, v20, v14, v24, %cs:n16, %os:arg]
+            }
+          } -> [v28, v29, v30, v31, v32, %cs, %os]
+          results: [v28, v30, v31, v32, %cs:n32, %os:n32]
+        }
+    } -> [v33, v34, v35, v36, %cs, %os]
+    n34 = Const(0x0) [] -> [v37]
+    n35 = CmpNe [v36, v37] -> [v38]
+    n37 = gamma [
+      pred: v38
+      in0: %cs:n33
+      in1: %os:n33
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n36 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n38 = Const(0x10) [] -> [v39]
+    n39 = Shr [v33, v39] -> [v40]
+    n40 = Const(0x0) [] -> [v41]
+    n41 = CmpNe [v40, v41] -> [v42]
+    n43 = gamma [
+      pred: v42
+      in0: %cs:n37
+      in1: %os:n37
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n42 = ErrorExit(NumberOutOfRange) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n44 = WriteToField(offset=24, W2) [v33, %os:n43] -> [%os]
+    n45 = BoundsCheck(1) [%cs:n43] -> [%cs]
+    n46 = ReadBytes(1) [%cs:n45] -> [v43, %cs]
+    n47 = Const(0x7f) [] -> [v44]
+    n48 = And [v43, v44] -> [v45]
+    n49 = Const(0x80) [] -> [v46]
+    n50 = And [v43, v46] -> [v47]
+    n51 = Const(0x0) [] -> [v48]
+    n52 = CmpNe [v47, v48] -> [v49]
+    n76 = gamma [
+      pred: v49
+      in0: v45
+      in1: %cs:n46
+      in2: %os:n44
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n53 = Const(0x4) [] -> [v50]
+          n54 = Const(0x0) [] -> [v51]
+          results: [arg0, v50, arg0, v51, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n55 = Const(0x7) [] -> [v52]
+          n56 = Const(0x4) [] -> [v53]
+          n57 = Const(0x1) [] -> [v54]
+          n272 = Const(0x7f) [] -> [v56]
+          n273 = Const(0x7) [] -> [v60]
+          n274 = Const(0x1) [] -> [v62]
+          n275 = Const(0x80) [] -> [v64]
+          n276 = Const(0x0) [] -> [v66]
+          n277 = Const(0x0) [] -> [v68]
+          n75 = theta [arg0, v52, v53, arg0, v54, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n58 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n59 = ReadBytes(1) [%cs:n58] -> [v55, %cs]
+              n61 = And [v55, v56] -> [v57]
+              n62 = Shl [v57, arg1] -> [v58]
+              n63 = Or [arg0, v58] -> [v59]
+              n65 = Add [arg1, v60] -> [v61]
+              n67 = Sub [arg2, v62] -> [v63]
+              n69 = And [v55, v64] -> [v65]
+              n71 = CmpNe [v65, v66] -> [v67]
+              n73 = CmpNe [v63, v68] -> [v69]
+              n74 = And [v67, v69] -> [v70]
+              results: [v70, v59, v61, v63, v57, v67, %cs:n59, %os:arg]
+            }
+          } -> [v71, v72, v73, v74, v75, %cs, %os]
+          results: [v71, v73, v74, v75, %cs:n75, %os:n75]
+        }
+    } -> [v76, v77, v78, v79, %cs, %os]
+    n77 = Const(0x0) [] -> [v80]
+    n78 = CmpNe [v79, v80] -> [v81]
+    n80 = gamma [
+      pred: v81
+      in0: %cs:n76
+      in1: %os:n76
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n79 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n81 = Const(0x20) [] -> [v82]
+    n82 = Shr [v76, v82] -> [v83]
+    n83 = Const(0x0) [] -> [v84]
+    n84 = CmpNe [v83, v84] -> [v85]
+    n86 = gamma [
+      pred: v85
+      in0: %cs:n80
+      in1: %os:n80
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n85 = ErrorExit(NumberOutOfRange) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n87 = WriteToField(offset=16, W4) [v76, %os:n86] -> [%os]
+    n88 = BoundsCheck(1) [%cs:n86] -> [%cs]
+    n89 = ReadBytes(1) [%cs:n88] -> [v86, %cs]
+    n90 = Const(0x7f) [] -> [v87]
+    n91 = And [v86, v87] -> [v88]
+    n92 = Const(0x80) [] -> [v89]
+    n93 = And [v86, v89] -> [v90]
+    n94 = Const(0x0) [] -> [v91]
+    n95 = CmpNe [v90, v91] -> [v92]
+    n119 = gamma [
+      pred: v92
+      in0: v88
+      in1: %cs:n89
+      in2: %os:n87
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n96 = Const(0x9) [] -> [v93]
+          n97 = Const(0x0) [] -> [v94]
+          results: [arg0, v93, arg0, v94, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n98 = Const(0x7) [] -> [v95]
+          n99 = Const(0x9) [] -> [v96]
+          n100 = Const(0x1) [] -> [v97]
+          n278 = Const(0x7f) [] -> [v99]
+          n279 = Const(0x7) [] -> [v103]
+          n280 = Const(0x1) [] -> [v105]
+          n281 = Const(0x80) [] -> [v107]
+          n282 = Const(0x0) [] -> [v109]
+          n283 = Const(0x0) [] -> [v111]
+          n118 = theta [arg0, v95, v96, arg0, v97, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n101 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n102 = ReadBytes(1) [%cs:n101] -> [v98, %cs]
+              n104 = And [v98, v99] -> [v100]
+              n105 = Shl [v100, arg1] -> [v101]
+              n106 = Or [arg0, v101] -> [v102]
+              n108 = Add [arg1, v103] -> [v104]
+              n110 = Sub [arg2, v105] -> [v106]
+              n112 = And [v98, v107] -> [v108]
+              n114 = CmpNe [v108, v109] -> [v110]
+              n116 = CmpNe [v106, v111] -> [v112]
+              n117 = And [v110, v112] -> [v113]
+              results: [v113, v102, v104, v106, v100, v110, %cs:n102, %os:arg]
+            }
+          } -> [v114, v115, v116, v117, v118, %cs, %os]
+          results: [v114, v116, v117, v118, %cs:n118, %os:n118]
+        }
+    } -> [v119, v120, v121, v122, %cs, %os]
+    n120 = Const(0x0) [] -> [v123]
+    n121 = CmpNe [v122, v123] -> [v124]
+    n123 = gamma [
+      pred: v124
+      in0: %cs:n119
+      in1: %os:n119
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n122 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n130 = gamma [
+      pred: v120
+      in0: v121
+      in1: %cs:n123
+      in2: %os:n123
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n124 = Const(0x7e) [] -> [v125]
+          n125 = And [arg0, v125] -> [v126]
+          n126 = Const(0x0) [] -> [v127]
+          n127 = CmpNe [v126, v127] -> [v128]
+          n129 = gamma [
+            pred: v128
+            in0: %cs:arg
+            in1: %os:arg
+          ] {
+            branch 0:
+              region {
+                args: [%cs, %os]
+                results: [%cs:arg, %os:arg]
+              }
+            branch 1:
+              region {
+                args: [%cs, %os]
+                n128 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+                results: [%cs:arg, %os:arg]
+              }
+          } -> [%cs, %os]
+          results: [%cs:n129, %os:n129]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n131 = WriteToField(offset=0, W8) [v119, %os:n130] -> [%os]
+    n132 = CallIntrinsic(0x<ptr>, field_offset=29) [%cs:n130, %os:n131] -> [%cs, %os]
+    n133 = BoundsCheck(1) [%cs:n132] -> [%cs]
+    n134 = ReadBytes(1) [%cs:n133] -> [v129, %cs]
+    n135 = Const(0x7f) [] -> [v130]
+    n136 = And [v129, v130] -> [v131]
+    n137 = Const(0x80) [] -> [v132]
+    n138 = And [v129, v132] -> [v133]
+    n139 = Const(0x0) [] -> [v134]
+    n140 = CmpNe [v133, v134] -> [v135]
+    n164 = gamma [
+      pred: v135
+      in0: v131
+      in1: %cs:n134
+      in2: %os:n132
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n141 = Const(0x2) [] -> [v136]
+          n142 = Const(0x0) [] -> [v137]
+          results: [arg0, v136, arg0, v137, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n143 = Const(0x7) [] -> [v138]
+          n144 = Const(0x2) [] -> [v139]
+          n145 = Const(0x1) [] -> [v140]
+          n284 = Const(0x7f) [] -> [v142]
+          n285 = Const(0x7) [] -> [v146]
+          n286 = Const(0x1) [] -> [v148]
+          n287 = Const(0x80) [] -> [v150]
+          n288 = Const(0x0) [] -> [v152]
+          n289 = Const(0x0) [] -> [v154]
+          n163 = theta [arg0, v138, v139, arg0, v140, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n146 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n147 = ReadBytes(1) [%cs:n146] -> [v141, %cs]
+              n149 = And [v141, v142] -> [v143]
+              n150 = Shl [v143, arg1] -> [v144]
+              n151 = Or [arg0, v144] -> [v145]
+              n153 = Add [arg1, v146] -> [v147]
+              n155 = Sub [arg2, v148] -> [v149]
+              n157 = And [v141, v150] -> [v151]
+              n159 = CmpNe [v151, v152] -> [v153]
+              n161 = CmpNe [v149, v154] -> [v155]
+              n162 = And [v153, v155] -> [v156]
+              results: [v156, v145, v147, v149, v143, v153, %cs:n147, %os:arg]
+            }
+          } -> [v157, v158, v159, v160, v161, %cs, %os]
+          results: [v157, v159, v160, v161, %cs:n163, %os:n163]
+        }
+    } -> [v162, v163, v164, v165, %cs, %os]
+    n165 = Const(0x0) [] -> [v166]
+    n166 = CmpNe [v165, v166] -> [v167]
+    n168 = gamma [
+      pred: v167
+      in0: %cs:n164
+      in1: %os:n164
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n167 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n169 = Const(0x10) [] -> [v168]
+    n170 = Shr [v162, v168] -> [v169]
+    n171 = Const(0x0) [] -> [v170]
+    n172 = CmpNe [v169, v170] -> [v171]
+    n174 = gamma [
+      pred: v171
+      in0: %cs:n168
+      in1: %os:n168
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n173 = ErrorExit(NumberOutOfRange) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n175 = ZigzagDecode(wide=false) [v162] -> [v172]
+    n176 = WriteToField(offset=26, W2) [v172, %os:n174] -> [%os]
+    n177 = BoundsCheck(1) [%cs:n174] -> [%cs]
+    n178 = ReadBytes(1) [%cs:n177] -> [v173, %cs]
+    n179 = Const(0x7f) [] -> [v174]
+    n180 = And [v173, v174] -> [v175]
+    n181 = Const(0x80) [] -> [v176]
+    n182 = And [v173, v176] -> [v177]
+    n183 = Const(0x0) [] -> [v178]
+    n184 = CmpNe [v177, v178] -> [v179]
+    n208 = gamma [
+      pred: v179
+      in0: v175
+      in1: %cs:n178
+      in2: %os:n176
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n185 = Const(0x4) [] -> [v180]
+          n186 = Const(0x0) [] -> [v181]
+          results: [arg0, v180, arg0, v181, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n187 = Const(0x7) [] -> [v182]
+          n188 = Const(0x4) [] -> [v183]
+          n189 = Const(0x1) [] -> [v184]
+          n290 = Const(0x7f) [] -> [v186]
+          n291 = Const(0x7) [] -> [v190]
+          n292 = Const(0x1) [] -> [v192]
+          n293 = Const(0x80) [] -> [v194]
+          n294 = Const(0x0) [] -> [v196]
+          n295 = Const(0x0) [] -> [v198]
+          n207 = theta [arg0, v182, v183, arg0, v184, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n190 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n191 = ReadBytes(1) [%cs:n190] -> [v185, %cs]
+              n193 = And [v185, v186] -> [v187]
+              n194 = Shl [v187, arg1] -> [v188]
+              n195 = Or [arg0, v188] -> [v189]
+              n197 = Add [arg1, v190] -> [v191]
+              n199 = Sub [arg2, v192] -> [v193]
+              n201 = And [v185, v194] -> [v195]
+              n203 = CmpNe [v195, v196] -> [v197]
+              n205 = CmpNe [v193, v198] -> [v199]
+              n206 = And [v197, v199] -> [v200]
+              results: [v200, v189, v191, v193, v187, v197, %cs:n191, %os:arg]
+            }
+          } -> [v201, v202, v203, v204, v205, %cs, %os]
+          results: [v201, v203, v204, v205, %cs:n207, %os:n207]
+        }
+    } -> [v206, v207, v208, v209, %cs, %os]
+    n209 = Const(0x0) [] -> [v210]
+    n210 = CmpNe [v209, v210] -> [v211]
+    n212 = gamma [
+      pred: v211
+      in0: %cs:n208
+      in1: %os:n208
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n211 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n213 = Const(0x20) [] -> [v212]
+    n214 = Shr [v206, v212] -> [v213]
+    n215 = Const(0x0) [] -> [v214]
+    n216 = CmpNe [v213, v214] -> [v215]
+    n218 = gamma [
+      pred: v215
+      in0: %cs:n212
+      in1: %os:n212
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n217 = ErrorExit(NumberOutOfRange) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n219 = ZigzagDecode(wide=false) [v206] -> [v216]
+    n220 = WriteToField(offset=20, W4) [v216, %os:n218] -> [%os]
+    n221 = BoundsCheck(1) [%cs:n218] -> [%cs]
+    n222 = ReadBytes(1) [%cs:n221] -> [v217, %cs]
+    n223 = Const(0x7f) [] -> [v218]
+    n224 = And [v217, v218] -> [v219]
+    n225 = Const(0x80) [] -> [v220]
+    n226 = And [v217, v220] -> [v221]
+    n227 = Const(0x0) [] -> [v222]
+    n228 = CmpNe [v221, v222] -> [v223]
+    n252 = gamma [
+      pred: v223
+      in0: v219
+      in1: %cs:n222
+      in2: %os:n220
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n229 = Const(0x9) [] -> [v224]
+          n230 = Const(0x0) [] -> [v225]
+          results: [arg0, v224, arg0, v225, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n231 = Const(0x7) [] -> [v226]
+          n232 = Const(0x9) [] -> [v227]
+          n233 = Const(0x1) [] -> [v228]
+          n296 = Const(0x7f) [] -> [v230]
+          n297 = Const(0x7) [] -> [v234]
+          n298 = Const(0x1) [] -> [v236]
+          n299 = Const(0x80) [] -> [v238]
+          n300 = Const(0x0) [] -> [v240]
+          n301 = Const(0x0) [] -> [v242]
+          n251 = theta [arg0, v226, v227, arg0, v228, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n234 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n235 = ReadBytes(1) [%cs:n234] -> [v229, %cs]
+              n237 = And [v229, v230] -> [v231]
+              n238 = Shl [v231, arg1] -> [v232]
+              n239 = Or [arg0, v232] -> [v233]
+              n241 = Add [arg1, v234] -> [v235]
+              n243 = Sub [arg2, v236] -> [v237]
+              n245 = And [v229, v238] -> [v239]
+              n247 = CmpNe [v239, v240] -> [v241]
+              n249 = CmpNe [v237, v242] -> [v243]
+              n250 = And [v241, v243] -> [v244]
+              results: [v244, v233, v235, v237, v231, v241, %cs:n235, %os:arg]
+            }
+          } -> [v245, v246, v247, v248, v249, %cs, %os]
+          results: [v245, v247, v248, v249, %cs:n251, %os:n251]
+        }
+    } -> [v250, v251, v252, v253, %cs, %os]
+    n253 = Const(0x0) [] -> [v254]
+    n254 = CmpNe [v253, v254] -> [v255]
+    n256 = gamma [
+      pred: v255
+      in0: %cs:n252
+      in1: %os:n252
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n255 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n263 = gamma [
+      pred: v251
+      in0: v252
+      in1: %cs:n256
+      in2: %os:n256
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n257 = Const(0x7e) [] -> [v256]
+          n258 = And [arg0, v256] -> [v257]
+          n259 = Const(0x0) [] -> [v258]
+          n260 = CmpNe [v257, v258] -> [v259]
+          n262 = gamma [
+            pred: v259
+            in0: %cs:arg
+            in1: %os:arg
+          ] {
+            branch 0:
+              region {
+                args: [%cs, %os]
+                results: [%cs:arg, %os:arg]
+              }
+            branch 1:
+              region {
+                args: [%cs, %os]
+                n261 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+                results: [%cs:arg, %os:arg]
+              }
+          } -> [%cs, %os]
+          results: [%cs:n262, %os:n262]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n264 = ZigzagDecode(wide=true) [v250] -> [v260]
+    n265 = WriteToField(offset=8, W8) [v260, %os:n263] -> [%os]
+    results: [%cs:n263, %os:n265]
+  }
+}

@@ -168,7 +168,7 @@ expression: disasm
   mov x2, x11
   mov x3, x12
   mov x16, #0xe10
-  movk x16, #0x4f9, lsl #16
+  movk x16, #0x44f, lsl #16
   movk x16, #0x1, lsl #32
   blr x16
   ldr x19, [x22]

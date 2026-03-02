@@ -7,8 +7,6 @@ mod harness;
 mod bench_macros;
 
 use facet::Facet;
-use std::hint::black_box;
-use std::sync::LazyLock;
 
 use serde::{Serialize, Deserialize};
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
@@ -65,14 +63,14 @@ type Pair = (u32, String);
 fn main() {
     let mut v: Vec<harness::Bench> = Vec::new();
 
-    bench!(v, flat_struct, Friend, Friend { age: 42, name: "Alice".into() }, +ser, +ir);
-    bench!(v, nested_struct, Person, Person { name: "Alice".into(), age: 30, address: Address { city: "Portland".into(), zip: 97201 } }, +ser, +ir);
-    bench!(v, deep_struct, Outer, Outer { middle: Middle { inner: Inner { x: 1 }, y: 2 }, z: 3 }, +ser, +ir);
-    bench!(v, all_integers, AllIntegers, AllIntegers { a_u8: 255, a_u16: 65535, a_u32: 1_000_000, a_u64: 1_000_000_000_000, a_i8: -128, a_i16: -32768, a_i32: -1_000_000, a_i64: -1_000_000_000_000 }, +ser, +ir);
-    bench!(v, bool_field, BoolField, BoolField { value: true }, +ser, +ir);
-    bench!(v, tuple_pair, Pair, (42u32, "Alice".to_string()), +ser, +ir);
-    bench!(v, vec_scalar_small, ScalarVec, ScalarVec { values: (0..16).map(|i| i as u32).collect() }, +ser, +ir);
-    bench!(v, vec_scalar_large, ScalarVec, ScalarVec { values: (0..2048).map(|i| i as u32).collect() }, +ser, +ir);
+    bench!(v, flat_struct, Friend { age : 42 , name : "Alice" . into () }, +ser, +ir);
+    bench!(v, nested_struct, Person { name : "Alice" . into () , age : 30 , address : Address { city : "Portland" . into () , zip : 97201 } }, +ser, +ir);
+    bench!(v, deep_struct, Outer { middle : Middle { inner : Inner { x : 1 } , y : 2 } , z : 3 }, +ser, +ir);
+    bench!(v, all_integers, AllIntegers { a_u8 : 255 , a_u16 : 65535 , a_u32 : 1_000_000 , a_u64 : 1_000_000_000_000 , a_i8 : - 128 , a_i16 : - 32768 , a_i32 : - 1_000_000 , a_i64 : - 1_000_000_000_000 }, +ser, +ir);
+    bench!(v, bool_field, BoolField { value : true }, +ser, +ir);
+    bench!(v, tuple_pair, (42u32 , "Alice" . to_string ()), +ser, +ir);
+    bench!(v, vec_scalar_small, ScalarVec { values : (0 .. 16) . map (| i | i as u32) . collect () }, +ser, +ir);
+    bench!(v, vec_scalar_large, ScalarVec { values : (0 .. 2048) . map (| i | i as u32) . collect () }, +ser, +ir);
 
     harness::run_benchmarks(v);
 }

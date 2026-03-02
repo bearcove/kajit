@@ -1,340 +1,441 @@
 // Shared bench macro definitions for bench targets under benches/.
 
-// bench!(v, name, Type, value)                — json + postcard, deser only
-// bench!(v, name, Type, value, +ser)          — json + postcard, deser + ser
-// bench!(v, name, Type, value, +ir)           — json deser + postcard serde/kajit_dynasm/kajit_ir deser
-// bench!(v, name, Type, value, +ser, +ir)     — json deser+ser + postcard serde/kajit_dynasm/kajit_ir deser + serde/kajit_dynasm ser
-// bench!(v, name, Type, value, json_only)     — json only, deser only
-// bench!(v, name, Type, value, postcard_legacy_ir)         — postcard serde + kajit_dynasm + kajit_ir, deser only
-// bench!(v, name, Type, value, postcard_legacy_ir_compile) — postcard kajit_dynasm vs kajit_ir, deser + compile
+use std::hint::black_box;
+use crate::harness;
+use facet::Facet;
+use std::sync::Arc;
+
+pub(crate) fn add_json<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let data = Arc::new(serde_json::to_string(&value).unwrap());
+    let decoder = Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson));
+
+    let prefix = format!("{group}/json");
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            move |runner| {
+                runner.run(|| {
+                    black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let decoder = Arc::clone(&decoder);
+            move |runner| {
+                let deser = &*decoder;
+                runner.run(|| {
+                    black_box(kajit::from_str::<T>(deser, black_box(data.as_str())).unwrap());
+                });
+            }
+        }),
+    });
+}
+
+pub(crate) fn add_json_ser<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let data = Arc::new(serde_json::to_string(&value).unwrap());
+    let value = Arc::new(value);
+    let decoder = Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson));
+    let encoder = Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::json::KajitJsonEncoder));
+
+    let prefix = format!("{group}/json");
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            move |runner| {
+                runner.run(|| {
+                    black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let decoder = Arc::clone(&decoder);
+            move |runner| {
+                let deser = &*decoder;
+                runner.run(|| {
+                    black_box(kajit::from_str::<T>(deser, black_box(data.as_str())).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_ser"),
+        func: Box::new({
+            let value = Arc::clone(&value);
+            move |runner| {
+                runner.run(|| {
+                    black_box(serde_json::to_vec(black_box(&*value)).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_ser"),
+        func: Box::new({
+            let value = Arc::clone(&value);
+            let encoder = Arc::clone(&encoder);
+            move |runner| {
+                let enc = &*encoder;
+                runner.run(|| {
+                    black_box(kajit::serialize(enc, black_box(&*value)));
+                });
+            }
+        }),
+    });
+}
+
+pub(crate) fn add_postcard<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let data = Arc::new(::postcard::to_allocvec(&value).unwrap());
+    let decoder = Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard));
+
+    let prefix = format!("{group}/postcard");
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            move |runner| {
+                runner.run(|| {
+                    black_box(::postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let decoder = Arc::clone(&decoder);
+            move |runner| {
+                let deser = &*decoder;
+                runner.run(|| {
+                    black_box(kajit::deserialize::<T>(deser, black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+}
+
+pub(crate) fn add_postcard_ser<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let data = Arc::new(::postcard::to_allocvec(&value).unwrap());
+    let value = Arc::new(value);
+    let decoder = Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard));
+    let encoder = Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::postcard::KajitPostcard));
+
+    let prefix = format!("{group}/postcard");
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            move |runner| {
+                runner.run(|| {
+                    black_box(::postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let decoder = Arc::clone(&decoder);
+            move |runner| {
+                let deser = &*decoder;
+                runner.run(|| {
+                    black_box(kajit::deserialize::<T>(deser, black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_ser"),
+        func: Box::new({
+            let value = Arc::clone(&value);
+            move |runner| {
+                runner.run(|| {
+                    black_box(::postcard::to_allocvec(black_box(&*value)).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_ser"),
+        func: Box::new({
+            let value = Arc::clone(&value);
+            let encoder = Arc::clone(&encoder);
+            move |runner| {
+                let enc = &*encoder;
+                runner.run(|| {
+                    black_box(kajit::serialize(enc, black_box(&*value)));
+                });
+            }
+        }),
+    });
+}
+
+pub(crate) fn add_postcard_ser_ir<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let data = Arc::new(::postcard::to_allocvec(&value).unwrap());
+    let value = Arc::new(value);
+    let legacy_decoder =
+        Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard));
+    let ir_decoder =
+        Arc::new(kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard));
+    let encoder = Arc::new(kajit::compile_encoder(T::SHAPE, &kajit::postcard::KajitPostcard));
+
+    let prefix = format!("{group}/postcard");
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            move |runner| {
+                runner.run(|| {
+                    black_box(::postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let legacy_decoder = Arc::clone(&legacy_decoder);
+            move |runner| {
+                let deser = &*legacy_decoder;
+                runner.run(|| {
+                    black_box(kajit::deserialize::<T>(deser, black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_ir_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let ir_decoder = Arc::clone(&ir_decoder);
+            move |runner| {
+                let deser = &*ir_decoder;
+                runner.run(|| {
+                    black_box(kajit::deserialize::<T>(deser, black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_ser"),
+        func: Box::new({
+            let value = Arc::clone(&value);
+            move |runner| {
+                runner.run(|| {
+                    black_box(::postcard::to_allocvec(black_box(&*value)).unwrap());
+                });
+            }
+        }),
+    });
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_ser"),
+        func: Box::new({
+            let value = Arc::clone(&value);
+            let encoder = Arc::clone(&encoder);
+            move |runner| {
+                let enc = &*encoder;
+                runner.run(|| {
+                    black_box(kajit::serialize(enc, black_box(&*value)));
+                });
+            }
+        }),
+    });
+}
+
+pub(crate) fn add_postcard_legacy_ir<T>(v: &mut Vec<harness::Bench>, group: &str, value: T, with_compile: bool)
+where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+{
+    let data = Arc::new(::postcard::to_allocvec(&value).unwrap());
+    let legacy_decoder =
+        Arc::new(kajit::compile_decoder_legacy(T::SHAPE, &kajit::postcard::KajitPostcard));
+    let ir_decoder =
+        Arc::new(kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard));
+
+    let prefix = format!("{group}/postcard");
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/serde_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            move |runner| {
+                runner.run(|| {
+                    black_box(::postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_dynasm_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let legacy_decoder = Arc::clone(&legacy_decoder);
+            move |runner| {
+                let deser = &*legacy_decoder;
+                runner.run(|| {
+                    black_box(kajit::deserialize::<T>(deser, black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+
+    v.push(harness::Bench {
+        name: format!("{prefix}/kajit_ir_deser"),
+        func: Box::new({
+            let data = Arc::clone(&data);
+            let ir_decoder = Arc::clone(&ir_decoder);
+            move |runner| {
+                let deser = &*ir_decoder;
+                runner.run(|| {
+                    black_box(kajit::deserialize::<T>(deser, black_box(&data[..])).unwrap());
+                });
+            }
+        }),
+    });
+
+    if with_compile {
+        v.push(harness::Bench {
+            name: format!("{prefix}/kajit_dynasm_compile"),
+            func: Box::new(move |runner| {
+                runner.run(|| {
+                    black_box(kajit::compile_decoder_legacy(
+                        T::SHAPE,
+                        &kajit::postcard::KajitPostcard,
+                    ));
+                });
+            }),
+        });
+
+        v.push(harness::Bench {
+            name: format!("{prefix}/kajit_ir_compile"),
+            func: Box::new(move |runner| {
+                runner.run(|| {
+                    black_box(kajit::compile_decoder_via_ir(
+                        T::SHAPE,
+                        &kajit::postcard::KajitPostcard,
+                    ));
+                });
+            }),
+        });
+    }
+}
 
 macro_rules! bench {
-    ($v:ident, $name:ident, $Type:ty, $value:expr) => {{
+    ($v:ident, $name:ident, $value:expr) => {{
         let group = stringify!($name);
-        bench!(@json $v, group, $Type, $value);
-        bench!(@postcard $v, group, $Type, $value);
+        crate::bench_macros::add_json(&mut $v, group, { $value });
+        crate::bench_macros::add_postcard(&mut $v, group, { $value });
+    }};
+
+    ($v:ident, $name:ident, $value:expr, +ser) => {{
+        let group = stringify!($name);
+        crate::bench_macros::add_json_ser(&mut $v, group, { $value });
+        crate::bench_macros::add_postcard_ser(&mut $v, group, { $value });
+    }};
+
+    ($v:ident, $name:ident, $value:expr, +ir) => {{
+        let group = stringify!($name);
+        crate::bench_macros::add_json(&mut $v, group, { $value });
+        crate::bench_macros::add_postcard_legacy_ir(&mut $v, group, { $value }, false);
+    }};
+
+    ($v:ident, $name:ident, $value:expr, +ser, +ir) => {{
+        let group = stringify!($name);
+        crate::bench_macros::add_json_ser(&mut $v, group, { $value });
+        crate::bench_macros::add_postcard_ser_ir(&mut $v, group, { $value });
+    }};
+
+    ($v:ident, $name:ident, $value:expr, +ir, +ser) => {{
+        let group = stringify!($name);
+        crate::bench_macros::add_json_ser(&mut $v, group, { $value });
+        crate::bench_macros::add_postcard_ser_ir(&mut $v, group, { $value });
+    }};
+
+    ($v:ident, $name:ident, $value:expr, json_only) => {{
+        let group = stringify!($name);
+        crate::bench_macros::add_json(&mut $v, group, { $value });
+    }};
+
+    ($v:ident, $name:ident, $value:expr, postcard_legacy_ir) => {{
+        let group = stringify!($name);
+        crate::bench_macros::add_postcard_legacy_ir(&mut $v, group, { $value }, false);
+    }};
+
+    ($v:ident, $name:ident, $value:expr, postcard_legacy_ir_compile) => {{
+        let group = stringify!($name);
+        crate::bench_macros::add_postcard_legacy_ir(&mut $v, group, { $value }, true);
+    }};
+
+    ($v:ident, $name:ident, $Type:ty, $value:expr) => {{
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value);
     }};
 
     ($v:ident, $name:ident, $Type:ty, $value:expr, +ser) => {{
-        let group = stringify!($name);
-        bench!(@json_ser $v, group, $Type, $value);
-        bench!(@postcard_ser $v, group, $Type, $value);
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value, +ser);
     }};
 
     ($v:ident, $name:ident, $Type:ty, $value:expr, +ir) => {{
-        let group = stringify!($name);
-        bench!(@json $v, group, $Type, $value);
-        bench!(@postcard_legacy_ir $v, group, $Type, $value, false);
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value, +ir);
     }};
 
     ($v:ident, $name:ident, $Type:ty, $value:expr, +ser, +ir) => {{
-        let group = stringify!($name);
-        bench!(@json_ser $v, group, $Type, $value);
-        bench!(@postcard_ser_ir $v, group, $Type, $value);
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value, +ser, +ir);
     }};
 
     ($v:ident, $name:ident, $Type:ty, $value:expr, +ir, +ser) => {{
-        let group = stringify!($name);
-        bench!(@json_ser $v, group, $Type, $value);
-        bench!(@postcard_ser_ir $v, group, $Type, $value);
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value, +ir, +ser);
     }};
 
     ($v:ident, $name:ident, $Type:ty, $value:expr, json_only) => {{
-        let group = stringify!($name);
-        bench!(@json $v, group, $Type, $value);
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value, json_only);
     }};
 
     ($v:ident, $name:ident, $Type:ty, $value:expr, postcard_legacy_ir) => {{
-        let group = stringify!($name);
-        bench!(@postcard_legacy_ir $v, group, $Type, $value, false);
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value, postcard_legacy_ir);
     }};
 
     ($v:ident, $name:ident, $Type:ty, $value:expr, postcard_legacy_ir_compile) => {{
-        let group = stringify!($name);
-        bench!(@postcard_legacy_ir $v, group, $Type, $value, true);
-    }};
-
-    // ── JSON (deser only) ───────────────────────────────────────────────
-
-    (@json $v:ident, $group:expr, $Type:ty, $value:expr) => {{
-        static DATA: LazyLock<String> = LazyLock::new(|| {
-            serde_json::to_string(&{ $value }).unwrap()
-        });
-        static DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_legacy(<$Type>::SHAPE, &kajit::json::KajitJson)
-        });
-
-        let prefix = format!("{}/json", $group);
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                runner.run(|| { black_box(serde_json::from_str::<$Type>(black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*DECODER;
-                runner.run(|| { black_box(kajit::from_str::<$Type>(deser, black_box(data)).unwrap()); });
-            }),
-        });
-    }};
-
-    // ── JSON (deser + ser) ──────────────────────────────────────────────
-
-    (@json_ser $v:ident, $group:expr, $Type:ty, $value:expr) => {{
-        static DATA: LazyLock<String> = LazyLock::new(|| {
-            serde_json::to_string(&{ $value }).unwrap()
-        });
-        static DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_legacy(<$Type>::SHAPE, &kajit::json::KajitJson)
-        });
-        static ENCODER: LazyLock<kajit::compiler::CompiledEncoder> = LazyLock::new(|| {
-            kajit::compile_encoder(<$Type>::SHAPE, &kajit::json::KajitJsonEncoder)
-        });
-
-        let prefix = format!("{}/json", $group);
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                runner.run(|| { black_box(serde_json::from_str::<$Type>(black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*DECODER;
-                runner.run(|| { black_box(kajit::from_str::<$Type>(deser, black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_ser"),
-            func: Box::new(|runner| {
-                let val: $Type = $value;
-                runner.run(|| { black_box(serde_json::to_vec(black_box(&val)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_ser"),
-            func: Box::new(|runner| {
-                let val: $Type = $value;
-                let enc = &*ENCODER;
-                runner.run(|| { black_box(kajit::serialize(enc, black_box(&val))); });
-            }),
-        });
-    }};
-
-    // ── Postcard (deser only) ───────────────────────────────────────────
-
-    (@postcard $v:ident, $group:expr, $Type:ty, $value:expr) => {{
-        static DATA: LazyLock<Vec<u8>> = LazyLock::new(|| {
-            ::postcard::to_allocvec(&{ $value }).unwrap()
-        });
-        static DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_legacy(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-
-        let prefix = format!("{}/postcard", $group);
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                runner.run(|| { black_box(::postcard::from_bytes::<$Type>(black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*DECODER;
-                runner.run(|| { black_box(kajit::deserialize::<$Type>(deser, black_box(data)).unwrap()); });
-            }),
-        });
-    }};
-
-    // ── Postcard (deser + ser) ──────────────────────────────────────────
-
-    (@postcard_ser $v:ident, $group:expr, $Type:ty, $value:expr) => {{
-        static DATA: LazyLock<Vec<u8>> = LazyLock::new(|| {
-            ::postcard::to_allocvec(&{ $value }).unwrap()
-        });
-        static DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_legacy(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-        static ENCODER: LazyLock<kajit::compiler::CompiledEncoder> = LazyLock::new(|| {
-            kajit::compile_encoder(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-
-        let prefix = format!("{}/postcard", $group);
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                runner.run(|| { black_box(::postcard::from_bytes::<$Type>(black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*DECODER;
-                runner.run(|| { black_box(kajit::deserialize::<$Type>(deser, black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_ser"),
-            func: Box::new(|runner| {
-                let val: $Type = $value;
-                runner.run(|| { black_box(::postcard::to_allocvec(black_box(&val)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_ser"),
-            func: Box::new(|runner| {
-                let val: $Type = $value;
-                let enc = &*ENCODER;
-                runner.run(|| { black_box(kajit::serialize(enc, black_box(&val))); });
-            }),
-        });
-    }};
-
-    // ── Postcard (deser + ser, with kajit_dynasm + kajit_ir side-by-side) ───
-
-    (@postcard_ser_ir $v:ident, $group:expr, $Type:ty, $value:expr) => {{
-        static DATA: LazyLock<Vec<u8>> = LazyLock::new(|| {
-            ::postcard::to_allocvec(&{ $value }).unwrap()
-        });
-        static LEGACY_DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_legacy(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-        static IR_DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_via_ir(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-        static ENCODER: LazyLock<kajit::compiler::CompiledEncoder> = LazyLock::new(|| {
-            kajit::compile_encoder(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-
-        let prefix = format!("{}/postcard", $group);
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                runner.run(|| { black_box(::postcard::from_bytes::<$Type>(black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*LEGACY_DECODER;
-                runner.run(|| { black_box(kajit::deserialize::<$Type>(deser, black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_ir_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*IR_DECODER;
-                runner.run(|| { black_box(kajit::deserialize::<$Type>(deser, black_box(data)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_ser"),
-            func: Box::new(|runner| {
-                let val: $Type = $value;
-                runner.run(|| { black_box(::postcard::to_allocvec(black_box(&val)).unwrap()); });
-            }),
-        });
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_ser"),
-            func: Box::new(|runner| {
-                let val: $Type = $value;
-                let enc = &*ENCODER;
-                runner.run(|| { black_box(kajit::serialize(enc, black_box(&val))); });
-            }),
-        });
-    }};
-
-    // ── Postcard serde + kajit_dynasm vs kajit_ir (deser, optional compile) ──
-
-    (@postcard_legacy_ir $v:ident, $group:expr, $Type:ty, $value:expr, $with_compile:expr) => {{
-        static DATA: LazyLock<Vec<u8>> = LazyLock::new(|| {
-            ::postcard::to_allocvec(&{ $value }).unwrap()
-        });
-        static LEGACY_DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_legacy(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-        static IR_DECODER: LazyLock<kajit::compiler::CompiledDecoder> = LazyLock::new(|| {
-            kajit::compile_decoder_via_ir(<$Type>::SHAPE, &kajit::postcard::KajitPostcard)
-        });
-
-        let prefix = format!("{}/postcard", $group);
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/serde_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                runner.run(|| {
-                    black_box(::postcard::from_bytes::<$Type>(black_box(data)).unwrap());
-                });
-            }),
-        });
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_dynasm_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*LEGACY_DECODER;
-                runner.run(|| {
-                    black_box(kajit::deserialize::<$Type>(deser, black_box(data)).unwrap());
-                });
-            }),
-        });
-
-        $v.push(harness::Bench {
-            name: format!("{prefix}/kajit_ir_deser"),
-            func: Box::new(|runner| {
-                let data = &*DATA;
-                let deser = &*IR_DECODER;
-                runner.run(|| {
-                    black_box(kajit::deserialize::<$Type>(deser, black_box(data)).unwrap());
-                });
-            }),
-        });
-
-        if $with_compile {
-            $v.push(harness::Bench {
-                name: format!("{prefix}/kajit_dynasm_compile"),
-                func: Box::new(|runner| {
-                    runner.run(|| {
-                        black_box(kajit::compile_decoder_legacy(
-                            <$Type>::SHAPE,
-                            &kajit::postcard::KajitPostcard,
-                        ));
-                    });
-                }),
-            });
-
-            $v.push(harness::Bench {
-                name: format!("{prefix}/kajit_ir_compile"),
-                func: Box::new(|runner| {
-                    runner.run(|| {
-                        black_box(kajit::compile_decoder_via_ir(
-                            <$Type>::SHAPE,
-                            &kajit::postcard::KajitPostcard,
-                        ));
-                    });
-                }),
-            });
-        }
+        let _ = core::marker::PhantomData::<$Type>;
+        bench!($v, $name, $value, postcard_legacy_ir_compile);
     }};
 }
