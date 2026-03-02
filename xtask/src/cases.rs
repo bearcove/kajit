@@ -55,12 +55,19 @@ pub(crate) fn types_rs() -> TokenStream {
             meta: Metadata,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         #[repr(u8)]
         enum Animal {
             Cat,
             Dog { name: String, good_boy: bool },
             Parrot(String),
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct Zoo {
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+            name: String,
+            star: Animal,
         }
 
         #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
@@ -259,6 +266,30 @@ pub(crate) fn types_rs() -> TokenStream {
         }
 
         #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct Nums {
+            #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
+            vals: Vec<u32>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct Names {
+            #[proptest(strategy = "proptest::collection::vec(proptest::string::string_regex(\"(?s).{0,32}\").unwrap(), 0..128)")]
+            items: Vec<String>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct AddressList {
+            #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<Address>(), 0..128)")]
+            addrs: Vec<Address>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct TwoAddresses {
+            home: Address,
+            work: Address,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct ConfigMap {
             #[proptest(strategy = "proptest::collection::hash_map(proptest::string::string_regex(\"[a-z]{1,8}\").unwrap(), proptest::arbitrary::any::<u32>(), 0..32)")]
             scores: HashMap<String, u32>,
@@ -343,6 +374,31 @@ pub(crate) fn cases() -> Vec<Case> {
             inputs: vec![],
         },
         Case {
+            name: "enum_external",
+            ty: quote!(Animal),
+            values: vec![
+                quote!(Animal::Cat),
+                quote!(Animal::Dog {
+                    name: "Rex".into(),
+                    good_boy: true
+                }),
+                quote!(Animal::Parrot("Polly".into())),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "enum_as_struct_field",
+            ty: quote!(Zoo),
+            values: vec![quote!(Zoo {
+                name: "City Zoo".into(),
+                star: Animal::Dog {
+                    name: "Rex".into(),
+                    good_boy: true
+                }
+            })],
+            inputs: vec![],
+        },
+        Case {
             name: "tuple_pair",
             ty: quote!(Pair),
             values: vec![quote!((42u32, "Alice".to_string()))],
@@ -361,6 +417,116 @@ pub(crate) fn cases() -> Vec<Case> {
             ty: quote!(ScalarVec),
             values: vec![quote!(ScalarVec {
                 values: (0..2048).map(|i| i as u32).collect()
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "flatten",
+            ty: quote!(Document),
+            values: vec![quote!(Document {
+                title: "Hello".into(),
+                meta: Metadata {
+                    version: 1,
+                    author: "Amos".into()
+                }
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "option_u32",
+            ty: quote!(WithOptU32),
+            values: vec![
+                quote!(WithOptU32 { value: Some(42) }),
+                quote!(WithOptU32 { value: None }),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "option_string",
+            ty: quote!(WithOptStr),
+            values: vec![
+                quote!(WithOptStr {
+                    name: Some("Alice".into())
+                }),
+                quote!(WithOptStr { name: None }),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "option_struct",
+            ty: quote!(WithOptAddr),
+            values: vec![
+                quote!(WithOptAddr {
+                    addr: Some(Address {
+                        city: "Portland".into(),
+                        zip: 97201
+                    })
+                }),
+                quote!(WithOptAddr { addr: None }),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "multi_options",
+            ty: quote!(MultiOpt),
+            values: vec![quote!(MultiOpt {
+                a: Some(7),
+                b: "hello".into(),
+                c: None
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "vec_u32",
+            ty: quote!(Nums),
+            values: vec![
+                quote!(Nums {
+                    vals: vec![1, 2, 3]
+                }),
+                quote!(Nums { vals: vec![] }),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "vec_string",
+            ty: quote!(Names),
+            values: vec![
+                quote!(Names {
+                    items: vec!["hello".into(), "world".into()]
+                }),
+                quote!(Names { items: vec![] }),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "vec_nested_struct",
+            ty: quote!(AddressList),
+            values: vec![quote!(AddressList {
+                addrs: vec![
+                    Address {
+                        city: "Portland".into(),
+                        zip: 97201
+                    },
+                    Address {
+                        city: "Seattle".into(),
+                        zip: 98101
+                    },
+                ]
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "shared_inner_type",
+            ty: quote!(TwoAddresses),
+            values: vec![quote!(TwoAddresses {
+                home: Address {
+                    city: "Portland".into(),
+                    zip: 97201
+                },
+                work: Address {
+                    city: "Seattle".into(),
+                    zip: 98101
+                }
             })],
             inputs: vec![],
         },

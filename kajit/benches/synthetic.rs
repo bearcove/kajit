@@ -38,12 +38,18 @@ struct Document {
     #[facet(flatten)]
     meta: Metadata,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[repr(u8)]
 enum Animal {
     Cat,
     Dog { name: String, good_boy: bool },
     Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Zoo {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    name: String,
+    star: Animal,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
 #[facet(tag = "type", content = "data")]
@@ -217,6 +223,32 @@ struct ScalarVec {
         strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
     )]
     values: Vec<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Nums {
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
+    )]
+    vals: Vec<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Names {
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::string::string_regex(\"(?s).{0,32}\").unwrap(), 0..128)"
+    )]
+    items: Vec<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct AddressList {
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<Address>(), 0..128)"
+    )]
+    addrs: Vec<Address>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct TwoAddresses {
+    home: Address,
+    work: Address,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ConfigMap {
@@ -450,6 +482,27 @@ fn main() {
         },
     );
     register_bench_case(&mut v, "bool_field", BoolField { value: true });
+    register_bench_case(&mut v, "enum_external__v0", Animal::Cat);
+    register_bench_case(
+        &mut v,
+        "enum_external__v1",
+        Animal::Dog {
+            name: "Rex".into(),
+            good_boy: true,
+        },
+    );
+    register_bench_case(&mut v, "enum_external__v2", Animal::Parrot("Polly".into()));
+    register_bench_case(
+        &mut v,
+        "enum_as_struct_field",
+        Zoo {
+            name: "City Zoo".into(),
+            star: Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        },
+    );
     register_bench_case(&mut v, "tuple_pair", (42u32, "Alice".to_string()));
     register_bench_case(
         &mut v,
@@ -463,6 +516,81 @@ fn main() {
         "vec_scalar_large",
         ScalarVec {
             values: (0..2048).map(|i| i as u32).collect(),
+        },
+    );
+    register_bench_case(
+        &mut v,
+        "flatten",
+        Document {
+            title: "Hello".into(),
+            meta: Metadata {
+                version: 1,
+                author: "Amos".into(),
+            },
+        },
+    );
+    register_bench_case(&mut v, "option_u32__v0", WithOptU32 { value: Some(42) });
+    register_bench_case(&mut v, "option_u32__v1", WithOptU32 { value: None });
+    register_bench_case(
+        &mut v,
+        "option_string__v0",
+        WithOptStr {
+            name: Some("Alice".into()),
+        },
+    );
+    register_bench_case(&mut v, "option_string__v1", WithOptStr { name: None });
+    register_bench_case(
+        &mut v,
+        "option_struct__v0",
+        WithOptAddr {
+            addr: Some(Address {
+                city: "Portland".into(),
+                zip: 97201,
+            }),
+        },
+    );
+    register_bench_case(&mut v, "option_struct__v1", WithOptAddr { addr: None });
+    register_bench_case(
+        &mut v,
+        "multi_options",
+        MultiOpt {
+            a: Some(7),
+            b: "hello".into(),
+            c: None,
+        },
+    );
+    register_bench_case(&mut v, "vec_u32__v0", Nums { vals: vec![1, 2, 3] });
+    register_bench_case(&mut v, "vec_u32__v1", Nums { vals: vec![] });
+    register_bench_case(
+        &mut v,
+        "vec_string__v0",
+        Names {
+            items: vec!["hello".into(), "world".into()],
+        },
+    );
+    register_bench_case(&mut v, "vec_string__v1", Names { items: vec![] });
+    register_bench_case(
+        &mut v,
+        "vec_nested_struct",
+        AddressList {
+            addrs: vec![
+                Address { city : "Portland".into(), zip : 97201 }, Address { city :
+                "Seattle".into(), zip : 98101 },
+            ],
+        },
+    );
+    register_bench_case(
+        &mut v,
+        "shared_inner_type",
+        TwoAddresses {
+            home: Address {
+                city: "Portland".into(),
+                zip: 97201,
+            },
+            work: Address {
+                city: "Seattle".into(),
+                zip: 98101,
+            },
         },
     );
     harness::run_benchmarks(v);

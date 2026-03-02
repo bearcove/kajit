@@ -39,12 +39,18 @@ struct Document {
     #[facet(flatten)]
     meta: Metadata,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[repr(u8)]
 enum Animal {
     Cat,
     Dog { name: String, good_boy: bool },
     Parrot(String),
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Zoo {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    name: String,
+    star: Animal,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
 #[facet(tag = "type", content = "data")]
@@ -218,6 +224,32 @@ struct ScalarVec {
         strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
     )]
     values: Vec<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Nums {
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
+    )]
+    vals: Vec<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Names {
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::string::string_regex(\"(?s).{0,32}\").unwrap(), 0..128)"
+    )]
+    items: Vec<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct AddressList {
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<Address>(), 0..128)"
+    )]
+    addrs: Vec<Address>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct TwoAddresses {
+    home: Address,
+    work: Address,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ConfigMap {
@@ -531,6 +563,59 @@ mod json {
         assert_json_case(value);
     }
     #[test]
+    fn enum_external_v0() {
+        let value = Animal::Cat;
+        assert_codegen_snapshots(
+            "json",
+            "enum_external__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn enum_external_v1() {
+        let value = Animal::Dog {
+            name: "Rex".into(),
+            good_boy: true,
+        };
+        assert_codegen_snapshots(
+            "json",
+            "enum_external__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn enum_external_v2() {
+        let value = Animal::Parrot("Polly".into());
+        assert_codegen_snapshots(
+            "json",
+            "enum_external__v2",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn enum_as_struct_field() {
+        let value = Zoo {
+            name: "City Zoo".into(),
+            star: Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        };
+        assert_codegen_snapshots(
+            "json",
+            "enum_as_struct_field",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
     fn tuple_pair() {
         let value = (42u32, "Alice".to_string());
         assert_codegen_snapshots("json", "tuple_pair", &kajit::json::KajitJson, &value);
@@ -557,6 +642,178 @@ mod json {
         assert_codegen_snapshots(
             "json",
             "vec_scalar_large",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn flatten() {
+        let value = Document {
+            title: "Hello".into(),
+            meta: Metadata {
+                version: 1,
+                author: "Amos".into(),
+            },
+        };
+        assert_codegen_snapshots("json", "flatten", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_u32_v0() {
+        let value = WithOptU32 { value: Some(42) };
+        assert_codegen_snapshots(
+            "json",
+            "option_u32__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_u32_v1() {
+        let value = WithOptU32 { value: None };
+        assert_codegen_snapshots(
+            "json",
+            "option_u32__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_string_v0() {
+        let value = WithOptStr {
+            name: Some("Alice".into()),
+        };
+        assert_codegen_snapshots(
+            "json",
+            "option_string__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_string_v1() {
+        let value = WithOptStr { name: None };
+        assert_codegen_snapshots(
+            "json",
+            "option_string__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_struct_v0() {
+        let value = WithOptAddr {
+            addr: Some(Address {
+                city: "Portland".into(),
+                zip: 97201,
+            }),
+        };
+        assert_codegen_snapshots(
+            "json",
+            "option_struct__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_struct_v1() {
+        let value = WithOptAddr { addr: None };
+        assert_codegen_snapshots(
+            "json",
+            "option_struct__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn multi_options() {
+        let value = MultiOpt {
+            a: Some(7),
+            b: "hello".into(),
+            c: None,
+        };
+        assert_codegen_snapshots(
+            "json",
+            "multi_options",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_u32_v0() {
+        let value = Nums { vals: vec![1, 2, 3] };
+        assert_codegen_snapshots("json", "vec_u32__v0", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_u32_v1() {
+        let value = Nums { vals: vec![] };
+        assert_codegen_snapshots("json", "vec_u32__v1", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_string_v0() {
+        let value = Names {
+            items: vec!["hello".into(), "world".into()],
+        };
+        assert_codegen_snapshots(
+            "json",
+            "vec_string__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_string_v1() {
+        let value = Names { items: vec![] };
+        assert_codegen_snapshots(
+            "json",
+            "vec_string__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_nested_struct() {
+        let value = AddressList {
+            addrs: vec![
+                Address { city : "Portland".into(), zip : 97201 }, Address { city :
+                "Seattle".into(), zip : 98101 },
+            ],
+        };
+        assert_codegen_snapshots(
+            "json",
+            "vec_nested_struct",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn shared_inner_type() {
+        let value = TwoAddresses {
+            home: Address {
+                city: "Portland".into(),
+                zip: 97201,
+            },
+            work: Address {
+                city: "Seattle".into(),
+                zip: 98101,
+            },
+        };
+        assert_codegen_snapshots(
+            "json",
+            "shared_inner_type",
             &kajit::json::KajitJson,
             &value,
         );
@@ -650,6 +907,59 @@ mod postcard {
         assert_postcard_case(value);
     }
     #[test]
+    fn enum_external_v0() {
+        let value = Animal::Cat;
+        assert_codegen_snapshots(
+            "postcard",
+            "enum_external__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn enum_external_v1() {
+        let value = Animal::Dog {
+            name: "Rex".into(),
+            good_boy: true,
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "enum_external__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn enum_external_v2() {
+        let value = Animal::Parrot("Polly".into());
+        assert_codegen_snapshots(
+            "postcard",
+            "enum_external__v2",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn enum_as_struct_field() {
+        let value = Zoo {
+            name: "City Zoo".into(),
+            star: Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "enum_as_struct_field",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
     fn tuple_pair() {
         let value = (42u32, "Alice".to_string());
         assert_codegen_snapshots(
@@ -681,6 +991,193 @@ mod postcard {
         assert_codegen_snapshots(
             "postcard",
             "vec_scalar_large",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn flatten() {
+        let value = Document {
+            title: "Hello".into(),
+            meta: Metadata {
+                version: 1,
+                author: "Amos".into(),
+            },
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "flatten",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_u32_v0() {
+        let value = WithOptU32 { value: Some(42) };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_u32__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_u32_v1() {
+        let value = WithOptU32 { value: None };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_u32__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_string_v0() {
+        let value = WithOptStr {
+            name: Some("Alice".into()),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_string__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_string_v1() {
+        let value = WithOptStr { name: None };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_string__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_struct_v0() {
+        let value = WithOptAddr {
+            addr: Some(Address {
+                city: "Portland".into(),
+                zip: 97201,
+            }),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_struct__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_struct_v1() {
+        let value = WithOptAddr { addr: None };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_struct__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn multi_options() {
+        let value = MultiOpt {
+            a: Some(7),
+            b: "hello".into(),
+            c: None,
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "multi_options",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_u32_v0() {
+        let value = Nums { vals: vec![1, 2, 3] };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_u32__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_u32_v1() {
+        let value = Nums { vals: vec![] };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_u32__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_string_v0() {
+        let value = Names {
+            items: vec!["hello".into(), "world".into()],
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_string__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_string_v1() {
+        let value = Names { items: vec![] };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_string__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_nested_struct() {
+        let value = AddressList {
+            addrs: vec![
+                Address { city : "Portland".into(), zip : 97201 }, Address { city :
+                "Seattle".into(), zip : 98101 },
+            ],
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_nested_struct",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn shared_inner_type() {
+        let value = TwoAddresses {
+            home: Address {
+                city: "Portland".into(),
+                zip: 97201,
+            },
+            work: Address {
+                city: "Seattle".into(),
+                zip: 98101,
+            },
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "shared_inner_type",
             &kajit::postcard::KajitPostcard,
             &value,
         );
@@ -744,6 +1241,22 @@ mod prop {
         assert_prop_case(&marker);
     }
     #[test]
+    fn enum_external() {
+        let marker = Animal::Cat;
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn enum_as_struct_field() {
+        let marker = Zoo {
+            name: "City Zoo".into(),
+            star: Animal::Dog {
+                name: "Rex".into(),
+                good_boy: true,
+            },
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
     fn tuple_pair() {
         let marker = (42u32, "Alice".to_string());
         assert_prop_case(&marker);
@@ -759,6 +1272,84 @@ mod prop {
     fn vec_scalar_large() {
         let marker = ScalarVec {
             values: (0..2048).map(|i| i as u32).collect(),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn flatten() {
+        let marker = Document {
+            title: "Hello".into(),
+            meta: Metadata {
+                version: 1,
+                author: "Amos".into(),
+            },
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn option_u32() {
+        let marker = WithOptU32 { value: Some(42) };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn option_string() {
+        let marker = WithOptStr {
+            name: Some("Alice".into()),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn option_struct() {
+        let marker = WithOptAddr {
+            addr: Some(Address {
+                city: "Portland".into(),
+                zip: 97201,
+            }),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn multi_options() {
+        let marker = MultiOpt {
+            a: Some(7),
+            b: "hello".into(),
+            c: None,
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn vec_u32() {
+        let marker = Nums { vals: vec![1, 2, 3] };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn vec_string() {
+        let marker = Names {
+            items: vec!["hello".into(), "world".into()],
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn vec_nested_struct() {
+        let marker = AddressList {
+            addrs: vec![
+                Address { city : "Portland".into(), zip : 97201 }, Address { city :
+                "Seattle".into(), zip : 98101 },
+            ],
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn shared_inner_type() {
+        let marker = TwoAddresses {
+            home: Address {
+                city: "Portland".into(),
+                zip: 97201,
+            },
+            work: Address {
+                city: "Seattle".into(),
+                zip: 98101,
+            },
         };
         assert_prop_case(&marker);
     }
