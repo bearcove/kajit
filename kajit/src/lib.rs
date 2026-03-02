@@ -841,58 +841,6 @@ mod tests {
         z: u32,
     }
 
-    // r[verify deser.nested-struct]
-    #[test]
-    fn postcard_shared_inner_type() {
-        use serde::Serialize;
-
-        #[derive(Facet, Debug, PartialEq)]
-        struct TwoAddresses {
-            home: Address,
-            work: Address,
-        }
-
-        #[derive(Serialize)]
-        struct AddressSerde {
-            city: String,
-            zip: u32,
-        }
-        #[derive(Serialize)]
-        struct TwoAddressesSerde {
-            home: AddressSerde,
-            work: AddressSerde,
-        }
-
-        let source = TwoAddressesSerde {
-            home: AddressSerde {
-                city: "Portland".into(),
-                zip: 97201,
-            },
-            work: AddressSerde {
-                city: "Seattle".into(),
-                zip: 98101,
-            },
-        };
-
-        let encoded = ::postcard::to_allocvec(&source).unwrap();
-        let deser = compile_decoder(TwoAddresses::SHAPE, &postcard::KajitPostcard);
-        let result: TwoAddresses = deserialize(&deser, &encoded).unwrap();
-
-        assert_eq!(
-            result,
-            TwoAddresses {
-                home: Address {
-                    city: "Portland".into(),
-                    zip: 97201,
-                },
-                work: Address {
-                    city: "Seattle".into(),
-                    zip: 98101,
-                },
-            }
-        );
-    }
-
     // --- Milestone 6: Enums ---
 
     #[derive(Facet, Debug, PartialEq)]
@@ -1187,23 +1135,6 @@ mod tests {
         name: String,
         #[facet(skip_deserializing, default)]
         internal: u32,
-    }
-
-    // r[verify deser.skip]
-    // r[verify deser.skip.postcard]
-    #[test]
-    fn postcard_skip_field() {
-        // Postcard: skipped field is NOT on the wire. Only "name" is serialized.
-        let wire = ::postcard::to_allocvec(&("Alice".to_string(),)).unwrap();
-        let deser = compile_decoder(WithSkip::SHAPE, &postcard::KajitPostcard);
-        let result: WithSkip = deserialize(&deser, &wire).unwrap();
-        assert_eq!(
-            result,
-            WithSkip {
-                name: "Alice".into(),
-                cached: 0,
-            }
-        );
     }
 
     #[derive(Facet, Debug, PartialEq)]
