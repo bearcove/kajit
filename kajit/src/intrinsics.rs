@@ -1158,25 +1158,70 @@ pub unsafe extern "C" fn kajit_encode_char(ctx: *mut EncodeContext, field_ptr: *
 pub fn known_intrinsics() -> Vec<(&'static str, crate::ir::IntrinsicFn)> {
     use crate::ir::IntrinsicFn;
     vec![
-        ("kajit_read_bool", IntrinsicFn(kajit_read_bool as *const () as usize)),
-        ("kajit_read_u8", IntrinsicFn(kajit_read_u8 as *const () as usize)),
-        ("kajit_read_u16", IntrinsicFn(kajit_read_u16 as *const () as usize)),
+        (
+            "kajit_read_bool",
+            IntrinsicFn(kajit_read_bool as *const () as usize),
+        ),
+        (
+            "kajit_read_u8",
+            IntrinsicFn(kajit_read_u8 as *const () as usize),
+        ),
+        (
+            "kajit_read_u16",
+            IntrinsicFn(kajit_read_u16 as *const () as usize),
+        ),
         (
             "kajit_read_varint_u32",
             IntrinsicFn(kajit_read_varint_u32 as *const () as usize),
         ),
-        ("kajit_read_u64", IntrinsicFn(kajit_read_u64 as *const () as usize)),
-        ("kajit_read_u128", IntrinsicFn(kajit_read_u128 as *const () as usize)),
-        ("kajit_read_usize", IntrinsicFn(kajit_read_usize as *const () as usize)),
-        ("kajit_read_i8", IntrinsicFn(kajit_read_i8 as *const () as usize)),
-        ("kajit_read_i16", IntrinsicFn(kajit_read_i16 as *const () as usize)),
-        ("kajit_read_i32", IntrinsicFn(kajit_read_i32 as *const () as usize)),
-        ("kajit_read_i64", IntrinsicFn(kajit_read_i64 as *const () as usize)),
-        ("kajit_read_i128", IntrinsicFn(kajit_read_i128 as *const () as usize)),
-        ("kajit_read_isize", IntrinsicFn(kajit_read_isize as *const () as usize)),
-        ("kajit_read_f32", IntrinsicFn(kajit_read_f32 as *const () as usize)),
-        ("kajit_read_f64", IntrinsicFn(kajit_read_f64 as *const () as usize)),
-        ("kajit_read_char", IntrinsicFn(kajit_read_char as *const () as usize)),
+        (
+            "kajit_read_u64",
+            IntrinsicFn(kajit_read_u64 as *const () as usize),
+        ),
+        (
+            "kajit_read_u128",
+            IntrinsicFn(kajit_read_u128 as *const () as usize),
+        ),
+        (
+            "kajit_read_usize",
+            IntrinsicFn(kajit_read_usize as *const () as usize),
+        ),
+        (
+            "kajit_read_i8",
+            IntrinsicFn(kajit_read_i8 as *const () as usize),
+        ),
+        (
+            "kajit_read_i16",
+            IntrinsicFn(kajit_read_i16 as *const () as usize),
+        ),
+        (
+            "kajit_read_i32",
+            IntrinsicFn(kajit_read_i32 as *const () as usize),
+        ),
+        (
+            "kajit_read_i64",
+            IntrinsicFn(kajit_read_i64 as *const () as usize),
+        ),
+        (
+            "kajit_read_i128",
+            IntrinsicFn(kajit_read_i128 as *const () as usize),
+        ),
+        (
+            "kajit_read_isize",
+            IntrinsicFn(kajit_read_isize as *const () as usize),
+        ),
+        (
+            "kajit_read_f32",
+            IntrinsicFn(kajit_read_f32 as *const () as usize),
+        ),
+        (
+            "kajit_read_f64",
+            IntrinsicFn(kajit_read_f64 as *const () as usize),
+        ),
+        (
+            "kajit_read_char",
+            IntrinsicFn(kajit_read_char as *const () as usize),
+        ),
         (
             "kajit_read_postcard_string",
             IntrinsicFn(kajit_read_postcard_string as *const () as usize),
@@ -1229,9 +1274,18 @@ pub fn known_intrinsics() -> Vec<(&'static str, crate::ir::IntrinsicFn)> {
             "kajit_string_validate_alloc_copy",
             IntrinsicFn(kajit_string_validate_alloc_copy as *const () as usize),
         ),
-        ("kajit_vec_alloc", IntrinsicFn(kajit_vec_alloc as *const () as usize)),
-        ("kajit_vec_grow", IntrinsicFn(kajit_vec_grow as *const () as usize)),
-        ("kajit_vec_free", IntrinsicFn(kajit_vec_free as *const () as usize)),
+        (
+            "kajit_vec_alloc",
+            IntrinsicFn(kajit_vec_alloc as *const () as usize),
+        ),
+        (
+            "kajit_vec_grow",
+            IntrinsicFn(kajit_vec_grow as *const () as usize),
+        ),
+        (
+            "kajit_vec_free",
+            IntrinsicFn(kajit_vec_free as *const () as usize),
+        ),
         (
             "kajit_field_default_trait",
             IntrinsicFn(kajit_field_default_trait as *const () as usize),
@@ -1244,7 +1298,10 @@ pub fn known_intrinsics() -> Vec<(&'static str, crate::ir::IntrinsicFn)> {
             "kajit_field_default_indirect",
             IntrinsicFn(kajit_field_default_indirect as *const () as usize),
         ),
-        ("kajit_map_build", IntrinsicFn(kajit_map_build as *const () as usize)),
+        (
+            "kajit_map_build",
+            IntrinsicFn(kajit_map_build as *const () as usize),
+        ),
         (
             "kajit_output_grow",
             IntrinsicFn(kajit_output_grow as *const () as usize),

@@ -478,9 +478,10 @@ impl AdapterFunction {
                 }
                 for operand in &operands {
                     if let OperandConstraint::FixedReg(preg) = operand.constraint()
-                        && operand.kind() == OperandKind::Def {
-                            clobbers.remove(preg);
-                        }
+                        && operand.kind() == OperandKind::Def
+                    {
+                        clobbers.remove(preg);
+                    }
                 }
                 adapter_insts.push(AdapterInst {
                     operands,
@@ -743,8 +744,8 @@ mod tests {
     use super::*;
     use crate::compiler;
     use crate::ir::IntrinsicRegistry;
-    use crate::linearize::linearize;
     use crate::ir_parse::parse_ir;
+    use crate::linearize::linearize;
     use facet::Facet;
 
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Facet)]
@@ -813,7 +814,8 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let mut func = parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
+        let mut func =
+            parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
         let lin = linearize(&mut func);
         let ra = crate::regalloc_mir::lower_linear_ir(&lin);
         let _alloc = allocate_program(&ra).unwrap_or_else(|e| {
@@ -850,7 +852,8 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let mut func = parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
+        let mut func =
+            parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
         crate::ir_passes::run_default_passes(&mut func);
         let lin = linearize(&mut func);
         let ra = crate::regalloc_mir::lower_linear_ir(&lin);

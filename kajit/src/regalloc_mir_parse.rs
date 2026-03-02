@@ -84,9 +84,7 @@ fn error_code<'src>() -> impl Parser<'src, &'src str, ErrorCode, Extra<'src>> + 
 }
 
 fn vreg<'src>() -> impl Parser<'src, &'src str, VReg, Extra<'src>> + Clone {
-    just("v")
-        .ignore_then(uint32())
-        .map(VReg::new)
+    just("v").ignore_then(uint32()).map(VReg::new)
 }
 
 fn block_id<'src>() -> impl Parser<'src, &'src str, BlockId, Extra<'src>> + Clone {
@@ -111,8 +109,8 @@ fn fixed_reg<'src>() -> impl Parser<'src, &'src str, FixedReg, Extra<'src>> + Cl
 }
 
 /// Parse an operand: `v0:gpr`, `v1:simd/arg2`, `v2:gpr/ret0`
-fn operand<'src>() -> impl Parser<'src, &'src str, (VReg, RegClass, Option<FixedReg>), Extra<'src>> + Clone
-{
+fn operand<'src>()
+-> impl Parser<'src, &'src str, (VReg, RegClass, Option<FixedReg>), Extra<'src>> + Clone {
     vreg()
         .then_ignore(just(":"))
         .then(reg_class())
@@ -122,21 +120,20 @@ fn operand<'src>() -> impl Parser<'src, &'src str, (VReg, RegClass, Option<Fixed
 
 /// Parse clobbers: `!gpr`, `!simd`, `!gpr,simd`
 fn clobbers<'src>() -> impl Parser<'src, &'src str, RaClobbers, Extra<'src>> + Clone {
-    just("!")
-        .ignore_then(choice((
-            just("gpr,simd").to(RaClobbers {
-                caller_saved_gpr: true,
-                caller_saved_simd: true,
-            }),
-            just("gpr").to(RaClobbers {
-                caller_saved_gpr: true,
-                caller_saved_simd: false,
-            }),
-            just("simd").to(RaClobbers {
-                caller_saved_gpr: false,
-                caller_saved_simd: true,
-            }),
-        )))
+    just("!").ignore_then(choice((
+        just("gpr,simd").to(RaClobbers {
+            caller_saved_gpr: true,
+            caller_saved_simd: true,
+        }),
+        just("gpr").to(RaClobbers {
+            caller_saved_gpr: true,
+            caller_saved_simd: false,
+        }),
+        just("simd").to(RaClobbers {
+            caller_saved_gpr: false,
+            caller_saved_simd: true,
+        }),
+    )))
 }
 
 /// Parse an instruction line.
@@ -297,8 +294,10 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstRaOp, Extra<'src>> + Clone
     ));
 
     let unaryops = choice((
-        just("ZigzagDecode { wide: true }").to(AstRaOp::UnaryOp(UnaryOpKind::ZigzagDecode { wide: true })),
-        just("ZigzagDecode { wide: false }").to(AstRaOp::UnaryOp(UnaryOpKind::ZigzagDecode { wide: false })),
+        just("ZigzagDecode { wide: true }")
+            .to(AstRaOp::UnaryOp(UnaryOpKind::ZigzagDecode { wide: true })),
+        just("ZigzagDecode { wide: false }")
+            .to(AstRaOp::UnaryOp(UnaryOpKind::ZigzagDecode { wide: false })),
         just("SignExtend { from_width: ")
             .ignore_then(width())
             .then_ignore(just(" }"))
@@ -354,11 +353,7 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, RaTerminator, Extra<'src>>
     let jump_table = just("jump_table ")
         .ignore_then(vreg())
         .then_ignore(just(" ["))
-        .then(
-            block_id()
-                .separated_by(just(", "))
-                .collect::<Vec<_>>(),
-        )
+        .then(block_id().separated_by(just(", ")).collect::<Vec<_>>())
         .then_ignore(just("], default "))
         .then(block_id())
         .map(|((predicate, targets), default)| RaTerminator::JumpTable {
@@ -372,15 +367,14 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, RaTerminator, Extra<'src>>
 
 /// Parse successor edges: `succs: b1 [v0, v1] b2 [v2]` or `succs: (none)`
 fn succs<'src>() -> impl Parser<'src, &'src str, Vec<RaEdge>, Extra<'src>> + Clone {
-    let none = just("succs:").then(ws()).then(just("(none)")).to(Vec::new());
+    let none = just("succs:")
+        .then(ws())
+        .then(just("(none)"))
+        .to(Vec::new());
     let edge = block_id()
         .then(
             just(" [")
-                .ignore_then(
-                    vreg()
-                        .separated_by(just(", "))
-                        .collect::<Vec<_>>(),
-                )
+                .ignore_then(vreg().separated_by(just(", ")).collect::<Vec<_>>())
                 .then_ignore(just("]"))
                 .or_not(),
         )
@@ -388,8 +382,12 @@ fn succs<'src>() -> impl Parser<'src, &'src str, Vec<RaEdge>, Extra<'src>> + Clo
             to,
             args: args.unwrap_or_default(),
         });
-    let some = just("succs:")
-        .ignore_then(ws().ignore_then(edge).repeated().at_least(1).collect::<Vec<_>>());
+    let some = just("succs:").ignore_then(
+        ws().ignore_then(edge)
+            .repeated()
+            .at_least(1)
+            .collect::<Vec<_>>(),
+    );
     none.or(some)
 }
 
@@ -429,16 +427,14 @@ fn block<'src>() -> impl Parser<'src, &'src str, AstBlock, Extra<'src>> + Clone 
         .then(terminator())
         .then_ignore(ws())
         .then(succs())
-        .map(
-            |(((((id, params), preds), insts), term), succs)| AstBlock {
-                id,
-                params: params.unwrap_or_default(),
-                preds: preds.unwrap_or_default(),
-                insts,
-                term,
-                succs,
-            },
-        )
+        .map(|(((((id, params), preds), insts), term), succs)| AstBlock {
+            id,
+            params: params.unwrap_or_default(),
+            preds: preds.unwrap_or_default(),
+            insts,
+            term,
+            succs,
+        })
 }
 
 #[derive(Debug, Clone)]

@@ -162,11 +162,7 @@ impl std::fmt::Display for RaProgram {
 
 impl std::fmt::Display for RaFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "ra_func @{} {{",
-            self.lambda_id.index()
-        )?;
+        writeln!(f, "ra_func @{} {{", self.lambda_id.index())?;
         for block in &self.blocks {
             fmt_block(f, block)?;
         }
@@ -848,8 +844,7 @@ fn coalesce_uncond_branch_tail_copies(block: &mut RaBlock) {
             rewrote = true;
         }
     }
-    if !rewrote {
-    }
+    if !rewrote {}
     // Keep instruction/operand indexing fully stable for backend/regalloc.
     // We coalesce by rewriting edge args only; the original tail copy remains
     // in place (possibly dead) to preserve all mapping invariants.

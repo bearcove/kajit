@@ -9,7 +9,7 @@ use chumsky::prelude::*;
 
 use crate::context::ErrorCode;
 use crate::ir::{
-    Arena, IntrinsicFn, IntrinsicRegistry, InputPort, IrFunc, IrOp, LambdaId, Node, NodeId,
+    Arena, InputPort, IntrinsicFn, IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId,
     NodeKind, OutputPort, OutputRef, PortKind, PortSource, Region, RegionArg, RegionArgRef,
     RegionId, RegionResult, SlotId, VReg, Width,
 };
@@ -88,9 +88,9 @@ struct AstRegion {
 
 #[derive(Debug, Clone)]
 enum AstRegionArg {
-    Data(u16),   // arg0, arg1, ...
-    Cursor,      // %cs
-    Output,      // %os
+    Data(u16), // arg0, arg1, ...
+    Cursor,    // %cs
+    Output,    // %os
 }
 
 /// A parsed lambda (unresolved).
@@ -170,8 +170,12 @@ fn error_code<'src>() -> impl Parser<'src, &'src str, ErrorCode, Extra<'src>> + 
 /// Parse a source reference.
 fn source<'src>() -> impl Parser<'src, &'src str, AstSource, Extra<'src>> + Clone {
     // Order matters: try more specific patterns first
-    let cursor_node = just("%cs:n").ignore_then(uint32()).map(AstSource::CursorNode);
-    let output_node = just("%os:n").ignore_then(uint32()).map(AstSource::OutputNode);
+    let cursor_node = just("%cs:n")
+        .ignore_then(uint32())
+        .map(AstSource::CursorNode);
+    let output_node = just("%os:n")
+        .ignore_then(uint32())
+        .map(AstSource::OutputNode);
     let cursor_arg = just("%cs:arg").to(AstSource::CursorArg);
     let output_arg = just("%os:arg").to(AstSource::OutputArg);
     let region_arg = just("arg").ignore_then(uint16()).map(AstSource::RegionArg);
@@ -263,13 +267,23 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .then_ignore(just(",").then(ws()))
             .then(width())
             .then_ignore(just(")"))
-            .map(|(o, w)| AstOp::Resolved(IrOp::WriteToField { offset: o, width: w })),
+            .map(|(o, w)| {
+                AstOp::Resolved(IrOp::WriteToField {
+                    offset: o,
+                    width: w,
+                })
+            }),
         just("ReadFromField(offset=")
             .ignore_then(uint32())
             .then_ignore(just(",").then(ws()))
             .then(width())
             .then_ignore(just(")"))
-            .map(|(o, w)| AstOp::Resolved(IrOp::ReadFromField { offset: o, width: w })),
+            .map(|(o, w)| {
+                AstOp::Resolved(IrOp::ReadFromField {
+                    offset: o,
+                    width: w,
+                })
+            }),
         just("SaveOutPtr").to(AstOp::Resolved(IrOp::SaveOutPtr)),
         just("SetOutPtr").to(AstOp::Resolved(IrOp::SetOutPtr)),
     ));
@@ -278,15 +292,27 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
         just("SlotAddr(")
             .ignore_then(uint32())
             .then_ignore(just(")"))
-            .map(|s| AstOp::Resolved(IrOp::SlotAddr { slot: SlotId::new(s) })),
+            .map(|s| {
+                AstOp::Resolved(IrOp::SlotAddr {
+                    slot: SlotId::new(s),
+                })
+            }),
         just("WriteToSlot(")
             .ignore_then(uint32())
             .then_ignore(just(")"))
-            .map(|s| AstOp::Resolved(IrOp::WriteToSlot { slot: SlotId::new(s) })),
+            .map(|s| {
+                AstOp::Resolved(IrOp::WriteToSlot {
+                    slot: SlotId::new(s),
+                })
+            }),
         just("ReadFromSlot(")
             .ignore_then(uint32())
             .then_ignore(just(")"))
-            .map(|s| AstOp::Resolved(IrOp::ReadFromSlot { slot: SlotId::new(s) })),
+            .map(|s| {
+                AstOp::Resolved(IrOp::ReadFromSlot {
+                    slot: SlotId::new(s),
+                })
+            }),
     ));
 
     let arith_ops = choice((
@@ -318,7 +344,10 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .then_ignore(just(",").then(ws()).then(just("field_offset=")))
             .then(uint32())
             .then_ignore(just(")"))
-            .map(|(func, fo)| AstOp::CallIntrinsic { func, field_offset: fo }),
+            .map(|(func, fo)| AstOp::CallIntrinsic {
+                func,
+                field_offset: fo,
+            }),
         just("CallPure(")
             .ignore_then(intrinsic_ref())
             .then_ignore(just(")"))
@@ -378,7 +407,12 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
 
         let gamma_node = just("n")
             .ignore_then(uint32())
-            .then_ignore(ws().then(just("=")).then(ws()).then(just("gamma")).then(ws()))
+            .then_ignore(
+                ws().then(just("="))
+                    .then(ws())
+                    .then(just("gamma"))
+                    .then(ws()),
+            )
             .then_ignore(just("[").then(ws()))
             .then(
                 // pred: <source>
@@ -430,7 +464,12 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
 
         let theta_node = just("n")
             .ignore_then(uint32())
-            .then_ignore(ws().then(just("=")).then(ws()).then(just("theta")).then(ws()))
+            .then_ignore(
+                ws().then(just("="))
+                    .then(ws())
+                    .then(just("theta"))
+                    .then(ws()),
+            )
             .then(bracketed_list(source()))
             .then_ignore(ws().then(just("{")).then(ws()))
             .then(
@@ -452,7 +491,12 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
 
         let apply_node = just("n")
             .ignore_then(uint32())
-            .then_ignore(ws().then(just("=")).then(ws()).then(just("apply")).then(ws()))
+            .then_ignore(
+                ws().then(just("="))
+                    .then(ws())
+                    .then(just("apply"))
+                    .then(ws()),
+            )
             .then_ignore(just("@"))
             .then(uint32())
             .then_ignore(ws())
@@ -558,10 +602,7 @@ pub fn parse_ir(
     let result = program().parse(input);
 
     let lambdas = result.into_result().map_err(|errs| {
-        let msgs: Vec<String> = errs
-            .into_iter()
-            .map(|e| format!("{e}"))
-            .collect();
+        let msgs: Vec<String> = errs.into_iter().map(|e| format!("{e}")).collect();
         ParseError {
             message: msgs.join("\n"),
         }
@@ -700,7 +741,9 @@ fn resolve_region(
     // Actually, the text format lists nodes in order, and sources always reference
     // earlier nodes or region args. So we can build them sequentially.
     for ast_node in &ast.nodes {
-        let node_id = resolve_node(ast_node, region_id, func, node_map, max_vreg, max_slot, registry)?;
+        let node_id = resolve_node(
+            ast_node, region_id, func, node_map, max_vreg, max_slot, registry,
+        )?;
         func.regions[region_id].nodes.push(node_id);
     }
 
@@ -770,9 +813,7 @@ fn resolve_node(
                         .iter()
                         .filter(|i| i.kind == PortKind::Data)
                         .count();
-                    let has_result = resolved_outputs
-                        .iter()
-                        .any(|o| o.kind == PortKind::Data);
+                    let has_result = resolved_outputs.iter().any(|o| o.kind == PortKind::Data);
                     IrOp::CallIntrinsic {
                         func: f,
                         arg_count: data_inputs as u8,
@@ -1004,15 +1045,16 @@ fn resolve_source(
                 for (idx, out) in node.outputs.iter().enumerate() {
                     if out.kind == PortKind::Data
                         && let Some(vreg) = out.vreg
-                            && vreg.index() == *v as usize {
-                                return (
-                                    PortSource::Node(OutputRef {
-                                        node: node_id,
-                                        index: idx as u16,
-                                    }),
-                                    PortKind::Data,
-                                );
-                            }
+                        && vreg.index() == *v as usize
+                    {
+                        return (
+                            PortSource::Node(OutputRef {
+                                node: node_id,
+                                index: idx as u16,
+                            }),
+                            PortKind::Data,
+                        );
+                    }
                 }
             }
             // Fallback: might be referencing a region arg with a vreg.
@@ -1138,7 +1180,7 @@ fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseErr
             // We'll set them to 0/false here and patch them in resolve_node.
             Ok(IrOp::CallIntrinsic {
                 func: intrinsic,
-                arg_count: 0,    // patched later from actual inputs
+                arg_count: 0,      // patched later from actual inputs
                 has_result: false, // patched later from actual outputs
                 field_offset: *field_offset,
             })
@@ -1198,7 +1240,7 @@ lambda @0 (shape: "u8") {
 
         let root_body = func.root_body();
         let region = &func.regions[root_body];
-        assert_eq!(region.args.len(), 2);  // %cs, %os
+        assert_eq!(region.args.len(), 2); // %cs, %os
         assert_eq!(region.nodes.len(), 3); // BoundsCheck, ReadBytes, WriteToField
         assert_eq!(region.results.len(), 2);
     }
@@ -1299,7 +1341,10 @@ lambda @0 (shape: "u8") {
         let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
-        assert_eq!(text1, text2, "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}");
+        assert_eq!(
+            text1, text2,
+            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
     }
 
     #[test]
@@ -1326,7 +1371,10 @@ lambda @0 (shape: "u8") {
         let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
-        assert_eq!(text1, text2, "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}");
+        assert_eq!(
+            text1, text2,
+            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
     }
 
     #[test]
@@ -1352,7 +1400,10 @@ lambda @0 (shape: "u8") {
         let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
-        assert_eq!(text1, text2, "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}");
+        assert_eq!(
+            text1, text2,
+            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
     }
 
     #[test]
@@ -1373,7 +1424,11 @@ lambda @0 (shape: "u8") {
             Err(e) => e,
             Ok(_) => panic!("expected error for unknown intrinsic"),
         };
-        assert!(err.message.contains("nonexistent"), "error was: {}", err.message);
+        assert!(
+            err.message.contains("nonexistent"),
+            "error was: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -1420,7 +1475,12 @@ lambda @0 (shape: "u8") {
             let _ = rb.binop(IrOp::Xor, a, b);
             let _ = rb.binop(IrOp::CmpNe, a, b);
             let _ = rb.unary(IrOp::ZigzagDecode { wide: false }, a);
-            let _ = rb.unary(IrOp::SignExtend { from_width: Width::W4 }, a);
+            let _ = rb.unary(
+                IrOp::SignExtend {
+                    from_width: Width::W4,
+                },
+                a,
+            );
 
             // Stack ops
             let slot = rb.alloc_slot();
@@ -1435,7 +1495,10 @@ lambda @0 (shape: "u8") {
         let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
-        assert_eq!(text1, text2, "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}");
+        assert_eq!(
+            text1, text2,
+            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
     }
 
     #[test]
@@ -1463,6 +1526,9 @@ lambda @0 (shape: "u8") {
         let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
-        assert_eq!(text1, text2, "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}");
+        assert_eq!(
+            text1, text2,
+            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
     }
 }
