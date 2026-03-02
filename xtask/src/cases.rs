@@ -345,6 +345,23 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected_error_code: None,
         },
         JsonInputCase {
+            name: "unknown_keys_skipped",
+            ty: quote!(Friend),
+            input: r#"{"age": 42, "extra": true, "name": "Alice"}"#,
+            expected: Some(quote!(Friend {
+                age: 42,
+                name: "Alice".into()
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "empty_object_missing_fields",
+            ty: quote!(Friend),
+            input: r#"{}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::MissingRequiredField)),
+        },
+        JsonInputCase {
             name: "nested_struct_reversed_keys",
             ty: quote!(Person),
             input: r#"{"address": {"zip": 97201, "city": "Portland"}, "age": 30, "name": "Alice"}"#,

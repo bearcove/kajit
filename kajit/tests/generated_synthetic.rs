@@ -756,6 +756,24 @@ mod json_input {
         );
     }
     #[test]
+    fn unknown_keys_skipped() {
+        assert_json_input_case::<
+            Friend,
+        >(
+            b"{\"age\": 42, \"extra\": true, \"name\": \"Alice\"}",
+            Friend {
+                age: 42,
+                name: "Alice".into(),
+            },
+        );
+    }
+    #[test]
+    fn empty_object_missing_fields() {
+        assert_json_input_err_code::<
+            Friend,
+        >(b"{}", kajit::context::ErrorCode::MissingRequiredField);
+    }
+    #[test]
     fn nested_struct_reversed_keys() {
         assert_json_input_case::<
             Person,

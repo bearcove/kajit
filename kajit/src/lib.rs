@@ -598,32 +598,6 @@ mod tests {
         );
     }
 
-    // r[verify deser.json.struct.unknown-keys]
-    #[test]
-    fn json_unknown_keys_skipped() {
-        let input = br#"{"age": 42, "extra": true, "name": "Alice"}"#;
-        let deser = compile_decoder(Friend::SHAPE, &json::KajitJson);
-        let result: Friend = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Friend {
-                age: 42,
-                name: "Alice".into()
-            }
-        );
-    }
-
-    // r[verify deser.json.struct]
-    #[test]
-    fn json_empty_object_missing_fields() {
-        let input = b"{}";
-        let deser = compile_decoder(Friend::SHAPE, &json::KajitJson);
-        let result = deserialize::<Friend>(&deser, input);
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert_eq!(err.code, context::ErrorCode::MissingRequiredField);
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct BorrowedFriend<'a> {
         age: u32,
