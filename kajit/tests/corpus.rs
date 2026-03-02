@@ -215,6 +215,18 @@ struct CamelCaseStruct {
     user_name: String,
     birth_year: u32,
 }
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(transparent)]
+struct Wrapper(u32);
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(transparent)]
+struct StringWrapper(
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    String,
+);
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(transparent)]
+struct StructWrapper(Friend);
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
 #[facet(deny_unknown_fields)]
 struct Strict {
@@ -1027,6 +1039,56 @@ mod json {
         assert_json_case(value);
     }
     #[test]
+    fn rename_field() {
+        let value = RenameField {
+            name: "Alice".into(),
+            age: 30,
+        };
+        assert_codegen_snapshots(
+            "json",
+            "rename_field",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn transparent_scalar() {
+        let value = Wrapper(42);
+        assert_codegen_snapshots(
+            "json",
+            "transparent_scalar",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn transparent_string() {
+        let value = StringWrapper("hello".into());
+        assert_codegen_snapshots(
+            "json",
+            "transparent_string",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn transparent_composite() {
+        let value = StructWrapper(Friend {
+            age: 25,
+            name: "Eve".into(),
+        });
+        assert_codegen_snapshots(
+            "json",
+            "transparent_composite",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
     fn shared_inner_type() {
         let value = TwoAddresses {
             home: Address {
@@ -1573,6 +1635,56 @@ mod postcard {
         assert_postcard_case(value);
     }
     #[test]
+    fn rename_field() {
+        let value = RenameField {
+            name: "Alice".into(),
+            age: 30,
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "rename_field",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn transparent_scalar() {
+        let value = Wrapper(42);
+        assert_codegen_snapshots(
+            "postcard",
+            "transparent_scalar",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn transparent_string() {
+        let value = StringWrapper("hello".into());
+        assert_codegen_snapshots(
+            "postcard",
+            "transparent_string",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn transparent_composite() {
+        let value = StructWrapper(Friend {
+            age: 25,
+            name: "Eve".into(),
+        });
+        assert_codegen_snapshots(
+            "postcard",
+            "transparent_composite",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
     fn shared_inner_type() {
         let value = TwoAddresses {
             home: Address {
@@ -1845,6 +1957,32 @@ mod prop {
                 "Seattle".into(), zip : 98101 },
             ],
         };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn rename_field() {
+        let marker = RenameField {
+            name: "Alice".into(),
+            age: 30,
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn transparent_scalar() {
+        let marker = Wrapper(42);
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn transparent_string() {
+        let marker = StringWrapper("hello".into());
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn transparent_composite() {
+        let marker = StructWrapper(Friend {
+            age: 25,
+            name: "Eve".into(),
+        });
         assert_prop_case(&marker);
     }
     #[test]

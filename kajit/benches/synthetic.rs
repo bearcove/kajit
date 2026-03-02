@@ -214,6 +214,18 @@ struct CamelCaseStruct {
     user_name: String,
     birth_year: u32,
 }
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(transparent)]
+struct Wrapper(u32);
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(transparent)]
+struct StringWrapper(
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    String,
+);
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(transparent)]
+struct StructWrapper(Friend);
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
 #[facet(deny_unknown_fields)]
 struct Strict {
@@ -738,6 +750,24 @@ fn main() {
                 "Seattle".into(), zip : 98101 },
             ],
         },
+    );
+    register_bench_case(
+        &mut v,
+        "rename_field",
+        RenameField {
+            name: "Alice".into(),
+            age: 30,
+        },
+    );
+    register_bench_case(&mut v, "transparent_scalar", Wrapper(42));
+    register_bench_case(&mut v, "transparent_string", StringWrapper("hello".into()));
+    register_bench_case(
+        &mut v,
+        "transparent_composite",
+        StructWrapper(Friend {
+            age: 25,
+            name: "Eve".into(),
+        }),
     );
     register_bench_case(
         &mut v,

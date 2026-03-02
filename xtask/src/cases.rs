@@ -252,6 +252,20 @@ pub(crate) fn types_rs() -> TokenStream {
             birth_year: u32,
         }
 
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        #[facet(transparent)]
+        struct Wrapper(u32);
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        #[facet(transparent)]
+        struct StringWrapper(
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")] String,
+        );
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        #[facet(transparent)]
+        struct StructWrapper(Friend);
+
         #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
         #[facet(deny_unknown_fields)]
         struct Strict {
@@ -721,6 +735,36 @@ pub(crate) fn cases() -> Vec<Case> {
                     },
                 ]
             })],
+            inputs: vec![],
+        },
+        Case {
+            name: "rename_field",
+            ty: quote!(RenameField),
+            values: vec![quote!(RenameField {
+                name: "Alice".into(),
+                age: 30
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "transparent_scalar",
+            ty: quote!(Wrapper),
+            values: vec![quote!(Wrapper(42))],
+            inputs: vec![],
+        },
+        Case {
+            name: "transparent_string",
+            ty: quote!(StringWrapper),
+            values: vec![quote!(StringWrapper("hello".into()))],
+            inputs: vec![],
+        },
+        Case {
+            name: "transparent_composite",
+            ty: quote!(StructWrapper),
+            values: vec![quote!(StructWrapper(Friend {
+                age: 25,
+                name: "Eve".into()
+            }))],
             inputs: vec![],
         },
         Case {
