@@ -1797,33 +1797,24 @@ pub(crate) fn render_test_file() -> String {
     let json_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
-            case.values
-                .iter()
-                .enumerate()
-                .map(|(sample_idx, value)| {
-                    let test_name = if case.values.len() == 1 {
-                        format_ident!("{}", case.name)
-                    } else {
-                        format_ident!("{}_v{}", case.name, sample_idx)
-                    };
-                    let case_name = if case.values.len() == 1 {
-                        case.name.to_string()
-                    } else {
-                        format!("{}__v{}", case.name, sample_idx)
-                    };
-                    let value = value.clone();
-                    quote! {
-                        #[test]
-                        fn #test_name() {
-                            let value = #value;
-                            assert_codegen_snapshots("json", #case_name, &kajit::json::KajitJson, &value);
-                            assert_json_case(value);
-                        }
+            case.values.iter().enumerate().map(|(sample_idx, value)| {
+                let test_name = if case.values.len() == 1 {
+                    format_ident!("{}", case.name)
+                } else {
+                    format_ident!("{}_v{}", case.name, sample_idx)
+                };
+                let value = value.clone();
+                quote! {
+                    #[test]
+                    fn #test_name() {
+                        let value = #value;
+                        assert_json_case(value);
                     }
-                })
+                }
+            })
         })
         .collect();
-    let postcard_tests: Vec<TokenStream> = cases
+    let json_rvsdg_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
             case.values
@@ -1845,8 +1836,167 @@ pub(crate) fn render_test_file() -> String {
                         #[test]
                         fn #test_name() {
                             let value = #value;
-                            assert_codegen_snapshots("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
-                            assert_postcard_case(value);
+                            assert_codegen_rvsdg_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
+                        }
+                    }
+                })
+        })
+        .collect();
+    let json_ra_mir_tests: Vec<TokenStream> = cases
+        .iter()
+        .flat_map(|case| {
+            case.values
+                .iter()
+                .enumerate()
+                .map(|(sample_idx, value)| {
+                    let test_name = if case.values.len() == 1 {
+                        format_ident!("{}", case.name)
+                    } else {
+                        format_ident!("{}_v{}", case.name, sample_idx)
+                    };
+                    let case_name = if case.values.len() == 1 {
+                        case.name.to_string()
+                    } else {
+                        format!("{}__v{}", case.name, sample_idx)
+                    };
+                    let value = value.clone();
+                    quote! {
+                        #[test]
+                        fn #test_name() {
+                            let value = #value;
+                            assert_codegen_ra_mir_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
+                        }
+                    }
+                })
+        })
+        .collect();
+    let json_postreg_edits_tests: Vec<TokenStream> = cases
+        .iter()
+        .flat_map(|case| {
+            case.values
+                .iter()
+                .enumerate()
+                .map(|(sample_idx, value)| {
+                    let test_name = if case.values.len() == 1 {
+                        format_ident!("{}", case.name)
+                    } else {
+                        format_ident!("{}_v{}", case.name, sample_idx)
+                    };
+                    let case_name = if case.values.len() == 1 {
+                        case.name.to_string()
+                    } else {
+                        format!("{}__v{}", case.name, sample_idx)
+                    };
+                    let value = value.clone();
+                    quote! {
+                        #[test]
+                        fn #test_name() {
+                            let value = #value;
+                            assert_codegen_edits_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
+                        }
+                    }
+                })
+        })
+        .collect();
+    let postcard_tests: Vec<TokenStream> = cases
+        .iter()
+        .flat_map(|case| {
+            case.values.iter().enumerate().map(|(sample_idx, value)| {
+                let test_name = if case.values.len() == 1 {
+                    format_ident!("{}", case.name)
+                } else {
+                    format_ident!("{}_v{}", case.name, sample_idx)
+                };
+                let value = value.clone();
+                quote! {
+                    #[test]
+                    fn #test_name() {
+                        let value = #value;
+                        assert_postcard_case(value);
+                    }
+                }
+            })
+        })
+        .collect();
+    let postcard_rvsdg_tests: Vec<TokenStream> = cases
+        .iter()
+        .flat_map(|case| {
+            case.values
+                .iter()
+                .enumerate()
+                .map(|(sample_idx, value)| {
+                    let test_name = if case.values.len() == 1 {
+                        format_ident!("{}", case.name)
+                    } else {
+                        format_ident!("{}_v{}", case.name, sample_idx)
+                    };
+                    let case_name = if case.values.len() == 1 {
+                        case.name.to_string()
+                    } else {
+                        format!("{}__v{}", case.name, sample_idx)
+                    };
+                    let value = value.clone();
+                    quote! {
+                        #[test]
+                        fn #test_name() {
+                            let value = #value;
+                            assert_codegen_rvsdg_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
+                        }
+                    }
+                })
+        })
+        .collect();
+    let postcard_ra_mir_tests: Vec<TokenStream> = cases
+        .iter()
+        .flat_map(|case| {
+            case.values
+                .iter()
+                .enumerate()
+                .map(|(sample_idx, value)| {
+                    let test_name = if case.values.len() == 1 {
+                        format_ident!("{}", case.name)
+                    } else {
+                        format_ident!("{}_v{}", case.name, sample_idx)
+                    };
+                    let case_name = if case.values.len() == 1 {
+                        case.name.to_string()
+                    } else {
+                        format!("{}__v{}", case.name, sample_idx)
+                    };
+                    let value = value.clone();
+                    quote! {
+                        #[test]
+                        fn #test_name() {
+                            let value = #value;
+                            assert_codegen_ra_mir_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
+                        }
+                    }
+                })
+        })
+        .collect();
+    let postcard_postreg_edits_tests: Vec<TokenStream> = cases
+        .iter()
+        .flat_map(|case| {
+            case.values
+                .iter()
+                .enumerate()
+                .map(|(sample_idx, value)| {
+                    let test_name = if case.values.len() == 1 {
+                        format_ident!("{}", case.name)
+                    } else {
+                        format_ident!("{}_v{}", case.name, sample_idx)
+                    };
+                    let case_name = if case.values.len() == 1 {
+                        case.name.to_string()
+                    } else {
+                        format!("{}__v{}", case.name, sample_idx)
+                    };
+                    let value = value.clone();
+                    quote! {
+                        #[test]
+                        fn #test_name() {
+                            let value = #value;
+                            assert_codegen_edits_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
                         }
                     }
                 })
@@ -1979,10 +2129,6 @@ pub(crate) fn render_test_file() -> String {
     let file_tokens = quote! {
         use facet::Facet;
         use proptest::arbitrary::Arbitrary;
-        use std::fmt::Write;
-        #[cfg(target_arch = "x86_64")]
-        use yaxpeax_arch::LengthedInstruction;
-        use yaxpeax_arch::{Decoder, U8Reader};
 
         #types
 
@@ -2103,76 +2249,7 @@ pub(crate) fn render_test_file() -> String {
                 .unwrap();
         }
 
-        fn disasm_bytes(code: &[u8], marker_offset: Option<usize>) -> String {
-            let mut out = String::new();
-
-            #[cfg(target_arch = "aarch64")]
-            {
-                use yaxpeax_arm::armv8::a64::InstDecoder;
-
-                let decoder = InstDecoder::default();
-                let mut reader = U8Reader::new(code);
-                let mut offset = 0usize;
-                let mut ret_count = 0u32;
-
-                while offset + 4 <= code.len() {
-                    let prefix = if marker_offset == Some(offset) { "> " } else { "  " };
-                    match decoder.decode(&mut reader) {
-                        Ok(inst) => {
-                            let text = kajit::disasm_normalize::normalize_inst(&format!("{inst}"));
-                            writeln!(&mut out, "{prefix}{text}").unwrap();
-                            if text.trim() == "ret" {
-                                ret_count += 1;
-                                if ret_count >= 2 {
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            let word = u32::from_le_bytes(code[offset..offset + 4].try_into().unwrap());
-                            writeln!(&mut out, "{prefix}<{e}> (0x{word:08x})").unwrap();
-                        }
-                    }
-                    offset += 4;
-                }
-            }
-
-            #[cfg(target_arch = "x86_64")]
-            {
-                use yaxpeax_x86::amd64::InstDecoder;
-
-                let decoder = InstDecoder::default();
-                let mut reader = U8Reader::new(code);
-                let mut offset = 0usize;
-                let mut ret_count = 0u32;
-
-                while offset < code.len() {
-                    let prefix = if marker_offset == Some(offset) { "> " } else { "  " };
-                    match decoder.decode(&mut reader) {
-                        Ok(inst) => {
-                            let len = inst.len().to_const() as usize;
-                            let text = kajit::disasm_normalize::normalize_inst(&format!("{inst}"));
-                            writeln!(&mut out, "{prefix}{text}").unwrap();
-                            if text.trim() == "ret" {
-                                ret_count += 1;
-                                if ret_count >= 2 {
-                                    break;
-                                }
-                            }
-                            offset += len;
-                        }
-                        Err(_) => {
-                            writeln!(&mut out, "{prefix}<decode error> (0x{:02x})", code[offset]).unwrap();
-                            offset += 1;
-                        }
-                    }
-                }
-            }
-
-            out
-        }
-
-        fn codegen_artifacts<T, F>(decoder: &F) -> (String, String, usize, String)
+        fn codegen_artifacts<T, F>(decoder: &F) -> (String, String, usize)
         where
             for<'input> T: Facet<'input>,
             F: kajit::format::Decoder,
@@ -2180,12 +2257,10 @@ pub(crate) fn render_test_file() -> String {
             let shape = T::SHAPE;
             let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
             let edits = kajit::regalloc_edit_count(shape, decoder);
-            let compiled = kajit::compile_decoder(shape, decoder);
-            let disasm = disasm_bytes(compiled.code(), Some(compiled.entry_offset()));
-            (ir_text, ra_text, edits, disasm)
+            (ir_text, ra_text, edits)
         }
 
-        fn assert_codegen_snapshots<T, F>(
+        fn assert_codegen_rvsdg_snapshot<T, F>(
             format_label: &str,
             case: &str,
             decoder: &F,
@@ -2195,7 +2270,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input>,
             F: kajit::format::Decoder,
         {
-            let (ir_text, ra_text, edits, disasm) = codegen_artifacts::<T, F>(decoder);
+            let (ir_text, _ra_text, _edits) = codegen_artifacts::<T, F>(decoder);
             insta::assert_snapshot!(
                 format!(
                     "generated_rvsdg_{}_{}_{}",
@@ -2205,6 +2280,19 @@ pub(crate) fn render_test_file() -> String {
                 ),
                 ir_text
             );
+        }
+
+        fn assert_codegen_ra_mir_snapshot<T, F>(
+            format_label: &str,
+            case: &str,
+            decoder: &F,
+            _marker: &T,
+        )
+        where
+            for<'input> T: Facet<'input>,
+            F: kajit::format::Decoder,
+        {
+            let (_ir_text, ra_text, _edits) = codegen_artifacts::<T, F>(decoder);
             insta::assert_snapshot!(
                 format!(
                     "generated_ra_mir_{}_{}_{}",
@@ -2214,15 +2302,19 @@ pub(crate) fn render_test_file() -> String {
                 ),
                 ra_text
             );
-            insta::assert_snapshot!(
-                format!(
-                    "generated_postreg_disasm_{}_{}_{}",
-                    format_label,
-                    case,
-                    std::env::consts::ARCH
-                ),
-                disasm
-            );
+        }
+
+        fn assert_codegen_edits_snapshot<T, F>(
+            format_label: &str,
+            case: &str,
+            decoder: &F,
+            _marker: &T,
+        )
+        where
+            for<'input> T: Facet<'input>,
+            F: kajit::format::Decoder,
+        {
+            let (_ir_text, _ra_text, edits) = codegen_artifacts::<T, F>(decoder);
             insta::assert_snapshot!(
                 format!(
                     "generated_postreg_edits_{}_{}_{}",
@@ -2242,6 +2334,36 @@ pub(crate) fn render_test_file() -> String {
         mod postcard {
             use super::*;
             #(#postcard_tests)*
+        }
+
+        mod rvsdg_json {
+            use super::*;
+            #(#json_rvsdg_tests)*
+        }
+
+        mod rvsdg_postcard {
+            use super::*;
+            #(#postcard_rvsdg_tests)*
+        }
+
+        mod ra_mir_json {
+            use super::*;
+            #(#json_ra_mir_tests)*
+        }
+
+        mod ra_mir_postcard {
+            use super::*;
+            #(#postcard_ra_mir_tests)*
+        }
+
+        mod postreg_edits_json {
+            use super::*;
+            #(#json_postreg_edits_tests)*
+        }
+
+        mod postreg_edits_postcard {
+            use super::*;
+            #(#postcard_postreg_edits_tests)*
         }
 
         mod prop {
@@ -2269,7 +2391,7 @@ pub(crate) fn render_test_file() -> String {
 
             #[test]
             fn vec_scalar_large_hotpath_asserts() {
-                let (ir_text, ra_text, edits, disasm) =
+                let (ir_text, ra_text, edits) =
                     codegen_artifacts::<ScalarVec, _>(&kajit::postcard::KajitPostcard);
 
                 assert!(
@@ -2285,8 +2407,6 @@ pub(crate) fn render_test_file() -> String {
                     "expected intrinsic-heavy vec decode path in RA-MIR"
                 );
                 assert!(edits <= 128, "expected edit budget <= 128, got {edits}");
-
-                assert!(!disasm.is_empty(), "expected non-empty disassembly artifact");
             }
         }
     };

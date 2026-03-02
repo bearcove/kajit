@@ -2,7 +2,8 @@
 use facet::Facet;
 fn parse_case(ir: &str) -> kajit::ir::IrFunc {
     let registry = kajit::ir::IntrinsicRegistry::empty();
-    kajit::ir_parse::parse_ir(ir, <u8 as Facet>::SHAPE, &registry).expect("text IR should parse")
+    kajit::ir_parse::parse_ir(ir, <u8 as Facet>::SHAPE, &registry)
+        .expect("text IR should parse")
 }
 fn run_pass(ir: &str) -> (String, String) {
     let mut func = parse_case(ir);
@@ -23,12 +24,10 @@ fn ir_opt_snapshot_theta_invariant_tree_hoist() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = Const(0x4) [] -> [v0]\n    n1 = Const(0x1) [] -> [v1]\n    n2 = theta [v0, v1, %cs:arg, %os:arg] {\n      region {\n        args: [arg0, arg1, %cs, %os]\n        n3 = Const(0x7) [] -> [v2]\n        n4 = Const(0x3) [] -> [v3]\n        n5 = Add [v2, v3] -> [v4]\n        n6 = Xor [v4, v3] -> [v5]\n        n7 = Sub [arg0, arg1] -> [v6]\n        n8 = Add [v5, v6] -> [v7]\n        results: [v6, v6, arg1, %cs:arg, %os:arg]\n      }\n    } -> [v8, v9, %cs, %os]\n    n9 = WriteToField(offset=0, W1) [v8, %os:n2] -> [%os]\n    results: [%cs:n2, %os:n9]\n  }\n}\n",
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_opt_before_", "theta_invariant_tree_hoist"),
-        before
+        concat!("generated_ir_opt_before_", "theta_invariant_tree_hoist"), before
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_opt_after_", "theta_invariant_tree_hoist"),
-        after
+        concat!("generated_ir_opt_after_", "theta_invariant_tree_hoist"), after
     );
 }
 #[test]
@@ -37,23 +36,19 @@ fn ir_opt_asserts_theta_invariant_tree_hoist() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = Const(0x4) [] -> [v0]\n    n1 = Const(0x1) [] -> [v1]\n    n2 = theta [v0, v1, %cs:arg, %os:arg] {\n      region {\n        args: [arg0, arg1, %cs, %os]\n        n3 = Const(0x7) [] -> [v2]\n        n4 = Const(0x3) [] -> [v3]\n        n5 = Add [v2, v3] -> [v4]\n        n6 = Xor [v4, v3] -> [v5]\n        n7 = Sub [arg0, arg1] -> [v6]\n        n8 = Add [v5, v6] -> [v7]\n        results: [v6, v6, arg1, %cs:arg, %os:arg]\n      }\n    } -> [v8, v9, %cs, %os]\n    n9 = WriteToField(offset=0, W1) [v8, %os:n2] -> [%os]\n    results: [%cs:n2, %os:n9]\n  }\n}\n",
     );
     assert!(
-        !after.contains("n3 = Const(0x7) [] -> [v2]"),
-        "expected to hoist/remove: {}",
+        ! after.contains("n3 = Const(0x7) [] -> [v2]"), "expected to hoist/remove: {}",
         "n3 = Const(0x7) [] -> [v2]"
     );
     assert!(
-        !after.contains("n4 = Const(0x3) [] -> [v3]"),
-        "expected to hoist/remove: {}",
+        ! after.contains("n4 = Const(0x3) [] -> [v3]"), "expected to hoist/remove: {}",
         "n4 = Const(0x3) [] -> [v3]"
     );
     assert!(
-        !after.contains("n5 = Add [v2, v3] -> [v4]"),
-        "expected to hoist/remove: {}",
+        ! after.contains("n5 = Add [v2, v3] -> [v4]"), "expected to hoist/remove: {}",
         "n5 = Add [v2, v3] -> [v4]"
     );
     assert!(
-        !after.contains("n6 = Xor [v4, v3] -> [v5]"),
-        "expected to hoist/remove: {}",
+        ! after.contains("n6 = Xor [v4, v3] -> [v5]"), "expected to hoist/remove: {}",
         "n6 = Xor [v4, v3] -> [v5]"
     );
 }
@@ -69,7 +64,8 @@ fn ir_opt_exec_theta_invariant_tree_hoist() {
     kajit::ir_passes::run_default_passes(&mut optimized);
     let linear = kajit::linearize::linearize(&mut optimized);
     let dec = kajit::compile_decoder_linear_ir(&linear, false);
-    let after_out = kajit::deserialize::<u8>(&dec, &[]).expect("optimized decoder should execute");
+    let after_out = kajit::deserialize::<u8>(&dec, &[])
+        .expect("optimized decoder should execute");
     assert_eq!(after_out, before_out);
 }
 #[test]
@@ -78,12 +74,10 @@ fn ir_opt_snapshot_theta_loop_variant_not_hoisted() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = Const(0x4) [] -> [v0]\n    n1 = Const(0x1) [] -> [v1]\n    n2 = theta [v0, v1, %cs:arg, %os:arg] {\n      region {\n        args: [arg0, arg1, %cs, %os]\n        n3 = Add [arg0, arg1] -> [v2]\n        n4 = Sub [arg0, arg1] -> [v3]\n        results: [v3, v3, arg1, %cs:arg, %os:arg]\n      }\n    } -> [v4, v5, %cs, %os]\n    n5 = WriteToField(offset=0, W1) [v4, %os:n2] -> [%os]\n    results: [%cs:n2, %os:n5]\n  }\n}\n",
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_opt_before_", "theta_loop_variant_not_hoisted"),
-        before
+        concat!("generated_ir_opt_before_", "theta_loop_variant_not_hoisted"), before
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_opt_after_", "theta_loop_variant_not_hoisted"),
-        after
+        concat!("generated_ir_opt_after_", "theta_loop_variant_not_hoisted"), after
     );
 }
 #[test]
@@ -92,8 +86,7 @@ fn ir_opt_asserts_theta_loop_variant_not_hoisted() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = Const(0x4) [] -> [v0]\n    n1 = Const(0x1) [] -> [v1]\n    n2 = theta [v0, v1, %cs:arg, %os:arg] {\n      region {\n        args: [arg0, arg1, %cs, %os]\n        n3 = Add [arg0, arg1] -> [v2]\n        n4 = Sub [arg0, arg1] -> [v3]\n        results: [v3, v3, arg1, %cs:arg, %os:arg]\n      }\n    } -> [v4, v5, %cs, %os]\n    n5 = WriteToField(offset=0, W1) [v4, %os:n2] -> [%os]\n    results: [%cs:n2, %os:n5]\n  }\n}\n",
     );
     assert!(
-        after.contains("n3 = Add [arg0, arg1] -> [v2]"),
-        "expected to keep/preserve: {}",
+        after.contains("n3 = Add [arg0, arg1] -> [v2]"), "expected to keep/preserve: {}",
         "n3 = Add [arg0, arg1] -> [v2]"
     );
 }
@@ -109,7 +102,8 @@ fn ir_opt_exec_theta_loop_variant_not_hoisted() {
     kajit::ir_passes::run_default_passes(&mut optimized);
     let linear = kajit::linearize::linearize(&mut optimized);
     let dec = kajit::compile_decoder_linear_ir(&linear, false);
-    let after_out = kajit::deserialize::<u8>(&dec, &[]).expect("optimized decoder should execute");
+    let after_out = kajit::deserialize::<u8>(&dec, &[])
+        .expect("optimized decoder should execute");
     assert_eq!(after_out, before_out);
 }
 #[test]
@@ -118,12 +112,10 @@ fn ir_opt_snapshot_bounds_check_chain_coalesce() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = BoundsCheck(1) [%cs:arg] -> [%cs]\n    n1 = PeekByte [%cs:n0] -> [v0, %cs]\n    n2 = BoundsCheck(1) [%cs:n1] -> [%cs]\n    n3 = ReadBytes(1) [%cs:n2] -> [v1, %cs]\n    n4 = WriteToField(offset=0, W1) [v1, %os:arg] -> [%os]\n    results: [%cs:n3, %os:n4]\n  }\n}\n",
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_opt_before_", "bounds_check_chain_coalesce"),
-        before
+        concat!("generated_ir_opt_before_", "bounds_check_chain_coalesce"), before
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_opt_after_", "bounds_check_chain_coalesce"),
-        after
+        concat!("generated_ir_opt_after_", "bounds_check_chain_coalesce"), after
     );
 }
 #[test]
@@ -132,14 +124,12 @@ fn ir_opt_asserts_bounds_check_chain_coalesce() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = BoundsCheck(1) [%cs:arg] -> [%cs]\n    n1 = PeekByte [%cs:n0] -> [v0, %cs]\n    n2 = BoundsCheck(1) [%cs:n1] -> [%cs]\n    n3 = ReadBytes(1) [%cs:n2] -> [v1, %cs]\n    n4 = WriteToField(offset=0, W1) [v1, %os:arg] -> [%os]\n    results: [%cs:n3, %os:n4]\n  }\n}\n",
     );
     assert!(
-        !after.contains("n2 = BoundsCheck(1) [%cs:n1] -> [%cs]"),
-        "expected to hoist/remove: {}",
-        "n2 = BoundsCheck(1) [%cs:n1] -> [%cs]"
+        ! after.contains("n2 = BoundsCheck(1) [%cs:n1] -> [%cs]"),
+        "expected to hoist/remove: {}", "n2 = BoundsCheck(1) [%cs:n1] -> [%cs]"
     );
     assert!(
         after.contains("BoundsCheck(1) [%cs:arg] -> [%cs]"),
-        "expected to keep/preserve: {}",
-        "BoundsCheck(1) [%cs:arg] -> [%cs]"
+        "expected to keep/preserve: {}", "BoundsCheck(1) [%cs:arg] -> [%cs]"
     );
 }
 #[test]
@@ -154,7 +144,7 @@ fn ir_opt_exec_bounds_check_chain_coalesce() {
     kajit::ir_passes::run_default_passes(&mut optimized);
     let linear = kajit::linearize::linearize(&mut optimized);
     let dec = kajit::compile_decoder_linear_ir(&linear, false);
-    let after_out =
-        kajit::deserialize::<u8>(&dec, &[7u8]).expect("optimized decoder should execute");
+    let after_out = kajit::deserialize::<u8>(&dec, &[7u8])
+        .expect("optimized decoder should execute");
     assert_eq!(after_out, before_out);
 }
