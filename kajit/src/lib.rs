@@ -2452,103 +2452,6 @@ mod tests {
 
     // r[verify deser.json.option]
     #[test]
-    fn json_option_some_scalar() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct WithOptU32 {
-            value: Option<u32>,
-        }
-
-        let input = br#"{"value": 42}"#;
-        let deser = compile_decoder(WithOptU32::SHAPE, &json::KajitJson);
-        let result: WithOptU32 = deserialize(&deser, input).unwrap();
-        assert_eq!(result, WithOptU32 { value: Some(42) });
-    }
-
-    // r[verify deser.json.option]
-    #[test]
-    fn json_option_none_scalar() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct WithOptU32 {
-            value: Option<u32>,
-        }
-
-        let input = br#"{"value": null}"#;
-        let deser = compile_decoder(WithOptU32::SHAPE, &json::KajitJson);
-        let result: WithOptU32 = deserialize(&deser, input).unwrap();
-        assert_eq!(result, WithOptU32 { value: None });
-    }
-
-    // r[verify deser.json.option]
-    #[test]
-    fn json_option_some_string() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct WithOptStr {
-            name: Option<String>,
-        }
-
-        let input = br#"{"name": "Alice"}"#;
-        let deser = compile_decoder(WithOptStr::SHAPE, &json::KajitJson);
-        let result: WithOptStr = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithOptStr {
-                name: Some("Alice".into())
-            }
-        );
-    }
-
-    // r[verify deser.json.option]
-    #[test]
-    fn json_option_none_string() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct WithOptStr {
-            name: Option<String>,
-        }
-
-        let input = br#"{"name": null}"#;
-        let deser = compile_decoder(WithOptStr::SHAPE, &json::KajitJson);
-        let result: WithOptStr = deserialize(&deser, input).unwrap();
-        assert_eq!(result, WithOptStr { name: None });
-    }
-
-    // r[verify deser.json.option]
-    #[test]
-    fn json_option_some_struct() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct WithOptAddr {
-            addr: Option<Address>,
-        }
-
-        let input = br#"{"addr": {"city": "Portland", "zip": 97201}}"#;
-        let deser = compile_decoder(WithOptAddr::SHAPE, &json::KajitJson);
-        let result: WithOptAddr = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithOptAddr {
-                addr: Some(Address {
-                    city: "Portland".into(),
-                    zip: 97201
-                }),
-            }
-        );
-    }
-
-    // r[verify deser.json.option]
-    #[test]
-    fn json_option_none_struct() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct WithOptAddr {
-            addr: Option<Address>,
-        }
-
-        let input = br#"{"addr": null}"#;
-        let deser = compile_decoder(WithOptAddr::SHAPE, &json::KajitJson);
-        let result: WithOptAddr = deserialize(&deser, input).unwrap();
-        assert_eq!(result, WithOptAddr { addr: None });
-    }
-
-    // r[verify deser.json.option]
-    #[test]
     fn json_multiple_options() {
         #[derive(Facet, Debug, PartialEq)]
         struct MultiOpt {
@@ -2566,29 +2469,6 @@ mod tests {
                 a: Some(7),
                 b: "hello".into(),
                 c: None,
-            }
-        );
-    }
-
-    // r[verify deser.json.option]
-    #[test]
-    fn json_option_reversed_keys() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct MultiOpt {
-            a: Option<u32>,
-            b: String,
-            c: Option<String>,
-        }
-
-        let input = br#"{"c": "world", "b": "hello", "a": null}"#;
-        let deser = compile_decoder(MultiOpt::SHAPE, &json::KajitJson);
-        let result: MultiOpt = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            MultiOpt {
-                a: None,
-                b: "hello".into(),
-                c: Some("world".into()),
             }
         );
     }
@@ -3276,55 +3156,11 @@ mod tests {
         age: u32,
     }
 
-    // r[verify deser.rename]
-    // r[verify deser.rename.json]
-    #[test]
-    fn json_rename_field() {
-        let input = br#"{"user_name": "Alice", "age": 30}"#;
-        let deser = compile_decoder(RenameField::SHAPE, &json::KajitJson);
-        let result: RenameField = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            RenameField {
-                name: "Alice".into(),
-                age: 30,
-            }
-        );
-    }
-
-    // r[verify deser.rename]
-    // r[verify deser.rename.json]
-    #[test]
-    fn json_rename_field_original_name_rejected() {
-        // Using the original Rust field name "name" should fail
-        // because the key dispatch only knows about "user_name".
-        let input = br#"{"name": "Alice", "age": 30}"#;
-        let deser = compile_decoder(RenameField::SHAPE, &json::KajitJson);
-        let result = deserialize::<RenameField>(&deser, input);
-        assert!(result.is_err(), "original field name should not match");
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     #[facet(rename_all = "camelCase")]
     struct CamelCaseStruct {
         user_name: String,
         birth_year: u32,
-    }
-
-    // r[verify deser.rename.all]
-    // r[verify deser.rename.json]
-    #[test]
-    fn json_rename_all_camel_case() {
-        let input = br#"{"userName": "Bob", "birthYear": 1990}"#;
-        let deser = compile_decoder(CamelCaseStruct::SHAPE, &json::KajitJson);
-        let result: CamelCaseStruct = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            CamelCaseStruct {
-                user_name: "Bob".into(),
-                birth_year: 1990,
-            }
-        );
     }
 
     // r[verify deser.rename.postcard-irrelevant]
@@ -3441,27 +3277,6 @@ mod tests {
         y: u32,
     }
 
-    // r[verify deser.deny-unknown-fields]
-    // r[verify deser.deny-unknown-fields.json]
-    #[test]
-    fn json_deny_unknown_fields_rejects() {
-        let input = br#"{"x": 1, "y": 2, "z": 3}"#;
-        let deser = compile_decoder(Strict::SHAPE, &json::KajitJson);
-        let result = deserialize::<Strict>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::UnknownField);
-    }
-
-    // r[verify deser.deny-unknown-fields]
-    // r[verify deser.deny-unknown-fields.json]
-    #[test]
-    fn json_deny_unknown_fields_allows_known() {
-        let input = br#"{"x": 1, "y": 2}"#;
-        let deser = compile_decoder(Strict::SHAPE, &json::KajitJson);
-        let result: Strict = deserialize(&deser, input).unwrap();
-        assert_eq!(result, Strict { x: 1, y: 2 });
-    }
-
     // r[verify deser.deny-unknown-fields.postcard-irrelevant]
     #[test]
     fn postcard_deny_unknown_fields_irrelevant() {
@@ -3483,69 +3298,11 @@ mod tests {
         score: u32,
     }
 
-    // r[verify deser.default]
-    #[test]
-    fn json_default_field_missing() {
-        // "score" is missing — should get its Default (0).
-        let input = br#"{"name": "Alice"}"#;
-        let deser = compile_decoder(WithDefault::SHAPE, &json::KajitJson);
-        let result: WithDefault = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithDefault {
-                name: "Alice".into(),
-                score: 0,
-            }
-        );
-    }
-
-    // r[verify deser.default]
-    #[test]
-    fn json_default_field_present() {
-        // "score" is present — use the provided value.
-        let input = br#"{"name": "Alice", "score": 99}"#;
-        let deser = compile_decoder(WithDefault::SHAPE, &json::KajitJson);
-        let result: WithDefault = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithDefault {
-                name: "Alice".into(),
-                score: 99,
-            }
-        );
-    }
-
-    // r[verify deser.default]
-    #[test]
-    fn json_default_field_required_still_errors() {
-        // "name" has no default — missing it should error.
-        let input = br#"{"score": 50}"#;
-        let deser = compile_decoder(WithDefault::SHAPE, &json::KajitJson);
-        let result = deserialize::<WithDefault>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::MissingRequiredField);
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct WithDefaultString {
         #[facet(default)]
         label: String,
         value: u32,
-    }
-
-    // r[verify deser.default]
-    #[test]
-    fn json_default_string_field() {
-        let input = br#"{"value": 42}"#;
-        let deser = compile_decoder(WithDefaultString::SHAPE, &json::KajitJson);
-        let result: WithDefaultString = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithDefaultString {
-                label: String::new(),
-                value: 42,
-            }
-        );
     }
 
     #[derive(Facet, Debug, PartialEq)]
@@ -3559,25 +3316,6 @@ mod tests {
         fn default() -> Self {
             AllDefault { x: 10, y: 20 }
         }
-    }
-
-    // r[verify deser.default]
-    #[test]
-    fn json_container_default_empty_object() {
-        // Container-level #[facet(default)] — all fields optional.
-        let input = br#"{}"#;
-        let deser = compile_decoder(AllDefault::SHAPE, &json::KajitJson);
-        let result: AllDefault = deserialize(&deser, input).unwrap();
-        assert_eq!(result, AllDefault { x: 0, y: 0 });
-    }
-
-    // r[verify deser.default]
-    #[test]
-    fn json_container_default_partial() {
-        let input = br#"{"x": 5}"#;
-        let deser = compile_decoder(AllDefault::SHAPE, &json::KajitJson);
-        let result: AllDefault = deserialize(&deser, input).unwrap();
-        assert_eq!(result, AllDefault { x: 5, y: 0 });
     }
 
     // r[verify deser.default.postcard-irrelevant]
@@ -3607,62 +3345,11 @@ mod tests {
         cached: u32,
     }
 
-    // r[verify deser.skip]
-    // r[verify deser.skip.json]
-    #[test]
-    fn json_skip_field() {
-        // "cached" is skipped — it should NOT appear in input and gets its default (0).
-        let input = br#"{"name": "Alice"}"#;
-        let deser = compile_decoder(WithSkip::SHAPE, &json::KajitJson);
-        let result: WithSkip = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithSkip {
-                name: "Alice".into(),
-                cached: 0,
-            }
-        );
-    }
-
-    // r[verify deser.skip]
-    // r[verify deser.skip.json]
-    #[test]
-    fn json_skip_field_in_input_treated_as_unknown() {
-        // If the skipped field's name appears in input, it's treated as unknown.
-        // Without deny_unknown_fields, it's silently skipped.
-        let input = br#"{"name": "Alice", "cached": 99}"#;
-        let deser = compile_decoder(WithSkip::SHAPE, &json::KajitJson);
-        let result: WithSkip = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithSkip {
-                name: "Alice".into(),
-                cached: 0, // default, NOT 99
-            }
-        );
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct WithSkipDeser {
         name: String,
         #[facet(skip_deserializing, default)]
         internal: u32,
-    }
-
-    // r[verify deser.skip]
-    // r[verify deser.skip.json]
-    #[test]
-    fn json_skip_deserializing_field() {
-        let input = br#"{"name": "Bob"}"#;
-        let deser = compile_decoder(WithSkipDeser::SHAPE, &json::KajitJson);
-        let result: WithSkipDeser = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            WithSkipDeser {
-                name: "Bob".into(),
-                internal: 0,
-            }
-        );
     }
 
     // r[verify deser.skip]
@@ -3689,21 +3376,6 @@ mod tests {
         magic: u32,
     }
 
-    // r[verify deser.skip]
-    // r[verify deser.skip.default-required]
-    #[test]
-    fn json_skip_with_custom_default() {
-        let input = br#"{"value": 10}"#;
-        let deser = compile_decoder(SkipWithCustomDefault::SHAPE, &json::KajitJson);
-        let result: SkipWithCustomDefault = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            SkipWithCustomDefault {
-                value: 10,
-                magic: 42,
-            }
-        );
-    }
     // ── Smart pointer tests ──────────────────────────────────────────
 
     #[derive(Facet, Debug, PartialEq)]
@@ -3890,24 +3562,6 @@ mod tests {
         );
     }
 
-    #[derive(Facet, Debug, PartialEq)]
-    struct RcScalar {
-        value: std::rc::Rc<u32>,
-    }
-
-    // r[verify deser.pointer]
-    #[test]
-    fn json_rc_scalar() {
-        let input = br#"{"value": 77}"#;
-        let deser = compile_decoder(RcScalar::SHAPE, &json::KajitJson);
-        let result: RcScalar = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            RcScalar {
-                value: std::rc::Rc::new(77),
-            }
-        );
-    }
     #[derive(Facet, Debug, PartialEq)]
     struct UnitField {
         geo: (),

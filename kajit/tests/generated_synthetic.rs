@@ -59,6 +59,94 @@ struct BoolField {
     value: bool,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct WithOptU32 {
+    value: Option<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct WithOptStr {
+    #[proptest(
+        strategy = "proptest::option::of(proptest::string::string_regex(\"(?s).{0,64}\").unwrap())"
+    )]
+    name: Option<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct WithOptAddr {
+    addr: Option<Address>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct MultiOpt {
+    a: Option<u32>,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    b: String,
+    #[proptest(
+        strategy = "proptest::option::of(proptest::string::string_regex(\"(?s).{0,64}\").unwrap())"
+    )]
+    c: Option<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct RenameField {
+    #[facet(rename = "user_name")]
+    name: String,
+    age: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(rename_all = "camelCase")]
+struct CamelCaseStruct {
+    user_name: String,
+    birth_year: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(deny_unknown_fields)]
+struct Strict {
+    x: u32,
+    y: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithDefault {
+    name: String,
+    #[facet(default)]
+    score: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithDefaultString {
+    #[facet(default)]
+    label: String,
+    value: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(default)]
+struct AllDefault {
+    x: u32,
+    y: u32,
+}
+impl Default for AllDefault {
+    fn default() -> Self {
+        AllDefault { x: 10, y: 20 }
+    }
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithSkip {
+    name: String,
+    #[facet(skip, default)]
+    cached: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithSkipDeser {
+    name: String,
+    #[facet(skip_deserializing, default)]
+    internal: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct SkipWithCustomDefault {
+    value: u32,
+    #[facet(skip, default = 42)]
+    magic: u32,
+}
+#[derive(Debug, PartialEq, Facet)]
+struct RcScalar {
+    value: std::rc::Rc<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
     #[proptest(
         strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
@@ -94,6 +182,34 @@ where
     let ir = kajit::compile_decoder_via_ir(T::SHAPE, &kajit::postcard::KajitPostcard);
     let ir_out: T = kajit::deserialize(&ir, &encoded).unwrap();
     assert_eq!(ir_out, expected);
+}
+fn assert_json_input_case<T>(input: &[u8], expected: T)
+where
+    for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
+{
+    let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+    let got: T = kajit::deserialize(&decoder, input).unwrap();
+    assert_eq!(got, expected);
+}
+fn assert_json_input_err<T>(input: &[u8])
+where
+    for<'input> T: Facet<'input>,
+{
+    let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+    let out = kajit::deserialize::<T>(&decoder, input);
+    assert!(out.is_err(), "expected json decode failure");
+}
+fn assert_json_input_err_code<T>(input: &[u8], expected_code: kajit::context::ErrorCode)
+where
+    for<'input> T: Facet<'input>,
+{
+    let decoder = kajit::compile_decoder_legacy(T::SHAPE, &kajit::json::KajitJson);
+    let out = kajit::deserialize::<T>(&decoder, input);
+    let err = match out {
+        Ok(_) => panic!("expected json decode failure"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code, expected_code);
 }
 fn assert_prop_case<T>(_marker: &T)
 where
@@ -558,6 +674,218 @@ mod prop {
             values: (0..2048).map(|i| i as u32).collect(),
         };
         assert_prop_case(&marker);
+    }
+}
+mod json_input {
+    use super::*;
+    #[test]
+    fn option_some_scalar() {
+        assert_json_input_case::<
+            WithOptU32,
+        >(b"{\"value\": 42}", WithOptU32 { value: Some(42) });
+    }
+    #[test]
+    fn option_some_string() {
+        assert_json_input_case::<
+            WithOptStr,
+        >(
+            b"{\"name\": \"Alice\"}",
+            WithOptStr {
+                name: Some("Alice".into()),
+            },
+        );
+    }
+    #[test]
+    fn option_some_struct() {
+        assert_json_input_case::<
+            WithOptAddr,
+        >(
+            b"{\"addr\": {\"city\": \"Portland\", \"zip\": 97201}}",
+            WithOptAddr {
+                addr: Some(Address {
+                    city: "Portland".into(),
+                    zip: 97201,
+                }),
+            },
+        );
+    }
+    #[test]
+    fn option_none_struct() {
+        assert_json_input_case::<
+            WithOptAddr,
+        >(b"{\"addr\": null}", WithOptAddr { addr: None });
+    }
+    #[test]
+    fn option_none_scalar() {
+        assert_json_input_case::<
+            WithOptU32,
+        >(b"{\"value\": null}", WithOptU32 { value: None });
+    }
+    #[test]
+    fn option_none_string() {
+        assert_json_input_case::<
+            WithOptStr,
+        >(b"{\"name\": null}", WithOptStr { name: None });
+    }
+    #[test]
+    fn option_reversed_keys() {
+        assert_json_input_case::<
+            MultiOpt,
+        >(
+            b"{\"c\": \"world\", \"b\": \"hello\", \"a\": null}",
+            MultiOpt {
+                a: None,
+                b: "hello".into(),
+                c: Some("world".into()),
+            },
+        );
+    }
+    #[test]
+    fn rc_scalar() {
+        assert_json_input_case::<
+            RcScalar,
+        >(
+            b"{\"value\": 77}",
+            RcScalar {
+                value: std::rc::Rc::new(77),
+            },
+        );
+    }
+    #[test]
+    fn rename_field() {
+        assert_json_input_case::<
+            RenameField,
+        >(
+            b"{\"user_name\": \"Alice\", \"age\": 30}",
+            RenameField {
+                name: "Alice".into(),
+                age: 30,
+            },
+        );
+    }
+    #[test]
+    fn rename_field_original_name_rejected() {
+        assert_json_input_err::<RenameField>(b"{\"name\": \"Alice\", \"age\": 30}");
+    }
+    #[test]
+    fn rename_all_camel_case() {
+        assert_json_input_case::<
+            CamelCaseStruct,
+        >(
+            b"{\"userName\": \"Bob\", \"birthYear\": 1990}",
+            CamelCaseStruct {
+                user_name: "Bob".into(),
+                birth_year: 1990,
+            },
+        );
+    }
+    #[test]
+    fn deny_unknown_fields_rejects() {
+        assert_json_input_err_code::<
+            Strict,
+        >(b"{\"x\": 1, \"y\": 2, \"z\": 3}", kajit::context::ErrorCode::UnknownField);
+    }
+    #[test]
+    fn deny_unknown_fields_allows_known() {
+        assert_json_input_case::<Strict>(b"{\"x\": 1, \"y\": 2}", Strict { x: 1, y: 2 });
+    }
+    #[test]
+    fn default_field_missing() {
+        assert_json_input_case::<
+            WithDefault,
+        >(
+            b"{\"name\": \"Alice\"}",
+            WithDefault {
+                name: "Alice".into(),
+                score: 0,
+            },
+        );
+    }
+    #[test]
+    fn default_field_present() {
+        assert_json_input_case::<
+            WithDefault,
+        >(
+            b"{\"name\": \"Alice\", \"score\": 99}",
+            WithDefault {
+                name: "Alice".into(),
+                score: 99,
+            },
+        );
+    }
+    #[test]
+    fn default_field_required_still_errors() {
+        assert_json_input_err_code::<
+            WithDefault,
+        >(b"{\"score\": 50}", kajit::context::ErrorCode::MissingRequiredField);
+    }
+    #[test]
+    fn default_string_field() {
+        assert_json_input_case::<
+            WithDefaultString,
+        >(
+            b"{\"value\": 42}",
+            WithDefaultString {
+                label: String::new(),
+                value: 42,
+            },
+        );
+    }
+    #[test]
+    fn container_default_empty_object() {
+        assert_json_input_case::<AllDefault>(b"{}", AllDefault { x: 0, y: 0 });
+    }
+    #[test]
+    fn container_default_partial() {
+        assert_json_input_case::<AllDefault>(b"{\"x\": 5}", AllDefault { x: 5, y: 0 });
+    }
+    #[test]
+    fn skip_field() {
+        assert_json_input_case::<
+            WithSkip,
+        >(
+            b"{\"name\": \"Alice\"}",
+            WithSkip {
+                name: "Alice".into(),
+                cached: 0,
+            },
+        );
+    }
+    #[test]
+    fn skip_field_in_input_treated_as_unknown() {
+        assert_json_input_case::<
+            WithSkip,
+        >(
+            b"{\"name\": \"Alice\", \"cached\": 99}",
+            WithSkip {
+                name: "Alice".into(),
+                cached: 0,
+            },
+        );
+    }
+    #[test]
+    fn skip_deserializing_field() {
+        assert_json_input_case::<
+            WithSkipDeser,
+        >(
+            b"{\"name\": \"Bob\"}",
+            WithSkipDeser {
+                name: "Bob".into(),
+                internal: 0,
+            },
+        );
+    }
+    #[test]
+    fn skip_with_custom_default() {
+        assert_json_input_case::<
+            SkipWithCustomDefault,
+        >(
+            b"{\"value\": 10}",
+            SkipWithCustomDefault {
+                value: 10,
+                magic: 42,
+            },
+        );
     }
 }
 mod postreg {

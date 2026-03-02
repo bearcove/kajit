@@ -58,6 +58,94 @@ struct BoolField {
     value: bool,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct WithOptU32 {
+    value: Option<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct WithOptStr {
+    #[proptest(
+        strategy = "proptest::option::of(proptest::string::string_regex(\"(?s).{0,64}\").unwrap())"
+    )]
+    name: Option<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct WithOptAddr {
+    addr: Option<Address>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct MultiOpt {
+    a: Option<u32>,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    b: String,
+    #[proptest(
+        strategy = "proptest::option::of(proptest::string::string_regex(\"(?s).{0,64}\").unwrap())"
+    )]
+    c: Option<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct RenameField {
+    #[facet(rename = "user_name")]
+    name: String,
+    age: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+#[facet(rename_all = "camelCase")]
+struct CamelCaseStruct {
+    user_name: String,
+    birth_year: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(deny_unknown_fields)]
+struct Strict {
+    x: u32,
+    y: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithDefault {
+    name: String,
+    #[facet(default)]
+    score: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithDefaultString {
+    #[facet(default)]
+    label: String,
+    value: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[facet(default)]
+struct AllDefault {
+    x: u32,
+    y: u32,
+}
+impl Default for AllDefault {
+    fn default() -> Self {
+        AllDefault { x: 10, y: 20 }
+    }
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithSkip {
+    name: String,
+    #[facet(skip, default)]
+    cached: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct WithSkipDeser {
+    name: String,
+    #[facet(skip_deserializing, default)]
+    internal: u32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+struct SkipWithCustomDefault {
+    value: u32,
+    #[facet(skip, default = 42)]
+    magic: u32,
+}
+#[derive(Debug, PartialEq, Facet)]
+struct RcScalar {
+    value: std::rc::Rc<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
     #[proptest(
         strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
