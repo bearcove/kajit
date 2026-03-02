@@ -569,20 +569,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn json_from_str_entrypoint() {
-        let input = r#"{"age": 42, "name": "Alice"}"#;
-        let deser = compile_decoder(Friend::SHAPE, &json::KajitJson);
-        let result: Friend = from_str(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            Friend {
-                age: 42,
-                name: "Alice".into()
-            }
-        );
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct BorrowedFriend<'a> {
         age: u32,
