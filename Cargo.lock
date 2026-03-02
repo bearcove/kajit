@@ -487,12 +487,16 @@ name = "kajit"
 version = "0.1.0"
 dependencies = [
  "brotli",
- "chumsky",
  "dynasm",
  "dynasmrt",
  "facet",
  "insta",
  "itoa",
+ "kajit-ir",
+ "kajit-ir-text",
+ "kajit-lir",
+ "kajit-mir",
+ "kajit-mir-text",
  "postcard",
  "proptest",
  "proptest-derive",
@@ -503,6 +507,51 @@ dependencies = [
  "yaxpeax-arm",
  "yaxpeax-x86",
  "zmij",
+]
+
+[[package]]
+name = "kajit-ir"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kajit-ir-text",
+]
+
+[[package]]
+name = "kajit-ir-text"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "facet",
+ "kajit-ir",
+]
+
+[[package]]
+name = "kajit-lir"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kajit-ir",
+]
+
+[[package]]
+name = "kajit-mir"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kajit-ir",
+ "kajit-lir",
+ "regalloc2",
+]
+
+[[package]]
+name = "kajit-mir-text"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "kajit-ir",
+ "kajit-lir",
+ "kajit-mir",
 ]
 
 [[package]]

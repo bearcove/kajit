@@ -17,7 +17,11 @@ dynasm = "5"
 itoa = "1"
 zmij = "1"
 regalloc2 = "0.15"
-chumsky = "1.0.0-alpha.8"
+kajit-ir = { path = "../kajit-ir" }
+kajit-ir-text = { path = "../kajit-ir-text" }
+kajit-lir = { path = "../kajit-lir" }
+kajit-mir = { path = "../kajit-mir" }
+kajit-mir-text = { path = "../kajit-mir-text" }
 
 [dev-dependencies]
 postcard = { version = "1", features = ["alloc"] }
