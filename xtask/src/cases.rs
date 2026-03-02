@@ -1,6 +1,6 @@
 //! Deser/ser cases
 
-use crate::Case;
+use crate::{Case, CaseBuilder, DecodeExpectation, WireFormat};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
 use syn::LitByteStr;
@@ -266,13 +266,16 @@ pub(crate) fn cases() -> Vec<Case> {
     vec![
         Case {
             name: "flat_struct",
+            ty: quote!(Friend),
             values: vec![quote!(Friend {
                 age: 42,
                 name: "Alice".into()
             })],
+            inputs: vec![],
         },
         Case {
             name: "nested_struct",
+            ty: quote!(Person),
             values: vec![quote!(Person {
                 name: "Alice".into(),
                 age: 30,
@@ -281,9 +284,11 @@ pub(crate) fn cases() -> Vec<Case> {
                     zip: 97201
                 }
             })],
+            inputs: vec![],
         },
         Case {
             name: "deep_struct",
+            ty: quote!(Outer),
             values: vec![quote!(Outer {
                 middle: Middle {
                     inner: Inner { x: 1 },
@@ -291,9 +296,11 @@ pub(crate) fn cases() -> Vec<Case> {
                 },
                 z: 3
             })],
+            inputs: vec![],
         },
         Case {
             name: "all_integers",
+            ty: quote!(AllIntegers),
             values: vec![quote!(AllIntegers {
                 a_u8: 255,
                 a_u16: 65535,
@@ -308,28 +315,53 @@ pub(crate) fn cases() -> Vec<Case> {
                 a_i128: -170141183460469231731687303715884105728i128,
                 a_isize: -123_456isize
             })],
+            inputs: vec![],
         },
         Case {
             name: "bool_field",
+            ty: quote!(BoolField),
             values: vec![quote!(BoolField { value: true })],
+            inputs: vec![],
         },
         Case {
             name: "tuple_pair",
+            ty: quote!(Pair),
             values: vec![quote!((42u32, "Alice".to_string()))],
+            inputs: vec![],
         },
         Case {
             name: "vec_scalar_small",
+            ty: quote!(ScalarVec),
             values: vec![quote!(ScalarVec {
                 values: (0..16).map(|i| i as u32).collect()
             })],
+            inputs: vec![],
         },
         Case {
             name: "vec_scalar_large",
+            ty: quote!(ScalarVec),
             values: vec![quote!(ScalarVec {
                 values: (0..2048).map(|i| i as u32).collect()
             })],
+            inputs: vec![],
         },
     ]
+}
+
+fn all_cases() -> Vec<Case> {
+    let mut out = cases();
+    for case in json_input_cases() {
+        let builder = CaseBuilder::new(case.name, case.ty);
+        let case = if let Some(expected) = case.expected {
+            builder.json_ok(case.name, case.input, expected).build()
+        } else if let Some(err_code) = case.expected_error_code {
+            builder.json_err(case.name, case.input, err_code).build()
+        } else {
+            builder.json_err_any(case.name, case.input).build()
+        };
+        out.push(case);
+    }
+    out
 }
 
 fn json_input_cases() -> Vec<JsonInputCase> {
@@ -767,7 +799,7 @@ fn json_input_cases() -> Vec<JsonInputCase> {
 }
 
 pub(crate) fn render_bench_file() -> String {
-    let cases = cases();
+    let cases = all_cases();
     let types = types_rs();
     let bench_calls: Vec<TokenStream> = cases
         .iter()
@@ -945,8 +977,7 @@ pub(crate) fn render_bench_file() -> String {
 }
 
 pub(crate) fn render_test_file() -> String {
-    let cases = cases();
-    let json_input_cases = json_input_cases();
+    let cases = all_cases();
     let types = types_rs();
     let json_tests: Vec<TokenStream> = cases
         .iter()
@@ -1008,6 +1039,7 @@ pub(crate) fn render_test_file() -> String {
         .collect();
     let prop_tests: Vec<TokenStream> = cases
         .iter()
+        .filter(|case| !case.values.is_empty())
         .map(|case| {
             let test_name = format_ident!("{}", case.name);
             let value = case
@@ -1024,36 +1056,49 @@ pub(crate) fn render_test_file() -> String {
             }
         })
         .collect();
-    let json_input_tests: Vec<TokenStream> = json_input_cases
+    let json_input_tests: Vec<TokenStream> = cases
         .iter()
-        .map(|case| {
-            let test_name = format_ident!("{}", case.name);
-            let ty = case.ty.clone();
-            let input = LitByteStr::new(case.input.as_bytes(), Span::call_site());
-            if let Some(expected) = &case.expected {
-                let expected = expected.clone();
-                quote! {
-                    #[test]
-                    fn #test_name() {
-                        assert_json_input_case::<#ty>(#input, #expected);
+        .flat_map(|case| {
+            case.inputs
+                .iter()
+                .filter(|input| input.format == WireFormat::Json)
+                .map(|input| {
+                    let test_name = if case.inputs.len() == 1 {
+                        format_ident!("{}", case.name)
+                    } else {
+                        format_ident!("{}_{}", case.name, input.name)
+                    };
+                    let ty = case.ty.clone();
+                    let input_bytes = LitByteStr::new(input.input, Span::call_site());
+                    match &input.expect {
+                        DecodeExpectation::Ok(expected) => {
+                            let expected = expected.clone();
+                            quote! {
+                                #[test]
+                                fn #test_name() {
+                                    assert_json_input_case::<#ty>(#input_bytes, #expected);
+                                }
+                            }
+                        }
+                        DecodeExpectation::Err(expected_error_code) => {
+                            let expected_error_code = expected_error_code.clone();
+                            quote! {
+                                #[test]
+                                fn #test_name() {
+                                    assert_json_input_err_code::<#ty>(#input_bytes, #expected_error_code);
+                                }
+                            }
+                        }
+                        DecodeExpectation::AnyErr => {
+                            quote! {
+                                #[test]
+                                fn #test_name() {
+                                    assert_json_input_err::<#ty>(#input_bytes);
+                                }
+                            }
+                        }
                     }
-                }
-            } else if let Some(expected_error_code) = &case.expected_error_code {
-                let expected_error_code = expected_error_code.clone();
-                quote! {
-                    #[test]
-                    fn #test_name() {
-                        assert_json_input_err_code::<#ty>(#input, #expected_error_code);
-                    }
-                }
-            } else {
-                quote! {
-                    #[test]
-                    fn #test_name() {
-                        assert_json_input_err::<#ty>(#input);
-                    }
-                }
-            }
+                })
         })
         .collect();
     let file_tokens = quote! {

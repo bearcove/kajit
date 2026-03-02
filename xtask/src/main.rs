@@ -10,7 +10,104 @@ mod ir_postreg_cases;
 
 struct Case {
     name: &'static str,
+    ty: TokenStream,
     values: Vec<TokenStream>,
+    inputs: Vec<DecodeInput>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WireFormat {
+    Json,
+    Postcard,
+}
+
+struct DecodeInput {
+    name: &'static str,
+    format: WireFormat,
+    input: &'static [u8],
+    expect: DecodeExpectation,
+}
+
+enum DecodeExpectation {
+    Ok(TokenStream),
+    Err(TokenStream),
+    AnyErr,
+}
+
+struct CaseBuilder {
+    case: Case,
+}
+
+impl CaseBuilder {
+    fn new(name: &'static str, ty: TokenStream) -> Self {
+        Self {
+            case: Case {
+                name,
+                ty,
+                values: Vec::new(),
+                inputs: Vec::new(),
+            },
+        }
+    }
+
+    fn value(mut self, value: TokenStream) -> Self {
+        self.case.values.push(value);
+        self
+    }
+
+    fn input_ok(
+        mut self,
+        format: WireFormat,
+        name: &'static str,
+        input: &'static [u8],
+        expected: TokenStream,
+    ) -> Self {
+        self.case.inputs.push(DecodeInput {
+            name,
+            format,
+            input,
+            expect: DecodeExpectation::Ok(expected),
+        });
+        self
+    }
+
+    fn input_err(
+        mut self,
+        format: WireFormat,
+        name: &'static str,
+        input: &'static [u8],
+        err_code: TokenStream,
+    ) -> Self {
+        self.case.inputs.push(DecodeInput {
+            name,
+            format,
+            input,
+            expect: DecodeExpectation::Err(err_code),
+        });
+        self
+    }
+
+    fn json_ok(self, name: &'static str, input: &'static str, expected: TokenStream) -> Self {
+        self.input_ok(WireFormat::Json, name, input.as_bytes(), expected)
+    }
+
+    fn json_err(self, name: &'static str, input: &'static str, err_code: TokenStream) -> Self {
+        self.input_err(WireFormat::Json, name, input.as_bytes(), err_code)
+    }
+
+    fn json_err_any(mut self, name: &'static str, input: &'static str) -> Self {
+        self.case.inputs.push(DecodeInput {
+            name,
+            format: WireFormat::Json,
+            input: input.as_bytes(),
+            expect: DecodeExpectation::AnyErr,
+        });
+        self
+    }
+
+    fn build(self) -> Case {
+        self.case
+    }
 }
 
 struct IrOptCase {
