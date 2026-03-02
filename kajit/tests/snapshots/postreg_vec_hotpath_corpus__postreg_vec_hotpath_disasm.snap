@@ -1,5 +1,6 @@
 ---
 source: kajit/tests/postreg_vec_hotpath_corpus.rs
+assertion_line: 108
 expression: disasm
 ---
 > sub sp, sp, #0xa0
@@ -19,17 +20,17 @@ expression: disasm
   mov w9, #0x1
   str w9, [x22, #0x10]
   b $+0x4c0
-  mov x9, #0x7f
+  mov x9, #<imm>
   mov x23, x9
-  mov x9, #0x80
+  mov x9, #<imm>
   mov x15, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x14, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x13, x9
-  mov x9, #0x20
+  mov x9, #<imm>
   mov x12, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x11, x9
   cmp x19, x20
   b.hs $+0x8
@@ -45,31 +46,31 @@ expression: disasm
   and x15, x15, x24
   cmp x15, x14
   b.ne $+0x24
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x23, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x24, x9
   mov x23, x17
   mov x14, x24
   mov x14, x24
   b $+0xe0
-  mov x9, #0x7
+  mov x9, #<imm>
   mov x1, x9
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x2, x9
-  mov x9, #0x1
+  mov x9, #<imm>
   mov x14, x9
-  mov x9, #0x7f
+  mov x9, #<imm>
   mov x14, x9
-  mov x9, #0x7
+  mov x9, #<imm>
   mov x15, x9
-  mov x9, #0x1
+  mov x9, #<imm>
   mov x23, x9
-  mov x9, #0x80
+  mov x9, #<imm>
   mov x24, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x25, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x26, x9
   mov x0, x17
   cmp x19, x20
@@ -123,9 +124,9 @@ expression: disasm
   str w9, [x22, #0x10]
   b $+0x324
   cbnz x23, $+0x30
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x12, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x11, x9
   mov x9, x12
   str x9, [x21, #0x8]
@@ -134,32 +135,32 @@ expression: disasm
   mov x9, x11
   str x9, [x21]
   b $+0x2d4
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x11, x9
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x12, x9
-  mov x9, #0x7f
+  mov x9, #<imm>
   mov x13, x9
   str x13, [sp, #0x50]
-  mov x9, #0x80
+  mov x9, #<imm>
   mov x13, x9
   str x13, [sp, #0x58]
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x13, x9
   str x13, [sp, #0x60]
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x24, x9
   str x24, [sp, #0x68]
-  mov x9, #0x20
+  mov x9, #<imm>
   mov x13, x9
   str x13, [sp, #0x70]
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x13, x9
   str x13, [sp, #0x78]
-  mov x9, #0x1
+  mov x9, #<imm>
   mov x13, x9
   str x13, [sp, #0x80]
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x13, x9
   str x13, [sp, #0x88]
   str x19, [x22]
@@ -167,9 +168,9 @@ expression: disasm
   mov x1, x23
   mov x2, x11
   mov x3, x12
-  mov x16, #0x9ae8
-  movk x16, #0xd2, lsl #16
-  movk x16, #0x1, lsl #32
+  mov x16, #<imm>
+  movk x16, #<imm>, lsl #16
+  movk x16, #<imm>, lsl #32
   blr x16
   ldr x19, [x22]
   ldr w9, [x22, #0x10]
@@ -214,31 +215,31 @@ expression: disasm
   cmp x13, x25
   cset x15, ne
   cbnz x15, $+0x24
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x25, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x25, x9
   mov x15, x25
   ldr x13, [sp, #0x68]
   mov x15, x25
   b $+0xf8
-  mov x9, #0x7
+  mov x9, #<imm>
   mov x15, x9
-  mov x9, #0x4
+  mov x9, #<imm>
   mov x13, x9
-  mov x9, #0x1
+  mov x9, #<imm>
   mov x25, x9
-  mov x9, #0x7f
+  mov x9, #<imm>
   mov x3, x9
-  mov x9, #0x7
+  mov x9, #<imm>
   mov x4, x9
-  mov x9, #0x1
+  mov x9, #<imm>
   mov x5, x9
-  mov x9, #0x80
+  mov x9, #<imm>
   mov x6, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x7, x9
-  mov x9, #0x0
+  mov x9, #<imm>
   mov x8, x9
   mov x17, x12
   mov x12, x15

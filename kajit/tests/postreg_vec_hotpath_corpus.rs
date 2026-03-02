@@ -29,7 +29,7 @@ fn disasm_bytes(code: &[u8], marker_offset: Option<usize>) -> String {
             };
             match decoder.decode(&mut reader) {
                 Ok(inst) => {
-                    let text = normalize_inst(&format!("{inst}"));
+                    let text = kajit::disasm_normalize::normalize_inst(&format!("{inst}"));
                     writeln!(&mut out, "{prefix}{text}").unwrap();
                     if text.trim() == "ret" {
                         ret_count += 1;
@@ -65,7 +65,7 @@ fn disasm_bytes(code: &[u8], marker_offset: Option<usize>) -> String {
             match decoder.decode(&mut reader) {
                 Ok(inst) => {
                     let len = inst.len().to_const() as usize;
-                    let text = normalize_inst(&format!("{inst}"));
+                    let text = kajit::disasm_normalize::normalize_inst(&format!("{inst}"));
                     writeln!(&mut out, "{prefix}{text}").unwrap();
                     if text.trim() == "ret" {
                         ret_count += 1;
@@ -86,30 +86,11 @@ fn disasm_bytes(code: &[u8], marker_offset: Option<usize>) -> String {
     out
 }
 
-fn normalize_inst(text: &str) -> String {
-    if let Some(rest) = text.strip_prefix("mov ")
-        && let Some((reg, imm)) = rest.split_once(", 0x") {
-            let hex_len = imm.len();
-            if reg.starts_with('r') && hex_len >= 10 {
-                return format!("mov {reg}, 0x<imm>");
-            }
-        }
-
-    if let Some(rest) = text.strip_prefix("adrp ")
-        && let Some((reg, imm)) = rest.split_once(", 0x") {
-            let hex_len = imm.len();
-            if reg.starts_with('x') && hex_len >= 6 {
-                return format!("adrp {reg}, 0x<imm>");
-            }
-        }
-
-    text.to_string()
-}
-
 fn vec_hotpath_artifacts() -> (String, String, usize, String) {
     let (ir_text, ra_text) =
         kajit::debug_ir_and_ra_mir_text(ScalarVec::SHAPE, &kajit::postcard::KajitPostcard);
-    let edits = kajit::regalloc_edit_count_via_ir(ScalarVec::SHAPE, &kajit::postcard::KajitPostcard);
+    let edits =
+        kajit::regalloc_edit_count_via_ir(ScalarVec::SHAPE, &kajit::postcard::KajitPostcard);
     let dec = kajit::compile_decoder_with_backend(
         ScalarVec::SHAPE,
         &kajit::postcard::KajitPostcard,

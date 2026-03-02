@@ -3,6 +3,7 @@
 pub mod arch;
 pub mod compiler;
 pub mod context;
+pub mod disasm_normalize;
 pub mod format;
 pub mod intrinsics;
 pub mod ir;
