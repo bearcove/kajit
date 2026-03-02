@@ -255,6 +255,38 @@ struct RcScalar {
     value: std::rc::Rc<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct BoxedScalar {
+    value: Box<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct BoxedString {
+    #[allow(clippy::box_collection)]
+    name: Box<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct BoxedNested {
+    inner: Box<Friend>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct OptionBox {
+    value: Option<Box<u32>>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct VecBox {
+    #[allow(clippy::vec_box)]
+    items: Vec<Box<u32>>,
+}
+#[derive(Debug, PartialEq, Facet)]
+struct ArcScalar {
+    value: std::sync::Arc<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct UnitField {
+    geo: (),
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    name: String,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
     #[proptest(
         strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
@@ -577,11 +609,55 @@ fn main() {
         },
     );
     register_bench_case(&mut v, "tuple_pair", (42u32, "Alice".to_string()));
+    register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32));
+    register_bench_case(&mut v, "array_u32_4", [10u32, 20u32, 30u32, 40u32]);
+    register_bench_case(&mut v, "tuple_nested", ((1u32, 2u32), 3u32));
     register_bench_case(
         &mut v,
         "vec_scalar_small",
         ScalarVec {
             values: (0..16).map(|i| i as u32).collect(),
+        },
+    );
+    register_bench_case(&mut v, "box_scalar", BoxedScalar { value: Box::new(42) });
+    register_bench_case(
+        &mut v,
+        "box_string",
+        BoxedString {
+            name: Box::new("hello".to_string()),
+        },
+    );
+    register_bench_case(
+        &mut v,
+        "box_nested",
+        BoxedNested {
+            inner: Box::new(Friend {
+                age: 30,
+                name: "Bob".to_string(),
+            }),
+        },
+    );
+    register_bench_case(
+        &mut v,
+        "option_box__v0",
+        OptionBox {
+            value: Some(Box::new(7)),
+        },
+    );
+    register_bench_case(&mut v, "option_box__v1", OptionBox { value: None });
+    register_bench_case(
+        &mut v,
+        "vec_box",
+        VecBox {
+            items: vec![Box::new(1), Box::new(2), Box::new(3)],
+        },
+    );
+    register_bench_case(
+        &mut v,
+        "unit_field",
+        UnitField {
+            geo: (),
+            name: "test".into(),
         },
     );
     register_bench_case(

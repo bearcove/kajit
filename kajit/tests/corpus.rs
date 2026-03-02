@@ -256,6 +256,38 @@ struct RcScalar {
     value: std::rc::Rc<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct BoxedScalar {
+    value: Box<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct BoxedString {
+    #[allow(clippy::box_collection)]
+    name: Box<String>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct BoxedNested {
+    inner: Box<Friend>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct OptionBox {
+    value: Option<Box<u32>>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct VecBox {
+    #[allow(clippy::vec_box)]
+    items: Vec<Box<u32>>,
+}
+#[derive(Debug, PartialEq, Facet)]
+struct ArcScalar {
+    value: std::sync::Arc<u32>,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct UnitField {
+    geo: (),
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    name: String,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
     #[proptest(
         strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
@@ -712,6 +744,34 @@ mod json {
         assert_json_case(value);
     }
     #[test]
+    fn tuple_triple() {
+        let value = (1u32, 2u32, 3u32);
+        assert_codegen_snapshots(
+            "json",
+            "tuple_triple",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn array_u32_4() {
+        let value = [10u32, 20u32, 30u32, 40u32];
+        assert_codegen_snapshots("json", "array_u32_4", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn tuple_nested() {
+        let value = ((1u32, 2u32), 3u32);
+        assert_codegen_snapshots(
+            "json",
+            "tuple_nested",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
     fn vec_scalar_small() {
         let value = ScalarVec {
             values: (0..16).map(|i| i as u32).collect(),
@@ -722,6 +782,72 @@ mod json {
             &kajit::json::KajitJson,
             &value,
         );
+        assert_json_case(value);
+    }
+    #[test]
+    fn box_scalar() {
+        let value = BoxedScalar { value: Box::new(42) };
+        assert_codegen_snapshots("json", "box_scalar", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn box_string() {
+        let value = BoxedString {
+            name: Box::new("hello".to_string()),
+        };
+        assert_codegen_snapshots("json", "box_string", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn box_nested() {
+        let value = BoxedNested {
+            inner: Box::new(Friend {
+                age: 30,
+                name: "Bob".to_string(),
+            }),
+        };
+        assert_codegen_snapshots("json", "box_nested", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_box_v0() {
+        let value = OptionBox {
+            value: Some(Box::new(7)),
+        };
+        assert_codegen_snapshots(
+            "json",
+            "option_box__v0",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn option_box_v1() {
+        let value = OptionBox { value: None };
+        assert_codegen_snapshots(
+            "json",
+            "option_box__v1",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn vec_box() {
+        let value = VecBox {
+            items: vec![Box::new(1), Box::new(2), Box::new(3)],
+        };
+        assert_codegen_snapshots("json", "vec_box", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn unit_field() {
+        let value = UnitField {
+            geo: (),
+            name: "test".into(),
+        };
+        assert_codegen_snapshots("json", "unit_field", &kajit::json::KajitJson, &value);
         assert_json_case(value);
     }
     #[test]
@@ -1119,6 +1245,39 @@ mod postcard {
         assert_postcard_case(value);
     }
     #[test]
+    fn tuple_triple() {
+        let value = (1u32, 2u32, 3u32);
+        assert_codegen_snapshots(
+            "postcard",
+            "tuple_triple",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn array_u32_4() {
+        let value = [10u32, 20u32, 30u32, 40u32];
+        assert_codegen_snapshots(
+            "postcard",
+            "array_u32_4",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn tuple_nested() {
+        let value = ((1u32, 2u32), 3u32);
+        assert_codegen_snapshots(
+            "postcard",
+            "tuple_nested",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
     fn vec_scalar_small() {
         let value = ScalarVec {
             values: (0..16).map(|i| i as u32).collect(),
@@ -1126,6 +1285,97 @@ mod postcard {
         assert_codegen_snapshots(
             "postcard",
             "vec_scalar_small",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn box_scalar() {
+        let value = BoxedScalar { value: Box::new(42) };
+        assert_codegen_snapshots(
+            "postcard",
+            "box_scalar",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn box_string() {
+        let value = BoxedString {
+            name: Box::new("hello".to_string()),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "box_string",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn box_nested() {
+        let value = BoxedNested {
+            inner: Box::new(Friend {
+                age: 30,
+                name: "Bob".to_string(),
+            }),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "box_nested",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_box_v0() {
+        let value = OptionBox {
+            value: Some(Box::new(7)),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_box__v0",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn option_box_v1() {
+        let value = OptionBox { value: None };
+        assert_codegen_snapshots(
+            "postcard",
+            "option_box__v1",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn vec_box() {
+        let value = VecBox {
+            items: vec![Box::new(1), Box::new(2), Box::new(3)],
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "vec_box",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn unit_field() {
+        let value = UnitField {
+            geo: (),
+            name: "test".into(),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "unit_field",
             &kajit::postcard::KajitPostcard,
             &value,
         );
@@ -1450,9 +1700,68 @@ mod prop {
         assert_prop_case(&marker);
     }
     #[test]
+    fn tuple_triple() {
+        let marker = (1u32, 2u32, 3u32);
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn array_u32_4() {
+        let marker = [10u32, 20u32, 30u32, 40u32];
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn tuple_nested() {
+        let marker = ((1u32, 2u32), 3u32);
+        assert_prop_case(&marker);
+    }
+    #[test]
     fn vec_scalar_small() {
         let marker = ScalarVec {
             values: (0..16).map(|i| i as u32).collect(),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn box_scalar() {
+        let marker = BoxedScalar { value: Box::new(42) };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn box_string() {
+        let marker = BoxedString {
+            name: Box::new("hello".to_string()),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn box_nested() {
+        let marker = BoxedNested {
+            inner: Box::new(Friend {
+                age: 30,
+                name: "Bob".to_string(),
+            }),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn option_box() {
+        let marker = OptionBox {
+            value: Some(Box::new(7)),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn vec_box() {
+        let marker = VecBox {
+            items: vec![Box::new(1), Box::new(2), Box::new(3)],
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn unit_field() {
+        let marker = UnitField {
+            geo: (),
+            name: "test".into(),
         };
         assert_prop_case(&marker);
     }
@@ -1995,6 +2304,17 @@ mod json_input {
             SkipWithCustomDefault {
                 value: 10,
                 magic: 42,
+            },
+        );
+    }
+    #[test]
+    fn arc_scalar() {
+        assert_json_input_case::<
+            ArcScalar,
+        >(
+            b"{\"value\": 99}",
+            ArcScalar {
+                value: std::sync::Arc::new(99),
             },
         );
     }

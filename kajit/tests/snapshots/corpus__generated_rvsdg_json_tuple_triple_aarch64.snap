@@ -1,0 +1,14 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 546
+expression: ir_text
+---
+lambda @0 (shape: "(ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¢ÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂÃÂ¦)") {
+  region {
+    args: [%cs, %os]
+    n1 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+    n2 = CallIntrinsic(0x<ptr>, field_offset=4) [%cs:n1, %os:n1] -> [%cs, %os]
+    n3 = CallIntrinsic(0x<ptr>, field_offset=8) [%cs:n2, %os:n2] -> [%cs, %os]
+    results: [%cs:n3, %os:n3]
+  }
+}

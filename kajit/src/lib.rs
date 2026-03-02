@@ -1547,117 +1547,15 @@ mod tests {
         value: Box<u32>,
     }
 
-    // r[verify deser.pointer]
-    // r[verify deser.pointer.scratch]
-    // r[verify deser.pointer.new-into]
-    // r[verify deser.pointer.format-transparent]
-    #[test]
-    fn json_box_scalar() {
-        let input = br#"{"value": 42}"#;
-        let deser = compile_decoder(BoxedScalar::SHAPE, &json::KajitJson);
-        let result: BoxedScalar = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            BoxedScalar {
-                value: Box::new(42)
-            }
-        );
-    }
-
-    // r[verify deser.pointer]
-    // r[verify deser.pointer.format-transparent]
-    #[test]
-    fn postcard_box_scalar() {
-        // Box<u32> is wire-transparent, so the postcard encoding is identical
-        // to a struct with a bare u32 field: just a varint.
-        #[derive(serde::Serialize)]
-        struct Ref {
-            value: u32,
-        }
-        let input = ::postcard::to_allocvec(&Ref { value: 42 }).unwrap();
-        let deser = compile_decoder(BoxedScalar::SHAPE, &postcard::KajitPostcard);
-        let result: BoxedScalar = deserialize(&deser, &input).unwrap();
-        assert_eq!(
-            result,
-            BoxedScalar {
-                value: Box::new(42)
-            }
-        );
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct BoxedString {
         #[allow(clippy::box_collection)]
         name: Box<String>,
     }
 
-    // r[verify deser.pointer]
-    #[test]
-    fn json_box_string() {
-        let input = br#"{"name": "hello"}"#;
-        let deser = compile_decoder(BoxedString::SHAPE, &json::KajitJson);
-        let result: BoxedString = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            BoxedString {
-                name: Box::new("hello".to_string()),
-            }
-        );
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct BoxedNested {
         inner: Box<Friend>,
-    }
-
-    // r[verify deser.pointer]
-    #[test]
-    fn json_box_nested_struct() {
-        let input = br#"{"inner": {"age": 30, "name": "Bob"}}"#;
-        let deser = compile_decoder(BoxedNested::SHAPE, &json::KajitJson);
-        let result: BoxedNested = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            BoxedNested {
-                inner: Box::new(Friend {
-                    age: 30,
-                    name: "Bob".to_string(),
-                }),
-            }
-        );
-    }
-
-    // r[verify deser.pointer]
-    #[test]
-    fn postcard_box_nested_struct() {
-        // Box<Friend> is wire-transparent — same encoding as a bare Friend.
-        #[derive(serde::Serialize)]
-        struct Ref {
-            inner: RefInner,
-        }
-        #[derive(serde::Serialize)]
-        struct RefInner {
-            age: u32,
-            name: String,
-        }
-        let input = ::postcard::to_allocvec(&Ref {
-            inner: RefInner {
-                age: 30,
-                name: "Bob".to_string(),
-            },
-        })
-        .unwrap();
-        let deser = compile_decoder(BoxedNested::SHAPE, &postcard::KajitPostcard);
-        let result: BoxedNested = deserialize(&deser, &input).unwrap();
-        assert_eq!(
-            result,
-            BoxedNested {
-                inner: Box::new(Friend {
-                    age: 30,
-                    name: "Bob".to_string(),
-                }),
-            }
-        );
     }
 
     // r[verify deser.pointer.nesting]
@@ -1666,45 +1564,10 @@ mod tests {
         value: Option<Box<u32>>,
     }
 
-    #[test]
-    fn json_option_box_some() {
-        let input = br#"{"value": 7}"#;
-        let deser = compile_decoder(OptionBox::SHAPE, &json::KajitJson);
-        let result: OptionBox = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            OptionBox {
-                value: Some(Box::new(7)),
-            }
-        );
-    }
-
-    #[test]
-    fn json_option_box_none() {
-        let input = br#"{"value": null}"#;
-        let deser = compile_decoder(OptionBox::SHAPE, &json::KajitJson);
-        let result: OptionBox = deserialize(&deser, input).unwrap();
-        assert_eq!(result, OptionBox { value: None });
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct VecBox {
         #[allow(clippy::vec_box)]
         items: Vec<Box<u32>>,
-    }
-
-    // r[verify deser.pointer.nesting]
-    #[test]
-    fn json_vec_box() {
-        let input = br#"{"items": [1, 2, 3]}"#;
-        let deser = compile_decoder(VecBox::SHAPE, &json::KajitJson);
-        let result: VecBox = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            VecBox {
-                items: vec![Box::new(1), Box::new(2), Box::new(3)],
-            }
-        );
     }
 
     #[derive(Facet, Debug, PartialEq)]
@@ -1712,38 +1575,10 @@ mod tests {
         value: std::sync::Arc<u32>,
     }
 
-    // r[verify deser.pointer]
-    #[test]
-    fn json_arc_scalar() {
-        let input = br#"{"value": 99}"#;
-        let deser = compile_decoder(ArcScalar::SHAPE, &json::KajitJson);
-        let result: ArcScalar = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            ArcScalar {
-                value: std::sync::Arc::new(99),
-            }
-        );
-    }
-
     #[derive(Facet, Debug, PartialEq)]
     struct UnitField {
         geo: (),
         name: String,
-    }
-
-    #[test]
-    fn json_unit_field() {
-        let input = br#"{"geo": null, "name": "test"}"#;
-        let deser = compile_decoder(UnitField::SHAPE, &json::KajitJson);
-        let result: UnitField = deserialize(&deser, input).unwrap();
-        assert_eq!(
-            result,
-            UnitField {
-                geo: (),
-                name: "test".into(),
-            }
-        );
     }
 
     // --- Encode tests ---
@@ -2142,58 +1977,6 @@ mod tests {
         let dec = compile_decoder(Friend::SHAPE, &json::KajitJson);
         let decoded: Friend = deserialize(&dec, &bytes).unwrap();
         assert_eq!(decoded, original);
-    }
-
-    // ── Tuple and array tests ─────────────────────────────────────────────────
-
-    #[test]
-    fn json_tuple_deser() {
-        let input = br#"[42, "Alice"]"#;
-        let dec = compile_decoder(<(u32, String)>::SHAPE, &json::KajitJson);
-        let result: (u32, String) = deserialize(&dec, input).unwrap();
-        assert_eq!(result, (42, "Alice".into()));
-    }
-
-    #[test]
-    fn postcard_tuple_deser() {
-        let original: (u32, String) = (42, "Alice".into());
-        let bytes = ::postcard::to_allocvec(&original).unwrap();
-        let dec = compile_decoder(<(u32, String)>::SHAPE, &postcard::KajitPostcard);
-        let result: (u32, String) = deserialize(&dec, &bytes).unwrap();
-        assert_eq!(result, original);
-    }
-
-    #[test]
-    fn json_tuple_triple_deser() {
-        let input = br#"[1, 2, 3]"#;
-        let dec = compile_decoder(<(u32, u32, u32)>::SHAPE, &json::KajitJson);
-        let result: (u32, u32, u32) = deserialize(&dec, input).unwrap();
-        assert_eq!(result, (1, 2, 3));
-    }
-
-    #[test]
-    fn json_array_deser() {
-        let input = br#"[10, 20, 30, 40]"#;
-        let dec = compile_decoder(<[u32; 4]>::SHAPE, &json::KajitJson);
-        let result: [u32; 4] = deserialize(&dec, input).unwrap();
-        assert_eq!(result, [10, 20, 30, 40]);
-    }
-
-    #[test]
-    fn postcard_array_deser() {
-        let original: [u32; 4] = [10, 20, 30, 40];
-        let bytes = ::postcard::to_allocvec(&original).unwrap();
-        let dec = compile_decoder(<[u32; 4]>::SHAPE, &postcard::KajitPostcard);
-        let result: [u32; 4] = deserialize(&dec, &bytes).unwrap();
-        assert_eq!(result, original);
-    }
-
-    #[test]
-    fn json_tuple_nested_deser() {
-        let input = br#"[[1, 2], [3, 4]]"#;
-        let dec = compile_decoder(<([u32; 2], [u32; 2])>::SHAPE, &json::KajitJson);
-        let result: ([u32; 2], [u32; 2]) = deserialize(&dec, input).unwrap();
-        assert_eq!(result, ([1, 2], [3, 4]));
     }
 }
 

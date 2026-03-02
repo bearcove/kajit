@@ -1,0 +1,20 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 550
+expression: ra_text
+---
+ra_func @0 {
+  block b0:
+    call_intrinsic(0x<ptr>, fo=0) !gpr,simd
+    call_intrinsic(0x<ptr>, fo=4) !gpr,simd
+    call_intrinsic(0x<ptr>, fo=8) !gpr,simd
+    term: return
+    succs: (none)
+}
+ra_func @1 {
+  block b0:
+    call_intrinsic(0x<ptr>, fo=0) !gpr,simd
+    call_intrinsic(0x<ptr>, fo=4) !gpr,simd
+    term: return
+    succs: (none)
+}

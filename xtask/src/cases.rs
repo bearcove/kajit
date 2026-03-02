@@ -300,6 +300,45 @@ pub(crate) fn types_rs() -> TokenStream {
         }
 
         #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct BoxedScalar {
+            value: Box<u32>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct BoxedString {
+            #[allow(clippy::box_collection)]
+            name: Box<String>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct BoxedNested {
+            inner: Box<Friend>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct OptionBox {
+            value: Option<Box<u32>>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct VecBox {
+            #[allow(clippy::vec_box)]
+            items: Vec<Box<u32>>,
+        }
+
+        #[derive(Debug, PartialEq, Facet)]
+        struct ArcScalar {
+            value: std::sync::Arc<u32>,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct UnitField {
+            geo: (),
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+            name: String,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct ScalarVec {
             #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
             values: Vec<u32>,
@@ -488,10 +527,83 @@ pub(crate) fn cases() -> Vec<Case> {
             inputs: vec![],
         },
         Case {
+            name: "tuple_triple",
+            ty: quote!((u32, u32, u32)),
+            values: vec![quote!((1u32, 2u32, 3u32))],
+            inputs: vec![],
+        },
+        Case {
+            name: "array_u32_4",
+            ty: quote!([u32; 4]),
+            values: vec![quote!([10u32, 20u32, 30u32, 40u32])],
+            inputs: vec![],
+        },
+        Case {
+            name: "tuple_nested",
+            ty: quote!(((u32, u32), u32)),
+            values: vec![quote!(((1u32, 2u32), 3u32))],
+            inputs: vec![],
+        },
+        Case {
             name: "vec_scalar_small",
             ty: quote!(ScalarVec),
             values: vec![quote!(ScalarVec {
                 values: (0..16).map(|i| i as u32).collect()
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "box_scalar",
+            ty: quote!(BoxedScalar),
+            values: vec![quote!(BoxedScalar {
+                value: Box::new(42)
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "box_string",
+            ty: quote!(BoxedString),
+            values: vec![quote!(BoxedString {
+                name: Box::new("hello".to_string())
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "box_nested",
+            ty: quote!(BoxedNested),
+            values: vec![quote!(BoxedNested {
+                inner: Box::new(Friend {
+                    age: 30,
+                    name: "Bob".to_string()
+                })
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "option_box",
+            ty: quote!(OptionBox),
+            values: vec![
+                quote!(OptionBox {
+                    value: Some(Box::new(7))
+                }),
+                quote!(OptionBox { value: None }),
+            ],
+            inputs: vec![],
+        },
+        Case {
+            name: "vec_box",
+            ty: quote!(VecBox),
+            values: vec![quote!(VecBox {
+                items: vec![Box::new(1), Box::new(2), Box::new(3)]
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "unit_field",
+            ty: quote!(UnitField),
+            values: vec![quote!(UnitField {
+                geo: (),
+                name: "test".into()
             })],
             inputs: vec![],
         },
@@ -1060,6 +1172,15 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected: Some(quote!(SkipWithCustomDefault {
                 value: 10,
                 magic: 42
+            })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "arc_scalar",
+            ty: quote!(ArcScalar),
+            input: r#"{"value": 99}"#,
+            expected: Some(quote!(ArcScalar {
+                value: std::sync::Arc::new(99)
             })),
             expected_error_code: None,
         },
