@@ -127,6 +127,43 @@ struct AllIntegers {
     a_isize: isize,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct AllScalars {
+    a_bool: bool,
+    a_u8: u8,
+    a_u16: u16,
+    a_u32: u32,
+    a_u64: u64,
+    a_u128: u128,
+    a_usize: usize,
+    a_i8: i8,
+    a_i16: i16,
+    a_i32: i32,
+    a_i64: i64,
+    a_i128: i128,
+    a_isize: isize,
+    #[proptest(strategy = "-1000000.0f32..1000000.0f32")]
+    a_f32: f32,
+    #[proptest(strategy = "-1000000.0f64..1000000.0f64")]
+    a_f64: f64,
+    a_char: char,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    a_name: String,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Bools {
+    a: bool,
+    b: bool,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Boundaries {
+    u8_max: u8,
+    u16_max: u16,
+    i8_min: i8,
+    i8_max: i8,
+    i16_min: i16,
+    i32_min: i32,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct BoolField {
     value: bool,
 }
@@ -557,6 +594,59 @@ mod json {
         assert_json_case(value);
     }
     #[test]
+    fn all_scalars() {
+        let value = AllScalars {
+            a_bool: true,
+            a_u8: 200,
+            a_u16: 1000,
+            a_u32: 70000,
+            a_u64: 1_000_000_000_000,
+            a_u128: 18_446_744_073_709_551_621u128,
+            a_usize: 12345,
+            a_i8: -42,
+            a_i16: -1000,
+            a_i32: -70000,
+            a_i64: -1_000_000_000_000,
+            a_i128: -18_446_744_073_709_551_621i128,
+            a_isize: -12345,
+            a_f32: 3.14,
+            a_f64: 2.718281828459045,
+            a_char: 'ß',
+            a_name: "hello".into(),
+        };
+        assert_codegen_snapshots("json", "all_scalars", &kajit::json::KajitJson, &value);
+        assert_json_case(value);
+    }
+    #[test]
+    fn bool_true_false() {
+        let value = Bools { a: true, b: false };
+        assert_codegen_snapshots(
+            "json",
+            "bool_true_false",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn integer_boundaries() {
+        let value = Boundaries {
+            u8_max: 255,
+            u16_max: 65535,
+            i8_min: -128,
+            i8_max: 127,
+            i16_min: -32768,
+            i32_min: -2147483648,
+        };
+        assert_codegen_snapshots(
+            "json",
+            "integer_boundaries",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
     fn bool_field() {
         let value = BoolField { value: true };
         assert_codegen_snapshots("json", "bool_field", &kajit::json::KajitJson, &value);
@@ -890,6 +980,64 @@ mod postcard {
         assert_codegen_snapshots(
             "postcard",
             "all_integers",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn all_scalars() {
+        let value = AllScalars {
+            a_bool: true,
+            a_u8: 200,
+            a_u16: 1000,
+            a_u32: 70000,
+            a_u64: 1_000_000_000_000,
+            a_u128: 18_446_744_073_709_551_621u128,
+            a_usize: 12345,
+            a_i8: -42,
+            a_i16: -1000,
+            a_i32: -70000,
+            a_i64: -1_000_000_000_000,
+            a_i128: -18_446_744_073_709_551_621i128,
+            a_isize: -12345,
+            a_f32: 3.14,
+            a_f64: 2.718281828459045,
+            a_char: 'ß',
+            a_name: "hello".into(),
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "all_scalars",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn bool_true_false() {
+        let value = Bools { a: true, b: false };
+        assert_codegen_snapshots(
+            "postcard",
+            "bool_true_false",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn integer_boundaries() {
+        let value = Boundaries {
+            u8_max: 255,
+            u16_max: 65535,
+            i8_min: -128,
+            i8_max: 127,
+            i16_min: -32768,
+            i32_min: -2147483648,
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "integer_boundaries",
             &kajit::postcard::KajitPostcard,
             &value,
         );
@@ -1232,6 +1380,46 @@ mod prop {
             a_i64: -1_000_000_000_000,
             a_i128: -170141183460469231731687303715884105728i128,
             a_isize: -123_456isize,
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn all_scalars() {
+        let marker = AllScalars {
+            a_bool: true,
+            a_u8: 200,
+            a_u16: 1000,
+            a_u32: 70000,
+            a_u64: 1_000_000_000_000,
+            a_u128: 18_446_744_073_709_551_621u128,
+            a_usize: 12345,
+            a_i8: -42,
+            a_i16: -1000,
+            a_i32: -70000,
+            a_i64: -1_000_000_000_000,
+            a_i128: -18_446_744_073_709_551_621i128,
+            a_isize: -12345,
+            a_f32: 3.14,
+            a_f64: 2.718281828459045,
+            a_char: 'ß',
+            a_name: "hello".into(),
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn bool_true_false() {
+        let marker = Bools { a: true, b: false };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn integer_boundaries() {
+        let marker = Boundaries {
+            u8_max: 255,
+            u16_max: 65535,
+            i8_min: -128,
+            i8_max: 127,
+            i16_min: -32768,
+            i32_min: -2147483648,
         };
         assert_prop_case(&marker);
     }
