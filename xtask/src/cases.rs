@@ -266,15 +266,16 @@ pub(crate) fn types_rs() -> TokenStream {
         #[facet(transparent)]
         struct StructWrapper(Friend);
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         #[facet(deny_unknown_fields)]
         struct Strict {
             x: u32,
             y: u32,
         }
 
-        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct WithDefault {
+            #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
             name: String,
             #[facet(default)]
             score: u32,
@@ -743,6 +744,21 @@ pub(crate) fn cases() -> Vec<Case> {
             values: vec![quote!(RenameField {
                 name: "Alice".into(),
                 age: 30
+            })],
+            inputs: vec![],
+        },
+        Case {
+            name: "deny_unknown_fields",
+            ty: quote!(Strict),
+            values: vec![quote!(Strict { x: 10, y: 20 })],
+            inputs: vec![],
+        },
+        Case {
+            name: "default_field",
+            ty: quote!(WithDefault),
+            values: vec![quote!(WithDefault {
+                name: "hello".into(),
+                score: 7
             })],
             inputs: vec![],
         },

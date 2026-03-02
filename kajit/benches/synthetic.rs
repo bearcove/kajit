@@ -226,14 +226,15 @@ struct StringWrapper(
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
 struct StructWrapper(Friend);
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(deny_unknown_fields)]
 struct Strict {
     x: u32,
     y: u32,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct WithDefault {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
     name: String,
     #[facet(default)]
     score: u32,
@@ -757,6 +758,15 @@ fn main() {
         RenameField {
             name: "Alice".into(),
             age: 30,
+        },
+    );
+    register_bench_case(&mut v, "deny_unknown_fields", Strict { x: 10, y: 20 });
+    register_bench_case(
+        &mut v,
+        "default_field",
+        WithDefault {
+            name: "hello".into(),
+            score: 7,
         },
     );
     register_bench_case(&mut v, "transparent_scalar", Wrapper(42));

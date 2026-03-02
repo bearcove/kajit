@@ -227,14 +227,15 @@ struct StringWrapper(
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
 struct StructWrapper(Friend);
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(deny_unknown_fields)]
 struct Strict {
     x: u32,
     y: u32,
 }
-#[derive(Debug, PartialEq, Serialize, Deserialize, Facet)]
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct WithDefault {
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
     name: String,
     #[facet(default)]
     score: u32,
@@ -1053,6 +1054,31 @@ mod json {
         assert_json_case(value);
     }
     #[test]
+    fn deny_unknown_fields() {
+        let value = Strict { x: 10, y: 20 };
+        assert_codegen_snapshots(
+            "json",
+            "deny_unknown_fields",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
+    fn default_field() {
+        let value = WithDefault {
+            name: "hello".into(),
+            score: 7,
+        };
+        assert_codegen_snapshots(
+            "json",
+            "default_field",
+            &kajit::json::KajitJson,
+            &value,
+        );
+        assert_json_case(value);
+    }
+    #[test]
     fn transparent_scalar() {
         let value = Wrapper(42);
         assert_codegen_snapshots(
@@ -1649,6 +1675,31 @@ mod postcard {
         assert_postcard_case(value);
     }
     #[test]
+    fn deny_unknown_fields() {
+        let value = Strict { x: 10, y: 20 };
+        assert_codegen_snapshots(
+            "postcard",
+            "deny_unknown_fields",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn default_field() {
+        let value = WithDefault {
+            name: "hello".into(),
+            score: 7,
+        };
+        assert_codegen_snapshots(
+            "postcard",
+            "default_field",
+            &kajit::postcard::KajitPostcard,
+            &value,
+        );
+        assert_postcard_case(value);
+    }
+    #[test]
     fn transparent_scalar() {
         let value = Wrapper(42);
         assert_codegen_snapshots(
@@ -1964,6 +2015,19 @@ mod prop {
         let marker = RenameField {
             name: "Alice".into(),
             age: 30,
+        };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn deny_unknown_fields() {
+        let marker = Strict { x: 10, y: 20 };
+        assert_prop_case(&marker);
+    }
+    #[test]
+    fn default_field() {
+        let marker = WithDefault {
+            name: "hello".into(),
+            score: 7,
         };
         assert_prop_case(&marker);
     }

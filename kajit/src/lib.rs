@@ -959,16 +959,6 @@ mod tests {
         y: u32,
     }
 
-    // r[verify deser.deny-unknown-fields.postcard-irrelevant]
-    #[test]
-    fn postcard_deny_unknown_fields_irrelevant() {
-        // Postcard is positional — deny_unknown_fields has no effect.
-        let wire = ::postcard::to_allocvec(&(10u32, 20u32)).unwrap();
-        let deser = compile_decoder(Strict::SHAPE, &postcard::KajitPostcard);
-        let result: Strict = deserialize(&deser, &wire).unwrap();
-        assert_eq!(result, Strict { x: 10, y: 20 });
-    }
-
     // ═══════════════════════════════════════════════════════════════════
     // #19: default
     // ═══════════════════════════════════════════════════════════════════
@@ -998,22 +988,6 @@ mod tests {
         fn default() -> Self {
             AllDefault { x: 10, y: 20 }
         }
-    }
-
-    // r[verify deser.default.postcard-irrelevant]
-    #[test]
-    fn postcard_default_irrelevant() {
-        // Postcard is positional — all fields are always present, defaults don't apply.
-        let wire = ::postcard::to_allocvec(&("hello".to_string(), 7u32)).unwrap();
-        let deser = compile_decoder(WithDefault::SHAPE, &postcard::KajitPostcard);
-        let result: WithDefault = deserialize(&deser, &wire).unwrap();
-        assert_eq!(
-            result,
-            WithDefault {
-                name: "hello".into(),
-                score: 7,
-            }
-        );
     }
 
     // ═══════════════════════════════════════════════════════════════════

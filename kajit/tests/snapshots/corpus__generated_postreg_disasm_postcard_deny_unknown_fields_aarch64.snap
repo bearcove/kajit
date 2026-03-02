@@ -1,0 +1,252 @@
+---
+source: kajit/tests/corpus.rs
+assertion_line: 578
+expression: disasm
+---
+> sub sp, sp, #0x60
+  stp x29, x30, [sp]
+  stp x19, x20, [sp, #0x10]
+  stp x21, x22, [sp, #0x20]
+  stp x23, x24, [sp, #0x30]
+  stp x25, x26, [sp, #0x40]
+  mov x29, sp
+  mov x21, x0
+  mov x22, x1
+  ldr x19, [x22]
+  ldr x20, [x22, #0x8]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x380
+  mov x9, #<imm>
+  mov x2, x9
+  mov x9, #<imm>
+  mov x5, x9
+  mov x9, #<imm>
+  mov x8, x9
+  mov x9, #<imm>
+  mov x26, x9
+  mov x9, #<imm>
+  mov x25, x9
+  mov x9, #<imm>
+  mov x15, x9
+  mov x9, #<imm>
+  mov x14, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x13, x9
+  mov x9, #<imm>
+  mov x24, x9
+  mov x9, #<imm>
+  mov x23, x9
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x308
+  ldrb w9, [x19]
+  mov x0, x9
+  add x19, x19, #0x1
+  mov x17, x0
+  and x17, x17, x2
+  and x0, x0, x5
+  cmp x0, x8
+  b.ne $+0x24
+  mov x9, #<imm>
+  mov x0, x9
+  mov x9, #<imm>
+  mov x1, x9
+  mov x0, x17
+  mov x2, x1
+  mov x2, x1
+  b $+0xd8
+  mov x9, #<imm>
+  mov x1, x9
+  mov x9, #<imm>
+  mov x2, x9
+  mov x9, #<imm>
+  mov x0, x9
+  mov x0, x17
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x294
+  mov x9, #<imm>
+  mov x4, x9
+  mov x9, #<imm>
+  mov x3, x9
+  mov x9, #<imm>
+  mov x8, x9
+  mov x9, #<imm>
+  mov x6, x9
+  mov x9, #<imm>
+  mov x5, x9
+  mov x9, #<imm>
+  mov x7, x9
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x24c
+  ldrb w9, [x19]
+  mov x17, x9
+  add x19, x19, #0x1
+  add x3, x3, x1
+  sub x2, x2, x8
+  and x4, x4, x17
+  and x6, x6, x17
+  cmp x2, x7
+  cset x7, ne
+  mov x9, x4
+  mov x10, x1
+  lsl x9, x9, x10
+  mov x1, x9
+  cmp x6, x5
+  cset x6, ne
+  orr x0, x0, x1
+  mov x1, x3
+  mov x3, x4
+  mov x3, x6
+  cbz x6, $+0x8
+  cbnz x7, $-0xb0
+  mov x2, x3
+  cmp x2, x26
+  mov x9, x0
+  mov x10, x25
+  lsr x9, x9, x10
+  mov x25, x9
+  b.ne $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x1cc
+  cmp x25, x15
+  b.ne $+0x8
+  b $+0x10
+  mov w9, #0xc
+  str w9, [x22, #0x10]
+  b $+0x1b4
+  mov x9, x0
+  str w9, [x21]
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x194
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x17c
+  ldrb w9, [x19]
+  mov x15, x9
+  add x19, x19, #0x1
+  and x14, x14, x15
+  and x12, x12, x15
+  cmp x12, x11
+  b.ne $+0x24
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x25, x14
+  mov x26, x11
+  mov x26, x11
+  b $+0xe0
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x15, x9
+  mov x9, #<imm>
+  mov x11, x9
+  mov x11, x14
+  mov x14, x15
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0x108
+  mov x9, #<imm>
+  mov x26, x9
+  mov x9, #<imm>
+  mov x25, x9
+  mov x9, #<imm>
+  mov x2, x9
+  mov x9, #<imm>
+  mov x0, x9
+  mov x9, #<imm>
+  mov x15, x9
+  mov x9, #<imm>
+  mov x1, x9
+  cmp x19, x20
+  b.hs $+0x8
+  b $+0x10
+  mov w9, #0x1
+  str w9, [x22, #0x10]
+  b $+0xc0
+  ldrb w9, [x19]
+  mov x17, x9
+  add x19, x19, #0x1
+  add x25, x25, x12
+  sub x14, x14, x2
+  and x26, x26, x17
+  mov x2, x17
+  and x2, x2, x0
+  cmp x14, x1
+  cset x0, ne
+  mov x9, x26
+  mov x10, x12
+  lsl x9, x9, x10
+  mov x12, x9
+  cmp x2, x15
+  cset x15, ne
+  orr x11, x11, x12
+  mov x12, x25
+  mov x25, x26
+  cbz x15, $+0x8
+  cbnz x0, $-0xb0
+  mov x25, x11
+  mov x26, x15
+  cmp x26, x13
+  mov x11, x25
+  lsr x11, x11, x24
+  b.ne $+0x8
+  b $+0x10
+  mov w9, #0x2
+  str w9, [x22, #0x10]
+  b $+0x44
+  cmp x11, x23
+  b.ne $+0x8
+  b $+0x10
+  mov w9, #0xc
+  str w9, [x22, #0x10]
+  b $+0x2c
+  mov x9, x25
+  str w9, [x21, #0x4]
+  str x19, [x22]
+  ldp x25, x26, [sp, #0x40]
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x60
+  ret
+  ldp x25, x26, [sp, #0x40]
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x60
+  ret
