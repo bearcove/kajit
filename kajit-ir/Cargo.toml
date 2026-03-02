@@ -1,0 +1,10 @@
+[package]
+name = "kajit-ir"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+
+[dev-dependencies]
+kajit-ir-text = { path = "../kajit-ir-text" }

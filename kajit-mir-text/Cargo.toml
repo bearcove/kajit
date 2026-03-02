@@ -1,0 +1,10 @@
+[package]
+name = "kajit-mir-text"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+kajit-ir = { path = "../kajit-ir" }
+kajit-lir = { path = "../kajit-lir" }
+kajit-mir = { path = "../kajit-mir" }
+chumsky = "1.0.0-alpha.8"

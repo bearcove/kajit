@@ -1,5 +1,13 @@
 [workspace]
-members = ["kajit", "xtask"]
+members = [
+    "kajit",
+    "kajit-ir",
+    "kajit-ir-text",
+    "kajit-lir",
+    "kajit-mir",
+    "kajit-mir-text",
+    "xtask",
+]
 resolver = "3"
 
 [profile.profiling]
