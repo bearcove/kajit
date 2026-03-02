@@ -167,6 +167,17 @@ struct BoolField {
     value: bool,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Tiny {
+    val: u8,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Floats {
+    #[proptest(strategy = "-1000000.0f64..1000000.0f64")]
+    a: f64,
+    #[proptest(strategy = "-1000000.0f64..1000000.0f64")]
+    b: f64,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct WithOptU32 {
     value: Option<u32>,
 }

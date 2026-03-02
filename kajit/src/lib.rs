@@ -676,37 +676,6 @@ mod tests {
         a_name: String,
     }
 
-    // r[verify deser.json.scalar.integer]
-    #[test]
-    fn json_u8_out_of_range() {
-        #[derive(Facet, Debug)]
-        struct Tiny {
-            val: u8,
-        }
-
-        let input = br#"{"val": 256}"#;
-        let deser = compile_decoder(Tiny::SHAPE, &json::KajitJson);
-        let result = deserialize::<Tiny>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::NumberOutOfRange);
-    }
-
-    // r[verify deser.json.scalar.float]
-    #[test]
-    fn json_float_scientific() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct Floats {
-            a: f64,
-            b: f64,
-        }
-
-        let input = br#"{"a": 1.5e2, "b": -3.14}"#;
-        let deser = compile_decoder(Floats::SHAPE, &json::KajitJson);
-        let result: Floats = deserialize(&deser, input).unwrap();
-        assert_eq!(result.a, 150.0);
-        assert_eq!(result.b, -3.14);
-    }
-
     // r[verify deser.json.scalar.float]
     // r[verify deser.json.scalar.float.sign]
     // r[verify deser.json.scalar.float.digits]

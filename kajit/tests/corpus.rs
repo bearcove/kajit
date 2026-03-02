@@ -168,6 +168,17 @@ struct BoolField {
     value: bool,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Tiny {
+    val: u8,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+struct Floats {
+    #[proptest(strategy = "-1000000.0f64..1000000.0f64")]
+    a: f64,
+    #[proptest(strategy = "-1000000.0f64..1000000.0f64")]
+    b: f64,
+}
+#[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct WithOptU32 {
     value: Option<u32>,
 }
@@ -2317,6 +2328,18 @@ mod json_input {
                 value: std::sync::Arc::new(99),
             },
         );
+    }
+    #[test]
+    fn u8_out_of_range() {
+        assert_json_input_err_code::<
+            Tiny,
+        >(b"{\"val\": 256}", kajit::context::ErrorCode::NumberOutOfRange);
+    }
+    #[test]
+    fn float_scientific() {
+        assert_json_input_case::<
+            Floats,
+        >(b"{\"a\": 1.5e2, \"b\": -3.14}", Floats { a: 150.0, b: -3.14 });
     }
     #[test]
     fn string_escape_newline() {

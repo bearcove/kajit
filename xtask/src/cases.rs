@@ -201,6 +201,19 @@ pub(crate) fn types_rs() -> TokenStream {
         }
 
         #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct Tiny {
+            val: u8,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
+        struct Floats {
+            #[proptest(strategy = "-1000000.0f64..1000000.0f64")]
+            a: f64,
+            #[proptest(strategy = "-1000000.0f64..1000000.0f64")]
+            b: f64,
+        }
+
+        #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
         struct WithOptU32 {
             value: Option<u32>,
         }
@@ -1182,6 +1195,20 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected: Some(quote!(ArcScalar {
                 value: std::sync::Arc::new(99)
             })),
+            expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "u8_out_of_range",
+            ty: quote!(Tiny),
+            input: r#"{"val": 256}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::NumberOutOfRange)),
+        },
+        JsonInputCase {
+            name: "float_scientific",
+            ty: quote!(Floats),
+            input: r#"{"a": 1.5e2, "b": -3.14}"#,
+            expected: Some(quote!(Floats { a: 150.0, b: -3.14 })),
             expected_error_code: None,
         },
         JsonInputCase {
