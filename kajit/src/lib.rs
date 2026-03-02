@@ -1497,16 +1497,6 @@ mod tests {
 
     // r[verify deser.json.enum.external]
     #[test]
-    fn json_enum_unknown_variant() {
-        let input = br#""Snake""#;
-        let deser = compile_decoder(Animal::SHAPE, &json::KajitJson);
-        let result = deserialize::<Animal>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::UnknownVariant);
-    }
-
-    // r[verify deser.json.enum.external]
-    #[test]
     fn json_enum_as_struct_field() {
         #[derive(Facet, Debug, PartialEq)]
         struct Zoo {
@@ -1665,26 +1655,6 @@ mod tests {
         assert_eq!(result, AdjAnimal::Parrot("Polly".into()));
     }
 
-    // r[verify deser.json.enum.adjacent]
-    #[test]
-    fn json_adjacent_unknown_variant() {
-        let input = br#"{"type": "Snake", "data": null}"#;
-        let deser = compile_decoder(AdjAnimal::SHAPE, &json::KajitJson);
-        let result = deserialize::<AdjAnimal>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::UnknownVariant);
-    }
-
-    // r[verify deser.json.enum.adjacent.key-order]
-    #[test]
-    fn json_adjacent_wrong_first_key() {
-        let input = br#"{"data": null, "type": "Cat"}"#;
-        let deser = compile_decoder(AdjAnimal::SHAPE, &json::KajitJson);
-        let result = deserialize::<AdjAnimal>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::ExpectedTagKey);
-    }
-
     // --- Milestone 7: Internally tagged enums ---
 
     #[derive(Facet, Debug, PartialEq)]
@@ -1718,26 +1688,6 @@ mod tests {
                 good_boy: true,
             }
         );
-    }
-
-    // r[verify deser.json.enum.internal]
-    #[test]
-    fn json_internal_unknown_variant() {
-        let input = br#"{"type": "Snake"}"#;
-        let deser = compile_decoder(IntAnimal::SHAPE, &json::KajitJson);
-        let result = deserialize::<IntAnimal>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::UnknownVariant);
-    }
-
-    // r[verify deser.json.enum.internal]
-    #[test]
-    fn json_internal_wrong_first_key() {
-        let input = br#"{"name": "Rex", "type": "Dog", "good_boy": true}"#;
-        let deser = compile_decoder(IntAnimal::SHAPE, &json::KajitJson);
-        let result = deserialize::<IntAnimal>(&deser, input);
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().code, ErrorCode::ExpectedTagKey);
     }
 
     // r[verify deser.json.enum.internal.struct-only]

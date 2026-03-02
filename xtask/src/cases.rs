@@ -399,6 +399,13 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected_error_code: None,
         },
         JsonInputCase {
+            name: "enum_unknown_variant",
+            ty: quote!(Animal),
+            input: r#""Snake""#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
+        },
+        JsonInputCase {
             name: "adjacent_struct_variant_reversed_fields",
             ty: quote!(AdjAnimal),
             input: r#"{"type": "Dog", "data": {"good_boy": true, "name": "Rex"}}"#,
@@ -409,6 +416,20 @@ fn json_input_cases() -> Vec<JsonInputCase> {
             expected_error_code: None,
         },
         JsonInputCase {
+            name: "adjacent_unknown_variant",
+            ty: quote!(AdjAnimal),
+            input: r#"{"type": "Snake", "data": null}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
+        },
+        JsonInputCase {
+            name: "adjacent_wrong_first_key",
+            ty: quote!(AdjAnimal),
+            input: r#"{"data": null, "type": "Cat"}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::ExpectedTagKey)),
+        },
+        JsonInputCase {
             name: "internal_struct_variant_reversed_fields",
             ty: quote!(IntAnimal),
             input: r#"{"type": "Dog", "good_boy": true, "name": "Rex"}"#,
@@ -417,6 +438,20 @@ fn json_input_cases() -> Vec<JsonInputCase> {
                 good_boy: true
             })),
             expected_error_code: None,
+        },
+        JsonInputCase {
+            name: "internal_unknown_variant",
+            ty: quote!(IntAnimal),
+            input: r#"{"type": "Snake"}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::UnknownVariant)),
+        },
+        JsonInputCase {
+            name: "internal_wrong_first_key",
+            ty: quote!(IntAnimal),
+            input: r#"{"name": "Rex", "type": "Dog", "good_boy": true}"#,
+            expected: None,
+            expected_error_code: Some(quote!(kajit::context::ErrorCode::ExpectedTagKey)),
         },
         JsonInputCase {
             name: "untagged_struct_reversed_keys",

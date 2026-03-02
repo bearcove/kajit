@@ -817,6 +817,12 @@ mod json_input {
         );
     }
     #[test]
+    fn enum_unknown_variant() {
+        assert_json_input_err_code::<
+            Animal,
+        >(b"\"Snake\"", kajit::context::ErrorCode::UnknownVariant);
+    }
+    #[test]
     fn adjacent_struct_variant_reversed_fields() {
         assert_json_input_case::<
             AdjAnimal,
@@ -829,6 +835,24 @@ mod json_input {
         );
     }
     #[test]
+    fn adjacent_unknown_variant() {
+        assert_json_input_err_code::<
+            AdjAnimal,
+        >(
+            b"{\"type\": \"Snake\", \"data\": null}",
+            kajit::context::ErrorCode::UnknownVariant,
+        );
+    }
+    #[test]
+    fn adjacent_wrong_first_key() {
+        assert_json_input_err_code::<
+            AdjAnimal,
+        >(
+            b"{\"data\": null, \"type\": \"Cat\"}",
+            kajit::context::ErrorCode::ExpectedTagKey,
+        );
+    }
+    #[test]
     fn internal_struct_variant_reversed_fields() {
         assert_json_input_case::<
             IntAnimal,
@@ -838,6 +862,21 @@ mod json_input {
                 name: "Rex".into(),
                 good_boy: true,
             },
+        );
+    }
+    #[test]
+    fn internal_unknown_variant() {
+        assert_json_input_err_code::<
+            IntAnimal,
+        >(b"{\"type\": \"Snake\"}", kajit::context::ErrorCode::UnknownVariant);
+    }
+    #[test]
+    fn internal_wrong_first_key() {
+        assert_json_input_err_code::<
+            IntAnimal,
+        >(
+            b"{\"name\": \"Rex\", \"type\": \"Dog\", \"good_boy\": true}",
+            kajit::context::ErrorCode::ExpectedTagKey,
         );
     }
     #[test]
