@@ -1,0 +1,5 @@
+---
+source: kajit/tests/corpus.rs
+expression: "format!(\"{edits}\")"
+---
+202

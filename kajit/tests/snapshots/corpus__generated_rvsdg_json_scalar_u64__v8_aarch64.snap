@@ -1,0 +1,11 @@
+---
+source: kajit/tests/corpus.rs
+expression: ir_text
+---
+lambda @0 (shape: "u64") {
+  region {
+    args: [%cs, %os]
+    n1 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+    results: [%cs:n1, %os:n1]
+  }
+}

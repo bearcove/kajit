@@ -1,0 +1,37 @@
+---
+source: kajit/tests/corpus.rs
+expression: disasm
+---
+> sub sp, sp, #0x70
+  stp x29, x30, [sp]
+  stp x19, x20, [sp, #0x10]
+  stp x21, x22, [sp, #0x20]
+  stp x23, x24, [sp, #0x30]
+  stp x25, x26, [sp, #0x40]
+  mov x29, sp
+  mov x21, x0
+  mov x22, x1
+  ldr x19, [x22]
+  ldr x20, [x22, #0x8]
+  str x19, [x22]
+  mov x0, x21
+  mov x1, x22
+  bl $+0x4c
+  ldr x19, [x22]
+  ldr w9, [x22, #0x10]
+  cbnz w9, $+0x24
+  str x19, [x22]
+  ldp x25, x26, [sp, #0x40]
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x70
+  ret
+  ldp x25, x26, [sp, #0x40]
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x70
+  ret
