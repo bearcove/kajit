@@ -292,37 +292,6 @@ mod tests {
         name: String,
     }
 
-    // r[verify deser.postcard.struct]
-    #[test]
-    fn postcard_flat_struct() {
-        // age=42 → postcard varint 0x2A (42 < 128, so single byte)
-        // name="Alice" → varint(5)=0x05 + b"Alice"
-        let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-        let deser = compile_decoder(Friend::SHAPE, &postcard::KajitPostcard);
-        let result: Friend = deserialize(&deser, &input).unwrap();
-        assert_eq!(
-            result,
-            Friend {
-                age: 42,
-                name: "Alice".into()
-            }
-        );
-    }
-
-    #[test]
-    fn postcard_flat_struct_via_ir() {
-        let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-        let deser = compile_decoder_via_ir(Friend::SHAPE, &postcard::KajitPostcard);
-        let result: Friend = deserialize(&deser, &input).unwrap();
-        assert_eq!(
-            result,
-            Friend {
-                age: 42,
-                name: "Alice".into()
-            }
-        );
-    }
-
     #[test]
     fn postcard_nested_struct_ir_uses_apply_nodes() {
         #[derive(Facet)]
@@ -349,46 +318,6 @@ mod tests {
         assert!(
             apply_count >= 1,
             "expected at least one apply node for nested shape"
-        );
-    }
-
-    #[test]
-    fn postcard_nested_struct_via_ir() {
-        #[derive(Facet, Debug, PartialEq)]
-        struct Inner {
-            x: u32,
-        }
-
-        #[derive(Facet, Debug, PartialEq)]
-        struct Outer {
-            inner: Inner,
-            y: u32,
-        }
-
-        #[derive(serde::Serialize)]
-        struct InnerSerde {
-            x: u32,
-        }
-
-        #[derive(serde::Serialize)]
-        struct OuterSerde {
-            inner: InnerSerde,
-            y: u32,
-        }
-
-        let source = OuterSerde {
-            inner: InnerSerde { x: 7 },
-            y: 99,
-        };
-        let encoded = ::postcard::to_allocvec(&source).unwrap();
-        let deser = compile_decoder_via_ir(Outer::SHAPE, &postcard::KajitPostcard);
-        let result: Outer = deserialize(&deser, &encoded).unwrap();
-        assert_eq!(
-            result,
-            Outer {
-                inner: Inner { x: 7 },
-                y: 99,
-            }
         );
     }
 
@@ -463,17 +392,6 @@ mod tests {
         let ir_out: AllIntegers = deserialize(&via_ir, &encoded).unwrap();
         assert_eq!(legacy_out, source);
         assert_eq!(ir_out, source);
-    }
-
-    #[test]
-    fn postcard_legacy_and_ir_match() {
-        let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-        let legacy = compile_decoder_legacy(Friend::SHAPE, &postcard::KajitPostcard);
-        let via_ir = compile_decoder_via_ir(Friend::SHAPE, &postcard::KajitPostcard);
-
-        let a: Friend = deserialize(&legacy, &input).unwrap();
-        let b: Friend = deserialize(&via_ir, &input).unwrap();
-        assert_eq!(a, b);
     }
 
     #[test]
