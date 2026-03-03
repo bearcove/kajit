@@ -263,7 +263,7 @@ impl MirHandler {
         let session_id = arg_u64(args, "session_id")?;
         let block_id = arg_opt_u64(args, "block_id");
         let want_trap = arg_opt_bool(args, "trap").unwrap_or(false);
-        let want_return = arg_opt_bool(args, "return").unwrap_or(false);
+        let want_return = arg_opt_bool(args, "until_return").unwrap_or(false);
         let max_steps = arg_opt_u64(args, "max_steps").unwrap_or(10_000) as usize;
 
         let target = match (block_id, want_trap, want_return) {
