@@ -590,6 +590,37 @@ IR vocabulary before linearization. This includes replacing placeholder calls
 with explicit loop/control/data subgraphs when the behavior is representable
 as core IR.
 
+### Pipeline toggles (`KAJIT_OPTS`)
+
+r[compiler.opts]
+The compiler pipeline supports runtime toggles via the `KAJIT_OPTS`
+environment variable for fast pass-level bisecting without rebuilding.
+
+r[compiler.opts.syntax]
+`KAJIT_OPTS` is a comma-separated list of option tokens. Each token is
+`+name` (enable) or `-name` (disable). Unknown or malformed tokens are errors.
+
+r[compiler.opts.defaults]
+If `KAJIT_OPTS` is unset or empty, pipeline behavior remains unchanged from
+the entrypoint defaults (options act as explicit overrides only).
+
+r[compiler.opts.all-opts]
+Option `all_opts` controls whether default RVSDG optimization passes run
+before linearization in compile paths that use the default pipeline.
+
+r[compiler.opts.regalloc]
+Option `regalloc` controls whether regalloc edit application is enabled
+during machine emission. When disabled, backend emission must skip applying
+regalloc instruction/edge edits while keeping deterministic behavior.
+
+r[compiler.opts.composition]
+Multiple option tokens compose left-to-right; for repeated option names, the
+last token wins.
+
+r[compiler.opts.invalid]
+On invalid `KAJIT_OPTS` content, compilation fails with a clear error that
+identifies the offending token and lists supported option names.
+
 ## Scalar types
 
 r[scalar.types]

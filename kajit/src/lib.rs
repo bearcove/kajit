@@ -20,6 +20,7 @@ pub mod json;
 pub mod json_intrinsics;
 pub mod linearize;
 pub mod malum;
+mod pipeline_opts;
 pub mod postcard;
 mod pow10tab;
 pub mod recipe;
@@ -66,7 +67,7 @@ pub fn compile_decoder_from_ir_text(
     with_passes: bool,
 ) -> CompiledDecoder {
     let mut func = ir_parse::parse_ir(ir_text, shape, registry).expect("IR text should parse");
-    if with_passes {
+    if with_passes && compiler::should_run_default_passes(true) {
         ir_passes::run_default_passes(&mut func);
     }
     let linear = linearize::linearize(&mut func);
@@ -100,7 +101,9 @@ pub fn debug_ir_and_ra_mir_text(
     ir_decoder: &dyn format::Decoder,
 ) -> (String, String) {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
-    ir_passes::run_default_passes(&mut func);
+    if compiler::should_run_default_passes(true) {
+        ir_passes::run_default_passes(&mut func);
+    }
     let ir_text = scrub_volatile_intrinsic_addrs(&format!("{func}"));
     let linear = linearize::linearize(&mut func);
     let ra = regalloc_mir::lower_linear_ir(&linear);
@@ -116,7 +119,9 @@ pub fn debug_ra_mir_human_text(
     ir_decoder: &dyn format::Decoder,
 ) -> String {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
-    ir_passes::run_default_passes(&mut func);
+    if compiler::should_run_default_passes(true) {
+        ir_passes::run_default_passes(&mut func);
+    }
     let linear = linearize::linearize(&mut func);
     let ra = regalloc_mir::lower_linear_ir(&linear);
     scrub_volatile_intrinsic_addrs(&format!("{}", ra.human()))
@@ -130,7 +135,9 @@ pub fn debug_linear_ir_text(
     ir_decoder: &dyn format::Decoder,
 ) -> String {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
-    ir_passes::run_default_passes(&mut func);
+    if compiler::should_run_default_passes(true) {
+        ir_passes::run_default_passes(&mut func);
+    }
     let linear = linearize::linearize(&mut func);
     scrub_volatile_intrinsic_addrs(&format!("{linear}"))
 }
