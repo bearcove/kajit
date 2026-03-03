@@ -27,12 +27,14 @@ Run options:
   --input-kind <ra_mir|ir>           Required
   --program-path <path>              Program source file
   --program-text <text>              Program source text
+  --input-path <path>                Raw input bytes file
   --input-hex <hex>                  Input bytes (default: empty)
   --max-steps <n>                    Step budget (default: 100000)
   --full-state                       Emit full vreg/output state
 
 Notes:
   --program-path and --program-text are mutually exclusive.
+  --input-path and --input-hex are mutually exclusive.
 ";
 
 #[mcp_tool(
@@ -95,6 +97,7 @@ struct RunOnceCliArgs {
     input_kind: InputKind,
     program_text: Option<String>,
     program_path: Option<String>,
+    input_path: Option<String>,
     input_hex: String,
     max_steps: usize,
     full_state: bool,
@@ -713,6 +716,7 @@ fn parse_run_once_args(args: &[String]) -> Result<RunOnceCliArgs, String> {
     let mut input_kind: Option<InputKind> = None;
     let mut program_text: Option<String> = None;
     let mut program_path: Option<String> = None;
+    let mut input_path: Option<String> = None;
     let mut input_hex = String::new();
     let mut max_steps = 100_000usize;
     let mut full_state = false;
@@ -748,6 +752,13 @@ fn parse_run_once_args(args: &[String]) -> Result<RunOnceCliArgs, String> {
                 input_hex = value.clone();
                 i += 2;
             }
+            "--input-path" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --input-path".to_owned())?;
+                input_path = Some(value.clone());
+                i += 2;
+            }
             "--max-steps" => {
                 let value = args
                     .get(i + 1)
@@ -773,11 +784,15 @@ fn parse_run_once_args(args: &[String]) -> Result<RunOnceCliArgs, String> {
     if program_text.is_none() && program_path.is_none() {
         return Err("missing program source: provide --program-text or --program-path".to_owned());
     }
+    if input_path.is_some() && !input_hex.is_empty() {
+        return Err("--input-path and --input-hex are mutually exclusive".to_owned());
+    }
 
     Ok(RunOnceCliArgs {
         input_kind,
         program_text,
         program_path,
+        input_path,
         input_hex,
         max_steps,
         full_state,
@@ -786,7 +801,11 @@ fn parse_run_once_args(args: &[String]) -> Result<RunOnceCliArgs, String> {
 
 fn run_once_command(args: RunOnceCliArgs) -> Result<JsonValue, String> {
     let start = std::time::Instant::now();
-    let input = parse_hex_input(&args.input_hex)?;
+    let input = if let Some(path) = args.input_path {
+        std::fs::read(&path).map_err(|e| format!("failed to read input_path {path:?}: {e}"))?
+    } else {
+        parse_hex_input(&args.input_hex)?
+    };
     let program_text = load_program_text_sources(args.program_text, args.program_path)?;
 
     let parse_start = std::time::Instant::now();
@@ -1087,8 +1106,10 @@ ra_func @0 {
             "ra_mir".to_owned(),
             "--program-path".to_owned(),
             "foo.ramir".to_owned(),
+            "--input-path".to_owned(),
+            "input.bin".to_owned(),
             "--input-hex".to_owned(),
-            "8101".to_owned(),
+            "".to_owned(),
             "--max-steps".to_owned(),
             "42".to_owned(),
             "--full-state".to_owned(),
@@ -1098,6 +1119,7 @@ ra_func @0 {
             input_kind,
             program_text,
             program_path,
+            input_path,
             input_hex,
             max_steps,
             full_state,
@@ -1105,9 +1127,26 @@ ra_func @0 {
         assert_eq!(input_kind, InputKind::RaMir);
         assert_eq!(program_text, None);
         assert_eq!(program_path, Some("foo.ramir".to_owned()));
-        assert_eq!(input_hex, "8101");
+        assert_eq!(input_path, Some("input.bin".to_owned()));
+        assert_eq!(input_hex, "");
         assert_eq!(max_steps, 42);
         assert!(full_state);
+    }
+
+    #[test]
+    fn parse_run_args_rejects_input_path_and_hex_together() {
+        let args = vec![
+            "--input-kind".to_owned(),
+            "ra_mir".to_owned(),
+            "--program-path".to_owned(),
+            "foo.ramir".to_owned(),
+            "--input-path".to_owned(),
+            "input.bin".to_owned(),
+            "--input-hex".to_owned(),
+            "8101".to_owned(),
+        ];
+        let err = parse_run_once_args(&args).expect_err("mixed input source must fail");
+        assert!(err.contains("input-path"));
     }
 
     #[test]
