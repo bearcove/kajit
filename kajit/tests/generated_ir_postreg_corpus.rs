@@ -2,8 +2,7 @@
 use facet::Facet;
 fn parse_case(ir: &str) -> kajit::ir::IrFunc {
     let registry = kajit::ir::IntrinsicRegistry::empty();
-    kajit::ir_parse::parse_ir(ir, <u8 as Facet>::SHAPE, &registry)
-        .expect("text IR should parse")
+    kajit::ir_parse::parse_ir(ir, <u8 as Facet>::SHAPE, &registry).expect("text IR should parse")
 }
 fn run_exec(ir: &str, input: &[u8], with_passes: bool) -> u8 {
     let mut func = parse_case(ir);
@@ -32,13 +31,16 @@ fn ir_postreg_snapshot_cmpne_gamma_branch() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = BoundsCheck(1) [%cs:arg] -> [%cs]\n    n1 = ReadBytes(1) [%cs:n0] -> [v0, %cs]\n    n2 = Const(0x0) [] -> [v1]\n    n3 = CmpNe [v0, v1] -> [v2]\n    n4 = gamma [\n      pred: v2\n      in0: %cs:n1\n      in1: %os:arg\n    ] {\n      branch 0:\n        region {\n          args: [%cs, %os]\n          n5 = Const(0x3) [] -> [v3]\n          results: [v3, %cs:arg, %os:arg]\n        }\n      branch 1:\n        region {\n          args: [%cs, %os]\n          n6 = Const(0x7) [] -> [v4]\n          results: [v4, %cs:arg, %os:arg]\n        }\n    } -> [v5, %cs, %os]\n    n7 = WriteToField(offset=0, W1) [v5, %os:n4] -> [%os]\n    results: [%cs:n4, %os:n7]\n  }\n}\n",
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_linear_", "cmpne_gamma_branch"), linear
+        concat!("generated_ir_postreg_linear_", "cmpne_gamma_branch"),
+        linear
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_ra_", "cmpne_gamma_branch"), ra
+        concat!("generated_ir_postreg_ra_", "cmpne_gamma_branch"),
+        ra
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_edits_", "cmpne_gamma_branch"), format!("{edits}")
+        concat!("generated_ir_postreg_edits_", "cmpne_gamma_branch"),
+        format!("{edits}")
     );
 }
 #[test]
@@ -46,12 +48,20 @@ fn ir_postreg_asserts_cmpne_gamma_branch() {
     let (linear, _ra, edits) = postreg_artifacts(
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = BoundsCheck(1) [%cs:arg] -> [%cs]\n    n1 = ReadBytes(1) [%cs:n0] -> [v0, %cs]\n    n2 = Const(0x0) [] -> [v1]\n    n3 = CmpNe [v0, v1] -> [v2]\n    n4 = gamma [\n      pred: v2\n      in0: %cs:n1\n      in1: %os:arg\n    ] {\n      branch 0:\n        region {\n          args: [%cs, %os]\n          n5 = Const(0x3) [] -> [v3]\n          results: [v3, %cs:arg, %os:arg]\n        }\n      branch 1:\n        region {\n          args: [%cs, %os]\n          n6 = Const(0x7) [] -> [v4]\n          results: [v4, %cs:arg, %os:arg]\n        }\n    } -> [v5, %cs, %os]\n    n7 = WriteToField(offset=0, W1) [v5, %os:n4] -> [%os]\n    results: [%cs:n4, %os:n7]\n  }\n}\n",
     );
-    assert!(edits <= 64usize, "expected edit budget <= {}, got {edits}", 64usize);
     assert!(
-        linear.contains("CmpNe"), "expected linear artifact to contain: {}", "CmpNe"
+        edits <= 64usize,
+        "expected edit budget <= {}, got {edits}",
+        64usize
     );
     assert!(
-        linear.contains("br_zero"), "expected linear artifact to contain: {}", "br_zero"
+        linear.contains("CmpNe"),
+        "expected linear artifact to contain: {}",
+        "CmpNe"
+    );
+    assert!(
+        linear.contains("br_zero"),
+        "expected linear artifact to contain: {}",
+        "br_zero"
     );
 }
 #[test]
@@ -75,10 +85,12 @@ fn ir_postreg_snapshot_and_cmpne_gamma_branch() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = BoundsCheck(2) [%cs:arg] -> [%cs]\n    n1 = ReadBytes(1) [%cs:n0] -> [v0, %cs]\n    n2 = ReadBytes(1) [%cs:n1] -> [v1, %cs]\n    n3 = Const(0x0) [] -> [v2]\n    n4 = CmpNe [v0, v2] -> [v3]\n    n5 = CmpNe [v1, v2] -> [v4]\n    n6 = And [v3, v4] -> [v5]\n    n7 = gamma [\n      pred: v5\n      in0: %cs:n2\n      in1: %os:arg\n    ] {\n      branch 0:\n        region {\n          args: [%cs, %os]\n          n8 = Const(0x4) [] -> [v6]\n          results: [v6, %cs:arg, %os:arg]\n        }\n      branch 1:\n        region {\n          args: [%cs, %os]\n          n9 = Const(0x9) [] -> [v7]\n          results: [v7, %cs:arg, %os:arg]\n        }\n    } -> [v8, %cs, %os]\n    n10 = WriteToField(offset=0, W1) [v8, %os:n7] -> [%os]\n    results: [%cs:n7, %os:n10]\n  }\n}\n",
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_linear_", "and_cmpne_gamma_branch"), linear
+        concat!("generated_ir_postreg_linear_", "and_cmpne_gamma_branch"),
+        linear
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_ra_", "and_cmpne_gamma_branch"), ra
+        concat!("generated_ir_postreg_ra_", "and_cmpne_gamma_branch"),
+        ra
     );
     insta::assert_snapshot!(
         concat!("generated_ir_postreg_edits_", "and_cmpne_gamma_branch"),
@@ -90,13 +102,25 @@ fn ir_postreg_asserts_and_cmpne_gamma_branch() {
     let (linear, _ra, edits) = postreg_artifacts(
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = BoundsCheck(2) [%cs:arg] -> [%cs]\n    n1 = ReadBytes(1) [%cs:n0] -> [v0, %cs]\n    n2 = ReadBytes(1) [%cs:n1] -> [v1, %cs]\n    n3 = Const(0x0) [] -> [v2]\n    n4 = CmpNe [v0, v2] -> [v3]\n    n5 = CmpNe [v1, v2] -> [v4]\n    n6 = And [v3, v4] -> [v5]\n    n7 = gamma [\n      pred: v5\n      in0: %cs:n2\n      in1: %os:arg\n    ] {\n      branch 0:\n        region {\n          args: [%cs, %os]\n          n8 = Const(0x4) [] -> [v6]\n          results: [v6, %cs:arg, %os:arg]\n        }\n      branch 1:\n        region {\n          args: [%cs, %os]\n          n9 = Const(0x9) [] -> [v7]\n          results: [v7, %cs:arg, %os:arg]\n        }\n    } -> [v8, %cs, %os]\n    n10 = WriteToField(offset=0, W1) [v8, %os:n7] -> [%os]\n    results: [%cs:n7, %os:n10]\n  }\n}\n",
     );
-    assert!(edits <= 96usize, "expected edit budget <= {}, got {edits}", 96usize);
-    assert!(linear.contains("And"), "expected linear artifact to contain: {}", "And");
     assert!(
-        linear.contains("CmpNe"), "expected linear artifact to contain: {}", "CmpNe"
+        edits <= 96usize,
+        "expected edit budget <= {}, got {edits}",
+        96usize
     );
     assert!(
-        linear.contains("br_zero"), "expected linear artifact to contain: {}", "br_zero"
+        linear.contains("And"),
+        "expected linear artifact to contain: {}",
+        "And"
+    );
+    assert!(
+        linear.contains("CmpNe"),
+        "expected linear artifact to contain: {}",
+        "CmpNe"
+    );
+    assert!(
+        linear.contains("br_zero"),
+        "expected linear artifact to contain: {}",
+        "br_zero"
     );
 }
 #[test]
@@ -120,13 +144,21 @@ fn ir_postreg_snapshot_theta_then_gamma_edit_budget() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = Const(0x3) [] -> [v0]\n    n1 = Const(0x1) [] -> [v1]\n    n2 = theta [v0, v1, %cs:arg, %os:arg] {\n      region {\n        args: [arg0, arg1, %cs, %os]\n        n3 = Sub [arg0, arg1] -> [v2]\n        results: [v2, v2, arg1, %cs:arg, %os:arg]\n      }\n    } -> [v3, v4, %cs, %os]\n    n4 = gamma [\n      pred: v3\n      in0: %cs:n2\n      in1: %os:n2\n    ] {\n      branch 0:\n        region {\n          args: [%cs, %os]\n          n5 = Const(0xb) [] -> [v5]\n          results: [v5, %cs:arg, %os:arg]\n        }\n      branch 1:\n        region {\n          args: [%cs, %os]\n          n6 = Const(0x16) [] -> [v6]\n          results: [v6, %cs:arg, %os:arg]\n        }\n    } -> [v7, %cs, %os]\n    n8 = WriteToField(offset=0, W1) [v7, %os:n4] -> [%os]\n    results: [%cs:n4, %os:n8]\n  }\n}\n",
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_linear_", "theta_then_gamma_edit_budget"), linear
+        concat!(
+            "generated_ir_postreg_linear_",
+            "theta_then_gamma_edit_budget"
+        ),
+        linear
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_ra_", "theta_then_gamma_edit_budget"), ra
+        concat!("generated_ir_postreg_ra_", "theta_then_gamma_edit_budget"),
+        ra
     );
     insta::assert_snapshot!(
-        concat!("generated_ir_postreg_edits_", "theta_then_gamma_edit_budget"),
+        concat!(
+            "generated_ir_postreg_edits_",
+            "theta_then_gamma_edit_budget"
+        ),
         format!("{edits}")
     );
 }
@@ -135,12 +167,20 @@ fn ir_postreg_asserts_theta_then_gamma_edit_budget() {
     let (linear, _ra, edits) = postreg_artifacts(
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = Const(0x3) [] -> [v0]\n    n1 = Const(0x1) [] -> [v1]\n    n2 = theta [v0, v1, %cs:arg, %os:arg] {\n      region {\n        args: [arg0, arg1, %cs, %os]\n        n3 = Sub [arg0, arg1] -> [v2]\n        results: [v2, v2, arg1, %cs:arg, %os:arg]\n      }\n    } -> [v3, v4, %cs, %os]\n    n4 = gamma [\n      pred: v3\n      in0: %cs:n2\n      in1: %os:n2\n    ] {\n      branch 0:\n        region {\n          args: [%cs, %os]\n          n5 = Const(0xb) [] -> [v5]\n          results: [v5, %cs:arg, %os:arg]\n        }\n      branch 1:\n        region {\n          args: [%cs, %os]\n          n6 = Const(0x16) [] -> [v6]\n          results: [v6, %cs:arg, %os:arg]\n        }\n    } -> [v7, %cs, %os]\n    n8 = WriteToField(offset=0, W1) [v7, %os:n4] -> [%os]\n    results: [%cs:n4, %os:n8]\n  }\n}\n",
     );
-    assert!(edits <= 128usize, "expected edit budget <= {}, got {edits}", 128usize);
     assert!(
-        linear.contains("br_if"), "expected linear artifact to contain: {}", "br_if"
+        edits <= 128usize,
+        "expected edit budget <= {}, got {edits}",
+        128usize
     );
     assert!(
-        linear.contains("br_zero"), "expected linear artifact to contain: {}", "br_zero"
+        linear.contains("br_if"),
+        "expected linear artifact to contain: {}",
+        "br_if"
+    );
+    assert!(
+        linear.contains("br_zero"),
+        "expected linear artifact to contain: {}",
+        "br_zero"
     );
 }
 #[test]
