@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    IrFunc, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource, RegionArgRef, RegionId,
+    IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource, RegionArgRef,
+    RegionId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -448,6 +449,9 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         for &node_id in &region.nodes {
             let node = &func.nodes[node_id];
             for input in &node.inputs {
+                if matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. })) {
+                    continue;
+                }
                 let producer = state_source(input.source);
                 match input.kind {
                     PortKind::StateCursor => {
@@ -607,5 +611,25 @@ mod tests {
             err,
             VerifyError::StateChainViolation { uses: 2, .. }
         ));
+    }
+
+    #[test]
+    fn verify_allows_error_exit_branch_passthrough_state() {
+        let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            let pred = rb.const_val(1);
+            let _ = rb.gamma(pred, &[], 2, |branch_idx, branch| match branch_idx {
+                0 => branch.set_results(&[]),
+                1 => {
+                    branch.error_exit(crate::ErrorCode::MissingRequiredField);
+                    branch.set_results(&[]);
+                }
+                _ => unreachable!(),
+            });
+            rb.set_results(&[]);
+        }
+        let func = builder.finish();
+        assert!(verify(&func).is_ok());
     }
 }
