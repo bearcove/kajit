@@ -219,6 +219,33 @@ pub fn from_str<'input, T: facet::Facet<'input>>(
     deserialize_with_ctx(deser, &mut ctx)
 }
 
+/// Deserialize into a raw output buffer and return its bytes.
+///
+/// This is intended for RA-MIR differential testing and minimization workflows
+/// where only output memory bytes and error slots matter.
+pub fn deserialize_raw(
+    deser: &CompiledDecoder,
+    input: &[u8],
+    output_size: usize,
+) -> Result<Vec<u8>, DeserError> {
+    let mut ctx = DeserContext::from_bytes(input);
+    let mut output = vec![0u8; output_size];
+
+    unsafe {
+        (deser.func())(output.as_mut_ptr(), &mut ctx);
+    }
+
+    if ctx.error.code != 0 {
+        let code: ErrorCode = unsafe { core::mem::transmute(ctx.error.code) };
+        return Err(DeserError {
+            code,
+            offset: ctx.error.offset,
+        });
+    }
+
+    Ok(output)
+}
+
 fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
     deser: &CompiledDecoder,
     ctx: &mut DeserContext,
