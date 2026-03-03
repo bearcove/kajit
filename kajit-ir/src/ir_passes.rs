@@ -118,14 +118,18 @@ impl UseLists {
 
 // r[impl ir.passes]
 pub fn run_default_passes(func: &mut IrFunc) {
-    bounds_check_coalescing_pass(func);
-    debug_verify(func, "bounds_check_coalescing_pass");
-    hoist_theta_loop_invariant_setup_pass(func);
-    debug_verify(func, "hoist_theta_loop_invariant_setup_pass");
-    inline_apply_pass(func);
-    debug_verify(func, "inline_apply_pass");
-    dead_code_elimination_pass(func);
-    debug_verify(func, "dead_code_elimination_pass");
+    run_default_passes_with_filter(func, |_| true);
+}
+
+pub fn run_default_passes_with_filter<F>(func: &mut IrFunc, mut enabled: F)
+where
+    F: FnMut(DefaultPassSpec) -> bool,
+{
+    for pass in default_pass_registry() {
+        if enabled(*pass) {
+            pass.run(func);
+        }
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -137,6 +141,66 @@ fn debug_verify(func: &IrFunc, pass_name: &str) {
 
 #[cfg(not(debug_assertions))]
 fn debug_verify(_func: &IrFunc, _pass_name: &str) {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DefaultPassSpec {
+    pub name: &'static str,
+    pub description: &'static str,
+    run: fn(&mut IrFunc),
+}
+
+impl DefaultPassSpec {
+    pub fn run(self, func: &mut IrFunc) {
+        (self.run)(func);
+    }
+}
+
+fn run_bounds_check_coalescing_pass(func: &mut IrFunc) {
+    bounds_check_coalescing_pass(func);
+    debug_verify(func, "bounds_check_coalescing_pass");
+}
+
+fn run_hoist_theta_loop_invariant_setup_pass(func: &mut IrFunc) {
+    hoist_theta_loop_invariant_setup_pass(func);
+    debug_verify(func, "hoist_theta_loop_invariant_setup_pass");
+}
+
+fn run_inline_apply_pass(func: &mut IrFunc) {
+    inline_apply_pass(func);
+    debug_verify(func, "inline_apply_pass");
+}
+
+fn run_dead_code_elimination_pass(func: &mut IrFunc) {
+    dead_code_elimination_pass(func);
+    debug_verify(func, "dead_code_elimination_pass");
+}
+
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 4] = [
+    DefaultPassSpec {
+        name: "bounds_check_coalescing",
+        description: "Coalesce redundant BoundsCheck chains in cursor pipelines.",
+        run: run_bounds_check_coalescing_pass,
+    },
+    DefaultPassSpec {
+        name: "theta_loop_invariant_hoist",
+        description: "Hoist loop-invariant setup out of theta loop bodies when safe.",
+        run: run_hoist_theta_loop_invariant_setup_pass,
+    },
+    DefaultPassSpec {
+        name: "inline_apply",
+        description: "Inline apply/lambda calls under size and use-site thresholds.",
+        run: run_inline_apply_pass,
+    },
+    DefaultPassSpec {
+        name: "dead_code_elimination",
+        description: "Remove dead nodes and unreachable regions after shaping passes.",
+        run: run_dead_code_elimination_pass,
+    },
+];
+
+pub fn default_pass_registry() -> &'static [DefaultPassSpec] {
+    &DEFAULT_PASS_REGISTRY
+}
 
 // r[impl ir.passes.planned]
 fn bounds_check_coalescing_pass(func: &mut IrFunc) {
