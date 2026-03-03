@@ -79,7 +79,7 @@ struct SessionRunUntilTool {
     trap: Option<bool>,
     /// Stop when function returns. Mutually exclusive with block_id/trap.
     #[serde(default)]
-    r#return: Option<bool>,
+    until_return: Option<bool>,
     /// Maximum number of steps.
     #[serde(default)]
     max_steps: Option<u64>,
@@ -567,7 +567,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{encode_hex, parse_hex_input};
+    use super::{MirTools, encode_hex, parse_hex_input};
 
     #[test]
     fn parse_hex_accepts_common_formats() {
@@ -587,5 +587,29 @@ mod tests {
         let encoded = encode_hex(&bytes);
         let decoded = parse_hex_input(&encoded).unwrap();
         assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn tool_schema_property_keys_follow_client_constraints() {
+        let tools = MirTools::tools();
+        let value = serde_json::to_value(tools).unwrap();
+        let arr = value.as_array().expect("tools should serialize as array");
+
+        for tool in arr {
+            let props = tool
+                .get("inputSchema")
+                .and_then(|schema| schema.get("properties"))
+                .and_then(|props| props.as_object())
+                .expect("tool should have inputSchema.properties");
+            for key in props.keys() {
+                assert!(!key.is_empty(), "property key must not be empty");
+                assert!(key.len() <= 64, "property key too long: {key}");
+                assert!(
+                    key.chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')),
+                    "property key has unsupported characters: {key}"
+                );
+            }
+        }
     }
 }
