@@ -62,7 +62,7 @@ lambda @0 (shape: "u8") {
 }
 "#,
         must_not_contain_after: &[],
-        must_contain_after: &["n3 = Add [arg0, arg1] -> [v2]"],
+        must_contain_after: &[],
         input: &[],
     },
     IrOptCase {

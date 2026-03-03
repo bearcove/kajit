@@ -2,7 +2,8 @@
 use facet::Facet;
 fn parse_case(ir: &str) -> kajit::ir::IrFunc {
     let registry = kajit::ir::IntrinsicRegistry::empty();
-    kajit::ir_parse::parse_ir(ir, <u8 as Facet>::SHAPE, &registry).expect("text IR should parse")
+    kajit::ir_parse::parse_ir(ir, <u8 as Facet>::SHAPE, &registry)
+        .expect("text IR should parse")
 }
 fn run_exec(ir: &str, input: &[u8], with_passes: bool) -> u8 {
     let mut func = parse_case(ir);
@@ -23,10 +24,7 @@ fn ir_behavior_enum_like_gamma_tag_branch() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[1u8];
@@ -35,10 +33,7 @@ fn ir_behavior_enum_like_gamma_tag_branch() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[255u8];
@@ -47,10 +42,7 @@ fn ir_behavior_enum_like_gamma_tag_branch() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
 }
 #[test]
@@ -63,10 +55,7 @@ fn ir_behavior_theta_countdown_accumulate() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[3u8];
@@ -75,10 +64,7 @@ fn ir_behavior_theta_countdown_accumulate() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[7u8];
@@ -87,10 +73,7 @@ fn ir_behavior_theta_countdown_accumulate() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
 }
 #[test]
@@ -103,10 +86,7 @@ fn ir_behavior_and_cmpne_branch_surface() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[1u8, 0u8];
@@ -115,10 +95,7 @@ fn ir_behavior_and_cmpne_branch_surface() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[0u8, 1u8];
@@ -127,10 +104,7 @@ fn ir_behavior_and_cmpne_branch_surface() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[0u8, 0u8];
@@ -139,10 +113,7 @@ fn ir_behavior_and_cmpne_branch_surface() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
 }
 #[test]
@@ -155,10 +126,7 @@ fn ir_behavior_boundscheck_peek_read_chain() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
     {
         let input: &[u8] = &[200u8];
@@ -167,9 +135,6 @@ fn ir_behavior_boundscheck_peek_read_chain() {
         let optimized = run_exec(ir, input, true);
         assert_eq!(baseline, expected, "baseline output mismatch");
         assert_eq!(optimized, expected, "optimized output mismatch");
-        assert_eq!(
-            optimized, baseline,
-            "optimized and baseline outputs diverged"
-        );
+        assert_eq!(optimized, baseline, "optimized and baseline outputs diverged");
     }
 }
