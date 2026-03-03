@@ -2,7 +2,7 @@
 ///
 /// These tests are for isolating and minimizing codegen bugs at the IR level:
 /// paste a failing IR snapshot, strip it down, and re-run until you have a
-/// minimal reproducer. See DEVELOP.md for the full workflow.
+/// minimal reproducer. See docs/develop/ for debugging workflows.
 use facet::Facet;
 
 fn run_ir<'a, T: Facet<'a>>(

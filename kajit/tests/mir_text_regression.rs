@@ -2,7 +2,7 @@
 ///
 /// These tests are for isolating and minimizing codegen bugs: paste a failing
 /// RA-MIR snapshot, strip it down, and re-run until you have a minimal
-/// reproducer. See DEVELOP.md for the full workflow.
+/// reproducer. See docs/develop/ for debugging workflows.
 use facet::Facet;
 
 fn run_mir<'a, T: Facet<'a>>(mir_text: &str, input: &'a [u8]) -> Result<T, kajit::DeserError> {
