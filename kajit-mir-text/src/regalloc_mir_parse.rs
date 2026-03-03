@@ -696,9 +696,9 @@ fn resolve_inst(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linearize::linearize;
-    use crate::regalloc_mir::lower_linear_ir;
     use kajit_ir::{IrBuilder, Width};
+    use kajit_lir::linearize;
+    use kajit_mir::lower_linear_ir;
 
     fn test_shape() -> &'static facet::Shape {
         <u8 as facet::Facet>::SHAPE

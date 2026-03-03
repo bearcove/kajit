@@ -597,11 +597,27 @@ pub enum Effect {
     Barrier,
 }
 
+/// Per-op metadata used by optimization passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IrOpMetadata {
+    /// Coarse effect class for scheduling/analysis.
+    pub effect: Effect,
+    /// Static cursor advancement in bytes, if known.
+    ///
+    /// `Some(0)` means the op preserves the cursor position.
+    /// `None` means the op either does not participate in the cursor chain, or
+    /// the advancement is dynamic/unknown.
+    pub cursor_advance: Option<u32>,
+    /// Whether the op has any observable side effects and must not be removed
+    /// solely based on dead outputs.
+    pub has_side_effects: bool,
+}
+
 // r[impl ir.effects.independence]
 impl IrOp {
-    /// Returns the effect classification of this op.
-    pub fn effect(&self) -> Effect {
-        match self {
+    /// Returns pass metadata for this op.
+    pub fn metadata(&self) -> IrOpMetadata {
+        let (effect, cursor_advance) = match self {
             // Pure ops
             IrOp::Const { .. }
             | IrOp::Add
@@ -615,31 +631,52 @@ impl IrOp {
             | IrOp::ZigzagDecode { .. }
             | IrOp::SignExtend { .. }
             | IrOp::SlotAddr { .. }
-            | IrOp::CallPure { .. } => Effect::Pure,
+            | IrOp::CallPure { .. } => (Effect::Pure, None),
 
             // Cursor ops
-            IrOp::ReadBytes { .. }
-            | IrOp::PeekByte
-            | IrOp::AdvanceCursor { .. }
-            | IrOp::AdvanceCursorBy
-            | IrOp::BoundsCheck { .. }
-            | IrOp::SaveCursor
+            IrOp::ReadBytes { count } => (Effect::Cursor, Some(*count)),
+            IrOp::AdvanceCursor { count } => (Effect::Cursor, Some(*count)),
+            IrOp::PeekByte | IrOp::SaveCursor | IrOp::BoundsCheck { .. } => {
+                (Effect::Cursor, Some(0))
+            }
+            IrOp::AdvanceCursorBy
             | IrOp::RestoreCursor
             | IrOp::WriteToSlot { .. }
             | IrOp::ReadFromSlot { .. }
             | IrOp::SimdStringScan
             | IrOp::SimdWhitespaceSkip
-            | IrOp::ErrorExit { .. } => Effect::Cursor,
+            | IrOp::ErrorExit { .. } => (Effect::Cursor, None),
 
             // Output ops
             IrOp::WriteToField { .. }
             | IrOp::ReadFromField { .. }
             | IrOp::SaveOutPtr
-            | IrOp::SetOutPtr => Effect::Output,
+            | IrOp::SetOutPtr => (Effect::Output, None),
 
             // Barrier ops
-            IrOp::CallIntrinsic { .. } => Effect::Barrier,
+            IrOp::CallIntrinsic { .. } => (Effect::Barrier, None),
+        };
+
+        IrOpMetadata {
+            effect,
+            cursor_advance,
+            has_side_effects: effect != Effect::Pure,
         }
+    }
+
+    /// Returns the effect classification of this op.
+    pub fn effect(&self) -> Effect {
+        self.metadata().effect
+    }
+
+    /// Returns the static cursor advancement in bytes when known.
+    pub fn cursor_advance(&self) -> Option<u32> {
+        self.metadata().cursor_advance
+    }
+
+    /// Returns whether this op has side effects.
+    pub fn has_side_effects(&self) -> bool {
+        self.metadata().has_side_effects
     }
 }
 
@@ -2146,6 +2183,44 @@ mod tests {
             }
             .effect(),
             Effect::Barrier
+        );
+    }
+
+    #[test]
+    fn op_metadata_cursor_advance_and_side_effects() {
+        assert_eq!(IrOp::ReadBytes { count: 4 }.cursor_advance(), Some(4));
+        assert_eq!(IrOp::AdvanceCursor { count: 7 }.cursor_advance(), Some(7));
+        assert_eq!(IrOp::PeekByte.cursor_advance(), Some(0));
+        assert_eq!(IrOp::SaveCursor.cursor_advance(), Some(0));
+        assert_eq!(IrOp::BoundsCheck { count: 32 }.cursor_advance(), Some(0));
+        assert_eq!(IrOp::AdvanceCursorBy.cursor_advance(), None);
+        assert_eq!(IrOp::SimdWhitespaceSkip.cursor_advance(), None);
+        assert_eq!(IrOp::Const { value: 1 }.cursor_advance(), None);
+
+        assert!(!IrOp::Const { value: 1 }.has_side_effects());
+        assert!(
+            !IrOp::CallPure {
+                func: IntrinsicFn(0),
+                arg_count: 0
+            }
+            .has_side_effects()
+        );
+        assert!(IrOp::ReadBytes { count: 1 }.has_side_effects());
+        assert!(
+            IrOp::WriteToField {
+                offset: 0,
+                width: Width::W4
+            }
+            .has_side_effects()
+        );
+        assert!(
+            IrOp::CallIntrinsic {
+                func: IntrinsicFn(0),
+                arg_count: 0,
+                has_result: false,
+                field_offset: 0,
+            }
+            .has_side_effects()
         );
     }
 

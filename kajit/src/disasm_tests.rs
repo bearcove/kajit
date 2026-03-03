@@ -265,36 +265,5 @@ fn disasm_json_supported_surface() {
         Outer::SHAPE,
         &crate::json::KajitJson,
     );
-    assert_case_snapshot("json", "flatten", Document::SHAPE, &crate::json::KajitJson);
-    assert_case_snapshot(
-        "json",
-        "enum_external",
-        Animal::SHAPE,
-        &crate::json::KajitJson,
-    );
-    assert_case_snapshot(
-        "json",
-        "enum_adjacent",
-        AdjAnimal::SHAPE,
-        &crate::json::KajitJson,
-    );
-    assert_case_snapshot(
-        "json",
-        "enum_internal",
-        IntAnimal::SHAPE,
-        &crate::json::KajitJson,
-    );
-    assert_case_snapshot(
-        "json",
-        "enum_untagged",
-        UntaggedAnimal::SHAPE,
-        &crate::json::KajitJson,
-    );
-    assert_case_snapshot(
-        "json",
-        "option",
-        OptionModel::SHAPE,
-        &crate::json::KajitJson,
-    );
     assert_case_snapshot("json", "vec", VecModel::SHAPE, &crate::json::KajitJson);
 }

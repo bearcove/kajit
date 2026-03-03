@@ -8,3 +8,6 @@ kajit-ir = { path = "../kajit-ir" }
 kajit-lir = { path = "../kajit-lir" }
 regalloc2 = "0.15"
 facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+
+[dev-dependencies]
+kajit-ir-text = { path = "../kajit-ir-text" }

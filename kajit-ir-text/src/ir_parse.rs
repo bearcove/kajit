@@ -1503,7 +1503,10 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn round_trip_with_intrinsics() {
-        let registry = IntrinsicRegistry::new();
+        unsafe extern "C" fn test_intrinsic(_ctx: *mut core::ffi::c_void) {}
+
+        let mut registry = IntrinsicRegistry::new();
+        registry.register("kajit_read_bool", IntrinsicFn(test_intrinsic as usize));
 
         let mut builder = IrBuilder::new(test_shape());
         {

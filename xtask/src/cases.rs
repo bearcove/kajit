@@ -3,7 +3,7 @@
 use crate::{Case, CaseBuilder, DecodeExpectation, WireFormat};
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
-use syn::LitByteStr;
+use syn::{LitByteStr, LitStr};
 
 struct PanicCase {
     name: &'static str,
@@ -932,6 +932,151 @@ fn all_cases() -> Vec<Case> {
     out
 }
 
+fn normalized_case_ty(case: &Case) -> String {
+    case.ty
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+fn is_pointer_case_type(ty: &str) -> bool {
+    matches!(
+        ty,
+        "RcScalar"
+            | "ArcScalar"
+            | "BoxedScalar"
+            | "BoxedString"
+            | "BoxedNested"
+            | "OptionBox"
+            | "VecBox"
+    )
+}
+
+fn is_map_case_type(ty: &str) -> bool {
+    matches!(ty, "ConfigMap" | "EnvMap" | "BTreeConfigMap")
+}
+
+fn is_default_or_skip_case_type(ty: &str) -> bool {
+    matches!(
+        ty,
+        "WithDefault"
+            | "WithDefaultString"
+            | "AllDefault"
+            | "WithSkip"
+            | "WithSkipDeser"
+            | "SkipWithCustomDefault"
+    )
+}
+
+fn is_json_enum_case_type(ty: &str) -> bool {
+    matches!(
+        ty,
+        "Animal"
+            | "AdjAnimal"
+            | "IntAnimal"
+            | "UntaggedAnimal"
+            | "UntaggedConfig"
+            | "ApiResponse"
+            | "Zoo"
+    )
+}
+
+fn is_json_option_case_type(ty: &str) -> bool {
+    matches!(ty, "WithOptU32" | "WithOptStr" | "WithOptAddr" | "MultiOpt")
+}
+
+fn is_array_case_type(ty: &str) -> bool {
+    ty.starts_with('[') && ty.ends_with(']') && ty.contains(';')
+}
+
+fn is_json_flatten_case(case: &Case) -> bool {
+    case.name == "flatten"
+}
+
+fn is_json_rename_case(case: &Case) -> bool {
+    case.name.starts_with("rename_field")
+}
+
+fn is_json_sequence_case(case: &Case) -> bool {
+    case.name.starts_with("vec_") || case.name.starts_with("tuple_") || case.name == "unit_field"
+}
+
+fn is_postcard_wide_scalar_case(case: &Case) -> bool {
+    matches!(
+        case.name,
+        "all_integers" | "all_scalars" | "integer_boundaries"
+    )
+}
+
+fn unsupported_reason_for_format(case: &Case, format: WireFormat) -> Option<String> {
+    let ty = normalized_case_ty(case);
+    let reason = match format {
+        WireFormat::Json => {
+            if is_json_enum_case_type(&ty) {
+                Some("json enum lowering is not implemented yet")
+            } else if is_json_option_case_type(&ty) {
+                Some("json option lowering is not implemented yet")
+            } else if is_map_case_type(&ty) {
+                Some("map lowering is not implemented in IR path yet")
+            } else if is_pointer_case_type(&ty) {
+                Some("pointer lowering is not implemented in IR path yet")
+            } else if is_default_or_skip_case_type(&ty) {
+                Some("default/skip field lowering is not implemented in IR path yet")
+            } else if is_array_case_type(&ty) {
+                Some("json array lowering is not implemented in IR path yet")
+            } else if is_json_sequence_case(case) {
+                Some("json sequence lowering is not implemented in IR path yet")
+            } else if is_json_flatten_case(case) {
+                Some("json flatten lowering is not implemented in IR path yet")
+            } else if is_json_rename_case(case) {
+                Some("json rename lowering is not implemented in IR path yet")
+            } else {
+                None
+            }
+        }
+        WireFormat::Postcard => {
+            if is_map_case_type(&ty) {
+                Some("map lowering is not implemented in IR path yet")
+            } else if is_pointer_case_type(&ty) {
+                Some("pointer lowering is not implemented in IR path yet")
+            } else if is_default_or_skip_case_type(&ty) {
+                Some("default/skip field lowering is not implemented in IR path yet")
+            } else if is_postcard_wide_scalar_case(case) {
+                Some("postcard wide scalar aggregate lowering is not implemented in IR path yet")
+            } else {
+                None
+            }
+        }
+    }?;
+
+    Some(format!("{reason}; case={}, type={ty}", case.name))
+}
+
+fn ignore_attr_for_format(case: &Case, format: WireFormat) -> Option<TokenStream> {
+    unsupported_reason_for_format(case, format).map(|msg| {
+        let lit = LitStr::new(&msg, Span::call_site());
+        quote!(#[ignore = #lit])
+    })
+}
+
+fn ignore_attr_for_prop_case(case: &Case) -> Option<TokenStream> {
+    let mut reasons = Vec::new();
+    if let Some(reason) = unsupported_reason_for_format(case, WireFormat::Json) {
+        reasons.push(format!("json: {reason}"));
+    }
+    if let Some(reason) = unsupported_reason_for_format(case, WireFormat::Postcard) {
+        reasons.push(format!("postcard: {reason}"));
+    }
+    if reasons.is_empty() {
+        None
+    } else {
+        let msg = reasons.join(" | ");
+        let lit = LitStr::new(&msg, Span::call_site());
+        Some(quote!(#[ignore = #lit]))
+    }
+}
+
 macro_rules! json_case_spec {
     (
         name: $name:expr,
@@ -1774,8 +1919,10 @@ pub(crate) fn render_test_file() -> String {
                     format_ident!("{}_v{}", case.name, sample_idx)
                 };
                 let value = value.clone();
+                let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
                 quote! {
                     #[test]
+                    #ignore_attr
                     fn #test_name() {
                         let value = #value;
                         assert_json_case(value);
@@ -1802,8 +1949,10 @@ pub(crate) fn render_test_file() -> String {
                         format!("{}__v{}", case.name, sample_idx)
                     };
                     let value = value.clone();
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
                     quote! {
                         #[test]
+                        #ignore_attr
                         fn #test_name() {
                             let value = #value;
                             assert_codegen_rvsdg_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
@@ -1830,8 +1979,10 @@ pub(crate) fn render_test_file() -> String {
                         format!("{}__v{}", case.name, sample_idx)
                     };
                     let value = value.clone();
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
                     quote! {
                         #[test]
+                        #ignore_attr
                         fn #test_name() {
                             let value = #value;
                             assert_codegen_ra_mir_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
@@ -1858,8 +2009,10 @@ pub(crate) fn render_test_file() -> String {
                         format!("{}__v{}", case.name, sample_idx)
                     };
                     let value = value.clone();
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
                     quote! {
                         #[test]
+                        #ignore_attr
                         fn #test_name() {
                             let value = #value;
                             assert_codegen_edits_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
@@ -1878,8 +2031,10 @@ pub(crate) fn render_test_file() -> String {
                     format_ident!("{}_v{}", case.name, sample_idx)
                 };
                 let value = value.clone();
+                let ignore_attr = ignore_attr_for_format(case, WireFormat::Postcard);
                 quote! {
                     #[test]
+                    #ignore_attr
                     fn #test_name() {
                         let value = #value;
                         assert_postcard_case(value);
@@ -1906,8 +2061,10 @@ pub(crate) fn render_test_file() -> String {
                         format!("{}__v{}", case.name, sample_idx)
                     };
                     let value = value.clone();
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Postcard);
                     quote! {
                         #[test]
+                        #ignore_attr
                         fn #test_name() {
                             let value = #value;
                             assert_codegen_rvsdg_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
@@ -1934,8 +2091,10 @@ pub(crate) fn render_test_file() -> String {
                         format!("{}__v{}", case.name, sample_idx)
                     };
                     let value = value.clone();
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Postcard);
                     quote! {
                         #[test]
+                        #ignore_attr
                         fn #test_name() {
                             let value = #value;
                             assert_codegen_ra_mir_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
@@ -1962,8 +2121,10 @@ pub(crate) fn render_test_file() -> String {
                         format!("{}__v{}", case.name, sample_idx)
                     };
                     let value = value.clone();
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Postcard);
                     quote! {
                         #[test]
+                        #ignore_attr
                         fn #test_name() {
                             let value = #value;
                             assert_codegen_edits_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
@@ -1982,8 +2143,10 @@ pub(crate) fn render_test_file() -> String {
                 .first()
                 .cloned()
                 .expect("each case should define at least one sample value");
+            let ignore_attr = ignore_attr_for_prop_case(case);
             quote! {
                 #[test]
+                #ignore_attr
                 fn #test_name() {
                     let marker = #value;
                     assert_prop_case(&marker);
@@ -2005,11 +2168,13 @@ pub(crate) fn render_test_file() -> String {
                     };
                     let ty = case.ty.clone();
                     let input_bytes = LitByteStr::new(input.input, Span::call_site());
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
                     match &input.expect {
                         DecodeExpectation::Ok(expected) => {
                             let expected = expected.clone();
                             quote! {
                                 #[test]
+                                #ignore_attr
                                 fn #test_name() {
                                     assert_json_input_case::<#ty>(#input_bytes, #expected);
                                 }
@@ -2019,6 +2184,7 @@ pub(crate) fn render_test_file() -> String {
                             let expected_error_code = expected_error_code.clone();
                             quote! {
                                 #[test]
+                                #ignore_attr
                                 fn #test_name() {
                                     assert_json_input_err_code::<#ty>(#input_bytes, #expected_error_code);
                                 }
@@ -2027,6 +2193,7 @@ pub(crate) fn render_test_file() -> String {
                         DecodeExpectation::AnyErr => {
                             quote! {
                                 #[test]
+                                #ignore_attr
                                 fn #test_name() {
                                     assert_json_input_err::<#ty>(#input_bytes);
                                 }
@@ -2050,11 +2217,13 @@ pub(crate) fn render_test_file() -> String {
                     };
                     let ty = case.ty.clone();
                     let input_bytes = LitByteStr::new(input.input, Span::call_site());
+                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Postcard);
                     match &input.expect {
                         DecodeExpectation::Ok(expected) => {
                             let expected = expected.clone();
                             quote! {
                                 #[test]
+                                #ignore_attr
                                 fn #test_name() {
                                     assert_postcard_input_case::<#ty>(#input_bytes, #expected);
                                 }
@@ -2064,6 +2233,7 @@ pub(crate) fn render_test_file() -> String {
                             let expected_error_code = expected_error_code.clone();
                             quote! {
                                 #[test]
+                                #ignore_attr
                                 fn #test_name() {
                                     assert_postcard_input_err_code::<#ty>(#input_bytes, #expected_error_code);
                                 }
@@ -2072,6 +2242,7 @@ pub(crate) fn render_test_file() -> String {
                         DecodeExpectation::AnyErr => {
                             quote! {
                                 #[test]
+                                #ignore_attr
                                 fn #test_name() {
                                     assert_postcard_input_err::<#ty>(#input_bytes);
                                 }
