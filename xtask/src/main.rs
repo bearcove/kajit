@@ -243,6 +243,8 @@ fn install() {
         std::process::exit(output.status.code().unwrap_or(1));
     }
     println!("installed and validated: {}", dst.display());
+
+    print_mcp_setup_instructions(&dst);
 }
 
 fn benches_prefix() -> PathBuf {
@@ -320,6 +322,16 @@ fn home_dir() -> PathBuf {
         return PathBuf::from(home);
     }
     panic!("unable to determine home directory (HOME/USERPROFILE are unset)");
+}
+
+fn print_mcp_setup_instructions(installed_binary: &Path) {
+    let binary = installed_binary.display();
+    println!();
+    println!("MCP setup (copy/paste):");
+    println!("  codex  => codex mcp add kajit-mir -- {binary}");
+    println!("  claude => claude mcp add --transport stdio kajit-mir -- {binary}");
+    println!();
+    println!("After adding, restart the client so it picks up the new MCP server.");
 }
 
 fn write_file(path: &Path, content: &str) {
