@@ -33,8 +33,9 @@ jobs:
       - name: Check
         run: cargo check
 
-      - name: Install cargo-nextest
-        run: cargo install cargo-nextest --locked
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
 
       - name: Test
         run: cargo nextest run
