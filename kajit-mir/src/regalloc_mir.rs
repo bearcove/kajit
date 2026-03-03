@@ -153,103 +153,39 @@ pub struct RaProgram {
 
 // ─── Display ────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy)]
-enum DisplayMode {
-    Canonical,
-    Human,
-}
-
-pub struct HumanRaProgram<'a> {
-    program: &'a RaProgram,
-}
-
-impl<'a> std::fmt::Display for HumanRaProgram<'a> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt_program(self.program, f, DisplayMode::Human)
-    }
-}
-
-impl RaProgram {
-    pub fn human(&self) -> HumanRaProgram<'_> {
-        HumanRaProgram { program: self }
-    }
-}
-
 impl std::fmt::Display for RaProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mode = if f.alternate() {
-            DisplayMode::Human
-        } else {
-            DisplayMode::Canonical
-        };
-        fmt_program(self, f, mode)
+        fmt_program(self, f)
     }
 }
 
 impl std::fmt::Display for RaFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mode = if f.alternate() {
-            DisplayMode::Human
-        } else {
-            DisplayMode::Canonical
-        };
-        fmt_function(self, f, mode)
+        fmt_function(self, f)
     }
 }
 
-fn fmt_program(
-    program: &RaProgram,
-    f: &mut std::fmt::Formatter<'_>,
-    mode: DisplayMode,
-) -> std::fmt::Result {
+fn fmt_program(program: &RaProgram, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     for func in &program.funcs {
-        fmt_function(func, f, mode)?;
+        fmt_function(func, f)?;
     }
     Ok(())
 }
 
-fn fmt_function(
-    func: &RaFunction,
-    f: &mut std::fmt::Formatter<'_>,
-    mode: DisplayMode,
-) -> std::fmt::Result {
-    match mode {
-        DisplayMode::Canonical => {
-            writeln!(f, "ra_func @{} {{", func.lambda_id.index())?;
-            for block in &func.blocks {
-                fmt_block(f, block, mode)?;
-            }
-            writeln!(f, "}}")
-        }
-        DisplayMode::Human => {
-            writeln!(
-                f,
-                "ra_func @{} (entry: b{}, args: {}, results: {}) {{",
-                func.lambda_id.index(),
-                func.entry.0,
-                fmt_vregs(&func.data_args),
-                fmt_vregs(&func.data_results)
-            )?;
-            for block in &func.blocks {
-                fmt_block(f, block, mode)?;
-            }
-            writeln!(f, "}}")
-        }
+fn fmt_function(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    writeln!(
+        f,
+        "ra_func @{} {{ ; entry: b{}",
+        func.lambda_id.index(),
+        func.entry.0,
+    )?;
+    for block in &func.blocks {
+        fmt_block(f, block)?;
     }
+    writeln!(f, "}}")
 }
 
-fn fmt_block(
-    f: &mut std::fmt::Formatter<'_>,
-    block: &RaBlock,
-    mode: DisplayMode,
-) -> std::fmt::Result {
-    match mode {
-        DisplayMode::Canonical => fmt_block_canonical(f, block),
-        DisplayMode::Human => fmt_block_human(f, block),
-    }
-}
-
-fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Result {
+fn fmt_block(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Result {
     // Block header: block b0 [params: v0, v1] (preds: b2, b3):
     write!(f, "  block b{}", block.id.0)?;
     if !block.params.is_empty() {
@@ -272,7 +208,7 @@ fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std:
         }
         write!(f, ")")?;
     }
-    writeln!(f, ":")?;
+    writeln!(f, ": ; insts: {}", block.insts.len())?;
 
     // Instructions.
     for inst in &block.insts {
@@ -284,7 +220,7 @@ fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std:
     // Terminator.
     write!(f, "    term: ")?;
     fmt_terminator(f, &block.term)?;
-    writeln!(f)?;
+    writeln!(f, " ; uses: {}", fmt_vregs(&block.term.uses()))?;
 
     // Successors with edge args.
     if block.succs.is_empty() {
@@ -304,46 +240,9 @@ fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std:
                 write!(f, "]")?;
             }
         }
-        writeln!(f)?;
+        writeln!(f, " ; count: {}", block.succs.len())?;
     }
 
-    Ok(())
-}
-
-fn fmt_block_human(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Result {
-    writeln!(f, "  b{}:", block.id.0)?;
-
-    if !block.params.is_empty() {
-        writeln!(f, "    params: {}", fmt_vregs(&block.params))?;
-    }
-    if !block.preds.is_empty() {
-        writeln!(f, "    preds: {}", fmt_blocks(&block.preds))?;
-    }
-
-    for inst in &block.insts {
-        write!(f, "    ")?;
-        fmt_ra_inst(f, inst)?;
-        writeln!(f)?;
-    }
-
-    write!(f, "    term: ")?;
-    fmt_terminator(f, &block.term)?;
-    writeln!(f)?;
-
-    if block.succs.is_empty() {
-        writeln!(f, "    succs: []")?;
-    } else {
-        writeln!(f, "    succs:")?;
-        for edge in &block.succs {
-            if edge.args.is_empty() {
-                writeln!(f, "      -> b{}", edge.to.0)?;
-            } else {
-                writeln!(f, "      -> b{} {}", edge.to.0, fmt_vregs(&edge.args))?;
-            }
-        }
-    }
-
-    writeln!(f)?;
     Ok(())
 }
 
@@ -355,19 +254,6 @@ fn fmt_vregs(vregs: &[VReg]) -> String {
         }
         out.push('v');
         out.push_str(&v.index().to_string());
-    }
-    out.push(']');
-    out
-}
-
-fn fmt_blocks(blocks: &[BlockId]) -> String {
-    let mut out = String::from("[");
-    for (i, b) in blocks.iter().enumerate() {
-        if i > 0 {
-            out.push_str(", ");
-        }
-        out.push('b');
-        out.push_str(&b.0.to_string());
     }
     out.push(']');
     out
@@ -1366,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn ra_mir_default_and_human_display_modes() {
+    fn ra_mir_single_display_mode_with_comments() {
         let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
         {
             let mut rb = builder.root_region();
@@ -1386,13 +1272,10 @@ mod tests {
         let lin = linearize(&mut func);
         let ra = lower_linear_ir(&lin);
 
-        let canonical = format!("{ra}");
-        let human = format!("{:#}", ra);
-        let via_wrapper = format!("{}", ra.human());
-
-        assert!(canonical.starts_with("ra_func @0 {"));
-        assert!(human.starts_with("ra_func @0 (entry: b0, args: ["));
-        assert!(human.contains("\n    succs:\n      -> b"));
-        assert_eq!(human, via_wrapper);
+        let text = format!("{ra}");
+        assert!(text.starts_with("ra_func @0 { ; entry: b0"));
+        assert!(text.contains(" ; insts: "));
+        assert!(text.contains(" ; uses: "));
+        assert!(text.contains("term:"));
     }
 }

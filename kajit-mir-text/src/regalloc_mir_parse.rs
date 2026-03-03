@@ -493,7 +493,8 @@ impl std::error::Error for ParseError {}
 
 /// Parse RA-MIR text format into an `RaProgram`.
 pub fn parse_ra_mir(input: &str) -> Result<RaProgram, ParseError> {
-    let result = ra_program().parse(input);
+    let stripped = strip_ra_mir_comments(input);
+    let result = ra_program().parse(stripped.as_str());
     let funcs_ast = result.into_result().map_err(|errs| {
         let msgs: Vec<String> = errs.into_iter().map(|e| format!("{e}")).collect();
         ParseError {
@@ -502,6 +503,19 @@ pub fn parse_ra_mir(input: &str) -> Result<RaProgram, ParseError> {
     })?;
 
     resolve(funcs_ast)
+}
+
+fn strip_ra_mir_comments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for line in input.lines() {
+        if let Some((head, _)) = line.split_once(';') {
+            out.push_str(head.trim_end());
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    out
 }
 
 fn resolve(funcs_ast: Vec<AstRaFunc>) -> Result<RaProgram, ParseError> {
@@ -787,6 +801,23 @@ ra_func @0 {
             text1, text2,
             "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
         );
+    }
+
+    #[test]
+    fn parse_ra_mir_with_semicolon_comments() {
+        let input = r#"
+ra_func @0 { ; entry: b0
+  block b0: ; no preds
+    v0:gpr = const(0x2a) ; a constant
+    term: return ; done
+    succs: (none) ; leaf
+}
+"#;
+
+        let prog = parse_ra_mir(input).unwrap();
+        assert_eq!(prog.funcs.len(), 1);
+        assert_eq!(prog.funcs[0].blocks.len(), 1);
+        assert_eq!(prog.funcs[0].blocks[0].insts.len(), 1);
     }
 
     #[test]
