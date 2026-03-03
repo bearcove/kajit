@@ -3,6 +3,10 @@
     "gdb": {
       "command": "uv",
       "args": ["run", "--directory", "../MDB-MCP", "server.py"]
+    },
+    "kajit-mir": {
+      "command": "cargo",
+      "args": ["run", "-q", "-p", "kajit-mir-mcp"]
     }
   }
 }
