@@ -155,6 +155,43 @@ pub fn debug_linear_ir_text(
     scrub_volatile_intrinsic_addrs(&format!("{linear}"))
 }
 
+/// Build decoder IR and return textual RVSDG checkpoints before/after each enabled optimization pass.
+///
+/// The first entry is always `("initial", ir_before_passes)`.
+pub fn debug_ir_opt_timeline_text(
+    shape: &'static facet::Shape,
+    ir_decoder: &dyn format::Decoder,
+) -> Vec<(String, String)> {
+    let pipeline_opts = PipelineOptions::from_env();
+    debug_ir_opt_timeline_text_with_options(shape, ir_decoder, &pipeline_opts)
+}
+
+/// Same as [`debug_ir_opt_timeline_text`], but with explicit pipeline options.
+pub fn debug_ir_opt_timeline_text_with_options(
+    shape: &'static facet::Shape,
+    ir_decoder: &dyn format::Decoder,
+    pipeline_opts: &PipelineOptions,
+) -> Vec<(String, String)> {
+    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    let mut checkpoints = vec![(
+        "initial".to_string(),
+        scrub_volatile_intrinsic_addrs(&format!("{func}")),
+    )];
+
+    compiler::run_configured_default_passes_with_observer(
+        &mut func,
+        pipeline_opts,
+        |pass, func| {
+            checkpoints.push((
+                pass.to_string(),
+                scrub_volatile_intrinsic_addrs(&format!("{func}")),
+            ));
+        },
+    );
+
+    checkpoints
+}
+
 fn scrub_volatile_intrinsic_addrs(text: &str) -> String {
     // Display dumps include intrinsic function pointer addresses which are process-local and
     // unstable across runs. Replace only those pointer fields to keep snapshots deterministic.
