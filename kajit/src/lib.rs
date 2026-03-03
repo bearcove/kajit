@@ -108,6 +108,20 @@ pub fn debug_ir_and_ra_mir_text(
     (ir_text, ra_text)
 }
 
+/// Build decoder IR (after default pre-regalloc passes) and return a human-readable RA-MIR dump.
+///
+/// This renderer is intended for interactive debugging and LLM-assisted analysis.
+pub fn debug_ra_mir_human_text(
+    shape: &'static facet::Shape,
+    ir_decoder: &dyn format::Decoder,
+) -> String {
+    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    ir_passes::run_default_passes(&mut func);
+    let linear = linearize::linearize(&mut func);
+    let ra = regalloc_mir::lower_linear_ir(&linear);
+    scrub_volatile_intrinsic_addrs(&format!("{}", ra.human()))
+}
+
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
 ///
 /// Intended for snapshot tests and debugging.

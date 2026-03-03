@@ -154,30 +154,90 @@ pub struct RaProgram {
 
 // ─── Display ────────────────────────────────────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DisplayStyle {
+    Canonical,
+    Human,
+}
+
+pub struct HumanRaProgram<'a> {
+    program: &'a RaProgram,
+}
+
+impl<'a> std::fmt::Display for HumanRaProgram<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt_program(self.program, f, DisplayStyle::Human)
+    }
+}
+
+impl RaProgram {
+    pub fn human(&self) -> HumanRaProgram<'_> {
+        HumanRaProgram { program: self }
+    }
+}
+
 impl std::fmt::Display for RaProgram {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt_program(self, f)
+        let style = if f.alternate() {
+            DisplayStyle::Human
+        } else {
+            DisplayStyle::Canonical
+        };
+        fmt_program(self, f, style)
     }
 }
 
 impl std::fmt::Display for RaFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt_function(self, f)
+        let style = if f.alternate() {
+            DisplayStyle::Human
+        } else {
+            DisplayStyle::Canonical
+        };
+        fmt_function(self, f, style)
     }
 }
 
-fn fmt_program(program: &RaProgram, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+fn fmt_program(
+    program: &RaProgram,
+    f: &mut std::fmt::Formatter<'_>,
+    style: DisplayStyle,
+) -> std::fmt::Result {
     for func in &program.funcs {
-        fmt_function(func, f)?;
+        fmt_function(func, f, style)?;
     }
     Ok(())
 }
 
-fn fmt_function(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+fn fmt_function(
+    func: &RaFunction,
+    f: &mut std::fmt::Formatter<'_>,
+    style: DisplayStyle,
+) -> std::fmt::Result {
+    match style {
+        DisplayStyle::Canonical => fmt_function_canonical(func, f),
+        DisplayStyle::Human => fmt_function_human(func, f),
+    }
+}
+
+fn fmt_function_canonical(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    writeln!(
+        f,
+        "ra_func @{} {{ ; entry: b{}",
+        func.lambda_id.index(),
+        func.entry.0,
+    )?;
+    for block in &func.blocks {
+        fmt_block_canonical(f, block)?;
+    }
+    writeln!(f, "}}")
+}
+
+fn fmt_function_human(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let meta = build_display_meta(func);
     write!(
         f,
-        "ra_func @{} {{ ; entry: b{}",
+        "ra_func @{} (entry: b{})",
         func.lambda_id.index(),
         func.entry.0,
     )?;
@@ -190,12 +250,70 @@ fn fmt_function(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt:
     }
     writeln!(f)?;
     for block in &func.blocks {
-        fmt_block(f, block, &meta)?;
+        fmt_block_human(f, block, &meta)?;
+        writeln!(f)?;
     }
-    writeln!(f, "}}")
+    Ok(())
 }
 
-fn fmt_block(
+fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Result {
+    write!(f, "  block b{}", block.id.0)?;
+    if !block.params.is_empty() {
+        write!(f, " [params:")?;
+        for (i, p) in block.params.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, " v{}", p.index())?;
+        }
+        write!(f, "]")?;
+    }
+    if !block.preds.is_empty() {
+        write!(f, " (preds:")?;
+        for (i, p) in block.preds.iter().enumerate() {
+            if i > 0 {
+                write!(f, ",")?;
+            }
+            write!(f, " b{}", p.0)?;
+        }
+        write!(f, ")")?;
+    }
+    writeln!(f, ": ; insts: {}", block.insts.len())?;
+
+    for inst in &block.insts {
+        write!(f, "    ")?;
+        fmt_ra_inst(f, inst)?;
+        writeln!(f)?;
+    }
+
+    write!(f, "    term: ")?;
+    fmt_terminator(f, &block.term)?;
+    writeln!(f, " ; uses: {}", fmt_vregs(&block.term.uses()))?;
+
+    if block.succs.is_empty() {
+        writeln!(f, "    succs: (none)")?;
+    } else {
+        write!(f, "    succs:")?;
+        for edge in &block.succs {
+            write!(f, " b{}", edge.to.0)?;
+            if !edge.args.is_empty() {
+                write!(f, " [")?;
+                for (i, arg) in edge.args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "v{}", arg.index())?;
+                }
+                write!(f, "]")?;
+            }
+        }
+        writeln!(f, " ; count: {}", block.succs.len())?;
+    }
+
+    Ok(())
+}
+
+fn fmt_block_human(
     f: &mut std::fmt::Formatter<'_>,
     block: &RaBlock,
     meta: &DisplayMeta,
@@ -1429,7 +1547,7 @@ mod tests {
     }
 
     #[test]
-    fn ra_mir_single_display_mode_with_comments() {
+    fn ra_mir_canonical_and_human_display_modes() {
         let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
         {
             let mut rb = builder.root_region();
@@ -1449,16 +1567,22 @@ mod tests {
         let lin = linearize(&mut func);
         let ra = lower_linear_ir(&lin);
 
-        let text = format!("{ra}");
-        assert!(text.starts_with("ra_func @0 { ; entry: b0"));
-        assert!(text.contains(" ; consts: "));
-        assert!(text.contains(" ; insts: "));
-        assert!(text.contains(" ; params_dbg: "));
-        assert!(text.contains(" ; uses: "));
-        assert!(text.contains(" ; orig: lir#"));
-        assert!(text.contains(" ; sem: "));
-        assert!(text.contains(" ; const_alias: "));
-        assert!(text.contains(" ; defs_dbg: "));
-        assert!(text.contains("term:"));
+        let canonical = format!("{ra}");
+        let human_alt = format!("{ra:#}");
+        let human_wrapper = format!("{}", ra.human());
+
+        assert!(canonical.starts_with("ra_func @0 { ; entry: b0"));
+        assert!(canonical.contains(" ; insts: "));
+        assert!(canonical.contains(" ; uses: "));
+        assert!(canonical.contains("term:"));
+        assert!(!canonical.contains(" ; sem: "));
+        assert!(!canonical.contains(" ; const_alias: "));
+
+        assert!(human_alt.starts_with("ra_func @0 (entry: b0)"));
+        assert!(human_alt.contains(" ; consts: "));
+        assert!(human_alt.contains(" ; sem: "));
+        assert!(human_alt.contains(" ; const_alias: "));
+        assert!(human_alt.contains(" ; defs_dbg: "));
+        assert_eq!(human_alt, human_wrapper);
     }
 }
