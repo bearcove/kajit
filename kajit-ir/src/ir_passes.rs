@@ -126,12 +126,7 @@ fn cursor_chain_step(
         return None;
     };
 
-    let advance = match op {
-        IrOp::ReadBytes { count } => *count,
-        IrOp::AdvanceCursor { count } => *count,
-        IrOp::PeekByte | IrOp::SaveCursor => 0,
-        _ => return None,
-    };
+    let advance = op.cursor_advance()?;
     Some((advance, out))
 }
 
