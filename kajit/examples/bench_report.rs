@@ -924,6 +924,7 @@ body{
 }
 .ratio-col.win{color:var(--lhs)}
 .ratio-col.lose{color:var(--rhs)}
+.ratio-col.na{color:var(--dim)}
 .t-left{
   font-size:12px;font-weight:500;color:var(--bright);
   text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;
@@ -1025,6 +1026,17 @@ footer a:hover{text-decoration:underline}
         });
 
         for pair in PAIRS {
+            let any_total = groups
+                .iter()
+                .filter(|g| {
+                    find_row_for_impl(g, pair.left, direction).is_some()
+                        || find_row_for_impl(g, pair.right, direction).is_some()
+                })
+                .count();
+            if any_total == 0 {
+                continue;
+            }
+
             let comparable_total = groups
                 .iter()
                 .filter(|g| {
@@ -1032,100 +1044,116 @@ footer a:hover{text-decoration:underline}
                         && find_row_for_impl(g, pair.right, direction).is_some()
                 })
                 .count();
-            if comparable_total == 0 {
-                continue;
+            if comparable_total > 0 {
+                let left_wins = groups
+                    .iter()
+                    .filter(|g| {
+                        let Some(left) = find_row_for_impl(g, pair.left, direction) else {
+                            return false;
+                        };
+                        let Some(right) = find_row_for_impl(g, pair.right, direction) else {
+                            return false;
+                        };
+                        left.median_ns <= right.median_ns
+                    })
+                    .count();
+                let right_wins = comparable_total - left_wins;
+                write!(
+                    h,
+                    r#"<div class="bench-row pair-summary pair-{}"><span></span><span></span><span></span><div class="summary-cell">{} wins <span class="lhs-n">{}</span><span class="sep">&middot;</span>{} wins <span class="rhs-n">{}</span></div><span></span></div>"#,
+                    esc(pair.id),
+                    esc(&display_name(pair.left)),
+                    left_wins,
+                    esc(&display_name(pair.right)),
+                    right_wins
+                )
+                .unwrap();
             }
-            let left_wins = groups
-                .iter()
-                .filter(|g| {
-                    let Some(left) = find_row_for_impl(g, pair.left, direction) else {
-                        return false;
-                    };
-                    let Some(right) = find_row_for_impl(g, pair.right, direction) else {
-                        return false;
-                    };
-                    left.median_ns <= right.median_ns
-                })
-                .count();
-            let right_wins = comparable_total - left_wins;
-            write!(
-                h,
-                r#"<div class="bench-row pair-summary pair-{}"><span></span><span></span><span></span><div class="summary-cell">{} wins <span class="lhs-n">{}</span><span class="sep">&middot;</span>{} wins <span class="rhs-n">{}</span></div><span></span></div>"#,
-                esc(pair.id),
-                esc(&display_name(pair.left)),
-                left_wins,
-                esc(&display_name(pair.right)),
-                right_wins
-            )
-            .unwrap();
         }
 
         for group in &groups {
             for pair in PAIRS {
-                let Some(left_row) = find_row_for_impl(group, pair.left, direction) else {
+                let left_row = find_row_for_impl(group, pair.left, direction);
+                let right_row = find_row_for_impl(group, pair.right, direction);
+                if left_row.is_none() && right_row.is_none() {
                     continue;
-                };
-                let Some(right_row) = find_row_for_impl(group, pair.right, direction) else {
-                    continue;
-                };
+                }
 
-                let ratio = right_row.median_ns / left_row.median_ns;
-                let left_wins = ratio >= 1.0;
-                let fill = ratio_to_fill(ratio);
-                let fill_class = if left_wins {
-                    "delta-fill left-side"
-                } else {
-                    "delta-fill right-side"
-                };
-                let ratio_cls = if left_wins { "win" } else { "lose" };
+                let default_na = r#"<span class="unit">n/a</span>"#.to_string();
+                let left_cell = left_row
+                    .map(|r| fmt_time_html(r.median_ns))
+                    .unwrap_or_else(|| default_na.clone());
+                let right_cell = right_row
+                    .map(|r| fmt_time_html(r.median_ns))
+                    .unwrap_or_else(|| default_na.clone());
 
-                let ratio_best = right_row.p95_ns / left_row.p5_ns;
-                let ratio_worst = right_row.p5_ns / left_row.p95_ns;
-                let best_wins = ratio_best >= 1.0;
-                let worst_wins = ratio_worst >= 1.0;
-                let best_fill = ratio_to_fill(ratio_best);
-                let worst_fill = ratio_to_fill(ratio_worst);
+                let mut ratio_text = "--".to_string();
+                let mut ratio_cls = "na";
+                let mut bar = String::new();
 
-                let mut bar =
-                    format!(r#"<div class="{fill_class}" style="width:{fill:.1}%"></div>"#);
-                if best_wins == worst_wins {
-                    let side = if best_wins { "left-side" } else { "right-side" };
-                    let (lo, hi) = if worst_fill < best_fill {
-                        (worst_fill, best_fill)
+                if let (Some(left_row), Some(right_row)) = (left_row, right_row) {
+                    let ratio = right_row.median_ns / left_row.median_ns;
+                    let left_wins = ratio >= 1.0;
+                    let fill = ratio_to_fill(ratio);
+                    let fill_class = if left_wins {
+                        "delta-fill left-side"
                     } else {
-                        (best_fill, worst_fill)
+                        "delta-fill right-side"
                     };
-                    if best_wins {
-                        write!(bar, r#"<div class="whisker-line {side}" style="right:calc(50% + {lo:.1}%);width:{:.1}%"></div>"#, hi - lo).unwrap();
-                        write!(bar, r#"<div class="whisker {side}" style="right:calc(50% + {hi:.1}%)"></div>"#).unwrap();
-                        write!(bar, r#"<div class="whisker {side}" style="right:calc(50% + {lo:.1}%)"></div>"#).unwrap();
+                    ratio_text = format!("{ratio:.2}×");
+                    ratio_cls = if left_wins { "win" } else { "lose" };
+
+                    let ratio_best = right_row.p95_ns / left_row.p5_ns;
+                    let ratio_worst = right_row.p5_ns / left_row.p95_ns;
+                    let best_wins = ratio_best >= 1.0;
+                    let worst_wins = ratio_worst >= 1.0;
+                    let best_fill = ratio_to_fill(ratio_best);
+                    let worst_fill = ratio_to_fill(ratio_worst);
+
+                    bar = format!(r#"<div class="{fill_class}" style="width:{fill:.1}%"></div>"#);
+                    if best_wins == worst_wins {
+                        let side = if best_wins { "left-side" } else { "right-side" };
+                        let (lo, hi) = if worst_fill < best_fill {
+                            (worst_fill, best_fill)
+                        } else {
+                            (best_fill, worst_fill)
+                        };
+                        if best_wins {
+                            write!(bar, r#"<div class="whisker-line {side}" style="right:calc(50% + {lo:.1}%);width:{:.1}%"></div>"#, hi - lo).unwrap();
+                            write!(bar, r#"<div class="whisker {side}" style="right:calc(50% + {hi:.1}%)"></div>"#).unwrap();
+                            write!(bar, r#"<div class="whisker {side}" style="right:calc(50% + {lo:.1}%)"></div>"#).unwrap();
+                        } else {
+                            write!(bar, r#"<div class="whisker-line {side}" style="left:calc(50% + {lo:.1}%);width:{:.1}%"></div>"#, hi - lo).unwrap();
+                            write!(bar, r#"<div class="whisker {side}" style="left:calc(50% + {hi:.1}%)"></div>"#).unwrap();
+                            write!(bar, r#"<div class="whisker {side}" style="left:calc(50% + {lo:.1}%)"></div>"#).unwrap();
+                        }
+                    } else if best_wins {
+                        write!(bar, r#"<div class="whisker-line left-side" style="right:50%;width:{best_fill:.1}%"></div>"#).unwrap();
+                        write!(bar, r#"<div class="whisker left-side" style="right:calc(50% + {best_fill:.1}%)"></div>"#).unwrap();
+                        write!(bar, r#"<div class="whisker-line right-side" style="left:50%;width:{worst_fill:.1}%"></div>"#).unwrap();
+                        write!(bar, r#"<div class="whisker right-side" style="left:calc(50% + {worst_fill:.1}%)"></div>"#).unwrap();
                     } else {
-                        write!(bar, r#"<div class="whisker-line {side}" style="left:calc(50% + {lo:.1}%);width:{:.1}%"></div>"#, hi - lo).unwrap();
-                        write!(bar, r#"<div class="whisker {side}" style="left:calc(50% + {hi:.1}%)"></div>"#).unwrap();
-                        write!(bar, r#"<div class="whisker {side}" style="left:calc(50% + {lo:.1}%)"></div>"#).unwrap();
+                        write!(bar, r#"<div class="whisker-line right-side" style="left:50%;width:{best_fill:.1}%"></div>"#).unwrap();
+                        write!(bar, r#"<div class="whisker right-side" style="left:calc(50% + {best_fill:.1}%)"></div>"#).unwrap();
+                        write!(bar, r#"<div class="whisker-line left-side" style="right:50%;width:{worst_fill:.1}%"></div>"#).unwrap();
+                        write!(bar, r#"<div class="whisker left-side" style="right:calc(50% + {worst_fill:.1}%)"></div>"#).unwrap();
                     }
-                } else if best_wins {
-                    write!(bar, r#"<div class="whisker-line left-side" style="right:50%;width:{best_fill:.1}%"></div>"#).unwrap();
-                    write!(bar, r#"<div class="whisker left-side" style="right:calc(50% + {best_fill:.1}%)"></div>"#).unwrap();
-                    write!(bar, r#"<div class="whisker-line right-side" style="left:50%;width:{worst_fill:.1}%"></div>"#).unwrap();
-                    write!(bar, r#"<div class="whisker right-side" style="left:calc(50% + {worst_fill:.1}%)"></div>"#).unwrap();
-                } else {
-                    write!(bar, r#"<div class="whisker-line right-side" style="left:50%;width:{best_fill:.1}%"></div>"#).unwrap();
-                    write!(bar, r#"<div class="whisker right-side" style="left:calc(50% + {best_fill:.1}%)"></div>"#).unwrap();
-                    write!(bar, r#"<div class="whisker-line left-side" style="right:50%;width:{worst_fill:.1}%"></div>"#).unwrap();
-                    write!(bar, r#"<div class="whisker left-side" style="right:calc(50% + {worst_fill:.1}%)"></div>"#).unwrap();
+                }
+
+                if bar.is_empty() {
+                    bar.push_str(r#"<div class="delta-fill left-side" style="width:0%"></div>"#);
                 }
 
                 write!(
                     h,
-                    r#"<div class="bench-row pair-row pair-{}"><span class="bname">{}</span><span class="ratio-col {}">{:.2}×</span><span class="t-left">{}</span><div class="delta-track">{}</div><span class="t-right">{}</span></div>"#,
+                    r#"<div class="bench-row pair-row pair-{}"><span class="bname">{}</span><span class="ratio-col {}">{}</span><span class="t-left">{}</span><div class="delta-track">{}</div><span class="t-right">{}</span></div>"#,
                     esc(pair.id),
                     esc(&group.name),
                     ratio_cls,
-                    ratio,
-                    fmt_time_html(left_row.median_ns),
+                    ratio_text,
+                    left_cell,
                     bar,
-                    fmt_time_html(right_row.median_ns),
+                    right_cell,
                 )
                 .unwrap();
             }
