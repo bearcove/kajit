@@ -25,7 +25,7 @@ expression: out
   mov r12, qword [r15]
   mov r10d, dword [r15 + 0x10]
   test r10d, r10d
-  jnz $+0x18fe
+  jnz $+0x1944
   mov r10, 0x7f
   mov rdx, r10
   mov qword [rsp + 0x30], rdx
@@ -156,17 +156,17 @@ expression: out
   mov r12, qword [r15]
   mov r10d, dword [r15 + 0x10]
   test r10d, r10d
-  jnz $+0x157e
+  jnz $+0x15c4
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x1560
+  jmp $+0x15a6
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x1542
+  jmp $+0x1588
   movzx r10d, byte [r12]
   mov rbx, r10
   add r12, 0x1
@@ -194,7 +194,7 @@ expression: out
   mov rcx, rbx
   mov rcx, rbx
   mov rbx, qword [rsp + 0x48]
-  jmp $+0x197
+  jmp $+0x1a1
   mov r10, 0x7
   mov rcx, r10
   mov r10, 0x2
@@ -205,11 +205,12 @@ expression: out
   mov qword [rsp + 0x38], rsi
   mov qword [rsp + 0x170], rcx
   mov rax, rbx
+  jmp $+0x0
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x1462
+  jmp $+0x14a3
   mov r10, 0x7f
   mov rdi, r10
   mov r10, 0x7
@@ -226,7 +227,7 @@ expression: out
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x13f6
+  jmp $+0x1437
   movzx r10d, byte [r12]
   mov rax, r10
   add r12, 0x1
@@ -274,9 +275,10 @@ expression: out
   mov rax, rdi
   mov rcx, r8
   test rbx, rbx
-  jnz $+0x1357
+  jnz $+0x1398
   mov rdx, qword [rsp + 0x38]
   mov rax, rdx
+  jmp $+0x0
   mov r10, rcx
   cmp r10, rbx
   setnz r10b
@@ -291,7 +293,7 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x2
-  jmp $+0x12e1
+  jmp $+0x131d
   mov rcx, qword [rsp + 0x58]
   mov r10, rbx
   cmp r10, rcx
@@ -303,19 +305,19 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0xc
-  jmp $+0x12a5
+  jmp $+0x12e1
   mov r10, rax
   mov word [r14 + 0x3c], r10w
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x127c
+  jmp $+0x12b8
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x125e
+  jmp $+0x129a
   movzx r10d, byte [r12]
   mov rbx, r10
   add r12, 0x1
@@ -344,7 +346,7 @@ expression: out
   mov rcx, rbx
   mov rax, qword [rsp + 0x78]
   mov rcx, rbx
-  jmp $+0x194
+  jmp $+0x19e
   mov r10, 0x7
   mov rcx, r10
   mov r10, 0x4
@@ -355,11 +357,12 @@ expression: out
   mov qword [rsp + 0x40], r8
   mov qword [rsp + 0x180], rcx
   mov rax, rbx
+  jmp $+0x0
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x117b
+  jmp $+0x11b2
   mov r10, 0x7f
   mov rdi, r10
   mov r10, 0x7
@@ -376,7 +379,7 @@ expression: out
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x110f
+  jmp $+0x1146
   movzx r10d, byte [r12]
   mov rax, r10
   add r12, 0x1
@@ -424,8 +427,9 @@ expression: out
   mov rax, rdi
   mov rcx, r9
   test rbx, rbx
-  jnz $+0x10b5
+  jnz $+0x10ec
   mov rdx, qword [rsp + 0x40]
+  jmp $+0x0
   mov r10, rcx
   cmp r10, rax
   setnz r10b
@@ -440,7 +444,7 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x2
-  jmp $+0xffd
+  jmp $+0x102f
   mov rax, qword [rsp + 0x88]
   mov r10, rbx
   cmp r10, rax
@@ -452,19 +456,19 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0xc
-  jmp $+0xfc1
+  jmp $+0xff3
   mov r10, rdx
   mov dword [r14 + 0x30], r10d
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xf99
+  jmp $+0xfcb
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xf7b
+  jmp $+0xfad
   movzx r10d, byte [r12]
   mov rbx, r10
   add r12, 0x1
@@ -494,7 +498,7 @@ expression: out
   mov rax, rbx
   mov rax, rbx
   mov rbx, qword [rsp + 0xa8]
-  jmp $+0x1a5
+  jmp $+0x1af
   mov r10, 0x7
   mov rax, r10
   mov r10, 0x9
@@ -505,11 +509,12 @@ expression: out
   mov rcx, rax
   mov qword [rsp + 0x198], rcx
   mov rax, rbx
+  jmp $+0x0
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xe95
+  jmp $+0xec2
   mov r10, 0x7f
   mov rdi, r10
   mov r10, 0x7
@@ -527,7 +532,7 @@ expression: out
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xe21
+  jmp $+0xe4e
   movzx r10d, byte [r12]
   mov r8, r10
   add r12, 0x1
@@ -574,12 +579,13 @@ expression: out
   mov rcx, rdi
   mov rdi, r8
   test rbx, rbx
-  jnz $+0xe14
+  jnz $+0xe41
   mov rax, qword [rsp + 0x190]
   mov rsi, rax
   mov rbx, qword [rsp + 0x1a0]
   mov rdx, rbx
   mov rax, rdi
+  jmp $+0x0
   mov r10, rax
   cmp r10, rbx
   setnz r10b
@@ -596,7 +602,7 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x2
-  jmp $+0xcfe
+  jmp $+0xd26
   test rbx, rbx
   jz $+0x5
   jmp $+0x5c
@@ -617,7 +623,7 @@ expression: out
   jmp $+0x5
   jmp $+0x15
   mov dword [r15 + 0x10], 0x2
-  jmp $+0xc99
+  jmp $+0xcc1
   jmp $+0x0
   mov r10, rsi
   mov qword [r14 + 0x18], r10
@@ -631,17 +637,17 @@ expression: out
   mov r12, qword [r15]
   mov r10d, dword [r15 + 0x10]
   test r10d, r10d
-  jnz $+0xc52
+  jnz $+0xc7a
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xc34
+  jmp $+0xc5c
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xc16
+  jmp $+0xc3e
   movzx r10d, byte [r12]
   mov rbx, r10
   add r12, 0x1
@@ -669,7 +675,7 @@ expression: out
   mov rcx, rbx
   mov rcx, rbx
   mov rbx, qword [rsp + 0xd0]
-  jmp $+0x181
+  jmp $+0x18b
   mov r10, 0x7
   mov rcx, r10
   mov r10, 0x2
@@ -680,11 +686,12 @@ expression: out
   mov qword [rsp + 0x1a8], rdx
   mov qword [rsp + 0x1b0], rcx
   mov rax, rbx
+  jmp $+0x0
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xb36
+  jmp $+0xb59
   mov r10, 0x7f
   mov r8, r10
   mov r10, 0x7
@@ -701,7 +708,7 @@ expression: out
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0xaca
+  jmp $+0xaed
   movzx r10d, byte [r12]
   mov rdx, r10
   add r12, 0x1
@@ -747,7 +754,8 @@ expression: out
   mov rcx, r8
   mov rcx, r9
   test rbx, rbx
-  jnz $+0xb05
+  jnz $+0xb28
+  jmp $+0x0
   mov r10, rcx
   cmp r10, rbx
   setnz r10b
@@ -769,7 +777,7 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x2
-  jmp $+0x9b4
+  jmp $+0x9d2
   mov rax, qword [rsp + 0xe0]
   mov r10, rcx
   cmp r10, rax
@@ -781,19 +789,19 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0xc
-  jmp $+0x978
+  jmp $+0x996
   mov r10, rbx
   mov word [r14 + 0x3e], r10w
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x94f
+  jmp $+0x96d
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x931
+  jmp $+0x94f
   movzx r10d, byte [r12]
   mov rbx, r10
   add r12, 0x1
@@ -821,7 +829,7 @@ expression: out
   mov rcx, rbx
   mov rcx, rbx
   mov rdx, qword [rsp + 0x100]
-  jmp $+0x179
+  jmp $+0x183
   mov r10, 0x7
   mov rcx, r10
   mov r10, 0x4
@@ -832,11 +840,12 @@ expression: out
   mov qword [rsp + 0x30], rdx
   mov qword [rsp + 0x1c0], rcx
   mov r9, rbx
+  jmp $+0x0
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x851
+  jmp $+0x86a
   mov r10, 0x7f
   mov rdi, r10
   mov r10, 0x7
@@ -853,7 +862,7 @@ expression: out
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x7e5
+  jmp $+0x7fe
   movzx r10d, byte [r12]
   mov rcx, r10
   add r12, 0x1
@@ -898,7 +907,8 @@ expression: out
   mov rcx, rdi
   mov rcx, r8
   test rbx, rbx
-  jnz $+0x86d
+  jnz $+0x886
+  jmp $+0x0
   mov r10, rcx
   cmp r10, rdx
   setnz r10b
@@ -920,7 +930,7 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x2
-  jmp $+0x6d7
+  jmp $+0x6eb
   mov rax, qword [rsp + 0x110]
   mov r10, rdi
   cmp r10, rax
@@ -932,19 +942,19 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0xc
-  jmp $+0x69b
+  jmp $+0x6af
   mov r10, rbx
   mov dword [r14 + 0x34], r10d
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x673
+  jmp $+0x687
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x655
+  jmp $+0x669
   movzx r10d, byte [r12]
   mov rbx, r10
   add r12, 0x1
@@ -973,7 +983,7 @@ expression: out
   mov rsi, rbx
   mov rsi, rbx
   mov r8, qword [rsp + 0x130]
-  jmp $+0x171
+  jmp $+0x17b
   mov r10, 0x7
   mov rax, r10
   mov r10, 0x9
@@ -984,11 +994,12 @@ expression: out
   mov rcx, rax
   mov qword [rsp + 0x1d8], rcx
   mov r9, rbx
+  jmp $+0x0
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x572
+  jmp $+0x581
   mov r10, 0x7f
   mov rsi, r10
   mov r10, 0x7
@@ -1005,7 +1016,7 @@ expression: out
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x506
+  jmp $+0x515
   movzx r10d, byte [r12]
   mov rcx, r10
   add r12, 0x1
@@ -1049,7 +1060,8 @@ expression: out
   mov rcx, rsi
   mov rsi, r8
   test rbx, rbx
-  jnz $+0x5db
+  jnz $+0x5ea
+  jmp $+0x0
   mov r10, rsi
   cmp r10, r8
   setnz r10b
@@ -1073,7 +1085,7 @@ expression: out
   jmp $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x2
-  jmp $+0x3f8
+  jmp $+0x402
   test rbx, rbx
   jz $+0x5
   jmp $+0x5c
@@ -1094,7 +1106,7 @@ expression: out
   jmp $+0x5
   jmp $+0x15
   mov dword [r15 + 0x10], 0x2
-  jmp $+0x393
+  jmp $+0x39d
   jmp $+0x0
   mov r10, rax
   mov qword [r14 + 0x20], r10
@@ -1108,7 +1120,7 @@ expression: out
   mov r12, qword [r15]
   mov r10d, dword [r15 + 0x10]
   test r10d, r10d
-  jnz $+0x34c
+  jnz $+0x356
   mov qword [r15], r12
   lea r10, qword [r14 + 0x28]
   push r10
@@ -1119,17 +1131,17 @@ expression: out
   mov r12, qword [r15]
   mov r10d, dword [r15 + 0x10]
   test r10d, r10d
-  jnz $+0x314
+  jnz $+0x31e
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x2f6
+  jmp $+0x300
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x2d8
+  jmp $+0x2e2
   movzx r10d, byte [r12]
   mov rbx, r10
   add r12, 0x1
@@ -1157,7 +1169,7 @@ expression: out
   mov rcx, rbx
   mov rcx, rbx
   mov rbx, qword [rsp + 0x158]
-  jmp $+0x169
+  jmp $+0x173
   mov r10, 0x7
   mov rcx, r10
   mov r10, 0x4
@@ -1167,11 +1179,12 @@ expression: out
   mov qword [rsp + 0x1e8], rax
   mov qword [rsp + 0x1f0], rcx
   mov r9, rbx
+  jmp $+0x0
   cmp r12, r13
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x1fb
+  jmp $+0x200
   mov r10, 0x7f
   mov rdi, r10
   mov r10, 0x7
@@ -1188,7 +1201,7 @@ expression: out
   jnb $+0x5
   jmp $+0x10
   mov dword [r15 + 0x10], 0x1
-  jmp $+0x18f
+  jmp $+0x194
   movzx r10d, byte [r12]
   mov rcx, r10
   add r12, 0x1
@@ -1231,8 +1244,9 @@ expression: out
   mov rsi, rdi
   mov rsi, r8
   test rbx, rbx
-  jnz $+0x2b1
+  jnz $+0x2b6
   mov rcx, rsi
+  jmp $+0x0
   mov r10, rcx
   cmp r10, rbx
   setnz r10b

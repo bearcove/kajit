@@ -8,6 +8,10 @@ pub mod format;
 pub mod intrinsics;
 pub mod ir;
 pub mod ir_backend;
+#[cfg(target_arch = "aarch64")]
+pub mod ir_backend_aarch64;
+#[cfg(target_arch = "x86_64")]
+pub mod ir_backend_x64;
 pub mod ir_parse;
 pub mod ir_passes;
 pub mod jit_debug;
@@ -46,6 +50,52 @@ pub fn compile_decoder_linear_ir(
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
     compiler::compile_linear_ir_decoder(ir, trusted_utf8_input)
+}
+
+/// Compile a deserializer from IR text (RVSDG representation).
+///
+/// Parses the IR text, runs the full pipeline (IR → passes → LIR → RA-MIR →
+/// regalloc → codegen), and returns an executable decoder.
+///
+/// This is intended for regression tests and bug minimization: paste a failing
+/// IR snapshot, edit it down to a minimal reproducer, and re-run.
+pub fn compile_decoder_from_ir_text(
+    ir_text: &str,
+    shape: &'static facet::Shape,
+    registry: &ir::IntrinsicRegistry,
+    with_passes: bool,
+) -> CompiledDecoder {
+    let mut func = ir_parse::parse_ir(ir_text, shape, registry)
+        .expect("IR text should parse");
+    if with_passes {
+        ir_passes::run_default_passes(&mut func);
+    }
+    let linear = linearize::linearize(&mut func);
+    compiler::compile_linear_ir_decoder(&linear, false)
+}
+
+/// Compile a deserializer from an already-constructed RaProgram.
+///
+/// Runs regalloc2 + codegen, skipping IR/LIR entirely.
+pub fn compile_decoder_from_ra_program(
+    program: &regalloc_mir::RaProgram,
+) -> CompiledDecoder {
+    compiler::compile_ra_program_decoder(program)
+}
+
+/// Compile a deserializer from RA-MIR text.
+///
+/// Parses the RA-MIR text, runs regalloc2 + codegen, and returns an
+/// executable decoder. Skips the IR → LIR pipeline entirely.
+///
+/// This is intended for regression tests and bug minimization: paste a
+/// failing RA-MIR snapshot, edit it down to a minimal reproducer, and re-run.
+pub fn compile_decoder_from_ra_mir_text(
+    mir_text: &str,
+) -> CompiledDecoder {
+    let program = regalloc_mir_parse::parse_ra_mir(mir_text)
+        .expect("RA-MIR text should parse");
+    compile_decoder_from_ra_program(&program)
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + RA-MIR dumps.

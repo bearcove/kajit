@@ -105,7 +105,10 @@ fn fixed_reg<'src>() -> impl Parser<'src, &'src str, FixedReg, Extra<'src>> + Cl
     let ret = just("/ret")
         .ignore_then(text::int::<_, Extra<'_>>(10).map(|s: &str| s.parse::<u8>().unwrap()))
         .map(FixedReg::AbiRet);
-    arg.or(ret)
+    let hw = just("/hw")
+        .ignore_then(text::int::<_, Extra<'_>>(10).map(|s: &str| s.parse::<u8>().unwrap()))
+        .map(FixedReg::HwReg);
+    choice((arg, ret, hw))
 }
 
 /// Parse an operand: `v0:gpr`, `v1:simd/arg2`, `v2:gpr/ret0`
@@ -508,16 +511,20 @@ fn resolve(funcs_ast: Vec<AstRaFunc>) -> Result<RaProgram, ParseError> {
 
     for ast_func in funcs_ast {
         let mut blocks = Vec::new();
+        // Assign contiguous linear op indices across all blocks within the
+        // function so regalloc2 can place edge moves correctly.
+        let mut next_linear_op_index: usize = 0;
         for ast_block in ast_func.blocks {
             let mut insts = Vec::new();
-            for (inst_idx, ast_inst) in ast_block.insts.iter().enumerate() {
+            for ast_inst in ast_block.insts.iter() {
                 let (op, operands) = resolve_inst(ast_inst, &mut max_vreg, &mut max_slot);
                 insts.push(RaInst {
-                    linear_op_index: inst_idx,
+                    linear_op_index: next_linear_op_index,
                     op,
                     operands,
                     clobbers: ast_inst.clobbers,
                 });
+                next_linear_op_index += 1;
             }
 
             // Track vregs in params.
@@ -525,12 +532,16 @@ fn resolve(funcs_ast: Vec<AstRaFunc>) -> Result<RaProgram, ParseError> {
                 max_vreg = max_vreg.max(p.index() as u32);
             }
 
+            // The terminator gets the next index after the last instruction.
+            let term_linear_op_index = Some(next_linear_op_index);
+            next_linear_op_index += 1;
+
             blocks.push(RaBlock {
                 id: ast_block.id,
                 label: None,
                 params: ast_block.params,
                 insts,
-                term_linear_op_index: None,
+                term_linear_op_index,
                 term: ast_block.term,
                 preds: ast_block.preds,
                 succs: ast_block.succs,
