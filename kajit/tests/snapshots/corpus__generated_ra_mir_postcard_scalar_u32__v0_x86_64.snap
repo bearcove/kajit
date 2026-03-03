@@ -2,99 +2,99 @@
 source: kajit/tests/corpus.rs
 expression: ra_text
 ---
-ra_func @0 { ; entry: b0
+ra_func @0 { ; entry: b0 ; consts: k0=0x7f, k1=0x80, k2=0x0, k3=0x20, k4=0x4, k5=0x7, k6=0x1
   block b0: ; insts: 11
-    bounds_check(1) ; sem: ensure 1 input byte(s) available
-    v1:gpr = const(0x7f) ; sem: materialize constant 0x7f
-    v3:gpr = const(0x80) ; sem: materialize constant 0x80
-    v5:gpr = const(0x0) ; sem: materialize constant 0x0
-    v37:gpr = const(0x0) ; sem: materialize constant 0x0
-    v39:gpr = const(0x20) ; sem: materialize constant 0x20
-    v41:gpr = const(0x0) ; sem: materialize constant 0x0
-    v0:gpr = read_bytes(1) ; sem: consume 1 input byte(s)
-    v2:gpr = And v0:gpr, v1:gpr ; sem: bitwise and
-    v4:gpr = And v0:gpr, v3:gpr ; sem: bitwise and
-    v6:gpr = CmpNe v4:gpr, v5:gpr ; sem: compare not-equal (produces 0/1)
-    term: branch_if_zero v6 -> b2, fallthrough b1 ; uses: [v6] ; sem: branch when condition is zero
+    bounds_check(1) ; orig: lir#0 ; sem: ensure 1 input byte(s) available
+    v1:gpr = const(0x7f) ; orig: lir#1 ; sem: materialize constant 0x7f ; const_alias: k0 ; defs_dbg: t1=v1
+    v3:gpr = const(0x80) ; orig: lir#2 ; sem: materialize constant 0x80 ; const_alias: k1 ; defs_dbg: t3=v3
+    v5:gpr = const(0x0) ; orig: lir#3 ; sem: materialize constant 0x0 ; const_alias: k2 ; defs_dbg: t5=v5
+    v37:gpr = const(0x0) ; orig: lir#4 ; sem: materialize constant 0x0 ; const_alias: k2 ; defs_dbg: t37=v37
+    v39:gpr = const(0x20) ; orig: lir#5 ; sem: materialize constant 0x20 ; const_alias: k3 ; defs_dbg: t39=v39
+    v41:gpr = const(0x0) ; orig: lir#6 ; sem: materialize constant 0x0 ; const_alias: k2 ; defs_dbg: t41=v41
+    v0:gpr = read_bytes(1) ; orig: lir#7 ; sem: consume 1 input byte(s) ; defs_dbg: t0=v0
+    v2:gpr = And v0:gpr, v1:gpr ; orig: lir#8 ; sem: bitwise and ; defs_dbg: t2=v2
+    v4:gpr = And v0:gpr, v3:gpr ; orig: lir#9 ; sem: bitwise and ; defs_dbg: t4=v4
+    v6:gpr = CmpNe v4:gpr, v5:gpr ; orig: lir#10 ; sem: compare not-equal (produces 0/1) ; defs_dbg: t6=v6
+    term: branch_if_zero v6 -> b2, fallthrough b1 ; uses: [v6] ; orig: lir#11 ; sem: branch when condition is zero
     succs: b2 [v2, v37, v39, v41] b1 [v2, v37, v39, v41] ; count: 2
-  block b1 [params: v2, v37, v39, v41] (preds: b0): ; insts: 0
-    term: branch b3 ; uses: [] ; sem: unconditional jump
+  block b1 [params: v2, v37, v39, v41] (preds: b0): ; insts: 0 ; params_dbg: p0=v2, p1=v37, p2=v39, p3=v41
+    term: branch b3 ; uses: [] ; orig: lir#12 ; sem: unconditional jump
     succs: b3 [v2, v37, v39, v41] ; count: 1
-  block b2 [params: v2, v37, v39, v41] (preds: b0): ; insts: 4
-    v7:gpr = const(0x4) ; sem: materialize constant 0x4
-    v8:gpr = const(0x0) ; sem: materialize constant 0x0
-    v33:gpr = copy v2:gpr ; sem: ssa copy/move
-    v36:gpr = copy v8:gpr ; sem: ssa copy/move
-    term: branch b6 ; uses: [] ; sem: unconditional jump
+  block b2 [params: v2, v37, v39, v41] (preds: b0): ; insts: 4 ; params_dbg: p0=v2, p1=v37, p2=v39, p3=v41
+    v7:gpr = const(0x4) ; orig: lir#13 ; sem: materialize constant 0x4 ; const_alias: k4 ; defs_dbg: t7=v7
+    v8:gpr = const(0x0) ; orig: lir#14 ; sem: materialize constant 0x0 ; const_alias: k2 ; defs_dbg: t8=v8
+    v33:gpr = copy v2:gpr ; orig: lir#15 ; sem: ssa copy/move ; defs_dbg: t33=v33
+    v36:gpr = copy v8:gpr ; orig: lir#16 ; sem: ssa copy/move ; defs_dbg: t36=v36
+    term: branch b6 ; uses: [] ; orig: lir#17 ; sem: unconditional jump
     succs: b6 [v33, v8, v37, v39, v41] ; count: 1
-  block b3 [params: v2, v37, v39, v41] (preds: b1): ; insts: 12
-    v9:gpr = const(0x7) ; sem: materialize constant 0x7
-    v10:gpr = const(0x4) ; sem: materialize constant 0x4
-    v11:gpr = const(0x1) ; sem: materialize constant 0x1
-    v13:gpr = const(0x7f) ; sem: materialize constant 0x7f
-    v17:gpr = const(0x7) ; sem: materialize constant 0x7
-    v19:gpr = const(0x1) ; sem: materialize constant 0x1
-    v21:gpr = const(0x80) ; sem: materialize constant 0x80
-    v23:gpr = const(0x0) ; sem: materialize constant 0x0
-    v25:gpr = const(0x0) ; sem: materialize constant 0x0
-    v45:gpr = copy v2:gpr ; sem: ssa copy/move
-    v46:gpr = copy v9:gpr ; sem: ssa copy/move
-    v47:gpr = copy v10:gpr ; sem: ssa copy/move
-    term: branch b4 ; uses: [] ; sem: unconditional jump
+  block b3 [params: v2, v37, v39, v41] (preds: b1): ; insts: 12 ; params_dbg: p0=v2, p1=v37, p2=v39, p3=v41
+    v9:gpr = const(0x7) ; orig: lir#18 ; sem: materialize constant 0x7 ; const_alias: k5 ; defs_dbg: t9=v9
+    v10:gpr = const(0x4) ; orig: lir#19 ; sem: materialize constant 0x4 ; const_alias: k4 ; defs_dbg: t10=v10
+    v11:gpr = const(0x1) ; orig: lir#20 ; sem: materialize constant 0x1 ; const_alias: k6 ; defs_dbg: t11=v11
+    v13:gpr = const(0x7f) ; orig: lir#21 ; sem: materialize constant 0x7f ; const_alias: k0 ; defs_dbg: t13=v13
+    v17:gpr = const(0x7) ; orig: lir#22 ; sem: materialize constant 0x7 ; const_alias: k5 ; defs_dbg: t17=v17
+    v19:gpr = const(0x1) ; orig: lir#23 ; sem: materialize constant 0x1 ; const_alias: k6 ; defs_dbg: t19=v19
+    v21:gpr = const(0x80) ; orig: lir#24 ; sem: materialize constant 0x80 ; const_alias: k1 ; defs_dbg: t21=v21
+    v23:gpr = const(0x0) ; orig: lir#25 ; sem: materialize constant 0x0 ; const_alias: k2 ; defs_dbg: t23=v23
+    v25:gpr = const(0x0) ; orig: lir#26 ; sem: materialize constant 0x0 ; const_alias: k2 ; defs_dbg: t25=v25
+    v45:gpr = copy v2:gpr ; orig: lir#27 ; sem: ssa copy/move ; defs_dbg: t45=v45
+    v46:gpr = copy v9:gpr ; orig: lir#28 ; sem: ssa copy/move ; defs_dbg: t46=v46
+    v47:gpr = copy v10:gpr ; orig: lir#29 ; sem: ssa copy/move ; defs_dbg: t47=v47
+    term: branch b4 ; uses: [] ; orig: lir#30 ; sem: unconditional jump
     succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v41, v45, v46, v47] ; count: 1
-  block b4 [params: v13, v17, v19, v21, v23, v25, v37, v39, v41, v45, v46, v47] (preds: b3, b4): ; insts: 16
-    bounds_check(1) ; sem: ensure 1 input byte(s) available
-    v18:gpr = Add v46:gpr, v17:gpr ; sem: integer addition
-    v20:gpr = Sub v47:gpr, v19:gpr ; sem: integer subtraction
-    v12:gpr = read_bytes(1) ; sem: consume 1 input byte(s)
-    v26:gpr = CmpNe v20:gpr, v25:gpr ; sem: compare not-equal (produces 0/1)
-    v14:gpr = And v12:gpr, v13:gpr ; sem: bitwise and
-    v22:gpr = And v12:gpr, v21:gpr ; sem: bitwise and
-    v15:gpr = Shl v14:gpr, v46:gpr/hw1 ; sem: logical shift left
-    v24:gpr = CmpNe v22:gpr, v23:gpr ; sem: compare not-equal (produces 0/1)
-    v16:gpr = Or v45:gpr, v15:gpr ; sem: bitwise or
-    v27:gpr = And v24:gpr, v26:gpr ; sem: bitwise and
-    v45:gpr = copy v16:gpr ; sem: ssa copy/move
-    v46:gpr = copy v18:gpr ; sem: ssa copy/move
-    v47:gpr = copy v20:gpr ; sem: ssa copy/move
-    v48:gpr = copy v14:gpr ; sem: ssa copy/move
-    v49:gpr = copy v24:gpr ; sem: ssa copy/move
-    term: branch_if v27 -> b4, fallthrough b5 ; uses: [v27] ; sem: branch when condition is non-zero
+  block b4 [params: v13, v17, v19, v21, v23, v25, v37, v39, v41, v45, v46, v47] (preds: b3, b4): ; insts: 16 ; params_dbg: p0=v13, p1=v17, p2=v19, p3=v21, p4=v23, p5=v25, p6=v37, p7=v39, p8=v41, p9=v45, p10=v46, p11=v47
+    bounds_check(1) ; orig: lir#31 ; sem: ensure 1 input byte(s) available
+    v18:gpr = Add v46:gpr, v17:gpr ; orig: lir#32 ; sem: integer addition ; defs_dbg: t18=v18
+    v20:gpr = Sub v47:gpr, v19:gpr ; orig: lir#33 ; sem: integer subtraction ; defs_dbg: t20=v20
+    v12:gpr = read_bytes(1) ; orig: lir#34 ; sem: consume 1 input byte(s) ; defs_dbg: t12=v12
+    v26:gpr = CmpNe v20:gpr, v25:gpr ; orig: lir#35 ; sem: compare not-equal (produces 0/1) ; defs_dbg: t26=v26
+    v14:gpr = And v12:gpr, v13:gpr ; orig: lir#36 ; sem: bitwise and ; defs_dbg: t14=v14
+    v22:gpr = And v12:gpr, v21:gpr ; orig: lir#37 ; sem: bitwise and ; defs_dbg: t22=v22
+    v15:gpr = Shl v14:gpr, v46:gpr/hw1 ; orig: lir#38 ; sem: logical shift left ; defs_dbg: t15=v15
+    v24:gpr = CmpNe v22:gpr, v23:gpr ; orig: lir#39 ; sem: compare not-equal (produces 0/1) ; defs_dbg: t24=v24
+    v16:gpr = Or v45:gpr, v15:gpr ; orig: lir#40 ; sem: bitwise or ; defs_dbg: t16=v16
+    v27:gpr = And v24:gpr, v26:gpr ; orig: lir#41 ; sem: bitwise and ; defs_dbg: t27=v27
+    v45:gpr = copy v16:gpr ; orig: lir#42 ; sem: ssa copy/move ; defs_dbg: t45=v45
+    v46:gpr = copy v18:gpr ; orig: lir#43 ; sem: ssa copy/move ; defs_dbg: t46=v46
+    v47:gpr = copy v20:gpr ; orig: lir#44 ; sem: ssa copy/move ; defs_dbg: t47=v47
+    v48:gpr = copy v14:gpr ; orig: lir#45 ; sem: ssa copy/move ; defs_dbg: t48=v48
+    v49:gpr = copy v24:gpr ; orig: lir#46 ; sem: ssa copy/move ; defs_dbg: t49=v49
+    term: branch_if v27 -> b4, fallthrough b5 ; uses: [v27] ; orig: lir#47 ; sem: branch when condition is non-zero
     succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v41, v45, v46, v47] b5 [v37, v39, v41, v45, v49] ; count: 2
-  block b5 [params: v37, v39, v41, v45, v49] (preds: b4): ; insts: 2
-    v33:gpr = copy v45:gpr ; sem: ssa copy/move
-    v36:gpr = copy v49:gpr ; sem: ssa copy/move
-    term: branch b6 ; uses: [] ; sem: unconditional jump
+  block b5 [params: v37, v39, v41, v45, v49] (preds: b4): ; insts: 2 ; params_dbg: p0=v37, p1=v39, p2=v41, p3=v45, p4=v49
+    v33:gpr = copy v45:gpr ; orig: lir#48 ; sem: ssa copy/move ; defs_dbg: t33=v33
+    v36:gpr = copy v49:gpr ; orig: lir#49 ; sem: ssa copy/move ; defs_dbg: t36=v36
+    term: branch b6 ; uses: [] ; orig: lir#50 ; sem: unconditional jump
     succs: b6 [v33, v36, v37, v39, v41] ; count: 1
-  block b6 [params: v33, v36, v37, v39, v41] (preds: b2, b5): ; insts: 2
-    v38:gpr = CmpNe v36:gpr, v37:gpr ; sem: compare not-equal (produces 0/1)
-    v40:gpr = Shr v33:gpr, v39:gpr/hw1 ; sem: logical shift right
-    term: branch_if_zero v38 -> b8, fallthrough b7 ; uses: [v38] ; sem: branch when condition is zero
+  block b6 [params: v33, v36, v37, v39, v41] (preds: b2, b5): ; insts: 2 ; params_dbg: p0=v33, p1=v36, p2=v37, p3=v39, p4=v41
+    v38:gpr = CmpNe v36:gpr, v37:gpr ; orig: lir#51 ; sem: compare not-equal (produces 0/1) ; defs_dbg: t38=v38
+    v40:gpr = Shr v33:gpr, v39:gpr/hw1 ; orig: lir#52 ; sem: logical shift right ; defs_dbg: t40=v40
+    term: branch_if_zero v38 -> b8, fallthrough b7 ; uses: [v38] ; orig: lir#53 ; sem: branch when condition is zero
     succs: b8 [v33, v40, v41] b7 ; count: 2
   block b7 (preds: b6): ; insts: 0
-    term: branch b9 ; uses: [] ; sem: unconditional jump
+    term: branch b9 ; uses: [] ; orig: lir#54 ; sem: unconditional jump
     succs: b9 ; count: 1
-  block b8 [params: v33, v40, v41] (preds: b6): ; insts: 0
-    term: branch b10 ; uses: [] ; sem: unconditional jump
+  block b8 [params: v33, v40, v41] (preds: b6): ; insts: 0 ; params_dbg: p0=v33, p1=v40, p2=v41
+    term: branch b10 ; uses: [] ; orig: lir#55 ; sem: unconditional jump
     succs: b10 [v33, v40, v41] ; count: 1
   block b9 (preds: b7): ; insts: 0
-    term: error_exit(InvalidVarint) ; uses: [] ; sem: terminate with error
+    term: error_exit(InvalidVarint) ; uses: [] ; orig: lir#56 ; sem: terminate with error
     succs: (none)
-  block b10 [params: v33, v40, v41] (preds: b8): ; insts: 1
-    v42:gpr = CmpNe v40:gpr, v41:gpr ; sem: compare not-equal (produces 0/1)
-    term: branch_if_zero v42 -> b12, fallthrough b11 ; uses: [v42] ; sem: branch when condition is zero
+  block b10 [params: v33, v40, v41] (preds: b8): ; insts: 1 ; params_dbg: p0=v33, p1=v40, p2=v41
+    v42:gpr = CmpNe v40:gpr, v41:gpr ; orig: lir#57 ; sem: compare not-equal (produces 0/1) ; defs_dbg: t42=v42
+    term: branch_if_zero v42 -> b12, fallthrough b11 ; uses: [v42] ; orig: lir#58 ; sem: branch when condition is zero
     succs: b12 [v33] b11 ; count: 2
   block b11 (preds: b10): ; insts: 0
-    term: branch b13 ; uses: [] ; sem: unconditional jump
+    term: branch b13 ; uses: [] ; orig: lir#59 ; sem: unconditional jump
     succs: b13 ; count: 1
-  block b12 [params: v33] (preds: b10): ; insts: 0
-    term: branch b14 ; uses: [] ; sem: unconditional jump
+  block b12 [params: v33] (preds: b10): ; insts: 0 ; params_dbg: p0=v33
+    term: branch b14 ; uses: [] ; orig: lir#60 ; sem: unconditional jump
     succs: b14 [v33] ; count: 1
   block b13 (preds: b11): ; insts: 0
-    term: error_exit(NumberOutOfRange) ; uses: [] ; sem: terminate with error
+    term: error_exit(NumberOutOfRange) ; uses: [] ; orig: lir#61 ; sem: terminate with error
     succs: (none)
-  block b14 [params: v33] (preds: b12): ; insts: 1
-    store([0:W4]) v33:gpr ; sem: write output field at +0 (W4)
-    term: return ; uses: [] ; sem: finish function
+  block b14 [params: v33] (preds: b12): ; insts: 1 ; params_dbg: p0=v33
+    store([0:W4]) v33:gpr ; orig: lir#62 ; sem: write output field at +0 (W4)
+    term: return ; uses: [] ; orig: lir#63 ; sem: finish function
     succs: (none)
 }

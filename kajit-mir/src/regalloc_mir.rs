@@ -5,6 +5,7 @@
 use kajit_ir::ErrorCode;
 use kajit_ir::{LambdaId, VReg};
 use kajit_lir::{LabelId, LinearIr, LinearOp};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BlockId(pub u32);
@@ -173,19 +174,32 @@ fn fmt_program(program: &RaProgram, f: &mut std::fmt::Formatter<'_>) -> std::fmt
 }
 
 fn fmt_function(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    writeln!(
+    let meta = build_display_meta(func);
+    write!(
         f,
         "ra_func @{} {{ ; entry: b{}",
         func.lambda_id.index(),
         func.entry.0,
     )?;
+    if !meta.const_alias_list.is_empty() {
+        write!(
+            f,
+            " ; consts: {}",
+            fmt_const_alias_table(&meta.const_alias_list)
+        )?;
+    }
+    writeln!(f)?;
     for block in &func.blocks {
-        fmt_block(f, block)?;
+        fmt_block(f, block, &meta)?;
     }
     writeln!(f, "}}")
 }
 
-fn fmt_block(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Result {
+fn fmt_block(
+    f: &mut std::fmt::Formatter<'_>,
+    block: &RaBlock,
+    meta: &DisplayMeta,
+) -> std::fmt::Result {
     // Block header: block b0 [params: v0, v1] (preds: b2, b3):
     write!(f, "  block b{}", block.id.0)?;
     if !block.params.is_empty() {
@@ -208,14 +222,36 @@ fn fmt_block(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Resu
         }
         write!(f, ")")?;
     }
-    writeln!(f, ": ; insts: {}", block.insts.len())?;
+    write!(f, ": ; insts: {}", block.insts.len())?;
+    if !block.params.is_empty() {
+        write!(f, " ; params_dbg: {}", fmt_param_debug_names(&block.params))?;
+    }
+    writeln!(f)?;
 
     // Instructions.
-    for inst in &block.insts {
+    let block_lir_base = *meta
+        .block_lir_base
+        .get(&block.id)
+        .expect("every block should have a display lir base index");
+    for (inst_idx, inst) in block.insts.iter().enumerate() {
+        let defs: Vec<VReg> = inst
+            .operands
+            .iter()
+            .filter(|o| o.kind == OperandKind::Def)
+            .map(|o| o.vreg)
+            .collect();
+
         write!(f, "    ")?;
         fmt_ra_inst(f, inst)?;
+        write!(f, " ; orig: lir#{}", block_lir_base + inst_idx)?;
         if let Some(hint) = ra_inst_semantic_hint(&inst.op) {
             write!(f, " ; sem: {hint}")?;
+        }
+        if let Some(alias) = const_alias_for_inst(&inst.op, meta) {
+            write!(f, " ; const_alias: {alias}")?;
+        }
+        if !defs.is_empty() {
+            write!(f, " ; defs_dbg: {}", fmt_temp_debug_names(&defs))?;
         }
         writeln!(f)?;
     }
@@ -224,6 +260,7 @@ fn fmt_block(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Resu
     write!(f, "    term: ")?;
     fmt_terminator(f, &block.term)?;
     write!(f, " ; uses: {}", fmt_vregs(&block.term.uses()))?;
+    write!(f, " ; orig: lir#{}", block_lir_base + block.insts.len())?;
     if let Some(hint) = ra_term_semantic_hint(&block.term) {
         write!(f, " ; sem: {hint}")?;
     }
@@ -263,6 +300,81 @@ fn fmt_vregs(vregs: &[VReg]) -> String {
         out.push_str(&v.index().to_string());
     }
     out.push(']');
+    out
+}
+
+fn fmt_temp_debug_names(vregs: &[VReg]) -> String {
+    let mut out = String::new();
+    for (i, v) in vregs.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("t{}=v{}", v.index(), v.index()));
+    }
+    out
+}
+
+fn fmt_param_debug_names(params: &[VReg]) -> String {
+    let mut out = String::new();
+    for (i, p) in params.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("p{i}=v{}", p.index()));
+    }
+    out
+}
+
+struct DisplayMeta {
+    const_aliases: HashMap<u64, String>,
+    const_alias_list: Vec<(String, u64)>,
+    block_lir_base: HashMap<BlockId, usize>,
+}
+
+fn build_display_meta(func: &RaFunction) -> DisplayMeta {
+    let mut const_aliases = HashMap::new();
+    let mut const_alias_list = Vec::new();
+    let mut block_lir_base = HashMap::new();
+    let mut next_lir_index = 0usize;
+
+    for block in &func.blocks {
+        block_lir_base.insert(block.id, next_lir_index);
+        next_lir_index += block.insts.len() + 1; // +1 for terminator
+
+        for inst in &block.insts {
+            if let LinearOp::Const { value, .. } = inst.op
+                && !const_aliases.contains_key(&value)
+            {
+                let alias = format!("k{}", const_alias_list.len());
+                const_aliases.insert(value, alias.clone());
+                const_alias_list.push((alias, value));
+            }
+        }
+    }
+
+    DisplayMeta {
+        const_aliases,
+        const_alias_list,
+        block_lir_base,
+    }
+}
+
+fn const_alias_for_inst<'a>(op: &LinearOp, meta: &'a DisplayMeta) -> Option<&'a str> {
+    let value = match op {
+        LinearOp::Const { value, .. } => *value,
+        _ => return None,
+    };
+    meta.const_aliases.get(&value).map(String::as_str)
+}
+
+fn fmt_const_alias_table(aliases: &[(String, u64)]) -> String {
+    let mut out = String::new();
+    for (i, (alias, value)) in aliases.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("{alias}={value:#x}"));
+    }
     out
 }
 
@@ -1339,9 +1451,14 @@ mod tests {
 
         let text = format!("{ra}");
         assert!(text.starts_with("ra_func @0 { ; entry: b0"));
+        assert!(text.contains(" ; consts: "));
         assert!(text.contains(" ; insts: "));
+        assert!(text.contains(" ; params_dbg: "));
         assert!(text.contains(" ; uses: "));
+        assert!(text.contains(" ; orig: lir#"));
         assert!(text.contains(" ; sem: "));
+        assert!(text.contains(" ; const_alias: "));
+        assert!(text.contains(" ; defs_dbg: "));
         assert!(text.contains("term:"));
     }
 }
