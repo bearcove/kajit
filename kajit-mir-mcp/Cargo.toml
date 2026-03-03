@@ -6,9 +6,12 @@ edition = "2024"
 [dependencies]
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
-rust-mcp-schema = { version = "0.9.5", default-features = false, features = [
-  "2025_11_25",
-  "schema_utils",
+rust-mcp-sdk = { version = "0.8", default-features = false, features = [
+  "stdio",
+  "server",
+  "macros",
 ] }
+async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

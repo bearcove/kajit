@@ -1,234 +1,165 @@
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Write};
-use std::str::FromStr;
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use async_trait::async_trait;
 use kajit_mir::{BlockId, DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
-use rust_mcp_schema::schema_utils::{
-    ClientJsonrpcRequest, ClientMessage, ResultFromServer, ServerJsonrpcResponse, ServerMessage,
+use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
+use rust_mcp_sdk::mcp_server::{McpServerOptions, ServerHandler, server_runtime};
+use rust_mcp_sdk::schema::{
+    CallToolError, CallToolRequestParams, CallToolResult, Implementation, InitializeResult,
+    LATEST_PROTOCOL_VERSION, ListToolsResult, PaginatedRequestParams, RpcError, ServerCapabilities,
+    ServerCapabilitiesTools,
 };
-use rust_mcp_schema::{
-    CallToolRequest, CallToolResult, ContentBlock, Implementation, InitializeResult,
-    JsonrpcErrorResponse, ListToolsResult, ProtocolVersion, RequestId, Result as McpResult,
-    RpcError, ServerCapabilities, ServerCapabilitiesTools, TextContent, Tool, ToolAnnotations,
-    ToolInputSchema,
-};
-use serde_json::{Map, Value, json};
+use rust_mcp_sdk::{McpServer, StdioTransport, ToMcpServerHandler, TransportOptions, tool_box};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue, json};
+
+#[mcp_tool(
+    name = "session_new",
+    description = "Create a new RA-MIR debugger session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionNewTool {
+    /// RA-MIR text program
+    ra_mir_text: String,
+    /// Input bytes as hex string (e.g. '8101' or '[0x81, 0x01]')
+    #[serde(default)]
+    input_hex: Option<String>,
+}
+
+#[mcp_tool(
+    name = "session_close",
+    description = "Close and remove a debugger session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionCloseTool {
+    /// Session identifier returned by session_new.
+    session_id: u64,
+}
+
+#[mcp_tool(
+    name = "session_step",
+    description = "Step a session forward by one or more operations."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionStepTool {
+    /// Session identifier returned by session_new.
+    session_id: u64,
+    /// Number of forward steps.
+    #[serde(default)]
+    count: Option<u64>,
+}
+
+#[mcp_tool(
+    name = "session_back",
+    description = "Step a session backward by one or more recorded steps."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionBackTool {
+    /// Session identifier returned by session_new.
+    session_id: u64,
+    /// Number of backwards steps.
+    #[serde(default)]
+    count: Option<u64>,
+}
+
+#[mcp_tool(
+    name = "session_run_until",
+    description = "Run forward until block/trap/return or max step budget."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionRunUntilTool {
+    /// Session identifier returned by session_new.
+    session_id: u64,
+    /// Target block ID. Mutually exclusive with trap/return.
+    #[serde(default)]
+    block_id: Option<u64>,
+    /// Stop when a trap occurs. Mutually exclusive with block_id/return.
+    #[serde(default)]
+    trap: Option<bool>,
+    /// Stop when function returns. Mutually exclusive with block_id/trap.
+    #[serde(default)]
+    r#return: Option<bool>,
+    /// Maximum number of steps.
+    #[serde(default)]
+    max_steps: Option<u64>,
+}
+
+#[mcp_tool(
+    name = "session_state",
+    description = "Get deterministic full state snapshot for one session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionStateTool {
+    /// Session identifier returned by session_new.
+    session_id: u64,
+}
+
+#[mcp_tool(
+    name = "session_inspect_vreg",
+    description = "Read one virtual register by index."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionInspectVregTool {
+    /// Session identifier returned by session_new.
+    session_id: u64,
+    /// Virtual register index.
+    vreg: u64,
+}
+
+#[mcp_tool(
+    name = "session_inspect_output",
+    description = "Read a byte range from output memory."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct SessionInspectOutputTool {
+    /// Session identifier returned by session_new.
+    session_id: u64,
+    /// Start offset.
+    #[serde(default)]
+    start: Option<u64>,
+    /// Number of bytes to read.
+    #[serde(default)]
+    len: Option<u64>,
+}
+
+tool_box!(
+    MirTools,
+    [
+        SessionNewTool,
+        SessionCloseTool,
+        SessionStepTool,
+        SessionBackTool,
+        SessionRunUntilTool,
+        SessionStateTool,
+        SessionInspectVregTool,
+        SessionInspectOutputTool
+    ]
+);
 
 #[derive(Default)]
-struct Server {
+struct ServerState {
     sessions: HashMap<u64, DebuggerSession>,
     next_session_id: u64,
 }
 
-impl Server {
-    fn new() -> Self {
-        Self {
-            sessions: HashMap::new(),
-            next_session_id: 1,
-        }
+#[derive(Clone, Default)]
+struct MirHandler {
+    state: Arc<Mutex<ServerState>>,
+}
+
+impl MirHandler {
+    fn lock_state(&self) -> Result<MutexGuard<'_, ServerState>, String> {
+        self.state
+            .lock()
+            .map_err(|_| "internal error: debugger state mutex poisoned".to_owned())
     }
 
-    fn handle_request(&mut self, request: ClientJsonrpcRequest) -> ServerMessage {
-        match request {
-            ClientJsonrpcRequest::InitializeRequest(request) => {
-                let result = InitializeResult {
-                    capabilities: ServerCapabilities {
-                        tools: Some(ServerCapabilitiesTools {
-                            list_changed: Some(false),
-                        }),
-                        ..ServerCapabilities::default()
-                    },
-                    instructions: Some(
-                        "RA-MIR interpreter debugger over MCP. Use tools/list then tools/call."
-                            .to_owned(),
-                    ),
-                    meta: None,
-                    protocol_version: ProtocolVersion::V2025_11_25.into(),
-                    server_info: Implementation {
-                        description: Some(
-                            "Session-based RA-MIR debugger (step/run/inspect) for kajit-mir"
-                                .to_owned(),
-                        ),
-                        icons: Vec::new(),
-                        name: "kajit-mir-mcp".to_owned(),
-                        title: Some("Kajit MIR Debugger".to_owned()),
-                        version: env!("CARGO_PKG_VERSION").to_owned(),
-                        website_url: None,
-                    },
-                };
-                server_result(request.id, ResultFromServer::InitializeResult(result))
-            }
-            ClientJsonrpcRequest::PingRequest(request) => {
-                server_result(request.id, ResultFromServer::Result(McpResult::default()))
-            }
-            ClientJsonrpcRequest::ListToolsRequest(request) => {
-                let result = ListToolsResult {
-                    meta: None,
-                    next_cursor: None,
-                    tools: self.tools(),
-                };
-                server_result(request.id, ResultFromServer::ListToolsResult(result))
-            }
-            ClientJsonrpcRequest::CallToolRequest(request) => self.handle_call_tool(request),
-            other => server_error(
-                Some(other.request_id().clone()),
-                RpcError::method_not_found().with_message(format!(
-                    "unsupported request method for kajit-mir-mcp: {}",
-                    other.method()
-                )),
-            ),
-        }
-    }
-
-    fn handle_call_tool(&mut self, request: CallToolRequest) -> ServerMessage {
-        let name = request.params.name;
-        let args = request
-            .params
-            .arguments
-            .map(Value::Object)
-            .unwrap_or_else(|| Value::Object(Map::new()));
-
-        let result = match self.call_tool(&name, &args) {
-            Ok(payload) => call_tool_ok(payload),
-            Err(message) => call_tool_err(&message),
-        };
-
-        server_result(request.id, ResultFromServer::CallToolResult(result))
-    }
-
-    fn tools(&self) -> Vec<Tool> {
-        vec![
-            tool(
-                "session_new",
-                "Create a new RA-MIR debugger session.",
-                &["ra_mir_text"],
-                vec![
-                    (
-                        "ra_mir_text",
-                        schema_object(json!({
-                            "type": "string",
-                            "description": "RA-MIR text program"
-                        })),
-                    ),
-                    (
-                        "input_hex",
-                        schema_object(json!({
-                            "type": "string",
-                            "description": "Input bytes as hex string (e.g. '8101' or '[0x81, 0x01]')"
-                        })),
-                    ),
-                ],
-            ),
-            tool(
-                "session_close",
-                "Close and remove a debugger session.",
-                &["session_id"],
-                vec![(
-                    "session_id",
-                    schema_object(json!({
-                        "type": "integer",
-                        "minimum": 1
-                    })),
-                )],
-            ),
-            tool(
-                "session_step",
-                "Step a session forward by one or more operations.",
-                &["session_id"],
-                vec![
-                    (
-                        "session_id",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                    (
-                        "count",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                ],
-            ),
-            tool(
-                "session_back",
-                "Step a session backward by one or more recorded steps.",
-                &["session_id"],
-                vec![
-                    (
-                        "session_id",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                    (
-                        "count",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                ],
-            ),
-            tool(
-                "session_run_until",
-                "Run forward until block/trap/return or max step budget.",
-                &["session_id"],
-                vec![
-                    (
-                        "session_id",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                    (
-                        "block_id",
-                        schema_object(json!({"type": "integer", "minimum": 0})),
-                    ),
-                    ("trap", schema_object(json!({"type": "boolean"}))),
-                    ("return", schema_object(json!({"type": "boolean"}))),
-                    (
-                        "max_steps",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                ],
-            ),
-            tool(
-                "session_state",
-                "Get deterministic full state snapshot for one session.",
-                &["session_id"],
-                vec![(
-                    "session_id",
-                    schema_object(json!({"type": "integer", "minimum": 1})),
-                )],
-            ),
-            tool(
-                "session_inspect_vreg",
-                "Read one virtual register by index.",
-                &["session_id", "vreg"],
-                vec![
-                    (
-                        "session_id",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                    (
-                        "vreg",
-                        schema_object(json!({"type": "integer", "minimum": 0})),
-                    ),
-                ],
-            ),
-            tool(
-                "session_inspect_output",
-                "Read a byte range from output memory.",
-                &["session_id"],
-                vec![
-                    (
-                        "session_id",
-                        schema_object(json!({"type": "integer", "minimum": 1})),
-                    ),
-                    (
-                        "start",
-                        schema_object(json!({"type": "integer", "minimum": 0})),
-                    ),
-                    (
-                        "len",
-                        schema_object(json!({"type": "integer", "minimum": 0})),
-                    ),
-                ],
-            ),
-        ]
-    }
-
-    fn call_tool(&mut self, name: &str, args: &Value) -> Result<Value, String> {
+    fn call_tool(
+        &self,
+        name: &str,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
         match name {
             "session_new" => self.session_new(args),
             "session_close" => self.session_close(args),
@@ -242,17 +173,22 @@ impl Server {
         }
     }
 
-    fn session_new(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_new(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         let mir_text = arg_str(args, "ra_mir_text")?;
         let input_hex = arg_opt_str(args, "input_hex").unwrap_or_default();
         let input = parse_hex_input(&input_hex)?;
         let program = kajit_mir_text::parse_ra_mir(&mir_text).map_err(|e| e.to_string())?;
         let session = DebuggerSession::new(&program, &input).map_err(|e| e.to_string())?;
-        let session_id = self.next_session_id;
-        self.next_session_id += 1;
-        self.sessions.insert(session_id, session);
 
-        let state = self
+        let mut state = self.lock_state()?;
+        if state.next_session_id == 0 {
+            state.next_session_id = 1;
+        }
+        let session_id = state.next_session_id;
+        state.next_session_id += 1;
+        state.sessions.insert(session_id, session);
+
+        let snapshot = state
             .sessions
             .get(&session_id)
             .expect("inserted session should exist")
@@ -260,23 +196,26 @@ impl Server {
         Ok(json!({
             "session_id": session_id,
             "input_hex": encode_hex(&input),
-            "state": state_json(&state),
+            "state": state_json(&snapshot),
         }))
     }
 
-    fn session_close(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_close(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         let session_id = arg_u64(args, "session_id")?;
-        let removed = self.sessions.remove(&session_id).is_some();
+        let mut state = self.lock_state()?;
+        let removed = state.sessions.remove(&session_id).is_some();
         Ok(json!({
             "session_id": session_id,
             "closed": removed,
         }))
     }
 
-    fn session_step(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_step(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         let session_id = arg_u64(args, "session_id")?;
         let count = arg_opt_u64(args, "count").unwrap_or(1) as usize;
-        let session = self
+
+        let mut state = self.lock_state()?;
+        let session = state
             .sessions
             .get_mut(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
@@ -286,6 +225,7 @@ impl Server {
             let event = session.step_forward().map_err(|e| e.to_string())?;
             events.push(event_json(&event));
         }
+
         Ok(json!({
             "session_id": session_id,
             "events": events,
@@ -293,10 +233,12 @@ impl Server {
         }))
     }
 
-    fn session_back(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_back(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         let session_id = arg_u64(args, "session_id")?;
         let count = arg_opt_u64(args, "count").unwrap_or(1) as usize;
-        let session = self
+
+        let mut state = self.lock_state()?;
+        let session = state
             .sessions
             .get_mut(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
@@ -317,7 +259,7 @@ impl Server {
         }))
     }
 
-    fn session_run_until(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_run_until(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         let session_id = arg_u64(args, "session_id")?;
         let block_id = arg_opt_u64(args, "block_id");
         let want_trap = arg_opt_bool(args, "trap").unwrap_or(false);
@@ -338,7 +280,8 @@ impl Server {
             }
         };
 
-        let session = self
+        let mut state = self.lock_state()?;
+        let session = state
             .sessions
             .get_mut(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
@@ -358,9 +301,10 @@ impl Server {
         }))
     }
 
-    fn session_state(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_state(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         let session_id = arg_u64(args, "session_id")?;
         let state = self
+            .lock_state()?
             .sessions
             .get(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?
@@ -371,10 +315,11 @@ impl Server {
         }))
     }
 
-    fn session_inspect_vreg(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_inspect_vreg(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         let session_id = arg_u64(args, "session_id")?;
         let vreg = arg_u64(args, "vreg")? as usize;
-        let session = self
+        let state = self.lock_state()?;
+        let session = state
             .sessions
             .get(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
@@ -387,11 +332,15 @@ impl Server {
         }))
     }
 
-    fn session_inspect_output(&mut self, args: &Value) -> Result<Value, String> {
+    fn session_inspect_output(
+        &self,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
         let session_id = arg_u64(args, "session_id")?;
         let start = arg_opt_u64(args, "start").unwrap_or(0) as usize;
         let len = arg_opt_u64(args, "len").unwrap_or(64) as usize;
-        let session = self
+        let state = self.lock_state()?;
+        let session = state
             .sessions
             .get(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
@@ -406,70 +355,62 @@ impl Server {
     }
 }
 
-fn schema_object(value: Value) -> Map<String, Value> {
-    value
-        .as_object()
-        .cloned()
-        .expect("schema definitions must be JSON objects")
-}
+#[async_trait]
+impl ServerHandler for MirHandler {
+    async fn handle_list_tools_request(
+        &self,
+        _params: Option<PaginatedRequestParams>,
+        _runtime: Arc<dyn McpServer>,
+    ) -> Result<ListToolsResult, RpcError> {
+        Ok(ListToolsResult {
+            tools: MirTools::tools(),
+            meta: None,
+            next_cursor: None,
+        })
+    }
 
-fn tool(
-    name: &str,
-    description: &str,
-    required: &[&str],
-    properties: Vec<(&str, Map<String, Value>)>,
-) -> Tool {
-    let properties = properties
-        .into_iter()
-        .map(|(k, v)| (k.to_owned(), v))
-        .collect::<HashMap<_, _>>();
-    Tool {
-        annotations: Some(ToolAnnotations {
-            title: Some(name.replace('_', " ")),
-            read_only_hint: Some(false),
-            ..ToolAnnotations::default()
-        }),
-        description: Some(description.to_owned()),
-        execution: None,
-        icons: Vec::new(),
-        input_schema: ToolInputSchema::new(
-            required.iter().map(|s| (*s).to_owned()).collect(),
-            Some(properties),
-            None,
-        ),
-        meta: None,
-        name: name.to_owned(),
-        output_schema: None,
-        title: None,
+    async fn handle_call_tool_request(
+        &self,
+        params: CallToolRequestParams,
+        _runtime: Arc<dyn McpServer>,
+    ) -> Result<CallToolResult, CallToolError> {
+        let args = params.arguments.unwrap_or_default();
+        let result = match self.call_tool(params.name.as_str(), &args) {
+            Ok(payload) => call_tool_ok(payload),
+            Err(message) => call_tool_err(&message),
+        };
+        Ok(result)
     }
 }
 
-fn arg_str(args: &Value, key: &str) -> Result<String, String> {
+fn arg_str(args: &JsonMap<String, JsonValue>, key: &str) -> Result<String, String> {
     args.get(key)
-        .and_then(Value::as_str)
+        .and_then(JsonValue::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| format!("missing or invalid string argument `{key}`"))
 }
 
-fn arg_opt_str(args: &Value, key: &str) -> Option<String> {
-    args.get(key).and_then(Value::as_str).map(ToOwned::to_owned)
+fn arg_opt_str(args: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(JsonValue::as_str)
+        .map(ToOwned::to_owned)
 }
 
-fn arg_u64(args: &Value, key: &str) -> Result<u64, String> {
+fn arg_u64(args: &JsonMap<String, JsonValue>, key: &str) -> Result<u64, String> {
     args.get(key)
-        .and_then(Value::as_u64)
+        .and_then(JsonValue::as_u64)
         .ok_or_else(|| format!("missing or invalid integer argument `{key}`"))
 }
 
-fn arg_opt_u64(args: &Value, key: &str) -> Option<u64> {
-    args.get(key).and_then(Value::as_u64)
+fn arg_opt_u64(args: &JsonMap<String, JsonValue>, key: &str) -> Option<u64> {
+    args.get(key).and_then(JsonValue::as_u64)
 }
 
-fn arg_opt_bool(args: &Value, key: &str) -> Option<bool> {
-    args.get(key).and_then(Value::as_bool)
+fn arg_opt_bool(args: &JsonMap<String, JsonValue>, key: &str) -> Option<bool> {
+    args.get(key).and_then(JsonValue::as_bool)
 }
 
-fn trap_json(trap: &kajit_mir::InterpreterTrap) -> Value {
+fn trap_json(trap: &kajit_mir::InterpreterTrap) -> JsonValue {
     json!({
         "code": trap.code.to_string(),
         "code_num": trap.code as u32,
@@ -477,11 +418,11 @@ fn trap_json(trap: &kajit_mir::InterpreterTrap) -> Value {
     })
 }
 
-fn state_json(state: &DebuggerState) -> Value {
+fn state_json(state: &DebuggerState) -> JsonValue {
     let trap = state
         .trap
         .map(|trap| trap_json(&trap))
-        .unwrap_or(Value::Null);
+        .unwrap_or(JsonValue::Null);
     json!({
         "step_count": state.step_count,
         "location": {
@@ -499,11 +440,11 @@ fn state_json(state: &DebuggerState) -> Value {
     })
 }
 
-fn event_json(event: &StepEvent) -> Value {
+fn event_json(event: &StepEvent) -> JsonValue {
     let trap = event
         .trap
         .map(|trap| trap_json(&trap))
-        .unwrap_or(Value::Null);
+        .unwrap_or(JsonValue::Null);
     json!({
         "step_index": event.step_index,
         "kind": format!("{:?}", event.kind),
@@ -526,48 +467,13 @@ fn event_json(event: &StepEvent) -> Value {
     })
 }
 
-fn value_to_object(value: Value) -> Map<String, Value> {
-    match value {
-        Value::Object(map) => map,
-        other => {
-            let mut map = Map::new();
-            map.insert("value".to_owned(), other);
-            map
-        }
-    }
-}
-
-fn call_tool_ok(payload: Value) -> CallToolResult {
+fn call_tool_ok(payload: JsonValue) -> CallToolResult {
     let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
-    CallToolResult {
-        content: vec![ContentBlock::from(TextContent::new(text, None, None))],
-        is_error: Some(false),
-        meta: None,
-        structured_content: Some(value_to_object(payload)),
-    }
+    CallToolResult::text_content(vec![text.into()])
 }
 
 fn call_tool_err(message: &str) -> CallToolResult {
-    let mut structured = Map::new();
-    structured.insert("error".to_owned(), Value::String(message.to_owned()));
-    CallToolResult {
-        content: vec![ContentBlock::from(TextContent::new(
-            message.to_owned(),
-            None,
-            None,
-        ))],
-        is_error: Some(true),
-        meta: None,
-        structured_content: Some(structured),
-    }
-}
-
-fn server_result(id: RequestId, result: ResultFromServer) -> ServerMessage {
-    ServerMessage::Response(ServerJsonrpcResponse::new(id, result))
-}
-
-fn server_error(id: Option<RequestId>, error: RpcError) -> ServerMessage {
-    ServerMessage::Error(JsonrpcErrorResponse::new(error, id))
+    CallToolResult::text_content(vec![format!("Error: {message}").into()])
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -607,85 +513,56 @@ fn parse_hex_input(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn read_message<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
-    let mut content_length: Option<usize> = None;
-    loop {
-        let mut line = String::new();
-        let n = reader.read_line(&mut line)?;
-        if n == 0 {
-            if content_length.is_none() {
-                return Ok(None);
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "unexpected EOF while reading MCP headers",
-            ));
-        }
+async fn run() -> Result<(), String> {
+    let handler = MirHandler::default();
+    let server_details = InitializeResult {
+        server_info: Implementation {
+            name: "kajit-mir-mcp".into(),
+            version: env!("CARGO_PKG_VERSION").into(),
+            description: Some(
+                "Session-based RA-MIR debugger (step/run/inspect) for kajit-mir".into(),
+            ),
+            title: Some("Kajit MIR Debugger".into()),
+            icons: vec![],
+            website_url: None,
+        },
+        capabilities: ServerCapabilities {
+            tools: Some(ServerCapabilitiesTools {
+                list_changed: Some(false),
+            }),
+            ..Default::default()
+        },
+        protocol_version: LATEST_PROTOCOL_VERSION.into(),
+        instructions: Some(
+            "RA-MIR interpreter debugger over MCP. Use tools/list then tools/call.".into(),
+        ),
+        meta: None,
+    };
 
-        if line == "\r\n" {
-            break;
-        }
+    let transport = StdioTransport::new(TransportOptions::default())
+        .map_err(|e| format!("failed to create stdio transport: {e:?}"))?;
+    let options = McpServerOptions {
+        server_details,
+        transport,
+        handler: handler.to_mcp_server_handler(),
+        task_store: None,
+        client_task_store: None,
+    };
 
-        let line = line.trim_end_matches(['\r', '\n']);
-        if let Some(rest) = line.strip_prefix("Content-Length:") {
-            let len = rest
-                .trim()
-                .parse::<usize>()
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-            content_length = Some(len);
-        }
-    }
-
-    let len = content_length.ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "missing Content-Length header in MCP message",
-        )
-    })?;
-    let mut body = vec![0u8; len];
-    reader.read_exact(&mut body)?;
-    String::from_utf8(body)
-        .map(Some)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
-}
-
-fn write_message<W: Write>(writer: &mut W, body: &ServerMessage) -> io::Result<()> {
-    let serialized = serde_json::to_vec(body)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-    write!(writer, "Content-Length: {}\r\n\r\n", serialized.len())?;
-    writer.write_all(&serialized)?;
-    writer.flush()
-}
-
-fn main() -> io::Result<()> {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-    let mut reader = BufReader::new(stdin.lock());
-    let mut writer = stdout.lock();
-    let mut server = Server::new();
-
-    while let Some(message) = read_message(&mut reader)? {
-        let incoming = match ClientMessage::from_str(&message) {
-            Ok(message) => message,
-            Err(error) => {
-                let response = server_error(None, error);
-                write_message(&mut writer, &response)?;
-                continue;
-            }
-        };
-
-        let response = match incoming {
-            ClientMessage::Request(request) => Some(server.handle_request(request)),
-            ClientMessage::Notification(_) => None,
-            ClientMessage::Response(_) | ClientMessage::Error(_) => None,
-        };
-
-        if let Some(response) = response {
-            write_message(&mut writer, &response)?;
-        }
-    }
-
+    let server = server_runtime::create_server(options);
+    server
+        .start()
+        .await
+        .map_err(|e| format!("MCP server error: {e:?}"))?;
     Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
 }
 
 #[cfg(test)]
