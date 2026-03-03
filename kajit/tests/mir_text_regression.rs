@@ -10,6 +10,31 @@ fn run_mir<'a, T: Facet<'a>>(mir_text: &str, input: &'a [u8]) -> Result<T, kajit
     kajit::deserialize::<T>(&dec, input)
 }
 
+fn run_mir_interpreter_u32(
+    mir_text: &str,
+    input: &[u8],
+) -> Result<u32, kajit_mir::InterpreterTrap> {
+    let program = kajit_mir_text::parse_ra_mir(mir_text).expect("fixture should parse");
+    let outcome = kajit_mir::execute_program(&program, input).expect("interpreter should execute");
+    if let Some(trap) = outcome.trap {
+        return Err(trap);
+    }
+    assert!(
+        outcome.output.len() >= 4,
+        "interpreter output must contain at least 4 bytes for u32 result"
+    );
+    let bytes: [u8; 4] = outcome.output[..4].try_into().expect("slice must fit");
+    Ok(u32::from_le_bytes(bytes))
+}
+
+fn run_mir_interpreter_trap(mir_text: &str, input: &[u8]) -> kajit_mir::InterpreterTrap {
+    let program = kajit_mir_text::parse_ra_mir(mir_text).expect("fixture should parse");
+    let outcome = kajit_mir::execute_program(&program, input).expect("interpreter should execute");
+    outcome
+        .trap
+        .expect("input should trigger an interpreter trap")
+}
+
 const POSTCARD_U32_V0_X86_64_MIR: &str = r#"
 ra_func @0 { ; entry: b0
   block b0: ; insts: 11
@@ -151,4 +176,35 @@ fn postcard_u32_multi_byte_varint() {
     // 300 encodes as [0xAC, 0x02] in postcard varint
     let result: u32 = run_mir(mir, &[0xac, 0x02]).unwrap();
     assert_eq!(result, 300);
+}
+
+#[test]
+fn postcard_u32_interpreter_single_and_multi_byte_varint() {
+    let mir = POSTCARD_U32_V0_X86_64_MIR;
+
+    let result = run_mir_interpreter_u32(mir, &[0x2a]).unwrap();
+    assert_eq!(result, 42);
+
+    let result = run_mir_interpreter_u32(mir, &[0x00]).unwrap();
+    assert_eq!(result, 0);
+
+    let result = run_mir_interpreter_u32(mir, &[0x7f]).unwrap();
+    assert_eq!(result, 127);
+
+    let result = run_mir_interpreter_u32(mir, &[0x80, 0x01]).unwrap();
+    assert_eq!(result, 128);
+
+    let result = run_mir_interpreter_u32(mir, &[0xac, 0x02]).unwrap();
+    assert_eq!(result, 300);
+}
+
+#[test]
+fn postcard_u32_interpreter_error_cases() {
+    let mir = POSTCARD_U32_V0_X86_64_MIR;
+
+    let malformed = run_mir_interpreter_trap(mir, &[0x80, 0x80, 0x80, 0x80, 0x80]);
+    assert_eq!(malformed.code, kajit_ir::ErrorCode::InvalidVarint);
+
+    let overflow = run_mir_interpreter_trap(mir, &[0x80, 0x80, 0x80, 0x80, 0x10]);
+    assert_eq!(overflow.code, kajit_ir::ErrorCode::NumberOutOfRange);
 }
