@@ -28,7 +28,7 @@ pub fn compile_linear_ir_with_alloc(
 
     #[cfg(target_arch = "x86_64")]
     {
-        compile_linear_ir_x64(ir, max_spillslots)
+        compile_linear_ir_x64(ir, max_spillslots, alloc)
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -38,17 +38,44 @@ pub fn compile_linear_ir_with_alloc(
 }
 
 #[cfg(target_arch = "x86_64")]
-fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackendResult {
+// r[impl ir.backends.post-regalloc.branch-test]
+// r[impl ir.backends.post-regalloc.shuffle]
+fn compile_linear_ir_x64(
+    ir: &LinearIr,
+    max_spillslots: usize,
+    alloc: &crate::regalloc_engine::AllocatedProgram,
+) -> LinearBackendResult {
     use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
+    use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
+    use std::collections::BTreeMap;
 
     use crate::arch::{BASE_FRAME, EmitCtx};
     use crate::ir::Width;
     use crate::linearize::{BinOpKind, LabelId, LinearOp, UnaryOpKind};
-    use crate::recipe::{Op, Recipe, Slot};
+    use crate::recipe::{Op, Recipe};
 
     struct FunctionCtx {
         error_exit: DynamicLabel,
         data_results: Vec<crate::ir::VReg>,
+        lambda_id: crate::ir::LambdaId,
+    }
+
+    #[derive(Default)]
+    struct LambdaEditMap {
+        before: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
+        after: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
+    }
+
+    #[derive(Default)]
+    struct LambdaEdgeEditMap {
+        before: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
+        after: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
+    }
+
+    struct EdgeTrampoline {
+        label: DynamicLabel,
+        target: DynamicLabel,
+        moves: Vec<(Allocation, Allocation)>,
     }
 
     struct Lowerer {
@@ -56,40 +83,60 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
         labels: Vec<DynamicLabel>,
         lambda_labels: Vec<DynamicLabel>,
         slot_base: u32,
-        vreg_base: u32,
+        spill_base: u32,
         entry: Option<AssemblyOffset>,
         current_func: Option<FunctionCtx>,
-        x9_cached_vreg: Option<crate::ir::VReg>,
         const_vregs: Vec<Option<u64>>,
+        edits_by_lambda: BTreeMap<u32, LambdaEditMap>,
+        edge_edits_by_lambda: BTreeMap<u32, LambdaEdgeEditMap>,
+        forward_branch_labels_by_lambda: BTreeMap<u32, BTreeMap<LabelId, (usize, LabelId)>>,
+        allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
+        return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
+        edge_trampoline_labels: BTreeMap<(u32, usize, usize), DynamicLabel>,
+        edge_trampolines: Vec<EdgeTrampoline>,
+        current_inst_allocs: Option<Vec<Allocation>>,
+        current_lambda_linear_op_index: usize,
     }
 
     #[derive(Clone, Copy)]
     enum IntrinsicArg {
-        VReg(crate::ir::VReg),
+        VReg { operand_index: usize },
         OutField(u32),
-        OutStack(u32),
     }
 
     impl Lowerer {
-        fn new(ir: &LinearIr) -> Self {
+        fn normalize_edit_move(
+            from: Allocation,
+            to: Allocation,
+        ) -> Option<(Allocation, Allocation)> {
+            if from == to || from.is_none() || to.is_none() {
+                return None;
+            }
+            Some((from, to))
+        }
+
+        fn new(
+            ir: &LinearIr,
+            max_spillslots: usize,
+            alloc: &crate::regalloc_engine::AllocatedProgram,
+        ) -> Self {
             let slot_base = BASE_FRAME;
             let slot_bytes = ir.slot_count * 8;
-            let vreg_base = slot_base + slot_bytes;
-            let vreg_bytes = ir.vreg_count * 8;
-            let extra_stack = slot_bytes + vreg_bytes + 8;
+            let spill_base = slot_base + slot_bytes;
+            let spill_bytes = max_spillslots as u32 * 8;
+            let extra_stack = slot_bytes + spill_bytes + 8;
 
             let mut ectx = EmitCtx::new(extra_stack);
-
             let labels: Vec<DynamicLabel> = (0..ir.label_count).map(|_| ectx.new_label()).collect();
 
             let mut lambda_max = 0usize;
             for op in &ir.ops {
                 match op {
                     LinearOp::FuncStart { lambda_id, .. } => {
-                        lambda_max = lambda_max.max(lambda_id.index() as usize);
+                        lambda_max = lambda_max.max(lambda_id.index());
                     }
                     LinearOp::CallLambda { target, .. } => {
-                        lambda_max = lambda_max.max(target.index() as usize);
+                        lambda_max = lambda_max.max(target.index());
                     }
                     _ => {}
                 }
@@ -97,21 +144,122 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
             let lambda_labels: Vec<DynamicLabel> =
                 (0..=lambda_max).map(|_| ectx.new_label()).collect();
 
+            // Pre-compute forward-branch labels for branch forwarding optimization.
+            let mut forward_branch_labels_by_lambda =
+                BTreeMap::<u32, BTreeMap<LabelId, (usize, LabelId)>>::new();
+            let mut current_lambda_id = None::<u32>;
+            let mut current_linear_op_index = 0usize;
+            let mut pending_labels = Vec::<LabelId>::new();
+            for op in &ir.ops {
+                match op {
+                    LinearOp::FuncStart { lambda_id, .. } => {
+                        current_lambda_id = Some(lambda_id.index() as u32);
+                        current_linear_op_index = 0;
+                        pending_labels.clear();
+                    }
+                    LinearOp::FuncEnd => {
+                        current_lambda_id = None;
+                        pending_labels.clear();
+                    }
+                    _ => {
+                        let Some(lambda_id) = current_lambda_id else {
+                            continue;
+                        };
+                        match op {
+                            LinearOp::Label(label) => {
+                                pending_labels.push(*label);
+                            }
+                            LinearOp::Branch(target) => {
+                                if !pending_labels.is_empty() {
+                                    let by_lambda = forward_branch_labels_by_lambda
+                                        .entry(lambda_id)
+                                        .or_default();
+                                    for label in pending_labels.drain(..) {
+                                        by_lambda.insert(label, (current_linear_op_index, *target));
+                                    }
+                                }
+                            }
+                            _ => {
+                                pending_labels.clear();
+                            }
+                        }
+                        current_linear_op_index += 1;
+                    }
+                }
+            }
+
+            // Materialize regalloc2 output into per-lambda lookup tables.
+            let mut edits_by_lambda = BTreeMap::<u32, LambdaEditMap>::new();
+            let mut edge_edits_by_lambda = BTreeMap::<u32, LambdaEdgeEditMap>::new();
+            let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<Allocation>>>::new();
+            let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
+            for func in &alloc.functions {
+                let lambda_id = func.lambda_id.index() as u32;
+                let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
+                let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
+                let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
+                return_result_allocs_by_lambda
+                    .entry(lambda_id)
+                    .or_insert_with(|| func.return_result_allocs.clone());
+                for (prog_point, edit) in &func.edits {
+                    let Some(Some(linear_op_index)) =
+                        func.inst_linear_op_indices.get(prog_point.inst().index())
+                    else {
+                        continue;
+                    };
+                    let Edit::Move { from, to } = edit;
+                    let Some((from, to)) = Self::normalize_edit_move(*from, *to) else {
+                        continue;
+                    };
+                    let bucket = match prog_point.pos() {
+                        InstPosition::Before => &mut lambda_entry.before,
+                        InstPosition::After => &mut lambda_entry.after,
+                    };
+                    bucket.entry(*linear_op_index).or_default().push((from, to));
+                }
+                for edge_edit in &func.edge_edits {
+                    let Some((from, to)) = Self::normalize_edit_move(edge_edit.from, edge_edit.to)
+                    else {
+                        continue;
+                    };
+                    let key = (edge_edit.from_linear_op_index, edge_edit.succ_index);
+                    let bucket = match edge_edit.pos {
+                        InstPosition::Before => &mut lambda_edge_entry.before,
+                        InstPosition::After => &mut lambda_edge_entry.after,
+                    };
+                    bucket.entry(key).or_default().push((from, to));
+                }
+                for (inst_index, maybe_linear_op_index) in
+                    func.inst_linear_op_indices.iter().copied().enumerate()
+                {
+                    let Some(linear_op_index) = maybe_linear_op_index else {
+                        continue;
+                    };
+                    let Some(inst_allocs) = func.inst_allocs.get(inst_index) else {
+                        continue;
+                    };
+                    allocs_entry.insert(linear_op_index, inst_allocs.clone());
+                }
+            }
             Self {
                 ectx,
                 labels,
                 lambda_labels,
                 slot_base,
-                vreg_base,
+                spill_base,
                 entry: None,
                 current_func: None,
-                x9_cached_vreg: None,
                 const_vregs: vec![None; ir.vreg_count as usize],
+                edits_by_lambda,
+                edge_edits_by_lambda,
+                forward_branch_labels_by_lambda,
+                allocs_by_lambda,
+                return_result_allocs_by_lambda,
+                edge_trampoline_labels: BTreeMap::new(),
+                edge_trampolines: Vec::new(),
+                current_inst_allocs: None,
+                current_lambda_linear_op_index: 0,
             }
-        }
-
-        fn vreg_off(&self, v: crate::ir::VReg) -> u32 {
-            self.vreg_base + (v.index() as u32) * 8
         }
 
         fn slot_off(&self, s: crate::ir::SlotId) -> u32 {
@@ -119,31 +267,366 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
         }
 
         fn label(&self, label: LabelId) -> DynamicLabel {
-            self.labels[label.index() as usize]
+            self.labels[label.index()]
+        }
+
+        fn spill_off(&self, slot: regalloc2::SpillSlot) -> u32 {
+            self.spill_base + (slot.index() as u32) * 8
+        }
+
+        fn flush_all_vregs(&mut self) {
+            self.const_vregs.fill(None);
         }
 
         fn emit_recipe_ops(&mut self, ops: Vec<Op>) {
+            self.flush_all_vregs();
             self.ectx.emit_recipe(&Recipe {
                 ops,
                 label_count: 0,
             });
         }
 
-        fn emit_load_vreg_r10(&mut self, v: crate::ir::VReg) {
-            let off = self.vreg_off(v) as i32;
-            dynasm!(self.ectx.ops
-                ; .arch x64
-                ; mov r10, [rsp + off]
-            );
+        fn current_alloc(&self, operand_index: usize) -> Allocation {
+            self.current_inst_allocs
+                .as_ref()
+                .and_then(|allocs| allocs.get(operand_index).copied())
+                .unwrap_or_else(|| {
+                    panic!("missing regalloc allocation for operand index {operand_index}")
+                })
         }
 
-        fn emit_store_r10_to_vreg(&mut self, v: crate::ir::VReg) {
-            let off = self.vreg_off(v) as i32;
-            dynasm!(self.ectx.ops
-                ; .arch x64
-                ; mov [rsp + off], r10
-            );
+        fn const_of(&self, v: crate::ir::VReg) -> Option<u64> {
+            self.const_vregs[v.index()]
         }
+
+        fn set_const(&mut self, v: crate::ir::VReg, value: Option<u64>) {
+            self.const_vregs[v.index()] = value;
+        }
+
+        // ── Allocation ↔ r10 helpers ──────────────────────────────────
+
+        fn emit_load_r10_from_allocation(&mut self, alloc: Allocation) {
+            if let Some(reg) = alloc.as_reg() {
+                assert!(
+                    reg.class() == RegClass::Int,
+                    "unsupported register class {:?} for r10 load",
+                    reg.class()
+                );
+                let enc = reg.hw_enc() as u8;
+                if enc != 10 {
+                    dynasm!(self.ectx.ops ; .arch x64 ; mov r10, Rq(enc));
+                }
+                return;
+            }
+            if let Some(slot) = alloc.as_stack() {
+                let off = self.spill_off(slot) as i32;
+                dynasm!(self.ectx.ops ; .arch x64 ; mov r10, [rsp + off]);
+                return;
+            }
+            panic!("unexpected none allocation for r10 load");
+        }
+
+        fn emit_store_r10_to_allocation(&mut self, alloc: Allocation) {
+            if let Some(reg) = alloc.as_reg() {
+                assert!(
+                    reg.class() == RegClass::Int,
+                    "unsupported register class {:?} for r10 store",
+                    reg.class()
+                );
+                let enc = reg.hw_enc() as u8;
+                if enc != 10 {
+                    dynasm!(self.ectx.ops ; .arch x64 ; mov Rq(enc), r10);
+                }
+                return;
+            }
+            if let Some(slot) = alloc.as_stack() {
+                let off = self.spill_off(slot) as i32;
+                dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r10);
+                return;
+            }
+            panic!("unexpected none allocation for r10 store");
+        }
+
+        fn emit_load_use_r10(&mut self, _v: crate::ir::VReg, operand_index: usize) {
+            let alloc = self.current_alloc(operand_index);
+            self.emit_load_r10_from_allocation(alloc);
+        }
+
+        fn emit_store_def_r10(&mut self, _v: crate::ir::VReg, operand_index: usize) {
+            let alloc = self.current_alloc(operand_index);
+            self.emit_store_r10_to_allocation(alloc);
+        }
+
+        // ── Allocation ↔ ABI register helpers ─────────────────────────
+
+        fn emit_mov_preg_to_preg(&mut self, from: PReg, to: PReg) {
+            if from == to {
+                return;
+            }
+            assert!(
+                from.class() == RegClass::Int && to.class() == RegClass::Int,
+                "preg-to-preg move requires Int class"
+            );
+            let from_enc = from.hw_enc() as u8;
+            let to_enc = to.hw_enc() as u8;
+            dynasm!(self.ectx.ops ; .arch x64 ; mov Rq(to_enc), Rq(from_enc));
+        }
+
+        fn emit_capture_abi_ret_to_allocation(&mut self, abi_reg: PReg, operand_index: usize) {
+            let alloc = self.current_alloc(operand_index);
+            if let Some(reg) = alloc.as_reg() {
+                self.emit_mov_preg_to_preg(abi_reg, reg);
+                return;
+            }
+            if let Some(slot) = alloc.as_stack() {
+                let off = self.spill_off(slot) as i32;
+                let enc = abi_reg.hw_enc() as u8;
+                dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], Rq(enc));
+                return;
+            }
+            panic!("unexpected none allocation for ABI ret capture");
+        }
+
+        // ── Push/pop arg helpers (avoid ABI register clobbering) ─────
+
+        /// Push an allocation's value onto the stack.
+        /// `push_count` is the number of pushes already done (for RSP adjustment on spill reads).
+        fn push_allocation_operand(&mut self, operand_index: usize, push_count: usize) {
+            let alloc = self.current_alloc(operand_index);
+            let rsp_adjust = (push_count as i32) * 8;
+            if let Some(reg) = alloc.as_reg() {
+                let enc = reg.hw_enc() as u8;
+                dynasm!(self.ectx.ops ; .arch x64 ; push Rq(enc));
+            } else if let Some(slot) = alloc.as_stack() {
+                let off = self.spill_off(slot) as i32 + rsp_adjust;
+                dynasm!(self.ectx.ops ; .arch x64
+                    ; mov r10, [rsp + off]
+                    ; push r10
+                );
+            } else {
+                panic!("unexpected none allocation for call arg");
+            }
+        }
+
+        fn push_intrinsic_arg(&mut self, arg: IntrinsicArg, push_count: usize) {
+            match arg {
+                IntrinsicArg::VReg { operand_index } => {
+                    self.push_allocation_operand(operand_index, push_count);
+                }
+                IntrinsicArg::OutField(offset) => {
+                    let off = offset as i32;
+                    dynasm!(self.ectx.ops ; .arch x64
+                        ; lea r10, [r14 + off]
+                        ; push r10
+                    );
+                }
+            }
+        }
+
+        // ── Edit moves ────────────────────────────────────────────────
+
+        fn emit_edit_move(&mut self, from: Allocation, to: Allocation) {
+            if from == to || from.is_none() || to.is_none() {
+                return;
+            }
+            match (from.as_reg(), from.as_stack(), to.as_reg(), to.as_stack()) {
+                (Some(from_reg), None, Some(to_reg), None) => {
+                    self.emit_mov_preg_to_preg(from_reg, to_reg);
+                }
+                (Some(from_reg), None, None, Some(to_stack)) => {
+                    let off = self.spill_off(to_stack) as i32;
+                    let enc = from_reg.hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], Rq(enc));
+                }
+                (None, Some(from_stack), Some(to_reg), None) => {
+                    let off = self.spill_off(from_stack) as i32;
+                    let enc = to_reg.hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; mov Rq(enc), [rsp + off]);
+                }
+                (None, Some(from_stack), None, Some(to_stack)) => {
+                    if from_stack == to_stack {
+                        return;
+                    }
+                    let from_off = self.spill_off(from_stack) as i32;
+                    let to_off = self.spill_off(to_stack) as i32;
+                    dynasm!(self.ectx.ops
+                        ; .arch x64
+                        ; mov r10, [rsp + from_off]
+                        ; mov [rsp + to_off], r10
+                    );
+                }
+                _ => {}
+            }
+        }
+
+        // r[impl ir.regalloc.edits]
+        fn apply_regalloc_edits(&mut self, linear_op_index: usize, pos: InstPosition) {
+            let lambda_id = match self.current_func.as_ref() {
+                Some(func) => func.lambda_id.index() as u32,
+                None => return,
+            };
+
+            let edits = self
+                .edits_by_lambda
+                .get(&lambda_id)
+                .and_then(|by_lambda| match pos {
+                    InstPosition::Before => by_lambda.before.get(&linear_op_index),
+                    InstPosition::After => by_lambda.after.get(&linear_op_index),
+                })
+                .cloned()
+                .unwrap_or_default();
+
+            if edits.is_empty() {
+                return;
+            }
+
+            self.flush_all_vregs();
+            for (from, to) in edits {
+                self.emit_edit_move(from, to);
+            }
+        }
+
+        fn has_inst_edits(&self, linear_op_index: usize) -> bool {
+            let Some(lambda_id) = self
+                .current_func
+                .as_ref()
+                .map(|f| f.lambda_id.index() as u32)
+            else {
+                return false;
+            };
+            let Some(by_lambda) = self.edits_by_lambda.get(&lambda_id) else {
+                return false;
+            };
+            by_lambda.before.contains_key(&linear_op_index)
+                || by_lambda.after.contains_key(&linear_op_index)
+        }
+
+        fn resolve_forwarded_label(&self, label: LabelId) -> LabelId {
+            let Some(lambda_id) = self
+                .current_func
+                .as_ref()
+                .map(|f| f.lambda_id.index() as u32)
+            else {
+                return label;
+            };
+            let Some(by_lambda) = self.forward_branch_labels_by_lambda.get(&lambda_id) else {
+                return label;
+            };
+            let mut resolved = label;
+            let mut hops = 0usize;
+            while hops < 64 {
+                let Some((branch_linear_op_index, next_label)) = by_lambda.get(&resolved).copied()
+                else {
+                    break;
+                };
+                if self.has_inst_edits(branch_linear_op_index)
+                    || self.has_edge_edits(branch_linear_op_index, 0)
+                    || next_label == resolved
+                {
+                    break;
+                }
+                resolved = next_label;
+                hops += 1;
+            }
+            resolved
+        }
+
+        fn edge_edit_moves(
+            &self,
+            linear_op_index: usize,
+            succ_index: usize,
+        ) -> Vec<(Allocation, Allocation)> {
+            let Some(lambda_id) = self
+                .current_func
+                .as_ref()
+                .map(|f| f.lambda_id.index() as u32)
+            else {
+                return Vec::new();
+            };
+            let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
+                return Vec::new();
+            };
+            let key = (linear_op_index, succ_index);
+            let mut moves = Vec::new();
+            if let Some(before) = by_lambda.before.get(&key) {
+                moves.extend(before.iter().copied());
+            }
+            if let Some(after) = by_lambda.after.get(&key) {
+                moves.extend(after.iter().copied());
+            }
+            moves
+        }
+
+        fn apply_fallthrough_edge_edits(&mut self, linear_op_index: usize, succ_index: usize) {
+            let moves = self.edge_edit_moves(linear_op_index, succ_index);
+            if moves.is_empty() {
+                return;
+            }
+            self.flush_all_vregs();
+            for (from, to) in moves {
+                self.emit_edit_move(from, to);
+            }
+        }
+
+        fn has_edge_edits(&self, linear_op_index: usize, succ_index: usize) -> bool {
+            !self.edge_edit_moves(linear_op_index, succ_index).is_empty()
+        }
+
+        fn edge_target_label(
+            &mut self,
+            linear_op_index: usize,
+            succ_index: usize,
+            actual_target: DynamicLabel,
+        ) -> DynamicLabel {
+            let Some(lambda_id) = self
+                .current_func
+                .as_ref()
+                .map(|f| f.lambda_id.index() as u32)
+            else {
+                return actual_target;
+            };
+            let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
+                return actual_target;
+            };
+            let key = (linear_op_index, succ_index);
+            let has_edits =
+                by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
+            if !has_edits {
+                return actual_target;
+            }
+
+            let cache_key = (lambda_id, linear_op_index, succ_index);
+            if let Some(label) = self.edge_trampoline_labels.get(&cache_key).copied() {
+                return label;
+            }
+
+            let moves = self.edge_edit_moves(linear_op_index, succ_index);
+
+            let label = self.ectx.new_label();
+            self.edge_trampoline_labels.insert(cache_key, label);
+            self.edge_trampolines.push(EdgeTrampoline {
+                label,
+                target: actual_target,
+                moves,
+            });
+            label
+        }
+
+        fn emit_edge_trampolines(&mut self) {
+            let trampolines = std::mem::take(&mut self.edge_trampolines);
+            for trampoline in trampolines {
+                self.ectx.bind_label(trampoline.label);
+                if !trampoline.moves.is_empty() {
+                    self.flush_all_vregs();
+                    for (from, to) in trampoline.moves {
+                        self.emit_edit_move(from, to);
+                    }
+                }
+                self.ectx.emit_branch(trampoline.target);
+            }
+        }
+
+        // ── Per-op lowering helpers ───────────────────────────────────
 
         fn emit_read_from_field(&mut self, dst: crate::ir::VReg, offset: u32, width: Width) {
             let off = offset as i32;
@@ -153,11 +636,12 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                 Width::W4 => dynasm!(self.ectx.ops ; .arch x64 ; mov r10d, DWORD [r14 + off]),
                 Width::W8 => dynasm!(self.ectx.ops ; .arch x64 ; mov r10, QWORD [r14 + off]),
             }
-            self.emit_store_r10_to_vreg(dst);
+            self.emit_store_def_r10(dst, 0);
+            self.set_const(dst, None);
         }
 
         fn emit_write_to_field(&mut self, src: crate::ir::VReg, offset: u32, width: Width) {
-            self.emit_load_vreg_r10(src);
+            self.emit_load_use_r10(src, 0);
             let off = offset as i32;
             match width {
                 Width::W1 => dynasm!(self.ectx.ops ; .arch x64 ; mov BYTE [r14 + off], r10b),
@@ -168,29 +652,21 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
         }
 
         fn emit_save_out_ptr(&mut self, dst: crate::ir::VReg) {
-            let off = self.vreg_off(dst) as i32;
-            dynasm!(self.ectx.ops
-                ; .arch x64
-                ; mov [rsp + off], r14
-            );
+            dynasm!(self.ectx.ops ; .arch x64 ; mov r10, r14);
+            self.emit_store_def_r10(dst, 0);
+            self.set_const(dst, None);
         }
 
         fn emit_set_out_ptr(&mut self, src: crate::ir::VReg) {
-            let off = self.vreg_off(src) as i32;
-            dynasm!(self.ectx.ops
-                ; .arch x64
-                ; mov r14, [rsp + off]
-            );
+            self.emit_load_use_r10(src, 0);
+            dynasm!(self.ectx.ops ; .arch x64 ; mov r14, r10);
         }
 
         fn emit_slot_addr(&mut self, dst: crate::ir::VReg, slot: crate::ir::SlotId) {
-            let dst_off = self.vreg_off(dst) as i32;
             let slot_off = self.slot_off(slot) as i32;
-            dynasm!(self.ectx.ops
-                ; .arch x64
-                ; lea r10, [rsp + slot_off]
-                ; mov [rsp + dst_off], r10
-            );
+            dynasm!(self.ectx.ops ; .arch x64 ; lea r10, [rsp + slot_off]);
+            self.emit_store_def_r10(dst, 0);
+            self.set_const(dst, None);
         }
 
         fn emit_read_bytes(&mut self, dst: crate::ir::VReg, count: u32) {
@@ -202,14 +678,16 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                 8 => dynasm!(self.ectx.ops ; .arch x64 ; mov r10, QWORD [r12]),
                 _ => panic!("unsupported ReadBytes count: {count}"),
             }
-            self.emit_store_r10_to_vreg(dst);
+            self.emit_store_def_r10(dst, 0);
+            self.set_const(dst, None);
             self.ectx.emit_advance_cursor_by(count);
         }
 
         fn emit_peek_byte(&mut self, dst: crate::ir::VReg) {
             self.emit_recipe_ops(vec![Op::BoundsCheck { count: 1 }]);
             dynasm!(self.ectx.ops ; .arch x64 ; movzx r10d, BYTE [r12]);
-            self.emit_store_r10_to_vreg(dst);
+            self.emit_store_def_r10(dst, 0);
+            self.set_const(dst, None);
         }
 
         fn emit_binop(
@@ -217,38 +695,90 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
             kind: BinOpKind,
             dst: crate::ir::VReg,
             lhs: crate::ir::VReg,
-            rhs: crate::ir::VReg,
+            _rhs: crate::ir::VReg,
         ) {
-            self.emit_load_vreg_r10(lhs);
-            let rhs_off = self.vreg_off(rhs) as i32;
+            self.emit_load_use_r10(lhs, 0);
             match kind {
-                BinOpKind::Add => dynasm!(self.ectx.ops ; .arch x64 ; add r10, [rsp + rhs_off]),
-                BinOpKind::Sub => dynasm!(self.ectx.ops ; .arch x64 ; sub r10, [rsp + rhs_off]),
-                BinOpKind::And => dynasm!(self.ectx.ops ; .arch x64 ; and r10, [rsp + rhs_off]),
-                BinOpKind::Or => dynasm!(self.ectx.ops ; .arch x64 ; or r10, [rsp + rhs_off]),
-                BinOpKind::Xor => dynasm!(self.ectx.ops ; .arch x64 ; xor r10, [rsp + rhs_off]),
-                BinOpKind::CmpNe => dynasm!(self.ectx.ops
-                    ; .arch x64
-                    ; cmp r10, [rsp + rhs_off]
-                    ; setne r10b
-                    ; movzx r10, r10b
-                ),
-                BinOpKind::Shr => dynasm!(self.ectx.ops
-                    ; .arch x64
-                    ; mov rcx, [rsp + rhs_off]
-                    ; shr r10, cl
-                ),
-                BinOpKind::Shl => dynasm!(self.ectx.ops
-                    ; .arch x64
-                    ; mov rcx, [rsp + rhs_off]
-                    ; shl r10, cl
-                ),
+                BinOpKind::Add => {
+                    let rhs_alloc = self.current_alloc(1);
+                    if let Some(reg) = rhs_alloc.as_reg() {
+                        let enc = reg.hw_enc() as u8;
+                        dynasm!(self.ectx.ops ; .arch x64 ; add r10, Rq(enc));
+                    } else if let Some(slot) = rhs_alloc.as_stack() {
+                        let off = self.spill_off(slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; add r10, [rsp + off]);
+                    }
+                }
+                BinOpKind::Sub => {
+                    let rhs_alloc = self.current_alloc(1);
+                    if let Some(reg) = rhs_alloc.as_reg() {
+                        let enc = reg.hw_enc() as u8;
+                        dynasm!(self.ectx.ops ; .arch x64 ; sub r10, Rq(enc));
+                    } else if let Some(slot) = rhs_alloc.as_stack() {
+                        let off = self.spill_off(slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; sub r10, [rsp + off]);
+                    }
+                }
+                BinOpKind::And => {
+                    let rhs_alloc = self.current_alloc(1);
+                    if let Some(reg) = rhs_alloc.as_reg() {
+                        let enc = reg.hw_enc() as u8;
+                        dynasm!(self.ectx.ops ; .arch x64 ; and r10, Rq(enc));
+                    } else if let Some(slot) = rhs_alloc.as_stack() {
+                        let off = self.spill_off(slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; and r10, [rsp + off]);
+                    }
+                }
+                BinOpKind::Or => {
+                    let rhs_alloc = self.current_alloc(1);
+                    if let Some(reg) = rhs_alloc.as_reg() {
+                        let enc = reg.hw_enc() as u8;
+                        dynasm!(self.ectx.ops ; .arch x64 ; or r10, Rq(enc));
+                    } else if let Some(slot) = rhs_alloc.as_stack() {
+                        let off = self.spill_off(slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; or r10, [rsp + off]);
+                    }
+                }
+                BinOpKind::Xor => {
+                    let rhs_alloc = self.current_alloc(1);
+                    if let Some(reg) = rhs_alloc.as_reg() {
+                        let enc = reg.hw_enc() as u8;
+                        dynasm!(self.ectx.ops ; .arch x64 ; xor r10, Rq(enc));
+                    } else if let Some(slot) = rhs_alloc.as_stack() {
+                        let off = self.spill_off(slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; xor r10, [rsp + off]);
+                    }
+                }
+                BinOpKind::CmpNe => {
+                    let rhs_alloc = self.current_alloc(1);
+                    if let Some(reg) = rhs_alloc.as_reg() {
+                        let enc = reg.hw_enc() as u8;
+                        dynasm!(self.ectx.ops ; .arch x64 ; cmp r10, Rq(enc));
+                    } else if let Some(slot) = rhs_alloc.as_stack() {
+                        let off = self.spill_off(slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; cmp r10, [rsp + off]);
+                    }
+                    dynasm!(self.ectx.ops
+                        ; .arch x64
+                        ; setne r10b
+                        ; movzx r10, r10b
+                    );
+                }
+                BinOpKind::Shr => {
+                    // regalloc2 guarantees rhs is in rcx via FixedReg::HwReg(1)
+                    dynasm!(self.ectx.ops ; .arch x64 ; shr r10, cl);
+                }
+                BinOpKind::Shl => {
+                    // regalloc2 guarantees rhs is in rcx via FixedReg::HwReg(1)
+                    dynasm!(self.ectx.ops ; .arch x64 ; shl r10, cl);
+                }
             }
-            self.emit_store_r10_to_vreg(dst);
+            self.emit_store_def_r10(dst, 2);
+            self.set_const(dst, None);
         }
 
         fn emit_unary(&mut self, kind: UnaryOpKind, dst: crate::ir::VReg, src: crate::ir::VReg) {
-            self.emit_load_vreg_r10(src);
+            self.emit_load_use_r10(src, 0);
             match kind {
                 UnaryOpKind::ZigzagDecode { wide: true } => {
                     dynasm!(self.ectx.ops
@@ -277,24 +807,49 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                     Width::W8 => {}
                 },
             }
-            self.emit_store_r10_to_vreg(dst);
+            self.emit_store_def_r10(dst, 1);
+            self.set_const(dst, None);
         }
 
         fn emit_branch_if(&mut self, cond: crate::ir::VReg, target: DynamicLabel, invert: bool) {
-            self.emit_load_vreg_r10(cond);
-            if invert {
-                dynasm!(self.ectx.ops
-                    ; .arch x64
-                    ; test r10, r10
-                    ; jz =>target
+            let _ = cond;
+            let alloc = self.current_alloc(0);
+            self.emit_branch_if_allocation(alloc, target, invert);
+        }
+
+        fn emit_branch_if_allocation(
+            &mut self,
+            alloc: Allocation,
+            target: DynamicLabel,
+            invert: bool,
+        ) {
+            if let Some(reg) = alloc.as_reg() {
+                assert!(
+                    reg.class() == RegClass::Int,
+                    "unsupported register class {:?} for branch condition",
+                    reg.class()
                 );
-            } else {
-                dynasm!(self.ectx.ops
-                    ; .arch x64
-                    ; test r10, r10
-                    ; jnz =>target
-                );
+                let enc = reg.hw_enc() as u8;
+                dynasm!(self.ectx.ops ; .arch x64 ; test Rq(enc), Rq(enc));
+                if invert {
+                    dynasm!(self.ectx.ops ; .arch x64 ; jz =>target);
+                } else {
+                    dynasm!(self.ectx.ops ; .arch x64 ; jnz =>target);
+                }
+                return;
             }
+            if let Some(slot) = alloc.as_stack() {
+                let off = self.spill_off(slot) as i32;
+                dynasm!(self.ectx.ops ; .arch x64 ; mov r10, [rsp + off]);
+                dynasm!(self.ectx.ops ; .arch x64 ; test r10, r10);
+                if invert {
+                    dynasm!(self.ectx.ops ; .arch x64 ; jz =>target);
+                } else {
+                    dynasm!(self.ectx.ops ; .arch x64 ; jnz =>target);
+                }
+                return;
+            }
+            panic!("unexpected none allocation for branch condition");
         }
 
         fn emit_jump_table(
@@ -302,137 +857,39 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
             predicate: crate::ir::VReg,
             labels: &[LabelId],
             default: LabelId,
+            linear_op_index: usize,
         ) {
-            self.emit_load_vreg_r10(predicate);
+            let _ = predicate;
+            let alloc = self.current_alloc(0);
+            if let Some(reg) = alloc.as_reg() {
+                let enc = reg.hw_enc() as u8;
+                dynasm!(self.ectx.ops ; .arch x64 ; mov r10, Rq(enc));
+            } else if let Some(slot) = alloc.as_stack() {
+                let off = self.spill_off(slot) as i32;
+                dynasm!(self.ectx.ops ; .arch x64 ; mov r10, [rsp + off]);
+            } else {
+                panic!("unexpected none allocation for jumptable predicate");
+            }
             for (index, label) in labels.iter().enumerate() {
-                let target = self.label(*label);
+                let resolved = self.resolve_forwarded_label(*label);
+                let target = self.edge_target_label(linear_op_index, index, self.label(resolved));
                 dynasm!(self.ectx.ops
                     ; .arch x64
                     ; cmp r10d, index as i32
                     ; je =>target
                 );
             }
-            self.ectx.emit_branch(self.label(default));
+            let default_succ_index = labels.len();
+            let resolved_default = self.resolve_forwarded_label(default);
+            let default_target = self.edge_target_label(
+                linear_op_index,
+                default_succ_index,
+                self.label(resolved_default),
+            );
+            self.ectx.emit_branch(default_target);
         }
 
-        fn emit_load_intrinsic_arg_rsi(&mut self, arg: IntrinsicArg) {
-            match arg {
-                IntrinsicArg::VReg(v) => {
-                    let off = self.vreg_off(v) as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov rsi, [rsp + off]);
-                }
-                IntrinsicArg::OutField(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rsi, [r14 + off]);
-                }
-                IntrinsicArg::OutStack(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rsi, [rsp + off]);
-                }
-            }
-        }
-
-        fn emit_load_intrinsic_arg_rdi(&mut self, arg: IntrinsicArg) {
-            match arg {
-                IntrinsicArg::VReg(v) => {
-                    let off = self.vreg_off(v) as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov rdi, [rsp + off]);
-                }
-                IntrinsicArg::OutField(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rdi, [r14 + off]);
-                }
-                IntrinsicArg::OutStack(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rdi, [rsp + off]);
-                }
-            }
-        }
-
-        fn emit_load_intrinsic_arg_rdx(&mut self, arg: IntrinsicArg) {
-            match arg {
-                IntrinsicArg::VReg(v) => {
-                    let off = self.vreg_off(v) as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov rdx, [rsp + off]);
-                }
-                IntrinsicArg::OutField(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rdx, [r14 + off]);
-                }
-                IntrinsicArg::OutStack(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rdx, [rsp + off]);
-                }
-            }
-        }
-
-        fn emit_load_intrinsic_arg_rcx(&mut self, arg: IntrinsicArg) {
-            match arg {
-                IntrinsicArg::VReg(v) => {
-                    let off = self.vreg_off(v) as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov rcx, [rsp + off]);
-                }
-                IntrinsicArg::OutField(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rcx, [r14 + off]);
-                }
-                IntrinsicArg::OutStack(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea rcx, [rsp + off]);
-                }
-            }
-        }
-
-        fn emit_load_intrinsic_arg_r8(&mut self, arg: IntrinsicArg) {
-            match arg {
-                IntrinsicArg::VReg(v) => {
-                    let off = self.vreg_off(v) as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov r8, [rsp + off]);
-                }
-                IntrinsicArg::OutField(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea r8, [r14 + off]);
-                }
-                IntrinsicArg::OutStack(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea r8, [rsp + off]);
-                }
-            }
-        }
-
-        fn emit_load_intrinsic_arg_r9(&mut self, arg: IntrinsicArg) {
-            match arg {
-                IntrinsicArg::VReg(v) => {
-                    let off = self.vreg_off(v) as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov r9, [rsp + off]);
-                }
-                IntrinsicArg::OutField(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea r9, [r14 + off]);
-                }
-                IntrinsicArg::OutStack(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea r9, [rsp + off]);
-                }
-            }
-        }
-
-        fn emit_load_intrinsic_arg_r10(&mut self, arg: IntrinsicArg) {
-            match arg {
-                IntrinsicArg::VReg(v) => {
-                    let off = self.vreg_off(v) as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov r10, [rsp + off]);
-                }
-                IntrinsicArg::OutField(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea r10, [r14 + off]);
-                }
-                IntrinsicArg::OutStack(offset) => {
-                    let off = offset as i32;
-                    dynasm!(self.ectx.ops ; .arch x64 ; lea r10, [rsp + off]);
-                }
-            }
-        }
+        // ── Intrinsic / call helpers ──────────────────────────────────
 
         fn emit_call_intrinsic_with_args(&mut self, fn_ptr: *const u8, args: &[IntrinsicArg]) {
             use crate::context::{CTX_ERROR_CODE, CTX_INPUT_PTR};
@@ -443,63 +900,65 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                 .expect("CallIntrinsic outside function")
                 .error_exit;
 
+            self.flush_all_vregs();
+
             // Flush cursor before call.
             dynasm!(self.ectx.ops
                 ; .arch x64
                 ; mov [r15 + CTX_INPUT_PTR as i32], r12
             );
 
+            // Two-phase arg setup: push all values first (reading allocations
+            // before writing any ABI regs), then pop into ABI regs. This avoids
+            // clobbering a later arg's source register with an earlier arg's dest.
+
             #[cfg(not(windows))]
             {
+                // System V AMD64: rdi=ctx, rsi=arg0, rdx=arg1, rcx=arg2, r8=arg3, r9=arg4
                 if args.len() > 5 {
                     panic!(
                         "unsupported CallIntrinsic arity in linear backend adapter: {} args (+ctx)",
                         args.len()
                     );
                 }
+                let abi_regs: &[PReg] = &[
+                    PReg::new(6, RegClass::Int),  // rsi
+                    PReg::new(2, RegClass::Int),  // rdx
+                    PReg::new(1, RegClass::Int),  // rcx
+                    PReg::new(8, RegClass::Int),  // r8
+                    PReg::new(9, RegClass::Int),  // r9
+                ];
+                for (i, arg) in args.iter().copied().enumerate() {
+                    self.push_intrinsic_arg(arg, i);
+                }
                 dynasm!(self.ectx.ops ; .arch x64 ; mov rdi, r15);
-                if let Some(arg) = args.first().copied() {
-                    self.emit_load_intrinsic_arg_rsi(arg);
-                }
-                if let Some(arg) = args.get(1).copied() {
-                    self.emit_load_intrinsic_arg_rdx(arg);
-                }
-                if let Some(arg) = args.get(2).copied() {
-                    self.emit_load_intrinsic_arg_rcx(arg);
-                }
-                if let Some(arg) = args.get(3).copied() {
-                    self.emit_load_intrinsic_arg_r8(arg);
-                }
-                if let Some(arg) = args.get(4).copied() {
-                    self.emit_load_intrinsic_arg_r9(arg);
+                for i in (0..args.len()).rev() {
+                    let enc = abi_regs[i].hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
                 }
             }
 
             #[cfg(windows)]
             {
-                if args.len() > 5 {
+                // Win64: rcx=ctx, rdx=arg0, r8=arg1, r9=arg2 (+ stack for arg3, arg4)
+                if args.len() > 3 {
                     panic!(
                         "unsupported CallIntrinsic arity in linear backend adapter: {} args (+ctx)",
                         args.len()
                     );
                 }
+                let abi_regs: &[PReg] = &[
+                    PReg::new(2, RegClass::Int),  // rdx
+                    PReg::new(8, RegClass::Int),  // r8
+                    PReg::new(9, RegClass::Int),  // r9
+                ];
+                for (i, arg) in args.iter().copied().enumerate() {
+                    self.push_intrinsic_arg(arg, i);
+                }
                 dynasm!(self.ectx.ops ; .arch x64 ; mov rcx, r15);
-                if let Some(arg) = args.first().copied() {
-                    self.emit_load_intrinsic_arg_rdx(arg);
-                }
-                if let Some(arg) = args.get(1).copied() {
-                    self.emit_load_intrinsic_arg_r8(arg);
-                }
-                if let Some(arg) = args.get(2).copied() {
-                    self.emit_load_intrinsic_arg_r9(arg);
-                }
-                if let Some(arg) = args.get(3).copied() {
-                    self.emit_load_intrinsic_arg_r10(arg);
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + 32], r10);
-                }
-                if let Some(arg) = args.get(4).copied() {
-                    self.emit_load_intrinsic_arg_r10(arg);
-                    dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + 40], r10);
+                for i in (0..args.len()).rev() {
+                    let enc = abi_regs[i].hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
                 }
             }
 
@@ -531,29 +990,27 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
             let fn_ptr = func.0 as *const u8;
             match dst {
                 Some(dst) => {
-                    if args.is_empty() {
-                        // Legacy stack-out intrinsic ABI: fn(ctx, &mut out)
-                        let out_offset = self.vreg_off(dst);
-                        self.ectx.emit_store_imm64_to_stack(out_offset, 0);
-                        self.emit_call_intrinsic_with_args(
-                            fn_ptr,
-                            &[IntrinsicArg::OutStack(out_offset)],
-                        );
-                    } else {
-                        // Return-value intrinsic ABI: fn(ctx, args...) -> value
-                        let call_args: Vec<IntrinsicArg> =
-                            args.iter().copied().map(IntrinsicArg::VReg).collect();
-                        self.emit_call_intrinsic_with_args(fn_ptr, &call_args);
-                        let out_offset = self.vreg_off(dst) as i32;
-                        dynasm!(self.ectx.ops
-                            ; .arch x64
-                            ; mov [rsp + out_offset], rax
-                        );
-                    }
+                    let dst_operand_index = args.len();
+                    // Return-value intrinsic ABI: fn(ctx, args...) -> value
+                    let call_args: Vec<IntrinsicArg> = args
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .map(|(i, _vreg)| IntrinsicArg::VReg { operand_index: i })
+                        .collect();
+                    self.emit_call_intrinsic_with_args(fn_ptr, &call_args);
+                    // Capture rax into the destination allocation.
+                    let rax = PReg::new(0, RegClass::Int);
+                    self.emit_capture_abi_ret_to_allocation(rax, dst_operand_index);
+                    let _ = dst;
                 }
                 None => {
-                    let mut call_args: Vec<IntrinsicArg> =
-                        args.iter().copied().map(IntrinsicArg::VReg).collect();
+                    let mut call_args: Vec<IntrinsicArg> = args
+                        .iter()
+                        .copied()
+                        .enumerate()
+                        .map(|(i, _vreg)| IntrinsicArg::VReg { operand_index: i })
+                        .collect();
                     // Side-effect intrinsic ABI: fn(ctx, args..., out+field_offset)
                     call_args.push(IntrinsicArg::OutField(field_offset));
                     self.emit_call_intrinsic_with_args(fn_ptr, &call_args);
@@ -561,39 +1018,32 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
             }
         }
 
-        fn emit_call_pure(
-            &mut self,
-            func: crate::ir::IntrinsicFn,
-            args: &[crate::ir::VReg],
-            dst: crate::ir::VReg,
-        ) {
-            let fn_ptr = func.0 as i64;
+        fn emit_call_pure_with_args(&mut self, fn_ptr: *const u8, args: &[IntrinsicArg]) {
+            self.flush_all_vregs();
 
             #[cfg(not(windows))]
             {
+                // System V AMD64: rdi=arg0, rsi=arg1, rdx=arg2, rcx=arg3, r8=arg4, r9=arg5
                 if args.len() > 6 {
                     panic!(
                         "unsupported CallPure arity in linear backend adapter: {} args",
                         args.len()
                     );
                 }
-                if let Some(&arg) = args.first() {
-                    self.emit_load_intrinsic_arg_rdi(IntrinsicArg::VReg(arg));
+                let abi_regs: &[PReg] = &[
+                    PReg::new(7, RegClass::Int),  // rdi
+                    PReg::new(6, RegClass::Int),  // rsi
+                    PReg::new(2, RegClass::Int),  // rdx
+                    PReg::new(1, RegClass::Int),  // rcx
+                    PReg::new(8, RegClass::Int),  // r8
+                    PReg::new(9, RegClass::Int),  // r9
+                ];
+                for (i, arg) in args.iter().copied().enumerate() {
+                    self.push_intrinsic_arg(arg, i);
                 }
-                if let Some(&arg) = args.get(1) {
-                    self.emit_load_intrinsic_arg_rsi(IntrinsicArg::VReg(arg));
-                }
-                if let Some(&arg) = args.get(2) {
-                    self.emit_load_intrinsic_arg_rdx(IntrinsicArg::VReg(arg));
-                }
-                if let Some(&arg) = args.get(3) {
-                    self.emit_load_intrinsic_arg_rcx(IntrinsicArg::VReg(arg));
-                }
-                if let Some(&arg) = args.get(4) {
-                    self.emit_load_intrinsic_arg_r8(IntrinsicArg::VReg(arg));
-                }
-                if let Some(&arg) = args.get(5) {
-                    self.emit_load_intrinsic_arg_r9(IntrinsicArg::VReg(arg));
+                for i in (0..args.len()).rev() {
+                    let enc = abi_regs[i].hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
                 }
             }
 
@@ -605,31 +1055,47 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                         args.len()
                     );
                 }
-                if let Some(&arg) = args.first() {
-                    self.emit_load_intrinsic_arg_rcx(IntrinsicArg::VReg(arg));
+                let abi_regs: &[PReg] = &[
+                    PReg::new(1, RegClass::Int),  // rcx
+                    PReg::new(2, RegClass::Int),  // rdx
+                    PReg::new(8, RegClass::Int),  // r8
+                    PReg::new(9, RegClass::Int),  // r9
+                ];
+                for (i, arg) in args.iter().copied().enumerate() {
+                    self.push_intrinsic_arg(arg, i);
                 }
-                if let Some(&arg) = args.get(1) {
-                    self.emit_load_intrinsic_arg_rdx(IntrinsicArg::VReg(arg));
-                }
-                if let Some(&arg) = args.get(2) {
-                    self.emit_load_intrinsic_arg_r8(IntrinsicArg::VReg(arg));
-                }
-                if let Some(&arg) = args.get(3) {
-                    self.emit_load_intrinsic_arg_r9(IntrinsicArg::VReg(arg));
+                for i in (0..args.len()).rev() {
+                    let enc = abi_regs[i].hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
                 }
             }
 
+            let ptr_val = fn_ptr as i64;
             dynasm!(self.ectx.ops
                 ; .arch x64
-                ; mov rax, QWORD fn_ptr
+                ; mov rax, QWORD ptr_val
                 ; call rax
             );
+        }
 
-            let out_offset = self.vreg_off(dst) as i32;
-            dynasm!(self.ectx.ops
-                ; .arch x64
-                ; mov [rsp + out_offset], rax
-            );
+        fn emit_call_pure(
+            &mut self,
+            func: crate::ir::IntrinsicFn,
+            args: &[crate::ir::VReg],
+            dst: crate::ir::VReg,
+        ) {
+            let fn_ptr = func.0 as *const u8;
+            let dst_operand_index = args.len();
+            let call_args: Vec<IntrinsicArg> = args
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(i, _)| IntrinsicArg::VReg { operand_index: i })
+                .collect();
+            self.emit_call_pure_with_args(fn_ptr, &call_args);
+            let rax = PReg::new(0, RegClass::Int);
+            self.emit_capture_abi_ret_to_allocation(rax, dst_operand_index);
+            let _ = dst;
         }
 
         fn emit_store_incoming_lambda_args(&mut self, data_args: &[crate::ir::VReg]) {
@@ -644,27 +1110,15 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                     data_args.len()
                 );
             }
-
-            for (i, &arg) in data_args.iter().enumerate() {
-                let off = self.vreg_off(arg) as i32;
-                #[cfg(not(windows))]
-                match i {
-                    0 => dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], rdx),
-                    1 => dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], rcx),
-                    2 => dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r8),
-                    3 => dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r9),
-                    _ => unreachable!(),
-                }
-                #[cfg(windows)]
-                match i {
-                    0 => dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r8),
-                    1 => dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r9),
-                    _ => unreachable!(),
-                }
-            }
+            // Incoming lambda args arrive in ABI arg regs (rdx, rcx, r8, r9 on SysV).
+            // Regalloc edits around the first mapped linear op place them as needed.
         }
 
-        fn emit_load_lambda_results_to_ret_regs(&mut self, data_results: &[crate::ir::VReg]) {
+        fn emit_load_lambda_results_to_ret_regs(
+            &mut self,
+            lambda_id: crate::ir::LambdaId,
+            data_results: &[crate::ir::VReg],
+        ) {
             if data_results.len() > 2 {
                 panic!(
                     "x64 CallLambda supports at most 2 data results, got {}",
@@ -672,13 +1126,28 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                 );
             }
 
-            if let Some(&v) = data_results.first() {
-                let off = self.vreg_off(v) as i32;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov rax, [rsp + off]);
+            let result_allocs = self
+                .return_result_allocs_by_lambda
+                .get(&(lambda_id.index() as u32))
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                result_allocs.len() >= data_results.len(),
+                "missing return allocation mapping for lambda {:?}: need {}, got {}",
+                lambda_id,
+                data_results.len(),
+                result_allocs.len()
+            );
+
+            let rax = PReg::new(0, RegClass::Int);
+            let rdx = PReg::new(2, RegClass::Int);
+            if let Some(&alloc) = result_allocs.first() {
+                self.emit_load_r10_from_allocation(alloc);
+                self.emit_mov_preg_to_preg(PReg::new(10, RegClass::Int), rax);
             }
-            if let Some(&v) = data_results.get(1) {
-                let off = self.vreg_off(v) as i32;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov rdx, [rsp + off]);
+            if let Some(&alloc) = result_allocs.get(1) {
+                self.emit_load_r10_from_allocation(alloc);
+                self.emit_mov_preg_to_preg(PReg::new(10, RegClass::Int), rdx);
             }
         }
 
@@ -712,30 +1181,44 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                 .as_ref()
                 .expect("CallLambda outside function")
                 .error_exit;
+            self.flush_all_vregs();
             dynasm!(self.ectx.ops
                 ; .arch x64
                 ; mov [r15 + CTX_INPUT_PTR as i32], r12
             );
-            #[cfg(not(windows))]
-            dynasm!(self.ectx.ops ; .arch x64 ; lea rdi, [r14] ; mov rsi, r15);
-            #[cfg(windows)]
-            dynasm!(self.ectx.ops ; .arch x64 ; lea rcx, [r14] ; mov rdx, r15);
 
-            for (i, &arg) in args.iter().enumerate() {
-                let off = self.vreg_off(arg) as i32;
-                #[cfg(not(windows))]
-                match i {
-                    0 => dynasm!(self.ectx.ops ; .arch x64 ; mov rdx, [rsp + off]),
-                    1 => dynasm!(self.ectx.ops ; .arch x64 ; mov rcx, [rsp + off]),
-                    2 => dynasm!(self.ectx.ops ; .arch x64 ; mov r8, [rsp + off]),
-                    3 => dynasm!(self.ectx.ops ; .arch x64 ; mov r9, [rsp + off]),
-                    _ => unreachable!(),
+            // Set up ABI args: arg0=out, arg1=ctx, arg2..=data args
+            // Push data args first, then set fixed args, then pop into ABI regs.
+            #[cfg(not(windows))]
+            {
+                let abi_data_regs: &[PReg] = &[
+                    PReg::new(2, RegClass::Int),  // rdx
+                    PReg::new(1, RegClass::Int),  // rcx
+                    PReg::new(8, RegClass::Int),  // r8
+                    PReg::new(9, RegClass::Int),  // r9
+                ];
+                for (i, &_arg) in args.iter().enumerate() {
+                    self.push_allocation_operand(i, i);
                 }
-                #[cfg(windows)]
-                match i {
-                    0 => dynasm!(self.ectx.ops ; .arch x64 ; mov r8, [rsp + off]),
-                    1 => dynasm!(self.ectx.ops ; .arch x64 ; mov r9, [rsp + off]),
-                    _ => unreachable!(),
+                dynasm!(self.ectx.ops ; .arch x64 ; lea rdi, [r14] ; mov rsi, r15);
+                for i in (0..args.len()).rev() {
+                    let enc = abi_data_regs[i].hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
+                }
+            }
+            #[cfg(windows)]
+            {
+                let abi_data_regs: &[PReg] = &[
+                    PReg::new(8, RegClass::Int),  // r8
+                    PReg::new(9, RegClass::Int),  // r9
+                ];
+                for (i, &_arg) in args.iter().enumerate() {
+                    self.push_allocation_operand(i, i);
+                }
+                dynasm!(self.ectx.ops ; .arch x64 ; lea rcx, [r14] ; mov rdx, r15);
+                for i in (0..args.len()).rev() {
+                    let enc = abi_data_regs[i].hw_enc() as u8;
+                    dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
                 }
             }
 
@@ -748,18 +1231,36 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                 ; jnz =>error_exit
             );
 
-            if let Some(&dst) = results.first() {
-                let off = self.vreg_off(dst) as i32;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], rax);
+            let rax = PReg::new(0, RegClass::Int);
+            let rdx = PReg::new(2, RegClass::Int);
+            if let Some(&_dst) = results.first() {
+                self.emit_capture_abi_ret_to_allocation(rax, args.len());
             }
-            if let Some(&dst) = results.get(1) {
-                let off = self.vreg_off(dst) as i32;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], rdx);
+            if let Some(&_dst) = results.get(1) {
+                self.emit_capture_abi_ret_to_allocation(rdx, args.len() + 1);
             }
         }
 
         fn run(mut self, ir: &LinearIr) -> LinearBackendResult {
-            for op in &ir.ops {
+            for (op_index, op) in ir.ops.iter().enumerate() {
+                let linear_op_index = if self.current_func.is_some()
+                    && !matches!(op, LinearOp::FuncStart { .. } | LinearOp::FuncEnd)
+                {
+                    Some(self.current_lambda_linear_op_index)
+                } else {
+                    None
+                };
+                self.current_inst_allocs = linear_op_index.and_then(|lin_idx| {
+                    let lambda_id = self.current_func.as_ref()?.lambda_id.index() as u32;
+                    self.allocs_by_lambda
+                        .get(&lambda_id)
+                        .and_then(|by_lambda| by_lambda.get(&lin_idx))
+                        .cloned()
+                });
+                if let Some(linear_op_index) = linear_op_index {
+                    self.apply_regalloc_edits(linear_op_index, InstPosition::Before);
+                }
+
                 match op {
                     LinearOp::FuncStart {
                         lambda_id,
@@ -767,7 +1268,8 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                         data_results,
                         ..
                     } => {
-                        let label = self.lambda_labels[lambda_id.index() as usize];
+                        self.flush_all_vregs();
+                        let label = self.lambda_labels[lambda_id.index()];
                         self.ectx.bind_label(label);
                         let (entry_offset, error_exit) = self.ectx.begin_func();
                         if lambda_id.index() == 0 {
@@ -776,54 +1278,113 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                         self.current_func = Some(FunctionCtx {
                             error_exit,
                             data_results: data_results.clone(),
+                            lambda_id: *lambda_id,
                         });
-                        self.const_vregs.fill(None);
-                        self.x9_cached_vreg = None;
+                        self.current_lambda_linear_op_index = 0;
                         self.emit_store_incoming_lambda_args(data_args);
                     }
                     LinearOp::FuncEnd => {
+                        self.flush_all_vregs();
                         let func = self
                             .current_func
                             .take()
                             .expect("FuncEnd without active function");
-                        self.emit_load_lambda_results_to_ret_regs(&func.data_results);
+                        self.emit_load_lambda_results_to_ret_regs(
+                            func.lambda_id,
+                            &func.data_results,
+                        );
                         self.ectx.end_func(func.error_exit);
                     }
-                    LinearOp::Label(label) => self.ectx.bind_label(self.label(*label)),
-                    LinearOp::Branch(target) => self.ectx.emit_branch(self.label(*target)),
+                    LinearOp::Label(label) => {
+                        self.flush_all_vregs();
+                        self.ectx.bind_label(self.label(*label));
+                    }
+                    LinearOp::Branch(target) => {
+                        let resolved_target = self.resolve_forwarded_label(*target);
+                        let target_label = if let Some(lin_idx) = linear_op_index {
+                            self.edge_target_label(lin_idx, 0, self.label(resolved_target))
+                        } else {
+                            self.label(resolved_target)
+                        };
+                        let is_redundant_fallthrough = if let Some(lin_idx) = linear_op_index {
+                            if self.has_edge_edits(lin_idx, 0) {
+                                false
+                            } else if let Some(LinearOp::Label(next_label)) =
+                                ir.ops.get(op_index + 1)
+                            {
+                                let resolved_next = self.resolve_forwarded_label(*next_label);
+                                resolved_target == resolved_next
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !is_redundant_fallthrough {
+                            self.ectx.emit_branch(target_label);
+                        }
+                    }
                     LinearOp::BranchIf { cond, target } => {
-                        self.emit_branch_if(*cond, self.label(*target), false);
+                        let lin_idx = linear_op_index
+                            .expect("BranchIf should have linear op index inside function");
+                        let resolved_target = self.resolve_forwarded_label(*target);
+                        let taken_target =
+                            self.edge_target_label(lin_idx, 0, self.label(resolved_target));
+                        if let Some(cond_const) = self.const_of(*cond) {
+                            if cond_const != 0 {
+                                self.ectx.emit_branch(taken_target);
+                            } else {
+                                self.apply_fallthrough_edge_edits(lin_idx, 1);
+                            }
+                        } else {
+                            self.emit_branch_if(*cond, taken_target, false);
+                            self.apply_fallthrough_edge_edits(lin_idx, 1);
+                        }
                     }
                     LinearOp::BranchIfZero { cond, target } => {
-                        self.emit_branch_if(*cond, self.label(*target), true);
+                        let lin_idx = linear_op_index
+                            .expect("BranchIfZero should have linear op index inside function");
+                        let resolved_target = self.resolve_forwarded_label(*target);
+                        let taken_target =
+                            self.edge_target_label(lin_idx, 0, self.label(resolved_target));
+                        if let Some(cond_const) = self.const_of(*cond) {
+                            if cond_const == 0 {
+                                self.ectx.emit_branch(taken_target);
+                            } else {
+                                self.apply_fallthrough_edge_edits(lin_idx, 1);
+                            }
+                        } else {
+                            self.emit_branch_if(*cond, taken_target, true);
+                            self.apply_fallthrough_edge_edits(lin_idx, 1);
+                        }
                     }
                     LinearOp::JumpTable {
                         predicate,
                         labels,
                         default,
                     } => {
-                        self.emit_jump_table(*predicate, labels, *default);
+                        let lin_idx = linear_op_index
+                            .expect("JumpTable should have linear op index inside function");
+                        self.emit_jump_table(*predicate, labels, *default, lin_idx);
                     }
 
                     LinearOp::Const { dst, value } => {
-                        self.ectx
-                            .emit_store_imm64_to_stack(self.vreg_off(*dst), *value);
+                        dynasm!(self.ectx.ops
+                            ; .arch x64
+                            ; mov r10, QWORD *value as i64
+                        );
+                        self.emit_store_def_r10(*dst, 0);
+                        self.set_const(*dst, Some(*value));
                     }
                     LinearOp::Copy { dst, src } => {
-                        self.emit_recipe_ops(vec![
-                            Op::LoadFromStack {
-                                dst: Slot::A,
-                                sp_offset: self.vreg_off(*src),
-                                width: crate::recipe::Width::W8,
-                            },
-                            Op::StoreToStack {
-                                src: Slot::A,
-                                sp_offset: self.vreg_off(*dst),
-                                width: crate::recipe::Width::W8,
-                            },
-                        ]);
+                        let from = self.current_alloc(0);
+                        let to = self.current_alloc(1);
+                        self.emit_edit_move(from, to);
+                        self.set_const(*dst, self.const_of(*src));
                     }
-                    LinearOp::BinOp { op, dst, lhs, rhs } => self.emit_binop(*op, *dst, *lhs, *rhs),
+                    LinearOp::BinOp { op, dst, lhs, rhs } => {
+                        self.emit_binop(*op, *dst, *lhs, *rhs);
+                    }
                     LinearOp::UnaryOp { op, dst, src } => self.emit_unary(*op, *dst, *src),
 
                     LinearOp::BoundsCheck { count } => {
@@ -831,22 +1392,21 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                     }
                     LinearOp::ReadBytes { dst, count } => self.emit_read_bytes(*dst, *count),
                     LinearOp::PeekByte { dst } => self.emit_peek_byte(*dst),
-                    LinearOp::AdvanceCursor { count } => self.ectx.emit_advance_cursor_by(*count),
+                    LinearOp::AdvanceCursor { count } => {
+                        self.ectx.emit_advance_cursor_by(*count);
+                    }
                     LinearOp::AdvanceCursorBy { src } => {
-                        self.emit_recipe_ops(vec![
-                            Op::LoadFromStack {
-                                dst: Slot::A,
-                                sp_offset: self.vreg_off(*src),
-                                width: crate::recipe::Width::W8,
-                            },
-                            Op::AdvanceCursorBySlot { slot: Slot::A },
-                        ]);
+                        self.emit_load_use_r10(*src, 0);
+                        dynasm!(self.ectx.ops ; .arch x64 ; add r12, r10);
                     }
                     LinearOp::SaveCursor { dst } => {
-                        self.ectx.emit_save_cursor_to_stack(self.vreg_off(*dst));
+                        dynasm!(self.ectx.ops ; .arch x64 ; mov r10, r12);
+                        self.emit_store_def_r10(*dst, 0);
+                        self.set_const(*dst, None);
                     }
                     LinearOp::RestoreCursor { src } => {
-                        self.ectx.emit_restore_input_ptr(self.vreg_off(*src));
+                        self.emit_load_use_r10(*src, 0);
+                        dynasm!(self.ectx.ops ; .arch x64 ; mov r12, r10);
                     }
 
                     LinearOp::WriteToField { src, offset, width } => {
@@ -865,32 +1425,15 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                         self.emit_slot_addr(*dst, *slot);
                     }
                     LinearOp::WriteToSlot { slot, src } => {
-                        self.emit_recipe_ops(vec![
-                            Op::LoadFromStack {
-                                dst: Slot::A,
-                                sp_offset: self.vreg_off(*src),
-                                width: crate::recipe::Width::W8,
-                            },
-                            Op::StoreToStack {
-                                src: Slot::A,
-                                sp_offset: self.slot_off(*slot),
-                                width: crate::recipe::Width::W8,
-                            },
-                        ]);
+                        self.emit_load_use_r10(*src, 0);
+                        let off = self.slot_off(*slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r10);
                     }
                     LinearOp::ReadFromSlot { dst, slot } => {
-                        self.emit_recipe_ops(vec![
-                            Op::LoadFromStack {
-                                dst: Slot::A,
-                                sp_offset: self.slot_off(*slot),
-                                width: crate::recipe::Width::W8,
-                            },
-                            Op::StoreToStack {
-                                src: Slot::A,
-                                sp_offset: self.vreg_off(*dst),
-                                width: crate::recipe::Width::W8,
-                            },
-                        ]);
+                        let off = self.slot_off(*slot) as i32;
+                        dynasm!(self.ectx.ops ; .arch x64 ; mov r10, [rsp + off]);
+                        self.emit_store_def_r10(*dst, 0);
+                        self.set_const(*dst, None);
                     }
 
                     LinearOp::CallIntrinsic {
@@ -900,12 +1443,17 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                         field_offset,
                     } => {
                         self.emit_call_intrinsic(*func, args, *dst, *field_offset);
+                        if let Some(dst) = dst {
+                            self.set_const(*dst, None);
+                        }
                     }
                     LinearOp::CallPure { func, args, dst } => {
                         self.emit_call_pure(*func, args, *dst);
+                        self.set_const(*dst, None);
                     }
 
                     LinearOp::ErrorExit { code } => {
+                        self.flush_all_vregs();
                         self.ectx.emit_error(*code);
                     }
 
@@ -918,15 +1466,25 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
                         args,
                         results,
                     } => {
-                        let label = self.lambda_labels[target.index() as usize];
+                        let label = self.lambda_labels[target.index()];
                         self.emit_call_lambda(label, args, results);
+                        for &r in results {
+                            self.set_const(r, None);
+                        }
                     }
                 }
+                if let Some(linear_op_index) = linear_op_index {
+                    self.apply_regalloc_edits(linear_op_index, InstPosition::After);
+                    self.current_lambda_linear_op_index += 1;
+                }
+                self.current_inst_allocs = None;
             }
 
             if self.current_func.is_some() {
                 panic!("unterminated function: missing FuncEnd");
             }
+
+            self.emit_edge_trampolines();
 
             let entry = self.entry.expect("missing root FuncStart for lambda 0");
             let buf = self.ectx.finalize();
@@ -934,7 +1492,7 @@ fn compile_linear_ir_x64(ir: &LinearIr, _max_spillslots: usize) -> LinearBackend
         }
     }
 
-    Lowerer::new(ir).run(ir)
+    Lowerer::new(ir, max_spillslots, alloc).run(ir)
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -1245,7 +1803,7 @@ fn compile_linear_ir_aarch64(
                 if reg.class() != RegClass::Int {
                     return;
                 }
-                let enc = reg.hw_enc() as u32;
+                let enc = reg.hw_enc() as u8;
                 let pair = match enc {
                     23 | 24 => Some(0),
                     25 | 26 => Some(1),

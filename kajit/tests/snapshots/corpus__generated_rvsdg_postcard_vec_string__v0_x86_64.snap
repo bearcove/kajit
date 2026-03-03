@@ -1,0 +1,11 @@
+---
+source: kajit/tests/corpus.rs
+expression: ir_text
+---
+lambda @0 (shape: "Names") {
+  region {
+    args: [%cs, %os]
+    n2 = apply @1 [%cs:arg, %os:arg] -> [%cs, %os]
+    results: [%cs:n2, %os:n2]
+  }
+}

@@ -4,7 +4,6 @@ use crate::context::{
     CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR, ENC_ERROR_CODE, ENC_OUTPUT_END, ENC_OUTPUT_PTR,
     ErrorCode,
 };
-use crate::jit_f64;
 use crate::recipe::{ErrorTarget, Op, Recipe, Slot, Width};
 
 pub type Assembler = dynasmrt::x64::Assembler;
@@ -150,14 +149,14 @@ impl EmitCtx {
         // sub rsp, frame_size → stays 16-byte aligned (frame_size is multiple of 16).
         //
         // System V AMD64 frame layout (BASE_FRAME = 48):
-        //   [rsp+0]:  saved rbp      [rsp+8]:  (padding)
+        //   [rsp+0]:  saved rbp      [rsp+8]:  saved rbx
         //   [rsp+16]: saved r12      [rsp+24]: saved r13
         //   [rsp+32]: saved r14      [rsp+40]: saved r15
         //   [rsp+48..]: extra stack  (args arrive in rdi=out, rsi=ctx)
         //
         // Windows x64 frame layout (BASE_FRAME = 80):
         //   [rsp+0..31]: shadow/home space (32 bytes, callee may write here)
-        //   [rsp+32]: saved rbp      [rsp+40]: (padding)
+        //   [rsp+32]: saved rbp      [rsp+40]: saved rbx
         //   [rsp+48]: saved r12      [rsp+56]: saved r13
         //   [rsp+64]: saved r14      [rsp+72]: saved r15
         //   [rsp+80..]: extra stack  (args arrive in rcx=out, rdx=ctx)
@@ -167,6 +166,7 @@ impl EmitCtx {
             ; push rbp
             ; sub rsp, frame_size as i32
             ; mov [rsp], rbp
+            ; mov [rsp + 8], rbx
             ; mov [rsp + 16], r12
             ; mov [rsp + 24], r13
             ; mov [rsp + 32], r14
@@ -183,6 +183,7 @@ impl EmitCtx {
             ; sub rsp, frame_size as i32
             // [rsp+0..31] is shadow space; callee-saved regs follow after
             ; mov [rsp + 32], rbp
+            ; mov [rsp + 40], rbx
             ; mov [rsp + 48], r12
             ; mov [rsp + 56], r13
             ; mov [rsp + 64], r14
@@ -212,6 +213,7 @@ impl EmitCtx {
             ; mov r14, [rsp + 32]
             ; mov r13, [rsp + 24]
             ; mov r12, [rsp + 16]
+            ; mov rbx, [rsp + 8]
             ; mov rbp, [rsp]
             ; add rsp, frame_size
             ; pop rbp
@@ -223,6 +225,7 @@ impl EmitCtx {
             ; mov r14, [rsp + 32]
             ; mov r13, [rsp + 24]
             ; mov r12, [rsp + 16]
+            ; mov rbx, [rsp + 8]
             ; mov rbp, [rsp]
             ; add rsp, frame_size
             ; pop rbp
@@ -237,6 +240,7 @@ impl EmitCtx {
             ; mov r14, [rsp + 64]
             ; mov r13, [rsp + 56]
             ; mov r12, [rsp + 48]
+            ; mov rbx, [rsp + 40]
             ; mov rbp, [rsp + 32]
             ; add rsp, frame_size
             ; pop rbp
@@ -248,6 +252,7 @@ impl EmitCtx {
             ; mov r14, [rsp + 64]
             ; mov r13, [rsp + 56]
             ; mov r12, [rsp + 48]
+            ; mov rbx, [rsp + 40]
             ; mov rbp, [rsp + 32]
             ; add rsp, frame_size
             ; pop rbp
@@ -2415,546 +2420,6 @@ impl EmitCtx {
             ; jmp =>error_exit
             ; =>done_label
         );
-    }
-
-    // ── JIT f64 parser (uscale algorithm) ───────────────────────────────
-    //
-    // r[impl deser.json.scalar.float]
-    // r[impl deser.json.scalar.float.ws]
-    // r[impl deser.json.scalar.float.sign]
-    // r[impl deser.json.scalar.float.digits]
-    // r[impl deser.json.scalar.float.overflow-digits]
-    // r[impl deser.json.scalar.float.dot]
-    // r[impl deser.json.scalar.float.exponent]
-    // r[impl deser.json.scalar.float.validation]
-    // r[impl deser.json.scalar.float.zero]
-    // r[impl deser.json.scalar.float.exact-int]
-    // r[impl deser.json.scalar.float.uscale]
-    // r[impl deser.json.scalar.float.uscale.table]
-    // r[impl deser.json.scalar.float.uscale.mul128]
-    // r[impl deser.json.scalar.float.uscale.clz]
-    // r[impl deser.json.scalar.float.pack]
-    // r[impl deser.json.scalar.float.pack.subnormal]
-    // r[impl deser.json.scalar.float.pack.overflow]
-    //
-    // Register map — digit extraction phase:
-    //   r12 = cursor, r13 = end, r14 = out, r15 = ctx (persistent)
-    //   rbx = mantissa d (callee-saved, save/restore via stack)
-    //   ecx = nd (significant digit count)
-    //   r8  = sign (0/1)
-    //   r9d = frac_digits
-    //   eax = current byte / scratch
-    //   r10 = scratch (digit value)
-    //   r11 = exp_neg (during exponent parsing)
-    //   Stack: dropped, exp_val, flags
-    //
-    // Register map — uscale/pack phase:
-    //   rbx = x (left-justified d)
-    //   ecx = s (shift count, needed in cl)
-    //   rax/rdx = mul operands/results, then rax = final result bits
-    //   r8  = sign (preserved)
-    //   r9  = sticky
-    //   r10 = hi / scratch
-    //   r11 = mid / scratch
-    //   Stack: e, lp, pm_lo
-    pub fn emit_jit_f64_parse(&mut self, offset: u32) {
-        let error_exit = self.error_exit;
-
-        let rbx_save_off = crate::json::SAVED_CURSOR_OFFSET as i32;
-        let dropped_off = crate::json::KEY_PTR_OFFSET as i32;
-        let exp_off = crate::json::KEY_LEN_OFFSET as i32;
-        let flags_off = crate::json::RESULT_BYTE_OFFSET as i32;
-        let e_off = crate::json::CANDIDATES_OFFSET as i32;
-
-        let l_ws = self.ops.new_dynamic_label();
-        let l_ws_advance = self.ops.new_dynamic_label();
-        let l_ws_done = self.ops.new_dynamic_label();
-        let l_no_sign = self.ops.new_dynamic_label();
-        let l_skip_lz = self.ops.new_dynamic_label();
-        let l_skip_lz_end = self.ops.new_dynamic_label();
-        let l_int_loop = self.ops.new_dynamic_label();
-        let l_int_done = self.ops.new_dynamic_label();
-        let l_int_ovf = self.ops.new_dynamic_label();
-        let l_int_ovf_end = self.ops.new_dynamic_label();
-        let l_no_dot = self.ops.new_dynamic_label();
-        let l_frac_lz = self.ops.new_dynamic_label();
-        let l_frac_lz_end = self.ops.new_dynamic_label();
-        let l_frac_loop = self.ops.new_dynamic_label();
-        let l_frac_done = self.ops.new_dynamic_label();
-        let l_frac_ovf = self.ops.new_dynamic_label();
-        let l_frac_ovf_end = self.ops.new_dynamic_label();
-        let l_no_exp = self.ops.new_dynamic_label();
-        let l_exp_sign_done = self.ops.new_dynamic_label();
-        let l_exp_first_digit = self.ops.new_dynamic_label();
-        let l_exp_loop = self.ops.new_dynamic_label();
-        let l_exp_done = self.ops.new_dynamic_label();
-        let l_zero = self.ops.new_dynamic_label();
-        let l_uscale = self.ops.new_dynamic_label();
-        let l_pos_overflow = self.ops.new_dynamic_label();
-        let l_neg_underflow = self.ops.new_dynamic_label();
-        let l_e_clamp = self.ops.new_dynamic_label();
-        let l_need_lo_mul = self.ops.new_dynamic_label();
-        let l_after_lo_mul = self.ops.new_dynamic_label();
-        let l_hi_no_dec = self.ops.new_dynamic_label();
-        let l_no_ovf = self.ops.new_dynamic_label();
-        let l_pack_inf = self.ops.new_dynamic_label();
-        let l_apply_sign = self.ops.new_dynamic_label();
-        let l_done = self.ops.new_dynamic_label();
-        let l_skip_cold = self.ops.new_dynamic_label();
-        let l_err_num = self.ops.new_dynamic_label();
-        let l_err_eof = self.ops.new_dynamic_label();
-
-        let error_code_invalid = ErrorCode::InvalidJsonNumber as i32;
-        let error_code_eof = ErrorCode::UnexpectedEof as i32;
-        let tab_ptr = jit_f64::pow10_tab_ptr() as i64;
-
-        // ── Save rbx ──
-        dynasm!(self.ops ; .arch x64 ; mov [rsp + rbx_save_off], rbx);
-
-        // ── Whitespace skip ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>l_ws
-            ; cmp r12, r13
-            ; jae =>l_ws_done
-            ; movzx eax, BYTE [r12]
-            ; cmp al, 0x20
-            ; je =>l_ws_advance
-            ; cmp al, 0x09
-            ; jb =>l_ws_done
-            ; cmp al, 0x0d
-            ; ja =>l_ws_done
-            ; =>l_ws_advance
-            ; inc r12
-            ; jmp =>l_ws
-            ; =>l_ws_done
-        );
-
-        // ── Sign ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; cmp r12, r13
-            ; jae =>l_err_eof
-            ; xor r8d, r8d
-            ; movzx eax, BYTE [r12]
-            ; cmp al, 0x2d
-            ; jne =>l_no_sign
-            ; mov r8d, 1
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_err_eof
-            ; movzx eax, BYTE [r12]
-            ; =>l_no_sign
-        );
-
-        // ── Init digit accumulators ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; xor ebx, ebx
-            ; xor ecx, ecx
-            ; xor r9d, r9d
-            ; mov QWORD [rsp + dropped_off], 0
-            ; mov BYTE [rsp + flags_off], 0
-        );
-
-        // ── Leading integer zeros ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>l_skip_lz
-            ; cmp al, 0x30
-            ; jne =>l_skip_lz_end
-            ; or BYTE [rsp + flags_off], 2
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_skip_lz_end
-            ; movzx eax, BYTE [r12]
-            ; jmp =>l_skip_lz
-            ; =>l_skip_lz_end
-        );
-
-        // ── Integer digit loop ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>l_int_loop
-            ; movzx r10d, al
-            ; sub r10d, 0x30
-            ; cmp r10d, 9
-            ; ja =>l_int_done
-            ; or BYTE [rsp + flags_off], 2
-            ; cmp ecx, 19
-            ; jae =>l_int_ovf
-            ; imul rbx, rbx, 10
-            ; add rbx, r10
-            ; inc ecx
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_int_done
-            ; movzx eax, BYTE [r12]
-            ; jmp =>l_int_loop
-            ; =>l_int_ovf
-            ; add QWORD [rsp + dropped_off], 1
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_int_ovf_end
-            ; movzx eax, BYTE [r12]
-            ; movzx r10d, al
-            ; sub r10d, 0x30
-            ; cmp r10d, 9
-            ; jbe =>l_int_ovf
-            ; =>l_int_ovf_end
-            ; =>l_int_done
-        );
-
-        // ── Decimal point ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; cmp r12, r13
-            ; jae =>l_no_dot
-            ; cmp al, 0x2e
-            ; jne =>l_no_dot
-            ; or BYTE [rsp + flags_off], 1
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_no_dot
-            ; movzx eax, BYTE [r12]
-            // Leading fractional zeros (only if nd == 0)
-            ; test ecx, ecx
-            ; jnz =>l_frac_lz_end
-            ; =>l_frac_lz
-            ; cmp al, 0x30
-            ; jne =>l_frac_lz_end
-            ; or BYTE [rsp + flags_off], 2
-            ; inc r9d
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_frac_lz_end
-            ; movzx eax, BYTE [r12]
-            ; jmp =>l_frac_lz
-            ; =>l_frac_lz_end
-            // Fractional digit loop
-            ; =>l_frac_loop
-            ; movzx r10d, al
-            ; sub r10d, 0x30
-            ; cmp r10d, 9
-            ; ja =>l_frac_done
-            ; or BYTE [rsp + flags_off], 2
-            ; cmp ecx, 19
-            ; jae =>l_frac_ovf
-            ; imul rbx, rbx, 10
-            ; add rbx, r10
-            ; inc ecx
-            ; inc r9d
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_frac_done
-            ; movzx eax, BYTE [r12]
-            ; jmp =>l_frac_loop
-            ; =>l_frac_ovf
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_frac_ovf_end
-            ; movzx eax, BYTE [r12]
-            ; movzx r10d, al
-            ; sub r10d, 0x30
-            ; cmp r10d, 9
-            ; jbe =>l_frac_ovf
-            ; =>l_frac_ovf_end
-            ; =>l_frac_done
-            ; =>l_no_dot
-        );
-
-        // ── Validation ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; test BYTE [rsp + flags_off], 2
-            ; jz =>l_err_num
-        );
-
-        // ── Exponent ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov QWORD [rsp + exp_off], 0
-            ; cmp r12, r13
-            ; jae =>l_no_exp
-            ; cmp al, 0x65
-            ; je =>l_exp_first_digit
-            ; cmp al, 0x45
-            ; jne =>l_no_exp
-            ; =>l_exp_first_digit
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_err_num
-            ; movzx eax, BYTE [r12]
-            ; xor r11d, r11d
-            ; cmp al, 0x2d
-            ; jne =>l_exp_sign_done
-            ; mov r11d, 1
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_err_num
-            ; movzx eax, BYTE [r12]
-            ; jmp =>l_exp_loop
-            ; =>l_exp_sign_done
-            ; cmp al, 0x2b
-            ; jne =>l_exp_loop
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_err_num
-            ; movzx eax, BYTE [r12]
-            // Validate first exponent digit
-            ; movzx r10d, al
-            ; sub r10d, 0x30
-            ; cmp r10d, 9
-            ; ja =>l_err_num
-            // Exponent digit loop
-            ; =>l_exp_loop
-            ; movzx r10d, al
-            ; sub r10d, 0x30
-            ; cmp r10d, 9
-            ; ja =>l_exp_done
-            ; imul rax, QWORD [rsp + exp_off], 10
-            ; add rax, r10
-            ; mov r10d, 9999
-            ; cmp rax, r10
-            ; cmova rax, r10
-            ; mov [rsp + exp_off], rax
-            ; inc r12
-            ; cmp r12, r13
-            ; jae =>l_exp_done
-            ; movzx eax, BYTE [r12]
-            ; jmp =>l_exp_loop
-            ; =>l_exp_done
-            ; test r11d, r11d
-            ; jz =>l_no_exp
-            ; neg QWORD [rsp + exp_off]
-            ; =>l_no_exp
-        );
-
-        // ── Compute p, dispatch ──
-        dynasm!(self.ops
-            ; .arch x64
-            // p = exp + dropped - frac_digits
-            ; mov rax, [rsp + exp_off]
-            ; add rax, [rsp + dropped_off]
-            ; movsxd r10, r9d
-            ; sub rax, r10
-            ; mov [rsp + dropped_off], rax   // p → dropped_off (reuse slot)
-
-            ; test rbx, rbx
-            ; jz =>l_zero
-
-            // Exact integer fast path: !has_dot && exp==0 && d < 2^53
-            ; test BYTE [rsp + flags_off], 1
-            ; jnz =>l_uscale
-            ; cmp QWORD [rsp + exp_off], 0
-            ; jne =>l_uscale
-            ; mov r10, 1
-            ; shl r10, 53
-            ; cmp rbx, r10
-            ; jae =>l_uscale
-            // Convert d to f64
-            ; cvtsi2sd xmm0, rbx
-            ; movq rax, xmm0
-            ; jmp =>l_apply_sign
-
-            ; =>l_zero
-            ; xor eax, eax
-            ; jmp =>l_apply_sign
-        );
-
-        // ── uscale ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>l_uscale
-
-            // Range check p (signed, 32-bit)
-            ; movsxd rax, DWORD [rsp + dropped_off]
-            ; cmp eax, 347
-            ; jg =>l_pos_overflow
-            ; cmp eax, -348
-            ; jl =>l_neg_underflow
-            // eax = p (signed 32-bit)
-
-            // lp = (p * 108853) >> 15 → save to [rsp+exp_off]
-            ; imul r10d, eax, 108853          // r10d = p * 108853 (signed)
-            ; sar r10d, 15                    // r10d = lp
-            ; movsxd r10, r10d               // sign-extend to 64 bits
-            ; mov [rsp + exp_off], r10d       // save lp
-
-            // lzcnt → r11
-            ; lzcnt r11, rbx                  // r11 = clz
-
-            // Left-justify d: rbx = d << clz (consumes d)
-            ; mov ecx, r11d
-            ; shl rbx, cl                     // rbx = x
-
-            // e = min(1074, clz - 11 - lp)
-            ; mov eax, r11d
-            ; sub eax, 11
-            ; sub eax, r10d                   // eax = clz - 11 - lp
-            ; cmp eax, 1074
-            ; jle =>l_e_clamp
-            ; mov eax, 1074
-            ; =>l_e_clamp
-            ; mov [rsp + e_off], eax          // save e
-
-            // s = clz - e - lp - 3 → ecx (shift register)
-            ; mov ecx, r11d                   // clz
-            ; sub ecx, eax                    // clz - e
-            ; sub ecx, [rsp + exp_off]        // clz - e - lp
-            ; sub ecx, 3                      // ecx = s
-
-            // Table lookup: load pm_hi, pm_lo
-            ; movsxd rax, DWORD [rsp + dropped_off]   // rax = p (signed)
-            ; add eax, 348                    // eax = idx
-            ; shl rax, 4                      // rax = idx * 16
-            ; mov r10, QWORD tab_ptr          // r10 = table base
-            ; add r10, rax                    // r10 = &table[idx]
-            ; mov rax, [r10]                  // rax = pm_hi
-            ; mov r11, [r10 + 8]              // r11 = pm_lo
-            ; mov [rsp + flags_off], r11      // save pm_lo (flags slot is dead)
-
-            // mul128(x, pm_hi): rax is already pm_hi, need to swap
-            ; mov r10, rax                    // r10 = pm_hi
-            ; mov rax, rbx                    // rax = x
-            ; mul r10                         // rdx:rax = x * pm_hi
-            // rdx = hi, rax = mid
-            ; mov r11, rax                    // r11 = mid (save for lo mul check)
-            // rdx = hi
-
-            // mask = (1 << (s & 63)) - 1
-            // ecx = s, cl is available for shifts
-            ; mov rax, 1
-            ; shl rax, cl                     // rax = 1 << (s & 63) (x64 masks cl to &63)
-            ; dec rax                         // rax = mask
-
-            // if hi & mask == 0: need second multiply
-            ; test rdx, rax
-            ; jz =>l_need_lo_mul
-            ; mov r9d, 1                      // sticky = 1
-            ; jmp =>l_after_lo_mul
-
-            ; =>l_need_lo_mul
-            ; mov r10, rdx                    // r10 = hi (save)
-            // umulh(x, pm_lo): x is in rbx, pm_lo in [rsp+flags_off]
-            ; mov rax, rbx
-            ; mul QWORD [rsp + flags_off]     // rdx:rax = x * pm_lo
-            // mid2 = rdx (high 64 bits)
-            ; mov rax, rdx                    // rax = mid2
-
-            // sticky = (mid - mid2 > 1) ? 1 : 0
-            ; mov rdx, r11                    // rdx = mid
-            ; sub rdx, rax                    // rdx = mid - mid2 (wrapping)
-            ; cmp rdx, 1
-            ; seta r9b                        // r9b = sticky
-            ; movzx r9d, r9b
-
-            // if mid < mid2: hi -= 1
-            ; cmp r11, rax
-            ; jae =>l_hi_no_dec
-            ; dec r10
-            ; =>l_hi_no_dec
-            ; mov rdx, r10                    // rdx = hi (possibly decremented)
-
-            ; =>l_after_lo_mul
-            // top = (s >= 64) ? 0 : (hi >> s)
-            ; mov rax, rdx                    // rax = hi
-            ; shr rax, cl                     // rax = hi >> (s & 63)
-            ; xor r10d, r10d
-            ; cmp ecx, 64
-            ; cmovae rax, r10                 // if s >= 64: rax = 0
-
-            // u = top | sticky
-            ; or rax, r9
-        );
-
-        // ── Overflow check + round + pack ──
-        dynasm!(self.ops
-            ; .arch x64
-            // threshold = (1<<55) - 2 = 0x007FFFFFFFFFFFFFFE
-            ; mov r10, QWORD 0x007FFFFFFFFFFFFEi64
-            ; cmp rax, r10
-            ; jb =>l_no_ovf
-            // u = (u >> 1) | (u & 1)
-            ; mov r10, rax
-            ; shr r10, 1
-            ; and eax, 1
-            ; or rax, r10
-            ; sub DWORD [rsp + e_off], 1
-            ; =>l_no_ovf
-
-            // Round: (u + 1 + ((u >> 2) & 1)) >> 2
-            ; mov r10, rax
-            ; shr r10, 2
-            ; and r10d, 1
-            ; inc rax
-            ; add rax, r10
-            ; shr rax, 2                      // rax = rounded mantissa
-
-            // Pack: check bit 52
-            ; bt rax, 52
-            ; jnc =>l_apply_sign              // subnormal: bits = rax
-
-            // Normal: biased = 1075 - e
-            ; mov r10d, 1075
-            ; sub r10d, [rsp + e_off]
-            ; cmp r10d, 2047
-            ; jae =>l_pack_inf
-            // bits = (rax & ~(1<<52)) | (biased << 52)
-            ; btr rax, 52                     // clear bit 52
-            ; mov r11d, r10d                  // r11d = biased (guaranteed < 2047)
-            ; shl r11, 52
-            ; or rax, r11
-            ; jmp =>l_apply_sign
-
-            ; =>l_pack_inf
-            ; mov rax, QWORD 0x7FF0000000000000u64 as i64
-            ; jmp =>l_apply_sign
-        );
-
-        // ── Cold: pos overflow, neg underflow ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>l_pos_overflow
-            ; mov rax, QWORD 0x7FF0000000000000u64 as i64
-            ; jmp =>l_apply_sign
-
-            ; =>l_neg_underflow
-            ; xor eax, eax
-            // fall through to l_apply_sign
-        );
-
-        // ── Apply sign + store + update cursor ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>l_apply_sign
-            ; test r8d, r8d
-            ; jz =>l_done
-            ; mov r10, QWORD (1u64 << 63) as i64
-            ; or rax, r10
-            ; =>l_done
-            ; mov [r14 + offset as i32], rax
-            ; mov [r15 + CTX_INPUT_PTR as i32], r12
-        );
-
-        // ── Cold: error paths ──
-        dynasm!(self.ops
-            ; .arch x64
-            ; jmp =>l_skip_cold
-
-            ; =>l_err_num
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code_invalid
-            ; jmp =>error_exit
-
-            ; =>l_err_eof
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code_eof
-            ; jmp =>error_exit
-
-            ; =>l_skip_cold
-        );
-
-        // ── Restore rbx ──
-        dynasm!(self.ops ; .arch x64 ; mov rbx, [rsp + rbx_save_off]);
     }
 
     // =====================================================================

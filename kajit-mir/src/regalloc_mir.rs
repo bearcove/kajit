@@ -31,6 +31,8 @@ pub enum RegClass {
 pub enum FixedReg {
     AbiArg(u8),
     AbiRet(u8),
+    /// Pin operand to a specific hardware register encoding (e.g., rcx=1 for x64 shifts).
+    HwReg(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -298,6 +300,7 @@ fn fmt_operand(f: &mut std::fmt::Formatter<'_>, op: &RaOperand) -> std::fmt::Res
         match fixed {
             FixedReg::AbiArg(i) => write!(f, "/arg{i}")?,
             FixedReg::AbiRet(i) => write!(f, "/ret{i}")?,
+            FixedReg::HwReg(enc) => write!(f, "/hw{enc}")?,
         }
     }
     Ok(())
@@ -883,9 +886,21 @@ fn lower_inst(linear_op_index: usize, op: LinearOp) -> RaInst {
         | LinearOp::ReadFromSlot { dst, .. } => {
             push_def(&mut operands, *dst, None);
         }
-        LinearOp::BinOp { dst, lhs, rhs, .. } => {
+        LinearOp::BinOp {
+            dst, lhs, rhs, op, ..
+        } => {
             push_use(&mut operands, *lhs, None);
-            push_use(&mut operands, *rhs, None);
+            // On x86_64, variable shifts require the count in cl (rcx hw_enc=1).
+            #[cfg(target_arch = "x86_64")]
+            let rhs_fixed = match op {
+                kajit_lir::BinOpKind::Shr | kajit_lir::BinOpKind::Shl => {
+                    Some(FixedReg::HwReg(1))
+                }
+                _ => None,
+            };
+            #[cfg(not(target_arch = "x86_64"))]
+            let rhs_fixed = None;
+            push_use(&mut operands, *rhs, rhs_fixed);
             push_def(&mut operands, *dst, None);
         }
         LinearOp::UnaryOp { dst, src, .. } | LinearOp::Copy { dst, src } => {

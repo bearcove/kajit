@@ -1,0 +1,159 @@
+---
+source: kajit/tests/corpus.rs
+expression: ir_text
+---
+lambda @0 (shape: "BoolField") {
+  region {
+    args: [%cs, %os]
+    n1 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+    n2 = Const(0x0) [] -> [v0]
+    n3 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:n1, %os:n1] -> [%cs, %os]
+    n4 = PeekByte [%cs:n3] -> [v1, %cs]
+    n5 = Const(0x7d) [] -> [v2]
+    n6 = CmpNe [v1, v2] -> [v3]
+    n42 = gamma [
+      pred: v3
+      in0: v0
+      in1: %cs:n4
+      in2: %os:n3
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n7 = AdvanceCursor(1) [%cs:arg] -> [%cs]
+          results: [arg0, %cs:n7, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n48 = Const(0x0) [] -> [v8]
+          n49 = Const(0x<ptr>) [] -> [v9]
+          n50 = Const(0x5) [] -> [v10]
+          n51 = Const(0x1) [] -> [v12]
+          n52 = CmpNe [v8, v12] -> [v13]
+          n53 = Const(0x2c) [] -> [v22]
+          n41 = theta [arg0, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, %cs, %os]
+              n8 = SlotAddr(0) [] -> [v4]
+              n9 = SlotAddr(1) [] -> [v5]
+              n10 = CallIntrinsic(0x<ptr>, field_offset=0) [v4, v5, %cs:arg, %os:arg] -> [%cs, %os]
+              n11 = ReadFromSlot(0) [%cs:n10] -> [v6, %cs]
+              n12 = ReadFromSlot(1) [%cs:n11] -> [v7, %cs]
+              n13 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:n12, %os:n10] -> [%cs, %os]
+              n17 = CallPure(0x<ptr>) [v6, v7, v9, v10] -> [v11]
+              n20 = And [v11, v13] -> [v14]
+              n25 = gamma [
+                pred: v14
+                in0: arg0
+                in1: v8
+                in2: %cs:n13
+                in3: %os:n13
+              ] {
+                branch 0:
+                  region {
+                    args: [arg0, arg1, %cs, %os]
+                    results: [arg0, arg1, %cs:arg, %os:arg]
+                  }
+                branch 1:
+                  region {
+                    args: [arg0, arg1, %cs, %os]
+                    n21 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+                    n22 = Const(0x1) [] -> [v15]
+                    n23 = Or [arg0, v15] -> [v16]
+                    n24 = Const(0x1) [] -> [v17]
+                    results: [v16, v17, %cs:n21, %os:n21]
+                  }
+              } -> [v18, v19, %cs, %os]
+              n27 = gamma [
+                pred: v19
+                in0: v18
+                in1: %cs:n25
+                in2: %os:n25
+              ] {
+                branch 0:
+                  region {
+                    args: [arg0, %cs, %os]
+                    n26 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+                    results: [arg0, %cs:n26, %os:n26]
+                  }
+                branch 1:
+                  region {
+                    args: [arg0, %cs, %os]
+                    results: [arg0, %cs:arg, %os:arg]
+                  }
+              } -> [v20, %cs, %os]
+              n28 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:n27, %os:n27] -> [%cs, %os]
+              n29 = BoundsCheck(1) [%cs:n28] -> [%cs]
+              n30 = ReadBytes(1) [%cs:n29] -> [v21, %cs]
+              n32 = CmpNe [v21, v22] -> [v23]
+              n40 = gamma [
+                pred: v23
+                in0: v20
+                in1: v21
+                in2: %cs:n30
+                in3: %os:n28
+              ] {
+                branch 0:
+                  region {
+                    args: [arg0, arg1, %cs, %os]
+                    n33 = Const(0x1) [] -> [v24]
+                    results: [v24, arg0, %cs:arg, %os:arg]
+                  }
+                branch 1:
+                  region {
+                    args: [arg0, arg1, %cs, %os]
+                    n34 = Const(0x7d) [] -> [v25]
+                    n35 = CmpNe [arg1, v25] -> [v26]
+                    n39 = gamma [
+                      pred: v26
+                      in0: arg0
+                      in1: %cs:arg
+                      in2: %os:arg
+                    ] {
+                      branch 0:
+                        region {
+                          args: [arg0, %cs, %os]
+                          n36 = Const(0x0) [] -> [v27]
+                          results: [v27, arg0, %cs:arg, %os:arg]
+                        }
+                      branch 1:
+                        region {
+                          args: [arg0, %cs, %os]
+                          n37 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+                          n38 = Const(0x0) [] -> [v28]
+                          results: [v28, arg0, %cs:n37, %os:n37]
+                        }
+                    } -> [v29, v30, %cs, %os]
+                    results: [v29, v30, %cs:n39, %os:n39]
+                  }
+              } -> [v31, v32, %cs, %os]
+              results: [v31, v32, %cs:n40, %os:n40]
+            }
+          } -> [v33, %cs, %os]
+          results: [v33, %cs:n41, %os:n41]
+        }
+    } -> [v34, %cs, %os]
+    n43 = Const(0x1) [] -> [v35]
+    n44 = And [v34, v35] -> [v36]
+    n45 = CmpNe [v36, v35] -> [v37]
+    n47 = gamma [
+      pred: v37
+      in0: %cs:n42
+      in1: %os:n42
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n46 = ErrorExit(MissingRequiredField) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    results: [%cs:n47, %os:n47]
+  }
+}
