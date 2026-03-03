@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputRef, PortKind, PortSource,
-    Region, RegionArgRef, RegionId, RegionResult,
+    Region, RegionArgRef, RegionId, RegionResult, verify,
 };
 
 const MAX_INLINE_NODES_SINGLE_USE: usize = 256;
@@ -119,10 +119,24 @@ impl UseLists {
 // r[impl ir.passes]
 pub fn run_default_passes(func: &mut IrFunc) {
     bounds_check_coalescing_pass(func);
+    debug_verify(func, "bounds_check_coalescing_pass");
     hoist_theta_loop_invariant_setup_pass(func);
+    debug_verify(func, "hoist_theta_loop_invariant_setup_pass");
     inline_apply_pass(func);
+    debug_verify(func, "inline_apply_pass");
     dead_code_elimination_pass(func);
+    debug_verify(func, "dead_code_elimination_pass");
 }
+
+#[cfg(debug_assertions)]
+fn debug_verify(func: &IrFunc, pass_name: &str) {
+    if let Err(err) = verify(func) {
+        panic!("IR verification failed after {pass_name}: {err}");
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_verify(_func: &IrFunc, _pass_name: &str) {}
 
 // r[impl ir.passes.planned]
 fn bounds_check_coalescing_pass(func: &mut IrFunc) {
