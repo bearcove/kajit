@@ -92,9 +92,9 @@ fn ir_opt_asserts_theta_loop_variant_not_hoisted() {
         "\nlambda @0 (shape: \"u8\") {\n  region {\n    args: [%cs, %os]\n    n0 = Const(0x4) [] -> [v0]\n    n1 = Const(0x1) [] -> [v1]\n    n2 = theta [v0, v1, %cs:arg, %os:arg] {\n      region {\n        args: [arg0, arg1, %cs, %os]\n        n3 = Add [arg0, arg1] -> [v2]\n        n4 = Sub [arg0, arg1] -> [v3]\n        results: [v3, v3, arg1, %cs:arg, %os:arg]\n      }\n    } -> [v4, v5, %cs, %os]\n    n5 = WriteToField(offset=0, W1) [v4, %os:n2] -> [%os]\n    results: [%cs:n2, %os:n5]\n  }\n}\n",
     );
     assert!(
-        after.contains("n3 = Add [arg0, arg1] -> [v2]"),
+        after.contains("Sub [arg0, arg1] -> [v3]"),
         "expected to keep/preserve: {}",
-        "n3 = Add [arg0, arg1] -> [v2]"
+        "Sub [arg0, arg1] -> [v3]"
     );
 }
 #[test]

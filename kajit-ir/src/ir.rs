@@ -284,7 +284,7 @@ pub enum PortKind {
 // r[impl ir.edges.state]
 
 /// A reference to a node's output port.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputRef {
     pub node: NodeId,
     pub index: u16,
