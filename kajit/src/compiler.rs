@@ -44,6 +44,8 @@ impl CompiledDecoder {
     }
 }
 
+pub(crate) const DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED: bool = true;
+
 // r[impl compiler.walk]
 // r[impl compiler.recursive]
 // r[impl compiler.recursive.one-func-per-shape]
@@ -648,28 +650,42 @@ impl<'a> IrShapeLowerer<'a> {
 /// Compile a deserializer through RVSDG + linearization + backend adapter.
 pub fn compile_decoder(shape: &'static Shape, decoder: &dyn Decoder) -> CompiledDecoder {
     let pipeline_opts = PipelineOptions::from_env();
+    compile_decoder_with_options(shape, decoder, &pipeline_opts)
+}
+
+// r[impl compiler.opts.api]
+pub fn compile_decoder_with_options(
+    shape: &'static Shape,
+    decoder: &dyn Decoder,
+    pipeline_opts: &PipelineOptions,
+) -> CompiledDecoder {
     let mut func = build_decoder_ir(shape, decoder);
-    // r[impl compiler.opts.all-opts]
-    if pipeline_opts.resolve_all_opts(false) {
-        crate::ir_passes::run_default_passes(&mut func);
-    }
+    run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     compile_linear_ir_decoder_with_options(
         &linear,
         decoder.supports_trusted_utf8_input(),
-        pipeline_opts,
+        pipeline_opts.clone(),
     )
 }
 
 // r[impl ir.regalloc.regressions]
 /// Build IR + linear form and run regalloc over it, returning total edit count.
+///
+/// This is a full-pipeline diagnostic helper, not a lightweight metric.
 pub fn regalloc_edit_count(shape: &'static Shape, ir_decoder: &dyn Decoder) -> usize {
     let pipeline_opts = PipelineOptions::from_env();
+    regalloc_edit_count_with_options(shape, ir_decoder, &pipeline_opts)
+}
+
+// r[impl compiler.opts.api]
+pub fn regalloc_edit_count_with_options(
+    shape: &'static Shape,
+    ir_decoder: &dyn Decoder,
+    pipeline_opts: &PipelineOptions,
+) -> usize {
     let mut func = build_decoder_ir(shape, ir_decoder);
-    // r[impl compiler.opts.all-opts]
-    if pipeline_opts.resolve_all_opts(true) {
-        crate::ir_passes::run_default_passes(&mut func);
-    }
+    run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     let alloc = crate::regalloc_engine::allocate_linear_ir(&linear)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed while counting edits: {err}"));
@@ -716,15 +732,25 @@ pub(crate) fn build_decoder_ir(
     builder.finish()
 }
 
-// r[impl compiler.opts.all-opts]
-pub(crate) fn should_run_default_passes(default_enabled: bool) -> bool {
-    PipelineOptions::from_env().resolve_all_opts(default_enabled)
+pub(crate) fn run_default_passes_from_env(func: &mut crate::ir::IrFunc) {
+    let pipeline_opts = PipelineOptions::from_env();
+    run_configured_default_passes(func, &pipeline_opts);
+}
+
+fn run_configured_default_passes(func: &mut crate::ir::IrFunc, pipeline_opts: &PipelineOptions) {
+    // r[impl compiler.opts.all-opts]
+    if !pipeline_opts.resolve_all_opts(DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED) {
+        return;
+    }
+    crate::ir_passes::run_default_passes_with_filter(func, |pass| {
+        pipeline_opts.resolve_pass(pass.name, true)
+    });
 }
 
 // r[impl compiler.opts.regalloc]
 fn maybe_disable_regalloc_edits(
     alloc: &mut crate::regalloc_engine::AllocatedProgram,
-    pipeline_opts: PipelineOptions,
+    pipeline_opts: &PipelineOptions,
 ) {
     if pipeline_opts.resolve_regalloc(true) {
         return;
@@ -758,7 +784,7 @@ fn compile_linear_ir_decoder_with_options(
     // Run regalloc2 over RA-MIR and thread allocation artifacts into emission.
     let mut regalloc_alloc = crate::regalloc_engine::allocate_program(&ra_mir)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-    maybe_disable_regalloc_edits(&mut regalloc_alloc, pipeline_opts);
+    maybe_disable_regalloc_edits(&mut regalloc_alloc, &pipeline_opts);
 
     let crate::ir_backend::LinearBackendResult { buf, entry } =
         crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
@@ -799,7 +825,7 @@ fn compile_linear_ir_decoder_with_options(
 pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
     let mut alloc = crate::regalloc_engine::allocate_program(program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-    maybe_disable_regalloc_edits(&mut alloc, PipelineOptions::from_env());
+    maybe_disable_regalloc_edits(&mut alloc, &PipelineOptions::from_env());
 
     let crate::ir_backend::LinearBackendResult { buf, entry } =
         crate::ir_backend::compile_ra_program(program, &alloc);

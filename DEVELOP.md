@@ -67,6 +67,12 @@ Supported options:
 - `all_opts`: default RVSDG optimization passes before linearization
 - `regalloc`: regalloc edit application during backend emission
 
+Per-pass options:
+- `pass.bounds_check_coalescing`
+- `pass.theta_loop_invariant_hoist`
+- `pass.inline_apply`
+- `pass.dead_code_elimination`
+
 Examples:
 ```bash
 # disable optimization passes
@@ -77,6 +83,14 @@ KAJIT_OPTS='-regalloc' cargo nextest run -p kajit <test_filter>
 
 # disable both
 KAJIT_OPTS='-all_opts,-regalloc' cargo nextest run -p kajit <test_filter>
+
+# disable one specific default pass
+KAJIT_OPTS='-pass.inline_apply' cargo nextest run -p kajit <test_filter>
+```
+
+Show built-in help:
+```bash
+KAJIT_OPTS=help cargo nextest run -p kajit <test_filter>
 ```
 
 On Apple Silicon, combine with x86_64 Rosetta validation:

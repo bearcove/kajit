@@ -617,6 +617,19 @@ r[compiler.opts.composition]
 Multiple option tokens compose left-to-right; for repeated option names, the
 last token wins.
 
+r[compiler.opts.pass-registry]
+Default IR passes are individually addressable by stable option names and
+descriptions. Each pass can be toggled independently through `KAJIT_OPTS`.
+
+r[compiler.opts.help]
+When `KAJIT_OPTS=help`, compilation fails fast with a deterministic help
+message describing syntax, top-level options, and per-pass toggle names.
+
+r[compiler.opts.api]
+Pipeline option enable/disable controls are available through a public API so
+callers can configure compile behavior without relying on process environment
+variables.
+
 r[compiler.opts.invalid]
 On invalid `KAJIT_OPTS` content, compilation fails with a clear error that
 identifies the offending token and lists supported option names.
