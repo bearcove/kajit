@@ -33,5 +33,8 @@ jobs:
       - name: Check
         run: cargo check
 
+      - name: Install cargo-nextest
+        run: cargo install cargo-nextest --locked
+
       - name: Test
-        run: cargo test
+        run: cargo nextest run
