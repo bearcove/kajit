@@ -987,8 +987,8 @@ fn collect_use_def(block: &RaBlock, use_set: &mut [bool], def_set: &mut [bool]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IntrinsicFn, IrBuilder, IrOp, Width};
     use crate::linearize::linearize;
+    use kajit_ir::{IntrinsicFn, IrBuilder, IrOp, Width};
 
     // r[verify ir.regalloc.ra-mir.block-params]
     #[test]

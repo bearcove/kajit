@@ -29,7 +29,6 @@ pub struct ErrorSlot {
     pub offset: u32,
 }
 
-
 // Field offset constants for use from JIT code.
 pub const CTX_INPUT_PTR: u32 = core::mem::offset_of!(DeserContext, input_ptr) as u32;
 pub const CTX_INPUT_END: u32 = core::mem::offset_of!(DeserContext, input_end) as u32;

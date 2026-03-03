@@ -24,7 +24,7 @@ pub mod regalloc_mir;
 pub mod regalloc_mir_parse;
 pub mod solver;
 
-use compiler::{CompiledDecoder, CompiledEncoder};
+use compiler::CompiledDecoder;
 use context::{DeserContext, ErrorCode};
 
 /// Compile a deserializer for the given shape and format.
@@ -125,14 +125,6 @@ fn scrub_hex_after_prefix_with_min_len(input: &str, prefix: &str, min_hex_len: u
     out
 }
 
-/// Compile an encoder (serializer) for the given shape and format.
-pub fn compile_encoder(
-    shape: &'static facet::Shape,
-    encoder: &dyn format::Encoder,
-) -> CompiledEncoder {
-    compiler::compile_encoder(shape, encoder)
-}
-
 // r[impl api.output]
 /// Deserialize a value of type `T` from the given input bytes using a compiled deserializer.
 ///
@@ -205,15 +197,6 @@ impl core::fmt::Display for DeserError {
 }
 
 impl std::error::Error for DeserError {}
-
-/// Serialize a value using a compiled encoder, returning the output bytes.
-pub fn serialize<T: facet::Facet<'static>>(encoder: &CompiledEncoder, value: &T) -> Vec<u8> {
-    let mut ctx = context::EncodeContext::new();
-    unsafe {
-        (encoder.func())(value as *const T as *const u8, &mut ctx);
-    }
-    ctx.into_vec()
-}
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod disasm_tests;

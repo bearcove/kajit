@@ -224,7 +224,7 @@ impl IntrinsicRegistry {
     pub fn new() -> Self {
         let entries = Vec::new();
         // no default intrinsic registry in kajit-ir
-        
+
         Self { entries }
     }
 

@@ -9,8 +9,8 @@ use regalloc2::{
     OperandPos, Output, PReg, PRegSet, RegAllocError, RegClass, RegallocOptions, VReg,
 };
 
-use kajit_ir::LambdaId;
 use crate::{FixedReg, OperandKind as RaOperandKind, RaFunction, RaProgram};
+use kajit_ir::LambdaId;
 
 /// Materialized allocation result for one function.
 #[derive(Debug, Clone)]
