@@ -2,14 +2,14 @@
 source: kajit/tests/corpus.rs
 expression: ra_text
 ---
-ra_func @0 {
-  block b0:
+ra_func @0 { ; entry: b0
+  block b0: ; insts: 1
     call_lambda(@1) !gpr,simd
-    term: return
+    term: return ; uses: []
     succs: (none)
 }
-ra_func @1 {
-  block b0:
+ra_func @1 { ; entry: b0
+  block b0: ; insts: 11
     bounds_check(1)
     v1:gpr = const(0x7f)
     v3:gpr = const(0x80)
@@ -21,19 +21,19 @@ ra_func @1 {
     v2:gpr = And v0:gpr, v1:gpr
     v4:gpr = And v0:gpr, v3:gpr
     v6:gpr = CmpNe v4:gpr, v5:gpr
-    term: branch_if_zero v6 -> b2, fallthrough b1
-    succs: b2 [v2, v37, v39, v41] b1 [v2, v37, v39, v41]
-  block b1 [params: v2, v37, v39, v41] (preds: b0):
-    term: branch b3
-    succs: b3 [v2, v37, v39, v41]
-  block b2 [params: v2, v37, v39, v41] (preds: b0):
+    term: branch_if_zero v6 -> b2, fallthrough b1 ; uses: [v6]
+    succs: b2 [v2, v37, v39, v41] b1 [v2, v37, v39, v41] ; count: 2
+  block b1 [params: v2, v37, v39, v41] (preds: b0): ; insts: 0
+    term: branch b3 ; uses: []
+    succs: b3 [v2, v37, v39, v41] ; count: 1
+  block b2 [params: v2, v37, v39, v41] (preds: b0): ; insts: 4
     v7:gpr = const(0x4)
     v8:gpr = const(0x0)
     v33:gpr = copy v2:gpr
     v36:gpr = copy v8:gpr
-    term: branch b6
-    succs: b6 [v33, v8, v37, v39, v41]
-  block b3 [params: v2, v37, v39, v41] (preds: b1):
+    term: branch b6 ; uses: []
+    succs: b6 [v33, v8, v37, v39, v41] ; count: 1
+  block b3 [params: v2, v37, v39, v41] (preds: b1): ; insts: 12
     v9:gpr = const(0x7)
     v10:gpr = const(0x4)
     v11:gpr = const(0x1)
@@ -46,9 +46,9 @@ ra_func @1 {
     v100:gpr = copy v2:gpr
     v101:gpr = copy v9:gpr
     v102:gpr = copy v10:gpr
-    term: branch b4
-    succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v41, v100, v101, v102]
-  block b4 [params: v13, v17, v19, v21, v23, v25, v37, v39, v41, v100, v101, v102] (preds: b3, b4):
+    term: branch b4 ; uses: []
+    succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v41, v100, v101, v102] ; count: 1
+  block b4 [params: v13, v17, v19, v21, v23, v25, v37, v39, v41, v100, v101, v102] (preds: b3, b4): ; insts: 16
     bounds_check(1)
     v18:gpr = Add v101:gpr, v17:gpr
     v20:gpr = Sub v102:gpr, v19:gpr
@@ -65,55 +65,55 @@ ra_func @1 {
     v102:gpr = copy v20:gpr
     v103:gpr = copy v14:gpr
     v104:gpr = copy v24:gpr
-    term: branch_if v27 -> b4, fallthrough b5
-    succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v41, v100, v101, v102] b5 [v37, v39, v41, v100, v104]
-  block b5 [params: v37, v39, v41, v100, v104] (preds: b4):
+    term: branch_if v27 -> b4, fallthrough b5 ; uses: [v27]
+    succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v41, v100, v101, v102] b5 [v37, v39, v41, v100, v104] ; count: 2
+  block b5 [params: v37, v39, v41, v100, v104] (preds: b4): ; insts: 2
     v33:gpr = copy v100:gpr
     v36:gpr = copy v104:gpr
-    term: branch b6
-    succs: b6 [v33, v36, v37, v39, v41]
-  block b6 [params: v33, v36, v37, v39, v41] (preds: b2, b5):
+    term: branch b6 ; uses: []
+    succs: b6 [v33, v36, v37, v39, v41] ; count: 1
+  block b6 [params: v33, v36, v37, v39, v41] (preds: b2, b5): ; insts: 2
     v38:gpr = CmpNe v36:gpr, v37:gpr
     v40:gpr = Shr v33:gpr, v39:gpr/hw1
-    term: branch_if_zero v38 -> b8, fallthrough b7
-    succs: b8 [v33, v40, v41] b7
-  block b7 (preds: b6):
-    term: branch b9
-    succs: b9
-  block b8 [params: v33, v40, v41] (preds: b6):
-    term: branch b10
-    succs: b10 [v33, v40, v41]
-  block b9 (preds: b7):
-    term: error_exit(InvalidVarint)
+    term: branch_if_zero v38 -> b8, fallthrough b7 ; uses: [v38]
+    succs: b8 [v33, v40, v41] b7 ; count: 2
+  block b7 (preds: b6): ; insts: 0
+    term: branch b9 ; uses: []
+    succs: b9 ; count: 1
+  block b8 [params: v33, v40, v41] (preds: b6): ; insts: 0
+    term: branch b10 ; uses: []
+    succs: b10 [v33, v40, v41] ; count: 1
+  block b9 (preds: b7): ; insts: 0
+    term: error_exit(InvalidVarint) ; uses: []
     succs: (none)
-  block b10 [params: v33, v40, v41] (preds: b8):
+  block b10 [params: v33, v40, v41] (preds: b8): ; insts: 1
     v42:gpr = CmpNe v40:gpr, v41:gpr
-    term: branch_if_zero v42 -> b12, fallthrough b11
-    succs: b12 [v33] b11
-  block b11 (preds: b10):
-    term: branch b13
-    succs: b13
-  block b12 [params: v33] (preds: b10):
-    term: branch b14
-    succs: b14 [v33]
-  block b13 (preds: b11):
-    term: error_exit(NumberOutOfRange)
+    term: branch_if_zero v42 -> b12, fallthrough b11 ; uses: [v42]
+    succs: b12 [v33] b11 ; count: 2
+  block b11 (preds: b10): ; insts: 0
+    term: branch b13 ; uses: []
+    succs: b13 ; count: 1
+  block b12 [params: v33] (preds: b10): ; insts: 0
+    term: branch b14 ; uses: []
+    succs: b14 [v33] ; count: 1
+  block b13 (preds: b11): ; insts: 0
+    term: error_exit(NumberOutOfRange) ; uses: []
     succs: (none)
-  block b14 [params: v33] (preds: b12):
-    term: branch_if_zero v33 -> b16, fallthrough b15
-    succs: b16 b15 [v33]
-  block b15 [params: v33] (preds: b14):
-    term: branch b17
-    succs: b17 [v33]
-  block b16 (preds: b14):
+  block b14 [params: v33] (preds: b12): ; insts: 0
+    term: branch_if_zero v33 -> b16, fallthrough b15 ; uses: [v33]
+    succs: b16 b15 [v33] ; count: 2
+  block b15 [params: v33] (preds: b14): ; insts: 0
+    term: branch b17 ; uses: []
+    succs: b17 [v33] ; count: 1
+  block b16 (preds: b14): ; insts: 5
     v43:gpr = const(0x4)
     v44:gpr = const(0x0)
     store([8:W8]) v43:gpr
     store([16:W8]) v44:gpr
     store([0:W8]) v44:gpr
-    term: branch b34
-    succs: b34
-  block b17 [params: v33] (preds: b15):
+    term: branch b34 ; uses: []
+    succs: b34 ; count: 1
+  block b17 [params: v33] (preds: b15): ; insts: 15
     v45:gpr = const(0x4)
     v46:gpr = const(0x4)
     v50:gpr = const(0x7f)
@@ -129,9 +129,9 @@ ra_func @1 {
     set_out_ptr v47:gpr
     v105:gpr = copy v33:gpr
     v106:gpr = copy v47:gpr
-    term: branch b18
-    succs: b18 [v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v94, v105, v106]
-  block b18 [params: v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v94, v105, v106] (preds: b17, b32):
+    term: branch b18 ; uses: []
+    succs: b18 [v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v94, v105, v106] ; count: 1
+  block b18 [params: v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v94, v105, v106] (preds: b17, b32): ; insts: 8
     set_out_ptr v106:gpr
     bounds_check(1)
     v93:gpr = Sub v105:gpr, v92:gpr
@@ -140,19 +140,19 @@ ra_func @1 {
     v51:gpr = And v49:gpr, v50:gpr
     v53:gpr = And v49:gpr, v52:gpr
     v55:gpr = CmpNe v53:gpr, v54:gpr
-    term: branch_if_zero v55 -> b20, fallthrough b19
-    succs: b20 [v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] b19 [v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95]
-  block b19 [params: v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] (preds: b18):
-    term: branch b21
-    succs: b21 [v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95]
-  block b20 [params: v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] (preds: b18):
+    term: branch_if_zero v55 -> b20, fallthrough b19 ; uses: [v55]
+    succs: b20 [v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] b19 [v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] ; count: 2
+  block b19 [params: v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] (preds: b18): ; insts: 0
+    term: branch b21 ; uses: []
+    succs: b21 [v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] ; count: 1
+  block b20 [params: v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] (preds: b18): ; insts: 4
     v56:gpr = const(0x4)
     v57:gpr = const(0x0)
     v82:gpr = copy v51:gpr
     v85:gpr = copy v57:gpr
-    term: branch b24
-    succs: b24 [v33, v47, v48, v50, v52, v54, v82, v57, v86, v88, v90, v92, v93, v94, v95]
-  block b21 [params: v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] (preds: b19):
+    term: branch b24 ; uses: []
+    succs: b24 [v33, v47, v48, v50, v52, v54, v82, v57, v86, v88, v90, v92, v93, v94, v95] ; count: 1
+  block b21 [params: v33, v47, v48, v50, v51, v52, v54, v86, v88, v90, v92, v93, v94, v95] (preds: b19): ; insts: 12
     v58:gpr = const(0x7)
     v59:gpr = const(0x4)
     v60:gpr = const(0x1)
@@ -165,9 +165,9 @@ ra_func @1 {
     v109:gpr = copy v51:gpr
     v110:gpr = copy v58:gpr
     v111:gpr = copy v59:gpr
-    term: branch b22
-    succs: b22 [v33, v47, v48, v50, v52, v54, v62, v66, v68, v70, v72, v74, v86, v88, v90, v92, v93, v94, v95, v109, v110, v111]
-  block b22 [params: v33, v47, v48, v50, v52, v54, v62, v66, v68, v70, v72, v74, v86, v88, v90, v92, v93, v94, v95, v109, v110, v111] (preds: b21, b22):
+    term: branch b22 ; uses: []
+    succs: b22 [v33, v47, v48, v50, v52, v54, v62, v66, v68, v70, v72, v74, v86, v88, v90, v92, v93, v94, v95, v109, v110, v111] ; count: 1
+  block b22 [params: v33, v47, v48, v50, v52, v54, v62, v66, v68, v70, v72, v74, v86, v88, v90, v92, v93, v94, v95, v109, v110, v111] (preds: b21, b22): ; insts: 16
     bounds_check(1)
     v67:gpr = Add v110:gpr, v66:gpr
     v69:gpr = Sub v111:gpr, v68:gpr
@@ -184,54 +184,54 @@ ra_func @1 {
     v111:gpr = copy v69:gpr
     v112:gpr = copy v63:gpr
     v113:gpr = copy v73:gpr
-    term: branch_if v76 -> b22, fallthrough b23
-    succs: b22 [v33, v47, v48, v50, v52, v54, v62, v66, v68, v70, v72, v74, v86, v88, v90, v92, v93, v94, v95, v109, v110, v111] b23 [v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v93, v94, v95, v109, v113]
-  block b23 [params: v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v93, v94, v95, v109, v113] (preds: b22):
+    term: branch_if v76 -> b22, fallthrough b23 ; uses: [v76]
+    succs: b22 [v33, v47, v48, v50, v52, v54, v62, v66, v68, v70, v72, v74, v86, v88, v90, v92, v93, v94, v95, v109, v110, v111] b23 [v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v93, v94, v95, v109, v113] ; count: 2
+  block b23 [params: v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v93, v94, v95, v109, v113] (preds: b22): ; insts: 2
     v82:gpr = copy v109:gpr
     v85:gpr = copy v113:gpr
-    term: branch b24
-    succs: b24 [v33, v47, v48, v50, v52, v54, v82, v85, v86, v88, v90, v92, v93, v94, v95]
-  block b24 [params: v33, v47, v48, v50, v52, v54, v82, v85, v86, v88, v90, v92, v93, v94, v95] (preds: b20, b23):
+    term: branch b24 ; uses: []
+    succs: b24 [v33, v47, v48, v50, v52, v54, v82, v85, v86, v88, v90, v92, v93, v94, v95] ; count: 1
+  block b24 [params: v33, v47, v48, v50, v52, v54, v82, v85, v86, v88, v90, v92, v93, v94, v95] (preds: b20, b23): ; insts: 2
     v87:gpr = CmpNe v85:gpr, v86:gpr
     v89:gpr = Shr v82:gpr, v88:gpr/hw1
-    term: branch_if_zero v87 -> b26, fallthrough b25
-    succs: b26 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95] b25
-  block b25 (preds: b24):
-    term: branch b27
-    succs: b27
-  block b26 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95] (preds: b24):
-    term: branch b28
-    succs: b28 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95]
-  block b27 (preds: b25):
-    term: error_exit(InvalidVarint)
+    term: branch_if_zero v87 -> b26, fallthrough b25 ; uses: [v87]
+    succs: b26 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95] b25 ; count: 2
+  block b25 (preds: b24): ; insts: 0
+    term: branch b27 ; uses: []
+    succs: b27 ; count: 1
+  block b26 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95] (preds: b24): ; insts: 0
+    term: branch b28 ; uses: []
+    succs: b28 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95] ; count: 1
+  block b27 (preds: b25): ; insts: 0
+    term: error_exit(InvalidVarint) ; uses: []
     succs: (none)
-  block b28 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95] (preds: b26):
+  block b28 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v89, v90, v92, v93, v94, v95] (preds: b26): ; insts: 1
     v91:gpr = CmpNe v89:gpr, v90:gpr
-    term: branch_if_zero v91 -> b30, fallthrough b29
-    succs: b30 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95] b29
-  block b29 (preds: b28):
-    term: branch b31
-    succs: b31
-  block b30 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95] (preds: b28):
-    term: branch b32
-    succs: b32 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95]
-  block b31 (preds: b29):
-    term: error_exit(NumberOutOfRange)
+    term: branch_if_zero v91 -> b30, fallthrough b29 ; uses: [v91]
+    succs: b30 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95] b29 ; count: 2
+  block b29 (preds: b28): ; insts: 0
+    term: branch b31 ; uses: []
+    succs: b31 ; count: 1
+  block b30 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95] (preds: b28): ; insts: 0
+    term: branch b32 ; uses: []
+    succs: b32 [v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95] ; count: 1
+  block b31 (preds: b29): ; insts: 0
+    term: error_exit(NumberOutOfRange) ; uses: []
     succs: (none)
-  block b32 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95] (preds: b30):
+  block b32 [params: v33, v47, v48, v50, v52, v54, v82, v86, v88, v90, v92, v93, v94, v95] (preds: b30): ; insts: 3
     store([0:W4]) v82:gpr
     v105:gpr = copy v93:gpr
     v106:gpr = copy v95:gpr
-    term: branch_if v93 -> b18, fallthrough b33
-    succs: b18 [v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v94, v105, v106] b33 [v33, v47, v48]
-  block b33 [params: v33, v47, v48] (preds: b32):
+    term: branch_if v93 -> b18, fallthrough b33 ; uses: [v93]
+    succs: b18 [v33, v47, v48, v50, v52, v54, v86, v88, v90, v92, v94, v105, v106] b33 [v33, v47, v48] ; count: 2
+  block b33 [params: v33, v47, v48] (preds: b32): ; insts: 4
     set_out_ptr v48:gpr
     store([8:W8]) v47:gpr
     store([16:W8]) v33:gpr
     store([0:W8]) v33:gpr
-    term: branch b34
-    succs: b34
-  block b34 (preds: b16, b33):
-    term: return
+    term: branch b34 ; uses: []
+    succs: b34 ; count: 1
+  block b34 (preds: b16, b33): ; insts: 0
+    term: return ; uses: []
     succs: (none)
 }

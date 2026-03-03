@@ -76,21 +76,14 @@ pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendRe
 }
 
 impl Lowerer {
-    fn normalize_edit_move(
-        from: Allocation,
-        to: Allocation,
-    ) -> Option<(Allocation, Allocation)> {
+    fn normalize_edit_move(from: Allocation, to: Allocation) -> Option<(Allocation, Allocation)> {
         if from == to || from.is_none() || to.is_none() {
             return None;
         }
         Some((from, to))
     }
 
-    fn new(
-        program: &RaProgram,
-        max_spillslots: usize,
-        alloc: &AllocatedProgram,
-    ) -> Self {
+    fn new(program: &RaProgram, max_spillslots: usize, alloc: &AllocatedProgram) -> Self {
         let slot_base = BASE_FRAME;
         let slot_bytes = program.slot_count * 8;
         let spill_base = slot_base + slot_bytes;
@@ -117,8 +110,7 @@ impl Lowerer {
                 block_labels.insert(key, ectx.new_label());
             }
         }
-        let lambda_labels: Vec<DynamicLabel> =
-            (0..=lambda_max).map(|_| ectx.new_label()).collect();
+        let lambda_labels: Vec<DynamicLabel> = (0..=lambda_max).map(|_| ectx.new_label()).collect();
 
         // Pre-compute forward-branch blocks: blocks with no instructions
         // whose terminator is a plain Branch. These can be skipped and their
@@ -434,8 +426,7 @@ impl Lowerer {
         let mut resolved = block_id;
         let mut hops = 0usize;
         while hops < 64 {
-            let Some(&next_block) = self.forward_branch_blocks.get(&(lambda_id, resolved.0))
-            else {
+            let Some(&next_block) = self.forward_branch_blocks.get(&(lambda_id, resolved.0)) else {
                 break;
             };
             let next_id = BlockId(next_block);
@@ -511,8 +502,7 @@ impl Lowerer {
             return actual_target;
         };
         let key = (linear_op_index, succ_index);
-        let has_edits =
-            by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
+        let has_edits = by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
         if !has_edits {
             return actual_target;
         }
@@ -737,12 +727,7 @@ impl Lowerer {
         self.emit_branch_if_allocation(alloc, target, invert);
     }
 
-    fn emit_branch_if_allocation(
-        &mut self,
-        alloc: Allocation,
-        target: DynamicLabel,
-        invert: bool,
-    ) {
+    fn emit_branch_if_allocation(&mut self, alloc: Allocation, target: DynamicLabel, invert: bool) {
         if let Some(reg) = alloc.as_reg() {
             assert!(
                 reg.class() == RegClass::Int,
@@ -846,11 +831,11 @@ impl Lowerer {
                 );
             }
             let abi_regs: &[PReg] = &[
-                PReg::new(6, RegClass::Int),  // rsi
-                PReg::new(2, RegClass::Int),  // rdx
-                PReg::new(1, RegClass::Int),  // rcx
-                PReg::new(8, RegClass::Int),  // r8
-                PReg::new(9, RegClass::Int),  // r9
+                PReg::new(6, RegClass::Int), // rsi
+                PReg::new(2, RegClass::Int), // rdx
+                PReg::new(1, RegClass::Int), // rcx
+                PReg::new(8, RegClass::Int), // r8
+                PReg::new(9, RegClass::Int), // r9
             ];
             for (i, arg) in args.iter().copied().enumerate() {
                 self.push_intrinsic_arg(arg, i);
@@ -871,9 +856,9 @@ impl Lowerer {
                 );
             }
             let abi_regs: &[PReg] = &[
-                PReg::new(2, RegClass::Int),  // rdx
-                PReg::new(8, RegClass::Int),  // r8
-                PReg::new(9, RegClass::Int),  // r9
+                PReg::new(2, RegClass::Int), // rdx
+                PReg::new(8, RegClass::Int), // r8
+                PReg::new(9, RegClass::Int), // r9
             ];
             for (i, arg) in args.iter().copied().enumerate() {
                 self.push_intrinsic_arg(arg, i);
@@ -949,12 +934,12 @@ impl Lowerer {
                 );
             }
             let abi_regs: &[PReg] = &[
-                PReg::new(7, RegClass::Int),  // rdi
-                PReg::new(6, RegClass::Int),  // rsi
-                PReg::new(2, RegClass::Int),  // rdx
-                PReg::new(1, RegClass::Int),  // rcx
-                PReg::new(8, RegClass::Int),  // r8
-                PReg::new(9, RegClass::Int),  // r9
+                PReg::new(7, RegClass::Int), // rdi
+                PReg::new(6, RegClass::Int), // rsi
+                PReg::new(2, RegClass::Int), // rdx
+                PReg::new(1, RegClass::Int), // rcx
+                PReg::new(8, RegClass::Int), // r8
+                PReg::new(9, RegClass::Int), // r9
             ];
             for (i, arg) in args.iter().copied().enumerate() {
                 self.push_intrinsic_arg(arg, i);
@@ -974,10 +959,10 @@ impl Lowerer {
                 );
             }
             let abi_regs: &[PReg] = &[
-                PReg::new(1, RegClass::Int),  // rcx
-                PReg::new(2, RegClass::Int),  // rdx
-                PReg::new(8, RegClass::Int),  // r8
-                PReg::new(9, RegClass::Int),  // r9
+                PReg::new(1, RegClass::Int), // rcx
+                PReg::new(2, RegClass::Int), // rdx
+                PReg::new(8, RegClass::Int), // r8
+                PReg::new(9, RegClass::Int), // r9
             ];
             for (i, arg) in args.iter().copied().enumerate() {
                 self.push_intrinsic_arg(arg, i);
@@ -1106,10 +1091,10 @@ impl Lowerer {
         #[cfg(not(windows))]
         {
             let abi_data_regs: &[PReg] = &[
-                PReg::new(2, RegClass::Int),  // rdx
-                PReg::new(1, RegClass::Int),  // rcx
-                PReg::new(8, RegClass::Int),  // r8
-                PReg::new(9, RegClass::Int),  // r9
+                PReg::new(2, RegClass::Int), // rdx
+                PReg::new(1, RegClass::Int), // rcx
+                PReg::new(8, RegClass::Int), // r8
+                PReg::new(9, RegClass::Int), // r9
             ];
             for (i, &_arg) in args.iter().enumerate() {
                 self.push_allocation_operand(i, i);
@@ -1123,8 +1108,8 @@ impl Lowerer {
         #[cfg(windows)]
         {
             let abi_data_regs: &[PReg] = &[
-                PReg::new(8, RegClass::Int),  // r8
-                PReg::new(9, RegClass::Int),  // r9
+                PReg::new(8, RegClass::Int), // r8
+                PReg::new(9, RegClass::Int), // r9
             ];
             for (i, &_arg) in args.iter().enumerate() {
                 self.push_allocation_operand(i, i);
@@ -1336,8 +1321,7 @@ impl Lowerer {
                 target,
                 fallthrough: _,
             } => {
-                let lin_idx = linear_op_index
-                    .expect("BranchIf should have linear op index");
+                let lin_idx = linear_op_index.expect("BranchIf should have linear op index");
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
                 let taken_target =
                     self.edge_target_label(lin_idx, 0, self.block_label(lambda_id, resolved));
@@ -1357,8 +1341,7 @@ impl Lowerer {
                 target,
                 fallthrough: _,
             } => {
-                let lin_idx = linear_op_index
-                    .expect("BranchIfZero should have linear op index");
+                let lin_idx = linear_op_index.expect("BranchIfZero should have linear op index");
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
                 let taken_target =
                     self.edge_target_label(lin_idx, 0, self.block_label(lambda_id, resolved));
@@ -1374,8 +1357,7 @@ impl Lowerer {
                 }
             }
             RaTerminator::JumpTable { predicate, .. } => {
-                let lin_idx = linear_op_index
-                    .expect("JumpTable should have linear op index");
+                let lin_idx = linear_op_index.expect("JumpTable should have linear op index");
                 self.emit_jump_table(lambda_id, *predicate, &block.term, lin_idx);
             }
         }
@@ -1440,10 +1422,7 @@ impl Lowerer {
                 .current_func
                 .take()
                 .expect("FuncEnd without active function");
-            self.emit_load_lambda_results_to_ret_regs(
-                func_ctx.lambda_id,
-                &func_ctx.data_results,
-            );
+            self.emit_load_lambda_results_to_ret_regs(func_ctx.lambda_id, &func_ctx.data_results);
             self.ectx.end_func(func_ctx.error_exit);
         }
 

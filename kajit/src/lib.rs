@@ -65,8 +65,7 @@ pub fn compile_decoder_from_ir_text(
     registry: &ir::IntrinsicRegistry,
     with_passes: bool,
 ) -> CompiledDecoder {
-    let mut func = ir_parse::parse_ir(ir_text, shape, registry)
-        .expect("IR text should parse");
+    let mut func = ir_parse::parse_ir(ir_text, shape, registry).expect("IR text should parse");
     if with_passes {
         ir_passes::run_default_passes(&mut func);
     }
@@ -77,9 +76,7 @@ pub fn compile_decoder_from_ir_text(
 /// Compile a deserializer from an already-constructed RaProgram.
 ///
 /// Runs regalloc2 + codegen, skipping IR/LIR entirely.
-pub fn compile_decoder_from_ra_program(
-    program: &regalloc_mir::RaProgram,
-) -> CompiledDecoder {
+pub fn compile_decoder_from_ra_program(program: &regalloc_mir::RaProgram) -> CompiledDecoder {
     compiler::compile_ra_program_decoder(program)
 }
 
@@ -90,11 +87,8 @@ pub fn compile_decoder_from_ra_program(
 ///
 /// This is intended for regression tests and bug minimization: paste a
 /// failing RA-MIR snapshot, edit it down to a minimal reproducer, and re-run.
-pub fn compile_decoder_from_ra_mir_text(
-    mir_text: &str,
-) -> CompiledDecoder {
-    let program = regalloc_mir_parse::parse_ra_mir(mir_text)
-        .expect("RA-MIR text should parse");
+pub fn compile_decoder_from_ra_mir_text(mir_text: &str) -> CompiledDecoder {
+    let program = regalloc_mir_parse::parse_ra_mir(mir_text).expect("RA-MIR text should parse");
     compile_decoder_from_ra_program(&program)
 }
 

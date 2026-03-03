@@ -1,6 +1,5 @@
 ---
 source: kajit/tests/corpus.rs
-assertion_line: 471
 expression: ir_text
 ---
 lambda @0 (shape: "TwoAddresses") {

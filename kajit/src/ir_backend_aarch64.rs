@@ -18,7 +18,6 @@ pub fn compile(
     max_spillslots: usize,
     alloc: &AllocatedProgram,
 ) -> LinearBackendResult {
-
     struct FunctionCtx {
         error_exit: DynamicLabel,
         data_results: Vec<crate::ir::VReg>,

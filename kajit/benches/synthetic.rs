@@ -2,11 +2,11 @@
 #[path = "harness.rs"]
 mod harness;
 use facet::Facet;
-use std::hint::black_box;
-use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::Arc;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use std::hint::black_box;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
     age: u32,
@@ -221,8 +221,7 @@ struct Wrapper(u32);
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
 struct StringWrapper(
-    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
-    String,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")] String,
 );
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
@@ -313,16 +312,12 @@ struct UnitField {
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
-    #[proptest(
-        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
-    )]
+    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
     values: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Nums {
-    #[proptest(
-        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
-    )]
+    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
     vals: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -382,10 +377,8 @@ fn register_bench_case<T>(
     value: T,
     enable_json_kajit: bool,
     enable_postcard_kajit: bool,
-)
-where
-    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
-        + 'static,
+) where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
 {
     let json_data = Arc::new(serde_json::to_string(&value).unwrap());
     let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
@@ -397,21 +390,16 @@ where
         func: Box::new({
             let data = Arc::clone(&json_data);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(
-                            serde_json::from_str::<T>(black_box(data.as_str())).unwrap(),
-                        );
-                    });
+                runner.run(|| {
+                    black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
+                });
             }
         }),
     });
     if enable_json_kajit {
-        let json_decoder = match catch_unwind(
-            AssertUnwindSafe(|| {
-                kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson)
-            }),
-        ) {
+        let json_decoder = match catch_unwind(AssertUnwindSafe(|| {
+            kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson)
+        })) {
             Ok(decoder) => Some(Arc::new(decoder)),
             Err(payload) => {
                 eprintln!(
@@ -422,11 +410,9 @@ where
             }
         };
         if let Some(decoder) = json_decoder {
-            match catch_unwind(
-                AssertUnwindSafe(|| {
-                    kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
-                }),
-            ) {
+            match catch_unwind(AssertUnwindSafe(|| {
+                kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
+            })) {
                 Ok(Ok(_)) => {
                     v.push(harness::Bench {
                         name: format!("{json_prefix}/kajit_deser"),
@@ -435,13 +421,12 @@ where
                             let decoder = Arc::clone(&decoder);
                             move |runner| {
                                 let decoder = decoder.as_ref();
-                                runner
-                                    .run(|| {
-                                        black_box(
-                                            kajit::from_str::<T>(decoder, black_box(data.as_str()))
-                                                .unwrap(),
-                                        );
-                                    });
+                                runner.run(|| {
+                                    black_box(
+                                        kajit::from_str::<T>(decoder, black_box(data.as_str()))
+                                            .unwrap(),
+                                    );
+                                });
                             }
                         }),
                     });
@@ -465,10 +450,9 @@ where
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(serde_json::to_vec(black_box(&*value)).unwrap());
-                    });
+                runner.run(|| {
+                    black_box(serde_json::to_vec(black_box(&*value)).unwrap());
+                });
             }
         }),
     });
@@ -477,21 +461,16 @@ where
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(
-                            postcard::from_bytes::<T>(black_box(&data[..])).unwrap(),
-                        );
-                    });
+                runner.run(|| {
+                    black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                });
             }
         }),
     });
     if enable_postcard_kajit {
-        let postcard_decoder = match catch_unwind(
-            AssertUnwindSafe(|| {
-                kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard)
-            }),
-        ) {
+        let postcard_decoder = match catch_unwind(AssertUnwindSafe(|| {
+            kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard)
+        })) {
             Ok(decoder) => Some(Arc::new(decoder)),
             Err(payload) => {
                 eprintln!(
@@ -502,11 +481,9 @@ where
             }
         };
         if let Some(decoder) = postcard_decoder {
-            match catch_unwind(
-                AssertUnwindSafe(|| {
-                    kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
-                }),
-            ) {
+            match catch_unwind(AssertUnwindSafe(|| {
+                kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
+            })) {
                 Ok(Ok(_)) => {
                     v.push(harness::Bench {
                         name: format!("{postcard_prefix}/kajit_deser"),
@@ -515,13 +492,12 @@ where
                             let decoder = Arc::clone(&decoder);
                             move |runner| {
                                 let decoder = decoder.as_ref();
-                                runner
-                                    .run(|| {
-                                        black_box(
-                                            kajit::deserialize::<T>(decoder, black_box(&data[..]))
-                                                .unwrap(),
-                                        );
-                                    });
+                                runner.run(|| {
+                                    black_box(
+                                        kajit::deserialize::<T>(decoder, black_box(&data[..]))
+                                            .unwrap(),
+                                    );
+                                });
                             }
                         }),
                     });
@@ -545,10 +521,9 @@ where
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
-                    });
+                runner.run(|| {
+                    black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
+                });
             }
         }),
     });
@@ -679,7 +654,13 @@ fn main() {
         false,
         true,
     );
-    register_bench_case(&mut v, "tuple_pair", (42u32, "Alice".to_string()), false, true);
+    register_bench_case(
+        &mut v,
+        "tuple_pair",
+        (42u32, "Alice".to_string()),
+        false,
+        true,
+    );
     register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32), false, true);
     register_bench_case(
         &mut v,
@@ -701,7 +682,9 @@ fn main() {
     register_bench_case(
         &mut v,
         "box_scalar",
-        BoxedScalar { value: Box::new(42) },
+        BoxedScalar {
+            value: Box::new(42),
+        },
         false,
         false,
     );
@@ -815,7 +798,15 @@ fn main() {
         false,
         true,
     );
-    register_bench_case(&mut v, "vec_u32", Nums { vals: vec![1, 2, 3] }, false, true);
+    register_bench_case(
+        &mut v,
+        "vec_u32",
+        Nums {
+            vals: vec![1, 2, 3],
+        },
+        false,
+        true,
+    );
     register_bench_case(
         &mut v,
         "vec_string",
@@ -830,8 +821,14 @@ fn main() {
         "vec_nested_struct",
         AddressList {
             addrs: vec![
-                Address { city : "Portland".into(), zip : 97201 }, Address { city :
-                "Seattle".into(), zip : 98101 },
+                Address {
+                    city: "Portland".into(),
+                    zip: 97201,
+                },
+                Address {
+                    city: "Seattle".into(),
+                    zip: 98101,
+                },
             ],
         },
         false,

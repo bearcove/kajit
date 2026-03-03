@@ -1,12 +1,11 @@
 ---
 source: kajit/tests/corpus.rs
-assertion_line: 518
 expression: ra_text
 ---
-ra_func @0 {
-  block b0:
+ra_func @0 { ; entry: b0
+  block b0: ; insts: 2
     call_intrinsic(0x<ptr>, fo=0) !gpr,simd
     call_intrinsic(0x<ptr>, fo=1) !gpr,simd
-    term: return
+    term: return ; uses: []
     succs: (none)
 }
