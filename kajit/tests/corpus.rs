@@ -480,63 +480,224 @@ where
         })
         .unwrap();
 }
-fn codegen_artifacts<T, F>(decoder: &F) -> (String, String, usize)
+const DUMP_STAGES_ENV: &str = "KAJIT_DUMP_STAGES";
+const DUMP_FILTER_ENV: &str = "KAJIT_DUMP_FILTER";
+const DUMP_DIR_ENV: &str = "KAJIT_DUMP_DIR";
+const ASSERT_SNAPSHOTS_ENV: &str = "KAJIT_ASSERT_CODEGEN_SNAPSHOTS";
+
+struct CodegenArtifacts {
+    ir_text: String,
+    linear_text: String,
+    ra_text: String,
+    edits: usize,
+    opt_timeline: Vec<(String, String)>,
+}
+
+fn codegen_artifacts<T, F>(decoder: &F) -> CodegenArtifacts
 where
     for<'input> T: Facet<'input>,
     F: kajit::format::Decoder,
 {
     let shape = T::SHAPE;
     let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
+    let linear_text = kajit::debug_linear_ir_text(shape, decoder);
     let edits = kajit::regalloc_edit_count(shape, decoder);
-    (ir_text, ra_text, edits)
+    let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, decoder);
+    CodegenArtifacts {
+        ir_text,
+        linear_text,
+        ra_text,
+        edits,
+        opt_timeline,
+    }
+}
+
+fn env_truthy(name: &str) -> bool {
+    let Some(raw) = std::env::var_os(name) else {
+        return false;
+    };
+    let raw = raw.to_string_lossy();
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn snapshot_assertions_enabled() -> bool {
+    env_truthy(ASSERT_SNAPSHOTS_ENV)
+}
+
+fn dump_stages() -> Option<Vec<String>> {
+    let raw = std::env::var_os(DUMP_STAGES_ENV)?;
+    let raw = raw.to_string_lossy();
+    let stages: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    if stages.is_empty() {
+        None
+    } else {
+        Some(stages)
+    }
+}
+
+fn should_dump_stage(stage: &str) -> bool {
+    let Some(stages) = dump_stages() else {
+        return false;
+    };
+    stages.iter().any(|s| s == "all" || s == stage)
+}
+
+fn dump_filter_matches(target: &str) -> bool {
+    let Some(raw) = std::env::var_os(DUMP_FILTER_ENV) else {
+        return true;
+    };
+    let raw = raw.to_string_lossy();
+    let filters: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if filters.is_empty() {
+        return true;
+    }
+    filters.iter().any(|needle| target.contains(needle))
+}
+
+fn dumps_enabled_for_case(format_label: &str, case: &str) -> bool {
+    if dump_stages().is_none() {
+        return false;
+    }
+    dump_filter_matches(&format!("{format_label}::{case}"))
+}
+
+fn default_dump_dir() -> std::path::PathBuf {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .map(|workspace_root| workspace_root.join("target/kajit-stage-dumps"))
+        .unwrap_or_else(|| manifest_dir.join("target/kajit-stage-dumps"))
+}
+
+fn dump_dir() -> std::path::PathBuf {
+    match std::env::var_os(DUMP_DIR_ENV) {
+        Some(raw) if !raw.is_empty() => std::path::PathBuf::from(raw),
+        _ => default_dump_dir(),
+    }
+}
+
+fn dump_stage(format_label: &str, case: &str, stage: &str, content: &str) {
+    let dir = dump_dir();
+    std::fs::create_dir_all(&dir).expect("failed to create dump directory");
+    let path = dir.join(format!(
+        "{format_label}__{case}__{}__{stage}.txt",
+        std::env::consts::ARCH
+    ));
+    std::fs::write(&path, content).unwrap_or_else(|error| {
+        panic!("failed writing dump to {}: {error}", path.display());
+    });
+}
+
+fn maybe_dump_codegen_artifacts(format_label: &str, case: &str, artifacts: &CodegenArtifacts) {
+    if !dumps_enabled_for_case(format_label, case) {
+        return;
+    }
+    if should_dump_stage("ir") {
+        dump_stage(format_label, case, "ir", &artifacts.ir_text);
+    }
+    if should_dump_stage("linear") {
+        dump_stage(format_label, case, "linear", &artifacts.linear_text);
+    }
+    if should_dump_stage("ra") {
+        dump_stage(format_label, case, "ra", &artifacts.ra_text);
+    }
+    if should_dump_stage("edits") {
+        dump_stage(format_label, case, "edits", &format!("{}", artifacts.edits));
+    }
+    if should_dump_stage("opts") {
+        for (index, (pass_name, ir_text)) in artifacts.opt_timeline.iter().enumerate() {
+            dump_stage(
+                format_label,
+                case,
+                &format!("opts_{index:02}_{pass_name}"),
+                ir_text,
+            );
+        }
+    }
 }
 fn assert_codegen_rvsdg_snapshot<T, F>(format_label: &str, case: &str, decoder: &F, _marker: &T)
 where
     for<'input> T: Facet<'input>,
     F: kajit::format::Decoder,
 {
-    let (ir_text, _ra_text, _edits) = codegen_artifacts::<T, F>(decoder);
-    insta::assert_snapshot!(
-        format!(
-            "generated_rvsdg_{}_{}_{}",
-            format_label,
-            case,
-            std::env::consts::ARCH
-        ),
-        ir_text
-    );
+    let should_assert = snapshot_assertions_enabled();
+    let should_dump = dumps_enabled_for_case(format_label, case);
+    if !should_assert && !should_dump {
+        return;
+    }
+    let artifacts = codegen_artifacts::<T, F>(decoder);
+    maybe_dump_codegen_artifacts(format_label, case, &artifacts);
+    if should_assert {
+        insta::assert_snapshot!(
+            format!(
+                "generated_rvsdg_{}_{}_{}",
+                format_label,
+                case,
+                std::env::consts::ARCH
+            ),
+            artifacts.ir_text
+        );
+    }
 }
 fn assert_codegen_ra_mir_snapshot<T, F>(format_label: &str, case: &str, decoder: &F, _marker: &T)
 where
     for<'input> T: Facet<'input>,
     F: kajit::format::Decoder,
 {
-    let (_ir_text, ra_text, _edits) = codegen_artifacts::<T, F>(decoder);
-    insta::assert_snapshot!(
-        format!(
-            "generated_ra_mir_{}_{}_{}",
-            format_label,
-            case,
-            std::env::consts::ARCH
-        ),
-        ra_text
-    );
+    let should_assert = snapshot_assertions_enabled();
+    let should_dump = dumps_enabled_for_case(format_label, case);
+    if !should_assert && !should_dump {
+        return;
+    }
+    let artifacts = codegen_artifacts::<T, F>(decoder);
+    maybe_dump_codegen_artifacts(format_label, case, &artifacts);
+    if should_assert {
+        insta::assert_snapshot!(
+            format!(
+                "generated_ra_mir_{}_{}_{}",
+                format_label,
+                case,
+                std::env::consts::ARCH
+            ),
+            artifacts.ra_text
+        );
+    }
 }
 fn assert_codegen_edits_snapshot<T, F>(format_label: &str, case: &str, decoder: &F, _marker: &T)
 where
     for<'input> T: Facet<'input>,
     F: kajit::format::Decoder,
 {
-    let (_ir_text, _ra_text, edits) = codegen_artifacts::<T, F>(decoder);
-    insta::assert_snapshot!(
-        format!(
-            "generated_postreg_edits_{}_{}_{}",
-            format_label,
-            case,
-            std::env::consts::ARCH
-        ),
-        format!("{edits}")
-    );
+    let should_assert = snapshot_assertions_enabled();
+    let should_dump = dumps_enabled_for_case(format_label, case);
+    if !should_assert && !should_dump {
+        return;
+    }
+    let artifacts = codegen_artifacts::<T, F>(decoder);
+    maybe_dump_codegen_artifacts(format_label, case, &artifacts);
+    if should_assert {
+        insta::assert_snapshot!(
+            format!(
+                "generated_postreg_edits_{}_{}_{}",
+                format_label,
+                case,
+                std::env::consts::ARCH
+            ),
+            format!("{}", artifacts.edits)
+        );
+    }
 }
 mod json {
     use super::*;
@@ -9079,20 +9240,23 @@ mod postreg {
     use super::*;
     #[test]
     fn vec_scalar_large_hotpath_asserts() {
-        let (ir_text, ra_text, edits) =
-            codegen_artifacts::<ScalarVec, _>(&kajit::postcard::KajitPostcard);
+        let artifacts = codegen_artifacts::<ScalarVec, _>(&kajit::postcard::KajitPostcard);
         assert!(
-            ir_text.contains("theta") || ir_text.contains("apply @"),
+            artifacts.ir_text.contains("theta") || artifacts.ir_text.contains("apply @"),
             "expected loop form (`theta`) or outlined loop body (`apply`) in IR"
         );
         assert!(
-            ra_text.contains("branch_if"),
+            artifacts.ra_text.contains("branch_if"),
             "expected loop backedge in RA-MIR"
         );
         assert!(
-            ra_text.contains("call_intrinsic"),
+            artifacts.ra_text.contains("call_intrinsic"),
             "expected intrinsic-heavy vec decode path in RA-MIR"
         );
-        assert!(edits <= 128, "expected edit budget <= 128, got {edits}");
+        assert!(
+            artifacts.edits <= 128,
+            "expected edit budget <= 128, got {}",
+            artifacts.edits
+        );
     }
 }

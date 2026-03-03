@@ -737,14 +737,32 @@ pub(crate) fn run_default_passes_from_env(func: &mut crate::ir::IrFunc) {
     run_configured_default_passes(func, &pipeline_opts);
 }
 
-fn run_configured_default_passes(func: &mut crate::ir::IrFunc, pipeline_opts: &PipelineOptions) {
+pub(crate) fn run_configured_default_passes(
+    func: &mut crate::ir::IrFunc,
+    pipeline_opts: &PipelineOptions,
+) {
+    run_configured_default_passes_with_observer(func, pipeline_opts, |_, _| {});
+}
+
+pub(crate) fn run_configured_default_passes_with_observer<F>(
+    func: &mut crate::ir::IrFunc,
+    pipeline_opts: &PipelineOptions,
+    mut observe_after_pass: F,
+) where
+    F: FnMut(&str, &crate::ir::IrFunc),
+{
     // r[impl compiler.opts.all-opts]
     if !pipeline_opts.resolve_all_opts(DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED) {
         return;
     }
-    crate::ir_passes::run_default_passes_with_filter(func, |pass| {
-        pipeline_opts.resolve_pass(pass.name, true)
-    });
+
+    for pass in crate::ir_passes::default_pass_registry() {
+        if !pipeline_opts.resolve_pass(pass.name, true) {
+            continue;
+        }
+        pass.run(func);
+        observe_after_pass(pass.name, func);
+    }
 }
 
 // r[impl compiler.opts.regalloc]
