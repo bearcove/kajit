@@ -1,9 +1,15 @@
 use std::collections::HashMap;
 
+use kajit_abi::DeserContext;
 use kajit_ir::ErrorCode;
-use kajit_lir::{BinOpKind, LinearOp};
+use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 
+use crate::intrinsic_calls::{
+    call_intrinsic_with_output, call_intrinsic_with_result, call_pure_u64,
+};
 use crate::{BlockId, InterpreterTrap, RaFunction, RaProgram, RaTerminator};
+
+const INTRINSIC_OUT_SCRATCH_BYTES: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebuggerError {
@@ -28,6 +34,14 @@ pub enum DebuggerError {
     UnsupportedTerminator {
         block: BlockId,
         term: String,
+    },
+    IntrinsicCallFailed {
+        block: BlockId,
+        op: String,
+        detail: String,
+    },
+    UnknownIntrinsicErrorCode {
+        raw: u32,
     },
 }
 
@@ -58,6 +72,16 @@ impl std::fmt::Display for DebuggerError {
                     "unsupported RA-MIR terminator in block b{}: {}",
                     block.0, term
                 )
+            }
+            Self::IntrinsicCallFailed { block, op, detail } => {
+                write!(
+                    f,
+                    "intrinsic call failed in block b{} ({}): {}",
+                    block.0, op, detail
+                )
+            }
+            Self::UnknownIntrinsicErrorCode { raw } => {
+                write!(f, "intrinsic wrote unknown error code: {raw}")
             }
         }
     }
@@ -116,6 +140,7 @@ pub enum RunUntilTarget {
 struct SessionSnapshot {
     cursor: usize,
     output: Vec<u8>,
+    slots: Vec<u64>,
     vregs: Vec<u64>,
     trap: Option<InterpreterTrap>,
     returned: bool,
@@ -128,8 +153,11 @@ pub struct DebuggerSession {
     func: RaFunction,
     block_indices: HashMap<BlockId, usize>,
     input: Vec<u8>,
+    input_start: *const u8,
+    ctx: DeserContext,
     cursor: usize,
     output: Vec<u8>,
+    slots: Vec<u64>,
     vregs: Vec<u64>,
     trap: Option<InterpreterTrap>,
     returned: bool,
@@ -147,9 +175,13 @@ impl DebuggerSession {
             .ok_or(DebuggerError::NoFunctions)?
             .clone();
         let block_indices = build_block_index(&func);
+        let input = input.to_vec();
+        let input_start = input.as_ptr();
+        let ctx = DeserContext::from_bytes(input.as_slice());
         Ok(Self {
             cursor: 0,
             output: vec![0u8; infer_output_size(&func)],
+            slots: vec![0u64; infer_slot_count(&func).max(program.slot_count as usize)],
             vregs: vec![0u64; program.vreg_count as usize],
             trap: None,
             returned: false,
@@ -159,7 +191,9 @@ impl DebuggerSession {
             history: Vec::new(),
             func,
             block_indices,
-            input: input.to_vec(),
+            input,
+            input_start,
+            ctx,
         })
     }
 
@@ -310,6 +344,7 @@ impl DebuggerSession {
         SessionSnapshot {
             cursor: self.cursor,
             output: self.output.clone(),
+            slots: self.slots.clone(),
             vregs: self.vregs.clone(),
             trap: self.trap,
             returned: self.returned,
@@ -322,12 +357,14 @@ impl DebuggerSession {
     fn restore(&mut self, snapshot: SessionSnapshot) {
         self.cursor = snapshot.cursor;
         self.output = snapshot.output;
+        self.slots = snapshot.slots;
         self.vregs = snapshot.vregs;
         self.trap = snapshot.trap;
         self.returned = snapshot.returned;
         self.current = snapshot.current;
         self.next_inst = snapshot.next_inst;
         self.steps = snapshot.steps;
+        self.sync_ctx_from_cursor();
     }
 
     fn read_vreg(&self, idx: usize) -> u64 {
@@ -347,6 +384,34 @@ impl DebuggerSession {
         }
     }
 
+    fn ensure_slot_index(&mut self, slot: usize) {
+        if slot >= self.slots.len() {
+            self.slots.resize(slot + 1, 0);
+        }
+    }
+
+    fn read_slot(&self, slot: usize) -> u64 {
+        self.slots.get(slot).copied().unwrap_or(0)
+    }
+
+    fn write_slot(&mut self, slot: usize, value: u64) {
+        self.ensure_slot_index(slot);
+        self.slots[slot] = value;
+    }
+
+    fn slot_addr(&mut self, slot: usize) -> u64 {
+        self.ensure_slot_index(slot);
+        (&mut self.slots[slot] as *mut u64 as usize) as u64
+    }
+
+    fn sync_ctx_from_cursor(&mut self) {
+        self.ctx.input_ptr = unsafe { self.input_start.add(self.cursor) };
+    }
+
+    fn sync_cursor_from_ctx(&mut self) {
+        self.cursor = unsafe { self.ctx.input_ptr.offset_from(self.input_start) as usize };
+    }
+
     fn trap(&mut self, code: ErrorCode) {
         if self.trap.is_none() {
             self.trap = Some(InterpreterTrap {
@@ -363,6 +428,11 @@ impl DebuggerSession {
                 let value = self.read_vreg(src.index());
                 self.write_vreg(dst.index(), value);
             }
+            LinearOp::UnaryOp { op, dst, src } => {
+                let src = self.read_vreg(src.index());
+                let value = exec_unary(*op, src);
+                self.write_vreg(dst.index(), value);
+            }
             LinearOp::BinOp { op, dst, lhs, rhs } => {
                 let lhs = self.read_vreg(lhs.index());
                 let rhs = self.read_vreg(rhs.index());
@@ -371,6 +441,46 @@ impl DebuggerSession {
             LinearOp::BoundsCheck { count } => {
                 if self.cursor + (*count as usize) > self.input.len() {
                     self.trap(ErrorCode::UnexpectedEof);
+                }
+            }
+            LinearOp::PeekByte { dst } => {
+                if self.cursor >= self.input.len() {
+                    self.trap(ErrorCode::UnexpectedEof);
+                } else {
+                    self.write_vreg(dst.index(), self.input[self.cursor] as u64);
+                }
+            }
+            LinearOp::AdvanceCursor { count } => {
+                let count = *count as usize;
+                if self.cursor + count > self.input.len() {
+                    self.trap(ErrorCode::UnexpectedEof);
+                } else {
+                    self.cursor += count;
+                    self.sync_ctx_from_cursor();
+                }
+            }
+            LinearOp::AdvanceCursorBy { src } => {
+                let count = self.read_vreg(src.index()) as usize;
+                if self.cursor + count > self.input.len() {
+                    self.trap(ErrorCode::UnexpectedEof);
+                } else {
+                    self.cursor += count;
+                    self.sync_ctx_from_cursor();
+                }
+            }
+            LinearOp::SaveCursor { dst } => {
+                let ptr = unsafe { self.input_start.add(self.cursor) } as usize as u64;
+                self.write_vreg(dst.index(), ptr);
+            }
+            LinearOp::RestoreCursor { src } => {
+                let ptr = self.read_vreg(src.index()) as usize;
+                let start = self.input_start as usize;
+                let end = start + self.input.len();
+                if !(start..=end).contains(&ptr) {
+                    self.trap(ErrorCode::UnexpectedEof);
+                } else {
+                    self.cursor = ptr - start;
+                    self.sync_ctx_from_cursor();
                 }
             }
             LinearOp::ReadBytes { dst, count } => {
@@ -383,6 +493,7 @@ impl DebuggerSession {
                         value |= (self.input[self.cursor + i] as u64) << (i * 8);
                     }
                     self.cursor += count;
+                    self.sync_ctx_from_cursor();
                     self.write_vreg(dst.index(), value);
                 }
             }
@@ -404,6 +515,84 @@ impl DebuggerSession {
                     value |= (self.output[base + i] as u64) << (i * 8);
                 }
                 self.write_vreg(dst.index(), value);
+            }
+            LinearOp::SlotAddr { dst, slot } => {
+                let ptr = self.slot_addr(slot.index());
+                self.write_vreg(dst.index(), ptr);
+            }
+            LinearOp::WriteToSlot { slot, src } => {
+                let value = self.read_vreg(src.index());
+                self.write_slot(slot.index(), value);
+            }
+            LinearOp::ReadFromSlot { dst, slot } => {
+                let value = self.read_slot(slot.index());
+                self.write_vreg(dst.index(), value);
+            }
+            LinearOp::CallPure { func, args, dst } => {
+                let arg_values: Vec<u64> =
+                    args.iter().map(|arg| self.read_vreg(arg.index())).collect();
+                let result = unsafe { call_pure_u64(func.0, &arg_values) }.map_err(|err| {
+                    DebuggerError::IntrinsicCallFailed {
+                        block,
+                        op: "CallPure".to_owned(),
+                        detail: err.to_string(),
+                    }
+                })?;
+                self.write_vreg(dst.index(), result);
+            }
+            LinearOp::CallIntrinsic {
+                func,
+                args,
+                dst,
+                field_offset,
+            } => {
+                self.ctx.error.code = 0;
+                self.ctx.error.offset = 0;
+                let arg_values: Vec<u64> =
+                    args.iter().map(|arg| self.read_vreg(arg.index())).collect();
+                match dst {
+                    Some(dst) => {
+                        let result = unsafe {
+                            call_intrinsic_with_result(func.0, &mut self.ctx, &arg_values)
+                        }
+                        .map_err(|err| {
+                            DebuggerError::IntrinsicCallFailed {
+                                block,
+                                op: "CallIntrinsic(result)".to_owned(),
+                                detail: err.to_string(),
+                            }
+                        })?;
+                        self.write_vreg(dst.index(), result);
+                    }
+                    None => {
+                        let out_base = *field_offset as usize;
+                        self.ensure_output_len(out_base + INTRINSIC_OUT_SCRATCH_BYTES);
+                        let out_ptr = unsafe { self.output.as_mut_ptr().add(out_base) };
+                        unsafe {
+                            call_intrinsic_with_output(func.0, &mut self.ctx, &arg_values, out_ptr)
+                        }
+                        .map_err(|err| {
+                            DebuggerError::IntrinsicCallFailed {
+                                block,
+                                op: "CallIntrinsic(output)".to_owned(),
+                                detail: err.to_string(),
+                            }
+                        })?;
+                    }
+                }
+
+                self.sync_cursor_from_ctx();
+                if self.ctx.error.code != 0 {
+                    let code = decode_error_code(self.ctx.error.code).ok_or(
+                        DebuggerError::UnknownIntrinsicErrorCode {
+                            raw: self.ctx.error.code,
+                        },
+                    )?;
+                    self.trap = Some(InterpreterTrap {
+                        code,
+                        offset: self.ctx.error.offset,
+                    });
+                }
             }
             LinearOp::ErrorExit { code } => {
                 self.trap(*code);
@@ -464,11 +653,16 @@ impl DebuggerSession {
                 self.current = next;
                 self.next_inst = 0;
             }
-            term => {
-                return Err(DebuggerError::UnsupportedTerminator {
-                    block: block_id,
-                    term: format!("{term:?}"),
-                });
+            RaTerminator::JumpTable {
+                predicate,
+                targets,
+                default,
+            } => {
+                let pred = self.read_vreg(predicate.index()) as usize;
+                let next = targets.get(pred).copied().unwrap_or(*default);
+                self.apply_edge_args(block_id, next)?;
+                self.current = next;
+                self.next_inst = 0;
             }
         }
 
@@ -531,6 +725,25 @@ fn infer_output_size(func: &RaFunction) -> usize {
             | LinearOp::ReadFromField { offset, width, .. } => {
                 Some(*offset as usize + width.bytes() as usize)
             }
+            LinearOp::CallIntrinsic {
+                dst: None,
+                field_offset,
+                ..
+            } => Some(*field_offset as usize + INTRINSIC_OUT_SCRATCH_BYTES),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn infer_slot_count(func: &RaFunction) -> usize {
+    func.blocks
+        .iter()
+        .flat_map(|block| block.insts.iter())
+        .filter_map(|inst| match &inst.op {
+            LinearOp::SlotAddr { slot, .. }
+            | LinearOp::WriteToSlot { slot, .. }
+            | LinearOp::ReadFromSlot { slot, .. } => Some(slot.index() + 1),
             _ => None,
         })
         .max()
@@ -562,9 +775,55 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
     }
 }
 
+fn exec_unary(op: UnaryOpKind, src: u64) -> u64 {
+    match op {
+        UnaryOpKind::ZigzagDecode { wide: true } => {
+            ((src >> 1) as i64 ^ -((src & 1) as i64)) as u64
+        }
+        UnaryOpKind::ZigzagDecode { wide: false } => {
+            let src = src as u32;
+            ((src >> 1) as i32 ^ -((src & 1) as i32)) as i64 as u64
+        }
+        UnaryOpKind::SignExtend { from_width } => match from_width.bytes() {
+            1 => (src as u8 as i8 as i64) as u64,
+            2 => (src as u16 as i16 as i64) as u64,
+            4 => (src as u32 as i32 as i64) as u64,
+            8 => src,
+            _ => src,
+        },
+    }
+}
+
+fn decode_error_code(raw: u32) -> Option<ErrorCode> {
+    Some(match raw {
+        0 => ErrorCode::Ok,
+        1 => ErrorCode::UnexpectedEof,
+        2 => ErrorCode::InvalidVarint,
+        3 => ErrorCode::InvalidUtf8,
+        4 => ErrorCode::UnsupportedShape,
+        5 => ErrorCode::ExpectedObjectStart,
+        6 => ErrorCode::ExpectedColon,
+        7 => ErrorCode::ExpectedStringKey,
+        8 => ErrorCode::UnterminatedString,
+        9 => ErrorCode::InvalidJsonNumber,
+        10 => ErrorCode::MissingRequiredField,
+        11 => ErrorCode::UnexpectedCharacter,
+        12 => ErrorCode::NumberOutOfRange,
+        13 => ErrorCode::InvalidBool,
+        14 => ErrorCode::UnknownVariant,
+        15 => ErrorCode::ExpectedTagKey,
+        16 => ErrorCode::AmbiguousVariant,
+        17 => ErrorCode::AllocError,
+        18 => ErrorCode::InvalidEscapeSequence,
+        19 => ErrorCode::UnknownField,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use kajit_ir::{ErrorCode, LambdaId, VReg, Width};
+    use kajit_abi::DeserContext;
+    use kajit_ir::{ErrorCode, IntrinsicFn, LambdaId, SlotId, VReg, Width};
     use kajit_lir::LinearOp;
 
     use crate::{
@@ -645,6 +904,67 @@ mod tests {
         }
     }
 
+    unsafe extern "C" fn read_u8_intrinsic(ctx: *mut DeserContext) -> u64 {
+        let ctx = unsafe { &mut *ctx };
+        if ctx.input_ptr >= ctx.input_end {
+            ctx.error.code = ErrorCode::UnexpectedEof as u32;
+            ctx.error.offset = 0;
+            return 0;
+        }
+        let byte = unsafe { *ctx.input_ptr };
+        ctx.input_ptr = unsafe { ctx.input_ptr.add(1) };
+        byte as u64
+    }
+
+    unsafe extern "C" fn store_u8_intrinsic(_ctx: *mut DeserContext, value: u64, out: *mut u8) {
+        unsafe { *out = value as u8 };
+    }
+
+    fn make_intrinsic_program() -> RaProgram {
+        let b0 = RaBlock {
+            id: BlockId(0),
+            label: None,
+            params: Vec::new(),
+            insts: vec![
+                test_inst(LinearOp::CallIntrinsic {
+                    func: IntrinsicFn(read_u8_intrinsic as *const () as usize),
+                    args: vec![],
+                    dst: Some(v(0)),
+                    field_offset: 0,
+                }),
+                test_inst(LinearOp::WriteToSlot {
+                    slot: SlotId::new(0),
+                    src: v(0),
+                }),
+                test_inst(LinearOp::ReadFromSlot {
+                    dst: v(1),
+                    slot: SlotId::new(0),
+                }),
+                test_inst(LinearOp::CallIntrinsic {
+                    func: IntrinsicFn(store_u8_intrinsic as *const () as usize),
+                    args: vec![v(1)],
+                    dst: None,
+                    field_offset: 2,
+                }),
+            ],
+            term_linear_op_index: None,
+            term: RaTerminator::Return,
+            preds: Vec::new(),
+            succs: Vec::new(),
+        };
+        RaProgram {
+            funcs: vec![RaFunction {
+                lambda_id: LambdaId::new(0),
+                entry: BlockId(0),
+                data_args: Vec::new(),
+                data_results: Vec::new(),
+                blocks: vec![b0],
+            }],
+            vreg_count: 2,
+            slot_count: 1,
+        }
+    }
+
     #[test]
     fn step_forward_and_back_restores_state() {
         let program = make_simple_program();
@@ -676,5 +996,23 @@ mod tests {
         let trap = event.trap.expect("trap should be recorded");
         assert_eq!(trap.code, ErrorCode::UnexpectedEof);
         assert_eq!(trap.offset, 0);
+    }
+
+    #[test]
+    fn call_intrinsic_and_slot_ops_step_and_rewind() {
+        let program = make_intrinsic_program();
+        let mut session = DebuggerSession::new(&program, &[0x2a]).expect("debugger should init");
+
+        session.step_forward().expect("step should work");
+        assert_eq!(session.state().cursor, 1);
+        assert_eq!(session.inspect_vreg(0), 0x2a);
+
+        session.step_forward().expect("step should work");
+        session.step_forward().expect("step should work");
+        session.step_forward().expect("step should work");
+        assert_eq!(session.inspect_output(2, 1), vec![0x2a]);
+
+        assert!(session.step_back());
+        assert_eq!(session.inspect_output(2, 1), vec![0x00]);
     }
 }

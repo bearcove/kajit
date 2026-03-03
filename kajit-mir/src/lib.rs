@@ -1,5 +1,6 @@
 mod debugger;
 mod interpreter;
+mod intrinsic_calls;
 mod regalloc_engine;
 mod regalloc_mir;
 
