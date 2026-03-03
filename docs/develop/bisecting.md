@@ -95,7 +95,7 @@ Instead, dump pipeline artifacts only when you need them:
 
 | Variable | What it does |
 |----------|-------------|
-| `KAJIT_DUMP_STAGES` | Comma-separated stage list: `ir`, `linear`, `ra`, `edits`, `opts`, or `all` |
+| `KAJIT_DUMP_STAGES` | Comma-separated stage list: `ir`, `linear`, `ra`, `postreg`, `edits`, `opts`, or `all` |
 | `KAJIT_DUMP_FILTER` | Optional comma-separated substring filters matched against `"<format>::<case>"` (e.g. `json::all_scalars`) |
 | `KAJIT_DUMP_DIR` | Output directory (default: workspace `target/kajit-stage-dumps`) |
 | `KAJIT_ASSERT_CODEGEN_SNAPSHOTS` | Set to `1` to opt back into legacy snapshot assertions |
@@ -105,7 +105,7 @@ Instead, dump pipeline artifacts only when you need them:
 Focus on a specific test with optimization toggles:
 ```bash
 KAJIT_OPTS='+all_opts,+regalloc,-pass.theta_loop_invariant_hoist' \
-KAJIT_DUMP_STAGES='ir,linear,ra,edits' \
+KAJIT_DUMP_STAGES='ir,linear,ra,postreg,edits' \
 KAJIT_DUMP_FILTER='json::all_scalars' \
 cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
 ```

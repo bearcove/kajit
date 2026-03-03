@@ -2500,6 +2500,7 @@ pub(crate) fn render_test_file() -> String {
             ir_text: String,
             linear_text: String,
             ra_text: String,
+            postreg_text: String,
             edits: usize,
             opt_timeline: Vec<(String, String)>,
         }
@@ -2512,12 +2513,14 @@ pub(crate) fn render_test_file() -> String {
             let shape = T::SHAPE;
             let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
             let linear_text = kajit::debug_linear_ir_text(shape, decoder);
+            let postreg_text = kajit::debug_post_regalloc_text(shape, decoder);
             let edits = kajit::regalloc_edit_count(shape, decoder);
             let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, decoder);
             CodegenArtifacts {
                 ir_text,
                 linear_text,
                 ra_text,
+                postreg_text,
                 edits,
                 opt_timeline,
             }
@@ -2623,6 +2626,9 @@ pub(crate) fn render_test_file() -> String {
             }
             if should_dump_stage("ra") {
                 dump_stage(format_label, case, "ra", &artifacts.ra_text);
+            }
+            if should_dump_stage("postreg") {
+                dump_stage(format_label, case, "postreg", &artifacts.postreg_text);
             }
             if should_dump_stage("edits") {
                 dump_stage(format_label, case, "edits", &format!("{}", artifacts.edits));
