@@ -2169,8 +2169,8 @@ If any assertion fails, compilation panics with a message identifying
 exactly which layout assumption broke. This catches rustc layout changes
 at JIT-compile time, not at runtime.
 
-For LLDB workflows when debugging generated JIT code and resolving JIT symbol
-names on macOS, see `docs/jit-debugging.md`.
+For debugging workflows (MIR interpreter, LLDB, GDB), see
+[`docs/develop/`](develop/README.md).
 
 ```rust
 fn validate_vec_layout() {

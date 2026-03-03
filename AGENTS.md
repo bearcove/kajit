@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Development/debugging guide
-- For debugger workflows (LLDB/GDB), JIT symbolization, and step-by-step JIT debugging, see `/Users/amos/bearcove/kajit/DEVELOP.md`.
+- For debugging and testing workflows, see `docs/develop/` — start with the [README](docs/develop/README.md) to find the right page for your problem.
 
 ## Compiler architecture principles
 - Expand backend capabilities to support required IR semantics; do not work around backend limitations in lowering or intrinsic selection.
