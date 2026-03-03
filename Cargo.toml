@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "kajit-abi",
   "kajit",
   "kajit-ir",
   "kajit-ir-text",

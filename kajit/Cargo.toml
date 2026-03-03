@@ -20,6 +20,7 @@ regalloc2 = "0.15"
 kajit-ir = { path = "../kajit-ir" }
 kajit-ir-text = { path = "../kajit-ir-text" }
 kajit-lir = { path = "../kajit-lir" }
+kajit-abi = { path = "../kajit-abi" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
 
