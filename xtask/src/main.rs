@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use proc_macro2::TokenStream;
 
@@ -141,6 +141,7 @@ fn main() {
     let command_args: Vec<String> = args.collect();
 
     match command.as_deref() {
+        Some("install") => install(),
         Some("gen") => {
             generate_synthetic();
             generate_ir_behavior_corpus();
@@ -150,11 +151,98 @@ fn main() {
         Some("test-x86_64") => test_x86_64(&command_args),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <gen|test-x86_64 [--full] [-- <extra nextest args...>]>"
+                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|test-x86_64 [--full] [-- <extra nextest args...>]>"
             );
             std::process::exit(2);
         }
     }
+}
+
+fn install() {
+    let root = workspace_root();
+    let package = "kajit-mir-mcp";
+    let binary = platform_binary_name(package);
+
+    println!("building {package} in release mode...");
+    let status = Command::new("cargo")
+        .args(["build", "--release", "-p", package])
+        .current_dir(&root)
+        .status()
+        .expect("failed to run cargo build");
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    let src = root.join("target").join("release").join(&binary);
+    if !src.exists() {
+        eprintln!("build finished but binary not found at {}", src.display());
+        std::process::exit(1);
+    }
+
+    let dst_dir = cargo_bin_dir();
+    if let Err(err) = fs::create_dir_all(&dst_dir) {
+        eprintln!(
+            "failed to create cargo bin directory {}: {err}",
+            dst_dir.display()
+        );
+        std::process::exit(1);
+    }
+
+    let dst = dst_dir.join(&binary);
+    if let Err(err) = fs::copy(&src, &dst) {
+        eprintln!(
+            "failed to copy {} to {}: {err}",
+            src.display(),
+            dst.display()
+        );
+        std::process::exit(1);
+    }
+    println!("copied {package} to {}", dst.display());
+
+    #[cfg(target_os = "macos")]
+    {
+        println!("codesigning installed binary...");
+        let status = Command::new("codesign")
+            .args(["--sign", "-", "--force"])
+            .arg(&dst)
+            .status()
+            .expect("failed to run codesign");
+        if !status.success() {
+            eprintln!("warning: codesign failed, continuing anyway");
+        } else {
+            let verify = Command::new("codesign")
+                .args(["--verify", "--verbose=2"])
+                .arg(&dst)
+                .status()
+                .expect("failed to run codesign --verify");
+            if !verify.success() {
+                eprintln!("warning: codesign verification failed, continuing anyway");
+            }
+        }
+    }
+
+    println!("validating installed binary...");
+    let output = Command::new(&dst)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap_or_else(|err| {
+            eprintln!("failed to execute {}: {err}", dst.display());
+            std::process::exit(1);
+        });
+    if !output.status.success() {
+        eprintln!(
+            "installed binary exited with {} while validating",
+            output.status
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if !stderr.trim().is_empty() {
+            eprintln!("stderr:\n{stderr}");
+        }
+        std::process::exit(output.status.code().unwrap_or(1));
+    }
+    println!("installed and validated: {}", dst.display());
 }
 
 fn benches_prefix() -> PathBuf {
@@ -203,6 +291,35 @@ fn workspace_root() -> PathBuf {
         .parent()
         .expect("xtask should live in workspace/xtask")
         .to_path_buf()
+}
+
+fn platform_binary_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    }
+}
+
+fn cargo_bin_dir() -> PathBuf {
+    if let Some(cargo_home) = std::env::var_os("CARGO_HOME") {
+        let cargo_home = PathBuf::from(cargo_home);
+        if cargo_home.is_absolute() {
+            return cargo_home.join("bin");
+        }
+        return home_dir().join(cargo_home).join("bin");
+    }
+    home_dir().join(".cargo").join("bin")
+}
+
+fn home_dir() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home);
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        return PathBuf::from(home);
+    }
+    panic!("unable to determine home directory (HOME/USERPROFILE are unset)");
 }
 
 fn write_file(path: &Path, content: &str) {
