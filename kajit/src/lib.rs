@@ -29,6 +29,8 @@ pub mod regalloc_mir;
 pub mod regalloc_mir_parse;
 pub mod solver;
 
+use std::collections::HashMap;
+
 use compiler::CompiledDecoder;
 use context::{DeserContext, ErrorCode};
 pub use pipeline_opts::PipelineOptions;
@@ -140,8 +142,7 @@ pub fn debug_ir_and_ra_mir_text(
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     let registry = known_intrinsic_registry();
-    let ir_text =
-        scrub_volatile_intrinsic_addrs(&format!("{}", func.display_with_registry(&registry)));
+    let ir_text = render_ir_text_for_debug_dump(&func, &registry);
     let linear = linearize::linearize(&mut func);
     let ra = regalloc_mir::lower_linear_ir(&linear);
     let ra_text =
@@ -198,7 +199,7 @@ pub fn debug_ir_opt_timeline_text_with_options(
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     let mut checkpoints = vec![(
         "initial".to_string(),
-        scrub_volatile_intrinsic_addrs(&format!("{}", func.display_with_registry(&registry))),
+        render_ir_text_for_debug_dump(&func, &registry),
     )];
 
     compiler::run_configured_default_passes_with_observer(
@@ -207,15 +208,155 @@ pub fn debug_ir_opt_timeline_text_with_options(
         |pass, func| {
             checkpoints.push((
                 pass.to_string(),
-                scrub_volatile_intrinsic_addrs(&format!(
-                    "{}",
-                    func.display_with_registry(&registry)
-                )),
+                render_ir_text_for_debug_dump(func, &registry),
             ));
         },
     );
 
     checkpoints
+}
+
+fn render_ir_text_for_debug_dump(func: &ir::IrFunc, registry: &ir::IntrinsicRegistry) -> String {
+    let rendered = format!("{}", func.display_with_registry(registry));
+    let const_data_hex_by_node = collect_const_data_hex_by_const_node(func, registry);
+    let rewritten = rewrite_const_lines_with_data_hex(&rendered, &const_data_hex_by_node);
+    scrub_volatile_intrinsic_addrs(&rewritten)
+}
+
+fn collect_const_data_hex_by_const_node(
+    func: &ir::IrFunc,
+    registry: &ir::IntrinsicRegistry,
+) -> HashMap<usize, String> {
+    let mut out = HashMap::new();
+
+    for (_node_id, node) in func.nodes.iter() {
+        let ir::NodeKind::Simple(ir::IrOp::CallPure {
+            func: pure_fn,
+            arg_count,
+        }) = &node.kind
+        else {
+            continue;
+        };
+        if registry.name_of(*pure_fn) != Some("kajit_json_key_equals") {
+            continue;
+        }
+        if *arg_count < 4 || node.inputs.len() < 4 {
+            continue;
+        }
+
+        for (ptr_index, len_index) in [(0usize, 1usize), (2usize, 3usize)] {
+            let Some((ptr_const_node, ptr_value)) =
+                const_node_and_value_from_input(func, node, ptr_index)
+            else {
+                continue;
+            };
+            let Some((_, len_value)) = const_node_and_value_from_input(func, node, len_index)
+            else {
+                continue;
+            };
+            let Some(hex) = read_ptr_bytes_as_hex(ptr_value, len_value) else {
+                continue;
+            };
+            out.insert(ptr_const_node.index(), hex);
+        }
+    }
+
+    out
+}
+
+fn const_node_and_value_from_input(
+    func: &ir::IrFunc,
+    node: &ir::Node,
+    input_index: usize,
+) -> Option<(ir::NodeId, u64)> {
+    let input = node.inputs.get(input_index)?;
+    let ir::PortSource::Node(output_ref) = input.source else {
+        return None;
+    };
+    let producer = &func.nodes[output_ref.node];
+    let ir::NodeKind::Simple(ir::IrOp::Const { value }) = &producer.kind else {
+        return None;
+    };
+    Some((output_ref.node, *value))
+}
+
+fn read_ptr_bytes_as_hex(ptr_value: u64, len_value: u64) -> Option<String> {
+    let len = usize::try_from(len_value).ok()?;
+    if len > 1024 {
+        return None;
+    }
+    if len == 0 {
+        return Some(String::new());
+    }
+    let ptr = ptr_value as *const u8;
+    if ptr.is_null() {
+        return None;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(ptr, len) };
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    Some(out)
+}
+
+fn rewrite_const_lines_with_data_hex(
+    text: &str,
+    const_data_hex_by_node: &HashMap<usize, String>,
+) -> String {
+    if const_data_hex_by_node.is_empty() {
+        return text.to_owned();
+    }
+
+    let mut out = String::with_capacity(text.len() + const_data_hex_by_node.len() * 24);
+    for chunk in text.split_inclusive('\n') {
+        let (line, newline) = match chunk.strip_suffix('\n') {
+            Some(line) => (line, "\n"),
+            None => (chunk, ""),
+        };
+
+        if let Some((prefix, node_id, suffix)) = split_const_line(line) {
+            if let Some(hex) = const_data_hex_by_node.get(&node_id) {
+                out.push_str(prefix);
+                out.push_str("ConstDataHex(\"");
+                out.push_str(hex);
+                out.push_str("\")");
+                out.push_str(suffix);
+                out.push_str(newline);
+                continue;
+            }
+        }
+
+        out.push_str(line);
+        out.push_str(newline);
+    }
+
+    out
+}
+
+fn split_const_line(line: &str) -> Option<(&str, usize, &str)> {
+    let marker = " = Const(0x";
+    let eq_idx = line.find(marker)?;
+    let lhs = line[..eq_idx].trim_start();
+    let node_digits = lhs.strip_prefix('n')?;
+    if node_digits.is_empty() || !node_digits.chars().all(|ch| ch.is_ascii_digit()) {
+        return None;
+    }
+    let node_id = node_digits.parse::<usize>().ok()?;
+
+    let hex_start = eq_idx + marker.len();
+    let bytes = line.as_bytes();
+    let mut i = hex_start;
+    while i < bytes.len() && bytes[i].is_ascii_hexdigit() {
+        i += 1;
+    }
+    if i == hex_start || i >= bytes.len() || bytes[i] != b')' {
+        return None;
+    }
+
+    let prefix = &line[..eq_idx + 3];
+    let suffix = &line[i + 1..];
+    Some((prefix, node_id, suffix))
 }
 
 fn scrub_volatile_intrinsic_addrs(text: &str) -> String {
@@ -371,7 +512,15 @@ mod disasm_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_decoder_from_ra_mir_text, known_intrinsic_registry};
+    use super::{
+        compile_decoder_from_ra_mir_text, debug_ir_opt_timeline_text, known_intrinsic_registry,
+    };
+    use facet::Facet;
+
+    #[derive(Facet)]
+    struct JsonKeyConstSmoke {
+        value: u8,
+    }
 
     #[test]
     fn known_intrinsic_registry_contains_common_intrinsics() {
@@ -402,5 +551,16 @@ ra_func @0 {
             .or_else(|| panic.downcast_ref::<String>().cloned())
             .unwrap_or_default();
         assert!(msg.contains("0x<ptr>"));
+    }
+
+    #[test]
+    fn debug_opt_timeline_uses_const_data_hex_for_json_key_constants() {
+        let timeline =
+            debug_ir_opt_timeline_text(JsonKeyConstSmoke::SHAPE, &super::json::KajitJson);
+        let initial = &timeline[0].1;
+        assert!(
+            initial.contains("ConstDataHex(\""),
+            "expected replayable const-data entries in initial checkpoint:\n{initial}"
+        );
     }
 }

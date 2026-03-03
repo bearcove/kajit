@@ -316,6 +316,15 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
     ));
 
     let arith_ops = choice((
+        just("ConstDataHex(\"")
+            .ignore_then(
+                any()
+                    .filter(|c: &char| c.is_ascii_hexdigit())
+                    .repeated()
+                    .collect::<String>(),
+            )
+            .then_ignore(just("\")"))
+            .map(AstOp::ConstDataHex),
         just("Const(")
             .ignore_then(uint64())
             .then_ignore(just(")"))
@@ -367,6 +376,7 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
 #[derive(Debug, Clone)]
 enum AstOp {
     Resolved(IrOp),
+    ConstDataHex(String),
     CallIntrinsic {
         func: IntrinsicRef,
         field_offset: u32,
@@ -1172,6 +1182,16 @@ fn resolve_output(o: &AstOutput, max_vreg: &mut u32) -> OutputPort {
 fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseError> {
     match op {
         AstOp::Resolved(ir_op) => Ok(ir_op.clone()),
+        AstOp::ConstDataHex(hex) => {
+            let bytes = decode_hex_bytes(hex)?;
+            let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+            let ptr = if leaked.is_empty() {
+                std::ptr::NonNull::<u8>::dangling().as_ptr() as u64
+            } else {
+                leaked.as_ptr() as u64
+            };
+            Ok(IrOp::Const { value: ptr })
+        }
         AstOp::CallIntrinsic { func, field_offset } => {
             let intrinsic = resolve_intrinsic(func, registry)?;
             // Count args from the inputs (they'll be resolved separately).
@@ -1193,6 +1213,30 @@ fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseErr
             })
         }
     }
+}
+
+fn decode_hex_bytes(hex: &str) -> Result<Vec<u8>, ParseError> {
+    if hex.len() % 2 != 0 {
+        return Err(ParseError {
+            message: format!(
+                "ConstDataHex payload has odd number of digits: {}",
+                hex.len()
+            ),
+        });
+    }
+
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    let bytes = hex.as_bytes();
+    for chunk in bytes.chunks_exact(2) {
+        let hi = (chunk[0] as char).to_digit(16).ok_or_else(|| ParseError {
+            message: format!("ConstDataHex has invalid hex digit: {}", chunk[0] as char),
+        })?;
+        let lo = (chunk[1] as char).to_digit(16).ok_or_else(|| ParseError {
+            message: format!("ConstDataHex has invalid hex digit: {}", chunk[1] as char),
+        })?;
+        out.push(((hi << 4) | lo) as u8);
+    }
+    Ok(out)
 }
 
 fn resolve_intrinsic(
@@ -1273,6 +1317,34 @@ lambda @0 (shape: "u8") {
             NodeKind::Simple(IrOp::Const { value }) => assert_eq!(*value, 0x2a),
             other => panic!("expected Const, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_const_data_hex_allocates_bytes() {
+        let input = r#"
+lambda @0 (shape: "u8") {
+  region {
+    args: [%cs, %os]
+    n0 = ConstDataHex("626f6f6c") [] -> [v0]
+    n1 = Const(0x4) [] -> [v1]
+    n2 = CallPure(0x0) [v0, v1, v0, v1] -> [v2]
+    results: [%cs:arg, %os:arg]
+  }
+}
+"#;
+
+        let registry = IntrinsicRegistry::empty();
+        let func = parse_ir(input, test_shape(), &registry).unwrap();
+        let root_body = func.root_body();
+        let region = &func.regions[root_body];
+        let node0 = &func.nodes[region.nodes[0]];
+
+        let ptr = match &node0.kind {
+            NodeKind::Simple(IrOp::Const { value }) => *value as *const u8,
+            other => panic!("expected Const, got {other:?}"),
+        };
+        let bytes = unsafe { std::slice::from_raw_parts(ptr, 4) };
+        assert_eq!(bytes, b"bool");
     }
 
     #[test]
