@@ -51,6 +51,45 @@ You can pass extra nextest arguments to the helper:
 cargo xtask test-x86_64 -- --no-fail-fast
 ```
 
+### Pipeline bisecting with `KAJIT_OPTS`
+
+Use `KAJIT_OPTS` to selectively disable parts of the compile pipeline at
+runtime, without rebuilding.
+
+Syntax:
+- comma-separated tokens
+- `+name` enables an option
+- `-name` disables an option
+- bare `name` is treated like `+name`
+- unknown names fail fast
+
+Supported options:
+- `all_opts`: default RVSDG optimization passes before linearization
+- `regalloc`: regalloc edit application during backend emission
+
+Examples:
+```bash
+# disable optimization passes
+KAJIT_OPTS='-all_opts' cargo nextest run -p kajit <test_filter>
+
+# disable regalloc edit application
+KAJIT_OPTS='-regalloc' cargo nextest run -p kajit <test_filter>
+
+# disable both
+KAJIT_OPTS='-all_opts,-regalloc' cargo nextest run -p kajit <test_filter>
+```
+
+On Apple Silicon, combine with x86_64 Rosetta validation:
+```bash
+KAJIT_OPTS='-regalloc' cargo xtask test-x86_64 --full -- \
+  --test corpus -E 'test(=postcard::scalar_u16_v1)'
+```
+
+Interpretation notes:
+- Disabling `all_opts` can change IR/RA-MIR snapshots while preserving runtime behavior.
+- Disabling `regalloc` can intentionally surface semantic regressions and is useful
+  for isolating bugs in the regalloc/edit-application path.
+
 ### Debugging x86_64 tests with LLDB under Rosetta
 
 Build and run the x86_64 test binary through Rosetta:
