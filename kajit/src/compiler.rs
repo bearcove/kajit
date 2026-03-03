@@ -12,6 +12,7 @@ use crate::format::{
     VariantLowerInfo,
 };
 use crate::ir::{LambdaId, RegionBuilder, Width as IrWidth};
+use crate::pipeline_opts::PipelineOptions;
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
 pub struct CompiledDecoder {
@@ -646,19 +647,35 @@ impl<'a> IrShapeLowerer<'a> {
 
 /// Compile a deserializer through RVSDG + linearization + backend adapter.
 pub fn compile_decoder(shape: &'static Shape, decoder: &dyn Decoder) -> CompiledDecoder {
+    let pipeline_opts = PipelineOptions::from_env();
     let mut func = build_decoder_ir(shape, decoder);
+    // r[impl compiler.opts.all-opts]
+    if pipeline_opts.resolve_all_opts(false) {
+        crate::ir_passes::run_default_passes(&mut func);
+    }
     let linear = crate::linearize::linearize(&mut func);
-    compile_linear_ir_decoder(&linear, decoder.supports_trusted_utf8_input())
+    compile_linear_ir_decoder_with_options(
+        &linear,
+        decoder.supports_trusted_utf8_input(),
+        pipeline_opts,
+    )
 }
 
 // r[impl ir.regalloc.regressions]
 /// Build IR + linear form and run regalloc over it, returning total edit count.
 pub fn regalloc_edit_count(shape: &'static Shape, ir_decoder: &dyn Decoder) -> usize {
+    let pipeline_opts = PipelineOptions::from_env();
     let mut func = build_decoder_ir(shape, ir_decoder);
-    crate::ir_passes::run_default_passes(&mut func);
+    // r[impl compiler.opts.all-opts]
+    if pipeline_opts.resolve_all_opts(true) {
+        crate::ir_passes::run_default_passes(&mut func);
+    }
     let linear = crate::linearize::linearize(&mut func);
     let alloc = crate::regalloc_engine::allocate_linear_ir(&linear)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed while counting edits: {err}"));
+    if !pipeline_opts.resolve_regalloc(true) {
+        return 0;
+    }
     alloc.functions.iter().map(|f| f.edits.len()).sum()
 }
 
@@ -699,6 +716,26 @@ pub(crate) fn build_decoder_ir(
     builder.finish()
 }
 
+// r[impl compiler.opts.all-opts]
+pub(crate) fn should_run_default_passes(default_enabled: bool) -> bool {
+    PipelineOptions::from_env().resolve_all_opts(default_enabled)
+}
+
+// r[impl compiler.opts.regalloc]
+fn maybe_disable_regalloc_edits(
+    alloc: &mut crate::regalloc_engine::AllocatedProgram,
+    pipeline_opts: PipelineOptions,
+) {
+    if pipeline_opts.resolve_regalloc(true) {
+        return;
+    }
+
+    for func in &mut alloc.functions {
+        func.edits.clear();
+        func.edge_edits.clear();
+    }
+}
+
 /// Compile a deserializer from already-linearized IR.
 ///
 /// This is the first backend-adapter entrypoint used by the IR migration.
@@ -706,13 +743,22 @@ pub fn compile_linear_ir_decoder(
     ir: &crate::linearize::LinearIr,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
+    compile_linear_ir_decoder_with_options(ir, trusted_utf8_input, PipelineOptions::from_env())
+}
+
+fn compile_linear_ir_decoder_with_options(
+    ir: &crate::linearize::LinearIr,
+    trusted_utf8_input: bool,
+    pipeline_opts: PipelineOptions,
+) -> CompiledDecoder {
     // r[impl ir.regalloc.ra-mir]
     // Build allocator-oriented CFG IR before machine emission.
     let ra_mir = crate::regalloc_mir::lower_linear_ir(ir);
     // r[impl ir.regalloc.engine]
     // Run regalloc2 over RA-MIR and thread allocation artifacts into emission.
-    let regalloc_alloc = crate::regalloc_engine::allocate_program(&ra_mir)
+    let mut regalloc_alloc = crate::regalloc_engine::allocate_program(&ra_mir)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+    maybe_disable_regalloc_edits(&mut regalloc_alloc, pipeline_opts);
 
     let crate::ir_backend::LinearBackendResult { buf, entry } =
         crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
@@ -751,8 +797,9 @@ pub fn compile_linear_ir_decoder(
 ///
 /// This is the backend for the RA-MIR text test workflow.
 pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
-    let alloc = crate::regalloc_engine::allocate_program(program)
+    let mut alloc = crate::regalloc_engine::allocate_program(program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+    maybe_disable_regalloc_edits(&mut alloc, PipelineOptions::from_env());
 
     let crate::ir_backend::LinearBackendResult { buf, entry } =
         crate::ir_backend::compile_ra_program(program, &alloc);
