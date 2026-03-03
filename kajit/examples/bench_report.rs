@@ -415,10 +415,8 @@ fn parse_ndjson(input: &str) -> Vec<Section> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        // Only process result events (skip suite/start)
-        match v["type"].as_str() {
-            Some("suite") | Some("start") => continue,
-            _ => {}
+        if v["type"].as_str() != Some("result") {
+            continue;
         }
         let Some(name) = v["name"].as_str() else {
             continue;
@@ -542,8 +540,7 @@ fn display_name(name: &str) -> String {
         .unwrap_or(name);
     match normalize_impl_name(base) {
         "serde" => "serde".to_string(),
-        "kajit_dynasm" => "kajit_dynasm".to_string(),
-        "kajit_ir" => "kajit_ir".to_string(),
+        "kajit" => "kajit".to_string(),
         other => other.to_string(),
     }
 }
@@ -556,32 +553,17 @@ struct PairDef {
     label: &'static str,
 }
 
-const PAIRS: [PairDef; 3] = [
-    PairDef {
-        id: "serde-vs-kajit-dynasm",
-        left: "serde",
-        right: "kajit_dynasm",
-        label: "serde vs kajit_dynasm",
-    },
-    PairDef {
-        id: "serde-vs-kajit-ir",
-        left: "serde",
-        right: "kajit_ir",
-        label: "serde vs kajit_ir",
-    },
-    PairDef {
-        id: "kajit-ir-vs-kajit-dynasm",
-        left: "kajit_ir",
-        right: "kajit_dynasm",
-        label: "kajit_ir vs kajit_dynasm",
-    },
-];
+const PAIRS: [PairDef; 1] = [PairDef {
+    id: "serde-vs-kajit",
+    left: "serde",
+    right: "kajit",
+    label: "serde vs kajit",
+}];
 
 fn normalize_impl_name(name: &str) -> &str {
     match name {
         "postcard_serde" | "serde_json" => "serde",
-        "legacy" | "kajit_legacy" => "kajit_dynasm",
-        "ir" => "kajit_ir",
+        "kajit" | "legacy" | "kajit_legacy" | "kajit_dynasm" | "ir" | "kajit_ir" => "kajit",
         other => other,
     }
 }

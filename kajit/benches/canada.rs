@@ -94,7 +94,7 @@ fn main() {
     match kajit_preflight {
         Ok(_) => {
             v.push(harness::Bench {
-                name: "canada/kajit_dynasm_deser".into(),
+                name: "canada/kajit_deser".into(),
                 func: Box::new(|runner| {
                     let data = &*CANADA_STR;
                     let deser = &*KAJIT_CANADA;
@@ -108,7 +108,7 @@ fn main() {
         }
         Err(err) => {
             eprintln!(
-                "skipping canada/kajit_dynasm_deser: fixture currently unsupported by kajit ({err:?})"
+                "skipping canada/kajit_deser: fixture currently unsupported by kajit ({err:?})"
             );
         }
     }

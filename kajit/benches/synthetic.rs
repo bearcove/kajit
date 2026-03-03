@@ -2,10 +2,10 @@
 #[path = "harness.rs"]
 mod harness;
 use facet::Facet;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 use std::hint::black_box;
 use std::sync::Arc;
-use serde::{Serialize, Deserialize};
-use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
     age: u32,
@@ -220,8 +220,7 @@ struct Wrapper(u32);
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
 struct StringWrapper(
-    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
-    String,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")] String,
 );
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
@@ -312,16 +311,12 @@ struct UnitField {
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
-    #[proptest(
-        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
-    )]
+    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
     values: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Nums {
-    #[proptest(
-        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
-    )]
+    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
     vals: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -368,8 +363,7 @@ struct BTreeConfigMap {
 type Pair = (u32, String);
 fn register_bench_case<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
 where
-    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
-        + 'static,
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
 {
     let json_data = Arc::new(serde_json::to_string(&value).unwrap());
     let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
@@ -387,12 +381,9 @@ where
         func: Box::new({
             let data = Arc::clone(&json_data);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(
-                            serde_json::from_str::<T>(black_box(data.as_str())).unwrap(),
-                        );
-                    });
+                runner.run(|| {
+                    black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
+                });
             }
         }),
     });
@@ -418,10 +409,9 @@ where
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(serde_json::to_vec(black_box(&*value)).unwrap());
-                    });
+                runner.run(|| {
+                    black_box(serde_json::to_vec(black_box(&*value)).unwrap());
+                });
             }
         }),
     });
@@ -430,12 +420,9 @@ where
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(
-                            postcard::from_bytes::<T>(black_box(&data[..])).unwrap(),
-                        );
-                    });
+                runner.run(|| {
+                    black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                });
             }
         }),
     });
@@ -461,10 +448,9 @@ where
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
-                runner
-                    .run(|| {
-                        black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
-                    });
+                runner.run(|| {
+                    black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
+                });
             }
         }),
     });
@@ -556,79 +542,14 @@ fn main() {
             i32_min: -2147483648,
         },
     );
-    register_bench_case(&mut v, "scalar_u16__v0", 0u16);
-    register_bench_case(&mut v, "scalar_u16__v1", 1u16);
-    register_bench_case(&mut v, "scalar_u16__v2", 127u16);
-    register_bench_case(&mut v, "scalar_u16__v3", 128u16);
-    register_bench_case(&mut v, "scalar_u16__v4", 255u16);
-    register_bench_case(&mut v, "scalar_u16__v5", 16383u16);
-    register_bench_case(&mut v, "scalar_u16__v6", 16384u16);
-    register_bench_case(&mut v, "scalar_u16__v7", u16::MAX);
-    register_bench_case(&mut v, "scalar_u32__v0", 0u32);
-    register_bench_case(&mut v, "scalar_u32__v1", 1u32);
-    register_bench_case(&mut v, "scalar_u32__v2", 127u32);
-    register_bench_case(&mut v, "scalar_u32__v3", 128u32);
-    register_bench_case(&mut v, "scalar_u32__v4", 16383u32);
-    register_bench_case(&mut v, "scalar_u32__v5", 16384u32);
-    register_bench_case(&mut v, "scalar_u32__v6", (1u32 << 21) - 1);
-    register_bench_case(&mut v, "scalar_u32__v7", 1u32 << 21);
-    register_bench_case(&mut v, "scalar_u32__v8", u32::MAX);
-    register_bench_case(&mut v, "scalar_u64__v0", 0u64);
-    register_bench_case(&mut v, "scalar_u64__v1", 1u64);
-    register_bench_case(&mut v, "scalar_u64__v2", 127u64);
-    register_bench_case(&mut v, "scalar_u64__v3", 128u64);
-    register_bench_case(&mut v, "scalar_u64__v4", 16383u64);
-    register_bench_case(&mut v, "scalar_u64__v5", 16384u64);
-    register_bench_case(&mut v, "scalar_u64__v6", (1u64 << 21) - 1);
-    register_bench_case(&mut v, "scalar_u64__v7", 1u64 << 21);
-    register_bench_case(&mut v, "scalar_u64__v8", u64::MAX);
-    register_bench_case(&mut v, "scalar_i16__v0", i16::MIN);
-    register_bench_case(&mut v, "scalar_i16__v1", -16384i16);
-    register_bench_case(&mut v, "scalar_i16__v2", -129i16);
-    register_bench_case(&mut v, "scalar_i16__v3", -128i16);
-    register_bench_case(&mut v, "scalar_i16__v4", -1i16);
-    register_bench_case(&mut v, "scalar_i16__v5", 0i16);
-    register_bench_case(&mut v, "scalar_i16__v6", 1i16);
-    register_bench_case(&mut v, "scalar_i16__v7", 127i16);
-    register_bench_case(&mut v, "scalar_i16__v8", 128i16);
-    register_bench_case(&mut v, "scalar_i16__v9", i16::MAX);
-    register_bench_case(&mut v, "scalar_i32__v0", i32::MIN);
-    register_bench_case(&mut v, "scalar_i32__v1", -1_000_000i32);
-    register_bench_case(&mut v, "scalar_i32__v2", -16384i32);
-    register_bench_case(&mut v, "scalar_i32__v3", -129i32);
-    register_bench_case(&mut v, "scalar_i32__v4", -128i32);
-    register_bench_case(&mut v, "scalar_i32__v5", -1i32);
-    register_bench_case(&mut v, "scalar_i32__v6", 0i32);
-    register_bench_case(&mut v, "scalar_i32__v7", 1i32);
-    register_bench_case(&mut v, "scalar_i32__v8", 127i32);
-    register_bench_case(&mut v, "scalar_i32__v9", 128i32);
-    register_bench_case(&mut v, "scalar_i32__v10", 16384i32);
-    register_bench_case(&mut v, "scalar_i32__v11", 1_000_000i32);
-    register_bench_case(&mut v, "scalar_i32__v12", i32::MAX);
-    register_bench_case(&mut v, "scalar_i64__v0", i64::MIN);
-    register_bench_case(&mut v, "scalar_i64__v1", -1_000_000_000_000i64);
-    register_bench_case(&mut v, "scalar_i64__v2", -16384i64);
-    register_bench_case(&mut v, "scalar_i64__v3", -129i64);
-    register_bench_case(&mut v, "scalar_i64__v4", -128i64);
-    register_bench_case(&mut v, "scalar_i64__v5", -1i64);
-    register_bench_case(&mut v, "scalar_i64__v6", 0i64);
-    register_bench_case(&mut v, "scalar_i64__v7", 1i64);
-    register_bench_case(&mut v, "scalar_i64__v8", 127i64);
-    register_bench_case(&mut v, "scalar_i64__v9", 128i64);
-    register_bench_case(&mut v, "scalar_i64__v10", 16384i64);
-    register_bench_case(&mut v, "scalar_i64__v11", 1_000_000_000_000i64);
-    register_bench_case(&mut v, "scalar_i64__v12", i64::MAX);
+    register_bench_case(&mut v, "scalar_u16", 0u16);
+    register_bench_case(&mut v, "scalar_u32", 0u32);
+    register_bench_case(&mut v, "scalar_u64", 0u64);
+    register_bench_case(&mut v, "scalar_i16", i16::MIN);
+    register_bench_case(&mut v, "scalar_i32", i32::MIN);
+    register_bench_case(&mut v, "scalar_i64", i64::MIN);
     register_bench_case(&mut v, "bool_field", BoolField { value: true });
-    register_bench_case(&mut v, "enum_external__v0", Animal::Cat);
-    register_bench_case(
-        &mut v,
-        "enum_external__v1",
-        Animal::Dog {
-            name: "Rex".into(),
-            good_boy: true,
-        },
-    );
-    register_bench_case(&mut v, "enum_external__v2", Animal::Parrot("Polly".into()));
+    register_bench_case(&mut v, "enum_external", Animal::Cat);
     register_bench_case(
         &mut v,
         "enum_as_struct_field",
@@ -651,7 +572,13 @@ fn main() {
             values: (0..16).map(|i| i as u32).collect(),
         },
     );
-    register_bench_case(&mut v, "box_scalar", BoxedScalar { value: Box::new(42) });
+    register_bench_case(
+        &mut v,
+        "box_scalar",
+        BoxedScalar {
+            value: Box::new(42),
+        },
+    );
     register_bench_case(
         &mut v,
         "box_string",
@@ -671,12 +598,11 @@ fn main() {
     );
     register_bench_case(
         &mut v,
-        "option_box__v0",
+        "option_box",
         OptionBox {
             value: Some(Box::new(7)),
         },
     );
-    register_bench_case(&mut v, "option_box__v1", OptionBox { value: None });
     register_bench_case(
         &mut v,
         "vec_box",
@@ -710,19 +636,17 @@ fn main() {
             },
         },
     );
-    register_bench_case(&mut v, "option_u32__v0", WithOptU32 { value: Some(42) });
-    register_bench_case(&mut v, "option_u32__v1", WithOptU32 { value: None });
+    register_bench_case(&mut v, "option_u32", WithOptU32 { value: Some(42) });
     register_bench_case(
         &mut v,
-        "option_string__v0",
+        "option_string",
         WithOptStr {
             name: Some("Alice".into()),
         },
     );
-    register_bench_case(&mut v, "option_string__v1", WithOptStr { name: None });
     register_bench_case(
         &mut v,
-        "option_struct__v0",
+        "option_struct",
         WithOptAddr {
             addr: Some(Address {
                 city: "Portland".into(),
@@ -730,7 +654,6 @@ fn main() {
             }),
         },
     );
-    register_bench_case(&mut v, "option_struct__v1", WithOptAddr { addr: None });
     register_bench_case(
         &mut v,
         "multi_options",
@@ -740,23 +663,33 @@ fn main() {
             c: None,
         },
     );
-    register_bench_case(&mut v, "vec_u32__v0", Nums { vals: vec![1, 2, 3] });
-    register_bench_case(&mut v, "vec_u32__v1", Nums { vals: vec![] });
     register_bench_case(
         &mut v,
-        "vec_string__v0",
+        "vec_u32",
+        Nums {
+            vals: vec![1, 2, 3],
+        },
+    );
+    register_bench_case(
+        &mut v,
+        "vec_string",
         Names {
             items: vec!["hello".into(), "world".into()],
         },
     );
-    register_bench_case(&mut v, "vec_string__v1", Names { items: vec![] });
     register_bench_case(
         &mut v,
         "vec_nested_struct",
         AddressList {
             addrs: vec![
-                Address { city : "Portland".into(), zip : 97201 }, Address { city :
-                "Seattle".into(), zip : 98101 },
+                Address {
+                    city: "Portland".into(),
+                    zip: 97201,
+                },
+                Address {
+                    city: "Seattle".into(),
+                    zip: 98101,
+                },
             ],
         },
     );

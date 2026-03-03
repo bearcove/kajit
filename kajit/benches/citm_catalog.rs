@@ -165,7 +165,7 @@ fn main() {
         Ok(decoder) => Some(Arc::new(decoder)),
         Err(payload) => {
             eprintln!(
-                "skipping citm_catalog/kajit_dynasm_deser: compile unsupported ({})",
+                "skipping citm_catalog/kajit_deser: compile unsupported ({})",
                 panic_payload_to_string(payload)
             );
             None
@@ -176,7 +176,7 @@ fn main() {
         match kajit::from_str::<CitmCatalog>(decoder.as_ref(), &CITM_STR) {
             Ok(_) => {
                 v.push(harness::Bench {
-                    name: "citm_catalog/kajit_dynasm_deser".into(),
+                    name: "citm_catalog/kajit_deser".into(),
                     func: Box::new({
                         let decoder = Arc::clone(&decoder);
                         move |runner| {
@@ -197,7 +197,7 @@ fn main() {
             }
             Err(err) => {
                 eprintln!(
-                    "skipping citm_catalog/kajit_dynasm_deser: fixture unsupported by kajit ({err:?})"
+                    "skipping citm_catalog/kajit_deser: fixture unsupported by kajit ({err:?})"
                 );
             }
         }

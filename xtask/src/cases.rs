@@ -1782,17 +1782,11 @@ pub(crate) fn render_bench_file() -> String {
     let types = types_rs();
     let bench_calls: Vec<TokenStream> = cases
         .iter()
-        .flat_map(|case| {
-            case.values.iter().enumerate().map(|(sample_idx, value)| {
-                let sample_name = if case.values.len() == 1 {
-                    case.name.to_string()
-                } else {
-                    format!("{}__v{}", case.name, sample_idx)
-                };
-                let value = value.clone();
-                quote! {
-                    register_bench_case(&mut v, #sample_name, #value);
-                }
+        .filter_map(|case| {
+            let value = case.values.first()?.clone();
+            let sample_name = case.name.to_string();
+            Some(quote! {
+                register_bench_case(&mut v, #sample_name, #value);
             })
         })
         .collect();

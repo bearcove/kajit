@@ -302,7 +302,7 @@ fn main() {
         Ok(decoder) => Some(Arc::new(decoder)),
         Err(payload) => {
             eprintln!(
-                "skipping twitter/kajit_dynasm_deser: compile unsupported ({})",
+                "skipping twitter/kajit_deser: compile unsupported ({})",
                 panic_payload_to_string(payload)
             );
             None
@@ -313,7 +313,7 @@ fn main() {
         match kajit::from_str::<Twitter>(decoder.as_ref(), &TWITTER_STR) {
             Ok(_) => {
                 v.push(harness::Bench {
-                    name: "twitter/kajit_dynasm_deser".into(),
+                    name: "twitter/kajit_deser".into(),
                     func: Box::new({
                         let decoder = Arc::clone(&decoder);
                         move |runner| {
@@ -330,9 +330,7 @@ fn main() {
                 });
             }
             Err(err) => {
-                eprintln!(
-                    "skipping twitter/kajit_dynasm_deser: fixture unsupported by kajit ({err:?})"
-                );
+                eprintln!("skipping twitter/kajit_deser: fixture unsupported by kajit ({err:?})");
             }
         }
     }
