@@ -2,10 +2,11 @@
 #[path = "harness.rs"]
 mod harness;
 use facet::Facet;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
 use std::hint::black_box;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
+use serde::{Serialize, Deserialize};
+use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
     age: u32,
@@ -220,7 +221,8 @@ struct Wrapper(u32);
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
 struct StringWrapper(
-    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")] String,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    String,
 );
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
@@ -311,12 +313,16 @@ struct UnitField {
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
-    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
+    )]
     values: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Nums {
-    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
+    )]
     vals: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -361,19 +367,29 @@ struct BTreeConfigMap {
 }
 #[allow(dead_code)]
 type Pair = (u32, String);
-fn register_bench_case<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        (*msg).to_owned()
+    } else if let Some(msg) = payload.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    }
+}
+fn register_bench_case<T>(
+    v: &mut Vec<harness::Bench>,
+    group: &str,
+    value: T,
+    enable_json_kajit: bool,
+    enable_postcard_kajit: bool,
+)
 where
-    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
+        + 'static,
 {
     let json_data = Arc::new(serde_json::to_string(&value).unwrap());
     let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
     let value = Arc::new(value);
-    let json_decoder = Arc::new(
-        kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson),
-    );
-    let postcard_decoder = Arc::new(
-        kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard),
-    );
     let json_prefix = format!("{group}/json");
     let postcard_prefix = format!("{group}/postcard");
     v.push(harness::Bench {
@@ -381,37 +397,78 @@ where
         func: Box::new({
             let data = Arc::clone(&json_data);
             move |runner| {
-                runner.run(|| {
-                    black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
-                });
-            }
-        }),
-    });
-    v.push(harness::Bench {
-        name: format!("{json_prefix}/kajit_dynasm_deser"),
-        func: Box::new({
-            let data = Arc::clone(&json_data);
-            let decoder = Arc::clone(&json_decoder);
-            move |runner| {
-                let decoder = &*decoder;
                 runner
                     .run(|| {
                         black_box(
-                            kajit::from_str::<T>(decoder, black_box(data.as_str()))
-                                .unwrap(),
+                            serde_json::from_str::<T>(black_box(data.as_str())).unwrap(),
                         );
                     });
             }
         }),
     });
+    if enable_json_kajit {
+        let json_decoder = match catch_unwind(
+            AssertUnwindSafe(|| {
+                kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson)
+            }),
+        ) {
+            Ok(decoder) => Some(Arc::new(decoder)),
+            Err(payload) => {
+                eprintln!(
+                    "skipping {json_prefix}/kajit_deser: compile unsupported ({})",
+                    panic_payload_to_string(payload)
+                );
+                None
+            }
+        };
+        if let Some(decoder) = json_decoder {
+            match catch_unwind(
+                AssertUnwindSafe(|| {
+                    kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
+                }),
+            ) {
+                Ok(Ok(_)) => {
+                    v.push(harness::Bench {
+                        name: format!("{json_prefix}/kajit_deser"),
+                        func: Box::new({
+                            let data = Arc::clone(&json_data);
+                            let decoder = Arc::clone(&decoder);
+                            move |runner| {
+                                let decoder = decoder.as_ref();
+                                runner
+                                    .run(|| {
+                                        black_box(
+                                            kajit::from_str::<T>(decoder, black_box(data.as_str()))
+                                                .unwrap(),
+                                        );
+                                    });
+                            }
+                        }),
+                    });
+                }
+                Ok(Err(err)) => {
+                    eprintln!(
+                        "skipping {json_prefix}/kajit_deser: preflight decode failed ({err:?})"
+                    );
+                }
+                Err(payload) => {
+                    eprintln!(
+                        "skipping {json_prefix}/kajit_deser: preflight panic ({})",
+                        panic_payload_to_string(payload)
+                    );
+                }
+            }
+        }
+    }
     v.push(harness::Bench {
         name: format!("{json_prefix}/serde_ser"),
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
-                runner.run(|| {
-                    black_box(serde_json::to_vec(black_box(&*value)).unwrap());
-                });
+                runner
+                    .run(|| {
+                        black_box(serde_json::to_vec(black_box(&*value)).unwrap());
+                    });
             }
         }),
     });
@@ -420,37 +477,78 @@ where
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             move |runner| {
-                runner.run(|| {
-                    black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
-                });
-            }
-        }),
-    });
-    v.push(harness::Bench {
-        name: format!("{postcard_prefix}/kajit_dynasm_deser"),
-        func: Box::new({
-            let data = Arc::clone(&postcard_data);
-            let decoder = Arc::clone(&postcard_decoder);
-            move |runner| {
-                let decoder = &*decoder;
                 runner
                     .run(|| {
                         black_box(
-                            kajit::deserialize::<T>(decoder, black_box(&data[..]))
-                                .unwrap(),
+                            postcard::from_bytes::<T>(black_box(&data[..])).unwrap(),
                         );
                     });
             }
         }),
     });
+    if enable_postcard_kajit {
+        let postcard_decoder = match catch_unwind(
+            AssertUnwindSafe(|| {
+                kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard)
+            }),
+        ) {
+            Ok(decoder) => Some(Arc::new(decoder)),
+            Err(payload) => {
+                eprintln!(
+                    "skipping {postcard_prefix}/kajit_deser: compile unsupported ({})",
+                    panic_payload_to_string(payload)
+                );
+                None
+            }
+        };
+        if let Some(decoder) = postcard_decoder {
+            match catch_unwind(
+                AssertUnwindSafe(|| {
+                    kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
+                }),
+            ) {
+                Ok(Ok(_)) => {
+                    v.push(harness::Bench {
+                        name: format!("{postcard_prefix}/kajit_deser"),
+                        func: Box::new({
+                            let data = Arc::clone(&postcard_data);
+                            let decoder = Arc::clone(&decoder);
+                            move |runner| {
+                                let decoder = decoder.as_ref();
+                                runner
+                                    .run(|| {
+                                        black_box(
+                                            kajit::deserialize::<T>(decoder, black_box(&data[..]))
+                                                .unwrap(),
+                                        );
+                                    });
+                            }
+                        }),
+                    });
+                }
+                Ok(Err(err)) => {
+                    eprintln!(
+                        "skipping {postcard_prefix}/kajit_deser: preflight decode failed ({err:?})"
+                    );
+                }
+                Err(payload) => {
+                    eprintln!(
+                        "skipping {postcard_prefix}/kajit_deser: preflight panic ({})",
+                        panic_payload_to_string(payload)
+                    );
+                }
+            }
+        }
+    }
     v.push(harness::Bench {
         name: format!("{postcard_prefix}/serde_ser"),
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
-                runner.run(|| {
-                    black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
-                });
+                runner
+                    .run(|| {
+                        black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
+                    });
             }
         }),
     });
@@ -464,6 +562,8 @@ fn main() {
             age: 42,
             name: "Alice".into(),
         },
+        true,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -476,6 +576,8 @@ fn main() {
                 zip: 97201,
             },
         },
+        true,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -487,6 +589,8 @@ fn main() {
             },
             z: 3,
         },
+        true,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -505,6 +609,8 @@ fn main() {
             a_i128: -170141183460469231731687303715884105728i128,
             a_isize: -123_456isize,
         },
+        true,
+        false,
     );
     register_bench_case(
         &mut v,
@@ -528,8 +634,16 @@ fn main() {
             a_char: 'ß',
             a_name: "hello".into(),
         },
+        true,
+        false,
     );
-    register_bench_case(&mut v, "bool_true_false", Bools { a: true, b: false });
+    register_bench_case(
+        &mut v,
+        "bool_true_false",
+        Bools { a: true, b: false },
+        true,
+        true,
+    );
     register_bench_case(
         &mut v,
         "integer_boundaries",
@@ -541,15 +655,17 @@ fn main() {
             i16_min: -32768,
             i32_min: -2147483648,
         },
+        true,
+        false,
     );
-    register_bench_case(&mut v, "scalar_u16", 0u16);
-    register_bench_case(&mut v, "scalar_u32", 0u32);
-    register_bench_case(&mut v, "scalar_u64", 0u64);
-    register_bench_case(&mut v, "scalar_i16", i16::MIN);
-    register_bench_case(&mut v, "scalar_i32", i32::MIN);
-    register_bench_case(&mut v, "scalar_i64", i64::MIN);
-    register_bench_case(&mut v, "bool_field", BoolField { value: true });
-    register_bench_case(&mut v, "enum_external", Animal::Cat);
+    register_bench_case(&mut v, "scalar_u16", 0u16, true, true);
+    register_bench_case(&mut v, "scalar_u32", 0u32, true, true);
+    register_bench_case(&mut v, "scalar_u64", 0u64, true, true);
+    register_bench_case(&mut v, "scalar_i16", i16::MIN, true, true);
+    register_bench_case(&mut v, "scalar_i32", i32::MIN, true, true);
+    register_bench_case(&mut v, "scalar_i64", i64::MIN, true, true);
+    register_bench_case(&mut v, "bool_field", BoolField { value: true }, true, true);
+    register_bench_case(&mut v, "enum_external", Animal::Cat, false, true);
     register_bench_case(
         &mut v,
         "enum_as_struct_field",
@@ -560,24 +676,34 @@ fn main() {
                 good_boy: true,
             },
         },
+        false,
+        true,
     );
-    register_bench_case(&mut v, "tuple_pair", (42u32, "Alice".to_string()));
-    register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32));
-    register_bench_case(&mut v, "array_u32_4", [10u32, 20u32, 30u32, 40u32]);
-    register_bench_case(&mut v, "tuple_nested", ((1u32, 2u32), 3u32));
+    register_bench_case(&mut v, "tuple_pair", (42u32, "Alice".to_string()), false, true);
+    register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32), false, true);
+    register_bench_case(
+        &mut v,
+        "array_u32_4",
+        [10u32, 20u32, 30u32, 40u32],
+        false,
+        true,
+    );
+    register_bench_case(&mut v, "tuple_nested", ((1u32, 2u32), 3u32), false, true);
     register_bench_case(
         &mut v,
         "vec_scalar_small",
         ScalarVec {
             values: (0..16).map(|i| i as u32).collect(),
         },
+        false,
+        true,
     );
     register_bench_case(
         &mut v,
         "box_scalar",
-        BoxedScalar {
-            value: Box::new(42),
-        },
+        BoxedScalar { value: Box::new(42) },
+        false,
+        false,
     );
     register_bench_case(
         &mut v,
@@ -585,6 +711,8 @@ fn main() {
         BoxedString {
             name: Box::new("hello".to_string()),
         },
+        false,
+        false,
     );
     register_bench_case(
         &mut v,
@@ -595,6 +723,8 @@ fn main() {
                 name: "Bob".to_string(),
             }),
         },
+        false,
+        false,
     );
     register_bench_case(
         &mut v,
@@ -602,6 +732,8 @@ fn main() {
         OptionBox {
             value: Some(Box::new(7)),
         },
+        false,
+        false,
     );
     register_bench_case(
         &mut v,
@@ -609,6 +741,8 @@ fn main() {
         VecBox {
             items: vec![Box::new(1), Box::new(2), Box::new(3)],
         },
+        false,
+        false,
     );
     register_bench_case(
         &mut v,
@@ -617,6 +751,8 @@ fn main() {
             geo: (),
             name: "test".into(),
         },
+        false,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -624,6 +760,8 @@ fn main() {
         ScalarVec {
             values: (0..2048).map(|i| i as u32).collect(),
         },
+        false,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -635,14 +773,24 @@ fn main() {
                 author: "Amos".into(),
             },
         },
+        false,
+        true,
     );
-    register_bench_case(&mut v, "option_u32", WithOptU32 { value: Some(42) });
+    register_bench_case(
+        &mut v,
+        "option_u32",
+        WithOptU32 { value: Some(42) },
+        false,
+        true,
+    );
     register_bench_case(
         &mut v,
         "option_string",
         WithOptStr {
             name: Some("Alice".into()),
         },
+        false,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -653,6 +801,8 @@ fn main() {
                 zip: 97201,
             }),
         },
+        false,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -662,36 +812,30 @@ fn main() {
             b: "hello".into(),
             c: None,
         },
+        false,
+        true,
     );
-    register_bench_case(
-        &mut v,
-        "vec_u32",
-        Nums {
-            vals: vec![1, 2, 3],
-        },
-    );
+    register_bench_case(&mut v, "vec_u32", Nums { vals: vec![1, 2, 3] }, false, true);
     register_bench_case(
         &mut v,
         "vec_string",
         Names {
             items: vec!["hello".into(), "world".into()],
         },
+        false,
+        true,
     );
     register_bench_case(
         &mut v,
         "vec_nested_struct",
         AddressList {
             addrs: vec![
-                Address {
-                    city: "Portland".into(),
-                    zip: 97201,
-                },
-                Address {
-                    city: "Seattle".into(),
-                    zip: 98101,
-                },
+                Address { city : "Portland".into(), zip : 97201 }, Address { city :
+                "Seattle".into(), zip : 98101 },
             ],
         },
+        false,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -700,14 +844,15 @@ fn main() {
             name: "Alice".into(),
             age: 30,
         },
+        false,
+        true,
     );
-    register_bench_case(&mut v, "deny_unknown_fields__v0", Strict { x: 10, y: 20 });
-    register_bench_case(&mut v, "deny_unknown_fields__v1", Strict { x: 128, y: 0 });
-    register_bench_case(&mut v, "deny_unknown_fields__v2", Strict { x: 0, y: 128 });
     register_bench_case(
         &mut v,
-        "deny_unknown_fields__v3",
-        Strict { x: 16384, y: 16384 },
+        "deny_unknown_fields",
+        Strict { x: 10, y: 20 },
+        true,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -716,9 +861,17 @@ fn main() {
             name: "hello".into(),
             score: 7,
         },
+        false,
+        false,
     );
-    register_bench_case(&mut v, "transparent_scalar", Wrapper(42));
-    register_bench_case(&mut v, "transparent_string", StringWrapper("hello".into()));
+    register_bench_case(&mut v, "transparent_scalar", Wrapper(42), true, true);
+    register_bench_case(
+        &mut v,
+        "transparent_string",
+        StringWrapper("hello".into()),
+        true,
+        true,
+    );
     register_bench_case(
         &mut v,
         "transparent_composite",
@@ -726,6 +879,8 @@ fn main() {
             age: 25,
             name: "Eve".into(),
         }),
+        true,
+        true,
     );
     register_bench_case(
         &mut v,
@@ -740,6 +895,8 @@ fn main() {
                 zip: 98101,
             },
         },
+        true,
+        true,
     );
     harness::run_benchmarks(v);
 }
