@@ -987,8 +987,8 @@ fn collect_use_def(block: &RaBlock, use_set: &mut [bool], def_set: &mut [bool]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linearize::linearize;
     use kajit_ir::{IntrinsicFn, IrBuilder, IrOp, Width};
+    use kajit_lir::linearize;
 
     // r[verify ir.regalloc.ra-mir.block-params]
     #[test]
@@ -1176,12 +1176,7 @@ mod tests {
     // r[verify ir.regalloc.ra-mir.calls]
     #[test]
     fn ra_mir_call_operands_and_clobbers_are_modeled() {
-        unsafe extern "C" fn add3(
-            _ctx: *mut crate::context::DeserContext,
-            a: u64,
-            b: u64,
-            c: u64,
-        ) -> u64 {
+        unsafe extern "C" fn add3(_ctx: *mut core::ffi::c_void, a: u64, b: u64, c: u64) -> u64 {
             a + b + c
         }
 

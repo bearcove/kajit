@@ -540,6 +540,7 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "kajit-ir",
+ "kajit-ir-text",
  "kajit-lir",
  "regalloc2",
 ]
@@ -549,6 +550,7 @@ name = "kajit-mir-text"
 version = "0.1.0"
 dependencies = [
  "chumsky",
+ "facet",
  "kajit-ir",
  "kajit-lir",
  "kajit-mir",

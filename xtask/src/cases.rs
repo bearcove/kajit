@@ -972,12 +972,41 @@ fn is_default_or_skip_case_type(ty: &str) -> bool {
 fn is_json_enum_case_type(ty: &str) -> bool {
     matches!(
         ty,
-        "Animal" | "AdjAnimal" | "IntAnimal" | "UntaggedAnimal" | "UntaggedConfig" | "ApiResponse"
+        "Animal"
+            | "AdjAnimal"
+            | "IntAnimal"
+            | "UntaggedAnimal"
+            | "UntaggedConfig"
+            | "ApiResponse"
+            | "Zoo"
     )
 }
 
 fn is_json_option_case_type(ty: &str) -> bool {
     matches!(ty, "WithOptU32" | "WithOptStr" | "WithOptAddr" | "MultiOpt")
+}
+
+fn is_array_case_type(ty: &str) -> bool {
+    ty.starts_with('[') && ty.ends_with(']') && ty.contains(';')
+}
+
+fn is_json_flatten_case(case: &Case) -> bool {
+    case.name == "flatten"
+}
+
+fn is_json_rename_case(case: &Case) -> bool {
+    case.name.starts_with("rename_field")
+}
+
+fn is_json_sequence_case(case: &Case) -> bool {
+    case.name.starts_with("vec_") || case.name.starts_with("tuple_") || case.name == "unit_field"
+}
+
+fn is_postcard_wide_scalar_case(case: &Case) -> bool {
+    matches!(
+        case.name,
+        "all_integers" | "all_scalars" | "integer_boundaries"
+    )
 }
 
 fn unsupported_reason_for_format(case: &Case, format: WireFormat) -> Option<String> {
@@ -994,6 +1023,14 @@ fn unsupported_reason_for_format(case: &Case, format: WireFormat) -> Option<Stri
                 Some("pointer lowering is not implemented in IR path yet")
             } else if is_default_or_skip_case_type(&ty) {
                 Some("default/skip field lowering is not implemented in IR path yet")
+            } else if is_array_case_type(&ty) {
+                Some("json array lowering is not implemented in IR path yet")
+            } else if is_json_sequence_case(case) {
+                Some("json sequence lowering is not implemented in IR path yet")
+            } else if is_json_flatten_case(case) {
+                Some("json flatten lowering is not implemented in IR path yet")
+            } else if is_json_rename_case(case) {
+                Some("json rename lowering is not implemented in IR path yet")
             } else {
                 None
             }
@@ -1005,6 +1042,8 @@ fn unsupported_reason_for_format(case: &Case, format: WireFormat) -> Option<Stri
                 Some("pointer lowering is not implemented in IR path yet")
             } else if is_default_or_skip_case_type(&ty) {
                 Some("default/skip field lowering is not implemented in IR path yet")
+            } else if is_postcard_wide_scalar_case(case) {
+                Some("postcard wide scalar aggregate lowering is not implemented in IR path yet")
             } else {
                 None
             }

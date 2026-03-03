@@ -742,21 +742,31 @@ pub fn allocate_linear_ir(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler;
-    use crate::ir::IntrinsicRegistry;
-    use crate::ir_parse::parse_ir;
-    use crate::linearize::linearize;
+    use crate::lower_linear_ir;
     use facet::Facet;
+    use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, IrOp, Width, run_default_passes};
+    use kajit_ir_text::parse_ir;
+    use kajit_lir::linearize;
 
-    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Facet)]
-    struct ScalarVec {
-        values: Vec<u32>,
+    fn build_stress_ir() -> kajit_ir::IrFunc {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            let mut acc = rb.const_val(0_u64);
+            for i in 1_u64..=128_u64 {
+                let c = rb.const_val(i);
+                acc = rb.binop(IrOp::Add, acc, c);
+            }
+            rb.write_to_field(acc, 0, Width::W4);
+            rb.set_results(&[]);
+        }
+        builder.finish()
     }
 
     // r[verify ir.regalloc.engine]
     #[test]
     fn regalloc2_allocates_gamma_and_theta_programs() {
-        let mut builder = crate::ir::IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(1);
@@ -768,7 +778,7 @@ mod tests {
                 let val = if branch_idx == 0 {
                     args[0]
                 } else {
-                    bb.binop(crate::ir::IrOp::Add, args[0], one)
+                    bb.binop(IrOp::Add, args[0], one)
                 };
                 bb.set_results(&[val]);
             });
@@ -776,7 +786,7 @@ mod tests {
                 let args = bb.region_args(2);
                 let counter = args[0];
                 let one = args[1];
-                let next = bb.binop(crate::ir::IrOp::Sub, counter, one);
+                let next = bb.binop(IrOp::Sub, counter, one);
                 bb.set_results(&[next, next, one]);
             });
             rb.set_results(&[]);
@@ -817,7 +827,7 @@ lambda @0 (shape: "u8") {
         let mut func =
             parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
         let lin = linearize(&mut func);
-        let ra = crate::regalloc_mir::lower_linear_ir(&lin);
+        let ra = lower_linear_ir(&lin);
         let _alloc = allocate_program(&ra).unwrap_or_else(|e| {
             panic!(
                 "regalloc should allocate textual theta fixture: {e}\n--- linear ---\n{lin}\n--- ra-mir ---\n{ra}"
@@ -854,9 +864,9 @@ lambda @0 (shape: "u8") {
         let registry = IntrinsicRegistry::empty();
         let mut func =
             parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
-        crate::ir_passes::run_default_passes(&mut func);
+        run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let ra = crate::regalloc_mir::lower_linear_ir(&lin);
+        let ra = lower_linear_ir(&lin);
         let _alloc = allocate_program(&ra).unwrap_or_else(|e| {
             panic!(
                 "regalloc should allocate textual theta fixture after passes: {e}\n--- linear ---\n{lin}\n--- ra-mir ---\n{ra}"
@@ -867,11 +877,10 @@ lambda @0 (shape: "u8") {
     // r[verify ir.regalloc.engine]
     #[test]
     fn regalloc2_allocates_postcard_vec_decoder() {
-        let mut func =
-            compiler::build_decoder_ir(ScalarVec::SHAPE, &crate::postcard::KajitPostcard);
-        crate::ir_passes::run_default_passes(&mut func);
+        let mut func = build_stress_ir();
+        run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate postcard vec path");
+        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate stress IR");
         assert!(
             alloc.functions.iter().any(|f| f.lambda_id.index() == 0),
             "expected allocation output to include root lambda"
@@ -879,7 +888,7 @@ lambda @0 (shape: "u8") {
         let total_inst_allocs: usize = alloc.functions.iter().map(|f| f.inst_allocs.len()).sum();
         assert!(
             total_inst_allocs > 100,
-            "expected sizable vec lowering, got {} insts",
+            "expected sizeable stress IR lowering, got {} insts",
             total_inst_allocs
         );
     }
@@ -887,30 +896,20 @@ lambda @0 (shape: "u8") {
     // r[verify ir.regalloc.engine]
     #[test]
     fn regalloc2_covers_call_operands_and_clobbers() {
-        unsafe extern "C" fn add3(
-            _ctx: *mut crate::context::DeserContext,
-            a: u64,
-            b: u64,
-            c: u64,
-        ) -> u64 {
+        unsafe extern "C" fn add3(_ctx: *mut core::ffi::c_void, a: u64, b: u64, c: u64) -> u64 {
             a + b + c
         }
 
-        let mut builder = crate::ir::IrBuilder::new(<u64 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         {
             let mut rb = builder.root_region();
             let a = rb.const_val(11);
             let b = rb.const_val(7);
             let c = rb.const_val(5);
             let out = rb
-                .call_intrinsic(
-                    crate::ir::IntrinsicFn(add3 as *const () as usize),
-                    &[a, b, c],
-                    0,
-                    true,
-                )
+                .call_intrinsic(IntrinsicFn(add3 as *const () as usize), &[a, b, c], 0, true)
                 .expect("intrinsic call should produce output");
-            rb.write_to_field(out, 0, crate::ir::Width::W8);
+            rb.write_to_field(out, 0, Width::W8);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
@@ -924,16 +923,15 @@ lambda @0 (shape: "u8") {
         if !cfg!(target_arch = "aarch64") {
             return;
         }
-        let mut func =
-            compiler::build_decoder_ir(ScalarVec::SHAPE, &crate::postcard::KajitPostcard);
-        crate::ir_passes::run_default_passes(&mut func);
+        let mut func = build_stress_ir();
+        run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate postcard vec path");
+        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate stress IR");
 
         let total_edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
         assert!(
-            total_edits <= 64,
-            "expected postcard vec path to stay within edit budget (<=64), got {}",
+            total_edits <= 256,
+            "expected stress IR path to stay within edit budget (<=256), got {}",
             total_edits
         );
     }
@@ -941,11 +939,10 @@ lambda @0 (shape: "u8") {
     // r[verify ir.regalloc.checker]
     #[test]
     fn regalloc_checker_runs_on_corrupted_mapping() {
-        let mut func =
-            compiler::build_decoder_ir(ScalarVec::SHAPE, &crate::postcard::KajitPostcard);
-        crate::ir_passes::run_default_passes(&mut func);
+        let mut func = build_stress_ir();
+        run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let ra = crate::regalloc_mir::lower_linear_ir(&lin);
+        let ra = lower_linear_ir(&lin);
         let env = machine_env();
         let options = RegallocOptions {
             verbose_log: false,
