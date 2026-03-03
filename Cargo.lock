@@ -546,6 +546,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "kajit-mir-mcp"
+version = "0.1.0"
+dependencies = [
+ "kajit-mir",
+ "kajit-mir-text",
+ "rust-mcp-schema",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kajit-mir-text"
 version = "0.1.0"
 dependencies = [
@@ -844,6 +855,16 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "rust-mcp-schema"
+version = "0.9.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ed324cdee4b735926a1eaa7741b63a5d103ee08bbe0d3701398279b0c3bf3ce"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "rustc-hash"
