@@ -14,6 +14,27 @@ use rust_mcp_sdk::{McpServer, StdioTransport, ToMcpServerHandler, TransportOptio
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
+const CLI_USAGE: &str = "\
+kajit-mir-mcp
+
+Usage:
+  kajit-mir-mcp                      Start MCP stdio server (default)
+  kajit-mir-mcp mcp                  Start MCP stdio server
+  kajit-mir-mcp run [options]        Run one program to completion
+  kajit-mir-mcp help                 Show this help
+
+Run options:
+  --input-kind <ra_mir|ir>           Required
+  --program-path <path>              Program source file
+  --program-text <text>              Program source text
+  --input-hex <hex>                  Input bytes (default: empty)
+  --max-steps <n>                    Step budget (default: 100000)
+  --full-state                       Emit full vreg/output state
+
+Notes:
+  --program-path and --program-text are mutually exclusive.
+";
+
 #[mcp_tool(
     name = "session_new",
     description = "Create a new debugger session from RA-MIR or IR text."
@@ -60,6 +81,23 @@ impl InputKind {
             Self::Ir => "ir",
         }
     }
+}
+
+#[derive(Debug)]
+enum MainCommand {
+    RunMcp,
+    RunOnce(RunOnceCliArgs),
+    Help,
+}
+
+#[derive(Debug, Clone)]
+struct RunOnceCliArgs {
+    input_kind: InputKind,
+    program_text: Option<String>,
+    program_path: Option<String>,
+    input_hex: String,
+    max_steps: usize,
+    full_state: bool,
 }
 
 #[mcp_tool(
@@ -451,8 +489,16 @@ fn arg_opt_str(args: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
 }
 
 fn load_program_text(args: &JsonMap<String, JsonValue>) -> Result<String, String> {
-    let from_text = arg_opt_str(args, "program_text");
-    let from_path = arg_opt_str(args, "program_path");
+    load_program_text_sources(
+        arg_opt_str(args, "program_text"),
+        arg_opt_str(args, "program_path"),
+    )
+}
+
+fn load_program_text_sources(
+    from_text: Option<String>,
+    from_path: Option<String>,
+) -> Result<String, String> {
     match (from_text, from_path) {
         (Some(text), None) => Ok(text),
         (None, Some(path)) => std::fs::read_to_string(&path)
@@ -505,6 +551,46 @@ fn state_json(state: &DebuggerState) -> JsonValue {
         "returned": state.returned,
         "halted": state.halted,
         "vregs": state.vregs,
+        "output_len": state.output.len(),
+        "output_hex": encode_hex(&state.output),
+    })
+}
+
+fn compact_state_json(state: &DebuggerState) -> JsonValue {
+    let trap = state
+        .trap
+        .map(|trap| trap_json(&trap))
+        .unwrap_or(JsonValue::Null);
+    let nonzero_vregs: Vec<JsonValue> = state
+        .vregs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, value)| {
+            if *value == 0 {
+                None
+            } else {
+                Some(json!({
+                    "index": index,
+                    "value": value,
+                    "value_hex": format!("0x{value:x}"),
+                }))
+            }
+        })
+        .collect();
+    json!({
+        "step_count": state.step_count,
+        "location": {
+            "block": state.location.block.0,
+            "next_inst_index": state.location.next_inst_index,
+            "at_terminator": state.location.at_terminator,
+        },
+        "cursor": state.cursor,
+        "trap": trap,
+        "returned": state.returned,
+        "halted": state.halted,
+        "vreg_count": state.vregs.len(),
+        "nonzero_vreg_count": nonzero_vregs.len(),
+        "nonzero_vregs": nonzero_vregs,
         "output_len": state.output.len(),
         "output_hex": encode_hex(&state.output),
     })
@@ -611,6 +697,137 @@ fn known_intrinsic_registry() -> kajit_ir::IntrinsicRegistry {
     kajit::known_intrinsic_registry()
 }
 
+fn parse_cli_command(args: &[String]) -> Result<MainCommand, String> {
+    if args.is_empty() {
+        return Ok(MainCommand::RunMcp);
+    }
+    match args[0].as_str() {
+        "mcp" => Ok(MainCommand::RunMcp),
+        "run" => parse_run_once_args(&args[1..]).map(MainCommand::RunOnce),
+        "help" | "--help" | "-h" => Ok(MainCommand::Help),
+        other => Err(format!("unknown command: {other}\n\n{CLI_USAGE}")),
+    }
+}
+
+fn parse_run_once_args(args: &[String]) -> Result<RunOnceCliArgs, String> {
+    let mut input_kind: Option<InputKind> = None;
+    let mut program_text: Option<String> = None;
+    let mut program_path: Option<String> = None;
+    let mut input_hex = String::new();
+    let mut max_steps = 100_000usize;
+    let mut full_state = false;
+
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--input-kind" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --input-kind".to_owned())?;
+                input_kind = Some(InputKind::parse(value)?);
+                i += 2;
+            }
+            "--program-text" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --program-text".to_owned())?;
+                program_text = Some(value.clone());
+                i += 2;
+            }
+            "--program-path" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --program-path".to_owned())?;
+                program_path = Some(value.clone());
+                i += 2;
+            }
+            "--input-hex" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --input-hex".to_owned())?;
+                input_hex = value.clone();
+                i += 2;
+            }
+            "--max-steps" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "missing value for --max-steps".to_owned())?;
+                max_steps = value
+                    .parse::<usize>()
+                    .map_err(|e| format!("invalid --max-steps value {value:?}: {e}"))?;
+                i += 2;
+            }
+            "--full-state" => {
+                full_state = true;
+                i += 1;
+            }
+            "help" | "--help" | "-h" => return Err(format!("run usage:\n\n{CLI_USAGE}")),
+            other => return Err(format!("unknown run option: {other}\n\n{CLI_USAGE}")),
+        }
+    }
+
+    let input_kind = input_kind.ok_or_else(|| "missing required --input-kind".to_owned())?;
+    if program_text.is_some() && program_path.is_some() {
+        return Err("--program-text and --program-path are mutually exclusive".to_owned());
+    }
+    if program_text.is_none() && program_path.is_none() {
+        return Err("missing program source: provide --program-text or --program-path".to_owned());
+    }
+
+    Ok(RunOnceCliArgs {
+        input_kind,
+        program_text,
+        program_path,
+        input_hex,
+        max_steps,
+        full_state,
+    })
+}
+
+fn run_once_command(args: RunOnceCliArgs) -> Result<JsonValue, String> {
+    let start = std::time::Instant::now();
+    let input = parse_hex_input(&args.input_hex)?;
+    let program_text = load_program_text_sources(args.program_text, args.program_path)?;
+
+    let parse_start = std::time::Instant::now();
+    let program = match args.input_kind {
+        InputKind::RaMir => parse_ra_mir_text(&program_text)?,
+        InputKind::Ir => lower_ir_text_to_ra_program(&program_text)?,
+    };
+    let parse_ms = parse_start.elapsed().as_millis() as u64;
+
+    let mut session = DebuggerSession::new(&program, &input).map_err(|e| e.to_string())?;
+    let run_start = std::time::Instant::now();
+    let events = session
+        .run_until(RunUntilTarget::Return, args.max_steps)
+        .map_err(|e| e.to_string())?;
+    let run_ms = run_start.elapsed().as_millis() as u64;
+    let state = session.state();
+
+    let stop = if state.returned {
+        json!({"kind": "return"})
+    } else if let Some(trap) = state.trap {
+        json!({"kind": "trap", "trap": trap_json(&trap)})
+    } else {
+        json!({"kind": "max_steps"})
+    };
+
+    Ok(json!({
+        "input_kind": args.input_kind.as_str(),
+        "input_hex": encode_hex(&input),
+        "stop": stop,
+        "steps_executed": events.len(),
+        "max_steps": args.max_steps,
+        "last_event": events.last().map(event_json).unwrap_or(JsonValue::Null),
+        "state": if args.full_state { state_json(&state) } else { compact_state_json(&state) },
+        "timings_ms": {
+            "parse_and_lower": parse_ms,
+            "run": run_ms,
+            "total": start.elapsed().as_millis() as u64
+        }
+    }))
+}
+
 async fn run() -> Result<(), String> {
     let handler = MirHandler::default();
     let server_details = InitializeResult {
@@ -657,7 +874,28 @@ async fn run() -> Result<(), String> {
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
+    let cli_args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match parse_cli_command(&cli_args) {
+        Ok(MainCommand::RunMcp) => run().await,
+        Ok(MainCommand::RunOnce(args)) => {
+            let output = run_once_command(args).and_then(|payload| {
+                serde_json::to_string_pretty(&payload).map_err(|e| e.to_string())
+            });
+            match output {
+                Ok(text) => {
+                    println!("{text}");
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+        Ok(MainCommand::Help) => {
+            println!("{CLI_USAGE}");
+            Ok(())
+        }
+        Err(error) => Err(error),
+    };
+    if let Err(error) = result {
         eprintln!("{error}");
         std::process::exit(1);
     }
@@ -666,8 +904,9 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        InputKind, MirTools, encode_hex, load_program_text, lower_ir_text_to_ra_program,
-        parse_hex_input, parse_ra_mir_text,
+        InputKind, MainCommand, MirTools, RunOnceCliArgs, encode_hex, load_program_text,
+        lower_ir_text_to_ra_program, parse_cli_command, parse_hex_input, parse_ra_mir_text,
+        parse_run_once_args,
     };
     use kajit_lir::LinearOp;
     use serde_json::{Map as JsonMap, Value as JsonValue, json};
@@ -821,6 +1060,54 @@ ra_func @0 {
         args.insert("program_text".to_owned(), json!("abc"));
         args.insert("program_path".to_owned(), json!("/tmp/x"));
         assert!(load_program_text(&args).is_err());
+    }
+
+    #[test]
+    fn parse_cli_defaults_to_mcp_mode() {
+        let args: Vec<String> = Vec::new();
+        let mode = parse_cli_command(&args).expect("empty args should be valid");
+        assert!(matches!(mode, MainCommand::RunMcp));
+    }
+
+    #[test]
+    fn parse_cli_run_requires_input_kind() {
+        let args = vec![
+            "run".to_owned(),
+            "--program-text".to_owned(),
+            "lambda @0 (shape: \"u8\") {}".to_owned(),
+        ];
+        let err = parse_cli_command(&args).expect_err("missing input kind must fail");
+        assert!(err.contains("--input-kind"));
+    }
+
+    #[test]
+    fn parse_run_args_accepts_basic_form() {
+        let args = vec![
+            "--input-kind".to_owned(),
+            "ra_mir".to_owned(),
+            "--program-path".to_owned(),
+            "foo.ramir".to_owned(),
+            "--input-hex".to_owned(),
+            "8101".to_owned(),
+            "--max-steps".to_owned(),
+            "42".to_owned(),
+            "--full-state".to_owned(),
+        ];
+        let parsed = parse_run_once_args(&args).expect("run args should parse");
+        let RunOnceCliArgs {
+            input_kind,
+            program_text,
+            program_path,
+            input_hex,
+            max_steps,
+            full_state,
+        } = parsed;
+        assert_eq!(input_kind, InputKind::RaMir);
+        assert_eq!(program_text, None);
+        assert_eq!(program_path, Some("foo.ramir".to_owned()));
+        assert_eq!(input_hex, "8101");
+        assert_eq!(max_steps, 42);
+        assert!(full_state);
     }
 
     #[test]
