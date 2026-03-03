@@ -93,6 +93,24 @@ Show built-in help:
 KAJIT_OPTS=help cargo nextest run -p kajit <test_filter>
 ```
 
+Run a pass-combination matrix for a focused failing test:
+```bash
+# default target: json::all_scalars in kajit/tests/corpus.rs
+cargo xtask opts-matrix
+
+# focused subset (example)
+cargo xtask opts-matrix --pass theta_loop_invariant_hoist --pass inline_apply
+
+# pass extra nextest args through to each run
+cargo xtask opts-matrix -- --no-fail-fast
+```
+
+Matrix behavior:
+- Runs `cargo nextest run -p kajit --test corpus -E '<expr>'` for every pass bitmask.
+- Uses `KAJIT_OPTS='+all_opts,<regalloc>,...explicit +/-pass toggles...'`.
+- When you provide a `--pass` subset, non-selected default passes are forced off.
+- Writes failing-run logs to `target/opts-matrix-logs/<timestamp>/`.
+
 ### On-demand pipeline dumps (without snapshot churn)
 
 Generated corpus tests no longer enforce large IR/RA-MIR/edit snapshots by
@@ -129,6 +147,8 @@ Interpretation notes:
 - Disabling `all_opts` can change IR/RA-MIR snapshots while preserving runtime behavior.
 - Disabling `regalloc` can intentionally surface semantic regressions and is useful
   for isolating bugs in the regalloc/edit-application path.
+- As of March 3, 2026: `cargo xtask opts-matrix` on `json::all_scalars` reports `8/16` failing
+  combinations, and every failing combination has `pass.theta_loop_invariant_hoist` enabled.
 
 ### Debugging x86_64 tests with LLDB under Rosetta
 

@@ -149,9 +149,10 @@ fn main() {
             generate_ir_postreg_corpus();
         }
         Some("test-x86_64") => test_x86_64(&command_args),
+        Some("opts-matrix") => opts_matrix(&command_args),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|test-x86_64 [--full] [-- <extra nextest args...>]>"
+                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|test-x86_64 [--full] [-- <extra nextest args...>]|opts-matrix [opts-matrix args...]>"
             );
             std::process::exit(2);
         }
@@ -396,6 +397,31 @@ fn test_x86_64(args: &[String]) {
         .args(nextest_args)
         .status()
         .expect("failed to run cargo nextest");
+
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
+fn opts_matrix(args: &[String]) {
+    let root = workspace_root();
+    let script = root.join("scripts").join("opts-matrix.sh");
+    if !script.exists() {
+        eprintln!("matrix script not found at {}", script.display());
+        std::process::exit(1);
+    }
+    let script_args = if matches!(args.first().map(String::as_str), Some("--")) {
+        &args[1..]
+    } else {
+        args
+    };
+
+    let status = Command::new("bash")
+        .arg(&script)
+        .args(script_args)
+        .current_dir(&root)
+        .status()
+        .expect("failed to run opts matrix script");
 
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
