@@ -9,20 +9,129 @@ const MAX_INLINE_NODES_SINGLE_USE: usize = 256;
 const MAX_INLINE_NODES_MULTI_USE: usize = 64;
 const MAX_INLINE_CALL_SITES_MULTI_USE: usize = 4;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UseSite {
+    NodeInput { node: NodeId, input_index: u16 },
+    RegionResult { region: RegionId, result_index: u16 },
+}
+
+#[derive(Default)]
+struct UseLists {
+    by_output: HashMap<OutputRef, Vec<UseSite>>,
+}
+
+impl UseLists {
+    fn build(func: &IrFunc) -> Self {
+        let mut out = Self::default();
+
+        for (region_id, region) in func.regions.iter() {
+            for &node_id in &region.nodes {
+                for (input_index, input) in func.nodes[node_id].inputs.iter().enumerate() {
+                    let PortSource::Node(source) = input.source else {
+                        continue;
+                    };
+                    out.by_output
+                        .entry(source)
+                        .or_default()
+                        .push(UseSite::NodeInput {
+                            node: node_id,
+                            input_index: input_index as u16,
+                        });
+                }
+            }
+
+            for (result_index, result) in region.results.iter().enumerate() {
+                let PortSource::Node(source) = result.source else {
+                    continue;
+                };
+                out.by_output
+                    .entry(source)
+                    .or_default()
+                    .push(UseSite::RegionResult {
+                        region: region_id,
+                        result_index: result_index as u16,
+                    });
+            }
+        }
+
+        out
+    }
+
+    fn output_has_uses(&self, out: OutputRef) -> bool {
+        self.by_output
+            .get(&out)
+            .is_some_and(|uses| !uses.is_empty())
+    }
+
+    fn replace_output_use(&mut self, func: &mut IrFunc, from: OutputRef, to: PortSource) {
+        let from_source = PortSource::Node(from);
+        if from_source == to {
+            return;
+        }
+        let Some(use_sites) = self.by_output.remove(&from) else {
+            return;
+        };
+
+        let mut rewritten_sites = Vec::new();
+        for use_site in use_sites {
+            let rewritten = match use_site {
+                UseSite::NodeInput { node, input_index } => {
+                    let Some(input) = func.nodes[node].inputs.get_mut(input_index as usize) else {
+                        continue;
+                    };
+                    if input.source == from_source {
+                        input.source = to;
+                        true
+                    } else {
+                        false
+                    }
+                }
+                UseSite::RegionResult {
+                    region,
+                    result_index,
+                } => {
+                    let Some(result) = func.regions[region].results.get_mut(result_index as usize)
+                    else {
+                        continue;
+                    };
+                    if result.source == from_source {
+                        result.source = to;
+                        true
+                    } else {
+                        false
+                    }
+                }
+            };
+            if rewritten {
+                rewritten_sites.push(use_site);
+            }
+        }
+
+        if let PortSource::Node(to_output) = to {
+            self.by_output
+                .entry(to_output)
+                .or_default()
+                .extend(rewritten_sites);
+        }
+    }
+}
+
 // r[impl ir.passes]
 pub fn run_default_passes(func: &mut IrFunc) {
     bounds_check_coalescing_pass(func);
     hoist_theta_loop_invariant_setup_pass(func);
     inline_apply_pass(func);
+    dead_code_elimination_pass(func);
 }
 
 // r[impl ir.passes.planned]
 fn bounds_check_coalescing_pass(func: &mut IrFunc) {
     loop {
+        let mut use_lists = UseLists::build(func);
         let region_ids: Vec<RegionId> = func.regions.iter().map(|(rid, _)| rid).collect();
         let mut changed = false;
         for rid in region_ids {
-            if coalesce_bounds_checks_in_region(func, rid) {
+            if coalesce_bounds_checks_in_region(func, rid, &mut use_lists) {
                 changed = true;
                 break;
             }
@@ -33,7 +142,11 @@ fn bounds_check_coalescing_pass(func: &mut IrFunc) {
     }
 }
 
-fn coalesce_bounds_checks_in_region(func: &mut IrFunc, region_id: RegionId) -> bool {
+fn coalesce_bounds_checks_in_region(
+    func: &mut IrFunc,
+    region_id: RegionId,
+    use_lists: &mut UseLists,
+) -> bool {
     let nodes = func.regions[region_id].nodes.clone();
     for (i, first) in nodes.iter().copied().enumerate() {
         let Some(first_count) = bounds_check_count(func, first) else {
@@ -62,7 +175,7 @@ fn coalesce_bounds_checks_in_region(func: &mut IrFunc, region_id: RegionId) -> b
                 let Some(second_cursor_out) = state_cursor_output_ref(func, second) else {
                     break;
                 };
-                replace_output_use(func, second_cursor_out, second_cursor_in);
+                replace_output_use(func, use_lists, second_cursor_out, second_cursor_in);
                 if let Some(pos) = func.regions[region_id]
                     .nodes
                     .iter()
@@ -148,8 +261,10 @@ fn hoist_theta_loop_invariant_setup_pass(func: &mut IrFunc) {
 
         let mut changed = false;
         for theta in theta_nodes {
-            if hoist_theta_loop_invariants_for_node(func, theta) {
+            let mut use_lists = UseLists::build(func);
+            if hoist_theta_loop_invariants_for_node(func, theta, &mut use_lists) {
                 changed = true;
+                break;
             }
         }
 
@@ -159,7 +274,11 @@ fn hoist_theta_loop_invariant_setup_pass(func: &mut IrFunc) {
     }
 }
 
-fn hoist_theta_loop_invariants_for_node(func: &mut IrFunc, theta: NodeId) -> bool {
+fn hoist_theta_loop_invariants_for_node(
+    func: &mut IrFunc,
+    theta: NodeId,
+    use_lists: &mut UseLists,
+) -> bool {
     let (parent_region, body_region) = {
         let node = &func.nodes[theta];
         let NodeKind::Theta { body } = &node.kind else {
@@ -249,7 +368,7 @@ fn hoist_theta_loop_invariants_for_node(func: &mut IrFunc, theta: NodeId) -> boo
                 node: new_node,
                 index: out_idx as u16,
             });
-            replace_output_use(func, from, to);
+            replace_output_use(func, use_lists, from, to);
         }
     }
 
@@ -308,8 +427,58 @@ fn is_hoistable_theta_setup_op(op: &IrOp) -> bool {
     )
 }
 
+fn dead_code_elimination_pass(func: &mut IrFunc) {
+    loop {
+        let use_lists = UseLists::build(func);
+        let mut dead_node = None;
+
+        let region_ids: Vec<RegionId> = func.regions.iter().map(|(rid, _)| rid).collect();
+        'search: for region_id in region_ids {
+            for &node_id in &func.regions[region_id].nodes {
+                if is_dead_pure_node(func, &use_lists, node_id) {
+                    dead_node = Some((region_id, node_id));
+                    break 'search;
+                }
+            }
+        }
+
+        let Some((region_id, node_id)) = dead_node else {
+            break;
+        };
+
+        let Some(position) = func.regions[region_id]
+            .nodes
+            .iter()
+            .position(|&nid| nid == node_id)
+        else {
+            break;
+        };
+        func.regions[region_id].nodes.remove(position);
+    }
+}
+
+fn is_dead_pure_node(func: &IrFunc, use_lists: &UseLists, node_id: NodeId) -> bool {
+    let NodeKind::Simple(op) = &func.nodes[node_id].kind else {
+        return false;
+    };
+    if op.has_side_effects() {
+        return false;
+    }
+
+    for output_index in 0..func.nodes[node_id].outputs.len() {
+        if use_lists.output_has_uses(OutputRef {
+            node: node_id,
+            index: output_index as u16,
+        }) {
+            return false;
+        }
+    }
+    true
+}
+
 fn inline_apply_pass(func: &mut IrFunc) {
     loop {
+        let mut use_lists = UseLists::build(func);
         let live_nodes = collect_live_nodes(func);
         let lambda_owner = build_region_owner_map(func);
         let call_sites = count_apply_call_sites(func, &live_nodes);
@@ -345,8 +514,9 @@ fn inline_apply_pass(func: &mut IrFunc) {
             .collect();
 
         for apply in candidates {
-            if inline_one_apply(func, apply) {
+            if inline_one_apply(func, &mut use_lists, apply) {
                 changed = true;
+                break;
             }
         }
 
@@ -663,28 +833,16 @@ fn clone_region_into(
     }
 }
 
-fn replace_output_use(func: &mut IrFunc, from: OutputRef, to: PortSource) {
-    let from_src = PortSource::Node(from);
-    let node_ids: Vec<NodeId> = func.nodes.iter().map(|(id, _)| id).collect();
-    for id in node_ids {
-        for inp in &mut func.nodes[id].inputs {
-            if inp.source == from_src {
-                inp.source = to;
-            }
-        }
-    }
-
-    let region_ids: Vec<RegionId> = func.regions.iter().map(|(id, _)| id).collect();
-    for rid in region_ids {
-        for result in &mut func.regions[rid].results {
-            if result.source == from_src {
-                result.source = to;
-            }
-        }
-    }
+fn replace_output_use(
+    func: &mut IrFunc,
+    use_lists: &mut UseLists,
+    from: OutputRef,
+    to: PortSource,
+) {
+    use_lists.replace_output_use(func, from, to);
 }
 
-fn inline_one_apply(func: &mut IrFunc, apply: NodeId) -> bool {
+fn inline_one_apply(func: &mut IrFunc, use_lists: &mut UseLists, apply: NodeId) -> bool {
     let (caller_region, target, top_arg_sources, output_count) = {
         let node = &func.nodes[apply];
         let NodeKind::Apply { target } = node.kind else {
@@ -730,6 +888,7 @@ fn inline_one_apply(func: &mut IrFunc, apply: NodeId) -> bool {
     for (idx, source) in mapped_results.into_iter().enumerate() {
         replace_output_use(
             func,
+            use_lists,
             OutputRef {
                 node: apply,
                 index: idx as u16,
@@ -819,6 +978,68 @@ mod tests {
         assert_eq!(apply_count, 1);
     }
 
+    #[test]
+    fn replace_output_use_rewrites_region_results() {
+        let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
+        let expected_output = {
+            let mut rb = builder.root_region();
+            let old = rb.const_val(1);
+            let new = rb.const_val(2);
+            rb.set_results(&[old]);
+            match new {
+                PortSource::Node(out) => out,
+                PortSource::RegionArg(_) => panic!("const output should be node output"),
+            }
+        };
+        let mut func = builder.finish();
+        let root = func.root_body();
+        let old_result = match func.regions[root].results[0].source {
+            PortSource::Node(out) => out,
+            PortSource::RegionArg(_) => panic!("root result should be node output"),
+        };
+        let new_output = expected_output;
+
+        let mut use_lists = UseLists::build(&func);
+        replace_output_use(
+            &mut func,
+            &mut use_lists,
+            old_result,
+            PortSource::Node(new_output),
+        );
+
+        assert_eq!(
+            func.regions[root].results[0].source,
+            PortSource::Node(new_output)
+        );
+    }
+
+    #[test]
+    fn dce_removes_dead_pure_nodes_after_inlining() {
+        let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
+        let child = builder.create_lambda(<u8 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.lambda_region(child);
+            let one = rb.const_val(1);
+            let two = rb.const_val(2);
+            let sum = rb.binop(IrOp::Add, one, two);
+            rb.set_results(&[sum]);
+        }
+        {
+            let mut rb = builder.root_region();
+            let _unused = rb.apply(child, &[], 1);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let root = func.root_body();
+
+        run_default_passes(&mut func);
+
+        assert!(
+            func.regions[root].nodes.is_empty(),
+            "dead pure inline residue should be removed from root region"
+        );
+    }
+
     // r[verify ir.passes.pre-regalloc.loop-invariants]
     #[test]
     fn hoists_theta_invariant_setup_consts_out_of_body() {
@@ -860,7 +1081,7 @@ mod tests {
             "expected invariant setup const in theta body before pass"
         );
 
-        run_default_passes(&mut func);
+        hoist_theta_loop_invariant_setup_pass(&mut func);
 
         let theta_after = func.regions[root]
             .nodes

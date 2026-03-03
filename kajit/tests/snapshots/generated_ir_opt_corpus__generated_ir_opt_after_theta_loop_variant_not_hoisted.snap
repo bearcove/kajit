@@ -1,5 +1,5 @@
 ---
-source: tests/generated_ir_opt_corpus.rs
+source: kajit/tests/generated_ir_opt_corpus.rs
 expression: after
 ---
 lambda @0 (shape: "u8") {
@@ -10,7 +10,6 @@ lambda @0 (shape: "u8") {
     n5 = theta [v0, v1, %cs:arg, %os:arg] {
       region {
         args: [arg0, arg1, %cs, %os]
-        n3 = Add [arg0, arg1] -> [v2]
         n4 = Sub [arg0, arg1] -> [v3]
         results: [v3, v3, arg1, %cs:arg, %os:arg]
       }
