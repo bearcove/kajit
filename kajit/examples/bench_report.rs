@@ -205,14 +205,11 @@ fn collect_vec_scalar_signals(sections: &[Section]) -> Vec<VecScalarSignalsRow> 
     // r[impl ir.regalloc.regressions]
     let legacy =
         kajit::compile_decoder(VecScalarSignalShape::SHAPE, &kajit::postcard::KajitPostcard);
-    let ir =
-        kajit::compile_decoder(VecScalarSignalShape::SHAPE, &kajit::postcard::KajitPostcard);
+    let ir = kajit::compile_decoder(VecScalarSignalShape::SHAPE, &kajit::postcard::KajitPostcard);
 
     let legacy_signals = analyze_codegen_signals(legacy.code(), None);
-    let ir_edits = kajit::regalloc_edit_count(
-        VecScalarSignalShape::SHAPE,
-        &kajit::postcard::KajitPostcard,
-    );
+    let ir_edits =
+        kajit::regalloc_edit_count(VecScalarSignalShape::SHAPE, &kajit::postcard::KajitPostcard);
     let ir_signals = analyze_codegen_signals(ir.code(), Some(ir_edits));
 
     present

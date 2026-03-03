@@ -1814,12 +1814,6 @@ pub(crate) fn render_bench_file() -> String {
             let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
             let value = Arc::new(value);
 
-            let json_decoder =
-                Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson));
-
-            let postcard_decoder =
-                Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard));
-
             let json_prefix = format!("{group}/json");
             let postcard_prefix = format!("{group}/postcard");
 
@@ -1830,19 +1824,6 @@ pub(crate) fn render_bench_file() -> String {
                     move |runner| {
                         runner.run(|| {
                             black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
-                        });
-                    }
-                }),
-            });
-            v.push(harness::Bench {
-                name: format!("{json_prefix}/kajit_dynasm_deser"),
-                func: Box::new({
-                    let data = Arc::clone(&json_data);
-                    let decoder = Arc::clone(&json_decoder);
-                    move |runner| {
-                        let decoder = &*decoder;
-                        runner.run(|| {
-                            black_box(kajit::from_str::<T>(decoder, black_box(data.as_str())).unwrap());
                         });
                     }
                 }),
@@ -1866,19 +1847,6 @@ pub(crate) fn render_bench_file() -> String {
                     move |runner| {
                         runner.run(|| {
                             black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
-                        });
-                    }
-                }),
-            });
-            v.push(harness::Bench {
-                name: format!("{postcard_prefix}/kajit_dynasm_deser"),
-                func: Box::new({
-                    let data = Arc::clone(&postcard_data);
-                    let decoder = Arc::clone(&postcard_decoder);
-                    move |runner| {
-                        let decoder = &*decoder;
-                        runner.run(|| {
-                            black_box(kajit::deserialize::<T>(decoder, black_box(&data[..])).unwrap());
                         });
                     }
                 }),
