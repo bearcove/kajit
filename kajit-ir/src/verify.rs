@@ -12,6 +12,12 @@ enum StateProducer {
     RegionArg { region: RegionId, index: u16 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct StateUsage {
+    chain_uses: usize,
+    error_exit_sinks: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {
     InvalidLambdaNode {
@@ -95,6 +101,10 @@ pub enum VerifyError {
         kind: PortKind,
         producer: PortSource,
         uses: usize,
+    },
+    StateErrorExitSinkViolation {
+        producer: PortSource,
+        sinks: usize,
     },
 }
 
@@ -442,23 +452,25 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         }
     }
 
-    let mut cursor_uses: HashMap<StateProducer, usize> = HashMap::new();
-    let mut output_uses: HashMap<StateProducer, usize> = HashMap::new();
+    let mut cursor_uses: HashMap<StateProducer, StateUsage> = HashMap::new();
+    let mut output_uses: HashMap<StateProducer, StateUsage> = HashMap::new();
     for &region_id in &region_order {
         let region = &func.regions[region_id];
         for &node_id in &region.nodes {
             let node = &func.nodes[node_id];
             for input in &node.inputs {
-                if matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. })) {
-                    continue;
-                }
                 let producer = state_source(input.source);
                 match input.kind {
                     PortKind::StateCursor => {
-                        *cursor_uses.entry(producer).or_insert(0) += 1;
+                        let usage = cursor_uses.entry(producer).or_default();
+                        if matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. })) {
+                            usage.error_exit_sinks += 1;
+                        } else {
+                            usage.chain_uses += 1;
+                        }
                     }
                     PortKind::StateOutput => {
-                        *output_uses.entry(producer).or_insert(0) += 1;
+                        output_uses.entry(producer).or_default().chain_uses += 1;
                     }
                     PortKind::Data => {}
                 }
@@ -468,10 +480,10 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
             let producer = state_source(result.source);
             match result.kind {
                 PortKind::StateCursor => {
-                    *cursor_uses.entry(producer).or_insert(0) += 1;
+                    cursor_uses.entry(producer).or_default().chain_uses += 1;
                 }
                 PortKind::StateOutput => {
-                    *output_uses.entry(producer).or_insert(0) += 1;
+                    output_uses.entry(producer).or_default().chain_uses += 1;
                 }
                 PortKind::Data => {}
             }
@@ -488,22 +500,28 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 region: region_id,
                 index: arg_index as u16,
             });
-            let uses = match arg.kind {
+            let usage = match arg.kind {
                 PortKind::StateCursor => cursor_uses
                     .get(&state_source(producer))
                     .copied()
-                    .unwrap_or(0),
+                    .unwrap_or_default(),
                 PortKind::StateOutput => output_uses
                     .get(&state_source(producer))
                     .copied()
-                    .unwrap_or(0),
-                PortKind::Data => 0,
+                    .unwrap_or_default(),
+                PortKind::Data => StateUsage::default(),
             };
-            if uses != 1 {
+            if usage.chain_uses != 1 {
                 return Err(VerifyError::StateChainViolation {
                     kind: arg.kind,
                     producer,
-                    uses,
+                    uses: usage.chain_uses,
+                });
+            }
+            if arg.kind == PortKind::StateCursor && usage.error_exit_sinks > 1 {
+                return Err(VerifyError::StateErrorExitSinkViolation {
+                    producer,
+                    sinks: usage.error_exit_sinks,
                 });
             }
         }
@@ -518,22 +536,28 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     node: node_id,
                     index: output_index as u16,
                 });
-                let uses = match output.kind {
+                let usage = match output.kind {
                     PortKind::StateCursor => cursor_uses
                         .get(&state_source(producer))
                         .copied()
-                        .unwrap_or(0),
+                        .unwrap_or_default(),
                     PortKind::StateOutput => output_uses
                         .get(&state_source(producer))
                         .copied()
-                        .unwrap_or(0),
-                    PortKind::Data => 0,
+                        .unwrap_or_default(),
+                    PortKind::Data => StateUsage::default(),
                 };
-                if uses != 1 {
+                if usage.chain_uses != 1 {
                     return Err(VerifyError::StateChainViolation {
                         kind: output.kind,
                         producer,
-                        uses,
+                        uses: usage.chain_uses,
+                    });
+                }
+                if output.kind == PortKind::StateCursor && usage.error_exit_sinks > 1 {
+                    return Err(VerifyError::StateErrorExitSinkViolation {
+                        producer,
+                        sinks: usage.error_exit_sinks,
                     });
                 }
             }
@@ -631,5 +655,22 @@ mod tests {
         }
         let func = builder.finish();
         assert!(verify(&func).is_ok());
+    }
+
+    #[test]
+    fn verify_rejects_multiple_error_exit_sinks_from_same_state() {
+        let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            rb.error_exit(crate::ErrorCode::MissingRequiredField);
+            rb.error_exit(crate::ErrorCode::MissingRequiredField);
+            rb.set_results(&[]);
+        }
+        let func = builder.finish();
+        let err = verify(&func).expect_err("verifier should reject duplicated ErrorExit sinks");
+        assert!(matches!(
+            err,
+            VerifyError::StateErrorExitSinkViolation { sinks: 2, .. }
+        ));
     }
 }
