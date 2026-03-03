@@ -214,13 +214,20 @@ fn fmt_block(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Resu
     for inst in &block.insts {
         write!(f, "    ")?;
         fmt_ra_inst(f, inst)?;
+        if let Some(hint) = ra_inst_semantic_hint(&inst.op) {
+            write!(f, " ; sem: {hint}")?;
+        }
         writeln!(f)?;
     }
 
     // Terminator.
     write!(f, "    term: ")?;
     fmt_terminator(f, &block.term)?;
-    writeln!(f, " ; uses: {}", fmt_vregs(&block.term.uses()))?;
+    write!(f, " ; uses: {}", fmt_vregs(&block.term.uses()))?;
+    if let Some(hint) = ra_term_semantic_hint(&block.term) {
+        write!(f, " ; sem: {hint}")?;
+    }
+    writeln!(f)?;
 
     // Successors with edge args.
     if block.succs.is_empty() {
@@ -368,6 +375,53 @@ fn fmt_ra_op_name(f: &mut std::fmt::Formatter<'_>, op: &LinearOp) -> std::fmt::R
     }
 }
 
+fn ra_inst_semantic_hint(op: &LinearOp) -> Option<String> {
+    match op {
+        LinearOp::Const { value, .. } => Some(format!("materialize constant {value:#x}")),
+        LinearOp::BinOp { op, .. } => Some(match op {
+            kajit_lir::BinOpKind::Add => "integer addition".to_string(),
+            kajit_lir::BinOpKind::Sub => "integer subtraction".to_string(),
+            kajit_lir::BinOpKind::And => "bitwise and".to_string(),
+            kajit_lir::BinOpKind::Or => "bitwise or".to_string(),
+            kajit_lir::BinOpKind::Shr => "logical shift right".to_string(),
+            kajit_lir::BinOpKind::Shl => "logical shift left".to_string(),
+            kajit_lir::BinOpKind::Xor => "bitwise xor".to_string(),
+            kajit_lir::BinOpKind::CmpNe => "compare not-equal (produces 0/1)".to_string(),
+        }),
+        LinearOp::UnaryOp { .. } => Some("unary transform".to_string()),
+        LinearOp::Copy { .. } => Some("ssa copy/move".to_string()),
+        LinearOp::BoundsCheck { count } => Some(format!("ensure {count} input byte(s) available")),
+        LinearOp::ReadBytes { count, .. } => Some(format!("consume {count} input byte(s)")),
+        LinearOp::PeekByte { .. } => Some("peek next input byte without advancing".to_string()),
+        LinearOp::AdvanceCursor { count } => Some(format!("advance input cursor by {count}")),
+        LinearOp::AdvanceCursorBy { .. } => {
+            Some("advance input cursor by runtime amount".to_string())
+        }
+        LinearOp::SaveCursor { .. } => Some("save current input cursor".to_string()),
+        LinearOp::RestoreCursor { .. } => Some("restore previously saved cursor".to_string()),
+        LinearOp::WriteToField { offset, width, .. } => {
+            Some(format!("write output field at +{offset} ({width:?})"))
+        }
+        LinearOp::ReadFromField { offset, width, .. } => {
+            Some(format!("read output field at +{offset} ({width:?})"))
+        }
+        LinearOp::SaveOutPtr { .. } => Some("save output base pointer".to_string()),
+        LinearOp::SetOutPtr { .. } => Some("set output pointer".to_string()),
+        LinearOp::SlotAddr { slot, .. } => {
+            Some(format!("compute spill slot {} address", slot.index()))
+        }
+        LinearOp::WriteToSlot { slot, .. } => Some(format!("write spill slot {}", slot.index())),
+        LinearOp::ReadFromSlot { slot, .. } => Some(format!("read spill slot {}", slot.index())),
+        LinearOp::CallIntrinsic { .. } => Some("call runtime intrinsic".to_string()),
+        LinearOp::CallPure { .. } => Some("call pure helper".to_string()),
+        LinearOp::CallLambda { target, .. } => Some(format!("call lambda @{}", target.index())),
+        LinearOp::SimdStringScan { .. } => Some("simd accelerated string scan".to_string()),
+        LinearOp::SimdWhitespaceSkip => Some("simd accelerated whitespace skip".to_string()),
+        LinearOp::ErrorExit { code } => Some(format!("raise decode error {code:?}")),
+        _ => None,
+    }
+}
+
 fn fmt_terminator(f: &mut std::fmt::Formatter<'_>, term: &RaTerminator) -> std::fmt::Result {
     match term {
         RaTerminator::Return => write!(f, "return"),
@@ -409,6 +463,17 @@ fn fmt_terminator(f: &mut std::fmt::Formatter<'_>, term: &RaTerminator) -> std::
             }
             write!(f, "], default b{}", default.0)
         }
+    }
+}
+
+fn ra_term_semantic_hint(term: &RaTerminator) -> Option<&'static str> {
+    match term {
+        RaTerminator::Return => Some("finish function"),
+        RaTerminator::ErrorExit { .. } => Some("terminate with error"),
+        RaTerminator::Branch { .. } => Some("unconditional jump"),
+        RaTerminator::BranchIf { .. } => Some("branch when condition is non-zero"),
+        RaTerminator::BranchIfZero { .. } => Some("branch when condition is zero"),
+        RaTerminator::JumpTable { .. } => Some("indexed branch table dispatch"),
     }
 }
 
@@ -1276,6 +1341,7 @@ mod tests {
         assert!(text.starts_with("ra_func @0 { ; entry: b0"));
         assert!(text.contains(" ; insts: "));
         assert!(text.contains(" ; uses: "));
+        assert!(text.contains(" ; sem: "));
         assert!(text.contains("term:"));
     }
 }
