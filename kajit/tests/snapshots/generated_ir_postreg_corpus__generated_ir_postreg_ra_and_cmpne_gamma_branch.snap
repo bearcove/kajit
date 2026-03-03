@@ -1,9 +1,9 @@
 ---
-source: tests/generated_ir_postreg_corpus.rs
+source: kajit/tests/generated_ir_postreg_corpus.rs
 expression: ra
 ---
-ra_func @0 {
-  block b0:
+ra_func @0 { ; entry: b0
+  block b0: ; insts: 7
     bounds_check(2)
     v2:gpr = const(0x0)
     v0:gpr = read_bytes(1)
@@ -11,23 +11,23 @@ ra_func @0 {
     v3:gpr = CmpNe v0:gpr, v2:gpr
     v4:gpr = CmpNe v1:gpr, v2:gpr
     v5:gpr = And v3:gpr, v4:gpr
-    term: branch_if_zero v5 -> b2, fallthrough b1
-    succs: b2 b1
-  block b1 (preds: b0):
-    term: branch b3
-    succs: b3
-  block b2 (preds: b0):
+    term: branch_if_zero v5 -> b2, fallthrough b1 ; uses: [v5]
+    succs: b2 b1 ; count: 2
+  block b1 (preds: b0): ; insts: 0
+    term: branch b3 ; uses: []
+    succs: b3 ; count: 1
+  block b2 (preds: b0): ; insts: 2
     v6:gpr = const(0x4)
     v8:gpr = copy v6:gpr
-    term: branch b4
-    succs: b4 [v6]
-  block b3 (preds: b1):
+    term: branch b4 ; uses: []
+    succs: b4 [v6] ; count: 1
+  block b3 (preds: b1): ; insts: 2
     v7:gpr = const(0x9)
     v8:gpr = copy v7:gpr
-    term: branch b4
-    succs: b4 [v8]
-  block b4 [params: v8] (preds: b2, b3):
+    term: branch b4 ; uses: []
+    succs: b4 [v8] ; count: 1
+  block b4 [params: v8] (preds: b2, b3): ; insts: 1
     store([0:W1]) v8:gpr
-    term: return
+    term: return ; uses: []
     succs: (none)
 }

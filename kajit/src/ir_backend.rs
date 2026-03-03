@@ -55,6 +55,8 @@ pub fn compile_ra_program(ra_mir: &RaProgram, alloc: &AllocatedProgram) -> Linea
     #[cfg(target_arch = "aarch64")]
     {
         let _ = (ra_mir, alloc);
-        panic!("compile_ra_program is not yet supported on aarch64 (backend needs refactoring to consume RaProgram directly)")
+        panic!(
+            "compile_ra_program is not yet supported on aarch64 (backend needs refactoring to consume RaProgram directly)"
+        )
     }
 }

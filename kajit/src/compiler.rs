@@ -750,9 +750,7 @@ pub fn compile_linear_ir_decoder(
 /// Compile a deserializer directly from an RaProgram (no LinearIr needed).
 ///
 /// This is the backend for the RA-MIR text test workflow.
-pub fn compile_ra_program_decoder(
-    program: &crate::regalloc_mir::RaProgram,
-) -> CompiledDecoder {
+pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
     let alloc = crate::regalloc_engine::allocate_program(program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
 

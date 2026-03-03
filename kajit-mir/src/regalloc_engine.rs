@@ -292,13 +292,13 @@ fn machine_env() -> MachineEnv {
     // System V AMD64 caller-saved: rax(0), rcx(1), rdx(2), rsi(6), rdi(7), r8(8), r9(9)
     // r11 excluded: used as backend temp for ZigzagDecode
     let non_preferred_int = set_from_regs(&[
-        preg_int(0),  // rax
-        preg_int(1),  // rcx
-        preg_int(2),  // rdx
-        preg_int(6),  // rsi
-        preg_int(7),  // rdi
-        preg_int(8),  // r8
-        preg_int(9),  // r9
+        preg_int(0), // rax
+        preg_int(1), // rcx
+        preg_int(2), // rdx
+        preg_int(6), // rsi
+        preg_int(7), // rdi
+        preg_int(8), // r8
+        preg_int(9), // r9
     ]);
     MachineEnv {
         preferred_regs_by_class: [preferred_int, set_from_regs(&[]), set_from_regs(&[])],
@@ -317,11 +317,11 @@ fn machine_env() -> MachineEnv {
     // r11 excluded: used as backend temp for ZigzagDecode
     // rsi(6) and rdi(7) are callee-saved on Windows but we don't use them.
     let non_preferred_int = set_from_regs(&[
-        preg_int(0),  // rax
-        preg_int(1),  // rcx
-        preg_int(2),  // rdx
-        preg_int(8),  // r8
-        preg_int(9),  // r9
+        preg_int(0), // rax
+        preg_int(1), // rcx
+        preg_int(2), // rdx
+        preg_int(8), // r8
+        preg_int(9), // r9
     ]);
     MachineEnv {
         preferred_regs_by_class: [preferred_int, set_from_regs(&[]), set_from_regs(&[])],

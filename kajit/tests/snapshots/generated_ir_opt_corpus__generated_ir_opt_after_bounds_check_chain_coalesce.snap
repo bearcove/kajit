@@ -1,5 +1,5 @@
 ---
-source: tests/generated_ir_opt_corpus.rs
+source: kajit/tests/generated_ir_opt_corpus.rs
 expression: after
 ---
 lambda @0 (shape: "u8") {

@@ -1,5 +1,5 @@
 ---
-source: tests/corpus.rs
+source: kajit/tests/corpus.rs
 expression: ir_text
 ---
 lambda @0 (shape: "Friend") {
