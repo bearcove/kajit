@@ -1,7 +1,7 @@
 #![allow(clippy::useless_conversion)]
 
 use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
-use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
+use regalloc2::{Allocation, InstPosition, PReg, RegClass};
 use std::collections::BTreeMap;
 
 use crate::arch::{BASE_FRAME, EmitCtx};
@@ -18,25 +18,13 @@ struct FunctionCtx {
     lambda_id: crate::ir::LambdaId,
 }
 
-#[derive(Default)]
-struct LambdaEditMap {
-    before: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
-    after: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
-}
-
-#[derive(Default)]
-struct LambdaEdgeEditMap {
-    before: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
-    after: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
-}
-
 struct EdgeTrampoline {
     label: DynamicLabel,
     target: DynamicLabel,
     moves: Vec<(Allocation, Allocation)>,
 }
 
-struct Lowerer {
+struct Lowerer<'a> {
     ectx: EmitCtx,
     /// DynamicLabel for each block, indexed by (lambda_index, block_id).
     block_labels: BTreeMap<(u32, u32), DynamicLabel>,
@@ -46,16 +34,13 @@ struct Lowerer {
     entry: Option<dynasmrt::AssemblyOffset>,
     current_func: Option<FunctionCtx>,
     const_vregs: Vec<Option<u64>>,
-    edits_by_lambda: BTreeMap<u32, LambdaEditMap>,
-    edge_edits_by_lambda: BTreeMap<u32, LambdaEdgeEditMap>,
+    postreg_plan: crate::regalloc_engine::PostRegAllocPlan<'a>,
     /// Forward-branch blocks: blocks with no instructions whose terminator is a
     /// plain Branch. Maps (lambda_id, block_id) → target block_id.
     forward_branch_blocks: BTreeMap<(u32, u32), u32>,
-    allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
-    return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
     edge_trampoline_labels: BTreeMap<(u32, usize, usize), DynamicLabel>,
     edge_trampolines: Vec<EdgeTrampoline>,
-    current_inst_allocs: Option<Vec<Allocation>>,
+    current_inst_allocs: Option<&'a [Allocation]>,
 }
 
 #[derive(Clone, Copy)]
@@ -65,25 +50,17 @@ enum IntrinsicArg {
 }
 
 pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendResult {
-    let max_spillslots = alloc
-        .functions
-        .iter()
-        .map(|f| f.num_spillslots)
-        .max()
-        .unwrap_or(0);
-
-    Lowerer::new(program, max_spillslots, alloc).run(program)
+    let postreg_plan = crate::regalloc_engine::PostRegAllocPlan::build(alloc);
+    let max_spillslots = postreg_plan.max_spillslots;
+    Lowerer::new(program, max_spillslots, postreg_plan).run(program)
 }
 
-impl Lowerer {
-    fn normalize_edit_move(from: Allocation, to: Allocation) -> Option<(Allocation, Allocation)> {
-        if from == to || from.is_none() || to.is_none() {
-            return None;
-        }
-        Some((from, to))
-    }
-
-    fn new(program: &RaProgram, max_spillslots: usize, alloc: &AllocatedProgram) -> Self {
+impl<'a> Lowerer<'a> {
+    fn new(
+        program: &RaProgram,
+        max_spillslots: usize,
+        postreg_plan: crate::regalloc_engine::PostRegAllocPlan<'a>,
+    ) -> Self {
         let slot_base = BASE_FRAME;
         let slot_bytes = program.slot_count * 8;
         let spill_base = slot_base + slot_bytes;
@@ -127,59 +104,6 @@ impl Lowerer {
             }
         }
 
-        // Materialize regalloc2 output into per-lambda lookup tables.
-        let mut edits_by_lambda = BTreeMap::<u32, LambdaEditMap>::new();
-        let mut edge_edits_by_lambda = BTreeMap::<u32, LambdaEdgeEditMap>::new();
-        let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<Allocation>>>::new();
-        let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
-        for func in &alloc.functions {
-            let lambda_id = func.lambda_id.index() as u32;
-            let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
-            let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
-            let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
-            return_result_allocs_by_lambda
-                .entry(lambda_id)
-                .or_insert_with(|| func.return_result_allocs.clone());
-            for (prog_point, edit) in &func.edits {
-                let Some(Some(linear_op_index)) =
-                    func.inst_linear_op_indices.get(prog_point.inst().index())
-                else {
-                    continue;
-                };
-                let Edit::Move { from, to } = edit;
-                let Some((from, to)) = Self::normalize_edit_move(*from, *to) else {
-                    continue;
-                };
-                let bucket = match prog_point.pos() {
-                    InstPosition::Before => &mut lambda_entry.before,
-                    InstPosition::After => &mut lambda_entry.after,
-                };
-                bucket.entry(*linear_op_index).or_default().push((from, to));
-            }
-            for edge_edit in &func.edge_edits {
-                let Some((from, to)) = Self::normalize_edit_move(edge_edit.from, edge_edit.to)
-                else {
-                    continue;
-                };
-                let key = (edge_edit.from_linear_op_index, edge_edit.succ_index);
-                let bucket = match edge_edit.pos {
-                    InstPosition::Before => &mut lambda_edge_entry.before,
-                    InstPosition::After => &mut lambda_edge_entry.after,
-                };
-                bucket.entry(key).or_default().push((from, to));
-            }
-            for (inst_index, maybe_linear_op_index) in
-                func.inst_linear_op_indices.iter().copied().enumerate()
-            {
-                let Some(linear_op_index) = maybe_linear_op_index else {
-                    continue;
-                };
-                let Some(inst_allocs) = func.inst_allocs.get(inst_index) else {
-                    continue;
-                };
-                allocs_entry.insert(linear_op_index, inst_allocs.clone());
-            }
-        }
         Self {
             ectx,
             block_labels,
@@ -189,11 +113,8 @@ impl Lowerer {
             entry: None,
             current_func: None,
             const_vregs: vec![None; program.vreg_count as usize],
-            edits_by_lambda,
-            edge_edits_by_lambda,
+            postreg_plan,
             forward_branch_blocks,
-            allocs_by_lambda,
-            return_result_allocs_by_lambda,
             edge_trampoline_labels: BTreeMap::new(),
             edge_trampolines: Vec::new(),
             current_inst_allocs: None,
@@ -226,7 +147,6 @@ impl Lowerer {
 
     fn current_alloc(&self, operand_index: usize) -> Allocation {
         self.current_inst_allocs
-            .as_ref()
             .and_then(|allocs| allocs.get(operand_index).copied())
             .unwrap_or_else(|| {
                 panic!("missing regalloc allocation for operand index {operand_index}")
@@ -403,11 +323,11 @@ impl Lowerer {
         };
 
         let edits = self
-            .edits_by_lambda
-            .get(&lambda_id)
+            .postreg_plan
+            .lambda_for_id(lambda_id)
             .and_then(|by_lambda| match pos {
-                InstPosition::Before => by_lambda.before.get(&linear_op_index),
-                InstPosition::After => by_lambda.after.get(&linear_op_index),
+                InstPosition::Before => by_lambda.edits_before.get(&linear_op_index),
+                InstPosition::After => by_lambda.edits_after.get(&linear_op_index),
             })
             .cloned()
             .unwrap_or_default();
@@ -456,15 +376,15 @@ impl Lowerer {
         else {
             return Vec::new();
         };
-        let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
+        let Some(by_lambda) = self.postreg_plan.lambda_for_id(lambda_id) else {
             return Vec::new();
         };
         let key = (linear_op_index, succ_index);
         let mut moves = Vec::new();
-        if let Some(before) = by_lambda.before.get(&key) {
+        if let Some(before) = by_lambda.edge_edits_before.get(&key) {
             moves.extend(before.iter().copied());
         }
-        if let Some(after) = by_lambda.after.get(&key) {
+        if let Some(after) = by_lambda.edge_edits_after.get(&key) {
             moves.extend(after.iter().copied());
         }
         moves
@@ -498,11 +418,12 @@ impl Lowerer {
         else {
             return actual_target;
         };
-        let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
+        let Some(by_lambda) = self.postreg_plan.lambda_for_id(lambda_id) else {
             return actual_target;
         };
         let key = (linear_op_index, succ_index);
-        let has_edits = by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
+        let has_edits = by_lambda.edge_edits_before.contains_key(&key)
+            || by_lambda.edge_edits_after.contains_key(&key);
         if !has_edits {
             return actual_target;
         }
@@ -1028,10 +949,10 @@ impl Lowerer {
         }
 
         let result_allocs = self
-            .return_result_allocs_by_lambda
-            .get(&(lambda_id.index() as u32))
-            .cloned()
-            .unwrap_or_default();
+            .postreg_plan
+            .lambda_for(lambda_id)
+            .map(|lambda| lambda.return_result_allocs)
+            .unwrap_or(&[]);
         assert!(
             result_allocs.len() >= data_results.len(),
             "missing return allocation mapping for lambda {:?}: need {}, got {}",
@@ -1276,10 +1197,9 @@ impl Lowerer {
         // Load allocations for the terminator if it has a linear_op_index.
         if let Some(lin_idx) = linear_op_index {
             self.current_inst_allocs = self
-                .allocs_by_lambda
-                .get(&lambda_id)
-                .and_then(|by_lambda| by_lambda.get(&lin_idx))
-                .cloned();
+                .postreg_plan
+                .lambda_for_id(lambda_id)
+                .and_then(|by_lambda| by_lambda.allocs_by_linear_op.get(&lin_idx).copied());
             self.apply_regalloc_edits(lin_idx, InstPosition::Before);
         }
 
@@ -1401,10 +1321,9 @@ impl Lowerer {
                 for inst in &block.insts {
                     let lin_idx = inst.linear_op_index;
                     self.current_inst_allocs = self
-                        .allocs_by_lambda
-                        .get(&lambda_id)
-                        .and_then(|by_lambda| by_lambda.get(&lin_idx))
-                        .cloned();
+                        .postreg_plan
+                        .lambda_for_id(lambda_id)
+                        .and_then(|by_lambda| by_lambda.allocs_by_linear_op.get(&lin_idx).copied());
                     self.apply_regalloc_edits(lin_idx, InstPosition::Before);
                     self.emit_inst(&inst.op);
                     self.apply_regalloc_edits(lin_idx, InstPosition::After);

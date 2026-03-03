@@ -1506,6 +1506,18 @@ fn fmt_op(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
     }
 }
 
+pub struct DisplayLinearOp<'a>(&'a LinearOp);
+
+impl fmt::Display for DisplayLinearOp<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt_op(f, self.0)
+    }
+}
+
+pub fn display_linear_op(op: &LinearOp) -> DisplayLinearOp<'_> {
+    DisplayLinearOp(op)
+}
+
 impl fmt::Debug for LinearIr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "LinearIr {{")?;

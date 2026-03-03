@@ -2,6 +2,7 @@
 //!
 //! This module adapts `regalloc_mir::RaProgram` to `regalloc2::Function`.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use regalloc2::{
@@ -9,7 +10,7 @@ use regalloc2::{
     OperandPos, Output, PReg, PRegSet, RegAllocError, RegClass, RegallocOptions, VReg,
 };
 
-use crate::{FixedReg, OperandKind as RaOperandKind, RaFunction, RaProgram};
+use crate::{FixedReg, OperandKind as RaOperandKind, RaFunction, RaProgram, RaTerminator};
 use kajit_ir::LambdaId;
 
 /// Materialized allocation result for one function.
@@ -38,6 +39,349 @@ pub struct AllocatedFunction {
 #[derive(Debug, Clone)]
 pub struct AllocatedProgram {
     pub functions: Vec<AllocatedFunction>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct LambdaPostRegAllocPlan<'a> {
+    pub num_spillslots: usize,
+    pub edits_before: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
+    pub edits_after: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
+    pub edge_edits_before: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
+    pub edge_edits_after: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
+    pub allocs_by_linear_op: BTreeMap<usize, &'a [Allocation]>,
+    pub return_result_allocs: &'a [Allocation],
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PostRegAllocPlan<'a> {
+    pub max_spillslots: usize,
+    pub by_lambda: BTreeMap<u32, LambdaPostRegAllocPlan<'a>>,
+}
+
+impl<'a> PostRegAllocPlan<'a> {
+    pub fn build(alloc: &'a AllocatedProgram) -> Self {
+        let mut plan = Self::default();
+
+        for func in &alloc.functions {
+            let lambda_id = func.lambda_id.index() as u32;
+            let mut lambda = LambdaPostRegAllocPlan {
+                num_spillslots: func.num_spillslots,
+                return_result_allocs: func.return_result_allocs.as_slice(),
+                ..Default::default()
+            };
+
+            for (prog_point, edit) in &func.edits {
+                let Some(Some(linear_op_index)) =
+                    func.inst_linear_op_indices.get(prog_point.inst().index())
+                else {
+                    continue;
+                };
+                let Edit::Move { from, to } = *edit;
+                let Some((from, to)) = normalize_edit_move(from, to) else {
+                    continue;
+                };
+                let bucket = match prog_point.pos() {
+                    regalloc2::InstPosition::Before => &mut lambda.edits_before,
+                    regalloc2::InstPosition::After => &mut lambda.edits_after,
+                };
+                bucket.entry(*linear_op_index).or_default().push((from, to));
+            }
+
+            for edge_edit in &func.edge_edits {
+                let Some((from, to)) = normalize_edit_move(edge_edit.from, edge_edit.to) else {
+                    continue;
+                };
+                let key = (edge_edit.from_linear_op_index, edge_edit.succ_index);
+                let bucket = match edge_edit.pos {
+                    regalloc2::InstPosition::Before => &mut lambda.edge_edits_before,
+                    regalloc2::InstPosition::After => &mut lambda.edge_edits_after,
+                };
+                bucket.entry(key).or_default().push((from, to));
+            }
+
+            for (inst_index, maybe_linear_op_index) in
+                func.inst_linear_op_indices.iter().copied().enumerate()
+            {
+                let Some(linear_op_index) = maybe_linear_op_index else {
+                    continue;
+                };
+                let Some(inst_allocs) = func.inst_allocs.get(inst_index) else {
+                    continue;
+                };
+                lambda
+                    .allocs_by_linear_op
+                    .insert(linear_op_index, inst_allocs.as_slice());
+            }
+
+            plan.max_spillslots = plan.max_spillslots.max(lambda.num_spillslots);
+            plan.by_lambda.insert(lambda_id, lambda);
+        }
+
+        plan
+    }
+
+    pub fn lambda_for_id(&self, lambda_id: u32) -> Option<&LambdaPostRegAllocPlan<'a>> {
+        self.by_lambda.get(&lambda_id)
+    }
+
+    pub fn lambda_for(&self, lambda_id: LambdaId) -> Option<&LambdaPostRegAllocPlan<'a>> {
+        self.lambda_for_id(lambda_id.index() as u32)
+    }
+}
+
+fn normalize_edit_move(from: Allocation, to: Allocation) -> Option<(Allocation, Allocation)> {
+    if from == to || from.is_none() || to.is_none() {
+        return None;
+    }
+    Some((from, to))
+}
+
+pub struct PostRegProgramDisplay<'a> {
+    program: &'a RaProgram,
+    plan: PostRegAllocPlan<'a>,
+}
+
+pub fn post_reg_program_display<'a>(
+    program: &'a RaProgram,
+    alloc: &'a AllocatedProgram,
+) -> PostRegProgramDisplay<'a> {
+    PostRegProgramDisplay {
+        program,
+        plan: PostRegAllocPlan::build(alloc),
+    }
+}
+
+impl std::fmt::Display for PostRegProgramDisplay<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for func in &self.program.funcs {
+            let lambda_id = func.lambda_id.index() as u32;
+            let Some(plan) = self.plan.lambda_for(func.lambda_id) else {
+                continue;
+            };
+
+            writeln!(
+                f,
+                "postreg_func @{} (entry: b{}, spillslots: {}) {{",
+                lambda_id, func.entry.0, plan.num_spillslots
+            )?;
+
+            for block in &func.blocks {
+                writeln!(f, "  block b{}:", block.id.0)?;
+
+                for inst in &block.insts {
+                    let idx = inst.linear_op_index;
+                    if let Some(moves) = plan.edits_before.get(&idx) {
+                        for (from, to) in moves {
+                            writeln!(
+                                f,
+                                "    edit.before lir#{idx}: {} -> {}",
+                                fmt_allocation(*from),
+                                fmt_allocation(*to)
+                            )?;
+                        }
+                    }
+
+                    write!(
+                        f,
+                        "    lir#{idx}: {}",
+                        kajit_lir::display_linear_op(&inst.op)
+                    )?;
+                    if let Some(allocs) = plan.allocs_by_linear_op.get(&idx) {
+                        write!(f, " ; allocs: {}", fmt_allocs(allocs))?;
+                    }
+                    writeln!(f)?;
+
+                    if let Some(moves) = plan.edits_after.get(&idx) {
+                        for (from, to) in moves {
+                            writeln!(
+                                f,
+                                "    edit.after  lir#{idx}: {} -> {}",
+                                fmt_allocation(*from),
+                                fmt_allocation(*to)
+                            )?;
+                        }
+                    }
+                }
+
+                if let Some(term_idx) = block.term_linear_op_index {
+                    if let Some(moves) = plan.edits_before.get(&term_idx) {
+                        for (from, to) in moves {
+                            writeln!(
+                                f,
+                                "    edit.before lir#{term_idx}: {} -> {}",
+                                fmt_allocation(*from),
+                                fmt_allocation(*to)
+                            )?;
+                        }
+                    }
+
+                    write!(
+                        f,
+                        "    lir#{term_idx}: term {}",
+                        fmt_terminator(&block.term)
+                    )?;
+                    if let Some(allocs) = plan.allocs_by_linear_op.get(&term_idx) {
+                        write!(f, " ; allocs: {}", fmt_allocs(allocs))?;
+                    }
+                    writeln!(f)?;
+
+                    if let Some(moves) = plan.edits_after.get(&term_idx) {
+                        for (from, to) in moves {
+                            writeln!(
+                                f,
+                                "    edit.after  lir#{term_idx}: {} -> {}",
+                                fmt_allocation(*from),
+                                fmt_allocation(*to)
+                            )?;
+                        }
+                    }
+
+                    for succ_index in 0..block.succs.len() {
+                        let key = (term_idx, succ_index);
+                        if let Some(moves) = plan.edge_edits_before.get(&key) {
+                            for (from, to) in moves {
+                                writeln!(
+                                    f,
+                                    "    edge.before lir#{term_idx} succ#{succ_index}: {} -> {}",
+                                    fmt_allocation(*from),
+                                    fmt_allocation(*to)
+                                )?;
+                            }
+                        }
+                        if let Some(moves) = plan.edge_edits_after.get(&key) {
+                            for (from, to) in moves {
+                                writeln!(
+                                    f,
+                                    "    edge.after  lir#{term_idx} succ#{succ_index}: {} -> {}",
+                                    fmt_allocation(*from),
+                                    fmt_allocation(*to)
+                                )?;
+                            }
+                        }
+                    }
+                }
+            }
+
+            writeln!(
+                f,
+                "  return_allocs: {}",
+                fmt_allocs(&plan.return_result_allocs)
+            )?;
+            writeln!(f, "}}")?;
+        }
+        Ok(())
+    }
+}
+
+fn fmt_terminator(term: &RaTerminator) -> String {
+    match term {
+        RaTerminator::Return => "return".to_string(),
+        RaTerminator::ErrorExit { code } => format!("error_exit {code:?}"),
+        RaTerminator::Branch { target } => format!("br b{}", target.0),
+        RaTerminator::BranchIf {
+            cond,
+            target,
+            fallthrough,
+        } => format!(
+            "br_if v{} b{} else b{}",
+            cond.index(),
+            target.0,
+            fallthrough.0
+        ),
+        RaTerminator::BranchIfZero {
+            cond,
+            target,
+            fallthrough,
+        } => format!(
+            "br_zero v{} b{} else b{}",
+            cond.index(),
+            target.0,
+            fallthrough.0
+        ),
+        RaTerminator::JumpTable {
+            predicate,
+            targets,
+            default,
+        } => {
+            let mut s = format!("jump_table v{} [", predicate.index());
+            for (i, target) in targets.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&format!("b{}", target.0));
+            }
+            s.push_str(&format!("] default b{}", default.0));
+            s
+        }
+    }
+}
+
+fn fmt_allocs(allocs: &[Allocation]) -> String {
+    let mut out = String::from("[");
+    for (i, alloc) in allocs.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&fmt_allocation(*alloc));
+    }
+    out.push(']');
+    out
+}
+
+fn fmt_allocation(alloc: Allocation) -> String {
+    if alloc.is_none() {
+        return "none".to_string();
+    }
+    if let Some(slot) = alloc.as_stack() {
+        return format!("spill{}", slot.index());
+    }
+    if let Some(reg) = alloc.as_reg() {
+        match reg.class() {
+            RegClass::Int => format_int_reg(reg.hw_enc() as u8),
+            RegClass::Vector => format_vec_reg(reg.hw_enc() as u8),
+            RegClass::Float => format!("f{}", reg.hw_enc()),
+        }
+    } else {
+        "unknown".to_string()
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn format_int_reg(enc: u8) -> String {
+    format!("x{enc}")
+}
+
+#[cfg(target_arch = "aarch64")]
+fn format_vec_reg(enc: u8) -> String {
+    format!("v{enc}")
+}
+
+#[cfg(target_arch = "x86_64")]
+fn format_int_reg(enc: u8) -> String {
+    match enc {
+        0 => "rax".to_string(),
+        1 => "rcx".to_string(),
+        2 => "rdx".to_string(),
+        3 => "rbx".to_string(),
+        4 => "rsp".to_string(),
+        5 => "rbp".to_string(),
+        6 => "rsi".to_string(),
+        7 => "rdi".to_string(),
+        8 => "r8".to_string(),
+        9 => "r9".to_string(),
+        10 => "r10".to_string(),
+        11 => "r11".to_string(),
+        12 => "r12".to_string(),
+        13 => "r13".to_string(),
+        14 => "r14".to_string(),
+        15 => "r15".to_string(),
+        _ => format!("r{enc}"),
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+fn format_vec_reg(enc: u8) -> String {
+    format!("xmm{enc}")
 }
 
 #[derive(Debug, Clone)]

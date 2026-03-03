@@ -1,0 +1,28 @@
+---
+source: kajit/tests/generated_ir_postreg_corpus.rs
+expression: postreg
+---
+postreg_func @0 (entry: b0, spillslots: 0) {
+  block b0:
+    lir#0: bounds_check 2 ; allocs: []
+    lir#1: v2 = const 0 ; allocs: [x11]
+    lir#2: v0 = read_bytes 1 ; allocs: [x12]
+    lir#3: v1 = read_bytes 1 ; allocs: [x13]
+    lir#4: v3 = v0 CmpNe v2 ; allocs: [x12, x11, x12]
+    lir#5: v4 = v1 CmpNe v2 ; allocs: [x13, x11, x11]
+    lir#6: v5 = v3 And v4 ; allocs: [x12, x11, x11]
+    lir#7: term br_zero v5 b2 else b1 ; allocs: [x11]
+  block b1:
+    lir#8: term br b3 ; allocs: []
+  block b2:
+    lir#10: v6 = const 4 ; allocs: [x15]
+    lir#11: v8 = copy v6 ; allocs: [x15, x23]
+    edit.before lir#12: x15 -> x23
+    lir#12: term br b4 ; allocs: []
+  block b3:
+    lir#14: v7 = const 9 ; allocs: [x23]
+    lir#15: v8 = copy v7 ; allocs: [x23, x23]
+  block b4:
+    lir#17: store [0:W1] v8 ; allocs: [x23]
+  return_allocs: []
+}

@@ -178,6 +178,24 @@ pub fn debug_linear_ir_text(
     scrub_volatile_intrinsic_addrs(&format!("{linear}"))
 }
 
+/// Build decoder IR (after default pre-regalloc passes) and return a symbolic
+/// post-regalloc plan dump (pre-dynasm).
+pub fn debug_post_regalloc_text(
+    shape: &'static facet::Shape,
+    ir_decoder: &dyn format::Decoder,
+) -> String {
+    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    compiler::run_default_passes_from_env(&mut func);
+    let linear = linearize::linearize(&mut func);
+    let ra = regalloc_mir::lower_linear_ir(&linear);
+    let alloc = regalloc_engine::allocate_program(&ra)
+        .expect("regalloc should succeed for post-regalloc debug dump");
+    scrub_volatile_intrinsic_addrs(&format!(
+        "{}",
+        regalloc_engine::post_reg_program_display(&ra, &alloc)
+    ))
+}
+
 /// Build decoder IR and return textual RVSDG checkpoints before/after each enabled optimization pass.
 ///
 /// The first entry is always `("initial", ir_before_passes)`.

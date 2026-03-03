@@ -152,16 +152,17 @@ pub(crate) fn render_ir_postreg_test_file() -> String {
             quote! {
                 #[test]
                 fn #snap() {
-                    let (linear, ra, edits) = postreg_artifacts(#ir);
+                    let (linear, ra, postreg, edits) = postreg_artifacts(#ir);
                     insta::assert_snapshot!(concat!("generated_ir_postreg_linear_", #name), linear);
                     insta::assert_snapshot!(concat!("generated_ir_postreg_ra_", #name), ra);
+                    insta::assert_snapshot!(concat!("generated_ir_postreg_plan_", #name), postreg);
                     insta::assert_snapshot!(concat!("generated_ir_postreg_edits_", #name), format!("{edits}"));
                 }
             },
             quote! {
                 #[test]
                 fn #asserts() {
-                    let (linear, _ra, edits) = postreg_artifacts(#ir);
+                    let (linear, _ra, _postreg, edits) = postreg_artifacts(#ir);
                     assert!(edits <= #max_edits, "expected edit budget <= {}, got {edits}", #max_edits);
                     #(#must_contain)*
                 }
@@ -196,7 +197,7 @@ pub(crate) fn render_ir_postreg_test_file() -> String {
             kajit::deserialize::<u8>(&dec, input).expect("decoder should execute")
         }
 
-        fn postreg_artifacts(ir: &str) -> (String, String, usize) {
+        fn postreg_artifacts(ir: &str) -> (String, String, String, usize) {
             let mut func = parse_case(ir);
             kajit::ir_passes::run_default_passes(&mut func);
             let linear = kajit::linearize::linearize(&mut func);
@@ -205,8 +206,9 @@ pub(crate) fn render_ir_postreg_test_file() -> String {
             let ra_text = format!("{ra}");
             let alloc = kajit::regalloc_engine::allocate_program(&ra)
                 .expect("regalloc should allocate post-reg corpus case");
+            let postreg = format!("{}", kajit::regalloc_engine::post_reg_program_display(&ra, &alloc));
             let edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
-            (linear_text, ra_text, edits)
+            (linear_text, ra_text, postreg, edits)
         }
 
         #(#tests)*
