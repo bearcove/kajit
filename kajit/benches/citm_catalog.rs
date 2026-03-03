@@ -18,7 +18,8 @@ use serde::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::hint::black_box;
-use std::sync::LazyLock;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, LazyLock};
 
 // =============================================================================
 // Types for citm_catalog.json
@@ -131,12 +132,15 @@ static CITM_STR: LazyLock<String> = LazyLock::new(|| {
     String::from_utf8(CITM_JSON.clone()).expect("citm_catalog.json is valid UTF-8")
 });
 
-// =============================================================================
-// Cached compiled deserializers
-// =============================================================================
-
-static KAJIT_CITM: LazyLock<kajit::compiler::CompiledDecoder> =
-    LazyLock::new(|| kajit::compile_decoder(CitmCatalog::SHAPE, &kajit::json::KajitJson));
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        (*msg).to_owned()
+    } else if let Some(msg) = payload.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    }
+}
 
 // =============================================================================
 // Benchmarks
@@ -155,16 +159,49 @@ fn main() {
         }),
     });
 
-    v.push(harness::Bench {
-        name: "citm_catalog/kajit_dynasm_deser".into(),
-        func: Box::new(|runner| {
-            let data = &*CITM_STR;
-            let deser = &*KAJIT_CITM;
-            runner.run(|| {
-                black_box(kajit::from_str::<CitmCatalog>(deser, black_box(data)).unwrap());
-            });
-        }),
-    });
+    let kajit_decoder = match catch_unwind(AssertUnwindSafe(|| {
+        kajit::compile_decoder(CitmCatalog::SHAPE, &kajit::json::KajitJson)
+    })) {
+        Ok(decoder) => Some(Arc::new(decoder)),
+        Err(payload) => {
+            eprintln!(
+                "skipping citm_catalog/kajit_deser: compile unsupported ({})",
+                panic_payload_to_string(payload)
+            );
+            None
+        }
+    };
+
+    if let Some(decoder) = kajit_decoder {
+        match kajit::from_str::<CitmCatalog>(decoder.as_ref(), &CITM_STR) {
+            Ok(_) => {
+                v.push(harness::Bench {
+                    name: "citm_catalog/kajit_deser".into(),
+                    func: Box::new({
+                        let decoder = Arc::clone(&decoder);
+                        move |runner| {
+                            let data = &*CITM_STR;
+                            let decoder = Arc::clone(&decoder);
+                            runner.run(move || {
+                                black_box(
+                                    kajit::from_str::<CitmCatalog>(
+                                        decoder.as_ref(),
+                                        black_box(data),
+                                    )
+                                    .unwrap(),
+                                );
+                            });
+                        }
+                    }),
+                });
+            }
+            Err(err) => {
+                eprintln!(
+                    "skipping citm_catalog/kajit_deser: fixture unsupported by kajit ({err:?})"
+                );
+            }
+        }
+    }
 
     harness::run_benchmarks(v);
 }

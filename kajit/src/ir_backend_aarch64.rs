@@ -1,6 +1,6 @@
 #![allow(clippy::useless_conversion)]
 
-use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
+use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
 use std::collections::{BTreeMap, BTreeSet};
 

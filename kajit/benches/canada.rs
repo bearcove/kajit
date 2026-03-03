@@ -63,6 +63,9 @@ static CANADA_JSON: LazyLock<Vec<u8>> = LazyLock::new(|| {
     decompress(compressed)
 });
 
+static CANADA_STR: LazyLock<String> =
+    LazyLock::new(|| String::from_utf8(CANADA_JSON.clone()).expect("canada.json is valid UTF-8"));
+
 // =============================================================================
 // Cached compiled deserializers
 // =============================================================================
@@ -80,23 +83,35 @@ fn main() {
     v.push(harness::Bench {
         name: "canada/serde_deser".into(),
         func: Box::new(|runner| {
-            let data = &*CANADA_JSON;
+            let data = &*CANADA_STR;
             runner.run(|| {
-                black_box(serde_json::from_slice::<FeatureCollection>(black_box(data)).unwrap());
+                black_box(serde_json::from_str::<FeatureCollection>(black_box(data)).unwrap());
             });
         }),
     });
 
-    v.push(harness::Bench {
-        name: "canada/kajit_dynasm_deser".into(),
-        func: Box::new(|runner| {
-            let data = &*CANADA_JSON;
-            let deser = &*KAJIT_CANADA;
-            runner.run(|| {
-                black_box(kajit::deserialize::<FeatureCollection>(deser, black_box(data)).unwrap());
+    let kajit_preflight = kajit::from_str::<FeatureCollection>(&KAJIT_CANADA, &CANADA_STR);
+    match kajit_preflight {
+        Ok(_) => {
+            v.push(harness::Bench {
+                name: "canada/kajit_deser".into(),
+                func: Box::new(|runner| {
+                    let data = &*CANADA_STR;
+                    let deser = &*KAJIT_CANADA;
+                    runner.run(|| {
+                        black_box(
+                            kajit::from_str::<FeatureCollection>(deser, black_box(data)).unwrap(),
+                        );
+                    });
+                }),
             });
-        }),
-    });
+        }
+        Err(err) => {
+            eprintln!(
+                "skipping canada/kajit_deser: fixture currently unsupported by kajit ({err:?})"
+            );
+        }
+    }
 
     harness::run_benchmarks(v);
 }

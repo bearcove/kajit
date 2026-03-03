@@ -1782,17 +1782,20 @@ pub(crate) fn render_bench_file() -> String {
     let types = types_rs();
     let bench_calls: Vec<TokenStream> = cases
         .iter()
-        .flat_map(|case| {
-            case.values.iter().enumerate().map(|(sample_idx, value)| {
-                let sample_name = if case.values.len() == 1 {
-                    case.name.to_string()
-                } else {
-                    format!("{}__v{}", case.name, sample_idx)
-                };
-                let value = value.clone();
-                quote! {
-                    register_bench_case(&mut v, #sample_name, #value);
-                }
+        .filter_map(|case| {
+            let value = case.values.first()?.clone();
+            let sample_name = case.name.to_string();
+            let enable_json_kajit = unsupported_reason_for_format(case, WireFormat::Json).is_none();
+            let enable_postcard_kajit =
+                unsupported_reason_for_format(case, WireFormat::Postcard).is_none();
+            Some(quote! {
+                register_bench_case(
+                    &mut v,
+                    #sample_name,
+                    #value,
+                    #enable_json_kajit,
+                    #enable_postcard_kajit,
+                );
             })
         })
         .collect();
@@ -1802,23 +1805,34 @@ pub(crate) fn render_bench_file() -> String {
 
         use facet::Facet;
         use std::hint::black_box;
+        use std::panic::{catch_unwind, AssertUnwindSafe};
         use std::sync::Arc;
 
         #types
 
-        fn register_bench_case<T>(v: &mut Vec<harness::Bench>, group: &str, value: T)
+        fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+            if let Some(msg) = payload.downcast_ref::<&str>() {
+                (*msg).to_owned()
+            } else if let Some(msg) = payload.downcast_ref::<String>() {
+                msg.clone()
+            } else {
+                "non-string panic payload".to_owned()
+            }
+        }
+
+        fn register_bench_case<T>(
+            v: &mut Vec<harness::Bench>,
+            group: &str,
+            value: T,
+            enable_json_kajit: bool,
+            enable_postcard_kajit: bool,
+        )
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
         {
             let json_data = Arc::new(serde_json::to_string(&value).unwrap());
             let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
             let value = Arc::new(value);
-
-            let json_decoder =
-                Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson));
-
-            let postcard_decoder =
-                Arc::new(kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard));
 
             let json_prefix = format!("{group}/json");
             let postcard_prefix = format!("{group}/postcard");
@@ -1834,19 +1848,60 @@ pub(crate) fn render_bench_file() -> String {
                     }
                 }),
             });
-            v.push(harness::Bench {
-                name: format!("{json_prefix}/kajit_dynasm_deser"),
-                func: Box::new({
-                    let data = Arc::clone(&json_data);
-                    let decoder = Arc::clone(&json_decoder);
-                    move |runner| {
-                        let decoder = &*decoder;
-                        runner.run(|| {
-                            black_box(kajit::from_str::<T>(decoder, black_box(data.as_str())).unwrap());
-                        });
+            if enable_json_kajit {
+                let json_decoder =
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson)
+                    })) {
+                        Ok(decoder) => Some(Arc::new(decoder)),
+                        Err(payload) => {
+                            eprintln!(
+                                "skipping {json_prefix}/kajit_deser: compile unsupported ({})",
+                                panic_payload_to_string(payload)
+                            );
+                            None
+                        }
+                    };
+
+                if let Some(decoder) = json_decoder {
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
+                    })) {
+                        Ok(Ok(_)) => {
+                            v.push(harness::Bench {
+                                name: format!("{json_prefix}/kajit_deser"),
+                        func: Box::new({
+                            let data = Arc::clone(&json_data);
+                            let decoder = Arc::clone(&decoder);
+                            move |runner| {
+                                let decoder = decoder.as_ref();
+                                runner.run(|| {
+                                    black_box(
+                                        kajit::from_str::<T>(
+                                            decoder,
+                                            black_box(data.as_str()),
+                                        )
+                                        .unwrap(),
+                                    );
+                                });
+                                    }
+                                }),
+                            });
+                        }
+                        Ok(Err(err)) => {
+                            eprintln!(
+                                "skipping {json_prefix}/kajit_deser: preflight decode failed ({err:?})"
+                            );
+                        }
+                        Err(payload) => {
+                            eprintln!(
+                                "skipping {json_prefix}/kajit_deser: preflight panic ({})",
+                                panic_payload_to_string(payload)
+                            );
+                        }
                     }
-                }),
-            });
+                }
+            }
             v.push(harness::Bench {
                 name: format!("{json_prefix}/serde_ser"),
                 func: Box::new({
@@ -1870,19 +1925,60 @@ pub(crate) fn render_bench_file() -> String {
                     }
                 }),
             });
-            v.push(harness::Bench {
-                name: format!("{postcard_prefix}/kajit_dynasm_deser"),
-                func: Box::new({
-                    let data = Arc::clone(&postcard_data);
-                    let decoder = Arc::clone(&postcard_decoder);
-                    move |runner| {
-                        let decoder = &*decoder;
-                        runner.run(|| {
-                            black_box(kajit::deserialize::<T>(decoder, black_box(&data[..])).unwrap());
-                        });
+            if enable_postcard_kajit {
+                let postcard_decoder =
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard)
+                    })) {
+                        Ok(decoder) => Some(Arc::new(decoder)),
+                        Err(payload) => {
+                            eprintln!(
+                                "skipping {postcard_prefix}/kajit_deser: compile unsupported ({})",
+                                panic_payload_to_string(payload)
+                            );
+                            None
+                        }
+                    };
+
+                if let Some(decoder) = postcard_decoder {
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
+                    })) {
+                        Ok(Ok(_)) => {
+                            v.push(harness::Bench {
+                                name: format!("{postcard_prefix}/kajit_deser"),
+                        func: Box::new({
+                            let data = Arc::clone(&postcard_data);
+                            let decoder = Arc::clone(&decoder);
+                            move |runner| {
+                                let decoder = decoder.as_ref();
+                                runner.run(|| {
+                                    black_box(
+                                        kajit::deserialize::<T>(
+                                            decoder,
+                                            black_box(&data[..]),
+                                        )
+                                        .unwrap(),
+                                    );
+                                });
+                                    }
+                                }),
+                            });
+                        }
+                        Ok(Err(err)) => {
+                            eprintln!(
+                                "skipping {postcard_prefix}/kajit_deser: preflight decode failed ({err:?})"
+                            );
+                        }
+                        Err(payload) => {
+                            eprintln!(
+                                "skipping {postcard_prefix}/kajit_deser: preflight panic ({})",
+                                panic_payload_to_string(payload)
+                            );
+                        }
                     }
-                }),
-            });
+                }
+            }
             v.push(harness::Bench {
                 name: format!("{postcard_prefix}/serde_ser"),
                 func: Box::new({

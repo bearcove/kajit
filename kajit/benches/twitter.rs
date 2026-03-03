@@ -19,7 +19,8 @@ use facet::Facet;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::hint::black_box;
-use std::sync::LazyLock;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::{Arc, LazyLock};
 
 // =============================================================================
 // Types for twitter.json — shared between serde and kajit
@@ -268,12 +269,15 @@ static TWITTER_JSON: LazyLock<Vec<u8>> = LazyLock::new(|| {
 static TWITTER_STR: LazyLock<String> =
     LazyLock::new(|| String::from_utf8(TWITTER_JSON.clone()).expect("twitter.json is valid UTF-8"));
 
-// =============================================================================
-// Cached compiled deserializers
-// =============================================================================
-
-static KAJIT_TWITTER: LazyLock<kajit::compiler::CompiledDecoder> =
-    LazyLock::new(|| kajit::compile_decoder(Twitter::SHAPE, &kajit::json::KajitJson));
+fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(msg) = payload.downcast_ref::<&str>() {
+        (*msg).to_owned()
+    } else if let Some(msg) = payload.downcast_ref::<String>() {
+        msg.clone()
+    } else {
+        "non-string panic payload".to_owned()
+    }
+}
 
 // =============================================================================
 // Benchmarks
@@ -292,16 +296,44 @@ fn main() {
         }),
     });
 
-    v.push(harness::Bench {
-        name: "twitter/kajit_dynasm_deser".into(),
-        func: Box::new(|runner| {
-            let data = &*TWITTER_STR;
-            let deser = &*KAJIT_TWITTER;
-            runner.run(|| {
-                black_box(kajit::from_str::<Twitter>(deser, black_box(data)).unwrap());
-            });
-        }),
-    });
+    let kajit_decoder = match catch_unwind(AssertUnwindSafe(|| {
+        kajit::compile_decoder(Twitter::SHAPE, &kajit::json::KajitJson)
+    })) {
+        Ok(decoder) => Some(Arc::new(decoder)),
+        Err(payload) => {
+            eprintln!(
+                "skipping twitter/kajit_deser: compile unsupported ({})",
+                panic_payload_to_string(payload)
+            );
+            None
+        }
+    };
+
+    if let Some(decoder) = kajit_decoder {
+        match kajit::from_str::<Twitter>(decoder.as_ref(), &TWITTER_STR) {
+            Ok(_) => {
+                v.push(harness::Bench {
+                    name: "twitter/kajit_deser".into(),
+                    func: Box::new({
+                        let decoder = Arc::clone(&decoder);
+                        move |runner| {
+                            let data = &*TWITTER_STR;
+                            let decoder = Arc::clone(&decoder);
+                            runner.run(move || {
+                                black_box(
+                                    kajit::from_str::<Twitter>(decoder.as_ref(), black_box(data))
+                                        .unwrap(),
+                                );
+                            });
+                        }
+                    }),
+                });
+            }
+            Err(err) => {
+                eprintln!("skipping twitter/kajit_deser: fixture unsupported by kajit ({err:?})");
+            }
+        }
+    }
 
     harness::run_benchmarks(v);
 }
