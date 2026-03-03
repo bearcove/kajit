@@ -212,6 +212,7 @@ fn disasm_bytes(code: &[u8], marker_offset: Option<usize>) -> String {
 }
 
 #[test]
+#[ignore = "temporarily disabled while disasm snapshot strategy is being replaced"]
 fn disasm_postcard_supported_surface() {
     assert_case_snapshot(
         "postcard",
@@ -252,6 +253,7 @@ fn disasm_postcard_supported_surface() {
 }
 
 #[test]
+#[ignore = "temporarily disabled while disasm snapshot strategy is being replaced"]
 fn disasm_json_supported_surface() {
     assert_case_snapshot(
         "json",

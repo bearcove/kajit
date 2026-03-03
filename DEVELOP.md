@@ -5,6 +5,63 @@
 kajit registers generated code with the GDB JIT interface. You can debug JIT code,
 but you should expect partial symbolization unless/until full unwind metadata is emitted.
 
+## x86_64 testing on Apple Silicon (Rosetta 2)
+
+When validating x86_64 codegen on an Apple Silicon machine, run tests as an
+x86_64 process under Rosetta.
+
+### One-time setup
+
+1. Install Rosetta 2:
+```bash
+softwareupdate --install-rosetta --agree-to-license
+```
+2. Install the Rust target:
+```bash
+rustup target add x86_64-apple-darwin
+```
+
+### Fast x86_64 smoke loop
+
+Run the focused x86_64 smoke set for quick local iteration:
+```bash
+cargo test-x86_64
+# equivalent:
+cargo xtask test-x86_64
+```
+
+Current smoke set:
+- `prop::deny_unknown_fields`
+- `prop::flat_struct`
+- `prop::scalar_i64`
+- `prop::nested_struct`
+- `prop::transparent_composite`
+- `prop::shared_inner_type`
+
+### Full x86_64 test suite
+
+```bash
+cargo xtask test-x86_64 --full
+# or directly:
+cargo nextest run -p kajit --target x86_64-apple-darwin
+```
+
+You can pass extra nextest arguments to the helper:
+```bash
+cargo xtask test-x86_64 -- --no-fail-fast
+```
+
+### Debugging x86_64 tests with LLDB under Rosetta
+
+Build and run the x86_64 test binary through Rosetta:
+```bash
+cargo nextest run -p kajit --target x86_64-apple-darwin <test_name> --no-run
+arch -x86_64 lldb target/x86_64-apple-darwin/debug/deps/<test_binary>
+```
+
+Within LLDB, source breakpoints and backtraces work as usual for translated
+x86_64 binaries.
+
 ## LLDB (macOS)
 
 1. Build tests in debug mode:
