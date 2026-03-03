@@ -153,7 +153,7 @@ pub struct DebuggerSession {
     func: RaFunction,
     block_indices: HashMap<BlockId, usize>,
     input: Vec<u8>,
-    input_start: *const u8,
+    input_start: usize,
     ctx: DeserContext,
     cursor: usize,
     output: Vec<u8>,
@@ -167,6 +167,11 @@ pub struct DebuggerSession {
     history: Vec<SessionSnapshot>,
 }
 
+// Safety: all raw pointers inside `ctx` and `input_start` refer to allocations owned by this
+// session (`input` and optional scratch storage). The session is always externally synchronized
+// behind a mutex in MCP usage; moving it across threads does not invalidate those pointers.
+unsafe impl Send for DebuggerSession {}
+
 impl DebuggerSession {
     pub fn new(program: &RaProgram, input: &[u8]) -> Result<Self, DebuggerError> {
         let func = program
@@ -176,7 +181,7 @@ impl DebuggerSession {
             .clone();
         let block_indices = build_block_index(&func);
         let input = input.to_vec();
-        let input_start = input.as_ptr();
+        let input_start = input.as_ptr() as usize;
         let ctx = DeserContext::from_bytes(input.as_slice());
         Ok(Self {
             cursor: 0,
@@ -405,11 +410,11 @@ impl DebuggerSession {
     }
 
     fn sync_ctx_from_cursor(&mut self) {
-        self.ctx.input_ptr = unsafe { self.input_start.add(self.cursor) };
+        self.ctx.input_ptr = (self.input_start as *const u8).wrapping_add(self.cursor);
     }
 
     fn sync_cursor_from_ctx(&mut self) {
-        self.cursor = unsafe { self.ctx.input_ptr.offset_from(self.input_start) as usize };
+        self.cursor = (self.ctx.input_ptr as usize).saturating_sub(self.input_start);
     }
 
     fn trap(&mut self, code: ErrorCode) {
@@ -469,12 +474,12 @@ impl DebuggerSession {
                 }
             }
             LinearOp::SaveCursor { dst } => {
-                let ptr = unsafe { self.input_start.add(self.cursor) } as usize as u64;
+                let ptr = (self.input_start + self.cursor) as u64;
                 self.write_vreg(dst.index(), ptr);
             }
             LinearOp::RestoreCursor { src } => {
                 let ptr = self.read_vreg(src.index()) as usize;
-                let start = self.input_start as usize;
+                let start = self.input_start;
                 let end = start + self.input.len();
                 if !(start..=end).contains(&ptr) {
                     self.trap(ErrorCode::UnexpectedEof);

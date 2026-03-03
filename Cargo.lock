@@ -622,6 +622,7 @@ dependencies = [
  "facet",
  "insta",
  "itoa",
+ "kajit-abi",
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
@@ -637,6 +638,13 @@ dependencies = [
  "yaxpeax-arm",
  "yaxpeax-x86",
  "zmij",
+]
+
+[[package]]
+name = "kajit-abi"
+version = "0.1.0"
+dependencies = [
+ "kajit-ir",
 ]
 
 [[package]]
@@ -669,6 +677,7 @@ name = "kajit-mir"
 version = "0.1.0"
 dependencies = [
  "facet",
+ "kajit-abi",
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
@@ -680,6 +689,11 @@ name = "kajit-mir-mcp"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "facet",
+ "kajit",
+ "kajit-ir",
+ "kajit-ir-text",
+ "kajit-lir",
  "kajit-mir",
  "kajit-mir-text",
  "rust-mcp-sdk",

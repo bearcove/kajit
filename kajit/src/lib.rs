@@ -93,6 +93,18 @@ pub fn compile_decoder_from_ir_text(
     compiler::compile_linear_ir_decoder(&linear, false)
 }
 
+/// Build an intrinsic registry containing all known postcard + JSON intrinsics.
+pub fn known_intrinsic_registry() -> ir::IntrinsicRegistry {
+    let mut registry = ir::IntrinsicRegistry::empty();
+    for (name, func) in intrinsics::known_intrinsics()
+        .into_iter()
+        .chain(json_intrinsics::known_intrinsics().into_iter())
+    {
+        registry.register(name, func);
+    }
+    registry
+}
+
 /// Compile a deserializer from an already-constructed RaProgram.
 ///
 /// Runs regalloc2 + codegen, skipping IR/LIR entirely.
@@ -121,7 +133,9 @@ pub fn debug_ir_and_ra_mir_text(
 ) -> (String, String) {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
-    let ir_text = scrub_volatile_intrinsic_addrs(&format!("{func}"));
+    let registry = known_intrinsic_registry();
+    let ir_text =
+        scrub_volatile_intrinsic_addrs(&format!("{}", func.display_with_registry(&registry)));
     let linear = linearize::linearize(&mut func);
     let ra = regalloc_mir::lower_linear_ir(&linear);
     let ra_text = scrub_volatile_intrinsic_addrs(&format!("{ra}"));
@@ -172,10 +186,11 @@ pub fn debug_ir_opt_timeline_text_with_options(
     ir_decoder: &dyn format::Decoder,
     pipeline_opts: &PipelineOptions,
 ) -> Vec<(String, String)> {
+    let registry = known_intrinsic_registry();
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     let mut checkpoints = vec![(
         "initial".to_string(),
-        scrub_volatile_intrinsic_addrs(&format!("{func}")),
+        scrub_volatile_intrinsic_addrs(&format!("{}", func.display_with_registry(&registry))),
     )];
 
     compiler::run_configured_default_passes_with_observer(
@@ -184,7 +199,10 @@ pub fn debug_ir_opt_timeline_text_with_options(
         |pass, func| {
             checkpoints.push((
                 pass.to_string(),
-                scrub_volatile_intrinsic_addrs(&format!("{func}")),
+                scrub_volatile_intrinsic_addrs(&format!(
+                    "{}",
+                    func.display_with_registry(&registry)
+                )),
             ));
         },
     );
@@ -342,3 +360,15 @@ impl std::error::Error for DeserError {}
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod disasm_tests;
+
+#[cfg(test)]
+mod tests {
+    use super::known_intrinsic_registry;
+
+    #[test]
+    fn known_intrinsic_registry_contains_common_intrinsics() {
+        let registry = known_intrinsic_registry();
+        assert!(registry.func_by_name("kajit_read_u8").is_some());
+        assert!(registry.func_by_name("kajit_json_read_u8").is_some());
+    }
+}

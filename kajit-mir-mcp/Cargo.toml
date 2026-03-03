@@ -4,8 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+kajit = { path = "../kajit" }
+kajit-ir = { path = "../kajit-ir" }
+kajit-ir-text = { path = "../kajit-ir-text" }
+kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
+facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
 rust-mcp-sdk = { version = "0.8", default-features = false, features = [
   "stdio",
   "server",

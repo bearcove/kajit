@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
-use kajit_mir::{BlockId, DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
+use kajit_mir::{BlockId, DebuggerSession, DebuggerState, RaProgram, RunUntilTarget, StepEvent};
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::mcp_server::{McpServerOptions, ServerHandler, server_runtime};
 use rust_mcp_sdk::schema::{
@@ -16,15 +16,50 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
 #[mcp_tool(
     name = "session_new",
-    description = "Create a new RA-MIR debugger session."
+    description = "Create a new debugger session from RA-MIR or IR text."
 )]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 struct SessionNewTool {
-    /// RA-MIR text program
-    ra_mir_text: String,
+    /// Program text kind: `ra_mir` or `ir`.
+    input_kind: String,
+    /// Program text payload matching `input_kind`.
+    ///
+    /// Mutually exclusive with `program_path`.
+    #[serde(default)]
+    program_text: Option<String>,
+    /// Path to a file containing program text matching `input_kind`.
+    ///
+    /// Mutually exclusive with `program_text`.
+    #[serde(default)]
+    program_path: Option<String>,
     /// Input bytes as hex string (e.g. '8101' or '[0x81, 0x01]')
     #[serde(default)]
     input_hex: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputKind {
+    RaMir,
+    Ir,
+}
+
+impl InputKind {
+    fn parse(raw: &str) -> Result<Self, String> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "ra_mir" | "ra-mir" | "ramir" => Ok(Self::RaMir),
+            "ir" => Ok(Self::Ir),
+            other => Err(format!(
+                "invalid input_kind {other:?} (expected \"ra_mir\" or \"ir\")"
+            )),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RaMir => "ra_mir",
+            Self::Ir => "ir",
+        }
+    }
 }
 
 #[mcp_tool(
@@ -174,12 +209,22 @@ impl MirHandler {
     }
 
     fn session_new(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
-        let mir_text = arg_str(args, "ra_mir_text")?;
+        let start = std::time::Instant::now();
+        let input_kind = InputKind::parse(&arg_str(args, "input_kind")?)?;
+        let program_text = load_program_text(args)?;
         let input_hex = arg_opt_str(args, "input_hex").unwrap_or_default();
         let input = parse_hex_input(&input_hex)?;
-        let program = kajit_mir_text::parse_ra_mir(&mir_text).map_err(|e| e.to_string())?;
+        let parse_start = std::time::Instant::now();
+        let program = match input_kind {
+            InputKind::RaMir => parse_ra_mir_text(&program_text)?,
+            InputKind::Ir => lower_ir_text_to_ra_program(&program_text)?,
+        };
+        let parse_ms = parse_start.elapsed().as_millis() as u64;
+        let session_start = std::time::Instant::now();
         let session = DebuggerSession::new(&program, &input).map_err(|e| e.to_string())?;
+        let session_ms = session_start.elapsed().as_millis() as u64;
 
+        let lock_start = std::time::Instant::now();
         let mut state = self.lock_state()?;
         if state.next_session_id == 0 {
             state.next_session_id = 1;
@@ -193,10 +238,19 @@ impl MirHandler {
             .get(&session_id)
             .expect("inserted session should exist")
             .state();
+        let lock_ms = lock_start.elapsed().as_millis() as u64;
+        let total_ms = start.elapsed().as_millis() as u64;
         Ok(json!({
             "session_id": session_id,
+            "input_kind": input_kind.as_str(),
             "input_hex": encode_hex(&input),
             "state": state_json(&snapshot),
+            "timings_ms": {
+                "parse_and_lower": parse_ms,
+                "session_init": session_ms,
+                "state_lock_and_insert": lock_ms,
+                "total": total_ms
+            }
         }))
     }
 
@@ -396,6 +450,22 @@ fn arg_opt_str(args: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn load_program_text(args: &JsonMap<String, JsonValue>) -> Result<String, String> {
+    let from_text = arg_opt_str(args, "program_text");
+    let from_path = arg_opt_str(args, "program_path");
+    match (from_text, from_path) {
+        (Some(text), None) => Ok(text),
+        (None, Some(path)) => std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read program_path {path:?}: {e}")),
+        (Some(_), Some(_)) => {
+            Err("program_text and program_path are mutually exclusive".to_owned())
+        }
+        (None, None) => {
+            Err("missing program input: provide program_text or program_path".to_owned())
+        }
+    }
+}
+
 fn arg_u64(args: &JsonMap<String, JsonValue>, key: &str) -> Result<u64, String> {
     args.get(key)
         .and_then(JsonValue::as_u64)
@@ -513,6 +583,35 @@ fn parse_hex_input(input: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+fn parse_ra_mir_text(program_text: &str) -> Result<RaProgram, String> {
+    kajit_mir_text::parse_ra_mir(program_text).map_err(|e| e.to_string())
+}
+
+fn lower_ir_text_to_ra_program(program_text: &str) -> Result<RaProgram, String> {
+    if program_text.contains("0x<ptr>") {
+        return Err("IR contains scrubbed intrinsic pointers (`0x<ptr>`). \
+Provide named intrinsics (for example `@kajit_read_u8`) so the MCP server can resolve them."
+            .to_owned());
+    }
+    let shape = <u8 as facet::Facet>::SHAPE;
+    let registry = known_intrinsic_registry();
+    let mut ir =
+        kajit_ir_text::parse_ir(program_text, shape, &registry).map_err(|e| e.to_string())?;
+    let linear = kajit_lir::linearize(&mut ir);
+    Ok(kajit_mir::lower_linear_ir(&linear))
+}
+
+fn known_intrinsic_registry() -> kajit_ir::IntrinsicRegistry {
+    let mut registry = kajit_ir::IntrinsicRegistry::empty();
+    for (name, func) in kajit::intrinsics::known_intrinsics()
+        .into_iter()
+        .chain(kajit::json_intrinsics::known_intrinsics().into_iter())
+    {
+        registry.register(name, func);
+    }
+    registry
+}
+
 async fn run() -> Result<(), String> {
     let handler = MirHandler::default();
     let server_details = InitializeResult {
@@ -567,7 +666,12 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{MirTools, encode_hex, parse_hex_input};
+    use super::{
+        InputKind, MirTools, encode_hex, load_program_text, lower_ir_text_to_ra_program,
+        parse_hex_input,
+    };
+    use kajit_lir::LinearOp;
+    use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
     #[test]
     fn parse_hex_accepts_common_formats() {
@@ -587,6 +691,98 @@ mod tests {
         let encoded = encode_hex(&bytes);
         let decoded = parse_hex_input(&encoded).unwrap();
         assert_eq!(decoded, bytes);
+    }
+
+    #[test]
+    fn parse_input_kind_supports_expected_aliases() {
+        assert_eq!(InputKind::parse("ra_mir").unwrap(), InputKind::RaMir);
+        assert_eq!(InputKind::parse("ra-mir").unwrap(), InputKind::RaMir);
+        assert_eq!(InputKind::parse("ramir").unwrap(), InputKind::RaMir);
+        assert_eq!(InputKind::parse("ir").unwrap(), InputKind::Ir);
+    }
+
+    #[test]
+    fn parse_input_kind_rejects_unknown_values() {
+        assert!(InputKind::parse("foo").is_err());
+    }
+
+    #[test]
+    fn lower_ir_rejects_scrubbed_intrinsic_ptrs() {
+        let input = r#"
+lambda @0 (shape: "u8") {
+  region {
+    args: [%cs, %os]
+    n0 = CallIntrinsic(0x<ptr>, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+    results: [%cs:n0, %os:n0]
+  }
+}
+"#;
+        let err = lower_ir_text_to_ra_program(input).expect_err("scrubbed ptrs should fail");
+        assert!(err.contains("0x<ptr>"));
+    }
+
+    #[test]
+    fn lower_ir_text_to_ra_program_supports_basic_ir_input() {
+        let ir_text = r#"
+lambda @0 (shape: "u8") {
+  region {
+    args: [%cs, %os]
+    n0 = BoundsCheck(1) [%cs:arg] -> [%cs]
+    n1 = ReadBytes(1) [%cs:n0] -> [v0, %cs]
+    n2 = WriteToField(offset=0, W1) [v0, %os:arg] -> [%os]
+    results: [%cs:n1, %os:n2]
+  }
+}
+"#;
+        let program = lower_ir_text_to_ra_program(ir_text).expect("IR should lower to RA-MIR");
+        assert_eq!(program.funcs.len(), 1);
+        assert!(
+            !program.funcs[0].blocks.is_empty(),
+            "lowered RA-MIR should contain at least one block"
+        );
+    }
+
+    #[test]
+    fn lower_ir_resolves_named_intrinsic_refs() {
+        let ir_text = r#"
+lambda @0 (shape: "u8") {
+  region {
+    args: [%cs, %os]
+    n0 = CallIntrinsic(@kajit_read_u8, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
+    results: [%cs:n0, %os:n0]
+  }
+}
+"#;
+
+        let program =
+            lower_ir_text_to_ra_program(ir_text).expect("named intrinsic refs should resolve");
+        let has_nonzero_intrinsic = program.funcs.iter().any(|func| {
+            func.blocks
+                .iter()
+                .flat_map(|block| block.insts.iter())
+                .any(|inst| {
+                    matches!(
+                        &inst.op,
+                        LinearOp::CallIntrinsic { func, .. } if func.0 != 0
+                    )
+                })
+        });
+        assert!(has_nonzero_intrinsic);
+    }
+
+    #[test]
+    fn load_program_text_accepts_program_text() {
+        let mut args = JsonMap::<String, JsonValue>::new();
+        args.insert("program_text".to_owned(), json!("abc"));
+        assert_eq!(load_program_text(&args).unwrap(), "abc");
+    }
+
+    #[test]
+    fn load_program_text_rejects_both_text_and_path() {
+        let mut args = JsonMap::<String, JsonValue>::new();
+        args.insert("program_text".to_owned(), json!("abc"));
+        args.insert("program_path".to_owned(), json!("/tmp/x"));
+        assert!(load_program_text(&args).is_err());
     }
 
     #[test]
