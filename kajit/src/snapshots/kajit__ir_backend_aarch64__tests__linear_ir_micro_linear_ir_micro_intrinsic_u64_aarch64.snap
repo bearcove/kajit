@@ -1,0 +1,49 @@
+---
+source: kajit/src/ir_backend_aarch64.rs
+expression: out
+---
+> sub sp, sp, #0x50
+  stp x29, x30, [sp]
+  stp x19, x20, [sp, #0x10]
+  stp x21, x22, [sp, #0x20]
+  stp x23, x24, [sp, #0x30]
+  mov x29, sp
+  mov x21, x0
+  mov x22, x1
+  ldr x19, [x22]
+  ldr x20, [x22, #0x8]
+  mov x9, #<imm>
+  mov x11, x9
+  mov x9, #<imm>
+  mov x12, x9
+  mov x9, #<imm>
+  mov x13, x9
+  str x19, [x22]
+  mov x0, x22
+  mov x1, x11
+  mov x2, x12
+  mov x3, x13
+  mov x16, #<imm>
+  movk x16, #<imm>, lsl #16
+  movk x16, #<imm>, lsl #32
+  blr x16
+  ldr x19, [x22]
+  ldr w9, [x22, #0x10]
+  cbnz w9, $+0x30
+  mov x9, x0
+  mov x23, x9
+  mov x9, x23
+  str x9, [x21]
+  str x19, [x22]
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x50
+  ret
+  ldp x23, x24, [sp, #0x30]
+  ldp x21, x22, [sp, #0x20]
+  ldp x19, x20, [sp, #0x10]
+  ldp x29, x30, [sp]
+  add sp, sp, #0x50
+  ret
