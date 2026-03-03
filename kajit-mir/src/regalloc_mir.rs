@@ -2,7 +2,7 @@
 //!
 //! This module builds a CFG-oriented machine IR used as allocator input.
 
-use kajit_ir::ErrorCode;
+use kajit_ir::{ErrorCode, IntrinsicRegistry};
 use kajit_ir::{LambdaId, VReg};
 use kajit_lir::{LabelId, LinearIr, LinearOp};
 use std::collections::HashMap;
@@ -164,15 +164,62 @@ pub struct HumanRaProgram<'a> {
     program: &'a RaProgram,
 }
 
+pub struct DisplayRaProgramWithRegistry<'a> {
+    program: &'a RaProgram,
+    registry: &'a IntrinsicRegistry,
+}
+
+pub struct HumanRaProgramWithRegistry<'a> {
+    program: &'a RaProgram,
+    registry: &'a IntrinsicRegistry,
+}
+
 impl<'a> std::fmt::Display for HumanRaProgram<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fmt_program(self.program, f, DisplayStyle::Human)
+        fmt_program(self.program, f, DisplayStyle::Human, None)
+    }
+}
+
+impl<'a> std::fmt::Display for DisplayRaProgramWithRegistry<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let style = if f.alternate() {
+            DisplayStyle::Human
+        } else {
+            DisplayStyle::Canonical
+        };
+        fmt_program(self.program, f, style, Some(self.registry))
+    }
+}
+
+impl<'a> std::fmt::Display for HumanRaProgramWithRegistry<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt_program(self.program, f, DisplayStyle::Human, Some(self.registry))
     }
 }
 
 impl RaProgram {
     pub fn human(&self) -> HumanRaProgram<'_> {
         HumanRaProgram { program: self }
+    }
+
+    pub fn display_with_registry<'a>(
+        &'a self,
+        registry: &'a IntrinsicRegistry,
+    ) -> DisplayRaProgramWithRegistry<'a> {
+        DisplayRaProgramWithRegistry {
+            program: self,
+            registry,
+        }
+    }
+
+    pub fn human_with_registry<'a>(
+        &'a self,
+        registry: &'a IntrinsicRegistry,
+    ) -> HumanRaProgramWithRegistry<'a> {
+        HumanRaProgramWithRegistry {
+            program: self,
+            registry,
+        }
     }
 }
 
@@ -183,7 +230,7 @@ impl std::fmt::Display for RaProgram {
         } else {
             DisplayStyle::Canonical
         };
-        fmt_program(self, f, style)
+        fmt_program(self, f, style, None)
     }
 }
 
@@ -194,7 +241,7 @@ impl std::fmt::Display for RaFunction {
         } else {
             DisplayStyle::Canonical
         };
-        fmt_function(self, f, style)
+        fmt_function(self, f, style, None)
     }
 }
 
@@ -202,9 +249,10 @@ fn fmt_program(
     program: &RaProgram,
     f: &mut std::fmt::Formatter<'_>,
     style: DisplayStyle,
+    registry: Option<&IntrinsicRegistry>,
 ) -> std::fmt::Result {
     for func in &program.funcs {
-        fmt_function(func, f, style)?;
+        fmt_function(func, f, style, registry)?;
     }
     Ok(())
 }
@@ -213,14 +261,19 @@ fn fmt_function(
     func: &RaFunction,
     f: &mut std::fmt::Formatter<'_>,
     style: DisplayStyle,
+    registry: Option<&IntrinsicRegistry>,
 ) -> std::fmt::Result {
     match style {
-        DisplayStyle::Canonical => fmt_function_canonical(func, f),
-        DisplayStyle::Human => fmt_function_human(func, f),
+        DisplayStyle::Canonical => fmt_function_canonical(func, f, registry),
+        DisplayStyle::Human => fmt_function_human(func, f, registry),
     }
 }
 
-fn fmt_function_canonical(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+fn fmt_function_canonical(
+    func: &RaFunction,
+    f: &mut std::fmt::Formatter<'_>,
+    registry: Option<&IntrinsicRegistry>,
+) -> std::fmt::Result {
     writeln!(
         f,
         "ra_func @{} {{ ; entry: b{}",
@@ -228,12 +281,16 @@ fn fmt_function_canonical(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) ->
         func.entry.0,
     )?;
     for block in &func.blocks {
-        fmt_block_canonical(f, block)?;
+        fmt_block_canonical(f, block, registry)?;
     }
     writeln!(f, "}}")
 }
 
-fn fmt_function_human(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+fn fmt_function_human(
+    func: &RaFunction,
+    f: &mut std::fmt::Formatter<'_>,
+    registry: Option<&IntrinsicRegistry>,
+) -> std::fmt::Result {
     let meta = build_display_meta(func);
     write!(
         f,
@@ -250,13 +307,17 @@ fn fmt_function_human(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std
     }
     writeln!(f)?;
     for block in &func.blocks {
-        fmt_block_human(f, block, &meta)?;
+        fmt_block_human(f, block, &meta, registry)?;
         writeln!(f)?;
     }
     Ok(())
 }
 
-fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Result {
+fn fmt_block_canonical(
+    f: &mut std::fmt::Formatter<'_>,
+    block: &RaBlock,
+    registry: Option<&IntrinsicRegistry>,
+) -> std::fmt::Result {
     write!(f, "  block b{}", block.id.0)?;
     if !block.params.is_empty() {
         write!(f, " [params:")?;
@@ -282,7 +343,7 @@ fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std:
 
     for inst in &block.insts {
         write!(f, "    ")?;
-        fmt_ra_inst(f, inst)?;
+        fmt_ra_inst(f, inst, registry)?;
         writeln!(f)?;
     }
 
@@ -317,6 +378,7 @@ fn fmt_block_human(
     f: &mut std::fmt::Formatter<'_>,
     block: &RaBlock,
     meta: &DisplayMeta,
+    registry: Option<&IntrinsicRegistry>,
 ) -> std::fmt::Result {
     // Block header: block b0 [params: v0, v1] (preds: b2, b3):
     write!(f, "  block b{}", block.id.0)?;
@@ -360,7 +422,7 @@ fn fmt_block_human(
             .collect();
 
         write!(f, "    ")?;
-        fmt_ra_inst(f, inst)?;
+        fmt_ra_inst(f, inst, registry)?;
         write!(f, " ; orig: lir#{}", block_lir_base + inst_idx)?;
         if let Some(hint) = ra_inst_semantic_hint(&inst.op) {
             write!(f, " ; sem: {hint}")?;
@@ -496,7 +558,11 @@ fn fmt_const_alias_table(aliases: &[(String, u64)]) -> String {
     out
 }
 
-fn fmt_ra_inst(f: &mut std::fmt::Formatter<'_>, inst: &RaInst) -> std::fmt::Result {
+fn fmt_ra_inst(
+    f: &mut std::fmt::Formatter<'_>,
+    inst: &RaInst,
+    registry: Option<&IntrinsicRegistry>,
+) -> std::fmt::Result {
     // Show operands in a compact format.
     // Defs first, then the op name, then uses.
     let defs: Vec<_> = inst
@@ -521,7 +587,7 @@ fn fmt_ra_inst(f: &mut std::fmt::Formatter<'_>, inst: &RaInst) -> std::fmt::Resu
     }
 
     // Op name (simplified from LinearOp).
-    fmt_ra_op_name(f, &inst.op)?;
+    fmt_ra_op_name(f, &inst.op, registry)?;
 
     if !uses.is_empty() {
         write!(f, " ")?;
@@ -569,7 +635,11 @@ fn fmt_operand(f: &mut std::fmt::Formatter<'_>, op: &RaOperand) -> std::fmt::Res
     Ok(())
 }
 
-fn fmt_ra_op_name(f: &mut std::fmt::Formatter<'_>, op: &LinearOp) -> std::fmt::Result {
+fn fmt_ra_op_name(
+    f: &mut std::fmt::Formatter<'_>,
+    op: &LinearOp,
+    registry: Option<&IntrinsicRegistry>,
+) -> std::fmt::Result {
     match op {
         LinearOp::Const { value, .. } => write!(f, "const({value:#x})"),
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
@@ -595,8 +665,14 @@ fn fmt_ra_op_name(f: &mut std::fmt::Formatter<'_>, op: &LinearOp) -> std::fmt::R
         LinearOp::ReadFromSlot { slot, .. } => write!(f, "read_slot({})", slot.index()),
         LinearOp::CallIntrinsic {
             func, field_offset, ..
-        } => write!(f, "call_intrinsic({func}, fo={field_offset})"),
-        LinearOp::CallPure { func, .. } => write!(f, "call_pure({func})"),
+        } => match registry.and_then(|r| r.name_of(*func)) {
+            Some(name) => write!(f, "call_intrinsic(@{name}, fo={field_offset})"),
+            None => write!(f, "call_intrinsic({func}, fo={field_offset})"),
+        },
+        LinearOp::CallPure { func, .. } => match registry.and_then(|r| r.name_of(*func)) {
+            Some(name) => write!(f, "call_pure(@{name})"),
+            None => write!(f, "call_pure({func})"),
+        },
         LinearOp::CallLambda { target, .. } => write!(f, "call_lambda(@{})", target.index()),
         LinearOp::SimdStringScan { .. } => write!(f, "simd_string_scan"),
         LinearOp::SimdWhitespaceSkip => write!(f, "simd_ws_skip"),
@@ -1218,7 +1294,10 @@ fn lower_inst(linear_op_index: usize, op: LinearOp) -> RaInst {
                 _ => None,
             };
             #[cfg(not(target_arch = "x86_64"))]
-            let rhs_fixed = None;
+            let rhs_fixed = {
+                let _ = op;
+                None
+            };
             push_use(&mut operands, *rhs, rhs_fixed);
             push_def(&mut operands, *dst, None);
         }
@@ -1321,7 +1400,7 @@ fn collect_use_def(block: &RaBlock, use_set: &mut [bool], def_set: &mut [bool]) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IntrinsicFn, IrBuilder, IrOp, Width};
+    use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, IrOp, Width};
     use kajit_lir::linearize;
 
     // r[verify ir.regalloc.ra-mir.block-params]
@@ -1584,5 +1663,39 @@ mod tests {
         assert!(human_alt.contains(" ; const_alias: "));
         assert!(human_alt.contains(" ; defs_dbg: "));
         assert_eq!(human_alt, human_wrapper);
+    }
+
+    #[test]
+    fn ra_mir_display_with_registry_uses_intrinsic_names() {
+        unsafe extern "C" fn test_intrinsic(_ctx: *mut core::ffi::c_void) -> u64 {
+            0
+        }
+
+        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            let out = rb
+                .call_intrinsic(
+                    IntrinsicFn(test_intrinsic as *const () as usize),
+                    &[],
+                    0,
+                    true,
+                )
+                .expect("call should return output");
+            rb.write_to_field(out, 0, Width::W8);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let ra = lower_linear_ir(&lin);
+
+        let mut registry = IntrinsicRegistry::empty();
+        registry.register(
+            "test_intrinsic",
+            IntrinsicFn(test_intrinsic as *const () as usize),
+        );
+
+        let text = format!("{}", ra.display_with_registry(&registry));
+        assert!(text.contains("call_intrinsic(@test_intrinsic, fo=0)"));
     }
 }

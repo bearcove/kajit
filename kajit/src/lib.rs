@@ -120,7 +120,13 @@ pub fn compile_decoder_from_ra_program(program: &regalloc_mir::RaProgram) -> Com
 /// This is intended for regression tests and bug minimization: paste a
 /// failing RA-MIR snapshot, edit it down to a minimal reproducer, and re-run.
 pub fn compile_decoder_from_ra_mir_text(mir_text: &str) -> CompiledDecoder {
-    let program = regalloc_mir_parse::parse_ra_mir(mir_text).expect("RA-MIR text should parse");
+    assert!(
+        !mir_text.contains("0x<ptr>"),
+        "RA-MIR text contains scrubbed intrinsic pointers (`0x<ptr>`); use named intrinsics (for example `@kajit_read_u8`)"
+    );
+    let registry = known_intrinsic_registry();
+    let program = regalloc_mir_parse::parse_ra_mir_with_registry(mir_text, &registry)
+        .expect("RA-MIR text should parse");
     compile_decoder_from_ra_program(&program)
 }
 
@@ -138,7 +144,8 @@ pub fn debug_ir_and_ra_mir_text(
         scrub_volatile_intrinsic_addrs(&format!("{}", func.display_with_registry(&registry)));
     let linear = linearize::linearize(&mut func);
     let ra = regalloc_mir::lower_linear_ir(&linear);
-    let ra_text = scrub_volatile_intrinsic_addrs(&format!("{ra}"));
+    let ra_text =
+        scrub_volatile_intrinsic_addrs(&format!("{}", ra.display_with_registry(&registry)));
     (ir_text, ra_text)
 }
 
@@ -149,11 +156,12 @@ pub fn debug_ra_mir_human_text(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
 ) -> String {
+    let registry = known_intrinsic_registry();
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
     let ra = regalloc_mir::lower_linear_ir(&linear);
-    scrub_volatile_intrinsic_addrs(&format!("{}", ra.human()))
+    scrub_volatile_intrinsic_addrs(&format!("{}", ra.human_with_registry(&registry)))
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
@@ -363,12 +371,36 @@ mod disasm_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::known_intrinsic_registry;
+    use super::{compile_decoder_from_ra_mir_text, known_intrinsic_registry};
 
     #[test]
     fn known_intrinsic_registry_contains_common_intrinsics() {
         let registry = known_intrinsic_registry();
         assert!(registry.func_by_name("kajit_read_u8").is_some());
         assert!(registry.func_by_name("kajit_json_read_u8").is_some());
+    }
+
+    #[test]
+    fn compile_ra_mir_text_rejects_scrubbed_intrinsic_ptrs() {
+        let mir_text = r#"
+ra_func @0 {
+  block b0:
+    call_intrinsic(0x<ptr>, fo=0) !gpr,simd
+    term: return
+    succs: (none)
+}
+"#;
+
+        let panic = std::panic::catch_unwind(|| {
+            let _ = compile_decoder_from_ra_mir_text(mir_text);
+        })
+        .expect_err("scrubbed RA-MIR should panic early");
+
+        let msg = panic
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(msg.contains("0x<ptr>"));
     }
 }

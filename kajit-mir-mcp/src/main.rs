@@ -584,7 +584,13 @@ fn parse_hex_input(input: &str) -> Result<Vec<u8>, String> {
 }
 
 fn parse_ra_mir_text(program_text: &str) -> Result<RaProgram, String> {
-    kajit_mir_text::parse_ra_mir(program_text).map_err(|e| e.to_string())
+    if program_text.contains("0x<ptr>") {
+        return Err("RA-MIR contains scrubbed intrinsic pointers (`0x<ptr>`). \
+Provide named intrinsics (for example `@kajit_read_u8`) so the MCP server can resolve them."
+            .to_owned());
+    }
+    let registry = known_intrinsic_registry();
+    kajit_mir_text::parse_ra_mir_with_registry(program_text, &registry).map_err(|e| e.to_string())
 }
 
 fn lower_ir_text_to_ra_program(program_text: &str) -> Result<RaProgram, String> {
@@ -602,14 +608,7 @@ Provide named intrinsics (for example `@kajit_read_u8`) so the MCP server can re
 }
 
 fn known_intrinsic_registry() -> kajit_ir::IntrinsicRegistry {
-    let mut registry = kajit_ir::IntrinsicRegistry::empty();
-    for (name, func) in kajit::intrinsics::known_intrinsics()
-        .into_iter()
-        .chain(kajit::json_intrinsics::known_intrinsics().into_iter())
-    {
-        registry.register(name, func);
-    }
-    registry
+    kajit::known_intrinsic_registry()
 }
 
 async fn run() -> Result<(), String> {
@@ -668,7 +667,7 @@ async fn main() {
 mod tests {
     use super::{
         InputKind, MirTools, encode_hex, load_program_text, lower_ir_text_to_ra_program,
-        parse_hex_input,
+        parse_hex_input, parse_ra_mir_text,
     };
     use kajit_lir::LinearOp;
     use serde_json::{Map as JsonMap, Value as JsonValue, json};
@@ -768,6 +767,45 @@ lambda @0 (shape: "u8") {
                 })
         });
         assert!(has_nonzero_intrinsic);
+    }
+
+    #[test]
+    fn parse_ra_mir_resolves_named_intrinsic_refs() {
+        let mir_text = r#"
+ra_func @0 {
+  block b0:
+    call_intrinsic(@kajit_json_skip_ws, fo=0) !gpr,simd
+    term: return
+    succs: (none)
+}
+"#;
+        let program = parse_ra_mir_text(mir_text).expect("named RA-MIR intrinsic should resolve");
+        let has_nonzero_intrinsic = program.funcs.iter().any(|func| {
+            func.blocks
+                .iter()
+                .flat_map(|block| block.insts.iter())
+                .any(|inst| {
+                    matches!(
+                        &inst.op,
+                        LinearOp::CallIntrinsic { func, .. } if func.0 != 0
+                    )
+                })
+        });
+        assert!(has_nonzero_intrinsic);
+    }
+
+    #[test]
+    fn parse_ra_mir_rejects_scrubbed_intrinsic_ptrs() {
+        let mir_text = r#"
+ra_func @0 {
+  block b0:
+    call_intrinsic(0x<ptr>, fo=0) !gpr,simd
+    term: return
+    succs: (none)
+}
+"#;
+        let err = parse_ra_mir_text(mir_text).expect_err("scrubbed ptr RA-MIR should fail");
+        assert!(err.contains("0x<ptr>"));
     }
 
     #[test]

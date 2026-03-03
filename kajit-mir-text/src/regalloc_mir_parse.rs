@@ -6,7 +6,7 @@
 use chumsky::prelude::*;
 
 use kajit_ir::ErrorCode;
-use kajit_ir::{IntrinsicFn, LambdaId, SlotId, VReg, Width};
+use kajit_ir::{IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_mir::{
     BlockId, FixedReg, OperandKind, RaBlock, RaClobbers, RaEdge, RaFunction, RaInst, RaOperand,
@@ -42,12 +42,13 @@ fn uint64<'src>() -> impl Parser<'src, &'src str, u64, Extra<'src>> + Clone {
     hex.or(dec)
 }
 
-fn usize_p<'src>() -> impl Parser<'src, &'src str, usize, Extra<'src>> + Clone {
-    let hex = just("0x")
-        .ignore_then(text::int::<_, Extra<'_>>(16))
-        .map(|s: &str| usize::from_str_radix(s, 16).unwrap());
-    let dec = text::int::<_, Extra<'_>>(10).map(|s: &str| s.parse::<usize>().unwrap());
-    hex.or(dec)
+fn intrinsic_name<'src>() -> impl Parser<'src, &'src str, String, Extra<'src>> + Clone {
+    any()
+        .filter(|c: &char| c.is_ascii_alphanumeric() || matches!(*c, '_' | '.' | '-'))
+        .repeated()
+        .at_least(1)
+        .to_slice()
+        .map(str::to_string)
 }
 
 fn width<'src>() -> impl Parser<'src, &'src str, Width, Extra<'src>> + Clone {
@@ -212,8 +213,8 @@ enum AstRaOp {
     SlotAddr(u32),
     WriteSlot(u32),
     ReadSlot(u32),
-    CallIntrinsic(usize, u32),
-    CallPure(usize),
+    CallIntrinsic(String, u32),
+    CallPure(String),
     CallLambda(u32),
     SimdStringScan,
     SimdWsSkip,
@@ -263,7 +264,7 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstRaOp, Extra<'src>> + Clone
             .then_ignore(just(")"))
             .map(AstRaOp::ReadSlot),
         just("call_intrinsic(")
-            .ignore_then(usize_p())
+            .ignore_then(just("@").ignore_then(intrinsic_name()))
             .then_ignore(just(",").then(ws()).then(just("fo=")))
             .then(uint32())
             .then_ignore(just(")"))
@@ -272,7 +273,7 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstRaOp, Extra<'src>> + Clone
 
     let parameterized2 = choice((
         just("call_pure(")
-            .ignore_then(usize_p())
+            .ignore_then(just("@").ignore_then(intrinsic_name()))
             .then_ignore(just(")"))
             .map(AstRaOp::CallPure),
         just("call_lambda(@")
@@ -493,6 +494,14 @@ impl std::error::Error for ParseError {}
 
 /// Parse RA-MIR text format into an `RaProgram`.
 pub fn parse_ra_mir(input: &str) -> Result<RaProgram, ParseError> {
+    parse_ra_mir_with_registry(input, &IntrinsicRegistry::empty())
+}
+
+/// Parse RA-MIR text format into an `RaProgram`, resolving intrinsic names from `registry`.
+pub fn parse_ra_mir_with_registry(
+    input: &str,
+    registry: &IntrinsicRegistry,
+) -> Result<RaProgram, ParseError> {
     let stripped = strip_ra_mir_comments(input);
     let result = ra_program().parse(stripped.as_str());
     let funcs_ast = result.into_result().map_err(|errs| {
@@ -502,7 +511,7 @@ pub fn parse_ra_mir(input: &str) -> Result<RaProgram, ParseError> {
         }
     })?;
 
-    resolve(funcs_ast)
+    resolve(funcs_ast, registry)
 }
 
 fn strip_ra_mir_comments(input: &str) -> String {
@@ -518,7 +527,10 @@ fn strip_ra_mir_comments(input: &str) -> String {
     out
 }
 
-fn resolve(funcs_ast: Vec<AstRaFunc>) -> Result<RaProgram, ParseError> {
+fn resolve(
+    funcs_ast: Vec<AstRaFunc>,
+    registry: &IntrinsicRegistry,
+) -> Result<RaProgram, ParseError> {
     let mut max_vreg: u32 = 0;
     let mut max_slot: u32 = 0;
     let mut funcs = Vec::new();
@@ -531,7 +543,8 @@ fn resolve(funcs_ast: Vec<AstRaFunc>) -> Result<RaProgram, ParseError> {
         for ast_block in ast_func.blocks {
             let mut insts = Vec::new();
             for ast_inst in ast_block.insts.iter() {
-                let (op, operands) = resolve_inst(ast_inst, &mut max_vreg, &mut max_slot);
+                let (op, operands) =
+                    resolve_inst(ast_inst, &mut max_vreg, &mut max_slot, registry)?;
                 insts.push(RaInst {
                     linear_op_index: next_linear_op_index,
                     op,
@@ -582,7 +595,8 @@ fn resolve_inst(
     ast: &AstInst,
     max_vreg: &mut u32,
     max_slot: &mut u32,
-) -> (LinearOp, Vec<RaOperand>) {
+    registry: &IntrinsicRegistry,
+) -> Result<(LinearOp, Vec<RaOperand>), ParseError> {
     let mut operands = Vec::new();
 
     // Build use operands.
@@ -680,8 +694,11 @@ fn resolve_inst(
         }
         AstRaOp::CallIntrinsic(func, fo) => {
             let args: Vec<VReg> = ast.uses.iter().map(|(v, _, _)| *v).collect();
+            let func = registry.func_by_name(func).ok_or_else(|| ParseError {
+                message: format!("unknown intrinsic: @{func}"),
+            })?;
             LinearOp::CallIntrinsic {
-                func: IntrinsicFn(*func),
+                func,
                 args,
                 dst,
                 field_offset: *fo,
@@ -689,8 +706,11 @@ fn resolve_inst(
         }
         AstRaOp::CallPure(func) => {
             let args: Vec<VReg> = ast.uses.iter().map(|(v, _, _)| *v).collect();
+            let func = registry.func_by_name(func).ok_or_else(|| ParseError {
+                message: format!("unknown intrinsic: @{func}"),
+            })?;
             LinearOp::CallPure {
-                func: IntrinsicFn(*func),
+                func,
                 args,
                 dst: dst.unwrap(),
             }
@@ -713,7 +733,7 @@ fn resolve_inst(
         AstRaOp::ErrorExit(code) => LinearOp::ErrorExit { code: *code },
     };
 
-    (op, operands)
+    Ok((op, operands))
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -721,7 +741,7 @@ fn resolve_inst(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IrBuilder, Width};
+    use kajit_ir::{IntrinsicFn, IrBuilder, Width};
     use kajit_lir::linearize;
     use kajit_mir::lower_linear_ir;
 
@@ -825,5 +845,46 @@ ra_func @0 { ; entry: b0
         let input = "not valid ra-mir";
         let result = parse_ra_mir(input);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_ra_mir_with_named_intrinsic_registry() {
+        unsafe extern "C" fn test_intrinsic(_ctx: *mut core::ffi::c_void) -> u64 {
+            0
+        }
+
+        let input = r#"
+ra_func @0 {
+  block b0:
+    v0:gpr = call_intrinsic(@test_intrinsic, fo=0)
+    term: return
+    succs: (none)
+}
+"#;
+
+        let mut registry = IntrinsicRegistry::empty();
+        registry.register(
+            "test_intrinsic",
+            IntrinsicFn(test_intrinsic as *const () as usize),
+        );
+        let program = parse_ra_mir_with_registry(input, &registry).expect("fixture should parse");
+        let op = &program.funcs[0].blocks[0].insts[0].op;
+        assert!(matches!(op, LinearOp::CallIntrinsic { .. }));
+    }
+
+    #[test]
+    fn parse_ra_mir_rejects_pointer_intrinsic_refs() {
+        let input = r#"
+ra_func @0 {
+  block b0:
+    v0:gpr = call_intrinsic(0x1234, fo=0)
+    term: return
+    succs: (none)
+}
+"#;
+
+        let err = parse_ra_mir_with_registry(input, &IntrinsicRegistry::empty())
+            .expect_err("pointer-style intrinsic refs should fail");
+        assert!(!err.message.is_empty());
     }
 }
