@@ -64,7 +64,68 @@ Notes:
   JIT symbol lookup still works.
 - `image list` should show an entry like `JIT(0x...)`.
 
-## GDB (Linux)
+## GDB (Linux / OrbStack)
+
+### OrbStack on Apple Silicon
+
+OrbStack runs x86_64 Linux binaries via Rosetta. GDB and LLDB **cannot** attach
+directly to Rosetta-emulated processes — you'll get `Cannot PTRACE_GETREGS:
+Input/output error`. This is not a ptrace_scope issue; it's fundamental to the
+Rosetta emulation layer.
+
+The workaround is `qemu-user` as a GDB remote stub:
+
+```bash
+sudo apt install qemu-user
+```
+
+1. Build tests:
+```bash
+cargo nextest run <test_name> --no-run
+# find the binary:
+cargo nextest list -p kajit --test corpus --message-format json-pretty | rg '"binary-path"'
+```
+
+2. Start the binary under qemu with a GDB server:
+```bash
+qemu-x86_64 -g 1234 ./target/debug/deps/corpus-<hash> --exact postcard::deny_unknown_fields_v1 --nocapture
+```
+
+3. Connect GDB (in another terminal, or via the MDB-MCP GDB server):
+```gdb
+file target/debug/deps/corpus-<hash>
+target remote :1234
+break kajit::deserialize_with_ctx<corpus::Strict>
+continue
+```
+
+4. Once stopped at the JIT call site, step into JIT code:
+```gdb
+stepi   # repeat until you land in fad::decode::*
+x/80i $pc   # disassemble JIT code
+```
+
+### MDB-MCP (GDB via MCP)
+
+A GDB MCP server is configured in `.mcp.json` using
+[MDB-MCP](https://github.com/smadi0x86/MDB-MCP), cloned to
+`~/.local/share/MDB-MCP`:
+
+```json
+{
+  "mcpServers": {
+    "gdb": {
+      "command": "uv",
+      "args": ["run", "--directory", "/home/amos/.local/share/MDB-MCP", "server.py"]
+    }
+  }
+}
+```
+
+This exposes `gdb_start`, `gdb_command`, `gdb_terminate` etc. as MCP tools.
+Use `gdb_command` with `target remote :1234` to connect to a qemu-user stub.
+
+### Native GDB (non-Rosetta Linux)
 
 1. Build tests in debug mode:
 ```bash

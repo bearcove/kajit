@@ -852,7 +852,12 @@ pub(crate) fn cases() -> Vec<Case> {
         Case {
             name: "deny_unknown_fields",
             ty: quote!(Strict),
-            values: vec![quote!(Strict { x: 10, y: 20 })],
+            values: vec![
+                quote!(Strict { x: 10, y: 20 }),
+                quote!(Strict { x: 128, y: 0 }),
+                quote!(Strict { x: 0, y: 128 }),
+                quote!(Strict { x: 16384, y: 16384 }),
+            ],
             inputs: vec![],
         },
         Case {

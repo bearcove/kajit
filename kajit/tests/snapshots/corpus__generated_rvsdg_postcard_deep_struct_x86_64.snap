@@ -1,0 +1,105 @@
+---
+source: kajit/tests/corpus.rs
+expression: ir_text
+---
+lambda @0 (shape: "Outer") {
+  region {
+    args: [%cs, %os]
+    n3 = apply @1 [%cs:arg, %os:arg] -> [%cs, %os]
+    n4 = BoundsCheck(1) [%cs:n3] -> [%cs]
+    n5 = ReadBytes(1) [%cs:n4] -> [v0, %cs]
+    n6 = Const(0x7f) [] -> [v1]
+    n7 = And [v0, v1] -> [v2]
+    n8 = Const(0x80) [] -> [v3]
+    n9 = And [v0, v3] -> [v4]
+    n10 = Const(0x0) [] -> [v5]
+    n11 = CmpNe [v4, v5] -> [v6]
+    n35 = gamma [
+      pred: v6
+      in0: v2
+      in1: %cs:n5
+      in2: %os:n3
+    ] {
+      branch 0:
+        region {
+          args: [arg0, %cs, %os]
+          n12 = Const(0x4) [] -> [v7]
+          n13 = Const(0x0) [] -> [v8]
+          results: [arg0, v7, arg0, v8, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [arg0, %cs, %os]
+          n14 = Const(0x7) [] -> [v9]
+          n15 = Const(0x4) [] -> [v10]
+          n16 = Const(0x1) [] -> [v11]
+          n134 = Const(0x7f) [] -> [v13]
+          n135 = Const(0x7) [] -> [v17]
+          n136 = Const(0x1) [] -> [v19]
+          n137 = Const(0x80) [] -> [v21]
+          n138 = Const(0x0) [] -> [v23]
+          n139 = Const(0x0) [] -> [v25]
+          n34 = theta [arg0, v9, v10, arg0, v11, %cs:arg, %os:arg] {
+            region {
+              args: [arg0, arg1, arg2, arg3, arg4, %cs, %os]
+              n17 = BoundsCheck(1) [%cs:arg] -> [%cs]
+              n18 = ReadBytes(1) [%cs:n17] -> [v12, %cs]
+              n20 = And [v12, v13] -> [v14]
+              n21 = Shl [v14, arg1] -> [v15]
+              n22 = Or [arg0, v15] -> [v16]
+              n24 = Add [arg1, v17] -> [v18]
+              n26 = Sub [arg2, v19] -> [v20]
+              n28 = And [v12, v21] -> [v22]
+              n30 = CmpNe [v22, v23] -> [v24]
+              n32 = CmpNe [v20, v25] -> [v26]
+              n33 = And [v24, v26] -> [v27]
+              results: [v27, v16, v18, v20, v14, v24, %cs:n18, %os:arg]
+            }
+          } -> [v28, v29, v30, v31, v32, %cs, %os]
+          results: [v28, v30, v31, v32, %cs:n34, %os:n34]
+        }
+    } -> [v33, v34, v35, v36, %cs, %os]
+    n36 = Const(0x0) [] -> [v37]
+    n37 = CmpNe [v36, v37] -> [v38]
+    n39 = gamma [
+      pred: v38
+      in0: %cs:n35
+      in1: %os:n35
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n38 = ErrorExit(InvalidVarint) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n40 = Const(0x20) [] -> [v39]
+    n41 = Shr [v33, v39] -> [v40]
+    n42 = Const(0x0) [] -> [v41]
+    n43 = CmpNe [v40, v41] -> [v42]
+    n45 = gamma [
+      pred: v42
+      in0: %cs:n39
+      in1: %os:n39
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          results: [%cs:arg, %os:arg]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n44 = ErrorExit(NumberOutOfRange) [%cs:arg] -> []
+          results: [%cs:arg, %os:arg]
+        }
+    } -> [%cs, %os]
+    n46 = WriteToField(offset=8, W4) [v33, %os:n45] -> [%os]
+    results: [%cs:n45, %os:n46]
+  }
+}

@@ -715,7 +715,7 @@ pub fn compile_linear_ir_decoder(
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
 
     let crate::ir_backend::LinearBackendResult { buf, entry } =
-        crate::ir_backend::compile_linear_ir_with_alloc(ir, &regalloc_alloc);
+        crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.ptr(entry)) };
     let root_name = ir
@@ -743,6 +743,38 @@ pub fn compile_linear_ir_decoder(
         entry,
         func,
         trusted_utf8_input,
+        _jit_registration: Some(registration),
+    }
+}
+
+/// Compile a deserializer directly from an RaProgram (no LinearIr needed).
+///
+/// This is the backend for the RA-MIR text test workflow.
+pub fn compile_ra_program_decoder(
+    program: &crate::regalloc_mir::RaProgram,
+) -> CompiledDecoder {
+    let alloc = crate::regalloc_engine::allocate_program(program)
+        .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+
+    let crate::ir_backend::LinearBackendResult { buf, entry } =
+        crate::ir_backend::compile_ra_program(program, &alloc);
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
+        unsafe { core::mem::transmute(buf.ptr(entry)) };
+    let registration = crate::jit_debug::register_jit_code(
+        buf.as_ptr(),
+        buf.len(),
+        &[crate::jit_debug::JitSymbolEntry {
+            name: "fad::decode::<ra-mir-text>".to_string(),
+            offset: entry.0,
+            size: buf.len().saturating_sub(entry.0),
+        }],
+    );
+
+    CompiledDecoder {
+        buf,
+        entry,
+        func,
+        trusted_utf8_input: false,
         _jit_registration: Some(registration),
     }
 }

@@ -1,0 +1,119 @@
+---
+source: kajit/tests/corpus.rs
+expression: ra_text
+---
+ra_func @0 {
+  block b0:
+    bounds_check(1)
+    v1:gpr = const(0x7f)
+    v3:gpr = const(0x80)
+    v5:gpr = const(0x0)
+    v37:gpr = const(0x0)
+    v39:gpr = const(0x0)
+    v0:gpr = read_bytes(1)
+    v2:gpr = And v0:gpr, v1:gpr
+    v4:gpr = And v0:gpr, v3:gpr
+    v6:gpr = CmpNe v4:gpr, v5:gpr
+    term: branch_if_zero v6 -> b2, fallthrough b1
+    succs: b2 [v2, v37, v39] b1 [v2, v37, v39]
+  block b1 [params: v2, v37, v39] (preds: b0):
+    term: branch b3
+    succs: b3 [v2, v37, v39]
+  block b2 [params: v2, v37, v39] (preds: b0):
+    v7:gpr = const(0x9)
+    v8:gpr = const(0x0)
+    v33:gpr = copy v2:gpr
+    v34:gpr = copy v7:gpr
+    v35:gpr = copy v2:gpr
+    v36:gpr = copy v8:gpr
+    term: branch b6
+    succs: b6 [v33, v34, v35, v8, v37, v39]
+  block b3 [params: v2, v37, v39] (preds: b1):
+    v9:gpr = const(0x7)
+    v10:gpr = const(0x9)
+    v11:gpr = const(0x1)
+    v13:gpr = const(0x7f)
+    v17:gpr = const(0x7)
+    v19:gpr = const(0x1)
+    v21:gpr = const(0x80)
+    v23:gpr = const(0x0)
+    v25:gpr = const(0x0)
+    v48:gpr = copy v2:gpr
+    v49:gpr = copy v9:gpr
+    v50:gpr = copy v10:gpr
+    term: branch b4
+    succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v48, v49, v50]
+  block b4 [params: v13, v17, v19, v21, v23, v25, v37, v39, v48, v49, v50] (preds: b3, b4):
+    bounds_check(1)
+    v18:gpr = Add v49:gpr, v17:gpr
+    v20:gpr = Sub v50:gpr, v19:gpr
+    v12:gpr = read_bytes(1)
+    v26:gpr = CmpNe v20:gpr, v25:gpr
+    v14:gpr = And v12:gpr, v13:gpr
+    v22:gpr = And v12:gpr, v21:gpr
+    v15:gpr = Shl v14:gpr, v49:gpr/hw1
+    v24:gpr = CmpNe v22:gpr, v23:gpr
+    v16:gpr = Or v48:gpr, v15:gpr
+    v27:gpr = And v24:gpr, v26:gpr
+    v48:gpr = copy v16:gpr
+    v49:gpr = copy v18:gpr
+    v50:gpr = copy v20:gpr
+    v51:gpr = copy v14:gpr
+    v52:gpr = copy v24:gpr
+    term: branch_if v27 -> b4, fallthrough b5
+    succs: b4 [v13, v17, v19, v21, v23, v25, v37, v39, v48, v49, v50] b5 [v37, v39, v48, v50, v51, v52]
+  block b5 [params: v37, v39, v48, v50, v51, v52] (preds: b4):
+    v33:gpr = copy v48:gpr
+    v34:gpr = copy v50:gpr
+    v35:gpr = copy v51:gpr
+    v36:gpr = copy v52:gpr
+    term: branch b6
+    succs: b6 [v33, v34, v35, v36, v37, v39]
+  block b6 [params: v33, v34, v35, v36, v37, v39] (preds: b2, b5):
+    v38:gpr = CmpNe v36:gpr, v37:gpr
+    v40:gpr = CmpNe v34:gpr, v39:gpr
+    v45:gpr = ZigzagDecode { wide: true } v33:gpr
+    term: branch_if_zero v38 -> b8, fallthrough b7
+    succs: b8 [v35, v40, v45] b7
+  block b7 (preds: b6):
+    term: branch b9
+    succs: b9
+  block b8 [params: v35, v40, v45] (preds: b6):
+    term: branch b10
+    succs: b10 [v35, v40, v45]
+  block b9 (preds: b7):
+    term: error_exit(InvalidVarint)
+    succs: (none)
+  block b10 [params: v35, v40, v45] (preds: b8):
+    term: branch_if_zero v40 -> b12, fallthrough b11
+    succs: b12 [v35, v45] b11 [v45]
+  block b11 [params: v45] (preds: b10):
+    term: branch b17
+    succs: b17 [v45]
+  block b12 [params: v35, v45] (preds: b10):
+    v41:gpr = const(0x7e)
+    v43:gpr = const(0x0)
+    v42:gpr = And v35:gpr, v41:gpr
+    v44:gpr = CmpNe v42:gpr, v43:gpr
+    term: branch_if_zero v44 -> b14, fallthrough b13
+    succs: b14 [v45] b13
+  block b13 (preds: b12):
+    term: branch b15
+    succs: b15
+  block b14 [params: v45] (preds: b12):
+    term: branch b16
+    succs: b16 [v45]
+  block b15 (preds: b13):
+    term: error_exit(InvalidVarint)
+    succs: (none)
+  block b16 [params: v45] (preds: b14):
+    term: branch b18
+    succs: b18 [v45]
+  block b17 [params: v45] (preds: b11):
+    term: branch b18
+    succs: b18 [v45]
+  block b18 [params: v45] (preds: b16, b17):
+    store([0:W8]) v45:gpr
+    term: return
+    succs: (none)
+}
