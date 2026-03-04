@@ -70,6 +70,10 @@ Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same ph
 
 **New hypothesis**: With 24 spill edits on x86 vs 1 on aarch64, the spill/reload machinery is under heavy stress. Possible culprits: wrong stack slot assigned, wrong load width (32-bit load of a 64-bit spilled value), or frame setup that misaligns the stack and causes a reload to read garbage. See **Prompt A4** below.
 
+**Prompt A4 diagnosis**: Also ruled out. All 24 edits are 64-bit. Slot stride is consistently 8 bytes. Emitted disassembly shows `qword [rsp+...]` throughout. No 32-bit reload or misalignment.
+
+**New hypothesis**: The fast-path branch in the varint decoder uses a **signed comparison** instead of unsigned. For `0x80` (128 unsigned, -128 signed), a signed `< 128` check is TRUE, so the fast path is taken when it should not be. The fast path returns `byte & 0x7F = 0` or hits a validity check, producing `InvalidVarint`. This explains all values ≥ 128 failing — they all have the high bit set, making them negative in a signed comparison. See **Prompt A5** below.
+
 ---
 
 ## ~~Group 2: Codegen snapshot diffs — control flow and intrinsic emission~~ FIXED (commit e4d888d / fix in x86_64/mod.rs)
@@ -139,6 +143,31 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 > 3. In `kajit/src/backends/x86_64/edits.rs`, find the function that emits a stack-slot reload. What width does it use? Does it vary by vreg type, or is it always the same?
 > 4. In `kajit/src/backends/x86_64/` (frame setup / stack allocation), how are stack slot sizes determined? Is there any place a 64-bit value might get a 32-bit slot?
 > 5. As a direct empirical check: look at the actual emitted disassembly for the varint loop (from the x86_64 stage dump or by adding a disasm call). Do any of the reload instructions use `mov r_, dword [rsp+...]` where `QWORD` would be expected?
+>
+> Do not fix anything — produce a diagnosis with specific file:line evidence.
+
+### ~~Prompt A4~~ — DIAGNOSED (spill machinery is correct; all 64-bit)
+
+### Prompt A5 — Read the actual disassembly; find the fast-path branch type
+
+> You are investigating a miscompilation in kajit's x86_64 JIT for `postcard::scalar_u64_v3` (128u64, encoded as `[0x80, 0x01]`).
+>
+> **What has been ruled out:**
+> - 32-bit register truncation
+> - rcx/cl clobber before `shl r10, cl`
+> - dst-lhs mismatch (emitter uses explicit r10 temp + store to dst)
+> - Spill/reload width or layout (all 64-bit, slot stride 8 bytes)
+>
+> **Current hypothesis:** The fast-path branch in the varint decoder uses a signed comparison instead of unsigned. `0x80` = 128 unsigned = -128 signed. A signed `< 128` check is TRUE for 0x80, so the fast path fires when it should not, returning `0x80 & 0x7F = 0` or triggering a validity error.
+>
+> The key question is: what comparison instruction and jump type does the emitted x86_64 code use for the "is this byte a single-byte varint?" branch?
+>
+> Investigate:
+> 1. Get the full disassembly of the JIT-compiled function for postcard scalar_u64. Use the existing disasm infrastructure in the test suite (e.g. `disasm_bytes` helper in `kajit/src/backends/x86_64/mod.rs`) or add a temporary `println!` call in a test. Alternatively, use `KAJIT_DUMP_STAGES` with stage `disasm` if it exists — check `docs/pipeline-debugging.md`.
+> 2. In the disassembly, find the branch that splits the fast path (single-byte varint) from the slow path (multi-byte). What is the comparison instruction (`cmp`/`test`) and what is the conditional jump (`jl`/`jb`/`jge`/`jae`)? `jb`/`jae` are unsigned; `jl`/`jge` are signed.
+> 3. In `kajit/src/backends/x86_64/emit.rs`, find how `CmpLt` (or whatever IR comparison op is used for the fast-path check) is emitted for u8 operands. Does it emit a signed or unsigned jump?
+> 4. In the IR / LinearIr for this function (`KAJIT_DUMP_STAGES='ir,linear'`), find the fast-path comparison node. What type is the comparison — `u8`, `i8`, signed, unsigned?
+> 5. On aarch64, what branch instruction is emitted for the same comparison? (`b.lo` = unsigned below; `b.lt` = signed less-than)
 >
 > Do not fix anything — produce a diagnosis with specific file:line evidence.
 
