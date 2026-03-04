@@ -1,4 +1,4 @@
-use kajit_emit::aarch64::{self, Width as A64Width};
+use kajit_emit::aarch64::{self, Reg, Width as A64Width};
 use kajit_emit::x64::{self, Emitter as X64Emitter};
 use proptest::prelude::*;
 
@@ -16,7 +16,8 @@ proptest! {
         rm in 0u8..32,
     ) {
         let width = if is_64 { A64Width::X64 } else { A64Width::W32 };
-        let word = aarch64::encode_add_reg(width, rd, rn, rm).unwrap();
+        let word = aarch64::encode_add_reg(width, Reg::from_raw(rd), Reg::from_raw(rn), Reg::from_raw(rm))
+            .unwrap();
         prop_assert_eq!(word & 0x1f, rd as u32);
         prop_assert_eq!((word >> 5) & 0x1f, rn as u32);
         prop_assert_eq!((word >> 16) & 0x1f, rm as u32);
@@ -37,7 +38,7 @@ proptest! {
         imm in -262_144i32..262_144i32,
     ) {
         let width = if is_64 { A64Width::X64 } else { A64Width::W32 };
-        let word = aarch64::encode_cbz(width, rt, imm).unwrap();
+        let word = aarch64::encode_cbz(width, Reg::from_raw(rt), imm).unwrap();
         let decoded = sign_extend_u32((word >> 5) & 0x7ffff, 19);
         prop_assert_eq!(decoded, imm);
     }

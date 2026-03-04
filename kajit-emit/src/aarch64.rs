@@ -1002,181 +1002,181 @@ mod tests {
 
     #[test]
     fn encode_mov_and_mov_wide() {
-        assert_eq!(encode_mov_reg(Width::X64, 1, 2).unwrap(), 0xAA02_03E1);
-        assert_eq!(encode_mov_reg(Width::W32, 1, 2).unwrap(), 0x2A02_03E1);
+        assert_eq!(encode_mov_reg(Width::X64, Reg::from_raw(1), Reg::from_raw(2)).unwrap(), 0xAA02_03E1);
+        assert_eq!(encode_mov_reg(Width::W32, Reg::from_raw(1), Reg::from_raw(2)).unwrap(), 0x2A02_03E1);
 
-        assert_eq!(encode_movz(Width::X64, 3, 0x1234, 0).unwrap(), 0xD282_4683);
-        assert_eq!(encode_movz(Width::X64, 3, 0x1234, 16).unwrap(), 0xD2A2_4683);
-        assert_eq!(encode_movz(Width::W32, 3, 0x1234, 0).unwrap(), 0x5282_4683);
-        assert_eq!(encode_movz(Width::W32, 3, 0x1234, 16).unwrap(), 0x52A2_4683);
+        assert_eq!(encode_movz(Width::X64, Reg::from_raw(3), 0x1234, 0).unwrap(), 0xD282_4683);
+        assert_eq!(encode_movz(Width::X64, Reg::from_raw(3), 0x1234, 16).unwrap(), 0xD2A2_4683);
+        assert_eq!(encode_movz(Width::W32, Reg::from_raw(3), 0x1234, 0).unwrap(), 0x5282_4683);
+        assert_eq!(encode_movz(Width::W32, Reg::from_raw(3), 0x1234, 16).unwrap(), 0x52A2_4683);
 
-        assert_eq!(encode_movk(Width::X64, 3, 0x5678, 0).unwrap(), 0xF28A_CF03);
-        assert_eq!(encode_movk(Width::X64, 3, 0x5678, 32).unwrap(), 0xF2CA_CF03);
-        assert_eq!(encode_movk(Width::W32, 3, 0x5678, 0).unwrap(), 0x728A_CF03);
-        assert_eq!(encode_movk(Width::W32, 3, 0x5678, 16).unwrap(), 0x72AA_CF03);
+        assert_eq!(encode_movk(Width::X64, Reg::from_raw(3), 0x5678, 0).unwrap(), 0xF28A_CF03);
+        assert_eq!(encode_movk(Width::X64, Reg::from_raw(3), 0x5678, 32).unwrap(), 0xF2CA_CF03);
+        assert_eq!(encode_movk(Width::W32, Reg::from_raw(3), 0x5678, 0).unwrap(), 0x728A_CF03);
+        assert_eq!(encode_movk(Width::W32, Reg::from_raw(3), 0x5678, 16).unwrap(), 0x72AA_CF03);
     }
 
     #[test]
     fn encode_load_store_unsigned_offset() {
-        assert_eq!(encode_ldr_imm(Width::X64, 4, 5, 16).unwrap(), 0xF940_08A4);
-        assert_eq!(encode_ldr_imm(Width::W32, 4, 5, 16).unwrap(), 0xB940_10A4);
-        assert_eq!(encode_ldrb_imm(4, 5, 15).unwrap(), 0x3940_3CA4);
-        assert_eq!(encode_ldrh_imm(4, 5, 14).unwrap(), 0x7940_1CA4);
+        assert_eq!(encode_ldr_imm(Width::X64, Reg::from_raw(4), Reg::from_raw(5), 16).unwrap(), 0xF940_08A4);
+        assert_eq!(encode_ldr_imm(Width::W32, Reg::from_raw(4), Reg::from_raw(5), 16).unwrap(), 0xB940_10A4);
+        assert_eq!(encode_ldrb_imm(Reg::from_raw(4), Reg::from_raw(5), 15).unwrap(), 0x3940_3CA4);
+        assert_eq!(encode_ldrh_imm(Reg::from_raw(4), Reg::from_raw(5), 14).unwrap(), 0x7940_1CA4);
 
-        assert_eq!(encode_str_imm(Width::X64, 4, 5, 16).unwrap(), 0xF900_08A4);
-        assert_eq!(encode_str_imm(Width::W32, 4, 5, 16).unwrap(), 0xB900_10A4);
-        assert_eq!(encode_strb_imm(4, 5, 15).unwrap(), 0x3900_3CA4);
-        assert_eq!(encode_strh_imm(4, 5, 14).unwrap(), 0x7900_1CA4);
+        assert_eq!(encode_str_imm(Width::X64, Reg::from_raw(4), Reg::from_raw(5), 16).unwrap(), 0xF900_08A4);
+        assert_eq!(encode_str_imm(Width::W32, Reg::from_raw(4), Reg::from_raw(5), 16).unwrap(), 0xB900_10A4);
+        assert_eq!(encode_strb_imm(Reg::from_raw(4), Reg::from_raw(5), 15).unwrap(), 0x3900_3CA4);
+        assert_eq!(encode_strh_imm(Reg::from_raw(4), Reg::from_raw(5), 14).unwrap(), 0x7900_1CA4);
     }
 
     #[test]
     fn encode_integer_arithmetic_and_bitwise() {
-        assert_eq!(encode_add_reg(Width::X64, 6, 7, 8).unwrap(), 0x8B08_00E6);
-        assert_eq!(encode_add_reg(Width::W32, 6, 7, 8).unwrap(), 0x0B08_00E6);
+        assert_eq!(encode_add_reg(Width::X64, Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0x8B08_00E6);
+        assert_eq!(encode_add_reg(Width::W32, Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0x0B08_00E6);
         assert_eq!(
-            encode_add_imm(Width::X64, 6, 7, 123, false).unwrap(),
+            encode_add_imm(Width::X64, Reg::from_raw(6), Reg::from_raw(7), 123, false).unwrap(),
             0x9101_ECE6
         );
         assert_eq!(
-            encode_add_imm(Width::W32, 6, 7, 123, false).unwrap(),
+            encode_add_imm(Width::W32, Reg::from_raw(6), Reg::from_raw(7), 123, false).unwrap(),
             0x1101_ECE6
         );
         assert_eq!(
-            encode_add_imm(Width::X64, 6, 7, 0x123, true).unwrap(),
+            encode_add_imm(Width::X64, Reg::from_raw(6), Reg::from_raw(7), 0x123, true).unwrap(),
             0x9144_8CE6
         );
 
-        assert_eq!(encode_sub_reg(Width::X64, 6, 7, 8).unwrap(), 0xCB08_00E6);
-        assert_eq!(encode_sub_reg(Width::W32, 6, 7, 8).unwrap(), 0x4B08_00E6);
+        assert_eq!(encode_sub_reg(Width::X64, Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0xCB08_00E6);
+        assert_eq!(encode_sub_reg(Width::W32, Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0x4B08_00E6);
         assert_eq!(
-            encode_sub_imm(Width::X64, 6, 7, 123, false).unwrap(),
+            encode_sub_imm(Width::X64, Reg::from_raw(6), Reg::from_raw(7), 123, false).unwrap(),
             0xD101_ECE6
         );
         assert_eq!(
-            encode_sub_imm(Width::W32, 6, 7, 123, false).unwrap(),
+            encode_sub_imm(Width::W32, Reg::from_raw(6), Reg::from_raw(7), 123, false).unwrap(),
             0x5101_ECE6
         );
         assert_eq!(
-            encode_sub_imm(Width::X64, 6, 7, 0x123, true).unwrap(),
+            encode_sub_imm(Width::X64, Reg::from_raw(6), Reg::from_raw(7), 0x123, true).unwrap(),
             0xD144_8CE6
         );
 
         assert_eq!(
-            encode_and_reg(Width::X64, 9, 10, 11, Shift::Lsl, 0).unwrap(),
+            encode_and_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Shift::Lsl, 0).unwrap(),
             0x8A0B_0149
         );
         assert_eq!(
-            encode_orr_reg(Width::X64, 9, 10, 11, Shift::Lsl, 0).unwrap(),
+            encode_orr_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Shift::Lsl, 0).unwrap(),
             0xAA0B_0149
         );
         assert_eq!(
-            encode_eor_reg(Width::X64, 9, 10, 11, Shift::Lsl, 0).unwrap(),
+            encode_eor_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Shift::Lsl, 0).unwrap(),
             0xCA0B_0149
         );
 
         assert_eq!(
-            encode_and_reg(Width::X64, 9, 10, 11, Shift::Lsr, 5).unwrap(),
+            encode_and_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Shift::Lsr, 5).unwrap(),
             0x8A4B_1549
         );
         assert_eq!(
-            encode_orr_reg(Width::X64, 9, 10, 11, Shift::Lsr, 5).unwrap(),
+            encode_orr_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Shift::Lsr, 5).unwrap(),
             0xAA4B_1549
         );
         assert_eq!(
-            encode_eor_reg(Width::X64, 9, 10, 11, Shift::Lsr, 5).unwrap(),
+            encode_eor_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Shift::Lsr, 5).unwrap(),
             0xCA4B_1549
         );
     }
 
     #[test]
     fn encode_shifts_cmp_and_misc() {
-        assert_eq!(encode_lsl_reg(Width::X64, 9, 10, 11).unwrap(), 0x9ACB_2149);
-        assert_eq!(encode_lsl_reg(Width::W32, 9, 10, 11).unwrap(), 0x1ACB_2149);
-        assert_eq!(encode_lsr_reg(Width::X64, 9, 10, 11).unwrap(), 0x9ACB_2549);
-        assert_eq!(encode_lsr_reg(Width::W32, 9, 10, 11).unwrap(), 0x1ACB_2549);
+        assert_eq!(encode_lsl_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11)).unwrap(), 0x9ACB_2149);
+        assert_eq!(encode_lsl_reg(Width::W32, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11)).unwrap(), 0x1ACB_2149);
+        assert_eq!(encode_lsr_reg(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11)).unwrap(), 0x9ACB_2549);
+        assert_eq!(encode_lsr_reg(Width::W32, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11)).unwrap(), 0x1ACB_2549);
 
-        assert_eq!(encode_neg(Width::X64, 12, 13).unwrap(), 0xCB0D_03EC);
-        assert_eq!(encode_neg(Width::W32, 12, 13).unwrap(), 0x4B0D_03EC);
+        assert_eq!(encode_neg(Width::X64, Reg::from_raw(12), Reg::from_raw(13)).unwrap(), 0xCB0D_03EC);
+        assert_eq!(encode_neg(Width::W32, Reg::from_raw(12), Reg::from_raw(13)).unwrap(), 0x4B0D_03EC);
 
-        assert_eq!(encode_cmp_reg(Width::X64, 14, 15).unwrap(), 0xEB0F_01DF);
-        assert_eq!(encode_cmp_reg(Width::W32, 14, 15).unwrap(), 0x6B0F_01DF);
+        assert_eq!(encode_cmp_reg(Width::X64, Reg::from_raw(14), Reg::from_raw(15)).unwrap(), 0xEB0F_01DF);
+        assert_eq!(encode_cmp_reg(Width::W32, Reg::from_raw(14), Reg::from_raw(15)).unwrap(), 0x6B0F_01DF);
         assert_eq!(
-            encode_cmp_imm(Width::X64, 14, 0xff, false).unwrap(),
+            encode_cmp_imm(Width::X64, Reg::from_raw(14), 0xff, false).unwrap(),
             0xF103_FDDF
         );
         assert_eq!(
-            encode_cmp_imm(Width::W32, 14, 0xff, false).unwrap(),
+            encode_cmp_imm(Width::W32, Reg::from_raw(14), 0xff, false).unwrap(),
             0x7103_FDDF
         );
         assert_eq!(
-            encode_cmp_imm(Width::X64, 14, 0x123, true).unwrap(),
+            encode_cmp_imm(Width::X64, Reg::from_raw(14), 0x123, true).unwrap(),
             0xF144_8DDF
         );
 
         assert_eq!(
-            encode_cset(Width::X64, 12, Condition::Ne).unwrap(),
+            encode_cset(Width::X64, Reg::from_raw(12), Condition::Ne).unwrap(),
             0x9A9F_07EC
         );
         assert_eq!(
-            encode_cset(Width::W32, 12, Condition::Ne).unwrap(),
+            encode_cset(Width::W32, Reg::from_raw(12), Condition::Ne).unwrap(),
             0x1A9F_07EC
         );
         assert_eq!(
-            encode_cset(Width::X64, 12, Condition::Eq).unwrap(),
+            encode_cset(Width::X64, Reg::from_raw(12), Condition::Eq).unwrap(),
             0x9A9F_17EC
         );
         assert_eq!(
-            encode_cset(Width::X64, 12, Condition::Gt).unwrap(),
+            encode_cset(Width::X64, Reg::from_raw(12), Condition::Gt).unwrap(),
             0x9A9F_D7EC
         );
 
-        assert_eq!(encode_sxtb(18, 19).unwrap(), 0x9340_1E72);
-        assert_eq!(encode_sxth(18, 19).unwrap(), 0x9340_3E72);
-        assert_eq!(encode_sxtw(18, 19).unwrap(), 0x9340_7E72);
+        assert_eq!(encode_sxtb(Reg::from_raw(18), Reg::from_raw(19)).unwrap(), 0x9340_1E72);
+        assert_eq!(encode_sxth(Reg::from_raw(18), Reg::from_raw(19)).unwrap(), 0x9340_3E72);
+        assert_eq!(encode_sxtw(Reg::from_raw(18), Reg::from_raw(19)).unwrap(), 0x9340_7E72);
 
-        assert_eq!(encode_blr(20).unwrap(), 0xD63F_0280);
+        assert_eq!(encode_blr(Reg::from_raw(20)).unwrap(), 0xD63F_0280);
     }
 
     #[test]
     fn encode_pair_load_store_ret_and_branches() {
-        assert_eq!(encode_stp(Width::X64, 29, 30, 31, 0).unwrap(), 0xA900_7BFD);
-        assert_eq!(encode_ldp(Width::X64, 29, 30, 31, 0).unwrap(), 0xA940_7BFD);
-        assert_eq!(encode_stp(Width::W32, 1, 2, 3, -4).unwrap(), 0x293F_8861);
-        assert_eq!(encode_ldp(Width::W32, 1, 2, 3, -4).unwrap(), 0x297F_8861);
-        assert_eq!(encode_ret(30).unwrap(), 0xD65F_03C0);
+        assert_eq!(encode_stp(Width::X64, Reg::from_raw(29), Reg::from_raw(30), Reg::from_raw(31), 0).unwrap(), 0xA900_7BFD);
+        assert_eq!(encode_ldp(Width::X64, Reg::from_raw(29), Reg::from_raw(30), Reg::from_raw(31), 0).unwrap(), 0xA940_7BFD);
+        assert_eq!(encode_stp(Width::W32, Reg::from_raw(1), Reg::from_raw(2), Reg::from_raw(3), -4).unwrap(), 0x293F_8861);
+        assert_eq!(encode_ldp(Width::W32, Reg::from_raw(1), Reg::from_raw(2), Reg::from_raw(3), -4).unwrap(), 0x297F_8861);
+        assert_eq!(encode_ret(Reg::from_raw(30)).unwrap(), 0xD65F_03C0);
 
-        assert_eq!(encode_tbz(1, 7, 3).unwrap(), 0x3638_0061);
-        assert_eq!(encode_tbnz(1, 7, 3).unwrap(), 0x3738_0061);
+        assert_eq!(encode_tbz(Reg::from_raw(1), 7, 3).unwrap(), 0x3638_0061);
+        assert_eq!(encode_tbnz(Reg::from_raw(1), 7, 3).unwrap(), 0x3738_0061);
         assert_eq!(encode_b_cond(Condition::Eq, 3).unwrap(), 0x5400_0060);
     }
 
     #[test]
     fn encode_test_and_misc_integer_ops() {
-        assert_eq!(encode_tst_reg(Width::X64, 14, 15).unwrap(), 0xEA0F_01DF);
-        assert_eq!(encode_tst_reg(Width::W32, 14, 15).unwrap(), 0x6A0F_01DF);
-        assert_eq!(encode_tst_imm(Width::X64, 9, 1).unwrap(), 0xF240_013F);
-        assert_eq!(encode_tst_imm(Width::W32, 9, 1).unwrap(), 0x7200_013F);
+        assert_eq!(encode_tst_reg(Width::X64, Reg::from_raw(14), Reg::from_raw(15)).unwrap(), 0xEA0F_01DF);
+        assert_eq!(encode_tst_reg(Width::W32, Reg::from_raw(14), Reg::from_raw(15)).unwrap(), 0x6A0F_01DF);
+        assert_eq!(encode_tst_imm(Width::X64, Reg::from_raw(9), 1).unwrap(), 0xF240_013F);
+        assert_eq!(encode_tst_imm(Width::W32, Reg::from_raw(9), 1).unwrap(), 0x7200_013F);
 
-        assert_eq!(encode_madd(Width::X64, 4, 1, 2, 3).unwrap(), 0x9B02_0C24);
-        assert_eq!(encode_madd(Width::W32, 4, 1, 2, 3).unwrap(), 0x1B02_0C24);
-        assert_eq!(encode_asr_imm(Width::X64, 1, 2, 5).unwrap(), 0x9345_FC41);
-        assert_eq!(encode_asr_imm(Width::W32, 1, 2, 5).unwrap(), 0x1305_7C41);
+        assert_eq!(encode_madd(Width::X64, Reg::from_raw(4), Reg::from_raw(1), Reg::from_raw(2), Reg::from_raw(3)).unwrap(), 0x9B02_0C24);
+        assert_eq!(encode_madd(Width::W32, Reg::from_raw(4), Reg::from_raw(1), Reg::from_raw(2), Reg::from_raw(3)).unwrap(), 0x1B02_0C24);
+        assert_eq!(encode_asr_imm(Width::X64, Reg::from_raw(1), Reg::from_raw(2), 5).unwrap(), 0x9345_FC41);
+        assert_eq!(encode_asr_imm(Width::W32, Reg::from_raw(1), Reg::from_raw(2), 5).unwrap(), 0x1305_7C41);
         assert_eq!(
-            encode_csel(Width::X64, 9, 10, 11, Condition::Ne).unwrap(),
+            encode_csel(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Condition::Ne).unwrap(),
             0x9A8B_1149
         );
-        assert_eq!(encode_subs_reg(Width::X64, 6, 7, 8).unwrap(), 0xEB08_00E6);
-        assert_eq!(encode_subs_reg(Width::W32, 6, 7, 8).unwrap(), 0x6B08_00E6);
-        assert_eq!(encode_cmn_imm(Width::X64, 14, 0xff, false).unwrap(), 0xB103_FDDF);
-        assert_eq!(encode_mul(Width::X64, 6, 7, 8).unwrap(), 0x9B08_7CE6);
-        assert_eq!(encode_umulh(6, 7, 8).unwrap(), 0x9BC8_7CE6);
-        assert_eq!(encode_clz(Width::X64, 9, 10).unwrap(), 0xDAC0_1149);
-        assert_eq!(encode_clz(Width::W32, 9, 10).unwrap(), 0x5AC0_1149);
+        assert_eq!(encode_subs_reg(Width::X64, Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0xEB08_00E6);
+        assert_eq!(encode_subs_reg(Width::W32, Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0x6B08_00E6);
+        assert_eq!(encode_cmn_imm(Width::X64, Reg::from_raw(14), 0xff, false).unwrap(), 0xB103_FDDF);
+        assert_eq!(encode_mul(Width::X64, Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0x9B08_7CE6);
+        assert_eq!(encode_umulh(Reg::from_raw(6), Reg::from_raw(7), Reg::from_raw(8)).unwrap(), 0x9BC8_7CE6);
+        assert_eq!(encode_clz(Width::X64, Reg::from_raw(9), Reg::from_raw(10)).unwrap(), 0xDAC0_1149);
+        assert_eq!(encode_clz(Width::W32, Reg::from_raw(9), Reg::from_raw(10)).unwrap(), 0x5AC0_1149);
         assert_eq!(
-            encode_bic(Width::X64, 9, 10, 11, Shift::Lsl, 0).unwrap(),
+            encode_bic(Width::X64, Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11), Shift::Lsl, 0).unwrap(),
             0x8A2B_0149
         );
-        assert_eq!(encode_smull(9, 10, 11).unwrap(), 0x9B2B_7D49);
+        assert_eq!(encode_smull(Reg::from_raw(9), Reg::from_raw(10), Reg::from_raw(11)).unwrap(), 0x9B2B_7D49);
     }
 
     #[test]
@@ -1186,10 +1186,10 @@ mod tests {
         assert_eq!(encode_bl(3).unwrap(), 0x9400_0003);
         assert_eq!(encode_bl(-4).unwrap(), 0x97FF_FFFC);
 
-        assert_eq!(encode_cbz(Width::X64, 16, 10).unwrap(), 0xB400_0150);
-        assert_eq!(encode_cbnz(Width::W32, 17, 9).unwrap(), 0x3500_0131);
-        assert_eq!(encode_cbz(Width::X64, 16, -2).unwrap(), 0xB4FF_FFD0);
-        assert_eq!(encode_cbnz(Width::W32, 17, -3).unwrap(), 0x35FF_FFB1);
+        assert_eq!(encode_cbz(Width::X64, Reg::from_raw(16), 10).unwrap(), 0xB400_0150);
+        assert_eq!(encode_cbnz(Width::W32, Reg::from_raw(17), 9).unwrap(), 0x3500_0131);
+        assert_eq!(encode_cbz(Width::X64, Reg::from_raw(16), -2).unwrap(), 0xB4FF_FFD0);
+        assert_eq!(encode_cbnz(Width::W32, Reg::from_raw(17), -3).unwrap(), 0x35FF_FFB1);
     }
 
     #[test]
@@ -1210,7 +1210,7 @@ mod tests {
             line: 11,
             column: 1,
         });
-        emitter.emit_cbz_label(Width::X64, 16, start).unwrap();
+        emitter.emit_cbz_label(Width::X64, Reg::from_raw(16), start).unwrap();
         emitter.bind_label(done).unwrap();
         emitter.set_source_location(crate::SourceLocation {
             file: 1,
@@ -1280,7 +1280,7 @@ mod tests {
     fn emitter_reports_out_of_range_fixup() {
         let mut emitter = Emitter::new();
         let far = emitter.new_label();
-        emitter.emit_cbz_label(Width::X64, 0, far).unwrap();
+        emitter.emit_cbz_label(Width::X64, Reg::X0, far).unwrap();
         for _ in 0..=262_143 {
             emitter.emit_word(0xD503_201F); // nop
         }
@@ -1308,13 +1308,13 @@ mod tests {
             line: 1,
             column: 1,
         });
-        emitter.emit_tbz_label(0, 7, done).unwrap();
+        emitter.emit_tbz_label(Reg::X0, 7, done).unwrap();
         emitter.set_source_location(crate::SourceLocation {
             file: 2,
             line: 2,
             column: 1,
         });
-        emitter.emit_tbnz_label(1, 5, start).unwrap();
+        emitter.emit_tbnz_label(Reg::from_raw(1), 5, start).unwrap();
         emitter.set_source_location(crate::SourceLocation {
             file: 2,
             line: 3,
@@ -1378,20 +1378,20 @@ mod tests {
             })
         ));
 
-        assert_eq!(encode_cbz(Width::X64, 0, -(1 << 18)).unwrap(), 0xB480_0000);
+        assert_eq!(encode_cbz(Width::X64, Reg::from_raw(0), -(1 << 18)).unwrap(), 0xB480_0000);
         assert_eq!(
-            encode_cbz(Width::X64, 0, (1 << 18) - 1).unwrap(),
+            encode_cbz(Width::X64, Reg::from_raw(0), (1 << 18) - 1).unwrap(),
             0xB47F_FFE0
         );
         assert!(matches!(
-            encode_cbz(Width::X64, 0, -(1 << 18) - 1),
+            encode_cbz(Width::X64, Reg::from_raw(0), -(1 << 18) - 1),
             Err(EmitError::InvalidImmediate {
                 instruction: "cbz",
                 ..
             })
         ));
         assert!(matches!(
-            encode_cbz(Width::X64, 0, 1 << 18),
+            encode_cbz(Width::X64, Reg::from_raw(0), 1 << 18),
             Err(EmitError::InvalidImmediate {
                 instruction: "cbz",
                 ..
@@ -1399,24 +1399,24 @@ mod tests {
         ));
 
         assert_eq!(
-            encode_ldr_imm(Width::X64, 1, 2, 4095 * 8).unwrap(),
+            encode_ldr_imm(Width::X64, Reg::from_raw(1), Reg::from_raw(2), 4095 * 8).unwrap(),
             0xF97F_FC41
         );
         assert!(matches!(
-            encode_ldr_imm(Width::X64, 1, 2, 4095 * 8 + 8),
+            encode_ldr_imm(Width::X64, Reg::from_raw(1), Reg::from_raw(2), 4095 * 8 + 8),
             Err(EmitError::InvalidOffset { .. })
         ));
         assert!(matches!(
-            encode_ldr_imm(Width::X64, 1, 2, 10),
+            encode_ldr_imm(Width::X64, Reg::from_raw(1), Reg::from_raw(2), 10),
             Err(EmitError::InvalidOffset { .. })
         ));
 
         assert!(matches!(
-            encode_movz(Width::W32, 1, 0x1234, 32),
+            encode_movz(Width::W32, Reg::from_raw(1), 0x1234, 32),
             Err(EmitError::InvalidMovWideShift { .. })
         ));
         assert!(matches!(
-            encode_add_imm(Width::X64, 0, 0, 0x1000, false),
+            encode_add_imm(Width::X64, Reg::from_raw(0), Reg::from_raw(0), 0x1000, false),
             Err(EmitError::InvalidImmediate {
                 instruction: "add/sub imm12",
                 ..
