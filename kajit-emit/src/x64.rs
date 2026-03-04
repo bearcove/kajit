@@ -1,5 +1,122 @@
 use crate::{SourceLocation, SourceMap, SourceMapEntry};
 
+use std::ptr;
+
+#[cfg(target_os = "macos")]
+const MAP_ANON: i32 = 0x1000;
+
+#[cfg(not(target_os = "macos"))]
+const MAP_ANON: i32 = 0x20;
+
+const MAP_PRIVATE: i32 = 0x02;
+const PROT_READ: i32 = 1;
+const PROT_WRITE: i32 = 2;
+const PROT_EXEC: i32 = 4;
+const MAP_FAILED: *mut u8 = !0usize as *mut u8;
+
+#[cfg(target_os = "macos")]
+const MAP_JIT: i32 = 0x0800;
+
+type MmapProt = i32;
+
+unsafe extern "C" {
+    fn mmap(
+        addr: *mut u8,
+        len: usize,
+        prot: MmapProt,
+        flags: i32,
+        fd: i32,
+        offset: i64,
+    ) -> *mut u8;
+    fn munmap(addr: *mut u8, len: usize) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
+    fn mprotect(addr: *mut u8, len: usize, prot: MmapProt) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn pthread_jit_write_protect_np(enabled: i32);
+    fn sys_icache_invalidate(start: *mut u8, len: usize);
+}
+
+#[derive(Debug)]
+pub struct ExecutableBuffer {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl ExecutableBuffer {
+    fn allocate(bytes: &[u8]) -> Self {
+        let len = bytes.len().max(1);
+        let mut flags = MAP_PRIVATE | MAP_ANON;
+        #[cfg(target_os = "macos")]
+        {
+            flags |= MAP_JIT;
+        }
+
+        let prot = if cfg!(target_os = "macos") {
+            PROT_READ | PROT_WRITE | PROT_EXEC
+        } else {
+            PROT_READ | PROT_WRITE
+        };
+
+        let ptr = unsafe { mmap(ptr::null_mut(), len, prot, flags, -1, 0) };
+        if ptr == MAP_FAILED {
+            panic!("mmap failed to allocate executable memory");
+        }
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            pthread_jit_write_protect_np(0);
+            ptr.copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
+            pthread_jit_write_protect_np(1);
+            sys_icache_invalidate(ptr, bytes.len());
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            ptr.copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
+            if mprotect(ptr, len, PROT_READ | PROT_EXEC) != 0 {
+                munmap(ptr, len);
+                panic!("mprotect failed to mark executable memory");
+            }
+        }
+
+        Self { ptr, len }
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl AsRef<[u8]> for ExecutableBuffer {
+    fn as_ref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl Drop for ExecutableBuffer {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() && self.len != 0 {
+            unsafe {
+                munmap(self.ptr, self.len);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mem {
     pub base: u8,
@@ -9,27 +126,27 @@ pub struct Mem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LabelId(u32);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct FinalizedEmission {
-    pub code: Vec<u8>,
+    pub exec: ExecutableBuffer,
     pub source_map: SourceMap,
 }
 
 impl FinalizedEmission {
     pub fn code_ptr(&self) -> *const u8 {
-        self.code.as_ptr()
+        self.exec.as_ptr()
     }
 
     pub fn len(&self) -> usize {
-        self.code.len()
+        self.exec.len()
     }
 
     pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
-        crate::build_trace(&self.code, &self.source_map)
+        crate::build_trace(self.exec.as_ref(), &self.source_map)
     }
 
     pub fn trace_text(&self) -> Result<String, crate::TraceError> {
-        crate::format_trace(&self.code, &self.source_map)
+        crate::format_trace(self.exec.as_ref(), &self.source_map)
     }
 
     pub fn source_map_le(&self) -> Result<Vec<u8>, crate::SourceMapError> {
@@ -63,6 +180,45 @@ pub enum EmitError {
         target_offset: u32,
         delta: i64,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Condition {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Lo,
+    Hi,
+    O,
+    No,
+    S,
+    Ns,
+    P,
+    Np,
+}
+
+impl Condition {
+    fn code(self) -> u8 {
+        match self {
+            Condition::O => 0x0,
+            Condition::No => 0x1,
+            Condition::Eq => 0x4,
+            Condition::Ne => 0x5,
+            Condition::Lo => 0x2,
+            Condition::Hi => 0x7,
+            Condition::S => 0x8,
+            Condition::Ns => 0x9,
+            Condition::P => 0xa,
+            Condition::Np => 0xb,
+            Condition::Lt => 0xc,
+            Condition::Ge => 0xd,
+            Condition::Le => 0xe,
+            Condition::Gt => 0xf,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,15 +318,7 @@ impl Emitter {
         &mut self,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.ensure_label_exists(label)?;
-        let start = self.current_offset();
-        self.emit_with(|buf| encode_je_rel32(buf, 0))?;
-        self.fixups.push(Fixup {
-            disp_offset: start + 2,
-            next_ip: self.current_offset(),
-            label,
-        });
-        Ok(())
+        self.emit_jcc_label(label, Condition::Eq)
     }
 
     pub fn emit_jz_label(
@@ -184,9 +332,52 @@ impl Emitter {
         &mut self,
         label: LabelId,
     ) -> Result<(), EmitError> {
+        self.emit_jcc_label(label, Condition::Ne)
+    }
+
+    pub fn emit_jne_label(
+        &mut self,
+        label: LabelId,
+    ) -> Result<(), EmitError> {
+        self.emit_jcc_label(label, Condition::Ne)
+    }
+
+    pub fn emit_jge_label(
+        &mut self,
+        label: LabelId,
+    ) -> Result<(), EmitError> {
+        self.emit_jcc_label(label, Condition::Ge)
+    }
+
+    pub fn emit_jl_label(
+        &mut self,
+        label: LabelId,
+    ) -> Result<(), EmitError> {
+        self.emit_jcc_label(label, Condition::Lt)
+    }
+
+    pub fn emit_jbe_label(
+        &mut self,
+        label: LabelId,
+    ) -> Result<(), EmitError> {
+        self.emit_jcc_label(label, Condition::Lo)
+    }
+
+    pub fn emit_ja_label(
+        &mut self,
+        label: LabelId,
+    ) -> Result<(), EmitError> {
+        self.emit_jcc_label(label, Condition::Hi)
+    }
+
+    pub fn emit_jcc_label(
+        &mut self,
+        label: LabelId,
+        condition: Condition,
+    ) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
         let start = self.current_offset();
-        self.emit_with(|buf| encode_jnz_rel32(buf, 0))?;
+        self.emit_with(|buf| encode_jcc_rel32(buf, condition, 0))?;
         self.fixups.push(Fixup {
             disp_offset: start + 2,
             next_ip: self.current_offset(),
@@ -248,7 +439,7 @@ impl Emitter {
         }
 
         Ok(FinalizedEmission {
-            code: self.buf,
+            exec: ExecutableBuffer::allocate(&self.buf),
             source_map: self.source_map,
         })
     }
@@ -337,6 +528,22 @@ pub fn encode_mov_r64_r64(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), Emi
     emit_op_rm(buf, None, &[0x89], true, src, Operand::Reg(dst), false)
 }
 
+pub fn encode_mov_r64_imm64(dst: u8, imm: u64, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    let dst = check_reg(dst)?;
+    push_rex(buf, true, 0, 0, dst, false);
+    buf.push(0xB8 + (dst & 0x7));
+    buf.extend_from_slice(&imm.to_le_bytes());
+    Ok(())
+}
+
+pub fn encode_mov_r32_imm32(dst: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    let dst = check_reg(dst)?;
+    push_rex(buf, false, 0, 0, dst, false);
+    buf.push(0xB8 + (dst & 0x7));
+    buf.extend_from_slice(&imm.to_le_bytes());
+    Ok(())
+}
+
 pub fn encode_mov_m_r64(dst: Mem, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x89], true, src, Operand::Mem(dst), false)
 }
@@ -357,6 +564,76 @@ pub fn encode_mov_r32_m(dst: u8, src: Mem, buf: &mut Vec<u8>) -> Result<(), Emit
     emit_op_rm(buf, None, &[0x8B], false, dst, Operand::Mem(src), false)
 }
 
+pub fn encode_mov_m_r8(dst_base: u8, dst_disp: i32, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        None,
+        &[0x88],
+        false,
+        src,
+        Operand::Mem(Mem {
+            base: dst_base,
+            disp: dst_disp,
+        }),
+        true,
+    )
+}
+
+pub fn encode_mov_r8_m(dst: u8, src_base: u8, src_disp: i32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        None,
+        &[0x8A],
+        false,
+        dst,
+        Operand::Mem(Mem {
+            base: src_base,
+            disp: src_disp,
+        }),
+        true,
+    )
+}
+
+pub fn encode_mov_m_r16(
+    dst_base: u8,
+    dst_disp: i32,
+    src: u8,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x89],
+        false,
+        src,
+        Operand::Mem(Mem {
+            base: dst_base,
+            disp: dst_disp,
+        }),
+        false,
+    )
+}
+
+pub fn encode_mov_r16_m(
+    dst: u8,
+    src_base: u8,
+    src_disp: i32,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x8B],
+        false,
+        dst,
+        Operand::Mem(Mem {
+            base: src_base,
+            disp: src_disp,
+        }),
+        false,
+    )
+}
+
 pub fn encode_movzx_r32_rm8(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x0F, 0xB6], false, dst, src, true)
 }
@@ -369,7 +646,19 @@ pub fn encode_movzx_r64_rm8(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result<
     emit_op_rm(buf, None, &[0x0F, 0xB6], true, dst, src, true)
 }
 
-pub fn encode_movzx_r64_rm16(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+pub fn encode_movzx_r64_rm16(dst: u8, base: u8, disp: i32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    encode_movzx_r64_rm16_op(
+        dst,
+        Operand::Mem(Mem { base, disp }),
+        buf,
+    )
+}
+
+pub fn encode_movzx_r64_rm16_op(
+    dst: u8,
+    src: Operand,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x0F, 0xB7], true, dst, src, false)
 }
 
@@ -393,12 +682,24 @@ pub fn encode_add_r64_r64(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), Emi
     emit_op_rm(buf, None, &[0x01], true, src, Operand::Reg(dst), false)
 }
 
+pub fn encode_add_r64_imm32(dst: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0x81], true, 0, Operand::Reg(dst), false)?;
+    buf.extend_from_slice(&imm.to_le_bytes());
+    Ok(())
+}
+
 pub fn encode_add_r64_m(dst: u8, src: Mem, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x03], true, dst, Operand::Mem(src), false)
 }
 
 pub fn encode_sub_r64_r64(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x29], true, src, Operand::Reg(dst), false)
+}
+
+pub fn encode_sub_r64_imm32(dst: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0x81], true, 5, Operand::Reg(dst), false)?;
+    buf.extend_from_slice(&imm.to_le_bytes());
+    Ok(())
 }
 
 pub fn encode_sub_r64_m(dst: u8, src: Mem, buf: &mut Vec<u8>) -> Result<(), EmitError> {
@@ -457,6 +758,12 @@ pub fn encode_cmp_r64_r64(lhs: u8, rhs: u8, buf: &mut Vec<u8>) -> Result<(), Emi
     emit_op_rm(buf, None, &[0x39], true, rhs, Operand::Reg(lhs), false)
 }
 
+pub fn encode_cmp_r64_imm32(dst: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0x81], true, 7, Operand::Reg(dst), false)?;
+    buf.extend_from_slice(&imm.to_le_bytes());
+    Ok(())
+}
+
 pub fn encode_cmp_r64_m(lhs: u8, rhs: Mem, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x3B], true, lhs, Operand::Mem(rhs), false)
 }
@@ -477,8 +784,48 @@ pub fn encode_setne_r8(dst: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x0F, 0x95], false, 0, Operand::Reg(dst), true)
 }
 
+pub fn encode_test_r8_r8(dst: u8, rhs: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0x84], false, rhs, Operand::Reg(dst), true)
+}
+
+pub fn encode_setcc_r8(cond: Condition, dst: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        None,
+        &[0x0F, 0x90 + cond.code()],
+        false,
+        0,
+        Operand::Reg(dst),
+        true,
+    )
+}
+
+pub fn encode_cmovcc_r64_r64(
+    cond: Condition,
+    dst: u8,
+    src: u8,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        None,
+        &[0x0F, 0x40 + cond.code()],
+        true,
+        dst,
+        Operand::Reg(src),
+        false,
+    )
+}
+
 pub fn encode_je_rel32(buf: &mut Vec<u8>, disp: i32) -> Result<(), EmitError> {
     buf.extend_from_slice(&[0x0F, 0x84]);
+    buf.extend_from_slice(&disp.to_le_bytes());
+    Ok(())
+}
+
+pub fn encode_jcc_rel32(buf: &mut Vec<u8>, cond: Condition, disp: i32) -> Result<(), EmitError> {
+    buf.push(0x0F);
+    buf.push(0x80 + cond.code());
     buf.extend_from_slice(&disp.to_le_bytes());
     Ok(())
 }
@@ -509,6 +856,10 @@ pub fn encode_call_r64(reg: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0xFF], false, 2, Operand::Reg(reg), false)
 }
 
+pub fn encode_jmp_r64(reg: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0xFF], false, 4, Operand::Reg(reg), false)
+}
+
 pub fn encode_push_r64(reg: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     let reg = check_reg(reg)?;
     push_rex(buf, false, 0, 0, reg, false);
@@ -523,6 +874,16 @@ pub fn encode_pop_r64(reg: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     Ok(())
 }
 
+pub fn encode_ret(buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    buf.push(0xC3);
+    Ok(())
+}
+
+pub fn encode_nop(buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    buf.push(0x90);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,6 +893,10 @@ mod tests {
         let mut buf = Vec::new();
         encode_mov_r64_r64(11, 10, &mut buf).unwrap();
         assert_eq!(buf, [0x4d, 0x89, 0xd3]);
+
+        buf.clear();
+        encode_mov_r64_imm64(3, 0x1122_3344_5566_7788, &mut buf).unwrap();
+        assert_eq!(buf, [0x48, 0xbb, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
 
         buf.clear();
         encode_mov_m_r64(Mem { base: 4, disp: 0 }, 10, &mut buf).unwrap();
@@ -552,6 +917,26 @@ mod tests {
         buf.clear();
         encode_mov_r32_m(10, Mem { base: 4, disp: 0 }, &mut buf).unwrap();
         assert_eq!(buf, [0x44, 0x8b, 0x14, 0x24]);
+
+        buf.clear();
+        encode_mov_r32_imm32(3, 0x1122_3344, &mut buf).unwrap();
+        assert_eq!(buf, [0xbb, 0x44, 0x33, 0x22, 0x11]);
+
+        buf.clear();
+        encode_mov_m_r8(9, 32, 7, &mut buf).unwrap();
+        assert_eq!(buf, [0x41, 0x88, 0x79, 0x20]);
+
+        buf.clear();
+        encode_mov_r8_m(8, 9, 40, &mut buf).unwrap();
+        assert_eq!(buf, [0x45, 0x8a, 0x41, 0x28]);
+
+        buf.clear();
+        encode_mov_m_r16(10, 16, 1, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x41, 0x89, 0x4a, 0x10]);
+
+        buf.clear();
+        encode_mov_r16_m(9, 11, 16, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x45, 0x8b, 0x4b, 0x10]);
     }
 
     #[test]
@@ -621,8 +1006,8 @@ mod tests {
         assert_eq!(buf, [0x4d, 0x0f, 0xb6, 0xd2]);
 
         buf.clear();
-        encode_movzx_r64_rm16(10, Operand::Reg(10), &mut buf).unwrap();
-        assert_eq!(buf, [0x4d, 0x0f, 0xb7, 0xd2]);
+        encode_movzx_r64_rm16(10, 10, 126, &mut buf).unwrap();
+        assert_eq!(buf, [0x4d, 0x0f, 0xb7, 0x52, 0x7e]);
 
         buf.clear();
         encode_lea_r64_m(10, Mem { base: 4, disp: 16 }, &mut buf).unwrap();
@@ -636,12 +1021,20 @@ mod tests {
         assert_eq!(buf, [0x4d, 0x01, 0xda]);
 
         buf.clear();
+        encode_add_r64_imm32(10, 0x1000, &mut buf).unwrap();
+        assert_eq!(buf, [0x49, 0x81, 0xc2, 0x00, 0x10, 0x00, 0x00]);
+
+        buf.clear();
         encode_add_r64_m(10, Mem { base: 4, disp: 0 }, &mut buf).unwrap();
         assert_eq!(buf, [0x4c, 0x03, 0x14, 0x24]);
 
         buf.clear();
         encode_sub_r64_r64(10, 11, &mut buf).unwrap();
         assert_eq!(buf, [0x4d, 0x29, 0xda]);
+
+        buf.clear();
+        encode_sub_r64_imm32(10, 4, &mut buf).unwrap();
+        assert_eq!(buf, [0x49, 0x81, 0xea, 0x04, 0x00, 0x00, 0x00]);
 
         buf.clear();
         encode_sub_r64_m(10, Mem { base: 4, disp: 0 }, &mut buf).unwrap();
@@ -713,6 +1106,22 @@ mod tests {
         buf.clear();
         encode_setne_r8(10, &mut buf).unwrap();
         assert_eq!(buf, [0x41, 0x0f, 0x95, 0xc2]);
+
+        buf.clear();
+        encode_test_r8_r8(9, 10, &mut buf).unwrap();
+        assert_eq!(buf, [0x45, 0x84, 0xd1]);
+
+        buf.clear();
+        encode_setcc_r8(Condition::Ne, 11, &mut buf).unwrap();
+        assert_eq!(buf, [0x41, 0x0f, 0x95, 0xc3]);
+
+        buf.clear();
+        encode_cmovcc_r64_r64(Condition::Lt, 10, 11, &mut buf).unwrap();
+        assert_eq!(buf, [0x4d, 0x0f, 0x4c, 0xd3]);
+
+        buf.clear();
+        encode_cmp_r64_imm32(11, 3, &mut buf).unwrap();
+        assert_eq!(buf, [0x49, 0x81, 0xfb, 0x03, 0x00, 0x00, 0x00]);
     }
 
     #[test]
@@ -748,6 +1157,22 @@ mod tests {
         buf.clear();
         encode_pop_r64(10, &mut buf).unwrap();
         assert_eq!(buf, [0x41, 0x5a]);
+
+        buf.clear();
+        encode_jmp_r64(10, &mut buf).unwrap();
+        assert_eq!(buf, [0x41, 0xff, 0xe2]);
+
+        buf.clear();
+        encode_ret(&mut buf).unwrap();
+        assert_eq!(buf, [0xc3]);
+
+        buf.clear();
+        encode_nop(&mut buf).unwrap();
+        assert_eq!(buf, [0x90]);
+
+        buf.clear();
+        encode_jcc_rel32(&mut buf, Condition::Hi, 0x14).unwrap();
+        assert_eq!(buf, [0x0f, 0x87, 0x14, 0x00, 0x00, 0x00]);
     }
 
     #[test]
@@ -859,7 +1284,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            finalized.code,
+            finalized.exec.as_ref(),
             vec![
                 0x0f, 0x84, 0x05, 0x00, 0x00, 0x00, // je +5
                 0xe8, 0xf5, 0xff, 0xff, 0xff, // call -11
@@ -960,7 +1385,7 @@ mod tests {
 
         let finalized = emitter.finalize().unwrap();
         assert_eq!(
-            finalized.code,
+            finalized.exec.as_ref(),
             vec![
                 0xe9, 0x02, 0x00, 0x00, 0x00, // jmp +2
                 0x90, 0x90, // nops

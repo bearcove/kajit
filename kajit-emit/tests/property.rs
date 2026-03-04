@@ -72,7 +72,8 @@ proptest! {
         emitter.bind_label(target).unwrap();
 
         let finalized = emitter.finalize().unwrap();
-        let disp = i32::from_le_bytes(finalized.code[1..5].try_into().unwrap());
+        let code = finalized.exec.as_ref();
+        let disp = i32::from_le_bytes(code[1..5].try_into().unwrap());
         prop_assert_eq!(disp, padding as i32);
     }
 
@@ -87,8 +88,9 @@ proptest! {
         emitter.emit_call_label(target).unwrap();
 
         let finalized = emitter.finalize().unwrap();
-        let disp_offset = finalized.code.len() - 4;
-        let disp = i32::from_le_bytes(finalized.code[disp_offset..].try_into().unwrap());
+        let code = finalized.exec.as_ref();
+        let disp_offset = code.len() - 4;
+        let disp = i32::from_le_bytes(code[disp_offset..].try_into().unwrap());
         prop_assert_eq!(disp, -((padding as i32) + 5));
     }
 
