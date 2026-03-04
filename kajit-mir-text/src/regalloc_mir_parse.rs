@@ -9,7 +9,8 @@ use kajit_ir::ErrorCode;
 use kajit_ir::{IntrinsicFn, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_mir::{
-    BlockId, FixedReg, OperandKind, RaBlock, RaClobbers, RaEdge, RaFunction, RaInst, RaOperand,
+    BlockId, FixedReg, OperandKind, RaBlock, RaClobbers, RaEdge, RaEdgeArg, RaFunction, RaInst,
+    RaOperand,
     RaProgram, RaTerminator, RegClass,
 };
 
@@ -85,6 +86,15 @@ fn error_code<'src>() -> impl Parser<'src, &'src str, ErrorCode, Extra<'src>> + 
 
 fn vreg<'src>() -> impl Parser<'src, &'src str, VReg, Extra<'src>> + Clone {
     just("v").ignore_then(uint32()).map(VReg::new)
+}
+
+fn edge_arg<'src>() -> impl Parser<'src, &'src str, RaEdgeArg, Extra<'src>> + Clone {
+    let mapped = vreg()
+        .then_ignore(just("=>"))
+        .then(vreg())
+        .map(|(target, source)| RaEdgeArg { target, source });
+    let identity = vreg().map(|v| RaEdgeArg { target: v, source: v });
+    mapped.or(identity)
 }
 
 fn block_id<'src>() -> impl Parser<'src, &'src str, BlockId, Extra<'src>> + Clone {
@@ -377,13 +387,16 @@ fn succs<'src>() -> impl Parser<'src, &'src str, Vec<RaEdge>, Extra<'src>> + Clo
     let edge = block_id()
         .then(
             just(" [")
-                .ignore_then(vreg().separated_by(just(", ")).collect::<Vec<_>>())
+                .ignore_then(edge_arg().separated_by(just(", ")).collect::<Vec<_>>())
                 .then_ignore(just("]"))
                 .or_not(),
         )
         .map(|(to, args)| RaEdge {
             to,
-            args: args.unwrap_or_default(),
+            args: args
+                .unwrap_or_default()
+                .into_iter()
+                .collect(),
         });
     let some = just("succs:").ignore_then(
         ws().ignore_then(edge)

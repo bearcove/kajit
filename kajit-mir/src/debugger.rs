@@ -501,9 +501,13 @@ impl DebuggerSession {
             });
         }
 
-        for arg in &edge.args {
-            let value = self.read_vreg(arg.source.index());
-            self.write_vreg(arg.target.index(), value);
+        let transfers: Vec<(usize, u64)> = edge
+            .args
+            .iter()
+            .map(|arg| (arg.target.index(), self.read_vreg(arg.source.index())))
+            .collect();
+        for (target, value) in transfers {
+            self.write_vreg(target, value);
         }
         Ok(())
     }

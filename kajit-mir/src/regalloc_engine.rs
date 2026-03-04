@@ -403,7 +403,7 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 continue;
             }
 
-            let args = blocks[from].succ_args[succ_idx]
+            let args: Vec<_> = blocks[from].succ_args[succ_idx]
                 .iter()
                 .copied()
                 .collect();
