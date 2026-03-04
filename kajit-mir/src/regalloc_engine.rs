@@ -2,6 +2,7 @@
 //!
 //! This module adapts `regalloc_mir::RaProgram` to `regalloc2::Function`.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use regalloc2::{
@@ -98,7 +99,22 @@ struct WorkBlock {
     succs: Vec<usize>,
     preds: Vec<usize>,
     params: Vec<kajit_ir::VReg>,
-    succ_args: Vec<Vec<kajit_ir::VReg>>,
+    succ_args: Vec<Vec<crate::RaEdgeArg>>,
+}
+
+fn align_succ_args_to_target(
+    target_params: &[kajit_ir::VReg],
+    args: &[crate::RaEdgeArg],
+) -> Vec<crate::RaEdgeArg> {
+    let source_by_target: HashMap<_, _> = args.iter().map(|arg| (arg.target, arg.source)).collect();
+
+    target_params
+        .iter()
+        .map(|target| crate::RaEdgeArg {
+            target: *target,
+            source: source_by_target.get(target).copied().unwrap_or(*target),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -387,7 +403,7 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 succ_args: b
                     .succs
                     .iter()
-                    .map(|s| s.args.iter().map(|arg| arg.source).collect())
+                    .map(|s| align_succ_args_to_target(&func.blocks[s.to.index()].params, &s.args))
                     .collect(),
             }
         })
@@ -403,10 +419,8 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 continue;
             }
 
-            let args: Vec<_> = blocks[from].succ_args[succ_idx]
-                .iter()
-                .copied()
-                .collect();
+            let args = blocks[from].succ_args[succ_idx].clone();
+            let to_params = blocks[to].params.clone();
             let from_linear_op_index = blocks[from]
                 .term_linear_op_index
                 .expect("critical-edge source must map to a linear op index");
@@ -418,7 +432,7 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 term_uses: Vec::new(),
                 succs: vec![to],
                 preds: vec![from],
-                params: args.clone(),
+                params: to_params,
                 succ_args: vec![args],
             };
             let edge_id = blocks.len();
@@ -559,7 +573,7 @@ impl AdapterFunction {
                 succ_args: b
                     .succ_args
                     .iter()
-                    .map(|args| args.iter().copied().map(int_vreg).collect())
+                    .map(|args| args.iter().map(|arg| int_vreg(arg.source)).collect())
                     .collect(),
             });
         }
