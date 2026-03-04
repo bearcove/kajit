@@ -579,45 +579,57 @@ impl EmitCtx {
         &mut self,
         sp_offset: u32,
         byte_val: u8,
-        label: DynamicLabel,
+        label: LabelId,
     ) {
         let byte_val = byte_val as u32;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldrb w9, [sp, #sp_offset]
-            ; cmp w9, #byte_val
-            ; b.eq =>label
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X9, Reg::SP, sp_offset).expect("ldrb"),
         );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, byte_val as u16, false)
+                .expect("cmp"),
+        );
+        self.emit.emit_b_cond_label(aarch64::Condition::Eq, label).expect("b.eq");
     }
 
     /// Set bit `bit_index` in a 64-bit stack slot at sp + sp_offset.
     pub fn emit_set_bit_on_stack(&mut self, sp_offset: u32, bit_index: u32) {
         let mask = 1u64 << bit_index;
-        let mask_lo = (mask & 0xFFFF) as u32;
-        let mask_hi = ((mask >> 16) & 0xFFFF) as u32;
+        let mask_lo = (mask & 0xFFFF) as u16;
+        let mask_hi = ((mask >> 16) & 0xFFFF) as u16;
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #sp_offset]
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset)
+                .expect("ldr"),
         );
 
         if mask <= 0xFFFF {
-            dynasm!(self.ops
-                ; .arch aarch64
-                ; movz x10, #mask_lo
+            self.emit.emit_word(
+                aarch64::encode_movz(aarch64::Width::X64, Reg::X10, mask_lo, 0).expect("movz"),
             );
         } else {
-            dynasm!(self.ops
-                ; .arch aarch64
-                ; movz x10, #mask_lo
-                ; movk x10, #mask_hi, LSL #16
+            self.emit.emit_word(
+                aarch64::encode_movz(aarch64::Width::X64, Reg::X10, mask_lo, 0).expect("movz"),
+            );
+            self.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, mask_hi, 16).expect("movk"),
             );
         }
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; orr x9, x9, x10
-            ; str x9, [sp, #sp_offset]
+        self.emit.emit_word(
+            aarch64::encode_orr_reg(
+                aarch64::Width::X64,
+                Reg::X9,
+                Reg::X9,
+                Reg::X10,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("orr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset)
+                .expect("str"),
         );
     }
 
@@ -625,42 +637,57 @@ impl EmitCtx {
     /// If not, set MissingRequiredField error and branch to error_exit.
     pub fn emit_check_bitset(&mut self, sp_offset: u32, expected_mask: u64) {
         let error_exit = self.error_exit;
-        let ok_label = self.ops.new_dynamic_label();
-        let mask_lo = (expected_mask & 0xFFFF) as u32;
-        let mask_hi = ((expected_mask >> 16) & 0xFFFF) as u32;
+        let ok_label = self.emit.new_label();
+        let mask_lo = (expected_mask & 0xFFFF) as u16;
+        let mask_hi = ((expected_mask >> 16) & 0xFFFF) as u16;
         let error_code = crate::context::ErrorCode::MissingRequiredField as u32;
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #sp_offset]
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset)
+                .expect("ldr"),
         );
 
         if expected_mask <= 0xFFFF {
-            dynasm!(self.ops
-                ; .arch aarch64
-                ; movz x10, #mask_lo
+            self.emit.emit_word(
+                aarch64::encode_movz(aarch64::Width::X64, Reg::X10, mask_lo, 0).expect("movz"),
             );
         } else {
-            dynasm!(self.ops
-                ; .arch aarch64
-                ; movz x10, #mask_lo
-                ; movk x10, #mask_hi, LSL #16
+            self.emit.emit_word(
+                aarch64::encode_movz(aarch64::Width::X64, Reg::X10, mask_lo, 0).expect("movz"),
+            );
+            self.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, mask_hi, 16).expect("movk"),
             );
         }
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            // Check that (bitset & mask) == mask — all required bits are set.
-            // Extra bits (from optional/default fields) are ignored.
-            ; and x11, x9, x10
-            ; cmp x11, x10
-            ; b.eq =>ok_label
-            // Not all required fields were seen — write error and bail
-            ; movz w9, #error_code
-            ; str w9, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
-            ; =>ok_label
+        // Check that (bitset & mask) == mask — all required bits are set.
+        // Extra bits (from optional/default fields) are ignored.
+        self.emit.emit_word(
+            aarch64::encode_and_reg(
+                aarch64::Width::X64,
+                Reg::X11,
+                Reg::X9,
+                Reg::X10,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("and"),
         );
+        self.emit
+            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X11, Reg::X10).expect("cmp"));
+        self.emit.emit_b_cond_label(aarch64::Condition::Eq, ok_label).expect("b.eq");
+
+        // Not all required fields were seen — write error and bail
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0)
+                .expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
+                .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
+        self.emit.bind_label(ok_label).expect("bind");
     }
 
     // ── Inline scalar reads (recipe-based) ─────────────────────────────
