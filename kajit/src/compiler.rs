@@ -1065,7 +1065,7 @@ fn compile_linear_ir_decoder_with_options(
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
         core::mem::transmute(buf.code_ptr().add(entry))
     };
-    let root_name = ir
+    let root_display_name = ir
         .ops
         .iter()
         .find_map(|op| match op {
@@ -1077,14 +1077,28 @@ fn compile_linear_ir_decoder_with_options(
             _ => None,
         })
         .unwrap_or_else(|| "kajit::decode::<ir-root>".to_string());
+    let root_mangled_name = ir
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            crate::linearize::LinearOp::FuncStart {
+                lambda_id, shape, ..
+            } if lambda_id.index() == 0 => Some(crate::jit_debug::rust_v0_mangle(&[
+                "kajit",
+                "decode",
+                shape.type_identifier,
+            ])),
+            _ => None,
+        })
+        .unwrap_or_else(|| crate::jit_debug::rust_v0_mangle(&["kajit", "decode", "ir_root"]));
     let symbol = crate::jit_debug::JitSymbolEntry {
-        name: root_name.clone(),
+        name: root_mangled_name,
         offset: entry,
         size: buf.len().saturating_sub(entry),
     };
     let registration = if jit_debug {
         let (listing, line_by_linear_op) = build_ra_mir_listing(&ra_mir);
-        let listing_path = write_ra_mir_listing_file(&root_name, &listing);
+        let listing_path = write_ra_mir_listing_file(&root_display_name, &listing);
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1130,15 +1144,16 @@ pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> C
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
         core::mem::transmute(buf.code_ptr().add(entry))
     };
-    let root_name = "kajit::decode::<ra-mir-text>";
+    let root_display_name = "kajit::decode::<ra-mir-text>";
+    let root_mangled_name = crate::jit_debug::rust_v0_mangle(&["kajit", "decode", "ra_mir_text"]);
     let symbol = crate::jit_debug::JitSymbolEntry {
-        name: root_name.to_string(),
+        name: root_mangled_name,
         offset: entry,
         size: buf.len().saturating_sub(entry),
     };
     let registration = if jit_debug {
         let (listing, line_by_linear_op) = build_ra_mir_listing(program);
-        let listing_path = write_ra_mir_listing_file(root_name, &listing);
+        let listing_path = write_ra_mir_listing_file(root_display_name, &listing);
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
