@@ -1,4 +1,5 @@
 use super::*;
+use kajit_emit::x64::{self, Mem};
 
 impl Lowerer {
     pub(super) fn emit_load_r10_from_allocation(&mut self, alloc: Allocation) {
@@ -10,13 +11,19 @@ impl Lowerer {
             );
             let enc = reg.hw_enc() as u8;
             if enc != 10 {
-                dynasm!(self.ectx.ops ; .arch x64 ; mov r10, Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_r64(10, enc, buf))
+                    .expect("mov");
             }
             return;
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot) as i32;
-            dynasm!(self.ectx.ops ; .arch x64 ; mov r10, [rsp + off]);
+            self.ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 4, disp: off }, buf))
+                .expect("mov");
             return;
         }
         panic!("unexpected none allocation for r10 load");
@@ -31,13 +38,19 @@ impl Lowerer {
             );
             let enc = reg.hw_enc() as u8;
             if enc != 10 {
-                dynasm!(self.ectx.ops ; .arch x64 ; mov Rq(enc), r10);
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_r64(enc, 10, buf))
+                    .expect("mov");
             }
             return;
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot) as i32;
-            dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r10);
+            self.ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: off }, 10, buf))
+                .expect("mov");
             return;
         }
         panic!("unexpected none allocation for r10 store");
@@ -63,7 +76,10 @@ impl Lowerer {
         );
         let from_enc = from.hw_enc() as u8;
         let to_enc = to.hw_enc() as u8;
-        dynasm!(self.ectx.ops ; .arch x64 ; mov Rq(to_enc), Rq(from_enc));
+        self.ectx
+            .emit
+            .emit_with(|buf| x64::encode_mov_r64_r64(to_enc, from_enc, buf))
+            .expect("mov");
     }
 
     pub(super) fn emit_capture_abi_ret_to_allocation(
@@ -79,7 +95,10 @@ impl Lowerer {
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot) as i32;
             let enc = abi_reg.hw_enc() as u8;
-            dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], Rq(enc));
+            self.ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: off }, enc, buf))
+                .expect("mov");
             return;
         }
         panic!("unexpected none allocation for ABI ret capture");
@@ -90,13 +109,19 @@ impl Lowerer {
         let rsp_adjust = (push_count as i32) * 8;
         if let Some(reg) = alloc.as_reg() {
             let enc = reg.hw_enc() as u8;
-            dynasm!(self.ectx.ops ; .arch x64 ; push Rq(enc));
+            self.ectx
+                .emit
+                .emit_with(|buf| x64::encode_push_r64(enc, buf))
+                .expect("push");
         } else if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot) as i32 + rsp_adjust;
-            dynasm!(self.ectx.ops ; .arch x64
-                ; mov r10, [rsp + off]
-                ; push r10
-            );
+            self.ectx
+                .emit
+                .emit_with(|buf| {
+                    x64::encode_mov_r64_m(10, Mem { base: 4, disp: off }, buf)?;
+                    x64::encode_push_r64(10, buf)
+                })
+                .expect("push arg");
         } else {
             panic!("unexpected none allocation for call arg");
         }
@@ -109,10 +134,13 @@ impl Lowerer {
             }
             IntrinsicArg::OutField(offset) => {
                 let off = offset as i32;
-                dynasm!(self.ectx.ops ; .arch x64
-                    ; lea r10, [r14 + off]
-                    ; push r10
-                );
+                self.ectx
+                    .emit
+                    .emit_with(|buf| {
+                        x64::encode_lea_r64_m(10, Mem { base: 14, disp: off }, buf)?;
+                        x64::encode_push_r64(10, buf)
+                    })
+                    .expect("outfield");
             }
         }
     }
