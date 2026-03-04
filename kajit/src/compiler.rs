@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use facet::{
     Def, EnumRepr, KnownPointer, OptionDef, PointerDef, ScalarType, Shape, StructKind, Type,
@@ -59,25 +60,173 @@ pub(crate) const DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED: bool = true;
 #[cfg(target_arch = "aarch64")]
 fn materialize_backend_result(
     result: crate::ir_backend::LinearBackendResult,
-) -> (kajit_emit::aarch64::FinalizedEmission, usize) {
+) -> (
+    kajit_emit::aarch64::FinalizedEmission,
+    usize,
+    Option<kajit_emit::SourceMap>,
+) {
     let crate::ir_backend::LinearBackendResult {
         buf,
         entry,
-        source_map: _,
+        source_map,
     } = result;
-    (buf, entry as usize)
+    (buf, entry as usize, source_map)
 }
 
 #[cfg(target_arch = "x86_64")]
 fn materialize_backend_result(
     result: crate::ir_backend::LinearBackendResult,
-) -> (kajit_emit::x64::FinalizedEmission, usize) {
+) -> (
+    kajit_emit::x64::FinalizedEmission,
+    usize,
+    Option<kajit_emit::SourceMap>,
+) {
     let crate::ir_backend::LinearBackendResult {
         buf,
         entry,
-        source_map: _,
+        source_map,
     } = result;
-    (buf, entry as usize)
+    (buf, entry as usize, source_map)
+}
+
+fn jit_debug_enabled() -> bool {
+    let Ok(raw) = std::env::var("KAJIT_DEBUG") else {
+        return false;
+    };
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn sanitize_debug_file_stem(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let out = out.trim_matches('_');
+    if out.is_empty() {
+        "jit".to_string()
+    } else {
+        out.to_string()
+    }
+}
+
+fn format_ra_terminator(term: &crate::regalloc_mir::RaTerminator) -> String {
+    match term {
+        crate::regalloc_mir::RaTerminator::Return => "return".to_string(),
+        crate::regalloc_mir::RaTerminator::ErrorExit { code } => format!("error_exit {code:?}"),
+        crate::regalloc_mir::RaTerminator::Branch { target } => format!("branch b{}", target.0),
+        crate::regalloc_mir::RaTerminator::BranchIf {
+            cond,
+            target,
+            fallthrough,
+        } => format!(
+            "branch_if v{} -> b{} else b{}",
+            cond.index(),
+            target.0,
+            fallthrough.0
+        ),
+        crate::regalloc_mir::RaTerminator::BranchIfZero {
+            cond,
+            target,
+            fallthrough,
+        } => format!(
+            "branch_if_zero v{} -> b{} else b{}",
+            cond.index(),
+            target.0,
+            fallthrough.0
+        ),
+        crate::regalloc_mir::RaTerminator::JumpTable {
+            predicate,
+            targets,
+            default,
+        } => {
+            let targets = targets
+                .iter()
+                .map(|target| format!("b{}", target.0))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "jump_table v{} [{}] default b{}",
+                predicate.index(),
+                targets,
+                default.0
+            )
+        }
+    }
+}
+
+fn build_ra_mir_listing(
+    program: &crate::regalloc_mir::RaProgram,
+) -> (String, HashMap<usize, u32>) {
+    let mut lines = Vec::new();
+    let mut line_by_linear_op = HashMap::<usize, u32>::new();
+    let mut next_line = 1u32;
+    for func in &program.funcs {
+        for block in &func.blocks {
+            for inst in &block.insts {
+                lines.push(format!("{:?}", inst.op));
+                line_by_linear_op.entry(inst.linear_op_index).or_insert(next_line);
+                next_line += 1;
+            }
+            if let Some(linear_op_index) = block.term_linear_op_index {
+                lines.push(format_ra_terminator(&block.term));
+                line_by_linear_op.entry(linear_op_index).or_insert(next_line);
+                next_line += 1;
+            }
+        }
+    }
+    let mut listing = lines.join("\n");
+    if !listing.is_empty() {
+        listing.push('\n');
+    }
+    (listing, line_by_linear_op)
+}
+
+fn write_ra_mir_listing_file(type_name: &str, listing: &str) -> Option<PathBuf> {
+    let stem = sanitize_debug_file_stem(type_name);
+    let dir = Path::new("/tmp/kajit-debug");
+    std::fs::create_dir_all(dir).ok()?;
+    let path = dir.join(format!("{stem}.ra-mir"));
+    std::fs::write(&path, listing).ok()?;
+    Some(path)
+}
+
+fn build_dwarf_from_source_map(
+    code_ptr: *const u8,
+    code_len: usize,
+    source_map: Option<&kajit_emit::SourceMap>,
+    listing_path: &Path,
+    line_by_linear_op: &HashMap<usize, u32>,
+) -> Option<crate::jit_dwarf::JitDwarfSections> {
+    let source_map = source_map?;
+    let mut dwarf_map = Vec::<(u32, u32)>::new();
+    for entry in source_map {
+        if entry.location.line == 0 {
+            continue;
+        }
+        let linear_op_index = (entry.location.line - 1) as usize;
+        let Some(&listing_line) = line_by_linear_op.get(&linear_op_index) else {
+            continue;
+        };
+        dwarf_map.push((entry.offset, listing_line.saturating_sub(1)));
+    }
+
+    let file_name = listing_path.file_name()?.to_str()?;
+    let directory = listing_path.parent().and_then(Path::to_str);
+    crate::jit_dwarf::build_jit_dwarf_sections(
+        code_ptr as u64,
+        code_len as u64,
+        &dwarf_map,
+        file_name,
+        directory,
+    )
+    .ok()
 }
 
 // r[impl compiler.walk]
@@ -897,6 +1046,8 @@ fn compile_linear_ir_decoder_with_options(
     trusted_utf8_input: bool,
     pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
+    let jit_debug = jit_debug_enabled();
+
     // r[impl ir.regalloc.ra-mir]
     // Build allocator-oriented CFG IR before machine emission.
     let ra_mir = crate::regalloc_mir::lower_linear_ir(ir);
@@ -906,7 +1057,7 @@ fn compile_linear_ir_decoder_with_options(
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
     maybe_disable_regalloc_edits(&mut regalloc_alloc, &pipeline_opts);
 
-    let (buf, entry) = {
+    let (buf, entry, source_map) = {
         let result =
             crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
         materialize_backend_result(result)
@@ -924,15 +1075,32 @@ fn compile_linear_ir_decoder_with_options(
             _ => None,
         })
         .unwrap_or_else(|| "fad::decode::<ir-root>".to_string());
-    let registration = crate::jit_debug::register_jit_code(
-        buf.code_ptr(),
-        buf.len(),
-        &[crate::jit_debug::JitSymbolEntry {
-            name: root_name,
-            offset: entry,
-            size: buf.len().saturating_sub(entry),
-        }],
-    );
+    let symbol = crate::jit_debug::JitSymbolEntry {
+        name: root_name.clone(),
+        offset: entry,
+        size: buf.len().saturating_sub(entry),
+    };
+    let registration = if jit_debug {
+        let (listing, line_by_linear_op) = build_ra_mir_listing(&ra_mir);
+        let listing_path = write_ra_mir_listing_file(&root_name, &listing);
+        let dwarf = listing_path.as_deref().and_then(|path| {
+            build_dwarf_from_source_map(
+                buf.code_ptr(),
+                buf.len(),
+                source_map.as_ref(),
+                path,
+                &line_by_linear_op,
+            )
+        });
+        crate::jit_debug::register_jit_code_with_dwarf(
+            buf.code_ptr(),
+            buf.len(),
+            &[symbol],
+            dwarf.as_ref(),
+        )
+    } else {
+        crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
+    };
 
     CompiledDecoder {
         buf,
@@ -947,26 +1115,46 @@ fn compile_linear_ir_decoder_with_options(
 ///
 /// This is the backend for the RA-MIR text test workflow.
 pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
+    let jit_debug = jit_debug_enabled();
+
     let mut alloc = crate::regalloc_engine::allocate_program(program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
     maybe_disable_regalloc_edits(&mut alloc, &PipelineOptions::from_env());
 
-    let (buf, entry) = {
+    let (buf, entry, source_map) = {
         let result = crate::ir_backend::compile_ra_program(program, &alloc);
         materialize_backend_result(result)
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
         core::mem::transmute(buf.code_ptr().add(entry))
     };
-    let registration = crate::jit_debug::register_jit_code(
-        buf.code_ptr(),
-        buf.len(),
-        &[crate::jit_debug::JitSymbolEntry {
-            name: "fad::decode::<ra-mir-text>".to_string(),
-            offset: entry,
-            size: buf.len().saturating_sub(entry),
-        }],
-    );
+    let root_name = "fad::decode::<ra-mir-text>";
+    let symbol = crate::jit_debug::JitSymbolEntry {
+        name: root_name.to_string(),
+        offset: entry,
+        size: buf.len().saturating_sub(entry),
+    };
+    let registration = if jit_debug {
+        let (listing, line_by_linear_op) = build_ra_mir_listing(program);
+        let listing_path = write_ra_mir_listing_file(root_name, &listing);
+        let dwarf = listing_path.as_deref().and_then(|path| {
+            build_dwarf_from_source_map(
+                buf.code_ptr(),
+                buf.len(),
+                source_map.as_ref(),
+                path,
+                &line_by_linear_op,
+            )
+        });
+        crate::jit_debug::register_jit_code_with_dwarf(
+            buf.code_ptr(),
+            buf.len(),
+            &[symbol],
+            dwarf.as_ref(),
+        )
+    } else {
+        crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
+    };
 
     CompiledDecoder {
         buf,
@@ -974,5 +1162,52 @@ pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> C
         func,
         trusted_utf8_input: false,
         _jit_registration: Some(registration),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_dwarf_sections_from_source_map_lines() {
+        let mut line_by_linear_op = HashMap::new();
+        line_by_linear_op.insert(0usize, 1u32);
+        line_by_linear_op.insert(3usize, 2u32);
+
+        let source_map = vec![
+            kajit_emit::SourceMapEntry {
+                offset: 0,
+                location: kajit_emit::SourceLocation {
+                    file: 0,
+                    line: 1,
+                    column: 1,
+                },
+            },
+            kajit_emit::SourceMapEntry {
+                offset: 8,
+                location: kajit_emit::SourceLocation {
+                    file: 0,
+                    line: 4,
+                    column: 1,
+                },
+            },
+        ];
+
+        let listing_path = std::env::temp_dir()
+            .join(format!("kajit-debug-test-{}", std::process::id()))
+            .join("sample.ra-mir");
+        std::fs::create_dir_all(listing_path.parent().expect("temp listing dir")).unwrap();
+        std::fs::write(&listing_path, "inst0\ninst1\n").unwrap();
+
+        let dwarf = build_dwarf_from_source_map(
+            0x1000 as *const u8,
+            32,
+            Some(&source_map),
+            &listing_path,
+            &line_by_linear_op,
+        )
+        .expect("expected dwarf sections");
+        assert!(!dwarf.debug_line.is_empty());
     }
 }
