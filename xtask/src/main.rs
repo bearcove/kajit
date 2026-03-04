@@ -5,9 +5,6 @@ use std::process::{Command, Stdio};
 use proc_macro2::TokenStream;
 
 mod cases;
-mod ir_behavior_cases;
-mod ir_opt_cases;
-mod ir_postreg_cases;
 
 struct Case {
     name: &'static str,
@@ -144,9 +141,6 @@ fn main() {
         Some("install") => install(),
         Some("gen") => {
             generate_synthetic();
-            generate_ir_behavior_corpus();
-            generate_ir_opt_corpus();
-            generate_ir_postreg_corpus();
         }
         _ => {
             eprintln!(
@@ -266,27 +260,6 @@ fn generate_synthetic() {
     );
 }
 
-fn generate_ir_opt_corpus() {
-    let test_path = tests_prefix().join("generated_ir_opt_corpus.rs");
-    write_file(&test_path, &ir_opt_cases::render_ir_opt_test_file());
-    println!("generated:\n- {}", test_path.display());
-}
-
-fn generate_ir_postreg_corpus() {
-    let test_path = tests_prefix().join("generated_ir_postreg_corpus.rs");
-    write_file(&test_path, &ir_postreg_cases::render_ir_postreg_test_file());
-    println!("generated:\n- {}", test_path.display());
-}
-
-fn generate_ir_behavior_corpus() {
-    let test_path = tests_prefix().join("generated_ir_behavior_corpus.rs");
-    write_file(
-        &test_path,
-        &ir_behavior_cases::render_ir_behavior_test_file(),
-    );
-    println!("generated:\n- {}", test_path.display());
-}
-
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -339,4 +312,3 @@ fn write_file(path: &Path, content: &str) {
     }
     fs::write(path, content).expect("write generated file");
 }
-

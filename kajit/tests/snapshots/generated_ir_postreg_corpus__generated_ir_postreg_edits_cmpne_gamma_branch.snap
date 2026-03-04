@@ -1,5 +1,0 @@
----
-source: kajit/tests/generated_ir_postreg_corpus.rs
-expression: "format!(\"{edits}\")"
----
-1

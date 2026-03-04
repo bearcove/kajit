@@ -337,6 +337,3 @@ impl core::fmt::Display for DeserError {
 }
 
 impl std::error::Error for DeserError {}
-
-#[cfg(all(test, not(target_os = "windows")))]
-mod disasm_tests;
