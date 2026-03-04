@@ -12,13 +12,13 @@
 //! `settings set plugin.jit-loader.gdb.enable on`
 //!
 //! This module emits a minimal JIT ELF (`.text` + symbol table). Symbol names
-//! are available (for example `fad::decode::...`), but `thread backtrace` may
+//! are available (for example `kajit::decode::...`), but `thread backtrace` may
 //! still show raw PCs for top JIT frames. Use explicit lookup when debugging:
 //!
 //! - `image list` (confirm a `JIT(...)` image is loaded)
 //! - `image lookup -a <pc>` (resolve the crashing JIT PC)
-//! - `image lookup -rn 'fad::decode::'` (list registered decode symbols)
-//! - `image lookup -rn 'fad::encode::'` (list registered encode symbols)
+//! - `image lookup -rn 'kajit::decode::'` (list registered decode symbols)
+//! - `image lookup -rn 'kajit::encode::'` (list registered encode symbols)
 
 use std::io::Write;
 use std::sync::Mutex;
