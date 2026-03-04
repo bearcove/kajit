@@ -2,7 +2,7 @@
 //!
 //! This module adapts `regalloc_mir::RaProgram` to `regalloc2::Function`.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use regalloc2::{
@@ -45,6 +45,7 @@ pub struct AllocatedProgram {
 pub enum RegallocEngineError {
     Regalloc(RegAllocError),
     Checker(String),
+    StaticVerifier(String),
 }
 
 impl fmt::Display for RegallocEngineError {
@@ -52,6 +53,7 @@ impl fmt::Display for RegallocEngineError {
         match self {
             Self::Regalloc(err) => write!(f, "{err}"),
             Self::Checker(msg) => write!(f, "{msg}"),
+            Self::StaticVerifier(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -745,6 +747,109 @@ fn allocate_ra_function(
     Ok(materialize_output(&out, &adapter, func.lambda_id))
 }
 
+fn verify_allocation_is_valid(
+    alloc: Allocation,
+    num_spillslots: usize,
+    field: &str,
+    edge_label: &str,
+) -> Result<(), RegallocEngineError> {
+    if alloc.is_reg() {
+        return Ok(());
+    }
+    if let Some(slot) = alloc.as_stack() {
+        if slot.index() < num_spillslots {
+            return Ok(());
+        }
+        return Err(RegallocEngineError::StaticVerifier(format!(
+            "{edge_label}: invalid {field} allocation {alloc:?} (spillslot {} out of range, num_spillslots={num_spillslots})",
+            slot.index()
+        )));
+    }
+    Err(RegallocEngineError::StaticVerifier(format!(
+        "{edge_label}: invalid {field} allocation kind {alloc:?}"
+    )))
+}
+
+fn verify_function_static_edge_edits(func: &AllocatedFunction) -> Result<(), RegallocEngineError> {
+    let scratch_regs: HashSet<PReg> = machine_env()
+        .scratch_by_class
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let mut by_edge = BTreeMap::<(usize, usize), Vec<&EdgeEdit>>::new();
+    for edge in &func.edge_edits {
+        by_edge
+            .entry((edge.from_linear_op_index, edge.succ_index))
+            .or_default()
+            .push(edge);
+    }
+
+    for ((from_linear_op_index, succ_index), edits) in by_edge {
+        let edge_label = format!(
+            "lambda @{} edge (lin={from_linear_op_index}, succ={succ_index})",
+            func.lambda_id.index()
+        );
+
+        let mut destinations = HashSet::<Allocation>::new();
+        for edit in &edits {
+            verify_allocation_is_valid(edit.from, func.num_spillslots, "source", &edge_label)?;
+            verify_allocation_is_valid(edit.to, func.num_spillslots, "target", &edge_label)?;
+
+            if !destinations.insert(edit.to) {
+                return Err(RegallocEngineError::StaticVerifier(format!(
+                    "{edge_label}: multiple edits write to the same destination {:#?}",
+                    edit.to
+                )));
+            }
+        }
+
+        // Static ordering check: if an edit writes a register that a later edit
+        // reads before any intervening write, this likely clobbers a still-live
+        // source value. Exempt dedicated scratch registers.
+        for (idx, edit) in edits.iter().enumerate() {
+            let Some(dst_reg) = edit.to.as_reg() else {
+                continue;
+            };
+            if scratch_regs.contains(&dst_reg) {
+                continue;
+            }
+
+            let mut next_read = None;
+            let mut overwritten = false;
+            for (later_idx, later) in edits.iter().enumerate().skip(idx + 1) {
+                if later.to == edit.to {
+                    overwritten = true;
+                    break;
+                }
+                if later.from == edit.to {
+                    next_read = Some(later_idx);
+                    break;
+                }
+            }
+
+            if overwritten {
+                continue;
+            }
+            if let Some(later_idx) = next_read {
+                return Err(RegallocEngineError::StaticVerifier(format!(
+                    "{edge_label}: edit #{idx} writes {:?} before later edit #{later_idx} reads it (possible clobber of still-live source)",
+                    edit.to
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn verify_static_edge_edits(program: &AllocatedProgram) -> Result<(), RegallocEngineError> {
+    for func in &program.functions {
+        verify_function_static_edge_edits(func)?;
+    }
+    Ok(())
+}
+
 // r[impl ir.regalloc.engine]
 pub fn allocate_program(program: &RaProgram) -> Result<AllocatedProgram, RegallocEngineError> {
     let env = machine_env();
@@ -763,7 +868,12 @@ pub fn allocate_program(program: &RaProgram) -> Result<AllocatedProgram, Regallo
             &options,
         )?);
     }
-    Ok(AllocatedProgram { functions })
+    let allocated = AllocatedProgram { functions };
+
+    #[cfg(debug_assertions)]
+    verify_static_edge_edits(&allocated)?;
+
+    Ok(allocated)
 }
 
 /// Run regalloc2 on linear IR by first lowering to RA-MIR.
@@ -995,5 +1105,85 @@ lambda @0 (shape: "u8") {
         let mut checker = regalloc2::checker::Checker::new(&adapter, &env);
         checker.prepare(&out);
         let _ = checker.run();
+    }
+
+    #[test]
+    fn static_edge_edit_verifier_accepts_allocated_program() {
+        let mut func = build_stress_ir();
+        run_default_passes(&mut func);
+        let lin = linearize(&mut func);
+        let alloc = allocate_linear_ir(&lin).expect("allocation should succeed");
+        verify_static_edge_edits(&alloc).expect("static verifier should accept allocator output");
+    }
+
+    #[test]
+    fn static_edge_edit_verifier_rejects_duplicate_dest_and_clobber() {
+        let edge_key_linear = 42usize;
+        let edge_key_succ = 0usize;
+        let bad = AllocatedProgram {
+            functions: vec![AllocatedFunction {
+                lambda_id: LambdaId::new(0),
+                num_spillslots: 2,
+                edits: Vec::new(),
+                inst_allocs: Vec::new(),
+                inst_linear_op_indices: Vec::new(),
+                edge_edits: vec![
+                    EdgeEdit {
+                        from_linear_op_index: edge_key_linear,
+                        succ_index: edge_key_succ,
+                        pos: regalloc2::InstPosition::After,
+                        from: Allocation::reg(preg_int(0)),
+                        to: Allocation::reg(preg_int(1)),
+                    },
+                    EdgeEdit {
+                        from_linear_op_index: edge_key_linear,
+                        succ_index: edge_key_succ,
+                        pos: regalloc2::InstPosition::After,
+                        from: Allocation::reg(preg_int(2)),
+                        to: Allocation::reg(preg_int(1)),
+                    },
+                ],
+                return_result_allocs: Vec::new(),
+            }],
+        };
+        let err = verify_static_edge_edits(&bad).expect_err("duplicate destination must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("multiple edits write to the same destination"),
+            "unexpected verifier error: {msg}"
+        );
+
+        let clobber = AllocatedProgram {
+            functions: vec![AllocatedFunction {
+                lambda_id: LambdaId::new(0),
+                num_spillslots: 2,
+                edits: Vec::new(),
+                inst_allocs: Vec::new(),
+                inst_linear_op_indices: Vec::new(),
+                edge_edits: vec![
+                    EdgeEdit {
+                        from_linear_op_index: edge_key_linear,
+                        succ_index: edge_key_succ,
+                        pos: regalloc2::InstPosition::After,
+                        from: Allocation::reg(preg_int(0)),
+                        to: Allocation::reg(preg_int(1)),
+                    },
+                    EdgeEdit {
+                        from_linear_op_index: edge_key_linear,
+                        succ_index: edge_key_succ,
+                        pos: regalloc2::InstPosition::After,
+                        from: Allocation::reg(preg_int(1)),
+                        to: Allocation::reg(preg_int(2)),
+                    },
+                ],
+                return_result_allocs: Vec::new(),
+            }],
+        };
+        let err = verify_static_edge_edits(&clobber).expect_err("clobbering order must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("possible clobber of still-live source"),
+            "unexpected verifier error: {msg}"
+        );
     }
 }
