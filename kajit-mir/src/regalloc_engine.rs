@@ -33,6 +33,7 @@ pub struct AllocatedFunction {
     pub edits: Vec<(regalloc2::ProgPoint, Edit)>,
     pub inst_allocs: Vec<Vec<Allocation>>,
     pub inst_linear_op_indices: Vec<Option<usize>>,
+    pub term_inst_indices_by_block: Vec<Option<usize>>,
     pub edge_edits: Vec<EdgeEdit>,
     pub return_result_allocs: Vec<Allocation>,
 }
@@ -694,6 +695,7 @@ fn materialize_output(
     out: &Output,
     adapter: &AdapterFunction,
     lambda_id: LambdaId,
+    original_block_count: usize,
 ) -> AllocatedFunction {
     let mut inst_allocs = Vec::with_capacity(adapter.insts.len());
     for i in 0..adapter.insts.len() {
@@ -742,12 +744,17 @@ fn materialize_output(
             to: *to,
         });
     }
+    let mut term_inst_indices_by_block = vec![None; original_block_count];
+    for block_idx in 0..original_block_count.min(adapter.blocks.len()) {
+        term_inst_indices_by_block[block_idx] = Some(adapter.blocks[block_idx].inst_range.last().index());
+    }
     AllocatedFunction {
         lambda_id,
         num_spillslots: out.num_spillslots,
         edits: out.edits.clone(),
         inst_allocs,
         inst_linear_op_indices: adapter.inst_linear_op_indices.clone(),
+        term_inst_indices_by_block,
         edge_edits,
         return_result_allocs,
     }
@@ -772,7 +779,12 @@ fn allocate_ra_function(
             .map_err(|errs| RegallocEngineError::Checker(format!("{errs:?}")))?;
     }
 
-    Ok(materialize_output(&out, &adapter, func.lambda_id))
+    Ok(materialize_output(
+        &out,
+        &adapter,
+        func.lambda_id,
+        func.blocks.len(),
+    ))
 }
 
 fn verify_allocation_is_valid(
@@ -1679,8 +1691,11 @@ pub fn simulate_execution(
         }
 
         let term_linear = block.term_linear_op_index;
-        let term_inst_idx =
-            term_linear.and_then(|linear| inst_index_by_linear.get(&linear).copied());
+        let term_inst_idx = alloc_func
+            .term_inst_indices_by_block
+            .get(block.id.0 as usize)
+            .copied()
+            .flatten();
 
         if let Some(term_inst_idx) = term_inst_idx
             && let Some(edits) =
@@ -1966,8 +1981,11 @@ pub fn simulate_execution_trace(
         }
 
         let term_linear = block.term_linear_op_index;
-        let term_inst_idx =
-            term_linear.and_then(|linear| inst_index_by_linear.get(&linear).copied());
+        let term_inst_idx = alloc_func
+            .term_inst_indices_by_block
+            .get(block.id.0 as usize)
+            .copied()
+            .flatten();
 
         if let Some(term_inst_idx) = term_inst_idx
             && let Some(edits) =
@@ -2562,6 +2580,7 @@ lambda @0 (shape: "u8") {
                 edits: Vec::new(),
                 inst_allocs: Vec::new(),
                 inst_linear_op_indices: Vec::new(),
+                term_inst_indices_by_block: Vec::new(),
                 edge_edits: vec![
                     EdgeEdit {
                         from_linear_op_index: edge_key_linear,
@@ -2600,6 +2619,7 @@ lambda @0 (shape: "u8") {
                 edits: Vec::new(),
                 inst_allocs: Vec::new(),
                 inst_linear_op_indices: Vec::new(),
+                term_inst_indices_by_block: Vec::new(),
                 edge_edits: vec![
                     EdgeEdit {
                         from_linear_op_index: edge_key_linear,
