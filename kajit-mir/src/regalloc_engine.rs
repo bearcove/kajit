@@ -403,7 +403,9 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 succ_args: b
                     .succs
                     .iter()
-                    .map(|s| align_succ_args_to_target(&func.blocks[s.to.index()].params, &s.args))
+                    .map(|s| {
+                        align_succ_args_to_target(&func.blocks[s.to.0 as usize].params, &s.args)
+                    })
                     .collect(),
             }
         })
