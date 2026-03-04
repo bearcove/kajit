@@ -13,6 +13,7 @@ pub mod backends;
 pub mod ir_parse;
 pub mod ir_passes;
 pub mod jit_debug;
+pub mod jit_dwarf;
 pub mod jit_f64;
 pub mod json;
 pub mod json_intrinsics;
