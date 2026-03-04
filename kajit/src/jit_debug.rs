@@ -126,7 +126,20 @@ pub fn register_jit_code(
     buf_len: usize,
     symbols: &[JitSymbolEntry],
 ) -> JitRegistration {
-    let elf = build_elf(buf_base as u64, buf_len, symbols);
+    register_jit_code_with_dwarf(buf_base, buf_len, symbols, None)
+}
+
+/// Register JIT-compiled code with optional DWARF sections.
+///
+/// Existing call sites can keep using `register_jit_code`; this is the
+/// preparatory API for attaching `.debug_line` payloads later.
+pub fn register_jit_code_with_dwarf(
+    buf_base: *const u8,
+    buf_len: usize,
+    symbols: &[JitSymbolEntry],
+    dwarf: Option<&crate::jit_dwarf::JitDwarfSections>,
+) -> JitRegistration {
+    let elf = build_elf(buf_base as u64, buf_len, symbols, dwarf);
 
     let entry = Box::into_raw(Box::new(JitCodeEntry {
         next: std::ptr::null_mut(),
@@ -195,7 +208,6 @@ const STT_FUNC: u8 = 2;
 const EHDR_SIZE: usize = 64;
 const SHDR_SIZE: usize = 64;
 const SYM_SIZE: usize = 24;
-const NUM_SECTIONS: usize = 5; // null, .text, .symtab, .strtab, .shstrtab
 
 #[cfg(target_arch = "x86_64")]
 const EM_MACHINE: u16 = 0x3E; // EM_X86_64
@@ -206,7 +218,24 @@ const EM_MACHINE: u16 = 0xB7; // EM_AARCH64
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
 const EM_MACHINE: u16 = 0;
 
-fn build_elf(text_addr: u64, text_len: usize, symbols: &[JitSymbolEntry]) -> Vec<u8> {
+struct ExtraSection<'a> {
+    name: &'a str,
+    sh_type: u32,
+    sh_flags: u64,
+    sh_addr: u64,
+    sh_link: u32,
+    sh_info: u32,
+    sh_addralign: u64,
+    sh_entsize: u64,
+    data: &'a [u8],
+}
+
+fn build_elf(
+    text_addr: u64,
+    text_len: usize,
+    symbols: &[JitSymbolEntry],
+    dwarf: Option<&crate::jit_dwarf::JitDwarfSections>,
+) -> Vec<u8> {
     // Build .strtab (symbol name strings)
     let mut strtab = vec![0u8]; // index 0 = empty string
     let mut name_offsets = Vec::with_capacity(symbols.len());
@@ -215,18 +244,6 @@ fn build_elf(text_addr: u64, text_len: usize, symbols: &[JitSymbolEntry]) -> Vec
         strtab.extend_from_slice(sym.name.as_bytes());
         strtab.push(0);
     }
-
-    // Build .shstrtab (section name strings)
-    let mut shstrtab = vec![0u8];
-    let sh_name_null = 0u32;
-    let sh_name_text = shstrtab.len() as u32;
-    shstrtab.extend_from_slice(b".text\0");
-    let sh_name_symtab = shstrtab.len() as u32;
-    shstrtab.extend_from_slice(b".symtab\0");
-    let sh_name_strtab = shstrtab.len() as u32;
-    shstrtab.extend_from_slice(b".strtab\0");
-    let sh_name_shstrtab = shstrtab.len() as u32;
-    shstrtab.extend_from_slice(b".shstrtab\0");
 
     // Build .symtab
     // Entry 0: null symbol
@@ -251,12 +268,82 @@ fn build_elf(text_addr: u64, text_len: usize, symbols: &[JitSymbolEntry]) -> Vec
         symtab.extend_from_slice(&(sym.size as u64).to_le_bytes());
     }
 
-    // Layout: ELF header | section headers | .symtab | .strtab | .shstrtab
+    let mut extras = Vec::<ExtraSection<'_>>::new();
+    if let Some(dwarf) = dwarf {
+        if !dwarf.debug_line.is_empty() {
+            extras.push(ExtraSection {
+                name: ".debug_line",
+                sh_type: SHT_PROGBITS,
+                sh_flags: 0,
+                sh_addr: 0,
+                sh_link: 0,
+                sh_info: 0,
+                sh_addralign: 1,
+                sh_entsize: 0,
+                data: &dwarf.debug_line,
+            });
+        }
+        if !dwarf.debug_str.is_empty() {
+            extras.push(ExtraSection {
+                name: ".debug_str",
+                sh_type: SHT_STRTAB,
+                sh_flags: 0,
+                sh_addr: 0,
+                sh_link: 0,
+                sh_info: 0,
+                sh_addralign: 1,
+                sh_entsize: 0,
+                data: &dwarf.debug_str,
+            });
+        }
+        if !dwarf.debug_line_str.is_empty() {
+            extras.push(ExtraSection {
+                name: ".debug_line_str",
+                sh_type: SHT_STRTAB,
+                sh_flags: 0,
+                sh_addr: 0,
+                sh_link: 0,
+                sh_info: 0,
+                sh_addralign: 1,
+                sh_entsize: 0,
+                data: &dwarf.debug_line_str,
+            });
+        }
+    }
+
+    // Build .shstrtab (section name strings)
+    let mut shstrtab = vec![0u8];
+    let sh_name_null = 0u32;
+    let sh_name_text = shstrtab.len() as u32;
+    shstrtab.extend_from_slice(b".text\0");
+    let sh_name_symtab = shstrtab.len() as u32;
+    shstrtab.extend_from_slice(b".symtab\0");
+    let sh_name_strtab = shstrtab.len() as u32;
+    shstrtab.extend_from_slice(b".strtab\0");
+    let mut extra_name_offsets = Vec::with_capacity(extras.len());
+    for extra in &extras {
+        let off = shstrtab.len() as u32;
+        shstrtab.extend_from_slice(extra.name.as_bytes());
+        shstrtab.push(0);
+        extra_name_offsets.push(off);
+    }
+    let sh_name_shstrtab = shstrtab.len() as u32;
+    shstrtab.extend_from_slice(b".shstrtab\0");
+
+    // Layout: ELF header | section headers | section data blobs
+    let num_sections = 5 + extras.len(); // null, .text, .symtab, .strtab, extras..., .shstrtab
+    let shstrtab_index = 4 + extras.len();
     let shdr_offset = EHDR_SIZE;
-    let data_offset = EHDR_SIZE + NUM_SECTIONS * SHDR_SIZE;
+    let data_offset = EHDR_SIZE + num_sections * SHDR_SIZE;
     let symtab_off = data_offset;
     let strtab_off = symtab_off + symtab.len();
-    let shstrtab_off = strtab_off + strtab.len();
+    let mut extra_offsets = Vec::with_capacity(extras.len());
+    let mut cursor = strtab_off + strtab.len();
+    for extra in &extras {
+        extra_offsets.push(cursor);
+        cursor += extra.data.len();
+    }
+    let shstrtab_off = cursor;
     let total_size = shstrtab_off + shstrtab.len();
 
     let mut elf = Vec::with_capacity(total_size);
@@ -278,8 +365,8 @@ fn build_elf(text_addr: u64, text_len: usize, symbols: &[JitSymbolEntry]) -> Vec
     elf.extend_from_slice(&0u16.to_le_bytes()); // e_phentsize
     elf.extend_from_slice(&0u16.to_le_bytes()); // e_phnum
     elf.extend_from_slice(&(SHDR_SIZE as u16).to_le_bytes()); // e_shentsize
-    elf.extend_from_slice(&(NUM_SECTIONS as u16).to_le_bytes()); // e_shnum
-    elf.extend_from_slice(&4u16.to_le_bytes()); // e_shstrndx (index of .shstrtab)
+    elf.extend_from_slice(&(num_sections as u16).to_le_bytes()); // e_shnum
+    elf.extend_from_slice(&(shstrtab_index as u16).to_le_bytes()); // e_shstrndx (index of .shstrtab)
     debug_assert_eq!(elf.len(), EHDR_SIZE);
 
     // ----- Section headers -----
@@ -332,6 +419,22 @@ fn build_elf(text_addr: u64, text_len: usize, symbols: &[JitSymbolEntry]) -> Vec
         0,
     );
 
+    for (index, extra) in extras.iter().enumerate() {
+        write_shdr(
+            &mut elf,
+            extra_name_offsets[index],
+            extra.sh_type,
+            extra.sh_flags,
+            extra.sh_addr,
+            extra_offsets[index] as u64,
+            extra.data.len() as u64,
+            extra.sh_link,
+            extra.sh_info,
+            extra.sh_addralign,
+            extra.sh_entsize,
+        );
+    }
+
     // [4] .shstrtab
     write_shdr(
         &mut elf,
@@ -352,6 +455,9 @@ fn build_elf(text_addr: u64, text_len: usize, symbols: &[JitSymbolEntry]) -> Vec
     // ----- Section data -----
     elf.extend_from_slice(&symtab);
     elf.extend_from_slice(&strtab);
+    for extra in &extras {
+        elf.extend_from_slice(extra.data);
+    }
     elf.extend_from_slice(&shstrtab);
 
     debug_assert_eq!(elf.len(), total_size);
@@ -382,4 +488,89 @@ fn write_shdr(
     buf.extend_from_slice(&sh_info.to_le_bytes());
     buf.extend_from_slice(&sh_addralign.to_le_bytes());
     buf.extend_from_slice(&sh_entsize.to_le_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+        u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+    }
+
+    fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+        u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+    }
+
+    fn read_section_names(elf: &[u8]) -> Vec<String> {
+        let shoff = read_u64(elf, 40) as usize;
+        let shentsize = read_u16(elf, 58) as usize;
+        let shnum = read_u16(elf, 60) as usize;
+        let shstrndx = read_u16(elf, 62) as usize;
+
+        let shstr_off = read_u64(elf, shoff + shstrndx * shentsize + 24) as usize;
+        let shstr_size = read_u64(elf, shoff + shstrndx * shentsize + 32) as usize;
+        let shstr = &elf[shstr_off..shstr_off + shstr_size];
+
+        (0..shnum)
+            .map(|index| {
+                let sh_name = read_u32(elf, shoff + index * shentsize) as usize;
+                if sh_name == 0 {
+                    return String::new();
+                }
+                let tail = &shstr[sh_name..];
+                let end = tail.iter().position(|b| *b == 0).unwrap();
+                String::from_utf8(tail[..end].to_vec()).unwrap()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn elf_without_dwarf_sections_keeps_base_layout() {
+        let elf = build_elf(
+            0x1000,
+            32,
+            &[JitSymbolEntry {
+                name: "jit::root".to_string(),
+                offset: 0,
+                size: 32,
+            }],
+            None,
+        );
+        let names = read_section_names(&elf);
+        assert!(names.contains(&".text".to_string()));
+        assert!(names.contains(&".symtab".to_string()));
+        assert!(names.contains(&".strtab".to_string()));
+        assert!(!names.contains(&".debug_line".to_string()));
+    }
+
+    #[test]
+    fn elf_with_dwarf_sections_contains_debug_line() {
+        let dwarf = crate::jit_dwarf::build_jit_dwarf_sections(
+            0x2000,
+            16,
+            &[(0, 0), (4, 1)],
+            "decoder.ra",
+            Some("jit"),
+        )
+        .unwrap();
+
+        let elf = build_elf(
+            0x2000,
+            16,
+            &[JitSymbolEntry {
+                name: "jit::root".to_string(),
+                offset: 0,
+                size: 16,
+            }],
+            Some(&dwarf),
+        );
+
+        let names = read_section_names(&elf);
+        assert!(names.contains(&".debug_line".to_string()));
+    }
 }
