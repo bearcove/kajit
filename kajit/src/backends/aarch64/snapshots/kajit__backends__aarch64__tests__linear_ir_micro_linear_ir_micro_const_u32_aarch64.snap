@@ -1,5 +1,5 @@
 ---
-source: kajit/src/ir_backend_aarch64.rs
+source: kajit/src/backends/aarch64/mod.rs
 expression: out
 ---
 > sub sp, sp, #0x40

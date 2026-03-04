@@ -8,8 +8,8 @@ pub mod format;
 pub mod intrinsics;
 pub mod ir;
 pub mod ir_backend;
-#[cfg(target_arch = "aarch64")]
-pub mod ir_backend_aarch64;
+pub mod backends;
+
 #[cfg(target_arch = "x86_64")]
 pub mod ir_backend_x64;
 pub mod ir_parse;

@@ -36,8 +36,8 @@ pub fn compile_linear_ir_with_alloc(
 
     #[cfg(target_arch = "aarch64")]
     {
-        let _ = ra_mir; // aarch64 backend still uses flat LinearIr
-        crate::ir_backend_aarch64::compile(ir, max_spillslots, alloc)
+        let _ = (ir, max_spillslots); // aarch64 backend reads from ra_mir directly
+        crate::backends::aarch64::compile(ra_mir, alloc)
     }
 }
 
@@ -54,9 +54,6 @@ pub fn compile_ra_program(ra_mir: &RaProgram, alloc: &AllocatedProgram) -> Linea
 
     #[cfg(target_arch = "aarch64")]
     {
-        let _ = (ra_mir, alloc);
-        panic!(
-            "compile_ra_program is not yet supported on aarch64 (backend needs refactoring to consume RaProgram directly)"
-        )
+        crate::backends::aarch64::compile(ra_mir, alloc)
     }
 }

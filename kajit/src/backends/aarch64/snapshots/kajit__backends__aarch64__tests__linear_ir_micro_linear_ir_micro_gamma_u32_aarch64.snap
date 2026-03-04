@@ -1,5 +1,5 @@
 ---
-source: kajit/src/ir_backend_aarch64.rs
+source: kajit/src/backends/aarch64/mod.rs
 expression: out
 ---
 > sub sp, sp, #0x40
@@ -13,16 +13,17 @@ expression: out
   ldr x20, [x22, #0x8]
   mov x9, #<imm>
   mov x11, x9
-  cbnz x11, $+0x18
+  b $+0x18
   mov x9, #<imm>
   mov x11, x9
   mov x9, x11
   str w9, [x21]
-  b $+0x14
+  b $+0x18
   mov x9, #<imm>
   mov x11, x9
   mov x9, x11
   str w9, [x21]
+  b $+0x4
   str x19, [x22]
   ldp x21, x22, [sp, #0x20]
   ldp x19, x20, [sp, #0x10]
