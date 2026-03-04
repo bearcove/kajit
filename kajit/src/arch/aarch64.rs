@@ -1436,9 +1436,8 @@ impl EmitCtx {
 
     /// Advance the cached cursor by n bytes (inline, no function call).
     pub fn emit_advance_cursor_by(&mut self, n: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; add x19, x19, #n
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, n as u16, false).expect("add"),
         );
     }
 
@@ -1457,43 +1456,65 @@ impl EmitCtx {
         let err_code = error_code as u32;
         let expected = expected as u32;
 
-        let ws_loop = self.ops.new_dynamic_label();
-        let non_ws = self.ops.new_dynamic_label();
-        let done = self.ops.new_dynamic_label();
-        let err_lbl = self.ops.new_dynamic_label();
+        let ws_loop = self.emit.new_label();
+        let non_ws = self.emit.new_label();
+        let done = self.emit.new_label();
+        let err_lbl = self.emit.new_label();
 
-        dynasm!(self.ops ; .arch aarch64
-            // ── whitespace-skip loop ────────────────────────────────────
-            ; =>ws_loop
-            ; cmp  x19, x20
-            ; b.hs =>err_lbl          // EOF → error
-            ; ldrb w10, [x19]         // raw byte → w10
-            ; sub  w9, w10, #9        // adjusted: HT→0, LF→1, CR→4, SP→23
-            ; cmp  w9, #23
-            ; b.hi =>non_ws           // adjusted > 23 → definitely not WS
-            // within range [0,23]: test bitmask bit at position w9
-            ; mov  x8, #0x0013        // bits 0,1,4 = HT,LF,CR
-            ; movk x8, #0x0080, lsl #16 // bit 23 = SP  → mask = 0x0080_0013
-            ; lsr  x8, x8, x9         // x9 = w9 zero-extended; shift by adjusted value
-            ; tbz  x8, #0, =>non_ws   // bit 0 clear → not WS
-            ; add  x19, x19, #1       // it's WS → advance
-            ; b    =>ws_loop
-
-            // ── byte check ─────────────────────────────────────────────
-            ; =>non_ws
-            ; cmp  w10, #expected
-            ; b.ne =>err_lbl
-            ; add  x19, x19, #1       // consume expected byte
-            ; b    =>done
-
-            // ── error ───────────────────────────────────────────────────
-            ; =>err_lbl
-            ; mov  w9, #err_code
-            ; str  w9, [x22, #CTX_ERROR_CODE]
-            ; b    =>error_exit
-
-            ; =>done
+        self.emit.bind_label(ws_loop).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
         );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, err_lbl)
+            .expect("b.hs");
+        self.emit
+            .emit_word(aarch64::encode_ldrb_imm(Reg::X10, Reg::X19, 0).expect("ldrb"));
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 9, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 23, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hi, non_ws)
+            .expect("b.hi");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X8, 0x0013, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X8, 0x0080, 16).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsr_reg(aarch64::Width::X64, Reg::X8, Reg::X8, Reg::X9).expect("lsr"),
+        );
+        self.emit.emit_tbz_label(Reg::X8, 0, non_ws).expect("tbz");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_b_label(ws_loop).expect("b");
+
+        self.emit.bind_label(non_ws).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X10, expected as u16, false).expect("cmp"),
+        );
+        self.emit.emit_b_cond_label(aarch64::Condition::Ne, err_lbl).expect("b.ne");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_b_label(done).expect("b");
+
+        self.emit.bind_label(err_lbl).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, err_code as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
+                .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
+
+        self.emit.bind_label(done).expect("bind");
     }
 
     // ── Option support ────────────────────────────────────────────────
@@ -1502,19 +1523,20 @@ impl EmitCtx {
     /// The save slot is at `scratch_offset - 8`.
     pub fn emit_redirect_out_to_stack(&mut self, scratch_offset: u32) {
         let save_slot = scratch_offset - 8;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; str x21, [sp, #save_slot]
-            ; add x21, sp, #scratch_offset
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X21, Reg::SP, save_slot).expect("str"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X21, Reg::SP, scratch_offset as u16, false)
+                .expect("add"),
         );
     }
 
     /// Restore the `out` pointer (x21) from the saved slot.
     pub fn emit_restore_out(&mut self, scratch_offset: u32) {
         let save_slot = scratch_offset - 8;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x21, [sp, #save_slot]
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, save_slot).expect("ldr"),
         );
     }
 
@@ -1526,8 +1548,21 @@ impl EmitCtx {
         init_none_fn: *const u8,
         offset: u32,
     ) {
-        load_imm64!(self.ops, x0, init_none_fn as u64);
-        dynasm!(self.ops ; .arch aarch64 ; add x1, x21, #offset);
+        let val = init_none_fn as u64;
+        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (val & 0xFFFF) as u16, 0).expect("movz"));
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::X21, offset as u16, false)
+                .expect("add"),
+        );
         self.emit_call_fn_ptr(wrapper_fn);
     }
 
@@ -1540,9 +1575,37 @@ impl EmitCtx {
         offset: u32,
         extra_ptr: *const u8,
     ) {
-        load_imm64!(self.ops, x0, fn_ptr as u64);
-        dynasm!(self.ops ; .arch aarch64 ; add x1, x21, #offset);
-        load_imm64!(self.ops, x2, extra_ptr as u64);
+        let fn_val = fn_ptr as u64;
+        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (fn_val & 0xFFFF) as u16, 0).expect("movz"));
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((fn_val >> 16) & 0xFFFF) as u16, 16).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((fn_val >> 32) & 0xFFFF) as u16, 32).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((fn_val >> 48) & 0xFFFF) as u16, 48).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::X21, offset as u16, false)
+                .expect("add"),
+        );
+        let extra_val = extra_ptr as u64;
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (extra_val & 0xFFFF) as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((extra_val >> 16) & 0xFFFF) as u16, 16)
+                .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((extra_val >> 32) & 0xFFFF) as u16, 32)
+                .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((extra_val >> 48) & 0xFFFF) as u16, 48)
+                .expect("movk"),
+        );
         self.emit_call_fn_ptr(wrapper_fn);
     }
 
@@ -1555,11 +1618,26 @@ impl EmitCtx {
         offset: u32,
         scratch_offset: u32,
     ) {
-        load_imm64!(self.ops, x0, init_some_fn as u64);
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; add x1, x21, #offset
-            ; add x2, sp, #scratch_offset
+        let val = init_some_fn as u64;
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (val & 0xFFFF) as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::X21, offset as u16, false)
+                .expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X2, Reg::SP, scratch_offset as u16, false)
+                .expect("add"),
         );
         self.emit_call_fn_ptr(wrapper_fn);
     }
@@ -1583,12 +1661,15 @@ impl EmitCtx {
     /// it survives across the function call boundary.
     pub fn emit_call_vec_alloc(&mut self, alloc_fn: *const u8, elem_size: u32, elem_align: u32) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x0, x22
-            ; mov x1, x9
-            ; movz x2, elem_size
-            ; movz x3, elem_align
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (elem_size as u16), 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X3, (elem_align as u16), 0).expect("movz"),
         );
         self.emit_call_fn_ptr(alloc_fn);
         self.emit_reload_cursor_and_check_error();
