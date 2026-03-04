@@ -528,6 +528,11 @@ impl Lowerer {
             self.flush_all_vregs();
             let label = self.lambda_labels[func.lambda_id.index()];
             self.ectx.bind_label(label);
+            self.ectx.set_source_location(kajit_emit::SourceLocation {
+                file: 1,
+                line: 1,
+                column: 0,
+            });
             let (entry_offset, error_exit) = self.ectx.begin_func();
             if func.lambda_id.index() == 0 {
                 self.entry = Some(entry_offset);
