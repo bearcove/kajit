@@ -105,7 +105,11 @@ impl Lowerer {
         moves
     }
 
-    pub(super) fn apply_fallthrough_edge_edits(&mut self, linear_op_index: usize, succ_index: usize) {
+    pub(super) fn apply_fallthrough_edge_edits(
+        &mut self,
+        linear_op_index: usize,
+        succ_index: usize,
+    ) {
         let moves = self.edge_edit_moves(linear_op_index, succ_index);
         if moves.is_empty() {
             return;

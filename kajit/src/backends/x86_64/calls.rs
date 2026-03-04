@@ -1,7 +1,11 @@
 use super::*;
 
 impl Lowerer {
-    pub(super) fn emit_call_intrinsic_with_args(&mut self, fn_ptr: *const u8, args: &[IntrinsicArg]) {
+    pub(super) fn emit_call_intrinsic_with_args(
+        &mut self,
+        fn_ptr: *const u8,
+        args: &[IntrinsicArg],
+    ) {
         use crate::context::{CTX_ERROR_CODE, CTX_INPUT_PTR};
 
         let error_exit = self

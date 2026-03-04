@@ -3,12 +3,7 @@
 use super::*;
 
 impl Lowerer {
-    pub(super) fn emit_read_from_field(
-        &mut self,
-        dst: crate::ir::VReg,
-        offset: u32,
-        width: Width,
-    ) {
+    pub(super) fn emit_read_from_field(&mut self, dst: crate::ir::VReg, offset: u32, width: Width) {
         match width {
             Width::W1 => dynasm!(self.ectx.ops ; .arch aarch64 ; ldrb w9, [x21, #offset]),
             Width::W2 => dynasm!(self.ectx.ops ; .arch aarch64 ; ldrh w9, [x21, #offset]),
@@ -19,12 +14,7 @@ impl Lowerer {
         self.set_const(dst, None);
     }
 
-    pub(super) fn emit_write_to_field(
-        &mut self,
-        src: crate::ir::VReg,
-        offset: u32,
-        width: Width,
-    ) {
+    pub(super) fn emit_write_to_field(&mut self, src: crate::ir::VReg, offset: u32, width: Width) {
         self.emit_load_use_x9(src, 0);
         match width {
             Width::W1 => dynasm!(self.ectx.ops ; .arch aarch64 ; strb w9, [x21, #offset]),

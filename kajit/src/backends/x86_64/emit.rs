@@ -148,7 +148,12 @@ impl Lowerer {
         self.set_const(dst, None);
     }
 
-    pub(super) fn emit_unary(&mut self, kind: UnaryOpKind, dst: crate::ir::VReg, src: crate::ir::VReg) {
+    pub(super) fn emit_unary(
+        &mut self,
+        kind: UnaryOpKind,
+        dst: crate::ir::VReg,
+        src: crate::ir::VReg,
+    ) {
         self.emit_load_use_r10(src, 0);
         match kind {
             UnaryOpKind::ZigzagDecode { wide: true } => {
@@ -182,13 +187,23 @@ impl Lowerer {
         self.set_const(dst, None);
     }
 
-    pub(super) fn emit_branch_if(&mut self, cond: crate::ir::VReg, target: DynamicLabel, invert: bool) {
+    pub(super) fn emit_branch_if(
+        &mut self,
+        cond: crate::ir::VReg,
+        target: DynamicLabel,
+        invert: bool,
+    ) {
         let _ = cond;
         let alloc = self.current_alloc(0);
         self.emit_branch_if_allocation(alloc, target, invert);
     }
 
-    pub(super) fn emit_branch_if_allocation(&mut self, alloc: Allocation, target: DynamicLabel, invert: bool) {
+    pub(super) fn emit_branch_if_allocation(
+        &mut self,
+        alloc: Allocation,
+        target: DynamicLabel,
+        invert: bool,
+    ) {
         if let Some(reg) = alloc.as_reg() {
             assert!(
                 reg.class() == RegClass::Int,
