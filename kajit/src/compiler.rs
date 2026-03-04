@@ -16,7 +16,7 @@ use crate::pipeline_opts::PipelineOptions;
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
 pub struct CompiledDecoder {
     #[cfg(target_arch = "x86_64")]
-    buf: dynasmrt::ExecutableBuffer,
+    buf: kajit_emit::x64::FinalizedEmission,
     #[cfg(target_arch = "aarch64")]
     buf: kajit_emit::aarch64::FinalizedEmission,
     entry: usize,
@@ -34,7 +34,7 @@ impl CompiledDecoder {
     pub fn code(&self) -> &[u8] {
         #[cfg(target_arch = "x86_64")]
         {
-            return &self.buf;
+            return self.buf.exec.as_ref();
         }
 
         #[cfg(target_arch = "aarch64")]
@@ -71,13 +71,13 @@ fn materialize_backend_result(
 #[cfg(target_arch = "x86_64")]
 fn materialize_backend_result(
     result: crate::ir_backend::LinearBackendResult,
-) -> (dynasmrt::ExecutableBuffer, usize) {
+) -> (kajit_emit::x64::FinalizedEmission, usize) {
     let crate::ir_backend::LinearBackendResult {
         buf,
         entry,
         source_map: _,
     } = result;
-    (buf, entry.0 as usize)
+    (buf, entry as usize)
 }
 
 // r[impl compiler.walk]
