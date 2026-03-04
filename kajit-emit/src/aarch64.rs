@@ -1,4 +1,4 @@
-use crate::{RaMirInstIndex, SourceMap};
+use crate::{SourceLocation, SourceMap, SourceMapEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
@@ -154,6 +154,8 @@ struct Fixup {
 pub struct Emitter {
     buf: Vec<u8>,
     source_map: SourceMap,
+    current_location: SourceLocation,
+    last_recorded_location: Option<SourceLocation>,
     labels: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
 }
@@ -171,8 +173,22 @@ impl Emitter {
         &self.buf
     }
 
-    pub fn source_map(&self) -> &[(u32, RaMirInstIndex)] {
+    pub fn source_map(&self) -> &[SourceMapEntry] {
         &self.source_map
+    }
+
+    pub fn set_source_location(&mut self, loc: SourceLocation) {
+        self.current_location = loc;
+    }
+
+    fn maybe_record_source_map(&mut self) {
+        if Some(self.current_location) != self.last_recorded_location {
+            self.source_map.push(SourceMapEntry {
+                offset: self.current_offset(),
+                location: self.current_location,
+            });
+            self.last_recorded_location = Some(self.current_location);
+        }
     }
 
     pub fn new_label(&mut self) -> LabelId {
@@ -196,17 +212,16 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_word(&mut self, ra_mir_inst: RaMirInstIndex, word: u32) {
-        self.source_map.push((self.current_offset(), ra_mir_inst));
+    pub fn emit_word(&mut self, word: u32) {
+        self.maybe_record_source_map();
         self.buf.extend_from_slice(&word.to_le_bytes());
     }
 
     pub fn emit_b_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.emit_word(ra_mir_inst, encode_b(0)?);
+        self.emit_word(encode_b(0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
             label,
@@ -217,10 +232,9 @@ impl Emitter {
 
     pub fn emit_bl_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.emit_word(ra_mir_inst, encode_bl(0)?);
+        self.emit_word(encode_bl(0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
             label,
@@ -231,12 +245,11 @@ impl Emitter {
 
     pub fn emit_cbz_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         width: Width,
         rt: u8,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.emit_word(ra_mir_inst, encode_cbz(width, rt, 0)?);
+        self.emit_word(encode_cbz(width, rt, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
             label,
@@ -247,12 +260,11 @@ impl Emitter {
 
     pub fn emit_cbnz_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         width: Width,
         rt: u8,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.emit_word(ra_mir_inst, encode_cbnz(width, rt, 0)?);
+        self.emit_word(encode_cbnz(width, rt, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
             label,
@@ -804,13 +816,56 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.emit_b_label(10, done).unwrap();
-        emitter.emit_cbz_label(11, Width::X64, 16, start).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 1,
+            line: 10,
+            column: 1,
+        });
+        emitter.emit_b_label(done).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 1,
+            line: 11,
+            column: 1,
+        });
+        emitter.emit_cbz_label(Width::X64, 16, start).unwrap();
         emitter.bind_label(done).unwrap();
-        emitter.emit_bl_label(12, start).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 1,
+            line: 12,
+            column: 1,
+        });
+        emitter.emit_bl_label(start).unwrap();
 
         let finalized = emitter.finalize().unwrap();
-        assert_eq!(finalized.source_map, vec![(0, 10), (4, 11), (8, 12)]);
+        assert_eq!(
+            finalized.source_map,
+            vec![
+                crate::SourceMapEntry {
+                    offset: 0,
+                    location: crate::SourceLocation {
+                        file: 1,
+                        line: 10,
+                        column: 1,
+                    },
+                },
+                crate::SourceMapEntry {
+                    offset: 4,
+                    location: crate::SourceLocation {
+                        file: 1,
+                        line: 11,
+                        column: 1,
+                    },
+                },
+                crate::SourceMapEntry {
+                    offset: 8,
+                    location: crate::SourceLocation {
+                        file: 1,
+                        line: 12,
+                        column: 1,
+                    },
+                },
+            ]
+        );
 
         assert_eq!(word(&finalized.code[0..4]), 0x1400_0002);
         assert_eq!(word(&finalized.code[4..8]), 0xB4FF_FFF0);
@@ -819,7 +874,7 @@ mod tests {
         let trace = finalized.trace_text().unwrap();
         assert_eq!(
             trace,
-            "00000000 inst=10 bytes=02000014\n00000004 inst=11 bytes=f0ffffb4\n00000008 inst=12 bytes=feffff97"
+            "00000000 file=1 line=10 col=1 bytes=02000014\n00000004 file=1 line=11 col=1 bytes=f0ffffb4\n00000008 file=1 line=12 col=1 bytes=feffff97"
         );
 
         let source_map_encoded = finalized.source_map_le().unwrap();
@@ -833,7 +888,7 @@ mod tests {
     fn emitter_reports_unbound_label() {
         let mut emitter = Emitter::new();
         let dangling = emitter.new_label();
-        emitter.emit_b_label(0, dangling).unwrap();
+        emitter.emit_b_label(dangling).unwrap();
         let err = emitter.finalize().unwrap_err();
         assert!(matches!(err, EmitError::UnboundLabel { .. }));
     }
@@ -842,9 +897,9 @@ mod tests {
     fn emitter_reports_out_of_range_fixup() {
         let mut emitter = Emitter::new();
         let far = emitter.new_label();
-        emitter.emit_cbz_label(0, Width::X64, 0, far).unwrap();
+        emitter.emit_cbz_label(Width::X64, 0, far).unwrap();
         for _ in 0..=262_143 {
-            emitter.emit_word(1, 0xD503_201F); // nop
+            emitter.emit_word(0xD503_201F); // nop
         }
         emitter.bind_label(far).unwrap();
 

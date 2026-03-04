@@ -1,4 +1,4 @@
-use crate::{RaMirInstIndex, SourceMap};
+use crate::{SourceLocation, SourceMap, SourceMapEntry};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mem {
@@ -68,6 +68,8 @@ struct Fixup {
 pub struct Emitter {
     buf: Vec<u8>,
     source_map: SourceMap,
+    current_location: SourceLocation,
+    last_recorded_location: Option<SourceLocation>,
     labels: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
 }
@@ -85,8 +87,22 @@ impl Emitter {
         &self.buf
     }
 
-    pub fn source_map(&self) -> &[(u32, RaMirInstIndex)] {
+    pub fn source_map(&self) -> &[SourceMapEntry] {
         &self.source_map
+    }
+
+    pub fn set_source_location(&mut self, loc: SourceLocation) {
+        self.current_location = loc;
+    }
+
+    fn maybe_record_source_map(&mut self) {
+        if Some(self.current_location) != self.last_recorded_location {
+            self.source_map.push(SourceMapEntry {
+                offset: self.current_offset(),
+                location: self.current_location,
+            });
+            self.last_recorded_location = Some(self.current_location);
+        }
     }
 
     pub fn new_label(&mut self) -> LabelId {
@@ -110,19 +126,19 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_with<F>(&mut self, ra_mir_inst: RaMirInstIndex, f: F) -> Result<(), EmitError>
+    pub fn emit_with<F>(&mut self, f: F) -> Result<(), EmitError>
     where
         F: FnOnce(&mut Vec<u8>) -> Result<(), EmitError>,
     {
         let mut inst = Vec::new();
         f(&mut inst)?;
-        self.source_map.push((self.current_offset(), ra_mir_inst));
+        self.maybe_record_source_map();
         self.buf.extend_from_slice(&inst);
         Ok(())
     }
 
-    pub fn emit_bytes(&mut self, ra_mir_inst: RaMirInstIndex, bytes: &[u8]) {
-        self.source_map.push((self.current_offset(), ra_mir_inst));
+    pub fn emit_bytes(&mut self, bytes: &[u8]) {
+        self.maybe_record_source_map();
         self.buf.extend_from_slice(bytes);
     }
 
@@ -136,12 +152,11 @@ impl Emitter {
 
     pub fn emit_je_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         label: LabelId,
     ) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
         let start = self.current_offset();
-        self.emit_with(ra_mir_inst, |buf| encode_je_rel32(buf, 0))?;
+        self.emit_with(|buf| encode_je_rel32(buf, 0))?;
         self.fixups.push(Fixup {
             disp_offset: start + 2,
             next_ip: self.current_offset(),
@@ -152,20 +167,18 @@ impl Emitter {
 
     pub fn emit_jz_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.emit_je_label(ra_mir_inst, label)
+        self.emit_je_label(label)
     }
 
     pub fn emit_jnz_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         label: LabelId,
     ) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
         let start = self.current_offset();
-        self.emit_with(ra_mir_inst, |buf| encode_jnz_rel32(buf, 0))?;
+        self.emit_with(|buf| encode_jnz_rel32(buf, 0))?;
         self.fixups.push(Fixup {
             disp_offset: start + 2,
             next_ip: self.current_offset(),
@@ -176,12 +189,11 @@ impl Emitter {
 
     pub fn emit_jmp_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         label: LabelId,
     ) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
         let start = self.current_offset();
-        self.emit_with(ra_mir_inst, |buf| encode_jmp_rel32(buf, 0))?;
+        self.emit_with(|buf| encode_jmp_rel32(buf, 0))?;
         self.fixups.push(Fixup {
             disp_offset: start + 1,
             next_ip: self.current_offset(),
@@ -192,12 +204,11 @@ impl Emitter {
 
     pub fn emit_call_label(
         &mut self,
-        ra_mir_inst: RaMirInstIndex,
         label: LabelId,
     ) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
         let start = self.current_offset();
-        self.emit_with(ra_mir_inst, |buf| encode_call_rel32(buf, 0))?;
+        self.emit_with(|buf| encode_call_rel32(buf, 0))?;
         self.fixups.push(Fixup {
             disp_offset: start + 1,
             next_ip: self.current_offset(),
@@ -789,13 +800,56 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.emit_je_label(10, done).unwrap();
-        emitter.emit_call_label(11, start).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 3,
+            line: 10,
+            column: 1,
+        });
+        emitter.emit_je_label(done).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 3,
+            line: 11,
+            column: 1,
+        });
+        emitter.emit_call_label(start).unwrap();
         emitter.bind_label(done).unwrap();
-        emitter.emit_jnz_label(12, start).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 3,
+            line: 12,
+            column: 1,
+        });
+        emitter.emit_jnz_label(start).unwrap();
 
         let finalized = emitter.finalize().unwrap();
-        assert_eq!(finalized.source_map, vec![(0, 10), (6, 11), (11, 12)]);
+        assert_eq!(
+            finalized.source_map,
+            vec![
+                crate::SourceMapEntry {
+                    offset: 0,
+                    location: crate::SourceLocation {
+                        file: 3,
+                        line: 10,
+                        column: 1,
+                    },
+                },
+                crate::SourceMapEntry {
+                    offset: 6,
+                    location: crate::SourceLocation {
+                        file: 3,
+                        line: 11,
+                        column: 1,
+                    },
+                },
+                crate::SourceMapEntry {
+                    offset: 11,
+                    location: crate::SourceLocation {
+                        file: 3,
+                        line: 12,
+                        column: 1,
+                    },
+                },
+            ]
+        );
         assert_eq!(
             finalized.code,
             vec![
@@ -808,7 +862,7 @@ mod tests {
         let trace = finalized.trace_text().unwrap();
         assert_eq!(
             trace,
-            "00000000 inst=10 bytes=0f8405000000\n00000006 inst=11 bytes=e8f5ffffff\n0000000b inst=12 bytes=0f85efffffff"
+            "00000000 file=3 line=10 col=1 bytes=0f8405000000\n00000006 file=3 line=11 col=1 bytes=e8f5ffffff\n0000000b file=3 line=12 col=1 bytes=0f85efffffff"
         );
 
         let source_map_encoded = finalized.source_map_le().unwrap();
@@ -822,7 +876,7 @@ mod tests {
     fn emitter_reports_unbound_label() {
         let mut emitter = Emitter::new();
         let dangling = emitter.new_label();
-        emitter.emit_call_label(0, dangling).unwrap();
+        emitter.emit_call_label(dangling).unwrap();
         let err = emitter.finalize().unwrap_err();
         assert!(matches!(err, EmitError::UnboundLabel { .. }));
     }
@@ -831,7 +885,7 @@ mod tests {
     fn emitter_reports_out_of_range_fixup() {
         let mut emitter = Emitter::new();
         let far = emitter.new_label();
-        emitter.emit_call_label(0, far).unwrap();
+        emitter.emit_call_label(far).unwrap();
         emitter.labels[far.0 as usize] = Some((i32::MAX as u32).saturating_add(1024));
         let err = emitter.finalize().unwrap_err();
         assert!(matches!(err, EmitError::RelativeOutOfRange { .. }));
@@ -876,10 +930,25 @@ mod tests {
         let start = emitter.new_label();
         let target = emitter.new_label();
         emitter.bind_label(start).unwrap();
-        emitter.emit_jmp_label(1, target).unwrap();
-        emitter.emit_bytes(2, &[0x90, 0x90]); // 2 nops
+        emitter.set_source_location(crate::SourceLocation {
+            file: 4,
+            line: 1,
+            column: 1,
+        });
+        emitter.emit_jmp_label(target).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 4,
+            line: 2,
+            column: 1,
+        });
+        emitter.emit_bytes(&[0x90, 0x90]); // 2 nops
         emitter.bind_label(target).unwrap();
-        emitter.emit_jz_label(3, start).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 4,
+            line: 3,
+            column: 1,
+        });
+        emitter.emit_jz_label(start).unwrap();
 
         let finalized = emitter.finalize().unwrap();
         assert_eq!(

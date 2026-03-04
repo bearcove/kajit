@@ -64,9 +64,9 @@ proptest! {
     fn x64_emitter_fixup_forward_delta_matches_padding(padding in 0usize..1024) {
         let mut emitter = X64Emitter::new();
         let target = emitter.new_label();
-        emitter.emit_call_label(0, target).unwrap();
+        emitter.emit_call_label(target).unwrap();
         for _ in 0..padding {
-            emitter.emit_bytes(1, &[0x90]);
+            emitter.emit_bytes(&[0x90]);
         }
         emitter.bind_label(target).unwrap();
 
@@ -81,9 +81,9 @@ proptest! {
         let target = emitter.new_label();
         emitter.bind_label(target).unwrap();
         for _ in 0..padding {
-            emitter.emit_bytes(1, &[0x90]);
+            emitter.emit_bytes(&[0x90]);
         }
-        emitter.emit_call_label(0, target).unwrap();
+        emitter.emit_call_label(target).unwrap();
 
         let finalized = emitter.finalize().unwrap();
         let disp_offset = finalized.code.len() - 4;
