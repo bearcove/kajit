@@ -626,60 +626,82 @@ impl EmitCtx {
         let advance_16 = self.emit.new_label();
 
         // Broadcast '"' (0x22) and '\' (0x5C) into xmm1 and xmm2
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov eax, 0x22222222u32 as i32
-            ; movd xmm1, eax
-            ; pshufd xmm1, xmm1, 0
-            ; mov eax, 0x5C5C5C5Cu32 as i32
-            ; movd xmm2, eax
-            ; pshufd xmm2, xmm2, 0
-
-            // ── Vector loop: 16 bytes per iteration ──
-            ; =>vector_loop
-            ; mov rax, r13
-            ; sub rax, r12
-            ; cmp rax, 16
-            ; jb =>scalar_tail
-
-            // Load 16 bytes (unaligned)
-            ; movdqu xmm0, [r12]
-            // Compare for '"'
-            ; movdqa xmm3, xmm1
-            ; pcmpeqb xmm3, xmm0
-            // Compare for '\'
-            ; movdqa xmm4, xmm2
-            ; pcmpeqb xmm4, xmm0
-            // OR the two masks
-            ; por xmm3, xmm4
-            // Extract byte mask to eax
-            ; pmovmskb eax, xmm3
-            ; test eax, eax
-            ; jz =>advance_16
-
-            // Found a match: find its position
-            ; tzcnt eax, eax
-            ; add r12, rax
-            ; cmp BYTE [r12], 0x22
-            ; je =>found_quote
-            ; jmp =>found_escape
-
-            ; =>advance_16
-            ; add r12, 16
-            ; jmp =>vector_loop
-
-            // ── Scalar tail: remaining < 16 bytes ──
-            ; =>scalar_tail
-            ; cmp r12, r13
-            ; jae =>unterminated
-            ; movzx eax, BYTE [r12]
-            ; cmp al, 0x22
-            ; je =>found_quote
-            ; cmp al, 0x5C
-            ; je =>found_escape
-            ; inc r12
-            ; jmp =>scalar_tail
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(0, 0x2222_2222, buf)?;
+                x64::encode_movd_xmm_r64(1, 0, buf)?;
+                x64::encode_pshufd_xmm_xmm_imm8(1, 1, 0, buf)?;
+                x64::encode_mov_r32_imm32(0, 0x5c5c_5c5c, buf)?;
+                x64::encode_movd_xmm_r64(2, 0, buf)?;
+                x64::encode_pshufd_xmm_xmm_imm8(2, 2, 0, buf)?;
+                Ok(())
+            })
+            .expect("load scan vectors");
+        self.emit.bind_label(vector_loop).expect("bind vector_loop");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(0, 13, buf)?;
+                x64::encode_sub_r64_r64(0, 12, buf)?;
+                x64::encode_cmp_r64_imm32(0, 16, buf)?;
+                Ok(())
+            })
+            .expect("test vector chunk");
+        self.emit
+            .emit_jcc_label(scalar_tail, x64::Condition::Lo)
+            .expect("jb scalar_tail");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_movdqu_xmm_m(0, 12, 0, buf)?;
+                x64::encode_movdqa_xmm_xmm(3, 1, buf)?;
+                x64::encode_pcmpeqb_xmm_xmm(3, 0, buf)?;
+                x64::encode_movdqa_xmm_xmm(4, 2, buf)?;
+                x64::encode_pcmpeqb_xmm_xmm(4, 0, buf)?;
+                x64::encode_por_xmm_xmm(3, 4, buf)?;
+                x64::encode_pmovmskb_r32_xmm(0, 3, buf)?;
+                x64::encode_test_r32_r32(0, 0, buf)
+            })
+            .expect("vector compare");
+        self.emit.emit_jz_label(advance_16).expect("jz advance_16");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_tzcnt_r32_r32(0, 0, buf)?;
+                x64::encode_add_r64_r64(12, 0, buf)?;
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
+                x64::encode_cmp_r64_imm32(10, 0x22, buf)?;
+                Ok(())
+            })
+            .expect("check quote");
+        self.emit.emit_je_label(found_quote).expect("found quote");
+        self.emit.emit_jmp_label(found_escape).expect("found escape");
+        self.emit.bind_label(advance_16).expect("bind advance_16");
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, 16, buf))
+            .expect("advance 16");
+        self.emit.emit_jmp_label(vector_loop).expect("loop vector");
+        self.emit.bind_label(scalar_tail).expect("bind scalar_tail");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_cmp_r64_r64(12, 13, buf)?;
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
+                x64::encode_cmp_r64_imm32(10, 0x22, buf)?;
+                Ok(())
+            })
+            .expect("scalar compare quote");
+        self.emit.emit_je_label(found_quote).expect("found quote");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, 0x5c, buf))
+            .expect("compare escape");
+        self.emit.emit_je_label(found_escape).expect("found escape");
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, 1, buf))
+            .expect("advance scalar");
+        self.emit.emit_jmp_label(scalar_tail).expect("loop scalar");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))
+            .expect("scalar bounds");
+        self.emit
+            .emit_jcc_label(unterminated, x64::Condition::Hs)
+            .expect("unterminated");
     }
 
     /// Inline skip-whitespace: loop over space/tab/newline/cr, advancing r12.
@@ -687,26 +709,41 @@ impl EmitCtx {
     pub fn emit_inline_skip_ws(&mut self) {
         let ws_loop = self.emit.new_label();
         let ws_done = self.emit.new_label();
+        let advance = self.emit.new_label();
 
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>ws_loop
-            ; cmp r12, r13
-            ; jae =>ws_done
-            ; movzx eax, BYTE [r12]
-            ; cmp al, b' ' as i8
-            ; je >advance
-            ; cmp al, b'\n' as i8
-            ; je >advance
-            ; cmp al, b'\r' as i8
-            ; je >advance
-            ; cmp al, b'\t' as i8
-            ; jne =>ws_done
-            ; advance:
-            ; inc r12
-            ; jmp =>ws_loop
-            ; =>ws_done
-        );
+        self.emit.bind_label(ws_loop).expect("bind ws_loop");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_cmp_r64_r64(12, 13, buf)?;
+                x64::encode_jcc_rel32(buf, x64::Condition::Hs, 0)?;
+                x64::encode_movzx_r32_rm8(
+                    10,
+                    x64::Operand::Mem(Mem { base: 12, disp: 0 }),
+                    buf,
+                )?;
+                x64::encode_cmp_r64_imm32(10, b' ' as u32, buf)?;
+                Ok(())
+            })
+            .expect("skip ws space");
+        self.emit.emit_je_label(advance).expect("space");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'\n' as u32, buf))
+            .expect("skip ws lf");
+        self.emit.emit_je_label(advance).expect("lf");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'\r' as u32, buf))
+            .expect("skip ws cr");
+        self.emit.emit_je_label(advance).expect("cr");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'\t' as u32, buf))
+            .expect("skip ws tab");
+        self.emit.emit_jne_label(ws_done).expect("done");
+        self.emit.bind_label(advance).expect("bind advance");
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, 1, buf))
+            .expect("advance ws");
+        self.emit.emit_jmp_label(ws_loop).expect("loop ws");
+        self.emit.bind_label(ws_done).expect("bind ws_done");
     }
 
     /// Inline comma-or-end-array: skip whitespace, then check for ',' or ']'.
@@ -720,25 +757,47 @@ impl EmitCtx {
 
         self.emit_inline_skip_ws();
 
-        dynasm!(self.ops
-            ; .arch x64
-            ; cmp r12, r13
-            ; jae =>error_exit
-            ; movzx eax, BYTE [r12]
-            ; inc r12
-            ; cmp al, b',' as i8
-            ; je =>got_comma
-            ; cmp al, b']' as i8
-            ; je =>got_end
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-            ; jmp =>error_exit
-            ; =>got_comma
-            ; mov BYTE [rsp + sp_offset as i32], 0
-            ; jmp =>done
-            ; =>got_end
-            ; mov BYTE [rsp + sp_offset as i32], 1
-            ; =>done
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_cmp_r64_r64(12, 13, buf)?;
+                x64::encode_movzx_r32_rm8(
+                    10,
+                    x64::Operand::Mem(Mem { base: 12, disp: 0 }),
+                    buf,
+                )?;
+                x64::encode_add_r64_imm32(12, 1, buf)?;
+                x64::encode_cmp_r64_imm32(10, b',' as u32, buf)?;
+                Ok(())
+            })
+            .expect("check comma/end");
+        self.emit.emit_je_label(got_comma).expect("comma");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b']' as u32, buf))
+            .expect("check array end");
+        self.emit.emit_je_label(got_end).expect("array end");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
+                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+            })
+            .expect("write array error");
+        self.emit.emit_jmp_label(error_exit).expect("array err");
+        self.emit.bind_label(got_comma).expect("bind comma");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(11, 0, buf)?;
+                x64::encode_mov_m_r8(4, sp_offset as i32, 11, buf)
+            })
+            .expect("write comma result");
+        self.emit.emit_jmp_label(done).expect("comma_or_end done");
+        self.emit.bind_label(got_end).expect("bind end");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(11, 1, buf)?;
+                x64::encode_mov_m_r8(4, sp_offset as i32, 11, buf)
+            })
+            .expect("write end result");
+        self.emit.bind_label(done).expect("bind done");
     }
 
     /// Inline comma-or-end-object: skip whitespace, then check for ',' or '}'.
@@ -752,33 +811,54 @@ impl EmitCtx {
 
         self.emit_inline_skip_ws();
 
-        dynasm!(self.ops
-            ; .arch x64
-            ; cmp r12, r13
-            ; jae =>error_exit
-            ; movzx eax, BYTE [r12]
-            ; inc r12
-            ; cmp al, b',' as i8
-            ; je =>got_comma
-            ; cmp al, b'}' as i8
-            ; je =>got_end
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-            ; jmp =>error_exit
-            ; =>got_comma
-            ; mov BYTE [rsp + sp_offset as i32], 0
-            ; jmp =>done
-            ; =>got_end
-            ; mov BYTE [rsp + sp_offset as i32], 1
-            ; =>done
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_cmp_r64_r64(12, 13, buf)?;
+                x64::encode_movzx_r32_rm8(
+                    10,
+                    x64::Operand::Mem(Mem { base: 12, disp: 0 }),
+                    buf,
+                )?;
+                x64::encode_add_r64_imm32(12, 1, buf)?;
+                x64::encode_cmp_r64_imm32(10, b',' as u32, buf)?;
+                Ok(())
+            })
+            .expect("check comma/object end");
+        self.emit.emit_je_label(got_comma).expect("comma");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'}' as u32, buf))
+            .expect("check object end");
+        self.emit.emit_je_label(got_end).expect("object end");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
+                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+            })
+            .expect("write object error");
+        self.emit.emit_jmp_label(error_exit).expect("obj err");
+        self.emit.bind_label(got_comma).expect("bind comma");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(11, 0, buf)?;
+                x64::encode_mov_m_r8(4, sp_offset as i32, 11, buf)
+            })
+            .expect("write object comma");
+        self.emit.emit_jmp_label(done).expect("obj comma_or_end done");
+        self.emit.bind_label(got_end).expect("bind end");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(11, 1, buf)?;
+                x64::encode_mov_m_r8(4, sp_offset as i32, 11, buf)
+            })
+            .expect("write obj end");
+        self.emit.bind_label(done).expect("bind obj done");
     }
 
     /// Store the cached cursor (r12) to a stack slot.
     pub fn emit_save_cursor_to_stack(&mut self, sp_offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov [rsp + sp_offset as i32], r12
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset as i32 }, 12, buf))
+            .expect("save cursor");
     }
 
     /// Emit: skip whitespace, expect and consume `"`, branch to error_exit if not found.
@@ -791,22 +871,30 @@ impl EmitCtx {
 
         self.emit_inline_skip_ws();
 
-        // Check bounds + opening '"'
-        dynasm!(self.ops
-            ; .arch x64
-            ; cmp r12, r13
-            ; jae =>not_quote
-            ; cmp BYTE [r12], 0x22
-            ; jne =>not_quote
-            ; inc r12
-            ; jmp =>ok
-
-            // Error: set ExpectedStringKey and bail
-            ; =>not_quote
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-            ; jmp =>error_exit
-            ; =>ok
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))
+            .expect("check input bounds");
+        self.emit.emit_jcc_label(not_quote, x64::Condition::Hi).expect("not_quote bounds");
+        self.emit
+            .emit_with(|buf| x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf))
+            .expect("load quote byte");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'"' as u32, buf))
+            .expect("compare quote");
+        self.emit.emit_jne_label(not_quote).expect("not_quote");
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, 1, buf))
+            .expect("advance quote");
+        self.emit.emit_jmp_label(ok).expect("ok");
+        self.emit.bind_label(not_quote).expect("bind not_quote");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, error_code as u32, buf)?;
+                Ok(())
+            })
+            .expect("write quote error");
+        self.emit.emit_jmp_label(error_exit).expect("error");
+        self.emit.bind_label(ok).expect("bind ok");
     }
 
     /// Call a post-scan intrinsic: fn(ctx, out+field_offset, start, len).
@@ -820,29 +908,34 @@ impl EmitCtx {
         start_sp_offset: u32,
     ) {
         // Compute len = r12 - start, flush cursor advanced past closing '"'
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r10, [rsp + start_sp_offset as i32]
-            ; mov rax, r12
-            ; sub rax, r10
-            ; lea r11, [r12 + 1]
-            ; mov [r15 + CTX_INPUT_PTR as i32], r11
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(0, 12, buf)?;
+                x64::encode_sub_r64_r64(0, 10, buf)?;
+                x64::encode_lea_r64_m(11, Mem { base: 12, disp: 1 }, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 11, buf)
+            })
+            .expect("compute string finish args");
         // Args: ctx, out+offset, start, len
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, r15
-            ; lea rsi, [r14 + field_offset as i32]
-            ; mov rdx, r10
-            ; mov rcx, rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(2, 10, buf)?;
+                x64::encode_mov_r64_r64(1, 0, buf)
+            })
+            .expect("setup string_finish args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, r15
-            ; lea rdx, [r14 + field_offset as i32]
-            ; mov r8, r10
-            ; mov r9, rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(8, 10, buf)?;
+                x64::encode_mov_r64_r64(9, 0, buf)
+            })
+            .expect("setup string_finish args");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -857,27 +950,35 @@ impl EmitCtx {
         field_offset: u32,
         start_sp_offset: u32,
     ) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r10, [rsp + start_sp_offset as i32]
-            ; mov rax, r12
-            ; sub rax, r10
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(0, 12, buf)?;
+                x64::encode_sub_r64_r64(0, 10, buf)?;
+                Ok(())
+            })
+            .expect("compute string_escape args");
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, r15
-            ; lea rsi, [r14 + field_offset as i32]
-            ; mov rdx, r10
-            ; mov rcx, rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(2, 10, buf)?;
+                x64::encode_mov_r64_r64(1, 0, buf)?;
+                Ok(())
+            })
+            .expect("setup string_escape args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, r15
-            ; lea rdx, [r14 + field_offset as i32]
-            ; mov r8, r10
-            ; mov r9, rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(8, 10, buf)?;
+                x64::encode_mov_r64_r64(9, 0, buf)?;
+                Ok(())
+            })
+            .expect("setup string_escape args");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -892,18 +993,37 @@ impl EmitCtx {
         start_sp_offset: u32,
         len_save_sp_offset: u32,
     ) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r10, [rsp + start_sp_offset as i32]
-            ; mov r11, r12
-            ; sub r11, r10
-            ; mov [rsp + len_save_sp_offset as i32], r11
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(11, 12, buf)?;
+                x64::encode_sub_r64_r64(11, 10, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: len_save_sp_offset as i32,
+                    },
+                    11,
+                    buf
+                )?;
+                Ok(())
+            })
+            .expect("compute alloc_copy len");
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; mov rsi, r10 ; mov edx, r11d);
+        self.emit.emit_with(|buf| {
+            x64::encode_mov_r64_r64(7, 15, buf)?;
+            x64::encode_mov_r64_r64(6, 10, buf)?;
+            x64::encode_mov_r64_r64(2, 11, buf)?;
+            Ok(())
+        }).expect("setup validate_alloc args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; mov rdx, r10 ; mov r8d, r11d);
+        self.emit.emit_with(|buf| {
+            x64::encode_mov_r64_r64(1, 15, buf)?;
+            x64::encode_mov_r64_r64(2, 10, buf)?;
+            x64::encode_mov_r64_r64(8, 11, buf)?;
+            Ok(())
+        }).expect("setup validate_alloc args");
         self.emit_call_fn_ptr(fn_ptr);
         // rax = buf pointer — no cursor reload needed
         self.emit_check_error();
@@ -922,17 +1042,15 @@ impl EmitCtx {
         let len_off = (field_offset + string_offsets.len_offset) as i32;
         let cap_off = (field_offset + string_offsets.cap_offset) as i32;
 
-        dynasm!(self.ops
-            ; .arch x64
-            // Write ptr
-            ; mov [r14 + ptr_off], rax
-            // Write len and cap (both = string length)
-            ; mov r10, [rsp + len_sp_offset as i32]
-            ; mov [r14 + len_off], r10
-            ; mov [r14 + cap_off], r10
-            // Advance cursor past closing '"'
-            ; inc r12
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 14, disp: ptr_off }, 0, buf)?;
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: len_sp_offset as i32 }, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: len_off }, 10, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: cap_off }, 10, buf)?;
+                x64::encode_add_r64_imm32(12, 1, buf)
+            })
+            .expect("write malum string fields");
     }
 
     /// Emit inline key-reading slow path call: kajit_json_key_slow_from_jit(ctx, start, prefix_len, &key_ptr, &key_len).
@@ -946,12 +1064,14 @@ impl EmitCtx {
         key_len_sp_offset: u32,
     ) {
         // Compute prefix_len = r12 - start
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r10, [rsp + start_sp_offset as i32]  // r10 = start
-            ; mov rax, r12
-            ; sub rax, r10                              // rax = prefix_len
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(0, 12, buf)?;
+                x64::encode_sub_r64_r64(0, 10, buf)?;
+                Ok(())
+            })
+            .expect("compute key_slow args");
 
         // Flush cursor (at '\' byte)
         self.emit_flush_input_cursor();
@@ -959,25 +1079,26 @@ impl EmitCtx {
         // Call fn(ctx, start, prefix_len, &key_ptr, &key_len)
         // System V: rdi=ctx, rsi=start, rdx=prefix_len, rcx=&key_ptr, r8=&key_len
         #[cfg(not(windows))]
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rdi, r15
-            ; mov rsi, r10                              // start
-            ; mov rdx, rax                              // prefix_len
-            ; lea rcx, [rsp + key_ptr_sp_offset as i32]
-            ; lea r8, [rsp + key_len_sp_offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_mov_r64_r64(6, 10, buf)?;
+                x64::encode_mov_r64_r64(2, 0, buf)?;
+                x64::encode_lea_r64_m(1, Mem { base: 4, disp: key_ptr_sp_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(8, Mem { base: 4, disp: key_len_sp_offset as i32 }, buf)
+            })
+            .expect("setup key_slow args");
         #[cfg(windows)]
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rcx, r15
-            ; mov rdx, r10                              // start
-            ; mov r8, rax                               // prefix_len
-            ; lea r9, [rsp + key_ptr_sp_offset as i32]
-            // 5th arg on stack for Windows
-            ; lea rax, [rsp + key_len_sp_offset as i32]
-            ; mov [rsp + 0x20], rax                     // shadow space arg5
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_mov_r64_r64(2, 10, buf)?;
+                x64::encode_mov_r64_r64(8, 0, buf)?;
+                x64::encode_lea_r64_m(9, Mem { base: 4, disp: key_ptr_sp_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(0, Mem { base: 4, disp: key_len_sp_offset as i32 }, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 0x20 }, 0, buf)
+            })
+            .expect("setup key_slow args windows");
 
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
@@ -991,21 +1112,55 @@ impl EmitCtx {
     /// `size` is 1, 2, 4, or 8 bytes (from EnumRepr).
     pub fn emit_write_discriminant(&mut self, value: i64, size: u32) {
         match size {
-            1 => dynasm!(self.ops ; .arch x64
-                ; mov BYTE [r14], value as i8
-            ),
-            2 => dynasm!(self.ops ; .arch x64
-                ; mov WORD [r14], value as i16
-            ),
-            4 => dynasm!(self.ops ; .arch x64
-                ; mov DWORD [r14], value as i32
-            ),
+            1 => {
+                let imm = value as u8;
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r32_imm32(0, imm as u32, buf)?;
+                        x64::encode_mov_m_r8(14, 0, 0, buf)
+                    })
+                    .expect("write discr 1 byte");
+            }
+            2 => {
+                let imm = value as u16;
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r32_imm32(0, imm as u32, buf)?;
+                        x64::encode_mov_m_r16(14, 0, 0, buf)
+                    })
+                    .expect("write discr 2 bytes");
+            }
+            4 => {
+                let imm = value as u32;
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r32_imm32(0, imm, buf)?;
+                        x64::encode_mov_m_r32(
+                            Mem {
+                                base: 14,
+                                disp: 0,
+                            },
+                            0,
+                            buf,
+                        )
+                    })
+                    .expect("write discr 4 bytes");
+            }
             8 => {
                 let val = value;
-                dynasm!(self.ops ; .arch x64
-                    ; mov rax, QWORD val
-                    ; mov QWORD [r14], rax
-                );
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r64_imm64(0, val as u64, buf)?;
+                        x64::encode_mov_m_r64(
+                            Mem {
+                                base: 14,
+                                disp: 0,
+                            },
+                            0,
+                            buf,
+                        )
+                    })
+                    .expect("write discr 8 bytes");
             }
             _ => panic!("unsupported discriminant size: {size}"),
         }
@@ -1023,56 +1178,76 @@ impl EmitCtx {
         let slow_path = self.emit.new_label();
         let done_label = self.emit.new_label();
 
-        dynasm!(self.ops
-            ; .arch x64
-            // Bounds check
-            ; cmp r12, r13
-            ; jae =>eof_label
-            // Load first byte
-            ; movzx r10d, BYTE [r12]
-            // Test continuation bit
-            ; test r10d, 0x80
-            ; jnz =>slow_path
-            // Fast path: single-byte varint
-            ; add r12, 1
-            ; jmp =>done_label
-
-            // Slow path: call full varint decode intrinsic
-            ; =>slow_path
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_cmp_r64_r64(12, 13, buf)?;
+                Ok(())
+            })
+            .expect("compare input bounds");
+        self.emit.emit_jae_label(eof_label).expect("eof");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
+                x64::encode_mov_r64_imm64(11, 0x80, buf)?;
+                x64::encode_test_r64_r64(10, 11, buf)?;
+                Ok(())
+            })
+            .expect("test discr bit");
+        self.emit.emit_jnz_label(slow_path).expect("slow path");
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, 1, buf))
+            .expect("advance one byte");
+        self.emit.emit_jmp_label(done_label).expect("done");
+        self.emit.bind_label(slow_path).expect("bind slow");
         self.emit_flush_input_cursor();
         // arg0 = ctx, arg1 = pointer to temp u32 at BASE_FRAME (start of extra area)
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; lea rsi, [rsp + BASE_FRAME as i32]);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 4, disp: BASE_FRAME as i32 }, buf)
+            })
+            .expect("setup postcard discr args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; lea rdx, [rsp + BASE_FRAME as i32]);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 4, disp: BASE_FRAME as i32 }, buf)
+            })
+            .expect("setup postcard discr args");
         self.emit_call_fn_ptr(slow_intrinsic);
         let error_exit = self.error_exit;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r12, [r15 + CTX_INPUT_PTR as i32]
-            ; mov r11d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r11d, r11d
-            ; jnz =>error_exit
-            ; mov r10d, DWORD [rsp + BASE_FRAME as i32]  // load decoded discriminant
-            ; jmp =>done_label
-
-            ; =>eof_label
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], crate::context::ErrorCode::UnexpectedEof as i32
-            ; jmp =>error_exit
-
-            ; =>done_label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
+                x64::encode_mov_r64_m(11, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_cmp_r64_imm32(11, 0, buf)?;
+                Ok(())
+            })
+            .expect("load postcard discr result");
+        self.emit.emit_jne_label(error_exit).expect("postcard discr error");
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r32_m(10, Mem { base: 4, disp: BASE_FRAME as i32 }, buf))
+            .expect("load discr");
+        self.emit.emit_jmp_label(done_label).expect("done label");
+        self.emit.bind_label(eof_label).expect("bind eof");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, crate::context::ErrorCode::UnexpectedEof as u32, buf)?;
+                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+            })
+            .expect("write eof error");
+        self.emit.emit_jmp_label(error_exit).expect("branch eof error");
+        self.emit.bind_label(done_label).expect("bind done");
     }
 
     /// Compare r10d (discriminant) with immediate `imm` and branch to `label`
     /// if equal.
     pub fn emit_cmp_imm_branch_eq(&mut self, imm: u32, label: LabelId) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; cmp r10d, imm as i32
-            ; je =>label
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, imm, buf))
+            .expect("cmp imm branch");
+        self.emit.emit_je_label(label).expect("branch eq");
     }
 
     /// Emit a branch-to-error for unknown variant (sets UnknownVariant error code).
@@ -1080,89 +1255,126 @@ impl EmitCtx {
         let error_exit = self.error_exit;
         let error_code = crate::context::ErrorCode::UnknownVariant as i32;
 
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-            ; jmp =>error_exit
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, error_code as u32, buf))
+            .expect("write unknown variant");
+        self.emit.emit_jmp_label(error_exit).expect("jump unknown variant");
     }
 
     /// Save the cached input_ptr (r12) to a stack slot.
     pub fn emit_save_input_ptr(&mut self, stack_offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov [rsp + stack_offset as i32], r12
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    12,
+                    buf,
+                )
+            })
+            .expect("save input ptr");
     }
 
     /// Restore the cached input_ptr (r12) from a stack slot.
     pub fn emit_restore_input_ptr(&mut self, stack_offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r12, [rsp + stack_offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    buf,
+                )
+            })
+            .expect("restore input ptr");
     }
 
     /// Store a 64-bit immediate into a stack slot at rsp + offset.
     pub fn emit_store_imm64_to_stack(&mut self, stack_offset: u32, value: u64) {
-        let val = value as i64;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, QWORD val
-            ; mov [rsp + stack_offset as i32], rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(0, value, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    0,
+                    buf,
+                )
+            })
+            .expect("store imm64 stack");
     }
 
     /// AND a 64-bit immediate into a stack slot at rsp + offset.
     /// Loads the slot, ANDs with the immediate, stores back.
     pub fn emit_and_imm64_on_stack(&mut self, stack_offset: u32, mask: u64) {
-        let mask_val = mask as i64;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + stack_offset as i32]
-            ; mov r10, QWORD mask_val
-            ; and rax, r10
-            ; mov [rsp + stack_offset as i32], rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(10, mask, buf)?;
+                x64::encode_and_r64_r64(0, 10, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    0,
+                    buf,
+                )
+            })
+            .expect("and imm64 stack");
     }
 
     /// Check if the stack slot at rsp + offset has exactly one bit set (popcount == 1).
     /// If so, branch to `label`.
     pub fn emit_popcount_eq1_branch(&mut self, stack_offset: u32, label: LabelId) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + stack_offset as i32]
-            // popcount == 1 iff (x & (x-1)) == 0 && x != 0
-            ; lea r10, [rax - 1]
-            ; test rax, r10        // sets Z if (x & (x-1)) == 0
-            ; jnz >skip            // more than 1 bit
-            ; test rax, rax        // check nonzero
-            ; jnz =>label          // exactly 1 bit
-            ; skip:
-        );
+        let skip = self.emit.new_label();
+
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(10, 0, buf)?;
+                x64::encode_sub_r64_imm32(10, 1, buf)?;
+                x64::encode_mov_r64_r64(11, 0, buf)?;
+                x64::encode_and_r64_r64(11, 10, buf)?;
+                x64::encode_test_r64_r64(11, 11, buf)
+            })
+            .expect("popcount test");
+        self.emit.emit_jne_label(skip).expect("skip non-popcount1");
+        self.emit
+            .emit_with(|buf| x64::encode_test_r64_r64(0, 0, buf))
+            .expect("check nonzero");
+        self.emit.emit_jne_label(label).expect("branch popcount1");
+        self.emit.bind_label(skip).expect("bind skip");
     }
 
     /// Check if the stack slot at rsp + offset is zero. If so, branch to `label`.
     pub fn emit_stack_zero_branch(&mut self, stack_offset: u32, label: LabelId) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + stack_offset as i32]
-            ; test rax, rax
-            ; jz =>label
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf))
+            .expect("load slot for zero check");
+        self.emit.emit_with(|buf| x64::encode_cmp_r64_imm32(0, 0, buf)).expect("compare zero");
+        self.emit.emit_jz_label(label).expect("branch zero");
     }
 
     /// Load the stack slot at rsp + offset, test if bit `bit_index` is set,
     /// and branch to `label` if so.
     pub fn emit_test_bit_branch(&mut self, stack_offset: u32, bit_index: u32, label: LabelId) {
         let mask = (1u64 << bit_index) as i64;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + stack_offset as i32]
-            ; mov r10, QWORD mask
-            ; test rax, r10
-            ; jnz =>label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(10, mask as u64, buf)?;
+                x64::encode_and_r64_r64(0, 10, buf)?;
+                Ok(())
+            })
+            .expect("test bit");
+        self.emit.emit_jnz_label(label).expect("branch bit set");
     }
 
     /// Test a single bit at `bit_index` in the u64 at `[rsp + stack_offset]`.
@@ -1174,32 +1386,32 @@ impl EmitCtx {
         label: LabelId,
     ) {
         let mask = (1u64 << bit_index) as i64;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + stack_offset as i32]
-            ; mov r10, QWORD mask
-            ; test rax, r10
-            ; jz =>label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(10, mask as u64, buf)?;
+                x64::encode_and_r64_r64(0, 10, buf)?;
+                Ok(())
+            })
+            .expect("test bit zero");
+        self.emit.emit_jz_label(label).expect("branch bit clear");
     }
 
     /// Emit an error (write error code to ctx, jump to error_exit).
     pub fn emit_error(&mut self, code: crate::context::ErrorCode) {
         let error_exit = self.error_exit;
         let error_code = code as i32;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-            ; jmp =>error_exit
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, error_code as u32, buf))
+            .expect("write error code");
+        self.emit.emit_jmp_label(error_exit).expect("jump error");
     }
 
     /// Advance the cached cursor by n bytes (inline, no function call).
     pub fn emit_advance_cursor_by(&mut self, n: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; add r12, n as i32
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, n, buf))
+            .expect("advance cursor");
     }
 
     // r[impl deser.json.struct]
@@ -1220,57 +1432,89 @@ impl EmitCtx {
         let done = self.emit.new_label();
         let err_lbl = self.emit.new_label();
 
-        dynasm!(self.ops ; .arch x64
-            // ── whitespace-skip loop ────────────────────────────────────
-            ; =>ws_loop
-            ; cmp  r12, r13
-            ; jge  =>err_lbl               // EOF → error
-            ; movzx r10d, BYTE [r12]       // raw byte → r10
-            ; cmp  r10b, 0x20 as i8        // space?
-            ; je   =>ws_next
-            ; cmp  r10b, 0x09 as i8        // HT?
-            ; je   =>ws_next
-            ; cmp  r10b, 0x0a as i8        // LF?
-            ; je   =>ws_next
-            ; cmp  r10b, 0x0d as i8        // CR?
-            ; jne  =>non_ws                // not WS → done skipping
-            ; =>ws_next
-            ; inc  r12
-            ; jmp  =>ws_loop
-
-            // ── byte check ─────────────────────────────────────────────
-            ; =>non_ws
-            ; cmp  r10b, expected
-            ; jne  =>err_lbl
-            ; inc  r12                     // consume expected byte
-            ; jmp  =>done
-
-            // ── error ───────────────────────────────────────────────────
-            ; =>err_lbl
-            ; mov  DWORD [r15 + CTX_ERROR_CODE as i32], err_code
-            ; jmp  =>error_exit
-
-            ; =>done
-        );
+        self.emit.bind_label(ws_loop).expect("bind ws_loop");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))
+            .expect("expect ws bounds");
+        self.emit.emit_jge_label(err_lbl).expect("error eof");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
+                x64::encode_cmp_r64_imm32(10, b' ' as u32, buf)?;
+                Ok(())
+            })
+            .expect("check ws space");
+        self.emit.emit_je_label(ws_next).expect("space");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'\t' as u32, buf))
+            .expect("check ws tab");
+        self.emit.emit_je_label(ws_next).expect("tab");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'\n' as u32, buf))
+            .expect("check ws lf");
+        self.emit.emit_je_label(ws_next).expect("lf");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'\r' as u32, buf))
+            .expect("check ws cr");
+        self.emit.emit_jne_label(non_ws).expect("non_ws");
+        self.emit.bind_label(ws_next).expect("bind ws_next");
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, 1, buf))
+            .expect("consume ws");
+        self.emit.emit_jmp_label(ws_loop).expect("loop ws");
+        self.emit.bind_label(non_ws).expect("bind non_ws");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, expected as u32, buf))
+            .expect("check expected");
+        self.emit.emit_jne_label(err_lbl).expect("expected mismatch");
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, 1, buf))
+            .expect("consume expected");
+        self.emit.emit_jmp_label(done).expect("done");
+        self.emit.bind_label(err_lbl).expect("bind err_lbl");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, err_code as u32, buf)?;
+                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+            })
+            .expect("write parse error");
+        self.emit.emit_jmp_label(error_exit).expect("error branch");
+        self.emit.bind_label(done).expect("bind done");
     }
 
     // ── Option support ────────────────────────────────────────────────
 
     /// Save the current `out` pointer (r14) and redirect it to a stack scratch area.
     pub fn emit_redirect_out_to_stack(&mut self, scratch_offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov [rsp + (scratch_offset as i32 - 8)], r14
-            ; lea r14, [rsp + scratch_offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: scratch_offset as i32 - 8,
+                    },
+                    14,
+                    buf,
+                )?;
+                x64::encode_lea_r64_m(14, Mem { base: 4, disp: scratch_offset as i32 }, buf)
+            })
+            .expect("redirect output");
     }
 
     /// Restore the `out` pointer (r14) from the saved slot.
     pub fn emit_restore_out(&mut self, scratch_offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r14, [rsp + (scratch_offset as i32 - 8)]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    14,
+                    Mem {
+                        base: 4,
+                        disp: scratch_offset as i32 - 8,
+                    },
+                    buf,
+                )
+            })
+            .expect("restore output");
     }
 
     /// Call kajit_option_init_none(init_none_fn, out + offset).
@@ -1285,15 +1529,19 @@ impl EmitCtx {
 
         // arg0: init_none_fn pointer, arg1: out + offset
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, QWORD init_none_val
-            ; lea rsi, [r14 + offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(7, init_none_val as u64, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 14, disp: offset as i32 }, buf)
+            })
+            .expect("setup init none");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, QWORD init_none_val
-            ; lea rdx, [r14 + offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(1, init_none_val as u64, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 14, disp: offset as i32 }, buf)
+            })
+            .expect("setup init none");
         self.emit_call_fn_ptr(wrapper_fn);
     }
 
@@ -1311,17 +1559,21 @@ impl EmitCtx {
 
         // arg0: fn_ptr, arg1: out + offset, arg2: extra_ptr
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, QWORD fn_val
-            ; lea rsi, [r14 + offset as i32]
-            ; mov rdx, QWORD extra_val
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(7, fn_val as u64, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 14, disp: offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(2, extra_val as u64, buf)
+            })
+            .expect("setup trampoline3");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, QWORD fn_val
-            ; lea rdx, [r14 + offset as i32]
-            ; mov r8, QWORD extra_val
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(1, fn_val as u64, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 14, disp: offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(8, extra_val as u64, buf)
+            })
+            .expect("setup trampoline3");
         self.emit_call_fn_ptr(wrapper_fn);
     }
 
@@ -1338,17 +1590,21 @@ impl EmitCtx {
 
         // arg0: init_some_fn pointer, arg1: out + offset, arg2: scratch area on stack
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, QWORD init_some_val
-            ; lea rsi, [r14 + offset as i32]
-            ; lea rdx, [rsp + scratch_offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(7, init_some_val as u64, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 14, disp: offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 4, disp: scratch_offset as i32 }, buf)
+            })
+            .expect("setup init some");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, QWORD init_some_val
-            ; lea rdx, [r14 + offset as i32]
-            ; lea r8, [rsp + scratch_offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(1, init_some_val as u64, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 14, disp: offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(8, Mem { base: 4, disp: scratch_offset as i32 }, buf)
+            })
+            .expect("setup init some");
         self.emit_call_fn_ptr(wrapper_fn);
     }
 
