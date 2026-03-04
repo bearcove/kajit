@@ -1,6 +1,7 @@
 //! Register/allocation load, store, and move helpers for aarch64.
 
 use super::*;
+use kajit_emit::aarch64::{self, Reg};
 
 impl Lowerer {
     pub(super) fn emit_mov_x9_from_preg(&mut self, preg: regalloc2::PReg) -> bool {
@@ -11,7 +12,9 @@ impl Lowerer {
         if r == 9 {
             return true;
         }
-        dynasm!(self.ectx.ops ; .arch aarch64 ; mov x9, X(r));
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::from_raw(r)).expect("mov"),
+        );
         true
     }
 
@@ -23,7 +26,9 @@ impl Lowerer {
         if r == 9 {
             return true;
         }
-        dynasm!(self.ectx.ops ; .arch aarch64 ; mov X(r), x9);
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::from_raw(r), Reg::X9).expect("mov"),
+        );
         true
     }
 
@@ -36,7 +41,14 @@ impl Lowerer {
         }
         let from_r = from.hw_enc() as u8;
         let to_r = to.hw_enc() as u8;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; mov X(to_r), X(from_r));
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(
+                aarch64::Width::X64,
+                Reg::from_raw(to_r),
+                Reg::from_raw(from_r),
+            )
+            .expect("mov"),
+        );
         true
     }
 
@@ -45,7 +57,15 @@ impl Lowerer {
             return false;
         }
         let r = preg.hw_enc() as u8;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; str X(r), [sp, #off]);
+        self.ectx.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::from_raw(r),
+                Reg::SP,
+                off,
+            )
+            .expect("str"),
+        );
         true
     }
 
@@ -54,7 +74,15 @@ impl Lowerer {
             return false;
         }
         let r = preg.hw_enc() as u8;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; ldr X(r), [sp, #off]);
+        self.ectx.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::from_raw(r),
+                Reg::SP,
+                off,
+            )
+            .expect("ldr"),
+        );
         true
     }
 
@@ -69,7 +97,9 @@ impl Lowerer {
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            dynasm!(self.ectx.ops ; .arch aarch64 ; ldr x9, [sp, #off]);
+            self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("ldr"),
+            );
             return;
         }
         panic!("unexpected none allocation for x9 load");
@@ -84,13 +114,19 @@ impl Lowerer {
             );
             let r = reg.hw_enc() as u8;
             if r != 10 {
-                dynasm!(self.ectx.ops ; .arch aarch64 ; mov x10, X(r));
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X10, Reg::from_raw(r))
+                        .expect("mov"),
+                );
             }
             return;
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            dynasm!(self.ectx.ops ; .arch aarch64 ; ldr x10, [sp, #off]);
+            self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, off)
+                    .expect("ldr"),
+            );
             return;
         }
         panic!("unexpected none allocation for x10 load");
@@ -102,7 +138,9 @@ impl Lowerer {
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            dynasm!(self.ectx.ops ; .arch aarch64 ; str x9, [sp, #off]);
+            self.ectx.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("str"),
+            );
             return true;
         }
         false
@@ -139,7 +177,15 @@ impl Lowerer {
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
             let target_r = target.hw_enc() as u8;
-            dynasm!(self.ectx.ops ; .arch aarch64 ; ldr X(target_r), [sp, #off]);
+            self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(
+                    aarch64::Width::X64,
+                    Reg::from_raw(target_r),
+                    Reg::SP,
+                    off,
+                )
+                .expect("ldr"),
+            );
             return;
         }
         panic!("unexpected none allocation for CallLambda arg");
@@ -167,9 +213,13 @@ impl Lowerer {
     pub(super) fn emit_load_u32_w10(&mut self, value: u32) {
         let lo = value & 0xFFFF;
         let hi = (value >> 16) & 0xFFFF;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; movz w10, #lo);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X10, lo as u16, 0).expect("movz"));
         if value > 0xFFFF {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk w10, #hi, LSL #16);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::W32, Reg::X10, hi as u16, 1).expect("movk"),
+            );
         }
     }
 
@@ -178,15 +228,23 @@ impl Lowerer {
         let p1 = ((value >> 16) & 0xFFFF) as u32;
         let p2 = ((value >> 32) & 0xFFFF) as u32;
         let p3 = ((value >> 48) & 0xFFFF) as u32;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; movz x10, #p0);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X10, p0 as u16, 0).expect("movz"));
         if p1 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x10, #p1, LSL #16);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p1 as u16, 1).expect("movk"),
+            );
         }
         if p2 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x10, #p2, LSL #32);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p2 as u16, 2).expect("movk"),
+            );
         }
         if p3 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x10, #p3, LSL #48);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p3 as u16, 3).expect("movk"),
+            );
         }
     }
 
@@ -195,15 +253,23 @@ impl Lowerer {
         let p1 = ((value >> 16) & 0xFFFF) as u32;
         let p2 = ((value >> 32) & 0xFFFF) as u32;
         let p3 = ((value >> 48) & 0xFFFF) as u32;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; movz x9, #p0);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X9, p0 as u16, 0).expect("movz"));
         if p1 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x9, #p1, LSL #16);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p1 as u16, 1).expect("movk"),
+            );
         }
         if p2 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x9, #p2, LSL #32);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p2 as u16, 2).expect("movk"),
+            );
         }
         if p3 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x9, #p3, LSL #48);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p3 as u16, 3).expect("movk"),
+            );
         }
     }
 }
