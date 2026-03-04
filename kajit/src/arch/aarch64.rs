@@ -1,5 +1,5 @@
 use dynasmrt::{DynasmApi, DynasmLabelApi, dynasm};
-use kajit_emit::aarch64::{self, Emitter, LabelId};
+use kajit_emit::aarch64::{self, Emitter, LabelId, Reg};
 
 use crate::context::{
     CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR, ENC_ERROR_CODE, ENC_OUTPUT_END, ENC_OUTPUT_PTR,
@@ -368,12 +368,12 @@ impl EmitCtx {
         let error_code = code as u32;
         // movz w9, #error_code
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::W32, 9, error_code as u16, 0)
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0)
                 .expect("encode_movz"),
         );
         // str w9, [x22, #CTX_ERROR_CODE]
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, 9, 22, CTX_ERROR_CODE as u32)
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
                 .expect("encode_str_imm"),
         );
         // b =>error_exit
@@ -394,7 +394,7 @@ impl EmitCtx {
     /// Emit `cbnz x0, label` — branch if x0 is nonzero.
     pub fn emit_cbnz_x0(&mut self, label: LabelId) {
         self.emit
-            .emit_cbnz_label(aarch64::Width::X64, 0, label)
+            .emit_cbnz_label(aarch64::Width::X64, Reg::X0, label)
             .expect("emit_cbnz_label");
     }
 
