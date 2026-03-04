@@ -384,7 +384,11 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 succs: b.succs.iter().map(|s| s.to.0 as usize).collect(),
                 preds: b.preds.iter().map(|p| p.0 as usize).collect(),
                 params: b.params.clone(),
-                succ_args: b.succs.iter().map(|s| s.args.clone()).collect(),
+                succ_args: b
+                    .succs
+                    .iter()
+                    .map(|s| s.args.iter().map(|arg| arg.source).collect())
+                    .collect(),
             }
         })
         .collect();
@@ -399,7 +403,10 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 continue;
             }
 
-            let args = blocks[from].succ_args[succ_idx].clone();
+            let args = blocks[from].succ_args[succ_idx]
+                .iter()
+                .copied()
+                .collect();
             let from_linear_op_index = blocks[from]
                 .term_linear_op_index
                 .expect("critical-edge source must map to a linear op index");

@@ -501,14 +501,9 @@ impl DebuggerSession {
             });
         }
 
-        let values: Vec<u64> = edge
-            .args
-            .iter()
-            .map(|arg| self.read_vreg(arg.index()))
-            .collect();
-        let params: Vec<usize> = to_block.params.iter().map(|param| param.index()).collect();
-        for (param, value) in params.into_iter().zip(values.into_iter()) {
-            self.write_vreg(param, value);
+        for arg in &edge.args {
+            let value = self.read_vreg(arg.source.index());
+            self.write_vreg(arg.target.index(), value);
         }
         Ok(())
     }

@@ -373,14 +373,9 @@ fn apply_edge_args(
         });
     }
 
-    let values: Vec<u64> = edge
-        .args
-        .iter()
-        .map(|arg| state.read_vreg(arg.index()))
-        .collect();
-
-    for (param, value) in to_block.params.iter().zip(values.into_iter()) {
-        state.write_vreg(param.index(), value);
+    for arg in &edge.args {
+        let value = state.read_vreg(arg.source.index());
+        state.write_vreg(arg.target.index(), value);
     }
 
     Ok(())

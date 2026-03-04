@@ -61,7 +61,13 @@ pub struct RaInst {
 #[derive(Debug, Clone)]
 pub struct RaEdge {
     pub to: BlockId,
-    pub args: Vec<VReg>,
+    pub args: Vec<RaEdgeArg>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RaEdgeArg {
+    pub target: VReg,
+    pub source: VReg,
 }
 
 #[derive(Debug, Clone)]
@@ -302,7 +308,11 @@ fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std:
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "v{}", arg.index())?;
+                    if arg.target == arg.source {
+                        write!(f, "v{}", arg.source.index())?;
+                    } else {
+                        write!(f, "v{}=>v{}", arg.target.index(), arg.source.index())?;
+                    }
                 }
                 write!(f, "]")?;
             }
@@ -397,7 +407,11 @@ fn fmt_block_human(
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "v{}", arg.index())?;
+                    if arg.target == arg.source {
+                        write!(f, "v{}", arg.source.index())?;
+                    } else {
+                        write!(f, "v{}=>v{}", arg.target.index(), arg.source.index())?;
+                    }
                 }
                 write!(f, "]")?;
             }
@@ -1016,9 +1030,20 @@ fn lower_function(
     for bi in 0..blocks.len() {
         blocks[bi].succs = succ_lists[bi]
             .iter()
-            .map(|to| RaEdge {
-                to: *to,
-                args: blocks[to.index()].params.clone(),
+            .map(|to| {
+                let args = blocks[to.index()]
+                    .params
+                    .iter()
+                    .copied()
+                    .map(|target| RaEdgeArg {
+                        target,
+                        source: target,
+                    })
+                    .collect();
+                RaEdge {
+                    to: *to,
+                    args,
+                }
             })
             .collect();
     }
@@ -1121,8 +1146,10 @@ fn coalesce_uncond_branch_tail_copies(block: &mut RaBlock) {
         return;
     }
     let edge_args_before = block.succs[0].args.clone();
-    let has_dst_arg = edge_args_before.contains(&dst);
-    let has_other_src_arg = edge_args_before.iter().any(|&arg| arg == src && arg != dst);
+    let has_dst_arg = edge_args_before.iter().any(|arg| arg.source == dst);
+    let has_other_src_arg = edge_args_before
+        .iter()
+        .any(|arg| arg.source == src && arg.source != dst);
     if has_dst_arg && has_other_src_arg {
         // Avoid introducing duplicate source args on the same edge; this can
         // destabilize parallel block-parameter moves.
@@ -1140,7 +1167,7 @@ fn coalesce_uncond_branch_tail_copies(block: &mut RaBlock) {
     }
     let original_edge_values: Vec<VReg> = edge_args_before
         .iter()
-        .map(|arg| original_sym.get(arg).copied().unwrap_or(*arg))
+        .map(|arg| original_sym.get(&arg.source).copied().unwrap_or(arg.source))
         .collect();
 
     let mut rewritten_sym = std::collections::HashMap::<VReg, VReg>::new();
@@ -1153,7 +1180,7 @@ fn coalesce_uncond_branch_tail_copies(block: &mut RaBlock) {
     }
     let rewritten_edge_values: Vec<VReg> = edge_args_before
         .iter()
-        .map(|arg| if *arg == dst { src } else { *arg })
+        .map(|arg| if arg.source == dst { src } else { arg.source })
         .map(|arg| rewritten_sym.get(&arg).copied().unwrap_or(arg))
         .collect();
     if original_edge_values != rewritten_edge_values {
@@ -1163,8 +1190,8 @@ fn coalesce_uncond_branch_tail_copies(block: &mut RaBlock) {
     let edge = &mut block.succs[0];
     let mut rewrote = false;
     for arg in &mut edge.args {
-        if *arg == dst {
-            *arg = src;
+        if arg.source == dst {
+            arg.source = src;
             rewrote = true;
         }
     }
@@ -1324,6 +1351,10 @@ mod tests {
     use kajit_ir::{IntrinsicFn, IrBuilder, IrOp, Width};
     use kajit_lir::linearize;
 
+    fn edge_arg_values(args: &[RaEdgeArg]) -> Vec<VReg> {
+        args.iter().map(|arg| arg.source).collect()
+    }
+
     // r[verify ir.regalloc.ra-mir.block-params]
     #[test]
     fn ra_mir_has_block_params_for_gamma_join() {
@@ -1427,8 +1458,9 @@ mod tests {
                 .iter()
                 .find(|e| e.to == merge.id)
                 .expect("pred should have edge to merge");
-            assert_eq!(edge.args.len(), merge.params.len());
-            if edge.args != merge.params {
+            let edge_values = edge_arg_values(&edge.args);
+            assert_eq!(edge_values.len(), merge.params.len());
+            if edge_values != merge.params {
                 saw_non_identity_edge = true;
             }
         }
@@ -1481,7 +1513,8 @@ mod tests {
                 .iter()
                 .find(|e| e.to == merge.id)
                 .expect("pred should have edge to merge");
-            assert_eq!(edge.args.len(), merge.params.len());
+            let edge_values = edge_arg_values(&edge.args);
+            assert_eq!(edge_values.len(), merge.params.len());
 
             let mut tail_copies = Vec::new();
             for inst in pred_block.insts.iter().rev() {
@@ -1492,7 +1525,7 @@ mod tests {
             }
             if tail_copies.len() >= 2 {
                 saw_multi_tail_block = true;
-                if edge.args != merge.params {
+                if edge_values != merge.params {
                     saw_rewrite_in_multi_tail_block = true;
                 }
             }
