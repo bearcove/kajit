@@ -511,58 +511,136 @@ impl Lowerer {
                 if let Some(c) = rhs_const
                     && c <= 4095
                 {
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; add x9, x9, c as u32);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X9,
+                            Reg::X9,
+                            c as u16,
+                            false,
+                        )
+                        .expect("add"),
+                    );
                 } else {
                     self.emit_load_use_x10(rhs, 1);
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; add x9, x9, x10);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_add_reg(
+                            aarch64::Width::X64,
+                            Reg::X9,
+                            Reg::X9,
+                            Reg::X10,
+                        )
+                        .expect("add"),
+                    );
                 }
             }
             BinOpKind::Sub => {
                 if let Some(c) = rhs_const
                     && c <= 4095
                 {
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; sub x9, x9, c as u32);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_sub_imm(
+                            aarch64::Width::X64,
+                            Reg::X9,
+                            Reg::X9,
+                            c as u16,
+                            false,
+                        )
+                        .expect("sub"),
+                    );
                 } else {
                     self.emit_load_use_x10(rhs, 1);
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; sub x9, x9, x10);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_sub_reg(
+                            aarch64::Width::X64,
+                            Reg::X9,
+                            Reg::X9,
+                            Reg::X10,
+                        )
+                        .expect("sub"),
+                    );
                 }
             }
             BinOpKind::And => {
                 if matches!(rhs_const, Some(0x7f | 0x7e | 0x80 | 0x1)) {
                     let c = rhs_const.expect("just matched Some");
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; and x9, x9, c);
+                    self.ectx
+                        .emit
+                        .emit_word(aarch64::encode_and_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c).expect("and"));
                 } else {
                     self.emit_load_use_x10(rhs, 1);
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; and x9, x9, x10);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_and_reg(
+                            aarch64::Width::X64,
+                            Reg::X9,
+                            Reg::X9,
+                            Reg::X10,
+                            aarch64::Shift::Lsl,
+                            0,
+                        )
+                        .expect("and"),
+                    );
                 }
             }
             BinOpKind::Or => {
                 self.emit_load_use_x10(rhs, 1);
-                dynasm!(self.ectx.ops ; .arch aarch64 ; orr x9, x9, x10);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_orr_reg(
+                        aarch64::Width::X64,
+                        Reg::X9,
+                        Reg::X9,
+                        Reg::X10,
+                        aarch64::Shift::Lsl,
+                        0,
+                    )
+                    .expect("orr"),
+                );
             }
             BinOpKind::Xor => {
                 self.emit_load_use_x10(rhs, 1);
-                dynasm!(self.ectx.ops ; .arch aarch64 ; eor x9, x9, x10);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_eor_reg(
+                        aarch64::Width::X64,
+                        Reg::X9,
+                        Reg::X9,
+                        Reg::X10,
+                        aarch64::Shift::Lsl,
+                        0,
+                    )
+                    .expect("eor"),
+                );
             }
             BinOpKind::CmpNe => unreachable!("CmpNe handled above"),
             BinOpKind::Shr => {
                 if let Some(c) = rhs_const
                     && c <= 63
                 {
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; lsr x9, x9, c as u32);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c as u8)
+                            .expect("lsr"),
+                    );
                 } else {
                     self.emit_load_use_x10(rhs, 1);
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; lsr x9, x9, x10);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_lsr_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                            .expect("lsr"),
+                    );
                 }
             }
             BinOpKind::Shl => {
                 if let Some(c) = rhs_const
                     && c <= 63
                 {
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; lsl x9, x9, c as u32);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c as u8)
+                            .expect("lsl"),
+                    );
                 } else {
                     self.emit_load_use_x10(rhs, 1);
-                    dynasm!(self.ectx.ops ; .arch aarch64 ; lsl x9, x9, x10);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_lsl_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                            .expect("lsl"),
+                    );
                 }
             }
         }
@@ -579,27 +657,64 @@ impl Lowerer {
         self.emit_load_use_x9(src, 0);
         match kind {
             UnaryOpKind::ZigzagDecode { wide: true } => {
-                dynasm!(self.ectx.ops
-                    ; .arch aarch64
-                    ; lsr x10, x9, #1
-                    ; and x16, x9, #1
-                    ; neg x16, x16
-                    ; eor x9, x10, x16
+                self.ectx.emit.emit_word(
+                    aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X10, Reg::X9, 1)
+                        .expect("lsr"),
+                );
+                self.ectx.emit.emit_word(
+                    aarch64::encode_and_imm(aarch64::Width::X64, Reg::X16, Reg::X9, 1)
+                        .expect("and"),
+                );
+                self.ectx
+                    .emit
+                    .emit_word(aarch64::encode_neg(aarch64::Width::X64, Reg::X16, Reg::X16).expect("neg"));
+                self.ectx.emit.emit_word(
+                    aarch64::encode_eor_reg(
+                        aarch64::Width::X64,
+                        Reg::X9,
+                        Reg::X10,
+                        Reg::X16,
+                        aarch64::Shift::Lsl,
+                        0,
+                    )
+                    .expect("eor"),
                 );
             }
             UnaryOpKind::ZigzagDecode { wide: false } => {
-                dynasm!(self.ectx.ops
-                    ; .arch aarch64
-                    ; lsr w10, w9, #1
-                    ; and w16, w9, #1
-                    ; neg w16, w16
-                    ; eor w9, w10, w16
+                self.ectx.emit.emit_word(
+                    aarch64::encode_lsr_imm(aarch64::Width::W32, Reg::X10, Reg::X9, 1).expect("lsr"),
+                );
+                self.ectx.emit.emit_word(
+                    aarch64::encode_and_imm(aarch64::Width::W32, Reg::X16, Reg::X9, 1).expect("and"),
+                );
+                self.ectx
+                    .emit
+                    .emit_word(aarch64::encode_neg(aarch64::Width::W32, Reg::X16, Reg::X16).expect("neg"));
+                self.ectx.emit.emit_word(
+                    aarch64::encode_eor_reg(
+                        aarch64::Width::W32,
+                        Reg::X9,
+                        Reg::X10,
+                        Reg::X16,
+                        aarch64::Shift::Lsl,
+                        0,
+                    )
+                    .expect("eor"),
                 );
             }
             UnaryOpKind::SignExtend { from_width } => match from_width {
-                Width::W1 => dynasm!(self.ectx.ops ; .arch aarch64 ; sxtb x9, w9),
-                Width::W2 => dynasm!(self.ectx.ops ; .arch aarch64 ; sxth x9, w9),
-                Width::W4 => dynasm!(self.ectx.ops ; .arch aarch64 ; sxtw x9, w9),
+                Width::W1 => self
+                    .ectx
+                    .emit
+                    .emit_word(aarch64::encode_sxtb(Reg::X9, Reg::X9).expect("sxtb")),
+                Width::W2 => self
+                    .ectx
+                    .emit
+                    .emit_word(aarch64::encode_sxth(Reg::X9, Reg::X9).expect("sxth")),
+                Width::W4 => self
+                    .ectx
+                    .emit
+                    .emit_word(aarch64::encode_sxtw(Reg::X9, Reg::X9).expect("sxtw")),
                 Width::W8 => {}
             },
         }
@@ -632,19 +747,33 @@ impl Lowerer {
             );
             let r = reg.hw_enc() as u8;
             if invert {
-                dynasm!(self.ectx.ops ; .arch aarch64 ; cbz X(r), =>target);
+                self.ectx
+                    .emit
+                    .emit_cbz_label(aarch64::Width::X64, Reg::from_raw(r), target)
+                    .expect("cbz");
             } else {
-                dynasm!(self.ectx.ops ; .arch aarch64 ; cbnz X(r), =>target);
+                self.ectx
+                    .emit
+                    .emit_cbnz_label(aarch64::Width::X64, Reg::from_raw(r), target)
+                    .expect("cbnz");
             }
             return;
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            dynasm!(self.ectx.ops ; .arch aarch64 ; ldr x9, [sp, #off]);
+            self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("ldr"),
+            );
             if invert {
-                dynasm!(self.ectx.ops ; .arch aarch64 ; cbz x9, =>target);
+                self.ectx
+                    .emit
+                    .emit_cbz_label(aarch64::Width::X64, Reg::X9, target)
+                    .expect("cbz");
             } else {
-                dynasm!(self.ectx.ops ; .arch aarch64 ; cbnz x9, =>target);
+                self.ectx
+                    .emit
+                    .emit_cbnz_label(aarch64::Width::X64, Reg::X9, target)
+                    .expect("cbnz");
             }
             return;
         }
@@ -676,7 +805,9 @@ impl Lowerer {
         });
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            dynasm!(self.ectx.ops ; .arch aarch64 ; ldr x9, [sp, #off]);
+            self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("ldr"),
+            );
         } else if pred_reg.is_none() {
             panic!("unexpected none allocation for jumptable predicate");
         }
@@ -690,24 +821,32 @@ impl Lowerer {
             let idx = index as u32;
             if let Some(r) = pred_reg {
                 self.emit_load_u32_w10(idx);
-                dynasm!(self.ectx.ops
-                    ; .arch aarch64
-                    ; cmp X(r), x10
-                    ; b.eq =>target
+                self.ectx.emit.emit_word(
+                    aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::from_raw(r), Reg::X10)
+                        .expect("cmp"),
                 );
+                self.ectx
+                    .emit
+                    .emit_b_cond_label(Condition::Eq, target)
+                    .expect("b.eq");
             } else if idx <= 4095 {
-                dynasm!(self.ectx.ops
-                    ; .arch aarch64
-                    ; cmp w9, idx
-                    ; b.eq =>target
+                self.ectx.emit.emit_word(
+                    aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, idx as u16, false)
+                        .expect("cmp"),
                 );
+                self.ectx
+                    .emit
+                    .emit_b_cond_label(Condition::Eq, target)
+                    .expect("b.eq");
             } else {
                 self.emit_load_u32_w10(idx);
-                dynasm!(self.ectx.ops
-                    ; .arch aarch64
-                    ; cmp w9, w10
-                    ; b.eq =>target
+                self.ectx.emit.emit_word(
+                    aarch64::encode_cmp_reg(aarch64::Width::W32, Reg::X9, Reg::X10).expect("cmp"),
                 );
+                self.ectx
+                    .emit
+                    .emit_b_cond_label(Condition::Eq, target)
+                    .expect("b.eq");
             }
         }
         let default_succ_index = targets.len();
