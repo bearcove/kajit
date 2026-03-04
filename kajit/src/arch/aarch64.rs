@@ -930,10 +930,7 @@ impl EmitCtx {
 
     /// Store the cached cursor (x19) to a stack slot.
     pub fn emit_save_cursor_to_stack(&mut self, sp_offset: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; str x19, [sp, #sp_offset]
-        );
+        self.emit.emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::SP, sp_offset).expect("str"));
     }
 
     /// Emit: skip whitespace, expect and consume `"`, branch to error_exit if not found.
@@ -975,18 +972,34 @@ impl EmitCtx {
         start_sp_offset: u32,
     ) {
         // x9 = start, x10 = len, flush cursor advanced past closing '"'
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #start_sp_offset]
-            ; sub x10, x19, x9
-            ; add x11, x19, 1
-            ; str x11, [x22, #CTX_INPUT_PTR]
-            // Args: x0=ctx, x1=out+offset, x2=start, x3=len
-            ; mov x0, x22
-            ; add x1, x21, #field_offset
-            ; mov x2, x9
-            ; mov x3, x10
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, start_sp_offset)
+                .expect("ldr"),
         );
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
+        );
+        self.emit.emit_word(aarch64::encode_add_imm(aarch64::Width::X64, Reg::X11, Reg::X19, 1, false).expect("add"));
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X11, Reg::X22, CTX_INPUT_PTR as u32)
+                .expect("str"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X1,
+                Reg::X21,
+                field_offset as u16,
+                false,
+            )
+            .expect("add"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X9).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::X10).expect("mov"));
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -1000,16 +1013,29 @@ impl EmitCtx {
         start_sp_offset: u32,
     ) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #start_sp_offset]
-            ; sub x10, x19, x9
-            // Args: x0=ctx, x1=out+offset, x2=start, x3=prefix_len
-            ; mov x0, x22
-            ; add x1, x21, #field_offset
-            ; mov x2, x9
-            ; mov x3, x10
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, start_sp_offset)
+                .expect("ldr"),
         );
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X1,
+                Reg::X21,
+                field_offset as u16,
+                false,
+            )
+            .expect("add"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X9).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::X10).expect("mov"));
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -1024,16 +1050,23 @@ impl EmitCtx {
         len_save_sp_offset: u32,
     ) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #start_sp_offset]
-            ; sub x10, x19, x9
-            ; str x10, [sp, #len_save_sp_offset]
-            // fn(ctx, data_ptr, data_len_u32)
-            ; mov x0, x22
-            ; mov x1, x9
-            ; mov w2, w10
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, start_sp_offset)
+                .expect("ldr"),
         );
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, len_save_sp_offset)
+                .expect("str"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::W32, Reg::X2, Reg::X10).expect("mov"));
         self.emit_call_fn_ptr(fn_ptr);
         // x0 = buf pointer (or null on error) — no cursor reload needed
         self.emit_check_error();
@@ -1051,17 +1084,19 @@ impl EmitCtx {
         let len_off = field_offset + string_offsets.len_offset;
         let cap_off = field_offset + string_offsets.cap_offset;
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            // Write ptr
-            ; str x0, [x21, #ptr_off]
-            // Write len and cap
-            ; ldr x9, [sp, #len_sp_offset]
-            ; str x9, [x21, #len_off]
-            ; str x9, [x21, #cap_off]
-            // Advance cursor past closing '"'
-            ; add x19, x19, 1
+        self.emit
+            .emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::X0, Reg::X21, ptr_off).expect("str"));
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, len_sp_offset)
+                .expect("ldr"),
         );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, len_off).expect("str"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, cap_off).expect("str"),
+        );
+        self.emit.emit_word(aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"));
     }
 
     /// Emit inline key-reading slow path call: fn(ctx, start, prefix_len, &key_ptr, &key_len).
@@ -1073,15 +1108,38 @@ impl EmitCtx {
         key_len_sp_offset: u32,
     ) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #start_sp_offset]
-            ; sub x10, x19, x9
-            ; mov x0, x22
-            ; mov x1, x9
-            ; mov x2, x10
-            ; add x3, sp, #key_ptr_sp_offset
-            ; add x4, sp, #key_len_sp_offset
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, start_sp_offset)
+                .expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X10).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X3,
+                Reg::SP,
+                key_ptr_sp_offset as u16,
+                false,
+            )
+            .expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X4,
+                Reg::SP,
+                key_len_sp_offset as u16,
+                false,
+            )
+            .expect("add"),
         );
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
