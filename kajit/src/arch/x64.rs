@@ -1,12 +1,10 @@
-use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
+use kajit_emit::x64::{self, Emitter, FinalizedEmission, LabelId, Mem};
 
 use crate::context::{
     CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR, ENC_ERROR_CODE, ENC_OUTPUT_END, ENC_OUTPUT_PTR,
     ErrorCode,
 };
 use crate::recipe::{ErrorTarget, Op, Recipe, Slot, Width};
-
-pub type Assembler = dynasmrt::x64::Assembler;
 
 /// Base frame size.
 ///
@@ -22,9 +20,9 @@ pub const BASE_FRAME: u32 = 80;
 
 /// Emission context — wraps the assembler plus bookkeeping labels.
 pub struct EmitCtx {
-    pub ops: Assembler,
-    pub error_exit: DynamicLabel,
-    pub entry: AssemblyOffset,
+    pub emit: Emitter,
+    pub error_exit: LabelId,
+    pub entry: u32,
     /// Total frame size (base + extra, 16-byte aligned).
     pub frame_size: u32,
 }
@@ -53,59 +51,67 @@ impl EmitCtx {
     /// Load a function pointer into rax and call it.
     fn emit_call_fn_ptr(&mut self, ptr: *const u8) {
         let ptr_val = ptr as i64;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, QWORD ptr_val
-            ; call rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(0, ptr_val as u64, buf)?;
+                x64::encode_call_r64(0, buf)
+            })
+            .expect("call fn ptr");
     }
 
     /// Flush the cached input cursor (r12) back to ctx.input_ptr.
     fn emit_flush_input_cursor(&mut self) {
-        dynasm!(self.ops ; .arch x64 ; mov [r15 + CTX_INPUT_PTR as i32], r12);
+        self.emit
+            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 12, buf))
+            .expect("flush input cursor");
     }
 
     /// Reload the cached input cursor from ctx and check the error flag.
     /// Branches to `error_exit` if `ctx.error.code != 0`.
     fn emit_reload_cursor_and_check_error(&mut self) {
         let error_exit = self.error_exit;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r12, [r15 + CTX_INPUT_PTR as i32]
-            ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>error_exit
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
+                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("reload cursor and test");
+        self.emit.emit_jnz_label(error_exit).expect("reload cursor error");
     }
 
     /// Check the error flag without reloading the cursor.
     /// Branches to `error_exit` if `ctx.error.code != 0`.
     fn emit_check_error(&mut self) {
         let error_exit = self.error_exit;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>error_exit
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("check error");
+        self.emit.emit_jnz_label(error_exit).expect("check error");
     }
 
     /// Flush the cached output cursor (r12) back to ctx for encoding.
     fn emit_enc_flush_output_cursor(&mut self) {
-        dynasm!(self.ops ; .arch x64 ; mov [r15 + ENC_OUTPUT_PTR as i32], r12);
+        self.emit
+            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 15, disp: ENC_OUTPUT_PTR }, 12, buf))
+            .expect("flush output cursor");
     }
 
     /// Reload output_ptr and output_end from ctx and check the error flag.
     fn emit_enc_reload_and_check_error(&mut self) {
         let error_exit = self.error_exit;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r12, [r15 + ENC_OUTPUT_PTR as i32]
-            ; mov r13, [r15 + ENC_OUTPUT_END as i32]
-            ; mov r10d, [r15 + ENC_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>error_exit
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: ENC_OUTPUT_PTR }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 15, disp: ENC_OUTPUT_END }, buf)?;
+                x64::encode_mov_r32_m(10, Mem { base: 15, disp: ENC_ERROR_CODE }, buf)?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("reload output and test");
+        self.emit.emit_jnz_label(error_exit).expect("reload output error");
     }
 
     /// Create a new EmitCtx. Does not emit any code.
@@ -117,12 +123,12 @@ impl EmitCtx {
     /// Call `begin_func()` to emit a function prologue.
     pub fn new(extra_stack: u32) -> Self {
         let frame_size = (BASE_FRAME + extra_stack + 15) & !15;
-        let mut ops = Assembler::new().expect("failed to create assembler");
-        let error_exit = ops.new_dynamic_label();
-        let entry = AssemblyOffset(0);
+        let mut emit = Emitter::new();
+        let error_exit = emit.new_label();
+        let entry = 0;
 
         EmitCtx {
-            ops,
+            emit,
             error_exit,
             entry,
             frame_size,
@@ -139,9 +145,9 @@ impl EmitCtx {
     /// - r13 = cached input_end
     /// - r14 = out pointer
     /// - r15 = ctx pointer
-    pub fn begin_func(&mut self) -> (AssemblyOffset, DynamicLabel) {
-        let error_exit = self.ops.new_dynamic_label();
-        let entry = self.ops.offset();
+    pub fn begin_func(&mut self) -> (u32, LabelId) {
+        let error_exit = self.emit.new_label();
+        let entry = self.emit.current_offset();
         let frame_size = self.frame_size;
 
         // On entry: rsp is 8-mod-16 (return address was pushed by `call`).
@@ -161,38 +167,39 @@ impl EmitCtx {
         //   [rsp+64]: saved r14      [rsp+72]: saved r15
         //   [rsp+80..]: extra stack  (args arrive in rcx=out, rdx=ctx)
         #[cfg(not(windows))]
-        dynasm!(self.ops
-            ; .arch x64
-            ; push rbp
-            ; sub rsp, frame_size as i32
-            ; mov [rsp], rbp
-            ; mov [rsp + 8], rbx
-            ; mov [rsp + 16], r12
-            ; mov [rsp + 24], r13
-            ; mov [rsp + 32], r14
-            ; mov [rsp + 40], r15
-            ; mov r14, rdi              // r14 = out
-            ; mov r15, rsi              // r15 = ctx
-            ; mov r12, [r15 + CTX_INPUT_PTR as i32]
-            ; mov r13, [r15 + CTX_INPUT_END as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_push_r64(5, buf)?;
+                x64::encode_sub_r64_imm32(4, frame_size, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 0 }, 5, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 8 }, 3, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 16 }, 12, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 24 }, 13, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 14, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 15, buf)?;
+                x64::encode_mov_r64_r64(14, 7, buf)?;
+                x64::encode_mov_r64_r64(15, 6, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 15, disp: CTX_INPUT_END }, buf)
+            })
+            .expect("begin prologue");
         #[cfg(windows)]
-        dynasm!(self.ops
-            ; .arch x64
-            ; push rbp
-            ; sub rsp, frame_size as i32
-            // [rsp+0..31] is shadow space; callee-saved regs follow after
-            ; mov [rsp + 32], rbp
-            ; mov [rsp + 40], rbx
-            ; mov [rsp + 48], r12
-            ; mov [rsp + 56], r13
-            ; mov [rsp + 64], r14
-            ; mov [rsp + 72], r15
-            ; mov r14, rcx              // r14 = out  (Windows arg0)
-            ; mov r15, rdx              // r15 = ctx  (Windows arg1)
-            ; mov r12, [r15 + CTX_INPUT_PTR as i32]
-            ; mov r13, [r15 + CTX_INPUT_END as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_push_r64(5, buf)?;
+                x64::encode_sub_r64_imm32(4, frame_size, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 5, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 3, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 48 }, 12, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 56 }, 13, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 64 }, 14, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 72 }, 15, buf)?;
+                x64::encode_mov_r64_r64(14, 1, buf)?;
+                x64::encode_mov_r64_r64(15, 2, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 15, disp: CTX_INPUT_END }, buf)
+            })
+            .expect("begin prologue windows");
 
         self.error_exit = error_exit;
         (entry, error_exit)
@@ -201,63 +208,69 @@ impl EmitCtx {
     /// Emit the success epilogue and error exit for the current function.
     ///
     /// `error_exit` must be the label returned by the corresponding `begin_func` call.
-    pub fn end_func(&mut self, error_exit: DynamicLabel) {
+    pub fn end_func(&mut self, error_exit: LabelId) {
         let frame_size = self.frame_size as i32;
 
         #[cfg(not(windows))]
-        dynasm!(self.ops
-            ; .arch x64
-            // Success path: flush cursor, restore registers, return
-            ; mov [r15 + CTX_INPUT_PTR as i32], r12
-            ; mov r15, [rsp + 40]
-            ; mov r14, [rsp + 32]
-            ; mov r13, [rsp + 24]
-            ; mov r12, [rsp + 16]
-            ; mov rbx, [rsp + 8]
-            ; mov rbp, [rsp]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
-
-            // Error exit: just restore and return (error is already in ctx.error)
-            ; =>error_exit
-            ; mov r15, [rsp + 40]
-            ; mov r14, [rsp + 32]
-            ; mov r13, [rsp + 24]
-            ; mov r12, [rsp + 16]
-            ; mov rbx, [rsp + 8]
-            ; mov rbp, [rsp]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 12, buf)?;
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 16 }, buf)?;
+                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 8 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 0 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end success");
         #[cfg(windows)]
-        dynasm!(self.ops
-            ; .arch x64
-            // Success path: flush cursor, restore registers, return
-            ; mov [r15 + CTX_INPUT_PTR as i32], r12
-            ; mov r15, [rsp + 72]
-            ; mov r14, [rsp + 64]
-            ; mov r13, [rsp + 56]
-            ; mov r12, [rsp + 48]
-            ; mov rbx, [rsp + 40]
-            ; mov rbp, [rsp + 32]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 12, buf)?;
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 48 }, buf)?;
+                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 40 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end success windows");
 
-            // Error exit: just restore and return (error is already in ctx.error)
-            ; =>error_exit
-            ; mov r15, [rsp + 72]
-            ; mov r14, [rsp + 64]
-            ; mov r13, [rsp + 56]
-            ; mov r12, [rsp + 48]
-            ; mov rbx, [rsp + 40]
-            ; mov rbp, [rsp + 32]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
-        );
+        self.emit.bind_label(error_exit).expect("bind error_exit");
+        #[cfg(not(windows))]
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 16 }, buf)?;
+                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 8 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 0 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end error");
+        #[cfg(windows)]
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 48 }, buf)?;
+                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 40 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end error windows");
     }
 
     /// Emit a call to another emitted function.
@@ -266,13 +279,23 @@ impl EmitCtx {
     /// Flushes cursor before call, reloads after, checks error.
     ///
     /// r[impl callconv.inter-function]
-    pub fn emit_call_emitted_func(&mut self, label: DynamicLabel, field_offset: u32) {
+    pub fn emit_call_emitted_func(&mut self, label: LabelId, field_offset: u32) {
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; lea rdi, [r14 + field_offset as i32] ; mov rsi, r15);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_lea_r64_m(7, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(6, 15, buf)
+            })
+            .expect("lea rdi/rsi");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; lea rcx, [r14 + field_offset as i32] ; mov rdx, r15);
-        dynasm!(self.ops ; .arch x64 ; call =>label);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_lea_r64_m(1, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(2, 15, buf)
+            })
+            .expect("lea rcx/rdx");
+        self.emit.emit_call_label(label).expect("call emitted fn");
         self.emit_reload_cursor_and_check_error();
     }
 
@@ -284,9 +307,19 @@ impl EmitCtx {
     pub fn emit_call_intrinsic(&mut self, fn_ptr: *const u8, field_offset: u32) {
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; lea rsi, [r14 + field_offset as i32]);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)
+            })
+            .expect("mov rdi/rsi");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; lea rdx, [r14 + field_offset as i32]);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)
+            })
+            .expect("mov rcx/rdx");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -296,9 +329,13 @@ impl EmitCtx {
     pub fn emit_call_intrinsic_ctx_only(&mut self, fn_ptr: *const u8) {
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15);
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_r64(7, 15, buf))
+            .expect("mov rdi");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15);
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_r64(1, 15, buf))
+            .expect("mov rcx");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -308,9 +345,19 @@ impl EmitCtx {
     pub fn emit_call_intrinsic_ctx_and_stack_out(&mut self, fn_ptr: *const u8, sp_offset: u32) {
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; lea rsi, [rsp + sp_offset as i32]);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 4, disp: sp_offset as i32 }, buf)
+            })
+            .expect("mov rdi/lea rsi");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; lea rdx, [rsp + sp_offset as i32]);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset as i32 }, buf)
+            })
+            .expect("mov rcx/lea rdx");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -325,17 +372,21 @@ impl EmitCtx {
     ) {
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, r15
-            ; lea rsi, [rsp + sp_offset1 as i32]
-            ; lea rdx, [rsp + sp_offset2 as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 4, disp: sp_offset1 as i32 }, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset2 as i32 }, buf)
+            })
+            .expect("mov ctx+args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, r15
-            ; lea rdx, [rsp + sp_offset1 as i32]
-            ; lea r8, [rsp + sp_offset2 as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset1 as i32 }, buf)?;
+                x64::encode_lea_r64_m(8, Mem { base: 4, disp: sp_offset2 as i32 }, buf)
+            })
+            .expect("mov ctx+args");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -354,82 +405,80 @@ impl EmitCtx {
         let expected_addr = expected_ptr as i64;
 
         #[cfg(not(windows))]
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rdi, [rsp + arg0_sp_offset as i32]
-            ; mov rsi, [rsp + arg1_sp_offset as i32]
-            ; mov rdx, QWORD expected_addr
-            ; mov ecx, expected_len as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(7, Mem { base: 4, disp: arg0_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(6, Mem { base: 4, disp: arg1_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(2, expected_addr as u64, buf)?;
+                x64::encode_mov_r32_imm32(1, expected_len, buf)
+            })
+            .expect("mov args");
         #[cfg(windows)]
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rcx, [rsp + arg0_sp_offset as i32]
-            ; mov rdx, [rsp + arg1_sp_offset as i32]
-            ; mov r8, QWORD expected_addr
-            ; mov r9d, expected_len as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(1, Mem { base: 4, disp: arg0_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(2, Mem { base: 4, disp: arg1_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(8, expected_addr as u64, buf)?;
+                x64::encode_mov_r32_imm32(9, expected_len, buf)
+            })
+            .expect("mov args");
         self.emit_call_fn_ptr(fn_ptr);
     }
 
     /// Allocate a new dynamic label.
-    pub fn new_label(&mut self) -> DynamicLabel {
-        self.ops.new_dynamic_label()
+    pub fn new_label(&mut self) -> LabelId {
+        self.emit.new_label()
     }
 
     /// Bind a dynamic label at the current position.
-    pub fn bind_label(&mut self, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>label
-        );
+    pub fn bind_label(&mut self, label: LabelId) {
+        self.emit.bind_label(label).expect("bind label");
     }
 
     /// Emit an unconditional branch to the given label.
-    pub fn emit_branch(&mut self, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; jmp =>label
-        );
+    pub fn emit_branch(&mut self, label: LabelId) {
+        self.emit.emit_jmp_label(label).expect("jmp");
     }
 
     /// Write an error code to ctx and branch to error_exit.
     pub fn emit_set_error(&mut self, code: ErrorCode) {
         let error_exit = self.error_exit;
         let error_code = code as i32;
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-            ; jmp =>error_exit
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
+                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+            })
+            .expect("store error code");
+        self.emit.emit_jmp_label(error_exit).expect("jmp error_exit");
     }
 
     /// Compute len = cursor - [rsp+start_slot], store to [rsp+len_slot], advance cursor past `"`.
     pub fn emit_compute_key_len_and_advance(&mut self, start_sp_offset: u32, len_sp_offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, r12
-            ; sub rax, [rsp + start_sp_offset as i32]  // len = cursor - start
-            ; mov [rsp + len_sp_offset as i32], rax     // store len
-            ; inc r12                                    // advance past closing '"'
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(0, 12, buf)?;
+                x64::encode_sub_r64_m(0, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: len_sp_offset as i32 }, 0, buf)?;
+                x64::encode_add_r64_imm32(12, 1, buf)?;
+                Ok(())
+            })
+            .expect("compute key len");
     }
 
     /// Emit `test rax, rax; jnz label` — branch if rax is nonzero.
-    pub fn emit_cbnz_x0(&mut self, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; test rax, rax
-            ; jnz =>label
-        );
+    pub fn emit_cbnz_x0(&mut self, label: LabelId) {
+        self.emit
+            .emit_with(|buf| x64::encode_test_r64_r64(0, 0, buf))
+            .expect("test rax");
+        self.emit.emit_jnz_label(label).expect("jnz");
     }
 
     /// Zero a 64-bit stack slot at rsp + offset.
     pub fn emit_zero_stack_slot(&mut self, sp_offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov QWORD [rsp + sp_offset as i32], 0
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset as i32 }, 0, buf))
+            .expect("zero slot");
     }
 
     /// Load a byte from rsp + sp_offset, compare with byte_val, branch if equal.
@@ -437,52 +486,63 @@ impl EmitCtx {
         &mut self,
         sp_offset: u32,
         byte_val: u8,
-        label: DynamicLabel,
+        label: LabelId,
     ) {
         let byte_val = byte_val as i32;
-        dynasm!(self.ops
-            ; .arch x64
-            ; movzx r10d, BYTE [rsp + sp_offset as i32]
-            ; cmp r10d, byte_val
-            ; je =>label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_movzx_r32_rm8(
+                    10,
+                    x64::Operand::Mem(Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    }),
+                    buf,
+                )?;
+                x64::encode_cmp_r64_imm32(10, byte_val as u32, buf)?;
+                Ok(())
+            })
+            .expect("cmp byte");
+        self.emit.emit_je_label(label).expect("je");
     }
 
     /// Set bit `bit_index` in a 64-bit stack slot at rsp + sp_offset.
     pub fn emit_set_bit_on_stack(&mut self, sp_offset: u32, bit_index: u32) {
         let mask = (1u64 << bit_index) as i64;
 
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + sp_offset as i32]
-            ; mov r10, QWORD mask
-            ; or rax, r10
-            ; mov [rsp + sp_offset as i32], rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(10, mask as u64, buf)?;
+                x64::encode_or_r64_r64(0, 10, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset as i32 }, 0, buf)
+            })
+            .expect("set bit on stack");
     }
 
     /// Check that the 64-bit stack slot at rsp + sp_offset equals expected_mask.
     /// If not, set MissingRequiredField error and branch to error_exit.
     pub fn emit_check_bitset(&mut self, sp_offset: u32, expected_mask: u64) {
         let error_exit = self.error_exit;
-        let ok_label = self.ops.new_dynamic_label();
+        let ok_label = self.emit.new_label();
         let expected_mask = expected_mask as i64;
         let error_code = crate::context::ErrorCode::MissingRequiredField as i32;
 
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + sp_offset as i32]
-            ; mov r10, QWORD expected_mask
-            // Check that (bitset & mask) == mask — all required bits are set.
-            // Extra bits (from optional/default fields) are ignored.
-            ; and rax, r10
-            ; cmp rax, r10
-            ; je =>ok_label
-            // Not all required fields were seen — write error and bail
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-            ; jmp =>error_exit
-            ; =>ok_label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_imm64(10, expected_mask as u64, buf)?;
+                x64::encode_and_r64_r64(0, 10, buf)?;
+                x64::encode_cmp_r64_r64(0, 10, buf)?;
+                Ok(())
+            })
+            .expect("check bitset");
+        self.emit.emit_je_label(ok_label).expect("je");
+        self.emit
+            .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf))
+            .expect("set error");
+        self.emit.emit_jmp_label(error_exit).expect("jmp");
+        self.emit.bind_label(ok_label).expect("bind ok");
     }
 
     // ── Inline scalar reads (recipe-based) ─────────────────────────────
@@ -557,13 +617,13 @@ impl EmitCtx {
     /// Falls back to scalar for the last < 16 bytes.
     pub fn emit_json_string_scan(
         &mut self,
-        found_quote: DynamicLabel,
-        found_escape: DynamicLabel,
-        unterminated: DynamicLabel,
+        found_quote: LabelId,
+        found_escape: LabelId,
+        unterminated: LabelId,
     ) {
-        let vector_loop = self.ops.new_dynamic_label();
-        let scalar_tail = self.ops.new_dynamic_label();
-        let advance_16 = self.ops.new_dynamic_label();
+        let vector_loop = self.emit.new_label();
+        let scalar_tail = self.emit.new_label();
+        let advance_16 = self.emit.new_label();
 
         // Broadcast '"' (0x22) and '\' (0x5C) into xmm1 and xmm2
         dynasm!(self.ops
@@ -625,8 +685,8 @@ impl EmitCtx {
     /// Inline skip-whitespace: loop over space/tab/newline/cr, advancing r12.
     /// No function call, no ctx flush.
     pub fn emit_inline_skip_ws(&mut self) {
-        let ws_loop = self.ops.new_dynamic_label();
-        let ws_done = self.ops.new_dynamic_label();
+        let ws_loop = self.emit.new_label();
+        let ws_done = self.emit.new_label();
 
         dynasm!(self.ops
             ; .arch x64
@@ -653,9 +713,9 @@ impl EmitCtx {
     /// Writes 0 (comma) or 1 (']') to stack at sp_offset. Errors on anything else.
     pub fn emit_inline_comma_or_end_array(&mut self, sp_offset: u32) {
         let error_exit = self.error_exit;
-        let got_comma = self.ops.new_dynamic_label();
-        let got_end = self.ops.new_dynamic_label();
-        let done = self.ops.new_dynamic_label();
+        let got_comma = self.emit.new_label();
+        let got_end = self.emit.new_label();
+        let done = self.emit.new_label();
         let error_code = ErrorCode::UnexpectedCharacter as i32;
 
         self.emit_inline_skip_ws();
@@ -685,9 +745,9 @@ impl EmitCtx {
     /// Writes 0 (comma) or 1 ('}') to stack at sp_offset. Errors on anything else.
     pub fn emit_inline_comma_or_end_object(&mut self, sp_offset: u32) {
         let error_exit = self.error_exit;
-        let got_comma = self.ops.new_dynamic_label();
-        let got_end = self.ops.new_dynamic_label();
-        let done = self.ops.new_dynamic_label();
+        let got_comma = self.emit.new_label();
+        let got_end = self.emit.new_label();
+        let done = self.emit.new_label();
         let error_code = ErrorCode::UnexpectedCharacter as i32;
 
         self.emit_inline_skip_ws();
@@ -725,8 +785,8 @@ impl EmitCtx {
     /// After this, r12 points just after the opening `"`.
     pub fn emit_json_expect_quote_after_ws(&mut self, _ws_intrinsic: *const u8) {
         let error_exit = self.error_exit;
-        let not_quote = self.ops.new_dynamic_label();
-        let ok = self.ops.new_dynamic_label();
+        let not_quote = self.emit.new_label();
+        let ok = self.emit.new_label();
         let error_code = ErrorCode::ExpectedStringKey as i32;
 
         self.emit_inline_skip_ws();
@@ -959,9 +1019,9 @@ impl EmitCtx {
     /// After this, the caller emits `emit_cmp_imm_branch_eq` for each variant.
     /// The discriminant value is in r10d.
     pub fn emit_read_postcard_discriminant(&mut self, slow_intrinsic: *const u8) {
-        let eof_label = self.ops.new_dynamic_label();
-        let slow_path = self.ops.new_dynamic_label();
-        let done_label = self.ops.new_dynamic_label();
+        let eof_label = self.emit.new_label();
+        let slow_path = self.emit.new_label();
+        let done_label = self.emit.new_label();
 
         dynasm!(self.ops
             ; .arch x64
@@ -1007,7 +1067,7 @@ impl EmitCtx {
 
     /// Compare r10d (discriminant) with immediate `imm` and branch to `label`
     /// if equal.
-    pub fn emit_cmp_imm_branch_eq(&mut self, imm: u32, label: DynamicLabel) {
+    pub fn emit_cmp_imm_branch_eq(&mut self, imm: u32, label: LabelId) {
         dynasm!(self.ops
             ; .arch x64
             ; cmp r10d, imm as i32
@@ -1068,7 +1128,7 @@ impl EmitCtx {
 
     /// Check if the stack slot at rsp + offset has exactly one bit set (popcount == 1).
     /// If so, branch to `label`.
-    pub fn emit_popcount_eq1_branch(&mut self, stack_offset: u32, label: DynamicLabel) {
+    pub fn emit_popcount_eq1_branch(&mut self, stack_offset: u32, label: LabelId) {
         dynasm!(self.ops
             ; .arch x64
             ; mov rax, [rsp + stack_offset as i32]
@@ -1083,7 +1143,7 @@ impl EmitCtx {
     }
 
     /// Check if the stack slot at rsp + offset is zero. If so, branch to `label`.
-    pub fn emit_stack_zero_branch(&mut self, stack_offset: u32, label: DynamicLabel) {
+    pub fn emit_stack_zero_branch(&mut self, stack_offset: u32, label: LabelId) {
         dynasm!(self.ops
             ; .arch x64
             ; mov rax, [rsp + stack_offset as i32]
@@ -1094,7 +1154,7 @@ impl EmitCtx {
 
     /// Load the stack slot at rsp + offset, test if bit `bit_index` is set,
     /// and branch to `label` if so.
-    pub fn emit_test_bit_branch(&mut self, stack_offset: u32, bit_index: u32, label: DynamicLabel) {
+    pub fn emit_test_bit_branch(&mut self, stack_offset: u32, bit_index: u32, label: LabelId) {
         let mask = (1u64 << bit_index) as i64;
         dynasm!(self.ops
             ; .arch x64
@@ -1111,7 +1171,7 @@ impl EmitCtx {
         &mut self,
         stack_offset: u32,
         bit_index: u32,
-        label: DynamicLabel,
+        label: LabelId,
     ) {
         let mask = (1u64 << bit_index) as i64;
         dynasm!(self.ops
@@ -1154,11 +1214,11 @@ impl EmitCtx {
         let err_code = error_code as i32;
         let expected = expected as i8;
 
-        let ws_loop = self.ops.new_dynamic_label();
-        let ws_next = self.ops.new_dynamic_label();
-        let non_ws = self.ops.new_dynamic_label();
-        let done = self.ops.new_dynamic_label();
-        let err_lbl = self.ops.new_dynamic_label();
+        let ws_loop = self.emit.new_label();
+        let ws_next = self.emit.new_label();
+        let non_ws = self.emit.new_label();
+        let done = self.emit.new_label();
+        let err_lbl = self.emit.new_label();
 
         dynasm!(self.ops ; .arch x64
             // ── whitespace-skip loop ────────────────────────────────────
@@ -1344,7 +1404,7 @@ impl EmitCtx {
     }
 
     /// Check ctx.error.code and branch to label if nonzero.
-    pub fn emit_check_error_branch(&mut self, label: DynamicLabel) {
+    pub fn emit_check_error_branch(&mut self, label: LabelId) {
         dynasm!(self.ops
             ; .arch x64
             ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
@@ -1514,8 +1574,8 @@ impl EmitCtx {
         _save_rbx_slot: u32,
         end_slot: u32,
         elem_size: u32,
-        loop_label: DynamicLabel,
-        error_cleanup_label: DynamicLabel,
+        loop_label: LabelId,
+        error_cleanup_label: LabelId,
     ) {
         dynasm!(self.ops
             ; .arch x64
@@ -1540,7 +1600,7 @@ impl EmitCtx {
         &mut self,
         end_slot: u32,
         elem_size: u32,
-        loop_label: DynamicLabel,
+        loop_label: LabelId,
     ) {
         dynasm!(self.ops
             ; .arch x64
@@ -1559,12 +1619,12 @@ impl EmitCtx {
         intrinsic_fn_ptr: *const u8,
         elem_size: u32,
         end_slot: u32,
-        loop_label: DynamicLabel,
-        done_label: DynamicLabel,
-        error_cleanup: DynamicLabel,
+        loop_label: LabelId,
+        done_label: LabelId,
+        error_cleanup: LabelId,
     ) {
-        let slow_path = self.ops.new_dynamic_label();
-        let eof_label = self.ops.new_dynamic_label();
+        let slow_path = self.emit.new_label();
+        let eof_label = self.emit.new_label();
 
         // === Hot loop ===
         dynasm!(self.ops
@@ -1747,7 +1807,7 @@ impl EmitCtx {
 
     /// Compare the count register (w9 on aarch64, r10d on x64) with zero
     /// and branch to label if equal.
-    pub fn emit_cbz_count(&mut self, label: DynamicLabel) {
+    pub fn emit_cbz_count(&mut self, label: LabelId) {
         dynasm!(self.ops
             ; .arch x64
             ; test r10d, r10d
@@ -1760,7 +1820,7 @@ impl EmitCtx {
         &mut self,
         slot_a: u32,
         slot_b: u32,
-        label: DynamicLabel,
+        label: LabelId,
     ) {
         dynasm!(self.ops
             ; .arch x64
@@ -1884,12 +1944,12 @@ impl EmitCtx {
         let error_exit = self.error_exit;
 
         // Allocate dynamic labels for the recipe
-        let labels: Vec<DynamicLabel> = (0..recipe.label_count)
-            .map(|_| self.ops.new_dynamic_label())
+        let labels: Vec<LabelId> = (0..recipe.label_count)
+            .map(|_| self.emit.new_label())
             .collect();
 
         // Shared EOF error label
-        let eof_label = self.ops.new_dynamic_label();
+        let eof_label = self.emit.new_label();
 
         for op in &recipe.ops {
             match op {
@@ -2035,8 +2095,8 @@ impl EmitCtx {
                 } => {
                     let max_val = *max_val as i32;
                     let error_code = *error as i32;
-                    let invalid_label = self.ops.new_dynamic_label();
-                    let ok_label = self.ops.new_dynamic_label();
+                    let invalid_label = self.emit.new_label();
+                    let ok_label = self.emit.new_label();
                     match slot {
                         Slot::A => dynasm!(self.ops
                             ; .arch x64
@@ -2295,7 +2355,7 @@ impl EmitCtx {
                 },
                 Op::OutputBoundsCheck { count } => {
                     let count = *count as i32;
-                    let have_space = self.ops.new_dynamic_label();
+                    let have_space = self.emit.new_label();
 
                     dynasm!(self.ops
                         ; .arch x64
@@ -2359,8 +2419,8 @@ impl EmitCtx {
                     // Inline varint encoding loop.
                     // While value >= 0x80: write (byte | 0x80), shift right 7.
                     // Then write final byte.
-                    let loop_label = self.ops.new_dynamic_label();
-                    let done_label = self.ops.new_dynamic_label();
+                    let loop_label = self.emit.new_label();
+                    let done_label = self.emit.new_label();
 
                     if *wide {
                         // 64-bit varint: use rax
@@ -2410,7 +2470,7 @@ impl EmitCtx {
         }
 
         // Jump over cold path, then emit shared EOF error
-        let done_label = self.ops.new_dynamic_label();
+        let done_label = self.emit.new_label();
         let eof_code = crate::context::ErrorCode::UnexpectedEof as i32;
         dynasm!(self.ops
             ; .arch x64
@@ -2440,9 +2500,9 @@ impl EmitCtx {
     ///
     /// Caches output_ptr and output_end from EncodeContext into r12/r13.
     /// Returns the entry offset and a fresh error_exit label.
-    pub fn begin_encode_func(&mut self) -> (AssemblyOffset, DynamicLabel) {
-        let error_exit = self.ops.new_dynamic_label();
-        let entry = self.ops.offset();
+    pub fn begin_encode_func(&mut self) -> (u32, LabelId) {
+        let error_exit = self.emit.new_label();
+        let entry = self.emit.current_offset();
         let frame_size = self.frame_size;
 
         #[cfg(not(windows))]
@@ -2483,7 +2543,7 @@ impl EmitCtx {
     /// Emit the success epilogue and error exit for an encode function.
     ///
     /// Flushes output_ptr back to ctx on success.
-    pub fn end_encode_func(&mut self, error_exit: DynamicLabel) {
+    pub fn end_encode_func(&mut self, error_exit: LabelId) {
         let frame_size = self.frame_size as i32;
 
         #[cfg(not(windows))]
@@ -2543,7 +2603,7 @@ impl EmitCtx {
     /// Convention: arg0 = input + field_offset, arg1 = ctx.
     /// Flushes output cursor before call, reloads both output_ptr and output_end
     /// after (buffer may have grown), checks error.
-    pub fn emit_enc_call_emitted_func(&mut self, label: DynamicLabel, field_offset: u32) {
+    pub fn emit_enc_call_emitted_func(&mut self, label: LabelId, field_offset: u32) {
         self.emit_enc_flush_output_cursor();
         // Set up arguments: arg0 = input + field_offset, arg1 = ctx
         #[cfg(not(windows))]
@@ -2602,7 +2662,7 @@ impl EmitCtx {
     /// Ensure the output buffer has at least `count` bytes of capacity.
     /// Inlines the comparison; calls kajit_output_grow only when needed.
     pub fn emit_enc_ensure_capacity(&mut self, count: u32) {
-        let have_space = self.ops.new_dynamic_label();
+        let have_space = self.emit.new_label();
 
         dynasm!(self.ops
             ; .arch x64
