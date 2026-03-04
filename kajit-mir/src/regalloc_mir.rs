@@ -243,7 +243,7 @@ fn fmt_function_human(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std
     let meta = build_display_meta(func);
     write!(
         f,
-        "ra_func @{} (entry: b{})",
+        "ra_func @{} {{ ; entry: b{}",
         func.lambda_id.index(),
         func.entry.0,
     )?;
@@ -259,7 +259,7 @@ fn fmt_function_human(func: &RaFunction, f: &mut std::fmt::Formatter<'_>) -> std
         fmt_block_human(f, block, &meta)?;
         writeln!(f)?;
     }
-    Ok(())
+    writeln!(f, "}}")
 }
 
 fn fmt_block_canonical(f: &mut std::fmt::Formatter<'_>, block: &RaBlock) -> std::fmt::Result {
@@ -1040,10 +1040,7 @@ fn lower_function(
                         source: target,
                     })
                     .collect();
-                RaEdge {
-                    to: *to,
-                    args,
-                }
+                RaEdge { to: *to, args }
             })
             .collect();
     }
@@ -1611,7 +1608,7 @@ mod tests {
         assert!(!canonical.contains(" ; sem: "));
         assert!(!canonical.contains(" ; const_alias: "));
 
-        assert!(human_alt.starts_with("ra_func @0 (entry: b0)"));
+        assert!(human_alt.starts_with("ra_func @0 { ; entry: b0"));
         assert!(human_alt.contains(" ; consts: "));
         assert!(human_alt.contains(" ; sem: "));
         assert!(human_alt.contains(" ; const_alias: "));
