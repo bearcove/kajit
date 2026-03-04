@@ -50,7 +50,19 @@ Failing test: `json::all_scalars`
 
 The i64 field reads 0 instead of -1000000000000. Every other scalar is correct. This is almost certainly the same root cause as the postcard failures — the x86_64 codegen for 64-bit integer load/store/decode is broken. JSON encodes i64 in text; the JIT-generated decoder is presumably converting the string to an integer, and the 64-bit conversion path produces 0.
 
-**Working hypothesis**: There is a single bug in the x86_64 backend's handling of 64-bit integer operations — either in instruction selection (wrong register size: using 32-bit ops on 64-bit values), in the varint loop codegen, or in how u64/i64 intrinsics are called/returned. All 15 failures likely share this root cause.
+**Diagnosis (Prompt A)**: Not a 32-bit truncation bug, not a calling convention bug. Root cause is the `rcx/cl` fixed-register constraint for x86 shift instructions in the varint loop.
+
+- `scalar_u64_v3` = `128u64` — first value requiring a multi-byte postcard varint
+- IR and LinearIr are correct and identical across arches
+- x86 RA-MIR forces `Shl` shift-count operand to `hw1` (rcx/cl): `kajit-mir/src/regalloc_mir.rs:1214-1217`
+- x86 emits `shl r10, cl` and depends on that constraint: `kajit/src/backends/x86_64/emit.rs:143-144`
+- This generates **24 register edits** on x86 vs **1** on aarch64 for this loop — massive spill/shuffle pressure
+- `W8` loads/stores and shift ops are correctly 64-bit; `r10d` uses elsewhere are intentional (error codes, booleans)
+- `kajit_read_u64` is an out-pointer intrinsic, not a return-value intrinsic; return-value path captures full `rax`
+
+**Next question**: Are those 24 edge edits around the `rcx/cl` constraint correct? Is the shift count vreg being saved/restored correctly across loop iterations, or is a clobber of `rcx` corrupting the accumulated u64 value?
+
+See **Prompt A2** below.
 
 ---
 
@@ -76,23 +88,26 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 
 ## Investigation Prompts
 
-### Prompt A — Root cause of u64/i64 x86_64 failures
+### ~~Prompt A~~ — DIAGNOSED (see above)
 
-> You are investigating why u64 and i64 decoding is broken on x86_64 in the kajit JIT compiler. All tests are run with `cargo nextest run --target x86_64-apple-darwin --no-fail-fast`.
+### Prompt A2 — Verify rcx/cl edge edits around the varint shift loop
+
+> You are investigating a runtime failure in kajit's x86_64 JIT: postcard `scalar_u64_v3` (value = 128u64) fails with `DeserError { code: InvalidVarint, offset: 0 }`. The IR and LinearIr are correct. The root cause has been narrowed to the x86 shift constraint.
 >
-> Start with the simplest failing case: `postcard::scalar_u64_v3`. This test encodes a u64 value using postcard's varint format and then decodes it with kajit's JIT-generated x86_64 code. It fails with `DeserError { code: InvalidVarint, offset: 0 }` — a decode error at the very first byte.
+> Known facts:
+> - x86 RA-MIR forces `Shl` shift-count to `hw1` (rcx/cl): `kajit-mir/src/regalloc_mir.rs:1214-1217`
+> - x86 emits `shl r10, cl`: `kajit/src/backends/x86_64/emit.rs:143-144`
+> - This generates 24 register edits for x86 vs 1 for aarch64 on this loop
+> - The error fires at offset 0, meaning the accumulated value is wrong from the very first multi-byte read
 >
-> Key observations:
-> - `scalar_u64_v0`, `v1`, `v2` pass; `v3`–`v8` fail. The value in v3 is likely ≥ 128, requiring a multi-byte varint.
-> - `json::all_scalars` fails because `a_i64` decodes as 0 instead of -1000000000000.
-> - The `linear_backend_vec_u32_matches_serde` test gets the same `InvalidVarint` from `kajit/src/backends/x86_64/mod.rs:967`.
+> Use `KAJIT_DUMP_STAGES=1` (see `docs/pipeline-debugging.md`) to dump the x86_64 pipeline for `postcard::scalar_u64_v3` and examine the edits file.
 >
 > Investigate:
-> 1. What corpus value is in `scalar_u64_v3` (check `kajit/tests/` or `xtask/src/cases.rs`)?
-> 2. What IR and LinearIr does kajit generate for a u64 field decode?
-> 3. What x86_64 instructions does the backend emit for that LinearIr? Compare to what aarch64 emits.
-> 4. Is the backend using 32-bit register variants (e.g., `eax` instead of `rax`) anywhere it should use 64-bit? Check `kajit/src/backends/x86_64/` thoroughly.
-> 5. Is there a u64 intrinsic (e.g., `kajit_read_u64`) and does the x86_64 calling convention handle its 64-bit return value correctly?
+> 1. Read `docs/pipeline-debugging.md` to understand how to produce and read the stage dumps.
+> 2. Look at the 24 edge edits in the x86_64 edits dump. What vregs are being moved around the shift instruction?
+> 3. Is `rcx` (hw1) live with the shift-count value when `shl` executes, or has it been overwritten by another edit?
+> 4. Does the varint loop use `rcx` for anything else (e.g., as a scratch reg for a move), potentially clobbering the shift count?
+> 5. Is there a missing `rcx` clobber declaration for the `Shl` instruction that would cause regalloc2 to leave a live value in `rcx` across the shift?
 >
 > Do not fix anything yet — produce a diagnosis with specific file:line evidence.
 
