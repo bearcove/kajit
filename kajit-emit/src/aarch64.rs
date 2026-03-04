@@ -22,6 +22,60 @@ impl Width {
     }
 }
 
+/// AArch64 general-purpose register (0..=31).
+///
+/// Named constants are provided for all registers. `XZR` and `SP` are
+/// both register 31 — the CPU disambiguates by instruction context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Reg(u8);
+
+impl Reg {
+    pub const X0: Self = Self(0);
+    pub const X1: Self = Self(1);
+    pub const X2: Self = Self(2);
+    pub const X3: Self = Self(3);
+    pub const X4: Self = Self(4);
+    pub const X5: Self = Self(5);
+    pub const X6: Self = Self(6);
+    pub const X7: Self = Self(7);
+    pub const X8: Self = Self(8);
+    pub const X9: Self = Self(9);
+    pub const X10: Self = Self(10);
+    pub const X11: Self = Self(11);
+    pub const X12: Self = Self(12);
+    pub const X13: Self = Self(13);
+    pub const X14: Self = Self(14);
+    pub const X15: Self = Self(15);
+    pub const X16: Self = Self(16);
+    pub const X17: Self = Self(17);
+    pub const X18: Self = Self(18);
+    pub const X19: Self = Self(19);
+    pub const X20: Self = Self(20);
+    pub const X21: Self = Self(21);
+    pub const X22: Self = Self(22);
+    pub const X23: Self = Self(23);
+    pub const X24: Self = Self(24);
+    pub const X25: Self = Self(25);
+    pub const X26: Self = Self(26);
+    pub const X27: Self = Self(27);
+    pub const X28: Self = Self(28);
+    pub const X29: Self = Self(29);
+    pub const X30: Self = Self(30);
+    pub const XZR: Self = Self(31);
+    pub const SP: Self = Self(31);
+
+    /// Create a Reg from a raw register number. Panics if > 31.
+    pub const fn from_raw(n: u8) -> Self {
+        assert!(n <= 31, "register number must be 0..=31");
+        Self(n)
+    }
+
+    /// Get the raw register number.
+    pub const fn raw(self) -> u8 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shift {
     Lsl = 0,
@@ -95,7 +149,7 @@ impl FinalizedEmission {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitError {
     InvalidRegister {
-        reg: u8,
+        reg: Reg,
     },
     InvalidShiftAmount {
         width: Width,
@@ -357,12 +411,8 @@ impl Emitter {
     }
 }
 
-fn check_reg(reg: u8) -> Result<u32, EmitError> {
-    if reg <= 31 {
-        Ok(reg as u32)
-    } else {
-        Err(EmitError::InvalidRegister { reg })
-    }
+fn check_reg(reg: Reg) -> u32 {
+    reg.raw() as u32
 }
 
 fn check_shift_amount(width: Width, amount: u8) -> Result<u32, EmitError> {
