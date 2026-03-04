@@ -1,5 +1,5 @@
 use dynasmrt::{DynasmApi, DynasmLabelApi, dynasm};
-use kajit_emit::aarch64::{Emitter, LabelId};
+use kajit_emit::aarch64::{self, Emitter, LabelId};
 
 use crate::context::{
     CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR, ENC_ERROR_CODE, ENC_OUTPUT_END, ENC_OUTPUT_PTR,
@@ -366,12 +366,18 @@ impl EmitCtx {
     pub fn emit_set_error(&mut self, code: ErrorCode) {
         let error_exit = self.error_exit;
         let error_code = code as u32;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; movz w9, #error_code
-            ; str w9, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
+        // movz w9, #error_code
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, 9, error_code as u16, 0)
+                .expect("encode_movz"),
         );
+        // str w9, [x22, #CTX_ERROR_CODE]
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, 9, 22, CTX_ERROR_CODE as u32)
+                .expect("encode_str_imm"),
+        );
+        // b =>error_exit
+        self.emit.emit_b_label(error_exit).expect("emit_b_label");
     }
 
     /// Compute len = cursor - [sp+start_slot], store to [sp+len_slot], advance cursor past `"`.
@@ -386,11 +392,10 @@ impl EmitCtx {
     }
 
     /// Emit `cbnz x0, label` — branch if x0 is nonzero.
-    pub fn emit_cbnz_x0(&mut self, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; cbnz x0, =>label
-        );
+    pub fn emit_cbnz_x0(&mut self, label: LabelId) {
+        self.emit
+            .emit_cbnz_label(aarch64::Width::X64, 0, label)
+            .expect("emit_cbnz_label");
     }
 
     /// Zero a 64-bit stack slot at sp + offset.
