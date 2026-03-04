@@ -16,13 +16,6 @@ On Apple Silicon, x86_64 tests run via Rosetta 2 — no Docker needed:
 cargo nextest run --target x86_64-apple-darwin
 ```
 
-For a curated regression subset (faster) or full suite:
-
-```
-cargo xtask test-x86_64           # regression subset only
-cargo xtask test-x86_64 --full    # full suite
-```
-
 The overwhelming majority of tests and benchmarks are generated from `xtask/src/cases.rs`. Don't add test cases by hand — add them there.
 
 Regenerate with `cargo xtask gen`.

@@ -138,7 +138,7 @@ fn main() {
     let mut args = std::env::args();
     let _bin = args.next();
     let command = args.next();
-    let command_args: Vec<String> = args.collect();
+    let _command_args: Vec<String> = args.collect();
 
     match command.as_deref() {
         Some("install") => install(),
@@ -148,10 +148,9 @@ fn main() {
             generate_ir_opt_corpus();
             generate_ir_postreg_corpus();
         }
-        Some("test-x86_64") => test_x86_64(&command_args),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|test-x86_64 [--full] [-- <extra nextest args...>]>"
+                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen>"
             );
             std::process::exit(2);
         }
@@ -341,98 +340,3 @@ fn write_file(path: &Path, content: &str) {
     fs::write(path, content).expect("write generated file");
 }
 
-const X86_64_REGRESSION_TESTS: &[&str] = &[
-    "prop::deny_unknown_fields",
-    "prop::flat_struct",
-    "prop::scalar_i64",
-    "prop::nested_struct",
-    "prop::transparent_composite",
-    "prop::shared_inner_type",
-];
-
-fn test_x86_64(args: &[String]) {
-    if !cfg!(target_os = "macos") {
-        eprintln!("`cargo xtask test-x86_64` is only supported on macOS hosts.");
-        std::process::exit(2);
-    }
-
-    ensure_rosetta_available();
-    ensure_x86_64_target_installed();
-
-    let mut nextest_args = vec![
-        "nextest".to_string(),
-        "run".to_string(),
-        "-p".to_string(),
-        "kajit".to_string(),
-        "--target".to_string(),
-        "x86_64-apple-darwin".to_string(),
-    ];
-
-    let mut run_full = false;
-    let mut passthrough_start = None;
-    for (idx, arg) in args.iter().enumerate() {
-        if arg == "--full" {
-            run_full = true;
-        } else if arg == "--" {
-            passthrough_start = Some(idx + 1);
-            break;
-        } else {
-            eprintln!("unknown argument `{arg}`");
-            eprintln!("usage: cargo xtask test-x86_64 [--full] [-- <extra nextest args...>]");
-            std::process::exit(2);
-        }
-    }
-
-    if !run_full {
-        nextest_args.extend(X86_64_REGRESSION_TESTS.iter().map(|t| (*t).to_string()));
-    }
-
-    if let Some(start) = passthrough_start {
-        nextest_args.extend(args[start..].iter().cloned());
-    }
-
-    println!("running: cargo {}", nextest_args.join(" "));
-    let status = Command::new("cargo")
-        .args(nextest_args)
-        .status()
-        .expect("failed to run cargo nextest");
-
-    if !status.success() {
-        std::process::exit(status.code().unwrap_or(1));
-    }
-}
-
-fn ensure_rosetta_available() {
-    let status = Command::new("arch")
-        .args(["-x86_64", "/usr/bin/true"])
-        .status()
-        .expect("failed to check Rosetta availability");
-
-    if !status.success() {
-        eprintln!("Rosetta is required for x86_64 test execution on Apple Silicon.");
-        eprintln!("Install it with: softwareupdate --install-rosetta --agree-to-license");
-        std::process::exit(status.code().unwrap_or(1));
-    }
-}
-
-fn ensure_x86_64_target_installed() {
-    let output = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .expect("failed to query installed Rust targets");
-
-    if !output.status.success() {
-        eprintln!("failed to read installed Rust targets via rustup");
-        std::process::exit(output.status.code().unwrap_or(1));
-    }
-
-    let installed = String::from_utf8(output.stdout).expect("rustup output should be utf-8");
-    if !installed
-        .lines()
-        .any(|line| line.trim() == "x86_64-apple-darwin")
-    {
-        eprintln!("missing Rust target `x86_64-apple-darwin`.");
-        eprintln!("Install it with: rustup target add x86_64-apple-darwin");
-        std::process::exit(2);
-    }
-}
