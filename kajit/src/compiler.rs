@@ -872,7 +872,11 @@ fn compile_linear_ir_decoder_with_options(
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
     maybe_disable_regalloc_edits(&mut regalloc_alloc, &pipeline_opts);
 
-    let crate::ir_backend::LinearBackendResult { buf, entry } =
+    let crate::ir_backend::LinearBackendResult {
+        buf,
+        entry,
+        source_map: _,
+    } =
         crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.ptr(entry)) };
@@ -913,7 +917,11 @@ pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> C
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
     maybe_disable_regalloc_edits(&mut alloc, &PipelineOptions::from_env());
 
-    let crate::ir_backend::LinearBackendResult { buf, entry } =
+    let crate::ir_backend::LinearBackendResult {
+        buf,
+        entry,
+        source_map: _,
+    } =
         crate::ir_backend::compile_ra_program(program, &alloc);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.ptr(entry)) };

@@ -211,7 +211,7 @@ impl Lowerer {
 
     pub(super) fn emit_call_lambda(
         &mut self,
-        label: DynamicLabel,
+        label: LabelId,
         args: &[crate::ir::VReg],
         results: &[crate::ir::VReg],
     ) {

@@ -22,6 +22,7 @@ kajit-ir-text = { path = "../kajit-ir-text" }
 kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
+kajit-emit = { path = "../kajit-emit" }
 
 [dev-dependencies]
 postcard = { version = "1", features = ["alloc"] }

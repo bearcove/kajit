@@ -416,7 +416,7 @@ impl Lowerer {
     pub(super) fn emit_branch_if(
         &mut self,
         cond: crate::ir::VReg,
-        target: DynamicLabel,
+        target: LabelId,
         invert: bool,
     ) {
         let _ = cond;
@@ -427,7 +427,7 @@ impl Lowerer {
     pub(super) fn emit_branch_if_allocation(
         &mut self,
         alloc: Allocation,
-        target: DynamicLabel,
+        target: LabelId,
         invert: bool,
     ) {
         if let Some(reg) = alloc.as_reg() {

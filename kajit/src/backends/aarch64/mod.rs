@@ -1,6 +1,7 @@
 #![allow(clippy::useless_conversion)]
 
-use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
+use dynasmrt::{AssemblyOffset as DynasmAssemblyOffset, DynasmApi, dynasm};
+use kajit_emit::aarch64::LabelId;
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
 use std::collections::BTreeMap;
 
@@ -18,7 +19,7 @@ mod edits;
 mod emit;
 
 pub(crate) struct FunctionCtx {
-    pub(crate) error_exit: DynamicLabel,
+    pub(crate) error_exit: LabelId,
     pub(crate) data_results: Vec<crate::ir::VReg>,
     pub(crate) lambda_id: crate::ir::LambdaId,
 }
@@ -36,18 +37,18 @@ pub(crate) struct LambdaEdgeEditMap {
 }
 
 pub(crate) struct EdgeTrampoline {
-    pub(crate) label: DynamicLabel,
-    pub(crate) target: DynamicLabel,
+    pub(crate) label: LabelId,
+    pub(crate) target: LabelId,
     pub(crate) moves: Vec<(Allocation, Allocation)>,
 }
 
 pub(crate) struct Lowerer {
     pub(crate) ectx: EmitCtx,
-    pub(crate) block_labels: BTreeMap<(u32, u32), DynamicLabel>,
-    pub(crate) lambda_labels: Vec<DynamicLabel>,
+    pub(crate) block_labels: BTreeMap<(u32, u32), LabelId>,
+    pub(crate) lambda_labels: Vec<LabelId>,
     pub(crate) slot_base: u32,
     pub(crate) spill_base: u32,
-    pub(crate) entry: Option<AssemblyOffset>,
+    pub(crate) entry: Option<u32>,
     pub(crate) current_func: Option<FunctionCtx>,
     pub(crate) const_vregs: Vec<Option<u64>>,
     pub(crate) edits_by_lambda: BTreeMap<u32, LambdaEditMap>,
@@ -55,7 +56,7 @@ pub(crate) struct Lowerer {
     pub(crate) forward_branch_blocks: BTreeMap<(u32, u32), u32>,
     pub(crate) allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
     pub(crate) return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
-    pub(crate) edge_trampoline_labels: BTreeMap<(u32, usize, usize), DynamicLabel>,
+    pub(crate) edge_trampoline_labels: BTreeMap<(u32, usize, usize), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
 }
@@ -64,6 +65,38 @@ pub(crate) struct Lowerer {
 pub(crate) enum IntrinsicArg {
     VReg { operand_index: usize },
     OutField(u32),
+}
+
+trait IntoBackendEntryOffset {
+    fn into_backend_entry_offset(self) -> u32;
+}
+
+impl IntoBackendEntryOffset for u32 {
+    fn into_backend_entry_offset(self) -> u32 {
+        self
+    }
+}
+
+impl IntoBackendEntryOffset for DynasmAssemblyOffset {
+    fn into_backend_entry_offset(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+trait FromBackendEntryOffset {
+    fn from_backend_entry_offset(offset: u32) -> Self;
+}
+
+impl FromBackendEntryOffset for u32 {
+    fn from_backend_entry_offset(offset: u32) -> Self {
+        offset
+    }
+}
+
+impl FromBackendEntryOffset for DynasmAssemblyOffset {
+    fn from_backend_entry_offset(offset: u32) -> Self {
+        DynasmAssemblyOffset(offset as usize)
+    }
 }
 
 // r[impl ir.backends.post-regalloc.branch-test]
@@ -80,6 +113,10 @@ pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendRe
 }
 
 impl Lowerer {
+    pub(super) fn new_label_id(&mut self) -> LabelId {
+        self.ectx.new_label()
+    }
+
     fn normalize_edit_move(from: Allocation, to: Allocation) -> Option<(Allocation, Allocation)> {
         if from == to || from.is_none() || to.is_none() {
             return None;
@@ -157,7 +194,7 @@ impl Lowerer {
                 block_labels.insert(key, ectx.new_label());
             }
         }
-        let lambda_labels: Vec<DynamicLabel> = (0..=lambda_max).map(|_| ectx.new_label()).collect();
+        let lambda_labels: Vec<LabelId> = (0..=lambda_max).map(|_| ectx.new_label()).collect();
 
         let mut forward_branch_blocks = BTreeMap::<(u32, u32), u32>::new();
         for func in &program.funcs {
@@ -247,7 +284,7 @@ impl Lowerer {
         self.slot_base + (s.index() as u32) * 8
     }
 
-    pub(super) fn block_label(&self, lambda_id: u32, block_id: BlockId) -> DynamicLabel {
+    pub(super) fn block_label(&self, lambda_id: u32, block_id: BlockId) -> LabelId {
         self.block_labels[&(lambda_id, block_id.0)]
     }
 
@@ -511,7 +548,7 @@ impl Lowerer {
             self.ectx.bind_label(label);
             let (entry_offset, error_exit) = self.ectx.begin_func();
             if func.lambda_id.index() == 0 {
-                self.entry = Some(entry_offset);
+                self.entry = Some(entry_offset.into_backend_entry_offset());
             }
             self.current_func = Some(FunctionCtx {
                 error_exit,
@@ -555,7 +592,11 @@ impl Lowerer {
 
         let entry = self.entry.expect("missing root FuncStart for lambda 0");
         let buf = self.ectx.finalize();
-        LinearBackendResult { buf, entry }
+        LinearBackendResult {
+            buf,
+            entry: FromBackendEntryOffset::from_backend_entry_offset(entry),
+            source_map: None,
+        }
     }
 }
 

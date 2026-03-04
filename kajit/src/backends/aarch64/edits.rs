@@ -149,8 +149,8 @@ impl Lowerer {
         &mut self,
         linear_op_index: usize,
         succ_index: usize,
-        actual_target: DynamicLabel,
-    ) -> DynamicLabel {
+        actual_target: LabelId,
+    ) -> LabelId {
         let Some(lambda_id) = self
             .current_func
             .as_ref()
@@ -174,7 +174,7 @@ impl Lowerer {
 
         let moves = self.edge_edit_moves(linear_op_index, succ_index);
 
-        let label = self.ectx.new_label();
+        let label = self.new_label_id();
         self.edge_trampoline_labels.insert(cache_key, label);
         self.edge_trampolines.push(EdgeTrampoline {
             label,

@@ -7,6 +7,7 @@ use crate::regalloc_mir::RaProgram;
 pub struct LinearBackendResult {
     pub buf: dynasmrt::ExecutableBuffer,
     pub entry: AssemblyOffset,
+    pub source_map: Option<kajit_emit::SourceMap>,
 }
 
 pub fn compile_linear_ir(ir: &LinearIr) -> LinearBackendResult {

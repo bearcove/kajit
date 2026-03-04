@@ -622,6 +622,7 @@ dependencies = [
  "facet",
  "insta",
  "itoa",
+ "kajit-emit",
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
