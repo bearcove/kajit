@@ -1,19 +1,20 @@
 //! DWARF preparation utilities for JIT code.
 //!
-//! This module builds a minimal DWARF v4 `.debug_line` section from a source
-//! map of `(code_offset, ra_mir_inst_index)` pairs.
+//! This module builds minimal DWARF v4 sections from a source map of
+//! `(code_offset, ra_mir_inst_index)` pairs: `.debug_line` for line tables,
+//! plus `.debug_info` and `.debug_abbrev` so that LLDB actually parses them.
 
 /// Owned DWARF sections ready to be attached to the JIT ELF.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct JitDwarfSections {
     pub debug_line: Vec<u8>,
-    pub debug_str: Vec<u8>,
-    pub debug_line_str: Vec<u8>,
+    pub debug_abbrev: Vec<u8>,
+    pub debug_info: Vec<u8>,
 }
 
 impl JitDwarfSections {
     pub fn is_empty(&self) -> bool {
-        self.debug_line.is_empty() && self.debug_str.is_empty() && self.debug_line_str.is_empty()
+        self.debug_line.is_empty() && self.debug_abbrev.is_empty() && self.debug_info.is_empty()
     }
 }
 
@@ -51,6 +52,19 @@ const LINE_RANGE: u8 = 14;
 const OPCODE_BASE: u8 = 13;
 const STANDARD_OPCODE_LENGTHS: [u8; 12] = [0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1];
 
+const DW_TAG_COMPILE_UNIT: u8 = 0x11;
+const DW_CHILDREN_NO: u8 = 0x00;
+const DW_AT_NAME: u8 = 0x03;
+const DW_AT_STMT_LIST: u8 = 0x10;
+const DW_AT_LOW_PC: u8 = 0x11;
+const DW_AT_HIGH_PC: u8 = 0x12;
+const DW_FORM_ADDR: u8 = 0x01;
+const DW_FORM_DATA8: u8 = 0x07;
+const DW_FORM_STRING: u8 = 0x08;
+const DW_FORM_SEC_OFFSET: u8 = 0x17;
+const INFO_VERSION: u16 = 4;
+const ADDRESS_SIZE_64: u8 = 8;
+
 /// Build DWARF sections for one JIT function.
 ///
 /// `source_map` entries are interpreted as:
@@ -63,6 +77,15 @@ pub fn build_jit_dwarf_sections(
     file_name: &str,
     directory: Option<&str>,
 ) -> Result<JitDwarfSections, DwarfPrepError> {
+    if file_name.as_bytes().contains(&0) {
+        return Err(DwarfPrepError::InteriorNul { field: "file_name" });
+    }
+    if let Some(dir) = directory {
+        if dir.as_bytes().contains(&0) {
+            return Err(DwarfPrepError::InteriorNul { field: "directory" });
+        }
+    }
+
     Ok(JitDwarfSections {
         debug_line: build_debug_line_section(
             code_address,
@@ -71,9 +94,48 @@ pub fn build_jit_dwarf_sections(
             file_name,
             directory,
         )?,
-        debug_str: Vec::new(),
-        debug_line_str: Vec::new(),
+        debug_abbrev: build_debug_abbrev_section(),
+        debug_info: build_debug_info_section(code_address, code_size, file_name),
     })
+}
+
+pub fn build_debug_abbrev_section() -> Vec<u8> {
+    vec![
+        0x01, // abbrev code = 1
+        DW_TAG_COMPILE_UNIT,
+        DW_CHILDREN_NO,
+        DW_AT_STMT_LIST,
+        DW_FORM_SEC_OFFSET,
+        DW_AT_LOW_PC,
+        DW_FORM_ADDR,
+        DW_AT_HIGH_PC,
+        DW_FORM_DATA8,
+        DW_AT_NAME,
+        DW_FORM_STRING,
+        0x00,
+        0x00, // end attribute specs
+        0x00, // end abbrev table
+    ]
+}
+
+pub fn build_debug_info_section(code_address: u64, code_size: u64, file_name: &str) -> Vec<u8> {
+    let mut die = Vec::new();
+    // Single compile unit DIE using abbreviation 1.
+    push_uleb128(&mut die, 1);
+    die.extend_from_slice(&0u32.to_le_bytes()); // DW_AT_stmt_list -> .debug_line offset 0
+    die.extend_from_slice(&code_address.to_le_bytes()); // DW_AT_low_pc
+    die.extend_from_slice(&code_size.to_le_bytes()); // DW_AT_high_pc as length (DW_FORM_data8)
+    die.extend_from_slice(file_name.as_bytes()); // DW_AT_name
+    die.push(0);
+
+    let unit_length = 2u32 + 4u32 + 1u32 + (die.len() as u32);
+    let mut section = Vec::with_capacity(4 + unit_length as usize);
+    section.extend_from_slice(&unit_length.to_le_bytes());
+    section.extend_from_slice(&INFO_VERSION.to_le_bytes());
+    section.extend_from_slice(&0u32.to_le_bytes()); // debug_abbrev_offset
+    section.push(ADDRESS_SIZE_64);
+    section.extend_from_slice(&die);
+    section
 }
 
 pub fn build_debug_line_section(
@@ -359,5 +421,49 @@ mod tests {
             err,
             DwarfPrepError::InteriorNul { field: "file_name" }
         ));
+    }
+
+    #[test]
+    fn debug_abbrev_contains_compile_unit_abbrev() {
+        let abbrev = build_debug_abbrev_section();
+        assert_eq!(
+            abbrev,
+            vec![
+                0x01, 0x11, 0x00, 0x10, 0x17, 0x11, 0x01, 0x12, 0x07, 0x03, 0x08, 0x00, 0x00,
+                0x00
+            ]
+        );
+    }
+
+    #[test]
+    fn debug_info_contains_single_compile_unit_die() {
+        let info = build_debug_info_section(0x1234, 0x56, "decoder.ra");
+
+        let unit_length = u32::from_le_bytes(info[0..4].try_into().unwrap()) as usize;
+        assert_eq!(info.len(), 4 + unit_length);
+        assert_eq!(u16::from_le_bytes(info[4..6].try_into().unwrap()), 4);
+        assert_eq!(u32::from_le_bytes(info[6..10].try_into().unwrap()), 0);
+        assert_eq!(info[10], 8);
+
+        let mut i = 11usize;
+        assert_eq!(parse_uleb(&info, &mut i), 1);
+        assert_eq!(u32::from_le_bytes(info[i..i + 4].try_into().unwrap()), 0);
+        i += 4;
+        assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x1234);
+        i += 8;
+        assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x56);
+        i += 8;
+        let end = info[i..].iter().position(|b| *b == 0).unwrap();
+        assert_eq!(&info[i..i + end], b"decoder.ra");
+    }
+
+    #[test]
+    fn build_jit_dwarf_sections_populates_all_sections() {
+        let sections =
+            build_jit_dwarf_sections(0x1000, 8, &[(0, 0)], "decoder.ra", Some("jit")).unwrap();
+        assert!(!sections.debug_line.is_empty());
+        assert!(!sections.debug_abbrev.is_empty());
+        assert!(!sections.debug_info.is_empty());
+        assert!(!sections.is_empty());
     }
 }
