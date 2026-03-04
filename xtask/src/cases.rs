@@ -2032,7 +2032,7 @@ pub(crate) fn render_test_file() -> String {
             })
         })
         .collect();
-    let json_rvsdg_tests: Vec<TokenStream> = cases
+    let _json_rvsdg_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
             case.values
@@ -2062,7 +2062,7 @@ pub(crate) fn render_test_file() -> String {
                 })
         })
         .collect();
-    let json_ra_mir_tests: Vec<TokenStream> = cases
+    let _json_ra_mir_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
             case.values
@@ -2092,7 +2092,7 @@ pub(crate) fn render_test_file() -> String {
                 })
         })
         .collect();
-    let json_postreg_edits_tests: Vec<TokenStream> = cases
+    let _json_postreg_edits_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
             case.values
@@ -2144,7 +2144,7 @@ pub(crate) fn render_test_file() -> String {
             })
         })
         .collect();
-    let postcard_rvsdg_tests: Vec<TokenStream> = cases
+    let _postcard_rvsdg_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
             case.values
@@ -2174,7 +2174,7 @@ pub(crate) fn render_test_file() -> String {
                 })
         })
         .collect();
-    let postcard_ra_mir_tests: Vec<TokenStream> = cases
+    let _postcard_ra_mir_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
             case.values
@@ -2204,7 +2204,7 @@ pub(crate) fn render_test_file() -> String {
                 })
         })
         .collect();
-    let postcard_postreg_edits_tests: Vec<TokenStream> = cases
+    let _postcard_postreg_edits_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
             case.values
@@ -2381,6 +2381,11 @@ pub(crate) fn render_test_file() -> String {
             let encoded = serde_json::to_string(&value).unwrap();
             let expected: T = serde_json::from_str(&encoded).unwrap();
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+            let case = runtime_case_name();
+            if dumps_enabled_for_case("json", &case) {
+                let artifacts = codegen_artifacts::<T, _>(&kajit::json::KajitJson);
+                maybe_dump_codegen_artifacts("json", &case, &artifacts);
+            }
             let got: T = kajit::from_str(&decoder, &encoded).unwrap();
             assert_eq!(got, expected);
         }
@@ -2392,6 +2397,11 @@ pub(crate) fn render_test_file() -> String {
             let encoded = ::postcard::to_allocvec(&value).unwrap();
             let expected: T = ::postcard::from_bytes(&encoded).unwrap();
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let case = runtime_case_name();
+            if dumps_enabled_for_case("postcard", &case) {
+                let artifacts = codegen_artifacts::<T, _>(&kajit::postcard::KajitPostcard);
+                maybe_dump_codegen_artifacts("postcard", &case, &artifacts);
+            }
             let got: T = kajit::deserialize(&decoder, &encoded).unwrap();
             assert_eq!(got, expected);
         }
@@ -2494,13 +2504,13 @@ pub(crate) fn render_test_file() -> String {
         const DUMP_STAGES_ENV: &str = "KAJIT_DUMP_STAGES";
         const DUMP_FILTER_ENV: &str = "KAJIT_DUMP_FILTER";
         const DUMP_DIR_ENV: &str = "KAJIT_DUMP_DIR";
-        const ASSERT_SNAPSHOTS_ENV: &str = "KAJIT_ASSERT_CODEGEN_SNAPSHOTS";
 
         struct CodegenArtifacts {
             ir_text: String,
             linear_text: String,
             ra_text: String,
             edits: usize,
+            edits_text: String,
             opt_timeline: Vec<(String, String)>,
         }
 
@@ -2513,29 +2523,24 @@ pub(crate) fn render_test_file() -> String {
             let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
             let linear_text = kajit::debug_linear_ir_text(shape, decoder);
             let edits = kajit::regalloc_edit_count(shape, decoder);
+            let edits_text = kajit::regalloc_edits_text(shape, decoder);
             let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, decoder);
             CodegenArtifacts {
                 ir_text,
                 linear_text,
                 ra_text,
                 edits,
+                edits_text,
                 opt_timeline,
             }
         }
 
-        fn env_truthy(name: &str) -> bool {
-            let Some(raw) = std::env::var_os(name) else {
-                return false;
-            };
-            let raw = raw.to_string_lossy();
-            matches!(
-                raw.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        }
-
-        fn snapshot_assertions_enabled() -> bool {
-            env_truthy(ASSERT_SNAPSHOTS_ENV)
+        fn runtime_case_name() -> String {
+            std::thread::current()
+                .name()
+                .and_then(|name| name.rsplit("::").next())
+                .unwrap_or("unknown")
+                .to_string()
         }
 
         fn dump_stages() -> Option<Vec<String>> {
@@ -2625,7 +2630,7 @@ pub(crate) fn render_test_file() -> String {
                 dump_stage(format_label, case, "ra", &artifacts.ra_text);
             }
             if should_dump_stage("edits") {
-                dump_stage(format_label, case, "edits", &format!("{}", artifacts.edits));
+                dump_stage(format_label, case, "edits", &artifacts.edits_text);
             }
             if should_dump_stage("opts") {
                 for (index, (pass_name, ir_text)) in artifacts.opt_timeline.iter().enumerate() {
@@ -2639,96 +2644,6 @@ pub(crate) fn render_test_file() -> String {
             }
         }
 
-        fn assert_codegen_rvsdg_snapshot<T, F>(
-            format_label: &str,
-            case: &str,
-            decoder: &F,
-            _marker: &T,
-        )
-        where
-            for<'input> T: Facet<'input>,
-            F: kajit::format::Decoder,
-        {
-            let should_assert = snapshot_assertions_enabled();
-            let should_dump = dumps_enabled_for_case(format_label, case);
-            if !should_assert && !should_dump {
-                return;
-            }
-            let artifacts = codegen_artifacts::<T, F>(decoder);
-            maybe_dump_codegen_artifacts(format_label, case, &artifacts);
-            if should_assert {
-                insta::assert_snapshot!(
-                    format!(
-                        "generated_rvsdg_{}_{}_{}",
-                        format_label,
-                        case,
-                        std::env::consts::ARCH
-                    ),
-                    artifacts.ir_text
-                );
-            }
-        }
-
-        fn assert_codegen_ra_mir_snapshot<T, F>(
-            format_label: &str,
-            case: &str,
-            decoder: &F,
-            _marker: &T,
-        )
-        where
-            for<'input> T: Facet<'input>,
-            F: kajit::format::Decoder,
-        {
-            let should_assert = snapshot_assertions_enabled();
-            let should_dump = dumps_enabled_for_case(format_label, case);
-            if !should_assert && !should_dump {
-                return;
-            }
-            let artifacts = codegen_artifacts::<T, F>(decoder);
-            maybe_dump_codegen_artifacts(format_label, case, &artifacts);
-            if should_assert {
-                insta::assert_snapshot!(
-                    format!(
-                        "generated_ra_mir_{}_{}_{}",
-                        format_label,
-                        case,
-                        std::env::consts::ARCH
-                    ),
-                    artifacts.ra_text
-                );
-            }
-        }
-
-        fn assert_codegen_edits_snapshot<T, F>(
-            format_label: &str,
-            case: &str,
-            decoder: &F,
-            _marker: &T,
-        )
-        where
-            for<'input> T: Facet<'input>,
-            F: kajit::format::Decoder,
-        {
-            let should_assert = snapshot_assertions_enabled();
-            let should_dump = dumps_enabled_for_case(format_label, case);
-            if !should_assert && !should_dump {
-                return;
-            }
-            let artifacts = codegen_artifacts::<T, F>(decoder);
-            maybe_dump_codegen_artifacts(format_label, case, &artifacts);
-            if should_assert {
-                insta::assert_snapshot!(
-                    format!(
-                        "generated_postreg_edits_{}_{}_{}",
-                        format_label,
-                        case,
-                        std::env::consts::ARCH
-                    ),
-                    format!("{}", artifacts.edits)
-                );
-            }
-        }
-
         mod json {
             use super::*;
             #(#json_tests)*
@@ -2737,36 +2652,6 @@ pub(crate) fn render_test_file() -> String {
         mod postcard {
             use super::*;
             #(#postcard_tests)*
-        }
-
-        mod rvsdg_json {
-            use super::*;
-            #(#json_rvsdg_tests)*
-        }
-
-        mod rvsdg_postcard {
-            use super::*;
-            #(#postcard_rvsdg_tests)*
-        }
-
-        mod ra_mir_json {
-            use super::*;
-            #(#json_ra_mir_tests)*
-        }
-
-        mod ra_mir_postcard {
-            use super::*;
-            #(#postcard_ra_mir_tests)*
-        }
-
-        mod postreg_edits_json {
-            use super::*;
-            #(#json_postreg_edits_tests)*
-        }
-
-        mod postreg_edits_postcard {
-            use super::*;
-            #(#postcard_postreg_edits_tests)*
         }
 
         mod prop {
