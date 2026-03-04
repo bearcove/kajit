@@ -232,7 +232,7 @@ Use `cargo test --release disasm_... -- --nocapture` for optimized output.
 This enables side-by-side comparison of kajit's JIT output vs LLVM-optimized
 serde codegen.
 
-For LLDB/JIT symbol workflows on macOS, see `docs/jit-debugging.md`.
+For LLDB/JIT debugging workflows, see `docs/pipeline-debugging.md` § "LLDB debugging of JIT code".
 
 ## Milestones
 
