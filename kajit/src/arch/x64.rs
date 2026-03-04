@@ -2219,18 +2219,18 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(7, fn_val as u64, buf)?;
-                x64::encode_mov_r64_m(6, Mem::base_disp(4, saved_out_slot as i32), buf)?;
-                x64::encode_mov_r64_m(2, Mem::base_disp(4, buf_slot as i32), buf)?;
-                x64::encode_mov_r64_m(1, Mem::base_disp(4, count_slot as i32), buf)
+                x64::encode_mov_r64_m(6, Mem { base: 4, disp: saved_out_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(2, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(1, Mem { base: 4, disp: count_slot as i32 }, buf)
             })
             .expect("map from pairs");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(1, fn_val as u64, buf)?;
-                x64::encode_mov_r64_m(2, Mem::base_disp(4, saved_out_slot as i32), buf)?;
-                x64::encode_mov_r64_m(8, Mem::base_disp(4, buf_slot as i32), buf)?;
-                x64::encode_mov_r64_m(9, Mem::base_disp(4, count_slot as i32), buf)
+                x64::encode_mov_r64_m(2, Mem { base: 4, disp: saved_out_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(8, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(9, Mem { base: 4, disp: count_slot as i32 }, buf)
             })
             .expect("map from pairs");
         self.emit_call_fn_ptr(crate::intrinsics::kajit_map_build as *const () as *const u8);
@@ -2278,8 +2278,8 @@ impl EmitCtx {
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(7, Mem::base_disp(4, buf_slot as i32), buf)?;
-                x64::encode_mov_r64_m(6, Mem::base_disp(4, cap_slot as i32), buf)?;
+                x64::encode_mov_r64_m(7, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(6, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
                 x64::encode_mov_r32_imm32(2, pair_stride as u32, buf)?;
                 x64::encode_mov_r32_imm32(1, pair_align as u32, buf)
             })
@@ -2287,8 +2287,8 @@ impl EmitCtx {
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(1, Mem::base_disp(4, buf_slot as i32), buf)?;
-                x64::encode_mov_r64_m(2, Mem::base_disp(4, cap_slot as i32), buf)?;
+                x64::encode_mov_r64_m(1, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(2, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
                 x64::encode_mov_r32_imm32(8, pair_stride as u32, buf)?;
                 x64::encode_mov_r32_imm32(9, pair_align as u32, buf)
             })
@@ -2314,67 +2314,124 @@ impl EmitCtx {
             match op {
                 Op::BoundsCheck { count } => {
                     if *count == 1 {
-                        dynasm!(self.ops
-                            ; .arch x64
-                            ; cmp r12, r13
-                            ; jae =>eof_label
-                        );
+                        self.emit.emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))?;
+                        self.emit.emit_jae_label(eof_label);
                     } else {
                         let count = *count as i32;
-                        dynasm!(self.ops
-                            ; .arch x64
-                            ; mov r10, r13
-                            ; sub r10, r12
-                            ; cmp r10, count
-                            ; jb =>eof_label
-                        );
+                        self.emit.emit_with(|buf| {
+                            x64::encode_mov_r64_r64(10, 13, buf)?;
+                            x64::encode_sub_r64_r64(10, 12, buf)?;
+                            x64::encode_cmp_r64_imm32(10, count as u32, buf)
+                        })
+                        .expect("bounds check");
+                        self.emit.emit_jb_label(eof_label);
                     }
                 }
                 Op::LoadByte { dst } => match dst {
-                    Slot::A => dynasm!(self.ops ; .arch x64 ; movzx r10d, BYTE [r12]),
-                    Slot::B => dynasm!(self.ops ; .arch x64 ; movzx r11d, BYTE [r12]),
+                    Slot::A => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_movzx_r32_rm8(
+                                10,
+                                x64::Operand::Mem(Mem { base: 12, disp: 0 }),
+                                buf
+                            )
+                        })
+                        .expect("load byte slot a"),
+                    Slot::B => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_movzx_r32_rm8(
+                                11,
+                                x64::Operand::Mem(Mem { base: 12, disp: 0 }),
+                                buf
+                            )
+                        })
+                        .expect("load byte slot b"),
                 },
                 Op::LoadFromCursor { dst, width } => match (dst, width) {
-                    (Slot::A, Width::W4) => dynasm!(self.ops ; .arch x64 ; mov r10d, DWORD [r12]),
-                    (Slot::A, Width::W8) => dynasm!(self.ops ; .arch x64 ; mov r10, QWORD [r12]),
-                    (Slot::B, Width::W4) => dynasm!(self.ops ; .arch x64 ; mov r11d, DWORD [r12]),
-                    (Slot::B, Width::W8) => dynasm!(self.ops ; .arch x64 ; mov r11, QWORD [r12]),
+                    (Slot::A, Width::W4) => {
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r32_m(10, Mem { base: 12, disp: 0 }, buf))
+                            .expect("load slot a w4")
+                    }
+                    (Slot::A, Width::W8) => {
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 12, disp: 0 }, buf))
+                            .expect("load slot a w8")
+                    }
+                    (Slot::B, Width::W4) => {
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r32_m(11, Mem { base: 12, disp: 0 }, buf))
+                            .expect("load slot b w4")
+                    }
+                    (Slot::B, Width::W8) => {
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r64_m(11, Mem { base: 12, disp: 0 }, buf))
+                            .expect("load slot b w8")
+                    }
                     _ => panic!("unsupported LoadFromCursor width"),
                 },
                 Op::StoreToOut { src, offset, width } => {
                     let offset = *offset as i32;
                     match (src, width) {
                         (Slot::A, Width::W1) => {
-                            dynasm!(self.ops ; .arch x64 ; mov BYTE [r14 + offset], r10b)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r8(14, offset, 10, buf))
+                                .expect("store to out w1")
                         }
                         (Slot::A, Width::W2) => {
-                            dynasm!(self.ops ; .arch x64 ; mov WORD [r14 + offset], r10w)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r16(14, offset, 10, buf))
+                                .expect("store to out w2")
                         }
                         (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov DWORD [r14 + offset], r10d)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 10, buf))
+                                .expect("store to out w4")
                         }
                         (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov QWORD [r14 + offset], r10)
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_m_r64(Mem { base: 14, disp: offset }, 10, buf)
+                                })
+                                .expect("store to out w8")
                         }
                         (Slot::B, Width::W1) => {
-                            dynasm!(self.ops ; .arch x64 ; mov BYTE [r14 + offset], r11b)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r8(14, offset, 11, buf))
+                                .expect("store to out w1")
                         }
                         (Slot::B, Width::W2) => {
-                            dynasm!(self.ops ; .arch x64 ; mov WORD [r14 + offset], r11w)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r16(14, offset, 11, buf))
+                                .expect("store to out w2")
                         }
                         (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov DWORD [r14 + offset], r11d)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 11, buf))
+                                .expect("store to out w4")
                         }
                         (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov QWORD [r14 + offset], r11)
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_m_r64(Mem { base: 14, disp: offset }, 11, buf)
+                                })
+                                .expect("store to out w8")
                         }
                     }
                 }
                 Op::StoreByteToStack { src, sp_offset } => {
                     let sp_offset = *sp_offset as i32;
                     match src {
-                        Slot::A => dynasm!(self.ops ; .arch x64 ; mov BYTE [rsp + sp_offset], r10b),
-                        Slot::B => dynasm!(self.ops ; .arch x64 ; mov BYTE [rsp + sp_offset], r11b),
+                        Slot::A => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r8(4, sp_offset, 10, buf))
+                            .expect("store byte stack a"),
+                        Slot::B => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r8(4, sp_offset, 11, buf))
+                            .expect("store byte stack b"),
                     }
                 }
                 Op::StoreToStack {
@@ -2385,16 +2442,28 @@ impl EmitCtx {
                     let sp_offset = *sp_offset as i32;
                     match (src, width) {
                         (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov DWORD [rsp + sp_offset], r10d)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 10, buf))
+                                .expect("store stack a w4")
                         }
                         (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov QWORD [rsp + sp_offset], r10)
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset }, 10, buf)
+                                })
+                                .expect("store stack a w8")
                         }
                         (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov DWORD [rsp + sp_offset], r11d)
+                            self.emit
+                                .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 11, buf))
+                                .expect("store stack b w4")
                         }
                         (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov QWORD [rsp + sp_offset], r11)
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset }, 11, buf)
+                                })
+                                .expect("store stack b w8")
                         }
                         _ => panic!("unsupported StoreToStack width"),
                     }
@@ -2407,45 +2476,75 @@ impl EmitCtx {
                     let sp_offset = *sp_offset as i32;
                     match (dst, width) {
                         (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r10d, DWORD [rsp + sp_offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r32_m(10, Mem { base: 4, disp: sp_offset }, buf)
+                                })
+                                .expect("load stack a w4")
                         }
                         (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r10, QWORD [rsp + sp_offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r64_m(10, Mem { base: 4, disp: sp_offset }, buf)
+                                })
+                                .expect("load stack a w8")
                         }
                         (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r11d, DWORD [rsp + sp_offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r32_m(11, Mem { base: 4, disp: sp_offset }, buf)
+                                })
+                                .expect("load stack b w4")
                         }
                         (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r11, QWORD [rsp + sp_offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r64_m(11, Mem { base: 4, disp: sp_offset }, buf)
+                                })
+                                .expect("load stack b w8")
                         }
                         _ => panic!("unsupported LoadFromStack width"),
                     }
                 }
                 Op::AdvanceCursor { count } => {
                     let count = *count as i32;
-                    dynasm!(self.ops ; .arch x64 ; add r12, count);
+                    self.emit
+                        .emit_with(|buf| x64::encode_add_r64_imm32(12, count as u32, buf))
+                        .expect("advance cursor")
                 }
                 Op::AdvanceCursorBySlot { slot } => match slot {
-                    Slot::A => dynasm!(self.ops ; .arch x64 ; add r12, r10),
-                    Slot::B => dynasm!(self.ops ; .arch x64 ; add r12, r11),
+                    Slot::A => self
+                        .emit
+                        .emit_with(|buf| x64::encode_add_r64_r64(12, 10, buf))
+                        .expect("advance cursor by a"),
+                    Slot::B => self
+                        .emit
+                        .emit_with(|buf| x64::encode_add_r64_r64(12, 11, buf))
+                        .expect("advance cursor by b"),
                 },
                 Op::ZigzagDecode { slot } => match slot {
-                    Slot::A => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r11d, r10d
-                        ; shr r11d, 1
-                        ; and r10d, 1
-                        ; neg r10d
-                        ; xor r10d, r11d
-                    ),
-                    Slot::B => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r10d, r11d
-                        ; shr r10d, 1
-                        ; and r11d, 1
-                        ; neg r11d
-                        ; xor r11d, r10d
-                    ),
+                    Slot::A => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r32_r32(11, 10, buf)?;
+                            x64::encode_shr_r64_imm8(11, 1, buf)?;
+                            x64::encode_mov_r64_imm64(9, 1, buf)?;
+                            x64::encode_and_r64_r64(10, 9, buf)?;
+                            x64::encode_neg_r64(10, buf)?;
+                            x64::encode_xor_r64_r64(10, 11, buf)
+                        })
+                        .expect("zigzag decode a"),
+                    Slot::B => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r32_r32(10, 11, buf)?;
+                            x64::encode_shr_r64_imm8(10, 1, buf)?;
+                            x64::encode_mov_r64_imm64(9, 1, buf)?;
+                            x64::encode_and_r64_r64(11, 9, buf)?;
+                            x64::encode_neg_r64(11, buf)?;
+                            x64::encode_xor_r64_r64(11, 10, buf)
+                        })
+                        .expect("zigzag decode b"),
                 },
                 Op::ValidateMax {
                     slot,
@@ -2457,48 +2556,72 @@ impl EmitCtx {
                     let invalid_label = self.emit.new_label();
                     let ok_label = self.emit.new_label();
                     match slot {
-                        Slot::A => dynasm!(self.ops
-                            ; .arch x64
-                            ; cmp r10d, max_val
-                            ; ja =>invalid_label
-                        ),
-                        Slot::B => dynasm!(self.ops
-                            ; .arch x64
-                            ; cmp r11d, max_val
-                            ; ja =>invalid_label
-                        ),
+                        Slot::A => {
+                            self.emit
+                                .emit_with(|buf| x64::encode_cmp_r64_imm32(10, max_val as u32, buf))
+                                .expect("validate max a")
+                        }
+                        Slot::B => {
+                            self.emit
+                                .emit_with(|buf| x64::encode_cmp_r64_imm32(11, max_val as u32, buf))
+                                .expect("validate max b")
+                        }
                     }
-                    dynasm!(self.ops
-                        ; .arch x64
-                        ; jmp =>ok_label
-                        ; =>invalid_label
-                        ; mov DWORD [r15 + CTX_ERROR_CODE as i32], error_code
-                        ; jmp =>error_exit
-                        ; =>ok_label
-                    );
+                    self.emit
+                        .emit_ja_label(invalid_label)
+                        .expect("validate max branch")?
+                        ;
+                    self.emit
+                        .emit_jmp_label(ok_label)
+                        .expect("validate max ok jump")?
+                        ;
+                    self.emit
+                        .bind_label(invalid_label)
+                        .expect("bind invalid label")?;
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r32_imm32(9, error_code as u32, buf)?;
+                            x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 9, buf)
+                        })
+                        .expect("write error code")
+                        ;
+                    self.emit
+                        .emit_jmp_label(error_exit)
+                        .expect("validate error_exit")?;
+                    self.emit
+                        .bind_label(ok_label)
+                        .expect("bind ok label")?;
                 }
                 Op::TestBit7Branch { slot, target } => {
                     let label = labels[*target];
                     match slot {
-                        Slot::A => dynasm!(self.ops
-                            ; .arch x64
-                            ; test r10d, 0x80
-                            ; jnz =>label
-                        ),
-                        Slot::B => dynasm!(self.ops
-                            ; .arch x64
-                            ; test r11d, 0x80
-                            ; jnz =>label
-                        ),
+                        Slot::A => {
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r64_imm64(9, 0x80, buf)?;
+                                    x64::encode_test_r64_r64(10, 9, buf)
+                                })
+                                .expect("test bit7 a");
+                            self.emit.emit_jnz_label(label).expect("bit7 a branch")
+                        }
+                        Slot::B => {
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r64_imm64(9, 0x80, buf)?;
+                                    x64::encode_test_r64_r64(11, 9, buf)
+                                })
+                                .expect("test bit7 b");
+                            self.emit.emit_jnz_label(label).expect("bit7 b branch")
+                        }
                     }
                 }
                 Op::Branch { target } => {
                     let label = labels[*target];
-                    dynasm!(self.ops ; .arch x64 ; jmp =>label);
+                    self.emit.emit_jmp_label(label).expect("branch")
                 }
                 Op::BindLabel { index } => {
                     let label = labels[*index];
-                    dynasm!(self.ops ; .arch x64 ; =>label);
+                    self.emit.bind_label(label).expect("bind")
                 }
                 Op::CallIntrinsic {
                     fn_ptr,
@@ -2507,9 +2630,19 @@ impl EmitCtx {
                     let field_offset = *field_offset as i32;
                     self.emit_flush_input_cursor();
                     #[cfg(not(windows))]
-                    dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; lea rsi, [r14 + field_offset]);
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(7, 15, buf)?;
+                            x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset }, buf)
+                        })
+                        .expect("call intrinsic args");
                     #[cfg(windows)]
-                    dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; lea rdx, [r14 + field_offset]);
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(1, 15, buf)?;
+                            x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset }, buf)
+                        })
+                        .expect("call intrinsic args");
                     self.emit_call_fn_ptr(*fn_ptr);
                     self.emit_reload_cursor_and_check_error();
                 }
@@ -2517,23 +2650,37 @@ impl EmitCtx {
                     let sp_offset = *sp_offset as i32;
                     self.emit_flush_input_cursor();
                     #[cfg(not(windows))]
-                    dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; lea rsi, [rsp + sp_offset]);
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(7, 15, buf)?;
+                            x64::encode_lea_r64_m(6, Mem { base: 4, disp: sp_offset }, buf)
+                        })
+                        .expect("call intrinsic stack out args");
                     #[cfg(windows)]
-                    dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; lea rdx, [rsp + sp_offset]);
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(1, 15, buf)?;
+                            x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset }, buf)
+                        })
+                        .expect("call intrinsic stack out args");
                     self.emit_call_fn_ptr(*fn_ptr);
                     self.emit_reload_cursor_and_check_error();
                 }
                 Op::ComputeRemaining { dst } => match dst {
-                    Slot::A => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r10, r13
-                        ; sub r10, r12
-                    ),
-                    Slot::B => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r11, r13
-                        ; sub r11, r12
-                    ),
+                    Slot::A => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(10, 13, buf)?;
+                            x64::encode_sub_r64_r64(10, 12, buf)
+                        })
+                        .expect("compute remaining a"),
+                    Slot::B => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(11, 13, buf)?;
+                            x64::encode_sub_r64_r64(11, 12, buf)
+                        })
+                        .expect("compute remaining b"),
                 },
                 Op::CmpBranchLo { lhs, rhs, on_fail } => {
                     let target = match on_fail {
@@ -2541,22 +2688,34 @@ impl EmitCtx {
                         ErrorTarget::ErrorExit => error_exit,
                     };
                     match (lhs, rhs) {
-                        (Slot::A, Slot::B) => dynasm!(self.ops
-                            ; .arch x64
-                            ; cmp r10, r11
-                            ; jb =>target
-                        ),
-                        (Slot::B, Slot::A) => dynasm!(self.ops
-                            ; .arch x64
-                            ; cmp r11, r10
-                            ; jb =>target
-                        ),
+                        (Slot::A, Slot::B) => {
+                            self.emit
+                                .emit_with(|buf| x64::encode_cmp_r64_r64(10, 11, buf))
+                                .expect("cmp branch lo a,b");
+                            self.emit
+                                .emit_jcc_label(target, x64::Condition::Lo)
+                                .expect("cmp branch lo a,b target")
+                        }
+                        (Slot::B, Slot::A) => {
+                            self.emit
+                                .emit_with(|buf| x64::encode_cmp_r64_r64(11, 10, buf))
+                                .expect("cmp branch lo b,a");
+                            self.emit
+                                .emit_jcc_label(target, x64::Condition::Lo)
+                                .expect("cmp branch lo b,a target")
+                        }
                         _ => panic!("CmpBranchLo requires different slots"),
                     }
                 }
                 Op::SaveCursor { dst } => match dst {
-                    Slot::A => dynasm!(self.ops ; .arch x64 ; mov r10, r12),
-                    Slot::B => dynasm!(self.ops ; .arch x64 ; mov r11, r12),
+                    Slot::A => self
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_r64(10, 12, buf))
+                        .expect("save cursor a"),
+                    Slot::B => self
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_r64(11, 12, buf))
+                        .expect("save cursor b"),
                 },
                 Op::CallValidateAllocCopy {
                     fn_ptr,
@@ -2569,36 +2728,67 @@ impl EmitCtx {
                     self.emit_flush_input_cursor();
                     #[cfg(not(windows))]
                     {
-                        dynasm!(self.ops ; .arch x64 ; mov rdi, r15);
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r64_r64(7, 15, buf))
+                            .expect("validate copy ctx");
                         match data_src {
-                            Slot::A => dynasm!(self.ops ; .arch x64 ; mov rsi, r10),
-                            Slot::B => dynasm!(self.ops ; .arch x64 ; mov rsi, r11),
+                            Slot::A => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r64_r64(6, 10, buf))
+                                .expect("validate copy data a"),
+                            Slot::B => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r64_r64(6, 11, buf))
+                                .expect("validate copy data b"),
                         }
                         match len_src {
-                            Slot::A => dynasm!(self.ops ; .arch x64 ; mov edx, r10d),
-                            Slot::B => dynasm!(self.ops ; .arch x64 ; mov edx, r11d),
+                            Slot::A => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r32_r32(2, 10, buf))
+                                .expect("validate copy len a"),
+                            Slot::B => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r32_r32(2, 11, buf))
+                                .expect("validate copy len b"),
                         }
                     }
                     #[cfg(windows)]
                     {
-                        dynasm!(self.ops ; .arch x64 ; mov rcx, r15);
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r64_r64(1, 15, buf))
+                            .expect("validate copy ctx windows");
                         match data_src {
-                            Slot::A => dynasm!(self.ops ; .arch x64 ; mov rdx, r10),
-                            Slot::B => dynasm!(self.ops ; .arch x64 ; mov rdx, r11),
+                            Slot::A => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r64_r64(2, 10, buf))
+                                .expect("validate copy data a windows"),
+                            Slot::B => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r64_r64(2, 11, buf))
+                                .expect("validate copy data b windows"),
                         }
                         match len_src {
-                            Slot::A => dynasm!(self.ops ; .arch x64 ; mov r8d, r10d),
-                            Slot::B => dynasm!(self.ops ; .arch x64 ; mov r8d, r11d),
+                            Slot::A => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r32_r32(8, 10, buf))
+                                .expect("validate copy len a windows"),
+                            Slot::B => self
+                                .emit
+                                .emit_with(|buf| x64::encode_mov_r32_r32(8, 11, buf))
+                                .expect("validate copy len b windows"),
                         }
                     }
                     self.emit_call_fn_ptr(*fn_ptr);
                     // Use r11d for error check to preserve r10 (Slot::A) for WriteMalumString
-                    dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r11d, [r15 + CTX_ERROR_CODE as i32]
-                        ; test r11d, r11d
-                        ; jnz =>error_exit
-                    );
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r32_m(11, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                            x64::encode_test_r32_r32(11, 11, buf)
+                        })
+                        .expect("validate copy error check");
+                    self.emit
+                        .emit_jnz_label(error_exit)
+                        .expect("validate copy branch to error")
                 }
                 Op::WriteMalumString {
                     base_offset,
@@ -2611,21 +2801,62 @@ impl EmitCtx {
                     let len_offset = (*base_offset + *len_off) as i32;
                     let cap_offset = (*base_offset + *cap_off) as i32;
                     // rax = buf pointer from previous call return
-                    dynasm!(self.ops ; .arch x64 ; mov [r14 + ptr_offset], rax);
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r64(
+                                Mem {
+                                    base: 14,
+                                    disp: ptr_offset,
+                                },
+                                0,
+                                buf,
+                            )
+                        })
+                        .expect("write malum ptr");
                     match len_slot {
                         Slot::A => {
-                            dynasm!(self.ops
-                                ; .arch x64
-                                ; mov [r14 + len_offset], r10
-                                ; mov [r14 + cap_offset], r10
-                            );
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_m_r64(
+                                        Mem {
+                                            base: 14,
+                                            disp: len_offset,
+                                        },
+                                        10,
+                                        buf,
+                                    )?;
+                                    x64::encode_mov_m_r64(
+                                        Mem {
+                                            base: 14,
+                                            disp: cap_offset,
+                                        },
+                                        10,
+                                        buf,
+                                    )
+                                })
+                                .expect("write malum len a");
                         }
                         Slot::B => {
-                            dynasm!(self.ops
-                                ; .arch x64
-                                ; mov [r14 + len_offset], r11
-                                ; mov [r14 + cap_offset], r11
-                            );
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_m_r64(
+                                        Mem {
+                                            base: 14,
+                                            disp: len_offset,
+                                        },
+                                        11,
+                                        buf,
+                                    )?;
+                                    x64::encode_mov_m_r64(
+                                        Mem {
+                                            base: 14,
+                                            disp: cap_offset,
+                                        },
+                                        11,
+                                        buf,
+                                    )
+                                })
+                                .expect("write malum len b");
                         }
                     }
                 }
@@ -2643,136 +2874,299 @@ impl EmitCtx {
                     let offset = *offset as i32;
                     match (dst, width) {
                         (Slot::A, Width::W1) => {
-                            dynasm!(self.ops ; .arch x64 ; movzx r10d, BYTE [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_movzx_r32_rm8(
+                                        10,
+                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
+                                        buf,
+                                    )
+                                })
+                                .expect("load input a w1")
                         }
                         (Slot::A, Width::W2) => {
-                            dynasm!(self.ops ; .arch x64 ; movzx r10d, WORD [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_movzx_r32_rm16(
+                                        10,
+                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
+                                        buf,
+                                    )
+                                })
+                                .expect("load input a w2")
                         }
                         (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r10d, DWORD [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r32_m(10, Mem { base: 14, disp: offset }, buf)
+                                })
+                                .expect("load input a w4")
                         }
                         (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r10, QWORD [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r64_m(10, Mem { base: 14, disp: offset }, buf)
+                                })
+                                .expect("load input a w8")
                         }
                         (Slot::B, Width::W1) => {
-                            dynasm!(self.ops ; .arch x64 ; movzx r11d, BYTE [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_movzx_r32_rm8(
+                                        11,
+                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
+                                        buf,
+                                    )
+                                })
+                                .expect("load input b w1")
                         }
                         (Slot::B, Width::W2) => {
-                            dynasm!(self.ops ; .arch x64 ; movzx r11d, WORD [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_movzx_r32_rm16(
+                                        11,
+                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
+                                        buf,
+                                    )
+                                })
+                                .expect("load input b w2")
                         }
                         (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r11d, DWORD [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r32_m(11, Mem { base: 14, disp: offset }, buf)
+                                })
+                                .expect("load input b w4")
                         }
                         (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch x64 ; mov r11, QWORD [r14 + offset])
+                            self.emit
+                                .emit_with(|buf| {
+                                    x64::encode_mov_r64_m(11, Mem { base: 14, disp: offset }, buf)
+                                })
+                                .expect("load input b w8")
                         }
                     }
                 }
                 Op::StoreToOutput { src, width } => match (src, width) {
                     (Slot::A, Width::W1) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r10b ; add r12, 1)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r8(12, 0, 10, buf)?;
+                                x64::encode_add_r64_imm32(12, 1, buf)
+                            })
+                            .expect("store output a w1")
                     }
                     (Slot::A, Width::W2) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r10w ; add r12, 2)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r16(12, 0, 10, buf)?;
+                                x64::encode_add_r64_imm32(12, 2, buf)
+                            })
+                            .expect("store output a w2")
                     }
                     (Slot::A, Width::W4) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r10d ; add r12, 4)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r32(
+                                    Mem {
+                                        base: 12,
+                                        disp: 0,
+                                    },
+                                    10,
+                                    buf,
+                                )?;
+                                x64::encode_add_r64_imm32(12, 4, buf)
+                            })
+                            .expect("store output a w4")
                     }
                     (Slot::A, Width::W8) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r10 ; add r12, 8)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r64(
+                                    Mem {
+                                        base: 12,
+                                        disp: 0,
+                                    },
+                                    10,
+                                    buf,
+                                )?;
+                                x64::encode_add_r64_imm32(12, 8, buf)
+                            })
+                            .expect("store output a w8")
                     }
                     (Slot::B, Width::W1) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r11b ; add r12, 1)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r8(12, 0, 11, buf)?;
+                                x64::encode_add_r64_imm32(12, 1, buf)
+                            })
+                            .expect("store output b w1")
                     }
                     (Slot::B, Width::W2) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r11w ; add r12, 2)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r16(12, 0, 11, buf)?;
+                                x64::encode_add_r64_imm32(12, 2, buf)
+                            })
+                            .expect("store output b w2")
                     }
                     (Slot::B, Width::W4) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r11d ; add r12, 4)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r32(
+                                    Mem {
+                                        base: 12,
+                                        disp: 0,
+                                    },
+                                    11,
+                                    buf,
+                                )?;
+                                x64::encode_add_r64_imm32(12, 4, buf)
+                            })
+                            .expect("store output b w4")
                     }
                     (Slot::B, Width::W8) => {
-                        dynasm!(self.ops ; .arch x64 ; mov [r12], r11 ; add r12, 8)
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r64(
+                                    Mem {
+                                        base: 12,
+                                        disp: 0,
+                                    },
+                                    11,
+                                    buf,
+                                )?;
+                                x64::encode_add_r64_imm32(12, 8, buf)
+                            })
+                            .expect("store output b w8")
                     }
                 },
                 Op::WriteByte { value } => {
                     let value = *value as i8;
-                    dynasm!(self.ops
-                        ; .arch x64
-                        ; mov BYTE [r12], value
-                        ; add r12, 1
-                    );
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_imm64(9, value as u8 as u64, buf)?;
+                            x64::encode_mov_m_r8(12, 0, 9, buf)?;
+                            x64::encode_add_r64_imm32(12, 1, buf)
+                        })
+                        .expect("write byte")
                 }
                 Op::AdvanceOutput { count } => {
                     let count = *count;
                     if count > 0 {
-                        dynasm!(self.ops ; .arch x64 ; add r12, count as i32);
+                        self.emit
+                            .emit_with(|buf| x64::encode_add_r64_imm32(12, count as u32, buf))
+                            .expect("advance output")
                     }
                 }
                 Op::AdvanceOutputBySlot { slot } => match slot {
-                    Slot::A => dynasm!(self.ops ; .arch x64 ; add r12, r10),
-                    Slot::B => dynasm!(self.ops ; .arch x64 ; add r12, r11),
+                    Slot::A => self
+                        .emit
+                        .emit_with(|buf| x64::encode_add_r64_r64(12, 10, buf))
+                        .expect("advance output by a"),
+                    Slot::B => self
+                        .emit
+                        .emit_with(|buf| x64::encode_add_r64_r64(12, 11, buf))
+                        .expect("advance output by b"),
                 },
                 Op::OutputBoundsCheck { count } => {
                     let count = *count as i32;
                     let have_space = self.emit.new_label();
 
-                    dynasm!(self.ops
-                        ; .arch x64
-                        ; mov rax, r13
-                        ; sub rax, r12
-                        ; cmp rax, count
-                        ; jge =>have_space
-                    );
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(0, 13, buf)?;
+                            x64::encode_sub_r64_r64(0, 12, buf)?;
+                            x64::encode_cmp_r64_imm32(0, count as u32, buf)
+                        })
+                        .expect("output bounds check");
+                    self.emit
+                        .emit_jcc_label(have_space, x64::Condition::Ge)
+                        .expect("output bounds check ge");
 
                     // Not enough space — call kajit_output_grow(ctx, needed)
                     self.emit_enc_flush_output_cursor();
                     #[cfg(not(windows))]
-                    dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; mov rsi, count);
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(7, 15, buf)?;
+                            x64::encode_mov_r64_imm64(6, count as u64, buf)
+                        })
+                        .expect("output grow args");
                     #[cfg(windows)]
-                    dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; mov rdx, count);
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(1, 15, buf)?;
+                            x64::encode_mov_r64_imm64(2, count as u64, buf)
+                        })
+                        .expect("output grow args windows");
                     self.emit_call_fn_ptr(crate::intrinsics::kajit_output_grow as *const u8);
                     self.emit_enc_reload_and_check_error();
 
-                    dynasm!(self.ops ; .arch x64 ; =>have_space);
+                    self.emit.bind_label(have_space).expect("bind output bounds done");
                 }
                 Op::SignExtend { slot, from } => match (slot, from) {
-                    (Slot::A, Width::W1) => dynasm!(self.ops ; .arch x64 ; movsx r10d, r10b),
-                    (Slot::A, Width::W2) => dynasm!(self.ops ; .arch x64 ; movsx r10d, r10w),
-                    (Slot::B, Width::W1) => dynasm!(self.ops ; .arch x64 ; movsx r11d, r11b),
-                    (Slot::B, Width::W2) => dynasm!(self.ops ; .arch x64 ; movsx r11d, r11w),
+                    (Slot::A, Width::W1) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_movsx_r64_rm8(10, x64::Operand::Reg(10), buf))
+                        .expect("sign extend a w1"),
+                    (Slot::A, Width::W2) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_movsx_r64_rm16(10, x64::Operand::Reg(10), buf))
+                        .expect("sign extend a w2"),
+                    (Slot::B, Width::W1) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_movsx_r64_rm8(11, x64::Operand::Reg(11), buf))
+                        .expect("sign extend b w1"),
+                    (Slot::B, Width::W2) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_movsx_r64_rm16(11, x64::Operand::Reg(11), buf))
+                        .expect("sign extend b w2"),
                     (_, Width::W4 | Width::W8) => {} // already at natural width
                 },
                 Op::ZigzagEncode { slot, wide } => match (slot, wide) {
                     // zigzag encode 32-bit: (n << 1) ^ (n >> 31)
-                    (Slot::A, false) => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r11d, r10d
-                        ; shl r11d, 1
-                        ; sar r10d, 31
-                        ; xor r10d, r11d
-                    ),
-                    (Slot::B, false) => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r10d, r11d
-                        ; shl r10d, 1
-                        ; sar r11d, 31
-                        ; xor r11d, r10d
-                    ),
+                    (Slot::A, false) => {
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_r64(11, 10, buf)?;
+                                x64::encode_shl_r64_imm8(11, 1, buf)?;
+                                x64::encode_sar_r64_imm8(10, 31, buf)?;
+                                x64::encode_xor_r64_r64(10, 11, buf)
+                            })
+                            .expect("zigzag encode a")
+                    }
+                    (Slot::B, false) => {
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_r64(10, 11, buf)?;
+                                x64::encode_shl_r64_imm8(10, 1, buf)?;
+                                x64::encode_sar_r64_imm8(11, 31, buf)?;
+                                x64::encode_xor_r64_r64(11, 10, buf)
+                            })
+                            .expect("zigzag encode b")
+                    }
                     // zigzag encode 64-bit: (n << 1) ^ (n >> 63)
-                    (Slot::A, true) => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r11, r10
-                        ; shl r11, 1
-                        ; sar r10, 63
-                        ; xor r10, r11
-                    ),
-                    (Slot::B, true) => dynasm!(self.ops
-                        ; .arch x64
-                        ; mov r10, r11
-                        ; shl r10, 1
-                        ; sar r11, 63
-                        ; xor r11, r10
-                    ),
+                    (Slot::A, true) => {
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_r64(11, 10, buf)?;
+                                x64::encode_shl_r64_imm8(11, 1, buf)?;
+                                x64::encode_sar_r64_imm8(10, 63, buf)?;
+                                x64::encode_xor_r64_r64(10, 11, buf)
+                            })
+                            .expect("zigzag encode wide a")
+                    }
+                    (Slot::B, true) => {
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_r64(10, 11, buf)?;
+                                x64::encode_shl_r64_imm8(10, 1, buf)?;
+                                x64::encode_sar_r64_imm8(11, 63, buf)?;
+                                x64::encode_xor_r64_r64(11, 10, buf)
+                            })
+                            .expect("zigzag encode wide b")
+                    }
                 },
                 Op::EncodeVarint { slot, wide } => {
                     // Inline varint encoding loop.
@@ -2780,65 +3174,67 @@ impl EmitCtx {
                     // Then write final byte.
                     let loop_label = self.emit.new_label();
                     let done_label = self.emit.new_label();
+                    let val_reg = match slot {
+                        Slot::A => 10,
+                        Slot::B => 11,
+                    };
 
                     if *wide {
-                        // 64-bit varint: use rax
-                        match slot {
-                            Slot::A => dynasm!(self.ops ; .arch x64 ; mov rax, r10),
-                            Slot::B => dynasm!(self.ops ; .arch x64 ; mov rax, r11),
-                        }
-                        dynasm!(self.ops
-                            ; .arch x64
-                            ; =>loop_label
-                            ; cmp rax, 0x80
-                            ; jb =>done_label
-                            ; mov r10d, eax
-                            ; or r10b, 0x80u8 as i8
-                            ; mov [r12], r10b
-                            ; add r12, 1
-                            ; shr rax, 7
-                            ; jmp =>loop_label
-                            ; =>done_label
-                            ; mov [r12], al
-                            ; add r12, 1
-                        );
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r64_r64(9, val_reg, buf))
+                            .expect("varint copy");
                     } else {
-                        // 32-bit varint: use eax
-                        match slot {
-                            Slot::A => dynasm!(self.ops ; .arch x64 ; mov eax, r10d),
-                            Slot::B => dynasm!(self.ops ; .arch x64 ; mov eax, r11d),
-                        }
-                        dynasm!(self.ops
-                            ; .arch x64
-                            ; =>loop_label
-                            ; cmp eax, 0x80
-                            ; jb =>done_label
-                            ; mov r10d, eax
-                            ; or r10b, 0x80u8 as i8
-                            ; mov [r12], r10b
-                            ; add r12, 1
-                            ; shr eax, 7
-                            ; jmp =>loop_label
-                            ; =>done_label
-                            ; mov [r12], al
-                            ; add r12, 1
-                        );
+                        self.emit
+                            .emit_with(|buf| x64::encode_mov_r64_r64(9, val_reg, buf))
+                            .expect("varint copy");
                     }
+
+                    self.emit.bind_label(loop_label).expect("bind varint loop");
+                    self.emit
+                        .emit_with(|buf| x64::encode_cmp_r64_imm32(9, 0x80, buf))
+                        .expect("varint cmp");
+                    self.emit.emit_jb_label(done_label).expect("varint done");
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_imm64(0, 0x80, buf)?;
+                            x64::encode_or_r64_r64(9, 0, buf)?;
+                            x64::encode_mov_m_r8(12, 0, 9, buf)?;
+                            x64::encode_add_r64_imm32(12, 1, buf)?;
+                            x64::encode_shr_r64_imm8(9, 7, buf)
+                        })
+                        .expect("write varint byte");
+                    self.emit.emit_jmp_label(loop_label).expect("varint loop");
+                    self.emit.bind_label(done_label).expect("bind varint done");
+                    self.emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r8(12, 0, 9, buf)?;
+                            x64::encode_add_r64_imm32(12, 1, buf)
+                        })
+                        .expect("write final varint byte");
                 }
             }
         }
 
         // Jump over cold path, then emit shared EOF error
         let done_label = self.emit.new_label();
-        let eof_code = crate::context::ErrorCode::UnexpectedEof as i32;
-        dynasm!(self.ops
-            ; .arch x64
-            ; jmp =>done_label
-            ; =>eof_label
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], eof_code
-            ; jmp =>error_exit
-            ; =>done_label
-        );
+        let eof_code = crate::context::ErrorCode::UnexpectedEof as u32;
+        self.emit.emit_jmp_label(done_label).expect("skip eof block");
+        self.emit.bind_label(eof_label).expect("bind eof");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, eof_code, buf)?;
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
+            })
+            .expect("eof store");
+        self.emit.emit_jmp_label(error_exit).expect("jmp eof error");
+        self.emit.bind_label(done_label).expect("bind done");
     }
 
     // =====================================================================
@@ -2865,96 +3261,106 @@ impl EmitCtx {
         let frame_size = self.frame_size;
 
         #[cfg(not(windows))]
-        dynasm!(self.ops
-            ; .arch x64
-            ; push rbp
-            ; sub rsp, frame_size as i32
-            ; mov [rsp], rbp
-            ; mov [rsp + 16], r12
-            ; mov [rsp + 24], r13
-            ; mov [rsp + 32], r14
-            ; mov [rsp + 40], r15
-            ; mov r14, rdi              // r14 = input struct pointer
-            ; mov r15, rsi              // r15 = EncodeContext pointer
-            ; mov r12, [r15 + ENC_OUTPUT_PTR as i32]
-            ; mov r13, [r15 + ENC_OUTPUT_END as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_push_r64(5, buf)?;
+                x64::encode_sub_r64_imm32(4, frame_size, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 0 }, 5, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 16 }, 12, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 24 }, 13, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 14, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 15, buf)?;
+                x64::encode_mov_r64_r64(14, 7, buf)?;
+                x64::encode_mov_r64_r64(15, 6, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: ENC_OUTPUT_PTR }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 15, disp: ENC_OUTPUT_END }, buf)
+            })
+            .expect("begin encode prologue");
         #[cfg(windows)]
-        dynasm!(self.ops
-            ; .arch x64
-            ; push rbp
-            ; sub rsp, frame_size as i32
-            ; mov [rsp + 32], rbp
-            ; mov [rsp + 48], r12
-            ; mov [rsp + 56], r13
-            ; mov [rsp + 64], r14
-            ; mov [rsp + 72], r15
-            ; mov r14, rcx              // r14 = input struct pointer (Windows arg0)
-            ; mov r15, rdx              // r15 = EncodeContext pointer (Windows arg1)
-            ; mov r12, [r15 + ENC_OUTPUT_PTR as i32]
-            ; mov r13, [r15 + ENC_OUTPUT_END as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_push_r64(5, buf)?;
+                x64::encode_sub_r64_imm32(4, frame_size, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 5, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 48 }, 12, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 56 }, 13, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 64 }, 14, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: 72 }, 15, buf)?;
+                x64::encode_mov_r64_r64(14, 1, buf)?;
+                x64::encode_mov_r64_r64(15, 2, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: ENC_OUTPUT_PTR }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 15, disp: ENC_OUTPUT_END }, buf)
+            })
+            .expect("begin encode prologue windows");
 
         self.error_exit = error_exit;
         (entry, error_exit)
-    }
+        }
 
-    /// Emit the success epilogue and error exit for an encode function.
-    ///
-    /// Flushes output_ptr back to ctx on success.
-    pub fn end_encode_func(&mut self, error_exit: LabelId) {
-        let frame_size = self.frame_size as i32;
+        /// Emit the success epilogue and error exit for an encode function.
+        ///
+        /// Flushes output_ptr back to ctx on success.
+        pub fn end_encode_func(&mut self, error_exit: LabelId) {
+            let frame_size = self.frame_size;
 
         #[cfg(not(windows))]
-        dynasm!(self.ops
-            ; .arch x64
-            // Success path: flush output cursor, restore registers, return
-            ; mov [r15 + ENC_OUTPUT_PTR as i32], r12
-            ; mov r15, [rsp + 40]
-            ; mov r14, [rsp + 32]
-            ; mov r13, [rsp + 24]
-            ; mov r12, [rsp + 16]
-            ; mov rbp, [rsp]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
-
-            // Error exit: just restore and return (error is already in ctx.error)
-            ; =>error_exit
-            ; mov r15, [rsp + 40]
-            ; mov r14, [rsp + 32]
-            ; mov r13, [rsp + 24]
-            ; mov r12, [rsp + 16]
-            ; mov rbp, [rsp]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 15, disp: ENC_OUTPUT_PTR }, 12, buf)?;
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 16 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 0 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end encode");
+        self.emit
+            .bind_label(error_exit)
+            .expect("bind error_exit");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 16 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 0 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end encode error");
         #[cfg(windows)]
-        dynasm!(self.ops
-            ; .arch x64
-            // Success path: flush output cursor, restore registers, return
-            ; mov [r15 + ENC_OUTPUT_PTR as i32], r12
-            ; mov r15, [rsp + 72]
-            ; mov r14, [rsp + 64]
-            ; mov r13, [rsp + 56]
-            ; mov r12, [rsp + 48]
-            ; mov rbp, [rsp + 32]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
-
-            // Error exit: just restore and return (error is already in ctx.error)
-            ; =>error_exit
-            ; mov r15, [rsp + 72]
-            ; mov r14, [rsp + 64]
-            ; mov r13, [rsp + 56]
-            ; mov r12, [rsp + 48]
-            ; mov rbp, [rsp + 32]
-            ; add rsp, frame_size
-            ; pop rbp
-            ; ret
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 15, disp: ENC_OUTPUT_PTR }, 12, buf)?;
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 48 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end encode windows");
+        self.emit
+            .bind_label(error_exit)
+            .expect("bind error_exit windows");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
+                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
+                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 48 }, buf)?;
+                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 32 }, buf)?;
+                x64::encode_add_r64_imm32(4, frame_size, buf)?;
+                x64::encode_pop_r64(5, buf)?;
+                x64::encode_ret(buf)
+            })
+            .expect("end encode windows error");
     }
 
     /// Emit a call to another emitted encode function.
@@ -2966,10 +3372,20 @@ impl EmitCtx {
         self.emit_enc_flush_output_cursor();
         // Set up arguments: arg0 = input + field_offset, arg1 = ctx
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; lea rdi, [r14 + field_offset as i32] ; mov rsi, r15);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_lea_r64_m(7, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(6, 15, buf)
+            })
+            .expect("call emitted func args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; lea rcx, [r14 + field_offset as i32] ; mov rdx, r15);
-        dynasm!(self.ops ; .arch x64 ; call =>label);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_lea_r64_m(1, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_mov_r64_r64(2, 15, buf)
+            })
+            .expect("call emitted func args win");
+        self.emit.emit_call_label(label).expect("call emitted");
         self.emit_enc_reload_and_check_error();
     }
 
@@ -2978,9 +3394,13 @@ impl EmitCtx {
     pub fn emit_enc_call_intrinsic_ctx_only(&mut self, fn_ptr: *const u8) {
         self.emit_enc_flush_output_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15);
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_r64(7, 15, buf))
+            .expect("enc intrinsic ctx only args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15);
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_r64(1, 2, buf))
+            .expect("enc intrinsic ctx only args");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_enc_reload_and_check_error();
     }
@@ -2992,9 +3412,19 @@ impl EmitCtx {
 
         self.emit_enc_flush_output_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; mov rsi, QWORD arg1_val);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_mov_r64_imm64(6, arg1_val as u64, buf)
+            })
+            .expect("enc intrinsic args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; mov rdx, QWORD arg1_val);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 2, buf)?;
+                x64::encode_mov_r64_imm64(3, arg1_val as u64, buf)
+            })
+            .expect("enc intrinsic args");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_enc_reload_and_check_error();
     }
@@ -3005,15 +3435,19 @@ impl EmitCtx {
     pub fn emit_enc_call_intrinsic_with_input(&mut self, fn_ptr: *const u8, field_offset: u32) {
         self.emit_enc_flush_output_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, r15
-            ; lea rsi, [r14 + field_offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)
+            })
+            .expect("enc intrinsic with input args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, r15
-            ; lea rdx, [r14 + field_offset as i32]
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 2, buf)?;
+                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)
+            })
+            .expect("enc intrinsic with input args windows");
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_enc_reload_and_check_error();
     }
@@ -3023,34 +3457,48 @@ impl EmitCtx {
     pub fn emit_enc_ensure_capacity(&mut self, count: u32) {
         let have_space = self.emit.new_label();
 
-        dynasm!(self.ops
-            ; .arch x64
-            // remaining = output_end - output_ptr
-            ; mov rax, r13
-            ; sub rax, r12
-            ; cmp rax, count as i32
-            ; jge =>have_space
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(0, 13, buf)?;
+                x64::encode_sub_r64_r64(0, 12, buf)?;
+                x64::encode_cmp_r64_imm32(0, count as u32, buf)
+            })
+            .expect("enc output capacity check");
+        self.emit
+            .emit_jge_label(have_space)
+            .expect("enc have space");
 
         // Not enough space — call kajit_output_grow(ctx, needed)
         self.emit_enc_flush_output_cursor();
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; mov rsi, count as i32);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_mov_r64_imm64(6, count as u64, buf)
+            })
+            .expect("enc ensure grow args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; mov rdx, count as i32);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 2, buf)?;
+                x64::encode_mov_r64_imm64(3, count as u64, buf)
+            })
+            .expect("enc ensure grow args");
         self.emit_call_fn_ptr(crate::intrinsics::kajit_output_grow as *const u8);
         self.emit_enc_reload_and_check_error();
 
-        dynasm!(self.ops ; .arch x64 ; =>have_space);
+        self.emit.bind_label(have_space).expect("have_space encode");
     }
 
     /// Write a single immediate byte to the output buffer and advance.
     pub fn emit_enc_write_byte(&mut self, value: u8) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov BYTE [r12], value as i8
-            ; add r12, 1
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, value as u32, buf)?;
+                x64::encode_mov_m_r8(12, 0, 10, buf)?;
+                x64::encode_add_r64_imm32(12, 1, buf)
+            })
+            .expect("enc write byte");
     }
 
     /// Copy `count` bytes from a static pointer to the output buffer.
@@ -3074,7 +3522,19 @@ impl EmitCtx {
                         .try_into()
                         .unwrap(),
                 );
-                dynasm!(self.ops ; .arch x64 ; mov rax, QWORD val ; mov [r12 + offset as i32], rax);
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r64_imm64(0, val as u64, buf)?;
+                        x64::encode_mov_m_r64(
+                            Mem {
+                                base: 12,
+                                disp: offset as i32,
+                            },
+                            0,
+                            buf,
+                        )
+                    })
+                    .expect("write static bytes <=8");
                 offset += 8;
                 remaining -= 8;
             }
@@ -3084,7 +3544,19 @@ impl EmitCtx {
                         .try_into()
                         .unwrap(),
                 );
-                dynasm!(self.ops ; .arch x64 ; mov DWORD [r12 + offset as i32], val);
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r32_imm32(10, val as u32, buf)?;
+                        x64::encode_mov_m_r32(
+                            Mem {
+                                base: 12,
+                                disp: offset as i32,
+                            },
+                            10,
+                            buf,
+                        )
+                    })
+                    .expect("write static 4");
                 offset += 4;
                 remaining -= 4;
             }
@@ -3094,44 +3566,65 @@ impl EmitCtx {
                         .try_into()
                         .unwrap(),
                 );
-                dynasm!(self.ops ; .arch x64 ; mov WORD [r12 + offset as i32], val);
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r32_imm32(10, val as u32, buf)?;
+                        x64::encode_mov_m_r16(
+                            Mem {
+                                base: 12,
+                                disp: offset as i32,
+                            },
+                            10,
+                            buf,
+                        )
+                    })
+                    .expect("write static 2");
                 offset += 2;
                 remaining -= 2;
             }
             if remaining >= 1 {
-                dynasm!(self.ops ; .arch x64 ; mov BYTE [r12 + offset as i32], bytes[offset as usize] as i8);
+                self.emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r32_imm32(10, bytes[offset as usize] as u32, buf)?;
+                        x64::encode_mov_m_r8(
+                            12,
+                            offset as i32,
+                            10,
+                            buf,
+                        )
+                    })
+                    .expect("write static 1");
             }
         } else {
             // For larger copies, load pointer and use rep movsb
             let ptr_val = ptr as i64;
-            dynasm!(self.ops
-                ; .arch x64
-                // Save rdi/rsi (caller-saved, but just in case)
-                ; mov rax, QWORD ptr_val   // source
-                ; mov r10, rdi             // save rdi
-                ; mov r11, rsi             // save rsi (on SysV, not needed on Windows but harmless)
-                ; mov rsi, rax             // rsi = source
-                ; mov rdi, r12             // rdi = dest (output_ptr)
-                ; mov ecx, count as i32    // count
-                ; rep movsb
-                ; mov rdi, r10             // restore rdi
-                ; mov rsi, r11             // restore rsi
-            );
+            self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_r64_imm64(0, ptr_val as u64, buf)?;
+                    x64::encode_mov_r64_r64(10, 7, buf)?;
+                    x64::encode_mov_r64_r64(11, 6, buf)?;
+                    x64::encode_mov_r64_r64(6, 0, buf)?;
+                    x64::encode_mov_r64_r64(7, 12, buf)?;
+                    x64::encode_mov_r32_imm32(2, count as u32, buf)?;
+                    x64::encode_cld(buf)?;
+                    x64::encode_rep_movsb(buf)?;
+                    x64::encode_mov_r64_r64(7, 10, buf)?;
+                    x64::encode_mov_r64_r64(6, 11, buf)
+                })
+                .expect("rep movsb");
         }
 
-        dynasm!(self.ops
-            ; .arch x64
-            ; add r12, count as i32
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(12, count as u32, buf))
+            .expect("advance after static bytes");
     }
 
     /// Advance the output cursor by `count` bytes (no write).
     pub fn emit_enc_advance_output(&mut self, count: u32) {
         if count > 0 {
-            dynasm!(self.ops
-                ; .arch x64
-                ; add r12, count as i32
-            );
+            self.emit
+                .emit_with(|buf| x64::encode_add_r64_imm32(12, count as u32, buf))
+                .expect("advance output");
         }
     }
 
@@ -3139,40 +3632,73 @@ impl EmitCtx {
     /// The value is left in eax/rax (32-bit for W1/W2/W4, 64-bit for W8).
     pub fn emit_enc_load_from_input(&mut self, offset: u32, width: Width) {
         match width {
-            Width::W1 => dynasm!(self.ops ; .arch x64 ; movzx eax, BYTE [r14 + offset as i32]),
-            Width::W2 => dynasm!(self.ops ; .arch x64 ; movzx eax, WORD [r14 + offset as i32]),
-            Width::W4 => dynasm!(self.ops ; .arch x64 ; mov eax, [r14 + offset as i32]),
-            Width::W8 => dynasm!(self.ops ; .arch x64 ; mov rax, [r14 + offset as i32]),
+            Width::W1 => self.emit
+                .emit_with(|buf| {
+                    x64::encode_movzx_r32_rm8(
+                        0,
+                        x64::Operand::Mem(Mem {
+                            base: 14,
+                            disp: offset as i32,
+                        }),
+                        buf,
+                    )
+                })
+                .expect("enc load 1"),
+            Width::W2 => self.emit
+                .emit_with(|buf| {
+                    x64::encode_movzx_r32_rm16(
+                        0,
+                        x64::Operand::Mem(Mem {
+                            base: 14,
+                            disp: offset as i32,
+                        }),
+                        buf,
+                    )
+                })
+                .expect("enc load 2"),
+            Width::W4 => self.emit
+                .emit_with(|buf| x64::encode_mov_r32_m(0, Mem { base: 14, disp: offset as i32 }, buf))
+                .expect("enc load 4"),
+            Width::W8 => self.emit
+                .emit_with(|buf| x64::encode_mov_r64_m(0, Mem { base: 14, disp: offset as i32 }, buf))
+                .expect("enc load 8"),
         }
     }
 
     /// Store a value from eax/rax to the output buffer and advance the cursor.
     pub fn emit_enc_store_to_output(&mut self, width: Width) {
         match width {
-            Width::W1 => dynasm!(self.ops ; .arch x64
-                ; mov [r12], al
-                ; add r12, 1
-            ),
-            Width::W2 => dynasm!(self.ops ; .arch x64
-                ; mov [r12], ax
-                ; add r12, 2
-            ),
-            Width::W4 => dynasm!(self.ops ; .arch x64
-                ; mov [r12], eax
-                ; add r12, 4
-            ),
-            Width::W8 => dynasm!(self.ops ; .arch x64
-                ; mov [r12], rax
-                ; add r12, 8
-            ),
+            Width::W1 => self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_m_r8(12, 0, 0, buf)?;
+                    x64::encode_add_r64_imm32(12, 1, buf)
+                })
+                .expect("enc store 1"),
+            Width::W2 => self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_m_r16(12, 0, 0, buf)?;
+                    x64::encode_add_r64_imm32(12, 2, buf)
+                })
+                .expect("enc store 2"),
+            Width::W4 => self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_m_r32(Mem { base: 12, disp: 0 }, 0, buf)?;
+                    x64::encode_add_r64_imm32(12, 4, buf)
+                })
+                .expect("enc store 4"),
+            Width::W8 => self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_m_r64(Mem { base: 12, disp: 0 }, 0, buf)?;
+                    x64::encode_add_r64_imm32(12, 8, buf)
+                })
+                .expect("enc store 8"),
         }
     }
 
     /// Commit and finalize the assembler, returning the executable buffer.
     ///
     /// All functions must have been completed with `end_func` before calling this.
-    pub fn finalize(mut self) -> dynasmrt::ExecutableBuffer {
-        self.ops.commit().expect("failed to commit assembly");
-        self.ops.finalize().expect("failed to finalize assembly")
+    pub fn finalize(self) -> FinalizedEmission {
+        self.emit.finalize().expect("failed to finalize assembly")
     }
 }
