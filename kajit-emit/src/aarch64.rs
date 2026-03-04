@@ -1067,6 +1067,91 @@ pub fn encode_bic(
     emit_logical_shifted_reg(0x0A20_0000, width, rd, rn, rm, shift, amount)
 }
 
+pub fn encode_movi_b16(vd: u8, imm8: u8) -> Result<u32, EmitError> {
+    if vd > 31 {
+        return Err(EmitError::InvalidRegister { reg: Reg(vd) });
+    }
+    let a = (imm8 >> 7) & 1;
+    let b = (imm8 >> 6) & 1;
+    let c = (imm8 >> 5) & 1;
+    let defgh = imm8 & 0x1F;
+    let vd = vd as u32;
+    Ok(0x4F00_E400
+        | (a as u32) << 18
+        | (b as u32) << 17
+        | (c as u32) << 16
+        | (defgh as u32) << 5
+        | vd)
+}
+
+pub fn encode_ld1_b16(vt: u8, rn: Reg) -> Result<u32, EmitError> {
+    if vt > 31 {
+        return Err(EmitError::InvalidRegister { reg: Reg(vt) });
+    }
+    let rn = check_reg(rn);
+    Ok(0x4C40_7000 | (rn << 5) | vt as u32)
+}
+
+pub fn encode_cmeq_b16(vd: u8, vn: u8, vm: u8) -> Result<u32, EmitError> {
+    if vd > 31 || vn > 31 || vm > 31 {
+        return Err(EmitError::InvalidRegister {
+            reg: Reg(if vd > 31 {
+                vd
+            } else if vn > 31 {
+                vn
+            } else {
+                vm
+            }),
+        });
+    }
+    Ok(0x6E20_8C00 | (vm as u32) << 16 | (vn as u32) << 5 | vd as u32)
+}
+
+pub fn encode_orr_b16(vd: u8, vn: u8, vm: u8) -> Result<u32, EmitError> {
+    if vd > 31 || vn > 31 || vm > 31 {
+        return Err(EmitError::InvalidRegister {
+            reg: Reg(if vd > 31 {
+                vd
+            } else if vn > 31 {
+                vn
+            } else {
+                vm
+            }),
+        });
+    }
+    Ok(0x4EA0_1C00 | (vm as u32) << 16 | (vn as u32) << 5 | vd as u32)
+}
+
+pub fn encode_umaxv_b16(vd: u8, vn: u8) -> Result<u32, EmitError> {
+    if vd > 31 || vn > 31 {
+        return Err(EmitError::InvalidRegister {
+            reg: Reg(if vd > 31 { vd } else { vn }),
+        });
+    }
+    Ok(0x6E30_A800 | (vn as u32) << 5 | vd as u32)
+}
+
+pub fn encode_umov_b(rd: Reg, vn: u8, index: u8) -> Result<u32, EmitError> {
+    if vn > 31 {
+        return Err(EmitError::InvalidRegister { reg: Reg(vn) });
+    }
+    if index > 15 {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "umov",
+            value: index as i64,
+        });
+    }
+    let rd = check_reg(rd);
+    Ok(0x0E00_3C00 | (index as u32) << 17 | 1u32 << 16 | (vn as u32) << 5 | rd)
+}
+
+pub fn encode_ldrb_reg(rt: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rt = check_reg(rt);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
+    Ok(0x3860_6800 | (rm << 16) | (rn << 5) | rt)
+}
+
 pub fn encode_b(imm26: i32) -> Result<u32, EmitError> {
     check_signed_bits("b", imm26 as i64, 26)?;
     Ok(0x1400_0000 | ((imm26 as u32) & 0x03ff_ffff))
@@ -1461,6 +1546,59 @@ mod tests {
         let w = encode_orr_imm(Width::X64, Reg::X13, Reg::X13, 2).unwrap();
         assert_eq!(w & 0x1f, 13);
         assert_eq!((w >> 5) & 0x1f, 13);
+    }
+
+    #[test]
+    fn movi_b16_basic() {
+        let w = encode_movi_b16(1, 0x22).unwrap();
+        assert_eq!(w & 0x1f, 1);
+    }
+
+    #[test]
+    fn ld1_b16_basic() {
+        let w = encode_ld1_b16(0, Reg::X19).unwrap();
+        assert_eq!(w & 0x1f, 0);
+        assert_eq!((w >> 5) & 0x1f, 19);
+    }
+
+    #[test]
+    fn cmeq_b16_basic() {
+        let w = encode_cmeq_b16(3, 0, 1).unwrap();
+        assert_eq!(w & 0x1f, 3);
+        assert_eq!((w >> 5) & 0x1f, 0);
+        assert_eq!((w >> 16) & 0x1f, 1);
+    }
+
+    #[test]
+    fn orr_b16_basic() {
+        let w = encode_orr_b16(1, 2, 3).unwrap();
+        assert_eq!(w & 0x1f, 1);
+        assert_eq!((w >> 5) & 0x1f, 2);
+        assert_eq!((w >> 16) & 0x1f, 3);
+    }
+
+    #[test]
+    fn umaxv_b16_basic() {
+        let w = encode_umaxv_b16(5, 6).unwrap();
+        assert_eq!(w & 0x1f, 5);
+        assert_eq!((w >> 5) & 0x1f, 6);
+    }
+
+    #[test]
+    fn umov_b16_basic() {
+        let w = encode_umov_b(Reg::X9, 5, 7).unwrap();
+        assert_eq!(w & 0x1f, 9);
+        assert_eq!((w >> 5) & 0x1f, 5);
+        assert_eq!(((w >> 16) & 0x1f), 15);
+        assert_eq!((w >> 17) & 0xf, 7);
+    }
+
+    #[test]
+    fn ldrb_reg_basic() {
+        let w = encode_ldrb_reg(Reg::X9, Reg::X19, Reg::X10).unwrap();
+        assert_eq!(w & 0x1f, 9);
+        assert_eq!((w >> 5) & 0x1f, 19);
+        assert_eq!((w >> 16) & 0x1f, 10);
     }
 
     #[test]
