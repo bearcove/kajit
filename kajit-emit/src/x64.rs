@@ -16,6 +16,14 @@ pub struct FinalizedEmission {
 }
 
 impl FinalizedEmission {
+    pub fn code_ptr(&self) -> *const u8 {
+        self.code.as_ptr()
+    }
+
+    pub fn len(&self) -> usize {
+        self.code.len()
+    }
+
     pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
         crate::build_trace(&self.code, &self.source_map)
     }

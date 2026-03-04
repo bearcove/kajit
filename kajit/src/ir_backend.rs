@@ -1,12 +1,18 @@
-use dynasmrt::AssemblyOffset;
-
 use crate::linearize::LinearIr;
 use crate::regalloc_engine::AllocatedProgram;
 use crate::regalloc_mir::RaProgram;
 
+#[cfg(target_arch = "x86_64")]
 pub struct LinearBackendResult {
     pub buf: dynasmrt::ExecutableBuffer,
-    pub entry: AssemblyOffset,
+    pub entry: dynasmrt::AssemblyOffset,
+    pub source_map: Option<kajit_emit::SourceMap>,
+}
+
+#[cfg(target_arch = "aarch64")]
+pub struct LinearBackendResult {
+    pub buf: kajit_emit::aarch64::FinalizedEmission,
+    pub entry: u32,
     pub source_map: Option<kajit_emit::SourceMap>,
 }
 

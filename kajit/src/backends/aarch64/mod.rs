@@ -1,7 +1,6 @@
 #![allow(clippy::useless_conversion)]
 
-use dynasmrt::{AssemblyOffset as DynasmAssemblyOffset, DynasmApi, dynasm};
-use kajit_emit::aarch64::LabelId;
+use kajit_emit::aarch64::{self, LabelId, Reg};
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
 use std::collections::BTreeMap;
 
@@ -65,38 +64,6 @@ pub(crate) struct Lowerer {
 pub(crate) enum IntrinsicArg {
     VReg { operand_index: usize },
     OutField(u32),
-}
-
-trait IntoBackendEntryOffset {
-    fn into_backend_entry_offset(self) -> u32;
-}
-
-impl IntoBackendEntryOffset for u32 {
-    fn into_backend_entry_offset(self) -> u32 {
-        self
-    }
-}
-
-impl IntoBackendEntryOffset for DynasmAssemblyOffset {
-    fn into_backend_entry_offset(self) -> u32 {
-        self.0 as u32
-    }
-}
-
-trait FromBackendEntryOffset {
-    fn from_backend_entry_offset(offset: u32) -> Self;
-}
-
-impl FromBackendEntryOffset for u32 {
-    fn from_backend_entry_offset(offset: u32) -> Self {
-        offset
-    }
-}
-
-impl FromBackendEntryOffset for DynasmAssemblyOffset {
-    fn from_backend_entry_offset(offset: u32) -> Self {
-        DynasmAssemblyOffset(offset as usize)
-    }
 }
 
 // r[impl ir.backends.post-regalloc.branch-test]
@@ -348,16 +315,25 @@ impl Lowerer {
             LinearOp::AdvanceCursor { count } => self.ectx.emit_advance_cursor_by(*count),
             LinearOp::AdvanceCursorBy { src } => {
                 self.emit_load_use_x9(*src, 0);
-                dynasm!(self.ectx.ops ; .arch aarch64 ; add x19, x19, x9);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X9)
+                        .expect("add"),
+                );
             }
             LinearOp::SaveCursor { dst } => {
-                dynasm!(self.ectx.ops ; .arch aarch64 ; mov x9, x19);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X19)
+                        .expect("mov"),
+                );
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, None);
             }
             LinearOp::RestoreCursor { src } => {
                 self.emit_load_use_x9(*src, 0);
-                dynasm!(self.ectx.ops ; .arch aarch64 ; mov x19, x9);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X19, Reg::X9)
+                        .expect("mov"),
+                );
             }
 
             LinearOp::WriteToField { src, offset, width } => {
@@ -381,11 +357,17 @@ impl Lowerer {
             LinearOp::WriteToSlot { slot, src } => {
                 self.emit_load_use_x9(*src, 0);
                 let off = self.slot_off(*slot);
-                dynasm!(self.ectx.ops ; .arch aarch64 ; str x9, [sp, #off]);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off)
+                        .expect("str"),
+                );
             }
             LinearOp::ReadFromSlot { dst, slot } => {
                 let off = self.slot_off(*slot);
-                dynasm!(self.ectx.ops ; .arch aarch64 ; ldr x9, [sp, #off]);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off)
+                        .expect("ldr"),
+                );
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, None);
             }
@@ -548,7 +530,7 @@ impl Lowerer {
             self.ectx.bind_label(label);
             let (entry_offset, error_exit) = self.ectx.begin_func();
             if func.lambda_id.index() == 0 {
-                self.entry = Some(entry_offset.into_backend_entry_offset());
+                self.entry = Some(entry_offset);
             }
             self.current_func = Some(FunctionCtx {
                 error_exit,
@@ -594,7 +576,7 @@ impl Lowerer {
         let buf = self.ectx.finalize();
         LinearBackendResult {
             buf,
-            entry: FromBackendEntryOffset::from_backend_entry_offset(entry),
+            entry,
             source_map: None,
         }
     }

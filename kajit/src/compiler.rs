@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use dynasmrt::AssemblyOffset;
 use facet::{
     Def, EnumRepr, KnownPointer, OptionDef, PointerDef, ScalarType, Shape, StructKind, Type,
     UserType,
@@ -16,8 +15,11 @@ use crate::pipeline_opts::PipelineOptions;
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
 pub struct CompiledDecoder {
+    #[cfg(target_arch = "x86_64")]
     buf: dynasmrt::ExecutableBuffer,
-    entry: AssemblyOffset,
+    #[cfg(target_arch = "aarch64")]
+    buf: kajit_emit::aarch64::FinalizedEmission,
+    entry: usize,
     func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
@@ -30,12 +32,20 @@ impl CompiledDecoder {
 
     /// The raw executable code buffer.
     pub fn code(&self) -> &[u8] {
-        &self.buf
+        #[cfg(target_arch = "x86_64")]
+        {
+            return &self.buf;
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        {
+            &self.buf.code
+        }
     }
 
     /// Byte offset of the entry point within the code buffer.
     pub fn entry_offset(&self) -> usize {
-        self.entry.0
+        self.entry
     }
 
     /// Whether `from_str` can safely enable trusted UTF-8 mode for this format.
@@ -45,6 +55,30 @@ impl CompiledDecoder {
 }
 
 pub(crate) const DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED: bool = true;
+
+#[cfg(target_arch = "aarch64")]
+fn materialize_backend_result(
+    result: crate::ir_backend::LinearBackendResult,
+) -> (kajit_emit::aarch64::FinalizedEmission, usize) {
+    let crate::ir_backend::LinearBackendResult {
+        buf,
+        entry,
+        source_map: _,
+    } = result;
+    (buf, entry as usize)
+}
+
+#[cfg(target_arch = "x86_64")]
+fn materialize_backend_result(
+    result: crate::ir_backend::LinearBackendResult,
+) -> (dynasmrt::ExecutableBuffer, usize) {
+    let crate::ir_backend::LinearBackendResult {
+        buf,
+        entry,
+        source_map: _,
+    } = result;
+    (buf, entry.0 as usize)
+}
 
 // r[impl compiler.walk]
 // r[impl compiler.recursive]
@@ -872,14 +906,14 @@ fn compile_linear_ir_decoder_with_options(
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
     maybe_disable_regalloc_edits(&mut regalloc_alloc, &pipeline_opts);
 
-    let crate::ir_backend::LinearBackendResult {
-        buf,
-        entry,
-        source_map: _,
-    } =
-        crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.ptr(entry)) };
+    let (buf, entry) = {
+        let result =
+            crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
+        materialize_backend_result(result)
+    };
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
+        core::mem::transmute(buf.code_ptr().add(entry))
+    };
     let root_name = ir
         .ops
         .iter()
@@ -891,12 +925,12 @@ fn compile_linear_ir_decoder_with_options(
         })
         .unwrap_or_else(|| "fad::decode::<ir-root>".to_string());
     let registration = crate::jit_debug::register_jit_code(
-        buf.as_ptr(),
+        buf.code_ptr(),
         buf.len(),
         &[crate::jit_debug::JitSymbolEntry {
             name: root_name,
-            offset: entry.0,
-            size: buf.len().saturating_sub(entry.0),
+            offset: entry,
+            size: buf.len().saturating_sub(entry),
         }],
     );
 
@@ -917,21 +951,20 @@ pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> C
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
     maybe_disable_regalloc_edits(&mut alloc, &PipelineOptions::from_env());
 
-    let crate::ir_backend::LinearBackendResult {
-        buf,
-        entry,
-        source_map: _,
-    } =
-        crate::ir_backend::compile_ra_program(program, &alloc);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.ptr(entry)) };
+    let (buf, entry) = {
+        let result = crate::ir_backend::compile_ra_program(program, &alloc);
+        materialize_backend_result(result)
+    };
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
+        core::mem::transmute(buf.code_ptr().add(entry))
+    };
     let registration = crate::jit_debug::register_jit_code(
-        buf.as_ptr(),
+        buf.code_ptr(),
         buf.len(),
         &[crate::jit_debug::JitSymbolEntry {
             name: "fad::decode::<ra-mir-text>".to_string(),
-            offset: entry.0,
-            size: buf.len().saturating_sub(entry.0),
+            offset: entry,
+            size: buf.len().saturating_sub(entry),
         }],
     );
 

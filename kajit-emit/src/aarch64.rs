@@ -1,5 +1,112 @@
 use crate::{SourceLocation, SourceMap, SourceMapEntry};
 
+use std::ptr;
+
+#[cfg(target_os = "macos")]
+const MAP_ANON: i32 = 0x1000;
+
+#[cfg(not(target_os = "macos"))]
+const MAP_ANON: i32 = 0x20;
+
+const MAP_PRIVATE: i32 = 0x02;
+const PROT_READ: i32 = 1;
+const PROT_WRITE: i32 = 2;
+const PROT_EXEC: i32 = 4;
+const MAP_FAILED: *mut u8 = !0usize as *mut u8;
+
+#[cfg(target_os = "macos")]
+const MAP_JIT: i32 = 0x0800;
+
+#[cfg(target_os = "macos")]
+type MmapProt = i32;
+
+extern "C" {
+    fn mmap(addr: *mut u8, len: usize, prot: MmapProt, flags: i32, fd: i32, offset: i64) -> *mut u8;
+    fn munmap(addr: *mut u8, len: usize) -> i32;
+    fn mprotect(addr: *mut u8, len: usize, prot: MmapProt) -> i32;
+}
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn pthread_jit_write_protect_np(enabled: i32);
+    fn sys_icache_invalidate(start: *mut u8, len: usize);
+}
+
+#[derive(Debug)]
+pub struct ExecutableBuffer {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl ExecutableBuffer {
+    fn allocate(mut bytes: Vec<u8>) -> Self {
+        let len = bytes.len().max(1);
+        let prot = if cfg!(target_os = "macos") {
+            PROT_READ | PROT_EXEC
+        } else {
+            PROT_READ | PROT_WRITE
+        };
+        let mut flags = MAP_PRIVATE | MAP_ANON;
+        #[cfg(target_os = "macos")]
+        {
+            flags |= MAP_JIT;
+        }
+
+        let ptr = unsafe { mmap(ptr::null_mut(), len, prot, flags, -1, 0) };
+        if ptr == MAP_FAILED {
+            panic!("mmap failed to allocate executable memory");
+        }
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            pthread_jit_write_protect_np(0);
+            ptr.copy_from_nonoverlapping(bytes.as_mut_ptr(), bytes.len());
+            pthread_jit_write_protect_np(1);
+            sys_icache_invalidate(ptr, bytes.len());
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            ptr.copy_from_nonoverlapping(bytes.as_mut_ptr(), bytes.len());
+            let ok = mprotect(ptr, len, PROT_READ | PROT_EXEC);
+            if ok != 0 {
+                munmap(ptr, len);
+                panic!("mprotect failed to mark executable memory");
+            }
+        }
+
+        Self { ptr, len }
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+}
+
+impl AsRef<[u8]> for ExecutableBuffer {
+    fn as_ref(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl Drop for ExecutableBuffer {
+    fn drop(&mut self) {
+        if !self.ptr.is_null() && self.len != 0 {
+            unsafe {
+                munmap(self.ptr, self.len);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Width {
     W32,
@@ -126,19 +233,27 @@ impl Condition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LabelId(u32);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct FinalizedEmission {
-    pub code: Vec<u8>,
+    pub exec: ExecutableBuffer,
     pub source_map: SourceMap,
 }
 
 impl FinalizedEmission {
+    pub fn code_ptr(&self) -> *const u8 {
+        self.exec.as_ptr()
+    }
+
+    pub fn len(&self) -> usize {
+        self.exec.len()
+    }
+
     pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
-        crate::build_trace(&self.code, &self.source_map)
+        crate::build_trace(self.exec.as_ref(), &self.source_map)
     }
 
     pub fn trace_text(&self) -> Result<String, crate::TraceError> {
-        crate::format_trace(&self.code, &self.source_map)
+        crate::format_trace(self.exec.as_ref(), &self.source_map)
     }
 
     pub fn source_map_le(&self) -> Result<Vec<u8>, crate::SourceMapError> {
@@ -395,7 +510,7 @@ impl Emitter {
         }
 
         Ok(FinalizedEmission {
-            code: self.buf,
+            exec: ExecutableBuffer::allocate(self.buf),
             source_map: self.source_map,
         })
     }
@@ -1865,6 +1980,8 @@ mod tests {
         emitter.emit_bl_label(start).unwrap();
 
         let finalized = emitter.finalize().unwrap();
+        let code = finalized.exec.as_ref();
+        let code = finalized.exec.as_ref();
         assert_eq!(
             finalized.source_map,
             vec![
@@ -1895,9 +2012,9 @@ mod tests {
             ]
         );
 
-        assert_eq!(word(&finalized.code[0..4]), 0x1400_0002);
-        assert_eq!(word(&finalized.code[4..8]), 0xB4FF_FFF0);
-        assert_eq!(word(&finalized.code[8..12]), 0x97FF_FFFE);
+        assert_eq!(word(&code[0..4]), 0x1400_0002);
+        assert_eq!(word(&code[4..8]), 0xB4FF_FFF0);
+        assert_eq!(word(&code[8..12]), 0x97FF_FFFE);
 
         let trace = finalized.trace_text().unwrap();
         assert_eq!(
@@ -1999,9 +2116,9 @@ mod tests {
             ]
         );
 
-        assert_eq!(word(&finalized.code[0..4]), 0x3638_0060);
-        assert_eq!(word(&finalized.code[4..8]), 0x372F_FFE1);
-        assert_eq!(word(&finalized.code[8..12]), 0x54FF_FFC0);
+        assert_eq!(word(&code[0..4]), 0x3638_0060);
+        assert_eq!(word(&code[4..8]), 0x372F_FFE1);
+        assert_eq!(word(&code[8..12]), 0x54FF_FFC0);
     }
 
     #[test]
