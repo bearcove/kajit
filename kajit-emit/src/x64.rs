@@ -564,6 +564,121 @@ pub fn encode_mov_r32_m(dst: u8, src: Mem, buf: &mut Vec<u8>) -> Result<(), Emit
     emit_op_rm(buf, None, &[0x8B], false, dst, Operand::Mem(src), false)
 }
 
+pub fn encode_movd_r64_xmm(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0x7E],
+        false,
+        src,
+        Operand::Reg(dst),
+        false,
+    )
+}
+
+pub fn encode_movd_xmm_r64(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0x6E],
+        false,
+        dst,
+        Operand::Reg(src),
+        false,
+    )
+}
+
+pub fn encode_pshufd_xmm_xmm_imm8(
+    dst: u8,
+    src: u8,
+    imm8: u8,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0x70],
+        false,
+        dst,
+        Operand::Reg(src),
+        false,
+    )?;
+    buf.push(imm8);
+    Ok(())
+}
+
+pub fn encode_movdqa_xmm_xmm(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0x6F],
+        false,
+        dst,
+        Operand::Reg(src),
+        false,
+    )
+}
+
+pub fn encode_movdqu_xmm_m(dst_xmm: u8, base: u8, disp: i32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0x6F],
+        false,
+        dst_xmm,
+        Operand::Mem(Mem { base, disp }),
+        false,
+    )
+}
+
+pub fn encode_movdqu_m_xmm(base: u8, disp: i32, src_xmm: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0x7F],
+        false,
+        src_xmm,
+        Operand::Mem(Mem { base, disp }),
+        false,
+    )
+}
+
+pub fn encode_pcmpeqb_xmm_xmm(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0x74],
+        false,
+        dst,
+        Operand::Reg(src),
+        false,
+    )
+}
+
+pub fn encode_por_xmm_xmm(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0xEB],
+        false,
+        dst,
+        Operand::Reg(src),
+        false,
+    )
+}
+
+pub fn encode_pmovmskb_r32_xmm(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(
+        buf,
+        Some(0x66),
+        &[0x0F, 0xD7],
+        false,
+        dst,
+        Operand::Reg(src),
+        false,
+    )
+}
+
 pub fn encode_mov_m_r8(dst_base: u8, dst_disp: i32, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(
         buf,
@@ -670,6 +785,20 @@ pub fn encode_movsx_r64_rm16(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result
     emit_op_rm(buf, None, &[0x0F, 0xBF], true, dst, src, false)
 }
 
+pub fn encode_tzcnt_r32_r32(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, Some(0xF3), &[0x0F, 0xBC], false, dst, Operand::Reg(src), false)
+}
+
+pub fn encode_imul_r64_r64(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0x0F, 0xAF], true, src, Operand::Reg(dst), false)
+}
+
+pub fn encode_imul_r64_r64_imm32(dst: u8, src: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0x69], true, src, Operand::Reg(dst), false)?;
+    buf.extend_from_slice(&imm.to_le_bytes());
+    Ok(())
+}
+
 pub fn encode_movsxd_r64_rm32(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x63], true, dst, src, false)
 }
@@ -766,6 +895,37 @@ pub fn encode_cmp_r64_imm32(dst: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), 
 
 pub fn encode_cmp_r64_m(lhs: u8, rhs: Mem, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x3B], true, lhs, Operand::Mem(rhs), false)
+}
+
+pub fn encode_rep_movsb(buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    buf.push(0xF3);
+    buf.push(0xA4);
+    Ok(())
+}
+
+pub fn encode_sar_r64_cl(dst: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0xD3], true, 7, Operand::Reg(dst), false)
+}
+
+pub fn encode_sar_r64_imm8(dst: u8, imm8: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0xC1], true, 7, Operand::Reg(dst), false)?;
+    buf.push(imm8);
+    Ok(())
+}
+
+pub fn encode_mov_r64_imm32_sext(dst: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0xC7], true, 0, Operand::Reg(dst), false)?;
+    buf.extend_from_slice(&imm.to_le_bytes());
+    Ok(())
+}
+
+pub fn encode_cld(buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    buf.push(0xFC);
+    Ok(())
+}
+
+pub fn encode_xor_r32_r32(lhs: u8, rhs: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+    emit_op_rm(buf, None, &[0x31], false, rhs, Operand::Reg(lhs), false)
 }
 
 pub fn encode_test_r64_r64(lhs: u8, rhs: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
@@ -1083,6 +1243,84 @@ mod tests {
         buf.clear();
         encode_neg_r64(10, &mut buf).unwrap();
         assert_eq!(buf, [0x49, 0xf7, 0xda]);
+    }
+
+    #[test]
+    fn encode_sse2_vector_ops() {
+        let mut buf = Vec::new();
+        encode_movd_r64_xmm(7, 1, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0x7e, 0xcf]);
+
+        buf.clear();
+        encode_movd_xmm_r64(2, 7, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0x6e, 0xd7]);
+
+        buf.clear();
+        encode_pshufd_xmm_xmm_imm8(3, 1, 0x1b, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0x70, 0xd9, 0x1b]);
+
+        buf.clear();
+        encode_movdqa_xmm_xmm(1, 0, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0x6f, 0xc8]);
+
+        buf.clear();
+        encode_movdqu_xmm_m(2, 1, 0, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0x6f, 0x11]);
+
+        buf.clear();
+        encode_movdqu_m_xmm(3, 0, 2, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0x7f, 0x13]);
+
+        buf.clear();
+        encode_pcmpeqb_xmm_xmm(6, 7, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0x74, 0xf7]);
+
+        buf.clear();
+        encode_por_xmm_xmm(1, 4, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0xeb, 0xcc]);
+
+        buf.clear();
+        encode_pmovmskb_r32_xmm(3, 7, &mut buf).unwrap();
+        assert_eq!(buf, [0x66, 0x0f, 0xd7, 0xdf]);
+    }
+
+    #[test]
+    fn encode_additional_scalar_ops() {
+        let mut buf = Vec::new();
+        encode_tzcnt_r32_r32(0, 0, &mut buf).unwrap();
+        assert_eq!(buf, [0xf3, 0x0f, 0xbc, 0xc0]);
+
+        buf.clear();
+        encode_imul_r64_r64(0, 1, &mut buf).unwrap();
+        assert_eq!(buf, [0x48, 0x0f, 0xaf, 0xc8]);
+
+        buf.clear();
+        encode_imul_r64_r64_imm32(2, 7, 0x1234_5678, &mut buf).unwrap();
+        assert_eq!(buf, [0x48, 0x69, 0xfa, 0x78, 0x56, 0x34, 0x12]);
+
+        buf.clear();
+        encode_sar_r64_cl(10, &mut buf).unwrap();
+        assert_eq!(buf, [0x49, 0xd3, 0xfa]);
+
+        buf.clear();
+        encode_sar_r64_imm8(10, 4, &mut buf).unwrap();
+        assert_eq!(buf, [0x49, 0xc1, 0xfa, 0x04]);
+
+        buf.clear();
+        encode_mov_r64_imm32_sext(9, 0x9abcdef0, &mut buf).unwrap();
+        assert_eq!(buf, [0x49, 0xc7, 0xc1, 0xf0, 0xde, 0xbc, 0x9a]);
+
+        buf.clear();
+        encode_rep_movsb(&mut buf).unwrap();
+        assert_eq!(buf, [0xf3, 0xa4]);
+
+        buf.clear();
+        encode_cld(&mut buf).unwrap();
+        assert_eq!(buf, [0xfc]);
+
+        buf.clear();
+        encode_xor_r32_r32(1, 2, &mut buf).unwrap();
+        assert_eq!(buf, [0x31, 0xd1]);
     }
 
     #[test]
