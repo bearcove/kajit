@@ -32,6 +32,7 @@ pub struct AllocatedFunction {
     pub num_spillslots: usize,
     pub edits: Vec<(regalloc2::ProgPoint, Edit)>,
     pub inst_allocs: Vec<Vec<Allocation>>,
+    pub inst_operands: Vec<Vec<(kajit_ir::VReg, RaOperandKind)>>,
     pub inst_linear_op_indices: Vec<Option<usize>>,
     pub term_inst_indices_by_block: Vec<Option<usize>>,
     pub edge_edits: Vec<EdgeEdit>,
@@ -98,6 +99,7 @@ impl From<RegAllocError> for RegallocEngineError {
 #[derive(Debug, Clone)]
 struct AdapterInst {
     operands: Vec<Operand>,
+    operand_vregs: Vec<(kajit_ir::VReg, RaOperandKind)>,
     clobbers: PRegSet,
     is_branch: bool,
     is_ret: bool,
@@ -521,6 +523,12 @@ impl AdapterFunction {
                 if !entry_operands.is_empty() {
                     adapter_insts.push(AdapterInst {
                         operands: entry_operands,
+                        operand_vregs: func
+                            .data_args
+                            .iter()
+                            .copied()
+                            .map(|arg| (arg, RaOperandKind::Def))
+                            .collect(),
                         clobbers: PRegSet::empty(),
                         is_branch: false,
                         is_ret: false,
@@ -535,6 +543,11 @@ impl AdapterFunction {
             for inst in &b.raw_insts {
                 let operands: Vec<Operand> =
                     inst.operands.iter().copied().map(lower_operand).collect();
+                let operand_vregs: Vec<(kajit_ir::VReg, RaOperandKind)> = inst
+                    .operands
+                    .iter()
+                    .map(|op| (op.vreg, op.kind))
+                    .collect();
                 let mut clobbers = PRegSet::empty();
                 if inst.clobbers.caller_saved_gpr {
                     clobbers.union_from(caller_saved_gprs());
@@ -551,6 +564,7 @@ impl AdapterFunction {
                 }
                 adapter_insts.push(AdapterInst {
                     operands,
+                    operand_vregs,
                     clobbers,
                     is_branch: false,
                     is_ret: false,
@@ -586,8 +600,23 @@ impl AdapterFunction {
             }
             let is_branch = matches!(b.term_kind, BlockTermKind::BranchLike);
             let is_ret = matches!(b.term_kind, BlockTermKind::Ret);
+            let mut term_operand_vregs = b
+                .term_uses
+                .iter()
+                .copied()
+                .map(|v| (v, RaOperandKind::Use))
+                .collect::<Vec<_>>();
+            if b.term_returns_data_results {
+                term_operand_vregs.extend(
+                    func.data_results
+                        .iter()
+                        .copied()
+                        .map(|v| (v, RaOperandKind::Use)),
+                );
+            }
             adapter_insts.push(AdapterInst {
                 operands: term_operands,
+                operand_vregs: term_operand_vregs,
                 clobbers: PRegSet::empty(),
                 is_branch,
                 is_ret,
@@ -698,8 +727,10 @@ fn materialize_output(
     original_block_count: usize,
 ) -> AllocatedFunction {
     let mut inst_allocs = Vec::with_capacity(adapter.insts.len());
+    let mut inst_operands = Vec::with_capacity(adapter.insts.len());
     for i in 0..adapter.insts.len() {
         inst_allocs.push(out.inst_allocs(Inst::new(i)).to_vec());
+        inst_operands.push(adapter.insts[i].operand_vregs.clone());
     }
     let mut return_result_allocs = Vec::<Allocation>::new();
     for (inst_index, inst) in adapter.insts.iter().enumerate() {
@@ -753,6 +784,7 @@ fn materialize_output(
         num_spillslots: out.num_spillslots,
         edits: out.edits.clone(),
         inst_allocs,
+        inst_operands,
         inst_linear_op_indices: adapter.inst_linear_op_indices.clone(),
         term_inst_indices_by_block,
         edge_edits,
@@ -2579,6 +2611,7 @@ lambda @0 (shape: "u8") {
                 num_spillslots: 2,
                 edits: Vec::new(),
                 inst_allocs: Vec::new(),
+                inst_operands: Vec::new(),
                 inst_linear_op_indices: Vec::new(),
                 term_inst_indices_by_block: Vec::new(),
                 edge_edits: vec![
@@ -2618,6 +2651,7 @@ lambda @0 (shape: "u8") {
                 num_spillslots: 2,
                 edits: Vec::new(),
                 inst_allocs: Vec::new(),
+                inst_operands: Vec::new(),
                 inst_linear_op_indices: Vec::new(),
                 term_inst_indices_by_block: Vec::new(),
                 edge_edits: vec![
