@@ -74,6 +74,8 @@ Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same ph
 
 **New hypothesis**: The fast-path branch in the varint decoder uses a **signed comparison** instead of unsigned. For `0x80` (128 unsigned, -128 signed), a signed `< 128` check is TRUE, so the fast path is taken when it should not be. The fast path returns `byte & 0x7F = 0` or hits a validity check, producing `InvalidVarint`. This explains all values ≥ 128 failing — they all have the high bit set, making them negative in a signed comparison. See **Prompt A5** below.
 
+**Prompt A5 diagnosis**: Also ruled out. Fast-path split is `(byte & 0x80) != 0` booleanized via `cmp/setnz/movzx`, then `test/jz`. Not a signed/unsigned `<` comparison at all. Slow path IS correctly taken for 0x80. Bug is inside the theta loop body or its exit condition. See **Prompt A6** below.
+
 ---
 
 ## ~~Group 2: Codegen snapshot diffs — control flow and intrinsic emission~~ FIXED (commit e4d888d / fix in x86_64/mod.rs)
@@ -170,6 +172,39 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 > 5. On aarch64, what branch instruction is emitted for the same comparison? (`b.lo` = unsigned below; `b.lt` = signed less-than)
 >
 > Do not fix anything — produce a diagnosis with specific file:line evidence.
+
+### ~~Prompt A5~~ — DIAGNOSED (not signed comparison; slow path correctly taken; bug is inside theta loop)
+
+### Prompt A6 — Bisect with KAJIT_OPTS, then trace the theta loop exit condition
+
+> You are investigating a miscompilation in kajit's x86_64 JIT for `postcard::scalar_u64_v3` (128u64, encoded as `[0x80, 0x01]`). All static analysis hypotheses have been ruled out. The slow path (theta loop) IS entered correctly. The bug is somewhere inside it.
+>
+> **What has been ruled out:**
+> - 32-bit register truncation
+> - rcx/cl clobber before `shl r10, cl`
+> - dst-lhs mismatch (explicit r10 temp + store to dst)
+> - Spill/reload width or layout (all 64-bit, slot stride 8 bytes)
+> - Signed vs unsigned fast-path branch (it's a bitmask `!= 0` check, `jz/jnz`)
+>
+> **Step 1 — empirical bisect (do this first):**
+>
+> Run the failing test with `KAJIT_OPTS='-regalloc'` to disable application of regalloc edge edits:
+> ```bash
+> KAJIT_OPTS='-regalloc' cargo nextest run -p kajit --target x86_64-apple-darwin \
+>   --test corpus -E 'test(=postcard::scalar_u64_v3)'
+> ```
+> Does the test pass or fail? Report the exact outcome (pass / fail with same error / fail with different error).
+>
+> - If it **passes**: one of the 24 edge edits is the bug. Identify which edit fires on which block edge inside the theta loop (entry edge, back-edge, or exit edge) and whether it corrupts a loop-carried value (accumulator or shift count).
+> - If it **fails**: the bug is in base register allocation or emission. Proceed to Step 2.
+>
+> **Step 2 — theta loop exit condition:**
+>
+> In the RA-MIR dump (`postcard__scalar_u64__v3__x86_64__ra.txt`), find the `BranchIf` instruction that controls whether the theta loop continues. What vreg holds the condition? What physical register does regalloc assign it? What does the emitted x86_64 code look like for that branch (instruction + register)?
+>
+> Also: what intrinsic is called inside the theta loop to read the next byte? On x86_64, calls clobber rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11. After the call, are loop-carried values (accumulator vreg, shift-count vreg) in caller-saved registers that the call may have clobbered — and if so, are they saved/restored by edits before/after the call?
+>
+> Do not fix anything — report the bisect outcome and produce a diagnosis with specific file:line evidence.
 
 ---
 
