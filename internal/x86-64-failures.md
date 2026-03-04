@@ -84,6 +84,10 @@ Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same ph
 
 **New hypothesis**: The cursor is not advancing inside the theta loop on x86_64. `read_bytes(1)` emits an inline cursor advance. One of the 24 edge edits on the theta back-edge is incorrectly restoring the cursor to its pre-loop value (spilled before the loop, reloaded on each iteration). Without those edits, the cursor advances correctly in a register but the loop condition is stale → `UnexpectedEof`. See **Prompt A7** below.
 
+**Prompt A7 diagnosis**: Also wrong. Cursor is hardwired in r12 (non-allocatable). No back-edge edit touches r12. Cursor advances correctly.
+
+**Pivot**: Seven hypotheses, seven dead ends. Stop theorizing top-down. Find WHERE `InvalidVarint` is actually emitted in the generated x86_64 code and trace backward from there. See **Prompt A8** below.
+
 ---
 
 ## ~~Group 2: Codegen snapshot diffs — control flow and intrinsic emission~~ FIXED (commit e4d888d / fix in x86_64/mod.rs)
@@ -233,6 +237,33 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 > 4. If a back-edge edit writes the cursor register: what is the source of that write? Is it reloading from a stack slot that was spilled before the loop (i.e. the pre-advance cursor value)?
 >
 > 5. Compare to aarch64: in the aarch64 RA-MIR dump for the same case, what edits (if any) appear on the theta back-edge? Does aarch64 have the same edit pattern or not?
+>
+> Do not fix anything — produce a diagnosis with specific file:line evidence.
+
+### ~~Prompt A7~~ — DIAGNOSED (cursor is hardwired in r12, non-allocatable, no edit touches it)
+
+### Prompt A8 — Bottom-up: find where InvalidVarint is set, trace backward
+
+> You are investigating a miscompilation in kajit's x86_64 JIT for `postcard::scalar_u64_v3` (128u64, `[0x80, 0x01]`). Seven static analysis hypotheses have been exhausted. The approach changes: find the ground truth first, then reason backward.
+>
+> **Step 1 — Find every place InvalidVarint can be set.**
+>
+> Search the kajit source for `InvalidVarint` — every place the error code is assigned, returned, or emitted inline (in Rust source, IR lowering, or inline emit code). List each site with file:line. Then look at the IR dump (`postcard__scalar_u64__v3__x86_64__ir.txt`) — are there `ErrorExit` nodes, and which ones use `InvalidVarint`?
+>
+> **Step 2 — Show the complete theta loop IR.**
+>
+> From the IR dump, show ALL nodes in the theta loop's body region. List them in order with their inputs and outputs. What is the full computation being performed per iteration?
+>
+> **Step 3 — Trace with input [0x80, 0x01] through the IR.**
+>
+> Walk through the theta loop body IR manually with:
+> - Iteration 1: the byte being read is `0x01` (byte 1, since byte 0 was consumed by the fast/slow path split)
+> - What should each node compute? What is the final accumulator value after the iteration?
+> - What is the loop continuation condition value? Does the loop exit?
+>
+> **Step 4 — Does aarch64 produce the correct result?**
+>
+> Run the equivalent aarch64 test to confirm it passes, then note any structural differences between the aarch64 and x86_64 IR dumps for this case (they should be identical — if they differ, that difference is the bug).
 >
 > Do not fix anything — produce a diagnosis with specific file:line evidence.
 
