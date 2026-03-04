@@ -191,6 +191,7 @@ pub enum Condition {
     Gt,
     Ge,
     Lo,
+    Hs,
     Hi,
     O,
     No,
@@ -208,6 +209,7 @@ impl Condition {
             Condition::Eq => 0x4,
             Condition::Ne => 0x5,
             Condition::Lo => 0x2,
+            Condition::Hs => 0x3,
             Condition::Hi => 0x7,
             Condition::S => 0x8,
             Condition::Ns => 0x9,
@@ -361,6 +363,13 @@ impl Emitter {
         label: LabelId,
     ) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Lo)
+    }
+
+    pub fn emit_jae_label(
+        &mut self,
+        label: LabelId,
+    ) -> Result<(), EmitError> {
+        self.emit_jcc_label(label, Condition::Hs)
     }
 
     pub fn emit_ja_label(

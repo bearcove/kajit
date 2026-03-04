@@ -1623,19 +1623,22 @@ impl EmitCtx {
         self.emit_flush_input_cursor();
         // args: ctx, count, elem_size, elem_align
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, r15
-            ; mov esi, count as i32
-            ; mov edx, elem_size as i32
-            ; mov ecx, elem_align as i32
-        );
+        self.emit.emit_with(|buf| {
+            x64::encode_mov_r64_r64(7, 15, buf)?;
+            x64::encode_mov_r32_imm32(6, count as u32, buf)?;
+            x64::encode_mov_r32_imm32(2, elem_size as u32, buf)?;
+            x64::encode_mov_r32_imm32(1, elem_align as u32, buf)
+        })
+        .expect("setup json vec alloc");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, r15
-            ; mov edx, count as i32
-            ; mov r8d, elem_size as i32
-            ; mov r9d, elem_align as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_mov_r32_imm32(2, count as u32, buf)?;
+                x64::encode_mov_r32_imm32(8, elem_size as u32, buf)?;
+                x64::encode_mov_r32_imm32(9, elem_align as u32, buf)
+            })
+            .expect("setup json vec alloc");
         self.emit_call_fn_ptr(alloc_fn);
         self.emit_reload_cursor_and_check_error();
     }
@@ -1649,34 +1652,56 @@ impl EmitCtx {
         cap_slot: u32,
         initial_cap: u32,
     ) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov [rsp + saved_out_slot as i32], r14  // save out pointer
-            ; mov [rsp + buf_slot as i32], rax         // buf = alloc result
-            ; mov QWORD [rsp + len_slot as i32], 0     // len = 0
-            ; mov DWORD [rsp + cap_slot as i32], initial_cap as i32
-            ; mov DWORD [rsp + (cap_slot as i32 + 4)], 0  // zero upper 32 bits
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 4, disp: saved_out_slot as i32 }, 14, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: buf_slot as i32 }, 0, buf)?;
+                x64::encode_mov_r64_imm64(10, 0, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: len_slot as i32 }, 10, buf)?;
+                x64::encode_mov_r32_imm32(11, initial_cap as u32, buf)?;
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    11,
+                    buf
+                )?;
+                x64::encode_mov_r32_imm32(11, 0, buf)?;
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32 + 4,
+                    },
+                    11,
+                    buf
+                )
+            })
+            .expect("init json vec loop");
     }
 
     /// Check ctx.error.code and branch to label if nonzero.
     pub fn emit_check_error_branch(&mut self, label: LabelId) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("check error branch");
+        self.emit
+            .emit_jnz_label(label)
+            .expect("check error branch");
     }
 
     /// Save the count register (w9 on aarch64, r10d on x64) to a stack slot.
     ///
     /// Used to preserve the count across a function call (r10 is caller-saved).
     pub fn emit_save_count_to_stack(&mut self, slot: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov [rsp + slot as i32], r10
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 4, disp: slot as i32 }, 10, buf)
+            })
+            .expect("save count to stack");
     }
 
     /// Call kajit_vec_alloc(ctx, count, elem_size, elem_align).
@@ -1690,19 +1715,23 @@ impl EmitCtx {
         self.emit_flush_input_cursor();
         // args: ctx, count(r10), elem_size, elem_align
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, r15
-            ; mov rsi, r10
-            ; mov edx, elem_size as i32
-            ; mov ecx, elem_align as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_mov_r64_r64(6, 10, buf)?;
+                x64::encode_mov_r32_imm32(2, elem_size as u32, buf)?;
+                x64::encode_mov_r32_imm32(1, elem_align as u32, buf)
+            })
+            .expect("setup vec alloc");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, r15
-            ; mov rdx, r10
-            ; mov r8d, elem_size as i32
-            ; mov r9d, elem_align as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_mov_r64_r64(2, 10, buf)?;
+                x64::encode_mov_r32_imm32(8, elem_size as u32, buf)?;
+                x64::encode_mov_r32_imm32(9, elem_align as u32, buf)
+            })
+            .expect("setup vec alloc");
         self.emit_call_fn_ptr(alloc_fn);
         self.emit_reload_cursor_and_check_error();
     }
@@ -1727,20 +1756,24 @@ impl EmitCtx {
             // System V AMD64: 6 register args + 7th on the stack via push.
             // Args: rdi=ctx, rsi=old_buf, rdx=len, rcx=old_cap, r8=new_cap, r9=elem_size
             // 7th arg (elem_align) pushed before call.
-            dynasm!(self.ops
-                ; .arch x64
-                ; mov r10, [rsp + cap_slot as i32]
-                ; shl r10, 1                         // new_cap = old_cap * 2
-                ; mov rdi, r15
-                ; mov rsi, [rsp + buf_slot as i32]
-                ; mov rdx, [rsp + len_slot as i32]
-                ; mov rcx, [rsp + cap_slot as i32]
-                ; mov r8, r10
-                ; mov r9d, elem_size as i32
-                ; push elem_align as i32
-            );
+            self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_r64_m(10, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_shl_r64_imm8(10, 1, buf)?;
+                    x64::encode_mov_r64_r64(7, 15, buf)?;
+                    x64::encode_mov_r64_m(6, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(2, Mem { base: 4, disp: len_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(1, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_r64(8, 10, buf)?;
+                    x64::encode_mov_r32_imm32(9, elem_size as u32, buf)?;
+                    x64::encode_mov_r32_imm32(11, elem_align as u32, buf)?;
+                    x64::encode_push_r64(11, buf)
+                })
+                .expect("setup vec grow");
             self.emit_call_fn_ptr(grow_fn);
-            dynasm!(self.ops ; .arch x64 ; add rsp, 8);
+            self.emit
+                .emit_with(|buf| x64::encode_add_r64_imm32(4, 8, buf))
+                .expect("restore vec grow stack");
         }
 
         #[cfg(windows)]
@@ -1752,34 +1785,37 @@ impl EmitCtx {
             // Load all values into registers BEFORE sub rsp (frame offsets change after).
             // Args: rcx=ctx, rdx=old_buf, r8=len, r9=old_cap
             // Stack: [rsp+32]=new_cap, [rsp+40]=elem_size, [rsp+48]=elem_align
-            dynasm!(self.ops
-                ; .arch x64
-                ; mov r10, [rsp + cap_slot as i32]
-                ; shl r10, 1                         // r10 = new_cap = old_cap * 2
-                ; mov rcx, r15
-                ; mov rdx, [rsp + buf_slot as i32]
-                ; mov r8, [rsp + len_slot as i32]
-                ; mov r9, [rsp + cap_slot as i32]
-                ; sub rsp, 64                        // 32 shadow + 24 args + 8 padding
-                ; mov [rsp + 32], r10                // arg5 = new_cap (64-bit)
-                // arg6 and arg7: use mov eax,N to zero-extend to 64 bits, then store
-                ; mov eax, elem_size as i32
-                ; mov [rsp + 40], rax                // arg6 = elem_size (zero-extended)
-                ; mov eax, elem_align as i32
-                ; mov [rsp + 48], rax                // arg7 = elem_align (zero-extended)
-            );
+            self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_r64_m(10, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_shl_r64_imm8(10, 1, buf)?;
+                    x64::encode_mov_r64_r64(1, 15, buf)?;
+                    x64::encode_mov_r64_m(2, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(8, Mem { base: 4, disp: len_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(9, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_sub_r64_imm32(4, 64, buf)?;
+                    x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 10, buf)?;
+                    x64::encode_mov_r32_imm32(11, elem_size as u32, buf)?;
+                    x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 11, buf)?;
+                    x64::encode_mov_r32_imm32(11, elem_align as u32, buf)?;
+                    x64::encode_mov_m_r64(Mem { base: 4, disp: 48 }, 11, buf)
+                })
+                .expect("setup vec grow");
             self.emit_call_fn_ptr(grow_fn);
-            dynasm!(self.ops ; .arch x64 ; add rsp, 64);
+            self.emit
+                .emit_with(|buf| x64::encode_add_r64_imm32(4, 64, buf))
+                .expect("restore vec grow stack");
         }
 
         self.emit_reload_cursor_and_check_error();
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov [rsp + buf_slot as i32], rax
-            ; mov r10, [rsp + cap_slot as i32]
-            ; shl r10, 1
-            ; mov [rsp + cap_slot as i32], r10
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 4, disp: buf_slot as i32 }, 0, buf)?;
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_shl_r64_imm8(10, 1, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: cap_slot as i32 }, 10, buf)
+            })
+            .expect("update vec cap");
     }
 
     /// Initialize Vec loop state after allocation.
@@ -1799,28 +1835,25 @@ impl EmitCtx {
         end_slot: u32,
         elem_size: u32,
     ) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov [rsp + saved_out_slot as i32], r14  // save out pointer
-            ; mov [rsp + buf_slot as i32], rax        // buf = alloc result
-            // Save callee-saved rbx
-            ; mov [rsp + save_rbx_slot as i32], rbx
-            // rbx = cursor = buf
-            ; mov rbx, rax
-            // end = buf + count * elem_size
-            ; mov r10, [rsp + count_slot as i32]
-            ; imul r10, r10, elem_size as i32
-            ; add r10, rax
-            ; mov [rsp + end_slot as i32], r10
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(Mem { base: 4, disp: saved_out_slot as i32 }, 14, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: buf_slot as i32 }, 0, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: save_rbx_slot as i32 }, 3, buf)?;
+                x64::encode_mov_r64_r64(3, 0, buf)?;
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: count_slot as i32 }, buf)?;
+                x64::encode_imul_r64_r64_imm32(10, 10, elem_size as u32, buf)?;
+                x64::encode_add_r64_r64(10, 0, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: end_slot as i32 }, 10, buf)
+            })
+            .expect("init vec loop cursor");
     }
 
     /// Set out = cursor (r14 = rbx). Single register move.
     pub fn emit_vec_loop_load_cursor(&mut self, _save_rbx_slot: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r14, rbx
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_r64(14, 3, buf))
+            .expect("set out cursor");
     }
 
     /// Advance cursor register, check error, branch back if cursor < end.
@@ -1833,18 +1866,22 @@ impl EmitCtx {
         loop_label: LabelId,
         error_cleanup_label: LabelId,
     ) {
-        dynasm!(self.ops
-            ; .arch x64
-            // Check error from element deserialization
-            ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>error_cleanup_label
-            // cursor += elem_size (register only)
-            ; add rbx, elem_size as i32
-            // Compare with end (cmp reg, [mem] — single instruction on x64)
-            ; cmp rbx, [rsp + end_slot as i32]
-            ; jb =>loop_label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("check vec loop error");
+        self.emit
+            .emit_jnz_label(error_cleanup_label)
+            .expect("vec loop error");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
+                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+            })
+            .expect("advance vec loop cursor");
+        self.emit.emit_jbe_label(loop_label).expect("vec loop check");
     }
 
     /// Advance the cursor register and loop back, without checking the error flag.
@@ -1858,12 +1895,13 @@ impl EmitCtx {
         elem_size: u32,
         loop_label: LabelId,
     ) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; add rbx, elem_size as i32
-            ; cmp rbx, [rsp + end_slot as i32]
-            ; jb =>loop_label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
+                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+            })
+            .expect("advance vec loop cursor");
+        self.emit.emit_jbe_label(loop_label).expect("vec loop check");
     }
 
     /// Emit a tight varint Vec loop body for x64. Writes directly to `[rbx]`
@@ -1883,100 +1921,143 @@ impl EmitCtx {
         let eof_label = self.emit.new_label();
 
         // === Hot loop ===
-        dynasm!(self.ops
-            ; .arch x64
-            ; cmp r12, r13
-            ; jae =>eof_label
-            ; movzx r10d, BYTE [r12]
-            ; add r12, 1
-            ; test r10d, 0x80
-            ; jnz =>slow_path
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_cmp_r64_r64(12, 13, buf)?;
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
+                x64::encode_add_r64_imm32(12, 1, buf)?;
+                x64::encode_mov_r32_imm32(11, 0x80, buf)?;
+                x64::encode_test_r32_r32(10, 11, buf)
+            })
+            .expect("vec varint hot-loop");
+        self.emit.emit_jne_label(slow_path).expect("vec varint slow path");
+        self.emit
+            .emit_jae_label(eof_label)
+            .expect("vec varint eof");
 
         if zigzag {
-            dynasm!(self.ops
-                ; .arch x64
-                ; mov r11d, r10d
-                ; shr r11d, 1
-                ; and r10d, 1
-                ; neg r10d
-                ; xor r10d, r11d
-            );
+            self.emit
+                .emit_with(|buf| {
+                    x64::encode_mov_r32_r32(11, 10, buf)?;
+                    x64::encode_shr_r64_imm8(11, 1, buf)?;
+                    x64::encode_mov_r32_imm32(2, 1, buf)?;
+                    x64::encode_and_r64_r64(10, 2, buf)?;
+                    x64::encode_neg_r64(10, buf)?;
+                    x64::encode_xor_r64_r64(10, 11, buf)
+                })
+                .expect("vec varint zigzag");
         }
 
         // Store directly to cursor (rbx)
         match store_width {
-            2 => dynasm!(self.ops ; .arch x64 ; mov WORD [rbx], r10w),
-            4 => dynasm!(self.ops ; .arch x64 ; mov DWORD [rbx], r10d),
-            8 => dynasm!(self.ops ; .arch x64 ; mov QWORD [rbx], r10),
+            2 => self
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r16(3, 0, 10, buf))
+                .expect("store varint width2"),
+            4 => self
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 3, disp: 0 }, 10, buf))
+                .expect("store varint width4"),
+            8 => self
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 3, disp: 0 }, 10, buf))
+                .expect("store varint width8"),
             _ => panic!("unsupported varint store width: {store_width}"),
         }
 
         // Advance cursor, loop back
-        dynasm!(self.ops
-            ; .arch x64
-            ; add rbx, elem_size as i32
-            ; cmp rbx, [rsp + end_slot as i32]
-            ; jb =>loop_label
-            ; jmp =>done_label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
+                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+            })
+            .expect("advance vec loop cursor");
+        self.emit.emit_jbe_label(loop_label).expect("vec varint loop");
+        self.emit
+            .emit_jmp_label(done_label)
+            .expect("vec varint done");
 
         // === Slow path (out-of-line) ===
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>slow_path
-            // Undo the add r12, 1 (intrinsic expects r12 at varint start)
-            ; sub r12, 1
-        );
+        self.emit.bind_label(slow_path).expect("bind vec varint slow");
+        self.emit
+            .emit_with(|buf| x64::encode_sub_r64_imm32(12, 1, buf))
+            .expect("undo varint increment");
         self.emit_flush_input_cursor();
         // arg0 = ctx, arg1 = out (cursor in rbx)
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64 ; mov rdi, r15 ; mov rsi, rbx);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_mov_r64_r64(6, 3, buf)
+            })
+            .expect("setup vec varint slow call");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64 ; mov rcx, r15 ; mov rdx, rbx);
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_mov_r64_r64(2, 3, buf)
+            })
+            .expect("setup vec varint slow call");
         self.emit_call_fn_ptr(intrinsic_fn_ptr);
         // Reload input pointer and check error (branches to error_cleanup, not error_exit)
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r12, [r15 + CTX_INPUT_PTR as i32]
-            ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>error_cleanup
-            // Advance cursor, loop back
-            ; add rbx, elem_size as i32
-            ; cmp rbx, [rsp + end_slot as i32]
-            ; jb =>loop_label
-            ; jmp =>done_label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
+                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("vec varint slow reload");
+        self.emit
+            .emit_jnz_label(error_cleanup)
+            .expect("vec varint slow error");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
+                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+            })
+            .expect("vec varint slow advance");
+        self.emit.emit_jbe_label(loop_label).expect("vec varint continue");
+        self.emit.emit_jmp_label(done_label).expect("vec varint slow done");
 
         // === EOF (cold) ===
-        dynasm!(self.ops
-            ; .arch x64
-            ; =>eof_label
-            ; mov DWORD [r15 + CTX_ERROR_CODE as i32], crate::context::ErrorCode::UnexpectedEof as i32
-            ; jmp =>error_cleanup
-        );
+        self.emit.bind_label(eof_label).expect("bind vec varint eof");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, crate::context::ErrorCode::UnexpectedEof as u32, buf)?;
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
+            })
+            .expect("set vec varint eof error");
+        self.emit
+            .emit_jmp_label(error_cleanup)
+            .expect("vec varint eof cleanup");
     }
 
     /// Restore rbx from stack. Must be called on every exit path from a Vec loop.
     pub fn emit_vec_restore_callee_saved(&mut self, save_rbx_slot: u32, _end_slot: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rbx, [rsp + save_rbx_slot as i32]
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_m(3, Mem { base: 4, disp: save_rbx_slot as i32 }, buf))
+            .expect("restore vec callee");
     }
 
     /// Emit Vec loop header: compute slot = buf + i * elem_size, set out = slot.
     ///
     /// Used by JSON where buf can change on growth and index-based access is needed.
     pub fn emit_vec_loop_slot(&mut self, buf_slot: u32, counter_slot: u32, elem_size: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov r14, [rsp + buf_slot as i32]         // buf
-            ; mov r10, [rsp + counter_slot as i32]     // i
-            ; imul r10, r10, elem_size as i32          // i * elem_size
-            ; add r14, r10                              // out = buf + i * elem_size
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(10, Mem { base: 4, disp: counter_slot as i32 }, buf)?;
+                x64::encode_imul_r64_r64_imm32(10, 10, elem_size as u32, buf)?;
+                x64::encode_add_r64_r64(14, 10, buf)
+            })
+            .expect("vec loop slot");
     }
 
     /// Write Vec fields (ptr, len, cap) to out + base_offset using discovered offsets.
@@ -1994,18 +2075,17 @@ impl EmitCtx {
         let len_off = (base_offset + offsets.len_offset) as i32;
         let cap_off = (base_offset + offsets.cap_offset) as i32;
 
-        dynasm!(self.ops
-            ; .arch x64
-            // Restore out pointer
-            ; mov r14, [rsp + saved_out_slot as i32]
-            // Load values and store at discovered offsets
-            ; mov rax, [rsp + buf_slot as i32]
-            ; mov [r14 + ptr_off], rax
-            ; mov rax, [rsp + len_slot as i32]
-            ; mov [r14 + len_off], rax
-            ; mov rax, [rsp + cap_slot as i32]
-            ; mov [r14 + cap_off], rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(14, Mem { base: 4, disp: saved_out_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: ptr_off }, 0, buf)?;
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: len_slot as i32 }, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: len_off }, 0, buf)?;
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: cap_off }, 0, buf)
+            })
+            .expect("store vec fields");
     }
 
     /// Write an empty Vec to out + base_offset with proper dangling pointer.
@@ -2020,12 +2100,15 @@ impl EmitCtx {
         let cap_off = (base_offset + offsets.cap_offset) as i32;
 
         // Vec::new() writes: ptr = NonNull::dangling() = elem_align as *mut T, len = 0, cap = 0.
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov QWORD [r14 + ptr_off], elem_align as i32
-            ; mov QWORD [r14 + len_off], 0
-            ; mov QWORD [r14 + cap_off], 0
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(10, elem_align as u64, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: ptr_off }, 10, buf)?;
+                x64::encode_mov_r64_imm64(10, 0, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: len_off }, 10, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 14, disp: cap_off }, 10, buf)
+            })
+            .expect("store empty vec");
     }
 
     /// Emit error cleanup for Vec: free the buffer and branch to error exit.
@@ -2041,34 +2124,41 @@ impl EmitCtx {
     ) {
         let error_exit = self.error_exit;
 
-        dynasm!(self.ops ; .arch x64 ; mov r14, [rsp + saved_out_slot as i32]);
+        self.emit
+            .emit_with(|buf| x64::encode_mov_r64_m(14, Mem { base: 4, disp: saved_out_slot as i32 }, buf))
+            .expect("load saved out");
         // args: buf, cap, elem_size, elem_align
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, [rsp + buf_slot as i32]
-            ; mov rsi, [rsp + cap_slot as i32]
-            ; mov edx, elem_size as i32
-            ; mov ecx, elem_align as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(7, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(6, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_r32_imm32(2, elem_size as u32, buf)?;
+                x64::encode_mov_r32_imm32(1, elem_align as u32, buf)
+            })
+            .expect("setup vec free args");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, [rsp + buf_slot as i32]
-            ; mov rdx, [rsp + cap_slot as i32]
-            ; mov r8d, elem_size as i32
-            ; mov r9d, elem_align as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(1, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(2, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_r32_imm32(8, elem_size as u32, buf)?;
+                x64::encode_mov_r32_imm32(9, elem_align as u32, buf)
+            })
+            .expect("setup vec free args");
         self.emit_call_fn_ptr(free_fn);
-        dynasm!(self.ops ; .arch x64 ; jmp =>error_exit);
+        self.emit
+            .emit_jmp_label(error_exit)
+            .expect("vec error cleanup");
     }
 
     /// Compare the count register (w9 on aarch64, r10d on x64) with zero
     /// and branch to label if equal.
     pub fn emit_cbz_count(&mut self, label: LabelId) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; test r10d, r10d
-            ; jz =>label
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_test_r32_r32(10, 10, buf))
+            .expect("check count zero");
+        self.emit.emit_jz_label(label).expect("count zero");
     }
 
     /// Compare two stack slot values and branch if equal (len == cap for growth check).
@@ -2078,22 +2168,24 @@ impl EmitCtx {
         slot_b: u32,
         label: LabelId,
     ) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + slot_a as i32]
-            ; cmp rax, [rsp + slot_b as i32]
-            ; je =>label
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: slot_a as i32 }, buf)?;
+                x64::encode_cmp_r64_m(0, Mem { base: 4, disp: slot_b as i32 }, buf)
+            })
+            .expect("compare stack slots");
+        self.emit.emit_je_label(label).expect("stack slots equal");
     }
 
     /// Increment a stack slot value by 1.
     pub fn emit_inc_stack_slot(&mut self, slot: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; mov rax, [rsp + slot as i32]
-            ; add rax, 1
-            ; mov [rsp + slot as i32], rax
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(0, Mem { base: 4, disp: slot as i32 }, buf)?;
+                x64::encode_add_r64_imm32(0, 1, buf)?;
+                x64::encode_mov_m_r64(Mem { base: 4, disp: slot as i32 }, 0, buf)
+            })
+            .expect("inc stack slot");
     }
 
     // ── Map support ─────────────────────────────────────────────────
