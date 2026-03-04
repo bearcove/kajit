@@ -3,18 +3,6 @@ experimental = ["wrapper-scripts"]
 [scripts.wrapper.valgrind]
 command = ['valgrind', '-q', '--error-exitcode=1']
 
-[scripts.wrapper.lldb]
-command = { command-line = "scripts/lldb-test.sh", relative-to = "workspace-root" }
-
 [[profile.valgrind.scripts]]
 platform = 'cfg(target_os = "linux")'
 run-wrapper = 'valgrind'
-
-[profile.lldb]
-slow-timeout = { period = "86400s" }
-retries = 0
-
-[[profile.lldb.scripts]]
-platform = 'cfg(target_os = "macos")'
-filter = 'all()'
-run-wrapper = 'lldb'

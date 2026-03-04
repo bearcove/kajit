@@ -89,19 +89,18 @@ Each dump file is named `<format>__<case>__<arch>__<stage>.txt`, e.g. `postcard_
 
 ### Quick start
 
-Run any test under LLDB with the `lldb` nextest profile:
+Start LLDB for a specific test with the standalone helper:
 
 ```bash
-cargo nextest run --profile lldb -E 'test(=json::bool_true_false)'
+scripts/lldb-test.sh json::bool_true_false
 ```
 
-This uses the wrapper script `scripts/lldb-test.sh` which:
+The script resolves the concrete test binary via `cargo nextest list`, then launches LLDB with:
 - Sets `KAJIT_DEBUG=1` (enables DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` emission)
 - Enables the GDB JIT loader (`settings set plugin.jit-loader.gdb.enable on`)
 - Sets a breakpoint on `__jit_debug_register_code`
-- Runs the test binary
-
-The profile has a 24-hour slow timeout so nextest won't kill your interactive session.
+- Passes test args `--exact <test_name> --nocapture`
+- Leaves LLDB interactive (does not auto-run; type `run` yourself)
 
 ### How it works
 
@@ -147,14 +146,14 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 | `kajit/src/jit_dwarf.rs` | Builds DWARF v4 `.debug_line`, `.debug_abbrev`, `.debug_info` sections |
 | `kajit/src/jit_debug.rs` | GDB JIT interface: builds in-memory ELF, registers with debugger, writes perf map |
 | `kajit/src/compiler.rs` | Glue: `build_dwarf_from_source_map()` converts backend source maps to DWARF |
-| `scripts/lldb-test.sh` | Nextest wrapper script for the `lldb` profile |
+| `scripts/lldb-test.sh` | Standalone LLDB launcher for one exact test |
 | `/tmp/kajit-debug/*.ra-mir` | Generated listing files (one per JIT-compiled type) |
 | `/tmp/perf-<pid>.map` | perf sampling map (always written, even without `KAJIT_DEBUG`) |
 
 ### Known limitations
 
 - **Breakpoints by name** on JIT symbols (`breakpoint set -n "fad::decode::Bools"`) may show as "pending, no locations" because LLDB can't map the symbol to a loadable section. Use `breakpoint set -a <address>` instead — get the address from `image lookup -rn`.
-- **macOS only** for the nextest profile (gated by `cfg(target_os = "macos")`). On Linux, GDB should work without the JIT loader setting.
+- The helper script is intended for local interactive LLDB sessions; it is not a nextest run wrapper.
 - The GDB JIT loader must be explicitly enabled on LLDB: `settings set plugin.jit-loader.gdb.enable on` (the wrapper script does this automatically).
 
 ## Getting disassembly
