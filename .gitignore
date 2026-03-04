@@ -8,3 +8,4 @@ perf_serde.data*
 bench_report/
 .handoffs/
 .playwright-mcp/
+*.v3*
