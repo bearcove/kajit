@@ -917,6 +917,48 @@ pub fn allocate_linear_ir(
 
 const MAX_SIM_STEPS: usize = 1_000_000;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionTraceEntry {
+    pub step_index: usize,
+    pub state: ExecutionState,
+    pub output: Vec<u8>,
+    pub cursor: usize,
+    pub trap: Option<crate::InterpreterTrap>,
+    pub returned: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DifferentialState {
+    pub step_index: usize,
+    pub position: ExecutionPosition,
+    pub cursor: usize,
+    pub output: Vec<u8>,
+    pub trap: Option<crate::InterpreterTrap>,
+    pub returned: bool,
+    pub vregs: Option<Vec<u64>>,
+    pub physical_registers: Option<HashMap<PReg, u64>>,
+    pub spillslots: Option<HashMap<usize, u64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DifferentialDivergence {
+    pub step_index: usize,
+    pub field: String,
+    pub ideal: DifferentialState,
+    pub post_regalloc: DifferentialState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DifferentialCheckResult {
+    Match {
+        steps: usize,
+        ideal_final: DifferentialState,
+        post_regalloc_final: DifferentialState,
+    },
+    Diverged(DifferentialDivergence),
+    Error(String),
+}
+
 fn infer_output_size_for_function(func: &RaFunction) -> usize {
     func.blocks
         .iter()
@@ -1432,6 +1474,568 @@ pub fn simulate_execution(
     })
 }
 
+pub fn simulate_execution_trace(
+    allocated: &AllocatedProgram,
+    input: &[u8],
+) -> Result<Vec<ExecutionTraceEntry>, RegallocEngineError> {
+    let func = allocated.ra_program.funcs.first().ok_or_else(|| {
+        RegallocEngineError::Simulation("RA-MIR program has no functions".to_string())
+    })?;
+    let alloc_func = allocated
+        .functions
+        .iter()
+        .find(|f| f.lambda_id == func.lambda_id)
+        .or_else(|| allocated.functions.first())
+        .ok_or_else(|| {
+            RegallocEngineError::Simulation("allocated program has no functions".to_string())
+        })?;
+
+    let mut block_indices = HashMap::with_capacity(func.blocks.len());
+    for (idx, block) in func.blocks.iter().enumerate() {
+        block_indices.insert(block.id, idx);
+    }
+
+    let mut inst_index_by_linear = HashMap::<usize, usize>::new();
+    for (inst_idx, maybe_linear) in alloc_func.inst_linear_op_indices.iter().enumerate() {
+        if let Some(linear) = maybe_linear {
+            inst_index_by_linear
+                .entry(*linear)
+                .and_modify(|existing| {
+                    if inst_idx > *existing {
+                        *existing = inst_idx;
+                    }
+                })
+                .or_insert(inst_idx);
+        }
+    }
+
+    let mut edits_by_progpoint =
+        BTreeMap::<(usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
+    for (prog_point, edit) in &alloc_func.edits {
+        let Edit::Move { from, to } = edit;
+        edits_by_progpoint
+            .entry((prog_point.inst().index(), prog_point.pos()))
+            .or_default()
+            .push((*from, *to));
+    }
+
+    let mut edge_edits =
+        BTreeMap::<(usize, usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
+    for edge in &alloc_func.edge_edits {
+        edge_edits
+            .entry((edge.from_linear_op_index, edge.succ_index, edge.pos))
+            .or_default()
+            .push((edge.from, edge.to));
+    }
+
+    let mut regs = HashMap::<PReg, u64>::new();
+    let mut spills = HashMap::<usize, u64>::new();
+    let mut output = vec![0u8; infer_output_size_for_function(func)];
+    let mut cursor = 0usize;
+    let mut trap: Option<crate::InterpreterTrap> = None;
+    let mut returned = false;
+    let mut current = func.entry;
+    let mut next_inst = 0usize;
+    let mut steps = 0usize;
+    let mut trace = Vec::<ExecutionTraceEntry>::new();
+
+    while trap.is_none() && !returned {
+        if steps >= MAX_SIM_STEPS {
+            return Err(RegallocEngineError::Simulation(format!(
+                "simulation exceeded step limit ({MAX_SIM_STEPS})"
+            )));
+        }
+        steps += 1;
+
+        let block_idx = *block_indices.get(&current).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!("unknown block b{}", current.0))
+        })?;
+        let block = &func.blocks[block_idx];
+
+        if next_inst < block.insts.len() {
+            let inst = &block.insts[next_inst];
+            let inst_idx = find_inst_index_for_linear(&inst_index_by_linear, inst.linear_op_index)?;
+
+            if let Some(edits) =
+                edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::Before))
+            {
+                apply_moves(&mut regs, &mut spills, edits);
+            }
+
+            let inst_allocs = alloc_func.inst_allocs.get(inst_idx).ok_or_else(|| {
+                RegallocEngineError::Simulation(format!(
+                    "missing inst allocs for adapter inst {inst_idx}"
+                ))
+            })?;
+
+            match &inst.op {
+                LinearOp::Const { dst, value } => {
+                    let dst_alloc =
+                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                    write_allocation(&mut regs, &mut spills, dst_alloc, *value);
+                }
+                LinearOp::Copy { dst, src } => {
+                    let src_alloc =
+                        find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+                    let dst_alloc =
+                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                    let value = read_allocation(&regs, &spills, src_alloc);
+                    write_allocation(&mut regs, &mut spills, dst_alloc, value);
+                }
+                LinearOp::BinOp { op, dst, lhs, rhs } => {
+                    let lhs_alloc =
+                        find_operand_alloc(inst, inst_allocs, *lhs, RaOperandKind::Use)?;
+                    let rhs_alloc =
+                        find_operand_alloc(inst, inst_allocs, *rhs, RaOperandKind::Use)?;
+                    let dst_alloc =
+                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                    let lhs_val = read_allocation(&regs, &spills, lhs_alloc);
+                    let rhs_val = read_allocation(&regs, &spills, rhs_alloc);
+                    write_allocation(
+                        &mut regs,
+                        &mut spills,
+                        dst_alloc,
+                        exec_binop(*op, lhs_val, rhs_val),
+                    );
+                }
+                LinearOp::BoundsCheck { count } => {
+                    if cursor + (*count as usize) > input.len() {
+                        trap = Some(crate::InterpreterTrap {
+                            code: ErrorCode::UnexpectedEof,
+                            offset: cursor as u32,
+                        });
+                    }
+                }
+                LinearOp::ReadBytes { dst, count } => {
+                    let count = *count as usize;
+                    if cursor + count > input.len() {
+                        trap = Some(crate::InterpreterTrap {
+                            code: ErrorCode::UnexpectedEof,
+                            offset: cursor as u32,
+                        });
+                    } else {
+                        let mut value = 0u64;
+                        for i in 0..count {
+                            value |= (input[cursor + i] as u64) << (i * 8);
+                        }
+                        cursor += count;
+                        let dst_alloc =
+                            find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                        write_allocation(&mut regs, &mut spills, dst_alloc, value);
+                    }
+                }
+                LinearOp::WriteToField { src, offset, width } => {
+                    let src_alloc =
+                        find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+                    let value = read_allocation(&regs, &spills, src_alloc);
+                    let width_bytes = width.bytes() as usize;
+                    let base = *offset as usize;
+                    if output.len() < base + width_bytes {
+                        output.resize(base + width_bytes, 0);
+                    }
+                    for i in 0..width_bytes {
+                        output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
+                    }
+                }
+                LinearOp::ReadFromField { dst, offset, width } => {
+                    let width_bytes = width.bytes() as usize;
+                    let base = *offset as usize;
+                    if output.len() < base + width_bytes {
+                        output.resize(base + width_bytes, 0);
+                    }
+                    let mut value = 0u64;
+                    for i in 0..width_bytes {
+                        value |= (output[base + i] as u64) << (i * 8);
+                    }
+                    let dst_alloc =
+                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                    write_allocation(&mut regs, &mut spills, dst_alloc, value);
+                }
+                LinearOp::ErrorExit { code } => {
+                    trap = Some(crate::InterpreterTrap {
+                        code: *code,
+                        offset: cursor as u32,
+                    });
+                }
+                op => {
+                    return Err(RegallocEngineError::Simulation(format!(
+                        "unsupported op in simulation at b{}: {op:?}",
+                        block.id.0
+                    )));
+                }
+            }
+
+            if let Some(edits) = edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::After))
+            {
+                apply_moves(&mut regs, &mut spills, edits);
+            }
+
+            next_inst += 1;
+            trace.push(ExecutionTraceEntry {
+                step_index: steps,
+                state: ExecutionState {
+                    physical_registers: regs.clone(),
+                    spillslots: spills.clone(),
+                    position: execution_position(block, next_inst),
+                },
+                output: output.clone(),
+                cursor,
+                trap,
+                returned,
+            });
+            continue;
+        }
+
+        let term_linear = block.term_linear_op_index;
+        let term_inst_idx =
+            term_linear.and_then(|linear| inst_index_by_linear.get(&linear).copied());
+
+        if let Some(term_inst_idx) = term_inst_idx
+            && let Some(edits) =
+                edits_by_progpoint.get(&(term_inst_idx, regalloc2::InstPosition::Before))
+        {
+            apply_moves(&mut regs, &mut spills, edits);
+        }
+
+        match &block.term {
+            crate::RaTerminator::Return => {
+                returned = true;
+            }
+            crate::RaTerminator::ErrorExit { code } => {
+                trap = Some(crate::InterpreterTrap {
+                    code: *code,
+                    offset: cursor as u32,
+                });
+            }
+            crate::RaTerminator::Branch { target } => {
+                let succ_index = find_succ_index(block, *target)?;
+                if let Some(term_linear) = term_linear
+                    && let Some(edits) =
+                        edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(term_linear) = term_linear
+                    && let Some(edits) =
+                        edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = *target;
+                next_inst = 0;
+            }
+            crate::RaTerminator::BranchIf {
+                cond,
+                target,
+                fallthrough,
+            } => {
+                let term_inst_idx = term_inst_idx.ok_or_else(|| {
+                    RegallocEngineError::Simulation(format!(
+                        "missing term inst index for b{} branch_if",
+                        block.id.0
+                    ))
+                })?;
+                let term_linear = term_linear.ok_or_else(|| {
+                    RegallocEngineError::Simulation(format!(
+                        "missing term linear index for b{} branch_if",
+                        block.id.0
+                    ))
+                })?;
+                let term_allocs = alloc_func.inst_allocs.get(term_inst_idx).ok_or_else(|| {
+                    RegallocEngineError::Simulation(format!(
+                        "missing term allocs for adapter inst {term_inst_idx}"
+                    ))
+                })?;
+                let cond_alloc = find_term_use_alloc(&block.term, term_allocs, *cond, term_linear)?;
+                let cond_value = read_allocation(&regs, &spills, cond_alloc);
+                let next_block = if cond_value != 0 {
+                    *target
+                } else {
+                    *fallthrough
+                };
+                let succ_index = find_succ_index(block, next_block)?;
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = next_block;
+                next_inst = 0;
+            }
+            crate::RaTerminator::BranchIfZero {
+                cond,
+                target,
+                fallthrough,
+            } => {
+                let term_inst_idx = term_inst_idx.ok_or_else(|| {
+                    RegallocEngineError::Simulation(format!(
+                        "missing term inst index for b{} branch_if_zero",
+                        block.id.0
+                    ))
+                })?;
+                let term_linear = term_linear.ok_or_else(|| {
+                    RegallocEngineError::Simulation(format!(
+                        "missing term linear index for b{} branch_if_zero",
+                        block.id.0
+                    ))
+                })?;
+                let term_allocs = alloc_func.inst_allocs.get(term_inst_idx).ok_or_else(|| {
+                    RegallocEngineError::Simulation(format!(
+                        "missing term allocs for adapter inst {term_inst_idx}"
+                    ))
+                })?;
+                let cond_alloc = find_term_use_alloc(&block.term, term_allocs, *cond, term_linear)?;
+                let cond_value = read_allocation(&regs, &spills, cond_alloc);
+                let next_block = if cond_value == 0 {
+                    *target
+                } else {
+                    *fallthrough
+                };
+                let succ_index = find_succ_index(block, next_block)?;
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = next_block;
+                next_inst = 0;
+            }
+            term => {
+                return Err(RegallocEngineError::Simulation(format!(
+                    "unsupported terminator in simulation at b{}: {term:?}",
+                    block.id.0
+                )));
+            }
+        }
+
+        if let Some(term_inst_idx) = term_inst_idx
+            && let Some(edits) =
+                edits_by_progpoint.get(&(term_inst_idx, regalloc2::InstPosition::After))
+        {
+            apply_moves(&mut regs, &mut spills, edits);
+        }
+
+        let current_block_idx = *block_indices.get(&current).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!("unknown block b{}", current.0))
+        })?;
+        let current_block = &func.blocks[current_block_idx];
+        trace.push(ExecutionTraceEntry {
+            step_index: steps,
+            state: ExecutionState {
+                physical_registers: regs.clone(),
+                spillslots: spills.clone(),
+                position: execution_position(current_block, next_inst),
+            },
+            output: output.clone(),
+            cursor,
+            trap,
+            returned,
+        });
+    }
+
+    Ok(trace)
+}
+
+fn ideal_trace(
+    program: &RaProgram,
+    input: &[u8],
+) -> Result<Vec<DifferentialState>, RegallocEngineError> {
+    let mut session = crate::DebuggerSession::new(program, input).map_err(|err| {
+        RegallocEngineError::Simulation(format!("ideal debugger init failed: {err}"))
+    })?;
+    let mut trace = Vec::new();
+
+    loop {
+        let before = session.state();
+        if before.halted {
+            break;
+        }
+        session.step_forward().map_err(|err| {
+            RegallocEngineError::Simulation(format!("ideal debugger step failed: {err}"))
+        })?;
+        let state = session.state();
+        trace.push(DifferentialState {
+            step_index: state.step_count,
+            position: ExecutionPosition {
+                block: state.location.block,
+                next_inst_index: state.location.next_inst_index,
+                at_terminator: state.location.at_terminator,
+            },
+            cursor: state.cursor,
+            output: state.output,
+            trap: state.trap,
+            returned: state.returned,
+            vregs: Some(state.vregs),
+            physical_registers: None,
+            spillslots: None,
+        });
+    }
+    Ok(trace)
+}
+
+fn first_differing_field(
+    ideal: &DifferentialState,
+    post: &DifferentialState,
+) -> Option<&'static str> {
+    if ideal.position != post.position {
+        return Some("position");
+    }
+    if ideal.cursor != post.cursor {
+        return Some("cursor");
+    }
+    if ideal.trap != post.trap {
+        return Some("trap");
+    }
+    if ideal.returned != post.returned {
+        return Some("returned");
+    }
+    if ideal.output != post.output {
+        return Some("output");
+    }
+    None
+}
+
+pub fn differential_check(allocated: &AllocatedProgram, input: &[u8]) -> DifferentialCheckResult {
+    let ideal = match ideal_trace(&allocated.ra_program, input) {
+        Ok(v) => v,
+        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
+    };
+    let post_trace = match simulate_execution_trace(allocated, input) {
+        Ok(v) => v,
+        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
+    };
+
+    let post = post_trace
+        .into_iter()
+        .map(|entry| DifferentialState {
+            step_index: entry.step_index,
+            position: entry.state.position,
+            cursor: entry.cursor,
+            output: entry.output,
+            trap: entry.trap,
+            returned: entry.returned,
+            vregs: None,
+            physical_registers: Some(entry.state.physical_registers),
+            spillslots: Some(entry.state.spillslots),
+        })
+        .collect::<Vec<_>>();
+
+    let shared = ideal.len().min(post.len());
+    for i in 0..shared {
+        if let Some(field) = first_differing_field(&ideal[i], &post[i]) {
+            return DifferentialCheckResult::Diverged(DifferentialDivergence {
+                step_index: ideal[i].step_index.min(post[i].step_index),
+                field: field.to_string(),
+                ideal: ideal[i].clone(),
+                post_regalloc: post[i].clone(),
+            });
+        }
+    }
+
+    if ideal.len() != post.len() {
+        let ideal_final = ideal.last().cloned().unwrap_or(DifferentialState {
+            step_index: 0,
+            position: ExecutionPosition {
+                block: crate::BlockId(0),
+                next_inst_index: 0,
+                at_terminator: true,
+            },
+            cursor: 0,
+            output: Vec::new(),
+            trap: None,
+            returned: false,
+            vregs: Some(Vec::new()),
+            physical_registers: None,
+            spillslots: None,
+        });
+        let post_final = post.last().cloned().unwrap_or(DifferentialState {
+            step_index: 0,
+            position: ExecutionPosition {
+                block: crate::BlockId(0),
+                next_inst_index: 0,
+                at_terminator: true,
+            },
+            cursor: 0,
+            output: Vec::new(),
+            trap: None,
+            returned: false,
+            vregs: None,
+            physical_registers: Some(HashMap::new()),
+            spillslots: Some(HashMap::new()),
+        });
+        return DifferentialCheckResult::Diverged(DifferentialDivergence {
+            step_index: shared,
+            field: "step_count".to_string(),
+            ideal: ideal_final,
+            post_regalloc: post_final,
+        });
+    }
+
+    let ideal_final = ideal.last().cloned().unwrap_or(DifferentialState {
+        step_index: 0,
+        position: ExecutionPosition {
+            block: crate::BlockId(0),
+            next_inst_index: 0,
+            at_terminator: true,
+        },
+        cursor: 0,
+        output: Vec::new(),
+        trap: None,
+        returned: false,
+        vregs: Some(Vec::new()),
+        physical_registers: None,
+        spillslots: None,
+    });
+    let post_final = post.last().cloned().unwrap_or(DifferentialState {
+        step_index: 0,
+        position: ExecutionPosition {
+            block: crate::BlockId(0),
+            next_inst_index: 0,
+            at_terminator: true,
+        },
+        cursor: 0,
+        output: Vec::new(),
+        trap: None,
+        returned: false,
+        vregs: None,
+        physical_registers: Some(HashMap::new()),
+        spillslots: Some(HashMap::new()),
+    });
+
+    if let Some(field) = first_differing_field(&ideal_final, &post_final) {
+        return DifferentialCheckResult::Diverged(DifferentialDivergence {
+            step_index: ideal_final.step_index.min(post_final.step_index),
+            field: field.to_string(),
+            ideal: ideal_final,
+            post_regalloc: post_final,
+        });
+    }
+
+    DifferentialCheckResult::Match {
+        steps: shared,
+        ideal_final,
+        post_regalloc_final: post_final,
+    }
+}
+
+pub fn differential_check_program(program: RaProgram, input: &[u8]) -> DifferentialCheckResult {
+    let allocated = match allocate_program(&program) {
+        Ok(v) => v,
+        Err(err) => return DifferentialCheckResult::Error(format!("allocation failed: {err}")),
+    };
+    differential_check(&allocated, input)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1771,5 +2375,27 @@ lambda @0 (shape: "u8") {
             sim.returned,
             "expected simulator to finish with a return terminator"
         );
+    }
+
+    #[test]
+    fn differential_checker_matches_for_simple_decoder() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            rb.bounds_check(4);
+            let value = rb.read_bytes(4);
+            rb.write_to_field(value, 0, Width::W4);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let ra = lower_linear_ir(&lin);
+
+        let input = [0x78_u8, 0x56, 0x34, 0x12];
+        let result = differential_check_program(ra, &input);
+        match result {
+            DifferentialCheckResult::Match { .. } => {}
+            other => panic!("expected differential check to match, got: {other:?}"),
+        }
     }
 }
