@@ -1152,6 +1152,22 @@ pub fn encode_ldrb_reg(rt: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
     Ok(0x3860_6800 | (rm << 16) | (rn << 5) | rt)
 }
 
+pub fn encode_ucvtf_d_x(vd: u8, rn: Reg) -> Result<u32, EmitError> {
+    if vd > 31 {
+        return Err(EmitError::InvalidRegister { reg: Reg(vd) });
+    }
+    let rn = check_reg(rn);
+    Ok(0x9E63_0000 | (rn << 5) | vd as u32)
+}
+
+pub fn encode_fmov_x_d(rd: Reg, vn: u8) -> Result<u32, EmitError> {
+    if vn > 31 {
+        return Err(EmitError::InvalidRegister { reg: Reg(vn) });
+    }
+    let rd = check_reg(rd);
+    Ok(0x9E66_0000 | (vn as u32) << 5 | rd)
+}
+
 pub fn encode_b(imm26: i32) -> Result<u32, EmitError> {
     check_signed_bits("b", imm26 as i64, 26)?;
     Ok(0x1400_0000 | ((imm26 as u32) & 0x03ff_ffff))
@@ -1599,6 +1615,22 @@ mod tests {
         assert_eq!(w & 0x1f, 9);
         assert_eq!((w >> 5) & 0x1f, 19);
         assert_eq!((w >> 16) & 0x1f, 10);
+    }
+
+    #[test]
+    fn ucvtf_d_x_basic() {
+        let w = encode_ucvtf_d_x(0, Reg::X9).unwrap();
+        assert_eq!(w & 0x1f, 0);
+        assert_eq!((w >> 5) & 0x1f, 9);
+        assert_eq!(w >> 24, 0x9E);
+    }
+
+    #[test]
+    fn fmov_x_d_basic() {
+        let w = encode_fmov_x_d(Reg::X7, 4).unwrap();
+        assert_eq!(w & 0x1f, 7);
+        assert_eq!((w >> 5) & 0x1f, 4);
+        assert_eq!(w >> 24, 0x9E);
     }
 
     #[test]
