@@ -2194,10 +2194,9 @@ impl EmitCtx {
     ///
     /// Used in map loops to move from the key slot to the value slot within a pair.
     pub fn emit_advance_out_by(&mut self, offset: u32) {
-        dynasm!(self.ops
-            ; .arch x64
-            ; add r14, offset as i32
-        );
+        self.emit
+            .emit_with(|buf| x64::encode_add_r64_imm32(14, offset, buf))
+            .expect("add");
     }
 
     /// Call `kajit_map_build(from_pair_slice_fn, saved_out, pairs_buf, count)`.
@@ -2217,19 +2216,23 @@ impl EmitCtx {
         let fn_val = from_pair_slice_fn as i64;
 
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, QWORD fn_val                    // arg0 = from_pair_slice_fn
-            ; mov rsi, [rsp + saved_out_slot as i32]   // arg1 = map_ptr
-            ; mov rdx, [rsp + buf_slot as i32]         // arg2 = pairs_ptr
-            ; mov rcx, [rsp + count_slot as i32]       // arg3 = count
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(7, fn_val as u64, buf)?;
+                x64::encode_mov_r64_m(6, Mem::base_disp(4, saved_out_slot as i32), buf)?;
+                x64::encode_mov_r64_m(2, Mem::base_disp(4, buf_slot as i32), buf)?;
+                x64::encode_mov_r64_m(1, Mem::base_disp(4, count_slot as i32), buf)
+            })
+            .expect("map from pairs");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, QWORD fn_val                    // arg0 = from_pair_slice_fn
-            ; mov rdx, [rsp + saved_out_slot as i32]   // arg1 = map_ptr
-            ; mov r8, [rsp + buf_slot as i32]          // arg2 = pairs_ptr
-            ; mov r9, [rsp + count_slot as i32]        // arg3 = count
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(1, fn_val as u64, buf)?;
+                x64::encode_mov_r64_m(2, Mem::base_disp(4, saved_out_slot as i32), buf)?;
+                x64::encode_mov_r64_m(8, Mem::base_disp(4, buf_slot as i32), buf)?;
+                x64::encode_mov_r64_m(9, Mem::base_disp(4, count_slot as i32), buf)
+            })
+            .expect("map from pairs");
         self.emit_call_fn_ptr(crate::intrinsics::kajit_map_build as *const () as *const u8);
     }
 
@@ -2240,19 +2243,23 @@ impl EmitCtx {
         let fn_val = from_pair_slice_fn as i64;
 
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, QWORD fn_val  // arg0 = from_pair_slice_fn
-            ; mov rsi, r14           // arg1 = map_ptr (current out)
-            ; xor edx, edx           // arg2 = null pairs ptr
-            ; xor ecx, ecx           // arg3 = count = 0
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(7, fn_val as u64, buf)?;
+                x64::encode_mov_r64_r64(6, 14, buf)?;
+                x64::encode_xor_r64_r64(2, 2, buf)?;
+                x64::encode_xor_r64_r64(1, 1, buf)
+            })
+            .expect("map from pairs empty");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, QWORD fn_val  // arg0 = from_pair_slice_fn
-            ; mov rdx, r14           // arg1 = map_ptr (current out)
-            ; xor r8d, r8d           // arg2 = null pairs ptr
-            ; xor r9d, r9d           // arg3 = count = 0
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(1, fn_val as u64, buf)?;
+                x64::encode_mov_r64_r64(2, 14, buf)?;
+                x64::encode_xor_r64_r64(8, 8, buf)?;
+                x64::encode_xor_r64_r64(9, 9, buf)
+            })
+            .expect("map from pairs empty");
         self.emit_call_fn_ptr(crate::intrinsics::kajit_map_build as *const () as *const u8);
     }
 
@@ -2267,21 +2274,25 @@ impl EmitCtx {
         cap_slot: u32,
         pair_stride: u32,
         pair_align: u32,
-    ) {
+        ) {
         #[cfg(not(windows))]
-        dynasm!(self.ops ; .arch x64
-            ; mov rdi, [rsp + buf_slot as i32]
-            ; mov rsi, [rsp + cap_slot as i32]
-            ; mov edx, pair_stride as i32
-            ; mov ecx, pair_align as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(7, Mem::base_disp(4, buf_slot as i32), buf)?;
+                x64::encode_mov_r64_m(6, Mem::base_disp(4, cap_slot as i32), buf)?;
+                x64::encode_mov_r32_imm32(2, pair_stride as u32, buf)?;
+                x64::encode_mov_r32_imm32(1, pair_align as u32, buf)
+            })
+            .expect("pairs free");
         #[cfg(windows)]
-        dynasm!(self.ops ; .arch x64
-            ; mov rcx, [rsp + buf_slot as i32]
-            ; mov rdx, [rsp + cap_slot as i32]
-            ; mov r8d, pair_stride as i32
-            ; mov r9d, pair_align as i32
-        );
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(1, Mem::base_disp(4, buf_slot as i32), buf)?;
+                x64::encode_mov_r64_m(2, Mem::base_disp(4, cap_slot as i32), buf)?;
+                x64::encode_mov_r32_imm32(8, pair_stride as u32, buf)?;
+                x64::encode_mov_r32_imm32(9, pair_align as u32, buf)
+            })
+            .expect("pairs free");
         self.emit_call_fn_ptr(free_fn);
     }
 
