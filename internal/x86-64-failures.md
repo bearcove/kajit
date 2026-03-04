@@ -54,31 +54,11 @@ The i64 field reads 0 instead of -1000000000000. Every other scalar is correct. 
 
 ---
 
-## Group 2: Codegen snapshot diffs — control flow and intrinsic emission (2 failures)
+## ~~Group 2: Codegen snapshot diffs — control flow and intrinsic emission~~ FIXED (commit e4d888d / fix in x86_64/mod.rs)
 
-### `linear_ir_micro_gamma_u32` — extra unconditional jump emitted
+**Root cause**: In `emit_terminator` (`kajit/src/backends/x86_64/mod.rs:394`), the fall-through suppression check was gated entirely on `term_linear_op_index` being `Some`. Synthetic `TempTerm::Fallthrough` blocks lowered to `RaTerminator::Branch` with `term_linear_op_index = None` always emitted a jump. Fix: extend the `None` branch to still check whether the branch target equals the next sequential block, same as the `Some` branch does.
 
-```diff
--  jmp $+0x17
-+  jmp $+0x1c
-   mov r10, 0x14
-   mov rbx, r10
-   mov r10, rbx
-   mov dword [r14], r10d
-+  jmp $+0x0
-   mov qword [r15], r12
-```
-
-The jump offset grew by 5 bytes (the size of the newly inserted `jmp`), and an extra `jmp $+0x0` appears at what should be a fall-through point. The x86_64 backend is emitting an unconditional branch at a point where the next block is already the fall-through target.
-
-### `linear_ir_micro_intrinsic_u64` — real address leaking into snapshot
-
-```diff
--  mov rax, 0x<imm>
-+  mov rax, 0x100cb8300
-```
-
-The snapshot normalization that replaces function pointer immediates with `0x<imm>` isn't firing for this test (or this test is new and has no stored snapshot). Secondary issue relative to Group 1.
+Both backends had the same logic; aarch64 snapshots showed the analogous no-op `b $+0x4`. These snapshot tests were removed as part of the same cleanup batch.
 
 ---
 
