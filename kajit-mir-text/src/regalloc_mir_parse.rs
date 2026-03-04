@@ -10,8 +10,7 @@ use kajit_ir::{IntrinsicFn, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_mir::{
     BlockId, FixedReg, OperandKind, RaBlock, RaClobbers, RaEdge, RaEdgeArg, RaFunction, RaInst,
-    RaOperand,
-    RaProgram, RaTerminator, RegClass,
+    RaOperand, RaProgram, RaTerminator, RegClass,
 };
 
 type Extra<'src> = extra::Err<Rich<'src, char>>;
@@ -93,7 +92,10 @@ fn edge_arg<'src>() -> impl Parser<'src, &'src str, RaEdgeArg, Extra<'src>> + Cl
         .then_ignore(just("=>"))
         .then(vreg())
         .map(|(target, source)| RaEdgeArg { target, source });
-    let identity = vreg().map(|v| RaEdgeArg { target: v, source: v });
+    let identity = vreg().map(|v| RaEdgeArg {
+        target: v,
+        source: v,
+    });
     mapped.or(identity)
 }
 
@@ -393,10 +395,7 @@ fn succs<'src>() -> impl Parser<'src, &'src str, Vec<RaEdge>, Extra<'src>> + Clo
         )
         .map(|(to, args)| RaEdge {
             to,
-            args: args
-                .unwrap_or_default()
-                .into_iter()
-                .collect(),
+            args: args.unwrap_or_default().into_iter().collect(),
         });
     let some = just("succs:").ignore_then(
         ws().ignore_then(edge)
@@ -809,6 +808,37 @@ ra_func @0 {
         let text1 = format!("{ra}");
         let ra2 = parse_ra_mir(&text1).unwrap();
         let text2 = format!("{ra2}");
+
+        assert_eq!(
+            text1, text2,
+            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
+    }
+
+    #[test]
+    fn round_trip_human_ra_mir_dump() {
+        let mut builder = IrBuilder::new(test_shape());
+        {
+            let mut rb = builder.root_region();
+            let pred = rb.const_val(0);
+            let out = rb.gamma(pred, &[], 2, |branch_idx, bb| {
+                let val = if branch_idx == 0 {
+                    bb.const_val(42)
+                } else {
+                    bb.const_val(99)
+                };
+                bb.set_results(&[val]);
+            });
+            rb.write_to_field(out[0], 0, Width::W4);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let ra = lower_linear_ir(&lin);
+
+        let text1 = format!("{ra:#}");
+        let ra2 = parse_ra_mir(&text1).unwrap();
+        let text2 = format!("{ra2:#}");
 
         assert_eq!(
             text1, text2,
