@@ -640,6 +640,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kajit-emit"
+version = "0.1.0"
+
+[[package]]
 name = "kajit-ir"
 version = "0.1.0"
 dependencies = [
