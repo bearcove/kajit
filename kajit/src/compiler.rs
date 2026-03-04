@@ -678,6 +678,12 @@ pub fn regalloc_edit_count(shape: &'static Shape, ir_decoder: &dyn Decoder) -> u
     regalloc_edit_count_with_options(shape, ir_decoder, &pipeline_opts)
 }
 
+/// Build IR + linear form and run regalloc, returning a detailed edits dump.
+pub fn regalloc_edits_text(shape: &'static Shape, ir_decoder: &dyn Decoder) -> String {
+    let pipeline_opts = PipelineOptions::from_env();
+    regalloc_edits_text_with_options(shape, ir_decoder, &pipeline_opts)
+}
+
 // r[impl compiler.opts.api]
 pub fn regalloc_edit_count_with_options(
     shape: &'static Shape,
@@ -693,6 +699,68 @@ pub fn regalloc_edit_count_with_options(
         return 0;
     }
     alloc.functions.iter().map(|f| f.edits.len()).sum()
+}
+
+/// Same as [`regalloc_edits_text`], but with explicit pipeline options.
+pub fn regalloc_edits_text_with_options(
+    shape: &'static Shape,
+    ir_decoder: &dyn Decoder,
+    pipeline_opts: &PipelineOptions,
+) -> String {
+    let mut func = build_decoder_ir(shape, ir_decoder);
+    run_configured_default_passes(&mut func, pipeline_opts);
+    let linear = crate::linearize::linearize(&mut func);
+    let ra_mir = crate::regalloc_mir::lower_linear_ir(&linear);
+    let mut alloc = crate::regalloc_engine::allocate_program(&ra_mir)
+        .unwrap_or_else(|err| panic!("regalloc2 allocation failed while formatting edits: {err}"));
+    maybe_disable_regalloc_edits(&mut alloc, pipeline_opts);
+    format_allocated_regalloc_edits(&alloc)
+}
+
+fn format_allocated_regalloc_edits(alloc: &crate::regalloc_engine::AllocatedProgram) -> String {
+    let mut out = String::new();
+    let total_pp_edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
+    let total_edge_edits: usize = alloc.functions.iter().map(|f| f.edge_edits.len()).sum();
+    let _ = std::fmt::Write::write_fmt(
+        &mut out,
+        format_args!(
+            "total_progpoint_edits: {total_pp_edits}\ntotal_edge_edits: {total_edge_edits}\n"
+        ),
+    );
+
+    for func in &alloc.functions {
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!(
+                "\nlambda @{}:\n  num_spillslots: {}\n  progpoint_edits ({}):\n",
+                func.lambda_id.index(),
+                func.num_spillslots,
+                func.edits.len()
+            ),
+        );
+        for (prog_point, edit) in &func.edits {
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!("    - {:?}: {:?}\n", prog_point, edit),
+            );
+        }
+
+        let _ = std::fmt::Write::write_fmt(
+            &mut out,
+            format_args!("  edge_edits ({}):\n", func.edge_edits.len()),
+        );
+        for edge in &func.edge_edits {
+            let _ = std::fmt::Write::write_fmt(
+                &mut out,
+                format_args!(
+                    "    - edge lin={} succ={} pos={:?} move {:?} -> {:?}\n",
+                    edge.from_linear_op_index, edge.succ_index, edge.pos, edge.from, edge.to
+                ),
+            );
+        }
+    }
+
+    out
 }
 
 pub(crate) fn build_decoder_ir(
