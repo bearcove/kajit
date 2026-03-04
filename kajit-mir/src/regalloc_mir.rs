@@ -1232,7 +1232,7 @@ fn lower_inst(linear_op_index: usize, op: LinearOp) -> RaInst {
             push_def(&mut operands, *dst, None);
         }
         LinearOp::BinOp {
-            dst, lhs, rhs, op, ..
+            dst, lhs, rhs, op: _, ..
         } => {
             push_use(&mut operands, *lhs, None);
             // On x86_64, variable shifts require the count in cl (rcx hw_enc=1).

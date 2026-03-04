@@ -145,11 +145,7 @@ impl Lowerer {
         panic!("unexpected none allocation for CallLambda arg");
     }
 
-    pub(super) fn emit_capture_abi_ret_to_allocation(
-        &mut self,
-        abi_ret: u8,
-        operand_index: usize,
-    ) {
+    pub(super) fn emit_capture_abi_ret_to_allocation(&mut self, abi_ret: u8, operand_index: usize) {
         let alloc = self.current_alloc(operand_index);
         let source = PReg::new(abi_ret as usize, RegClass::Int);
         if let Some(reg) = alloc.as_reg() {

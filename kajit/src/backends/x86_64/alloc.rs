@@ -66,7 +66,11 @@ impl Lowerer {
         dynasm!(self.ectx.ops ; .arch x64 ; mov Rq(to_enc), Rq(from_enc));
     }
 
-    pub(super) fn emit_capture_abi_ret_to_allocation(&mut self, abi_reg: PReg, operand_index: usize) {
+    pub(super) fn emit_capture_abi_ret_to_allocation(
+        &mut self,
+        abi_reg: PReg,
+        operand_index: usize,
+    ) {
         let alloc = self.current_alloc(operand_index);
         if let Some(reg) = alloc.as_reg() {
             self.emit_mov_preg_to_preg(abi_reg, reg);

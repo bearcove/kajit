@@ -87,8 +87,7 @@ impl Lowerer {
         let mut resolved = block_id;
         let mut hops = 0usize;
         while hops < 64 {
-            let Some(&next_block) = self.forward_branch_blocks.get(&(lambda_id, resolved.0))
-            else {
+            let Some(&next_block) = self.forward_branch_blocks.get(&(lambda_id, resolved.0)) else {
                 break;
             };
             let next_id = BlockId(next_block);
@@ -163,8 +162,7 @@ impl Lowerer {
             return actual_target;
         };
         let key = (linear_op_index, succ_index);
-        let has_edits =
-            by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
+        let has_edits = by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
         if !has_edits {
             return actual_target;
         }

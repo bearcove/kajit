@@ -1,6 +1,7 @@
 #![allow(clippy::approx_constant)]
 
 pub mod arch;
+pub mod backends;
 pub mod compiler;
 pub mod context;
 pub mod disasm_normalize;
@@ -8,7 +9,6 @@ pub mod format;
 pub mod intrinsics;
 pub mod ir;
 pub mod ir_backend;
-pub mod backends;
 
 pub mod ir_parse;
 pub mod ir_passes;
@@ -64,7 +64,10 @@ pub fn regalloc_edit_count_with_options<F: format::Decoder>(
 }
 
 /// Return a detailed regalloc edits dump for the compiled decoder pipeline.
-pub fn regalloc_edits_text<F: format::Decoder>(shape: &'static facet::Shape, decoder: &F) -> String {
+pub fn regalloc_edits_text<F: format::Decoder>(
+    shape: &'static facet::Shape,
+    decoder: &F,
+) -> String {
     compiler::regalloc_edits_text(shape, decoder)
 }
 

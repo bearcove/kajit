@@ -143,9 +143,7 @@ fn main() {
             generate_synthetic();
         }
         _ => {
-            eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen>"
-            );
+            eprintln!("usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen>");
             std::process::exit(2);
         }
     }

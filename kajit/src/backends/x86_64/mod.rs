@@ -526,7 +526,7 @@ mod tests {
     use crate::compiler;
     use crate::context::{DeserContext, ErrorCode};
     use crate::ir::{IntrinsicFn, IrBuilder, IrOp, Width};
-    use crate::linearize::{linearize, LinearIr};
+    use crate::linearize::{LinearIr, linearize};
     use facet::Facet;
 
     #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Facet, PartialEq)]
