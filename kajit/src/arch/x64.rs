@@ -435,6 +435,11 @@ impl EmitCtx {
         self.emit.bind_label(label).expect("bind label");
     }
 
+    /// Set source location metadata for subsequent emitted instructions.
+    pub fn set_source_location(&mut self, location: kajit_emit::SourceLocation) {
+        self.emit.set_source_location(location);
+    }
+
     /// Emit an unconditional branch to the given label.
     pub fn emit_branch(&mut self, label: LabelId) {
         self.emit.emit_jmp_label(label).expect("jmp");

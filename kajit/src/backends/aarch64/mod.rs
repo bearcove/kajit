@@ -546,6 +546,11 @@ impl Lowerer {
 
                 for inst in &block.insts {
                     let lin_idx = inst.linear_op_index;
+                    self.ectx.set_source_location(kajit_emit::SourceLocation {
+                        file: 1,
+                        line: (lin_idx + 1) as u32,
+                        column: 0,
+                    });
                     self.current_inst_allocs = self
                         .allocs_by_lambda
                         .get(&lambda_id)
