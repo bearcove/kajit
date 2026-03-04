@@ -398,10 +398,16 @@ impl EmitCtx {
     /// After the call: reloads input_ptr from ctx, checks error slot.
     pub fn emit_call_intrinsic(&mut self, fn_ptr: *const u8, field_offset: u32) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x0, x22
-            ; add x1, x21, #field_offset
+        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X1,
+                Reg::X21,
+                field_offset as u16,
+                false,
+            )
+            .expect("add"),
         );
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
@@ -411,7 +417,7 @@ impl EmitCtx {
     /// Flushes cursor, calls, reloads cursor, checks error.
     pub fn emit_call_intrinsic_ctx_only(&mut self, fn_ptr: *const u8) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops ; .arch aarch64 ; mov x0, x22);
+        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -420,10 +426,16 @@ impl EmitCtx {
     /// x0 = ctx, x1 = sp + sp_offset. Flushes/reloads cursor, checks error.
     pub fn emit_call_intrinsic_ctx_and_stack_out(&mut self, fn_ptr: *const u8, sp_offset: u32) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x0, x22
-            ; add x1, sp, #sp_offset
+        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X1,
+                Reg::SP,
+                sp_offset as u16,
+                false,
+            )
+            .expect("add"),
         );
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
@@ -438,11 +450,26 @@ impl EmitCtx {
         sp_offset2: u32,
     ) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x0, x22
-            ; add x1, sp, #sp_offset1
-            ; add x2, sp, #sp_offset2
+        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X1,
+                Reg::SP,
+                sp_offset1 as u16,
+                false,
+            )
+            .expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X2,
+                Reg::SP,
+                sp_offset2 as u16,
+                false,
+            )
+            .expect("add"),
         );
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
@@ -459,13 +486,31 @@ impl EmitCtx {
         expected_ptr: *const u8,
         expected_len: u32,
     ) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x0, [sp, #arg0_sp_offset]
-            ; ldr x1, [sp, #arg1_sp_offset]
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X0,
+                Reg::SP,
+                arg0_sp_offset,
+            )
+            .expect("ldr"),
         );
-        load_imm64!(self.ops, x2, expected_ptr as u64);
-        dynasm!(self.ops ; .arch aarch64 ; movz x3, expected_len);
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X1,
+                Reg::SP,
+                arg1_sp_offset,
+            )
+            .expect("ldr"),
+        );
+        let val = expected_ptr as u64;
+        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (val & 0xFFFF) as u16, 0).expect("movz"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"));
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X3, expected_len as u16, 0).expect("movz"));
         self.emit_call_fn_ptr(fn_ptr);
     }
 
@@ -504,13 +549,17 @@ impl EmitCtx {
 
     /// Compute len = cursor - [sp+start_slot], store to [sp+len_slot], advance cursor past `"`.
     pub fn emit_compute_key_len_and_advance(&mut self, start_sp_offset: u32, len_sp_offset: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #start_sp_offset]            // x9 = start
-            ; sub x10, x19, x9                           // x10 = len
-            ; str x10, [sp, #len_sp_offset]              // store len
-            ; add x19, x19, 1                            // advance past closing '"'
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, start_sp_offset)
+                .expect("ldr"),
         );
+        self.emit
+            .emit_word(aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"));
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, len_sp_offset)
+                .expect("str"),
+        );
+        self.emit.emit_word(aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"));
     }
 
     /// Emit `cbnz x0, label` — branch if x0 is nonzero.
@@ -522,10 +571,7 @@ impl EmitCtx {
 
     /// Zero a 64-bit stack slot at sp + offset.
     pub fn emit_zero_stack_slot(&mut self, sp_offset: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; str xzr, [sp, #sp_offset]
-        );
+        self.emit.emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::XZR, Reg::SP, sp_offset).expect("str"));
     }
 
     /// Load a byte from sp + sp_offset, compare with byte_val, branch if equal.
