@@ -311,12 +311,34 @@ pub unsafe extern "C" fn kajit_json_key_equals(
     expected_ptr: *const u8,
     expected_len: usize,
 ) -> u64 {
+    let mut debug_interest = false;
+    if std::env::var_os("KAJIT_DEBUG_KEYEQ").is_some() {
+        let key_dbg = unsafe { core::slice::from_raw_parts(key_ptr, key_len) };
+        let expected_dbg = unsafe { core::slice::from_raw_parts(expected_ptr, expected_len) };
+        if expected_dbg == b"a_u16" || expected_dbg == b"a_isize" || expected_dbg == b"a_f64" {
+            debug_interest = true;
+            eprintln!(
+                "keyeq key={:?} expected={:?} key_len={} expected_len={} expected_ptr={:#x}",
+                key_dbg, expected_dbg, key_len, expected_len, expected_ptr as usize
+            );
+        }
+    }
     if key_len != expected_len {
+        if debug_interest {
+            eprintln!("keyeq result=0 (len mismatch)");
+        }
         return 0;
     }
     let key = unsafe { core::slice::from_raw_parts(key_ptr, key_len) };
     let expected = unsafe { core::slice::from_raw_parts(expected_ptr, expected_len) };
-    if key == expected { 1 } else { 0 }
+    let out = if key == expected { 1 } else { 0 };
+    if std::env::var_os("KAJIT_DEBUG_KEYEQ_MATCHES").is_some() && out == 1 {
+        eprintln!("keyeq match key={:?} expected={:?}", key, expected);
+    }
+    if debug_interest {
+        eprintln!("keyeq result={out}");
+    }
+    out
 }
 
 /// Recursively skip one JSON value (string, number, boolean, null, object, array).
@@ -744,7 +766,11 @@ pub unsafe extern "C" fn kajit_json_read_u8(ctx: *mut DeserContext, out: *mut u8
         ctx.error.code = ErrorCode::NumberOutOfRange as u32;
         return;
     }
-    unsafe { *out = val as u8 };
+    let out_val = val as u8;
+    unsafe { *out = out_val };
+    if std::env::var_os("KAJIT_DEBUG_FIELD_WRITES").is_some() {
+        eprintln!("read_u8 out={:#x} val={}", out as usize, out_val);
+    }
 }
 
 /// Read a JSON unsigned integer and write it as a `u16`.
@@ -769,7 +795,11 @@ pub unsafe extern "C" fn kajit_json_read_u16(ctx: *mut DeserContext, out: *mut u
         ctx.error.code = ErrorCode::NumberOutOfRange as u32;
         return;
     }
-    unsafe { *out = val as u16 };
+    let out_val = val as u16;
+    unsafe { *out = out_val };
+    if std::env::var_os("KAJIT_DEBUG_FIELD_WRITES").is_some() {
+        eprintln!("read_u16 out={:#x} val={}", out as usize, out_val);
+    }
 }
 
 /// Read a JSON unsigned integer and write it as a `u32`.
@@ -1014,6 +1044,9 @@ pub unsafe extern "C" fn kajit_json_read_isize(ctx: *mut DeserContext, out: *mut
         }
     };
     unsafe { *out = v };
+    if std::env::var_os("KAJIT_DEBUG_FIELD_WRITES").is_some() {
+        eprintln!("read_isize out={:#x} val={}", out as usize, v);
+    }
 }
 
 // --- Float intrinsics ---
@@ -1081,7 +1114,12 @@ pub unsafe extern "C" fn kajit_json_read_f64(ctx: *mut DeserContext, out: *mut f
         }
     };
     match s.parse::<f64>() {
-        Ok(v) => unsafe { *out = v },
+        Ok(v) => {
+            unsafe { *out = v };
+            if std::env::var_os("KAJIT_DEBUG_FIELD_WRITES").is_some() {
+                eprintln!("read_f64 out={:#x} val={}", out as usize, v);
+            }
+        }
         Err(_) => {
             ctx.error.code = ErrorCode::InvalidJsonNumber as u32;
         }
