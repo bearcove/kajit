@@ -45,7 +45,7 @@ impl ExecutableBuffer {
     fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
         let prot = if cfg!(target_os = "macos") {
-            PROT_READ | PROT_EXEC
+            PROT_READ | PROT_WRITE | PROT_EXEC
         } else {
             PROT_READ | PROT_WRITE
         };
