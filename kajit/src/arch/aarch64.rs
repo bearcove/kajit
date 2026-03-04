@@ -189,20 +189,34 @@ impl EmitCtx {
     /// - x20 = cached input_end
     /// - x21 = out pointer
     /// - x22 = ctx pointer
-    pub fn begin_func(&mut self) -> (AssemblyOffset, DynamicLabel) {
-        let error_exit = self.ops.new_dynamic_label();
-        let entry = self.ops.offset();
+    pub fn begin_func(&mut self) -> (u32, LabelId) {
+        let error_exit = self.emit.new_label();
+        let entry = self.emit.current_offset();
         let frame_size = self.frame_size;
 
-        // We emit the prologue with sub sp + stp instead of the pre-index form,
-        // because frame_size is dynamic and dynasm doesn't support runtime
-        // immediates in pre-index stp.
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; sub sp, sp, #frame_size
-            ; stp x29, x30, [sp]
-            ; stp x19, x20, [sp, #16]
-            ; stp x21, x22, [sp, #32]
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::SP, Reg::SP, frame_size as u16, false)
+                .expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_stp(
+                aarch64::Width::X64,
+                Reg::X29,
+                Reg::X30,
+                Reg::SP,
+                0,
+            )
+            .expect("stp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect(
+                "stp",
+            ),
+        );
+        self.emit.emit_word(
+            aarch64::encode_stp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect(
+                "stp",
+            ),
         );
         let extra_pairs = ((self.base_frame - BASE_FRAME) / 16) as usize;
         assert!(
@@ -210,25 +224,49 @@ impl EmitCtx {
             "unsupported extra callee-saved pair count"
         );
         if extra_pairs >= 1 {
-            dynasm!(self.ops ; .arch aarch64 ; stp x23, x24, [sp, #48]);
+            self.emit.emit_word(
+                aarch64::encode_stp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
+                    .expect("stp"),
+            );
         }
         if extra_pairs >= 2 {
-            dynasm!(self.ops ; .arch aarch64 ; stp x25, x26, [sp, #64]);
+            self.emit.emit_word(
+                aarch64::encode_stp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
+                    .expect("stp"),
+            );
         }
         if extra_pairs >= 3 {
-            dynasm!(self.ops ; .arch aarch64 ; stp x27, x28, [sp, #80]);
+            self.emit.emit_word(
+                aarch64::encode_stp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
+                    .expect("stp"),
+            );
         }
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; add x29, sp, #0
-
-            // Save arguments to callee-saved registers
-            ; mov x21, x0              // x21 = out
-            ; mov x22, x1              // x22 = ctx
-
-            // Cache input cursor from ctx
-            ; ldr x19, [x22, #CTX_INPUT_PTR]  // x19 = ctx.input_ptr
-            ; ldr x20, [x22, #CTX_INPUT_END]  // x20 = ctx.input_end
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X29, Reg::SP, 0, false).expect(
+                "add",
+            ),
+        );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X0).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X22, Reg::X1).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X20,
+                Reg::X22,
+                CTX_INPUT_END as u32,
+            )
+            .expect("ldr"),
         );
 
         self.error_exit = error_exit;
@@ -238,7 +276,7 @@ impl EmitCtx {
     /// Emit the success epilogue and error exit for the current function.
     ///
     /// `error_exit` must be the label returned by the corresponding `begin_func` call.
-    pub fn end_func(&mut self, error_exit: DynamicLabel) {
+    pub fn end_func(&mut self, error_exit: LabelId) {
         let frame_size = self.frame_size;
 
         let extra_pairs = ((self.base_frame - BASE_FRAME) / 16) as usize;
@@ -247,48 +285,86 @@ impl EmitCtx {
             "unsupported extra callee-saved pair count"
         );
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            // Success path: flush cursor, restore registers, return
-            ; str x19, [x22, #CTX_INPUT_PTR]
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("str"),
         );
         if extra_pairs >= 3 {
-            dynasm!(self.ops ; .arch aarch64 ; ldp x27, x28, [sp, #80]);
+            self.emit.emit_word(
+                aarch64::encode_ldp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
+                    .expect("ldp"),
+            );
         }
         if extra_pairs >= 2 {
-            dynasm!(self.ops ; .arch aarch64 ; ldp x25, x26, [sp, #64]);
+            self.emit.emit_word(
+                aarch64::encode_ldp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
+                    .expect("ldp"),
+            );
         }
         if extra_pairs >= 1 {
-            dynasm!(self.ops ; .arch aarch64 ; ldp x23, x24, [sp, #48]);
+            self.emit.emit_word(
+                aarch64::encode_ldp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
+                    .expect("ldp"),
+            );
         }
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldp x21, x22, [sp, #32]
-            ; ldp x19, x20, [sp, #16]
-            ; ldp x29, x30, [sp]
-            ; add sp, sp, #frame_size
-            ; ret
-
-            // Error exit: just restore and return (error is already in ctx.error)
-            ; =>error_exit
+        self.emit.emit_word(
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32)
+                .expect("ldp"),
         );
+        self.emit.emit_word(
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16)
+                .expect("ldp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
+                .expect("ldp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::SP, Reg::SP, frame_size as u16, false)
+                .expect("add"),
+        );
+        self.emit.emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
+        self.emit.bind_label(error_exit).expect("bind");
         if extra_pairs >= 3 {
-            dynasm!(self.ops ; .arch aarch64 ; ldp x27, x28, [sp, #80]);
+            self.emit.emit_word(
+                aarch64::encode_ldp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
+                    .expect("ldp"),
+            );
         }
         if extra_pairs >= 2 {
-            dynasm!(self.ops ; .arch aarch64 ; ldp x25, x26, [sp, #64]);
+            self.emit.emit_word(
+                aarch64::encode_ldp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
+                    .expect("ldp"),
+            );
         }
         if extra_pairs >= 1 {
-            dynasm!(self.ops ; .arch aarch64 ; ldp x23, x24, [sp, #48]);
+            self.emit.emit_word(
+                aarch64::encode_ldp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
+                    .expect("ldp"),
+            );
         }
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldp x21, x22, [sp, #32]
-            ; ldp x19, x20, [sp, #16]
-            ; ldp x29, x30, [sp]
-            ; add sp, sp, #frame_size
-            ; ret
+        self.emit.emit_word(
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32)
+                .expect("ldp"),
         );
+        self.emit.emit_word(
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16)
+                .expect("ldp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
+                .expect("ldp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::SP, Reg::SP, frame_size as u16, false)
+                .expect("add"),
+        );
+        self.emit.emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
     }
 
     /// Emit a call to another emitted function.
@@ -297,14 +373,21 @@ impl EmitCtx {
     /// Flushes cursor before call, reloads after, checks error.
     ///
     /// r[impl callconv.inter-function]
-    pub fn emit_call_emitted_func(&mut self, label: DynamicLabel, field_offset: u32) {
+    pub fn emit_call_emitted_func(&mut self, label: LabelId, field_offset: u32) {
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; add x0, x21, #field_offset
-            ; mov x1, x22
-            ; bl =>label
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X0,
+                Reg::X21,
+                field_offset as u16,
+                false,
+            )
+            .expect("add"),
         );
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X22).expect("mov"));
+        self.emit.emit_bl_label(label).expect("bl");
         self.emit_reload_cursor_and_check_error();
     }
 
