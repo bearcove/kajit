@@ -847,72 +847,117 @@ impl EmitCtx {
     /// Falls back to scalar for the last < 16 bytes.
     pub fn emit_json_string_scan(
         &mut self,
-        found_quote: DynamicLabel,
-        found_escape: DynamicLabel,
-        unterminated: DynamicLabel,
+        found_quote: LabelId,
+        found_escape: LabelId,
+        unterminated: LabelId,
     ) {
-        let vector_loop = self.ops.new_dynamic_label();
-        let scalar_tail = self.ops.new_dynamic_label();
-        let advance_16 = self.ops.new_dynamic_label();
-        let find_pos = self.ops.new_dynamic_label();
-        let found_at_offset = self.ops.new_dynamic_label();
+        let vector_loop = self.emit.new_label();
+        let scalar_tail = self.emit.new_label();
+        let advance_16 = self.emit.new_label();
+        let find_pos = self.emit.new_label();
+        let found_at_offset = self.emit.new_label();
 
-        // Broadcast '"' (0x22) and '\' (0x5C) into v1.16b and v2.16b
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; movi v1.b16, 0x22
-            ; movi v2.b16, 0x5C
+        self.emit
+            .emit_word(aarch64::encode_movi_b16(1, 0x22).expect("movi"));
+        self.emit
+            .emit_word(aarch64::encode_movi_b16(2, 0x5C).expect("movi"));
 
-            // ── Vector loop: 16 bytes per iteration ──
-            ; =>vector_loop
-            ; sub x9, x20, x19
-            ; cmp x9, 16
-            ; b.lo =>scalar_tail
-
-            // Load 16 bytes
-            ; ld1 {v0.b16}, [x19]
-            // Compare for '"' and '\'
-            ; cmeq v3.b16, v0.b16, v1.b16
-            ; cmeq v4.b16, v0.b16, v2.b16
-            ; orr v3.b16, v3.b16, v4.b16
-            // Horizontal max: if any lane is 0xFF, b5 is 0xFF
-            ; umaxv b5, v3.b16
-            ; umov w9, v5.b[0]
-            ; cbz w9, =>advance_16
-
-            // Found a match in this 16-byte window — find exact position
-            ; mov x10, 0
-            ; =>find_pos
-            ; ldrb w9, [x19, x10]
-            ; cmp w9, 0x22
-            ; b.eq =>found_at_offset
-            ; cmp w9, 0x5C
-            ; b.eq =>found_at_offset
-            ; add x10, x10, 1
-            ; b =>find_pos
-
-            ; =>found_at_offset
-            ; add x19, x19, x10
-            ; cmp w9, 0x22
-            ; b.eq =>found_quote
-            ; b =>found_escape
-
-            ; =>advance_16
-            ; add x19, x19, 16
-            ; b =>vector_loop
-
-            // ── Scalar tail: remaining < 16 bytes ──
-            ; =>scalar_tail
-            ; cmp x19, x20
-            ; b.hs =>unterminated
-            ; ldrb w9, [x19]
-            ; cmp w9, 0x22
-            ; b.eq =>found_quote
-            ; cmp w9, 0x5C
-            ; b.eq =>found_escape
-            ; add x19, x19, 1
-            ; b =>scalar_tail
+        self.emit.bind_label(vector_loop).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X20, Reg::X19).expect("sub"),
         );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X9, 16, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Lo, scalar_tail)
+            .expect("b.lo");
+
+        self.emit
+            .emit_word(aarch64::encode_ld1_b16(0, Reg::X19).expect("ld1"));
+        self.emit
+            .emit_word(aarch64::encode_cmeq_b16(3, 0, 1).expect("cmeq"));
+        self.emit
+            .emit_word(aarch64::encode_cmeq_b16(4, 0, 2).expect("cmeq"));
+        self.emit
+            .emit_word(aarch64::encode_orr_b16(3, 3, 4).expect("orr"));
+        self.emit
+            .emit_word(aarch64::encode_umaxv_b16(5, 3).expect("umaxv"));
+        self.emit
+            .emit_word(aarch64::encode_umov_b(Reg::X9, 5, 0).expect("umov"));
+        self.emit
+            .emit_cbz_label(aarch64::Width::W32, Reg::X9, advance_16)
+            .expect("cbz");
+
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X10, 0, 0).expect("movz"));
+        self.emit.bind_label(find_pos).expect("bind");
+        self.emit
+            .emit_word(aarch64::encode_ldrb_reg(Reg::X9, Reg::X19, Reg::X10).expect("ldrb"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 0x22, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, found_at_offset)
+            .expect("b.eq");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 0x5C, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, found_at_offset)
+            .expect("b.eq");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X10, Reg::X10, 1, false)
+                .expect("add"),
+        );
+        self.emit.emit_b_label(find_pos).expect("b");
+
+        self.emit.bind_label(found_at_offset).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X10)
+                .expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 0x22, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, found_quote)
+            .expect("b.eq");
+        self.emit.emit_b_label(found_escape).expect("b");
+
+        self.emit.bind_label(advance_16).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 16, false)
+                .expect("add"),
+        );
+        self.emit.emit_b_label(vector_loop).expect("b");
+
+        self.emit.bind_label(scalar_tail).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, unterminated)
+            .expect("b.hs");
+        self.emit
+            .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 0x22, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, found_quote)
+            .expect("b.eq");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 0x5C, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, found_escape)
+            .expect("b.eq");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
+        );
+        self.emit.emit_b_label(scalar_tail).expect("b");
     }
 
     /// Inline skip-whitespace: loop over space/tab/newline/cr, advancing x19.
