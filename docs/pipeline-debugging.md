@@ -87,36 +87,75 @@ Each dump file is named `<format>__<case>__<arch>__<stage>.txt`, e.g. `postcard_
 
 ## LLDB debugging of JIT code
 
-Run any test under LLDB with the `lldb` nextest profile. This enables the GDB JIT loader, sets `KAJIT_DEBUG=1` (so DWARF `.debug_line` is emitted), and breaks on JIT code registration:
+### Quick start
+
+Run any test under LLDB with the `lldb` nextest profile:
 
 ```bash
 cargo nextest run --profile lldb -E 'test(=json::bool_true_false)'
 ```
 
-When LLDB stops at `__jit_debug_register_code`, the JIT code has been registered. You can then:
+This uses the wrapper script `scripts/lldb-test.sh` which:
+- Sets `KAJIT_DEBUG=1` (enables DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` emission)
+- Enables the GDB JIT loader (`settings set plugin.jit-loader.gdb.enable on`)
+- Sets a breakpoint on `__jit_debug_register_code`
+- Runs the test binary
+
+The profile has a 24-hour slow timeout so nextest won't kill your interactive session.
+
+### How it works
+
+When `KAJIT_DEBUG=1`:
+1. The compiler generates an RA-MIR listing file at `/tmp/kajit-debug/<type>.ra-mir` (one line per RA-MIR instruction)
+2. Both backends call `set_source_location()` before each instruction, recording the linear op index as the DWARF line number
+3. A minimal DWARF v4 compilation unit is built (`.debug_info` referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`)
+4. The JIT ELF registered via the GDB JIT interface contains `.text`, `.symtab`, `.debug_line`, `.debug_abbrev`, and `.debug_info`
+5. LLDB (with JIT loader enabled) parses the ELF, loads the line table, and maps code offsets to `.ra-mir` listing lines
+
+### LLDB commands for JIT code
+
+When LLDB stops at `__jit_debug_register_code`, the JIT code has just been registered:
 
 ```
-# Confirm JIT images are loaded
+# Confirm JIT images are loaded — look for JIT(...) entries
 (lldb) image list
-# Look for JIT(...) entries
-
-# Look up a JIT address
-(lldb) image lookup -a <pc>
 
 # Find registered decode/encode symbols
 (lldb) image lookup -rn 'fad::decode::'
-(lldb) image lookup -rn 'fad::encode::'
 
-# Set a breakpoint on a JIT function and continue
-(lldb) breakpoint set -rn 'fad::decode::.*'
-(lldb) continue
+# Inspect a JIT address (verbose — shows LineEntry if DWARF is working)
+(lldb) image lookup -va <address>
+
+# Check which sections the JIT ELF contains
+(lldb) image dump sections JIT(0x...)
+
+# Dump the line table (use the .ra-mir filename, not the full path)
+(lldb) image dump line-table fad__decode__Bools.ra-mir
+
+# Set a breakpoint on JIT code by address (name-based breakpoints on JIT symbols may not resolve)
+(lldb) breakpoint set -a <address>
 
 # Once stopped in JIT code, source-level stepping uses the .ra-mir listing
 (lldb) source info
 (lldb) step
 ```
 
-The `.ra-mir` listing files are written to `/tmp/kajit-debug/`. Each listing line corresponds to an RA-MIR instruction — DWARF `.debug_line` maps native code offsets to these lines, so `source info` and `step` navigate the RA-MIR.
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `kajit/src/jit_dwarf.rs` | Builds DWARF v4 `.debug_line`, `.debug_abbrev`, `.debug_info` sections |
+| `kajit/src/jit_debug.rs` | GDB JIT interface: builds in-memory ELF, registers with debugger, writes perf map |
+| `kajit/src/compiler.rs` | Glue: `build_dwarf_from_source_map()` converts backend source maps to DWARF |
+| `scripts/lldb-test.sh` | Nextest wrapper script for the `lldb` profile |
+| `/tmp/kajit-debug/*.ra-mir` | Generated listing files (one per JIT-compiled type) |
+| `/tmp/perf-<pid>.map` | perf sampling map (always written, even without `KAJIT_DEBUG`) |
+
+### Known limitations
+
+- **Breakpoints by name** on JIT symbols (`breakpoint set -n "fad::decode::Bools"`) may show as "pending, no locations" because LLDB can't map the symbol to a loadable section. Use `breakpoint set -a <address>` instead — get the address from `image lookup -rn`.
+- **macOS only** for the nextest profile (gated by `cfg(target_os = "macos")`). On Linux, GDB should work without the JIT loader setting.
+- The GDB JIT loader must be explicitly enabled on LLDB: `settings set plugin.jit-loader.gdb.enable on` (the wrapper script does this automatically).
 
 ## Getting disassembly
 

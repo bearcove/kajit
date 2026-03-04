@@ -65,3 +65,20 @@ Dump pipeline artifacts with environment variables:
 Dump files are named `<format>__<case>__<arch>__<stage>.txt`.
 
 Use `opts` stage to see RVSDG snapshots between each optimization pass.
+
+### LLDB debugging of JIT code
+
+Debug JIT-compiled code with source-level stepping through RA-MIR listings:
+
+```bash
+cargo nextest run --profile lldb -E 'test(=json::bool_true_false)'
+```
+
+Set `KAJIT_DEBUG=1` to enable DWARF emission (the `lldb` profile does this automatically). This generates:
+- RA-MIR listing files at `/tmp/kajit-debug/*.ra-mir`
+- DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` in the JIT ELF
+- GDB JIT interface registration so LLDB/GDB can discover the code
+
+Full reference: `docs/pipeline-debugging.md` § "LLDB debugging of JIT code"
+
+**Key architecture detail:** Both backends (`aarch64/mod.rs`, `x86_64/mod.rs`) call `set_source_location()` in their instruction emission loops, mapping each linear op index to a DWARF line number. The DWARF sections are built in `jit_dwarf.rs` and attached to the in-memory ELF in `jit_debug.rs`. LLDB requires all three DWARF sections (`.debug_info` with a CU referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`) — `.debug_line` alone is silently ignored.
