@@ -196,6 +196,9 @@ const ELFCLASS64: u8 = 2;
 const ELFDATA2LSB: u8 = 1;
 const EV_CURRENT: u8 = 1;
 const ET_EXEC: u16 = 2;
+const PT_LOAD: u32 = 1;
+const PF_X: u32 = 0x1;
+const PF_R: u32 = 0x4;
 const SHT_NULL: u32 = 0;
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -206,6 +209,7 @@ const STB_GLOBAL: u8 = 1;
 const STT_FUNC: u8 = 2;
 
 const EHDR_SIZE: usize = 64;
+const PHDR_SIZE: usize = 56;
 const SHDR_SIZE: usize = 64;
 const SYM_SIZE: usize = 24;
 
@@ -236,6 +240,12 @@ fn build_elf(
     symbols: &[JitSymbolEntry],
     dwarf: Option<&crate::jit_dwarf::JitDwarfSections>,
 ) -> Vec<u8> {
+    let entry_addr = symbols
+        .iter()
+        .map(|sym| text_addr + sym.offset as u64)
+        .min()
+        .unwrap_or(text_addr);
+
     // Build .strtab (symbol name strings)
     let mut strtab = vec![0u8]; // index 0 = empty string
     let mut name_offsets = Vec::with_capacity(symbols.len());
@@ -330,11 +340,13 @@ fn build_elf(
     let sh_name_shstrtab = shstrtab.len() as u32;
     shstrtab.extend_from_slice(b".shstrtab\0");
 
-    // Layout: ELF header | section headers | section data blobs
+    // Layout: ELF header | program headers | section headers | section data blobs
+    let num_program_headers = 1usize;
+    let phdr_offset = EHDR_SIZE;
     let num_sections = 5 + extras.len(); // null, .text, .symtab, .strtab, extras..., .shstrtab
     let shstrtab_index = 4 + extras.len();
-    let shdr_offset = EHDR_SIZE;
-    let data_offset = EHDR_SIZE + num_sections * SHDR_SIZE;
+    let shdr_offset = EHDR_SIZE + num_program_headers * PHDR_SIZE;
+    let data_offset = shdr_offset + num_sections * SHDR_SIZE;
     let symtab_off = data_offset;
     let strtab_off = symtab_off + symtab.len();
     let mut extra_offsets = Vec::with_capacity(extras.len());
@@ -357,17 +369,31 @@ fn build_elf(
     elf.extend_from_slice(&ET_EXEC.to_le_bytes()); // e_type
     elf.extend_from_slice(&EM_MACHINE.to_le_bytes()); // e_machine
     elf.extend_from_slice(&1u32.to_le_bytes()); // e_version
-    elf.extend_from_slice(&0u64.to_le_bytes()); // e_entry
-    elf.extend_from_slice(&0u64.to_le_bytes()); // e_phoff
+    elf.extend_from_slice(&entry_addr.to_le_bytes()); // e_entry
+    elf.extend_from_slice(&(phdr_offset as u64).to_le_bytes()); // e_phoff
     elf.extend_from_slice(&(shdr_offset as u64).to_le_bytes()); // e_shoff
     elf.extend_from_slice(&0u32.to_le_bytes()); // e_flags
     elf.extend_from_slice(&(EHDR_SIZE as u16).to_le_bytes()); // e_ehsize
-    elf.extend_from_slice(&0u16.to_le_bytes()); // e_phentsize
-    elf.extend_from_slice(&0u16.to_le_bytes()); // e_phnum
+    elf.extend_from_slice(&(PHDR_SIZE as u16).to_le_bytes()); // e_phentsize
+    elf.extend_from_slice(&(num_program_headers as u16).to_le_bytes()); // e_phnum
     elf.extend_from_slice(&(SHDR_SIZE as u16).to_le_bytes()); // e_shentsize
     elf.extend_from_slice(&(num_sections as u16).to_le_bytes()); // e_shnum
     elf.extend_from_slice(&(shstrtab_index as u16).to_le_bytes()); // e_shstrndx (index of .shstrtab)
     debug_assert_eq!(elf.len(), EHDR_SIZE);
+
+    // ----- Program headers -----
+    // [0] PT_LOAD covering runtime .text memory.
+    write_phdr(
+        &mut elf,
+        PT_LOAD,
+        PF_R | PF_X,
+        0, // no backing bytes in this ELF for .text
+        text_addr,
+        text_addr,
+        0,
+        text_len as u64,
+        16,
+    );
 
     // ----- Section headers -----
 
@@ -490,6 +516,28 @@ fn write_shdr(
     buf.extend_from_slice(&sh_entsize.to_le_bytes());
 }
 
+#[allow(clippy::too_many_arguments)]
+fn write_phdr(
+    buf: &mut Vec<u8>,
+    p_type: u32,
+    p_flags: u32,
+    p_offset: u64,
+    p_vaddr: u64,
+    p_paddr: u64,
+    p_filesz: u64,
+    p_memsz: u64,
+    p_align: u64,
+) {
+    buf.extend_from_slice(&p_type.to_le_bytes());
+    buf.extend_from_slice(&p_flags.to_le_bytes());
+    buf.extend_from_slice(&p_offset.to_le_bytes());
+    buf.extend_from_slice(&p_vaddr.to_le_bytes());
+    buf.extend_from_slice(&p_paddr.to_le_bytes());
+    buf.extend_from_slice(&p_filesz.to_le_bytes());
+    buf.extend_from_slice(&p_memsz.to_le_bytes());
+    buf.extend_from_slice(&p_align.to_le_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,6 +577,16 @@ mod tests {
             .collect()
     }
 
+    fn read_program_header(elf: &[u8], index: usize) -> [u8; PHDR_SIZE] {
+        let phoff = read_u64(elf, 32) as usize;
+        let phentsize = read_u16(elf, 54) as usize;
+        assert_eq!(phentsize, PHDR_SIZE);
+        let start = phoff + index * phentsize;
+        let mut out = [0u8; PHDR_SIZE];
+        out.copy_from_slice(&elf[start..start + PHDR_SIZE]);
+        out
+    }
+
     #[test]
     fn elf_without_dwarf_sections_keeps_base_layout() {
         let elf = build_elf(
@@ -546,6 +604,21 @@ mod tests {
         assert!(names.contains(&".symtab".to_string()));
         assert!(names.contains(&".strtab".to_string()));
         assert!(!names.contains(&".debug_line".to_string()));
+
+        assert_eq!(read_u64(&elf, 32), EHDR_SIZE as u64); // e_phoff
+        assert_eq!(read_u16(&elf, 54), PHDR_SIZE as u16); // e_phentsize
+        assert_eq!(read_u16(&elf, 56), 1); // e_phnum
+        assert_eq!(read_u64(&elf, 24), 0x1000); // e_entry
+
+        let ph = read_program_header(&elf, 0);
+        assert_eq!(u32::from_le_bytes(ph[0..4].try_into().unwrap()), PT_LOAD);
+        assert_eq!(u32::from_le_bytes(ph[4..8].try_into().unwrap()), PF_R | PF_X);
+        assert_eq!(u64::from_le_bytes(ph[8..16].try_into().unwrap()), 0); // p_offset
+        assert_eq!(u64::from_le_bytes(ph[16..24].try_into().unwrap()), 0x1000); // p_vaddr
+        assert_eq!(u64::from_le_bytes(ph[24..32].try_into().unwrap()), 0x1000); // p_paddr
+        assert_eq!(u64::from_le_bytes(ph[32..40].try_into().unwrap()), 0); // p_filesz
+        assert_eq!(u64::from_le_bytes(ph[40..48].try_into().unwrap()), 32); // p_memsz
+        assert_eq!(u64::from_le_bytes(ph[48..56].try_into().unwrap()), 16); // p_align
     }
 
     #[test]
