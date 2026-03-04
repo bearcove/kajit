@@ -95,8 +95,10 @@ const DW_FORM_EXPRLOC: u8 = 0x18;
 const INFO_VERSION: u16 = 4;
 const ADDRESS_SIZE_64: u8 = 8;
 const DW_OP_REG0: u8 = 0x50;
+const DW_OP_BREG0: u8 = 0x70;
 const DW_OP_REGX: u8 = 0x90;
 const DW_OP_FBREG: u8 = 0x91;
+const DW_OP_BREGX: u8 = 0x92;
 
 /// Build DWARF sections for one JIT function.
 ///
@@ -161,7 +163,7 @@ pub fn build_jit_dwarf_sections_with_variables(
     }
 
     let (debug_loc, variable_loc_offsets) = build_debug_loc_section(variables);
-    let frame_base_expr = expr_reg(frame_base_register(target_arch));
+    let frame_base_expr = expr_breg(frame_base_register(target_arch), 0);
 
     Ok(JitDwarfSections {
         debug_line: build_debug_line_section(
@@ -347,6 +349,18 @@ pub fn expr_reg(dwarf_reg: u16) -> Vec<u8> {
     }
     let mut out = vec![DW_OP_REGX];
     push_uleb128(&mut out, dwarf_reg as u64);
+    out
+}
+
+pub fn expr_breg(dwarf_reg: u16, offset: i64) -> Vec<u8> {
+    let mut out = Vec::new();
+    if dwarf_reg < 32 {
+        out.push(DW_OP_BREG0 + (dwarf_reg as u8));
+    } else {
+        out.push(DW_OP_BREGX);
+        push_uleb128(&mut out, dwarf_reg as u64);
+    }
+    push_sleb128(&mut out, offset);
     out
 }
 
@@ -750,6 +764,14 @@ mod tests {
         let arm_x1 = dwarf_register_from_hw_encoding(DwarfTargetArch::Aarch64, 1).unwrap();
         assert_eq!(x64_rcx, 2);
         assert_eq!(arm_x1, 1);
+    }
+
+    #[test]
+    fn expr_breg_encodes_register_plus_offset() {
+        let expr = expr_breg(7, 0);
+        assert_eq!(expr, vec![DW_OP_BREG0 + 7, 0]);
+        let expr = expr_breg(35, -8);
+        assert_eq!(expr[0], DW_OP_BREGX);
     }
 
     #[test]
