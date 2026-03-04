@@ -1,6 +1,7 @@
 //! Regalloc edit infrastructure: edit moves, edge trampolines, block resolution.
 
 use super::*;
+use kajit_emit::aarch64::{self, Reg};
 
 impl Lowerer {
     pub(super) fn emit_edit_move(&mut self, from: Allocation, to: Allocation) {
@@ -20,7 +21,14 @@ impl Lowerer {
                 }
                 let from_r = from_reg.hw_enc() as u8;
                 let to_r = to_reg.hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch aarch64 ; mov X(to_r), X(from_r));
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(
+                        aarch64::Width::X64,
+                        Reg::from_raw(to_r),
+                        Reg::from_raw(from_r),
+                    )
+                    .expect("mov"),
+                );
             }
             (Some(from_reg), None, None, Some(to_stack)) => {
                 let off = self.spill_off(to_stack);
@@ -30,14 +38,20 @@ impl Lowerer {
                 if !self.emit_mov_x9_from_preg(from_reg) {
                     return;
                 }
-                dynasm!(self.ectx.ops ; .arch aarch64 ; str x9, [sp, #off]);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off)
+                        .expect("str"),
+                );
             }
             (None, Some(from_stack), Some(to_reg), None) => {
                 let off = self.spill_off(from_stack);
                 if self.emit_load_preg_from_stack(to_reg, off) {
                     return;
                 }
-                dynasm!(self.ectx.ops ; .arch aarch64 ; ldr x9, [sp, #off]);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off)
+                        .expect("ldr"),
+                );
                 let _ = self.emit_mov_preg_from_x9(to_reg);
             }
             (None, Some(from_stack), None, Some(to_stack)) => {
@@ -46,10 +60,13 @@ impl Lowerer {
                 }
                 let from_off = self.spill_off(from_stack);
                 let to_off = self.spill_off(to_stack);
-                dynasm!(self.ectx.ops
-                    ; .arch aarch64
-                    ; ldr x9, [sp, #from_off]
-                    ; str x9, [sp, #to_off]
+                self.ectx.emit.emit_word(
+                    aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, from_off)
+                        .expect("ldr"),
+                );
+                self.ectx.emit.emit_word(
+                    aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, to_off)
+                        .expect("str"),
                 );
             }
             _ => {}
