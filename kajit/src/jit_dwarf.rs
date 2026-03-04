@@ -10,12 +10,35 @@ pub struct JitDwarfSections {
     pub debug_line: Vec<u8>,
     pub debug_abbrev: Vec<u8>,
     pub debug_info: Vec<u8>,
+    pub debug_loc: Vec<u8>,
 }
 
 impl JitDwarfSections {
     pub fn is_empty(&self) -> bool {
-        self.debug_line.is_empty() && self.debug_abbrev.is_empty() && self.debug_info.is_empty()
+        self.debug_line.is_empty()
+            && self.debug_abbrev.is_empty()
+            && self.debug_info.is_empty()
+            && self.debug_loc.is_empty()
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfLocationRange {
+    pub start: u64,
+    pub end: u64,
+    pub expression: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfVariable {
+    pub name: String,
+    pub locations: Vec<DwarfLocationRange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DwarfTargetArch {
+    X86_64,
+    Aarch64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +46,7 @@ pub enum DwarfPrepError {
     InteriorNul {
         field: &'static str,
     },
+    UnsupportedTargetArch,
     SourceMapNotStrictlyIncreasing {
         previous_offset: u32,
         next_offset: u32,
@@ -53,17 +77,26 @@ const OPCODE_BASE: u8 = 13;
 const STANDARD_OPCODE_LENGTHS: [u8; 12] = [0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1];
 
 const DW_TAG_COMPILE_UNIT: u8 = 0x11;
+const DW_TAG_SUBPROGRAM: u8 = 0x2e;
+const DW_TAG_VARIABLE: u8 = 0x34;
+const DW_CHILDREN_YES: u8 = 0x01;
 const DW_CHILDREN_NO: u8 = 0x00;
+const DW_AT_LOCATION: u8 = 0x02;
 const DW_AT_NAME: u8 = 0x03;
 const DW_AT_STMT_LIST: u8 = 0x10;
 const DW_AT_LOW_PC: u8 = 0x11;
 const DW_AT_HIGH_PC: u8 = 0x12;
+const DW_AT_FRAME_BASE: u8 = 0x40;
 const DW_FORM_ADDR: u8 = 0x01;
 const DW_FORM_DATA8: u8 = 0x07;
 const DW_FORM_STRING: u8 = 0x08;
 const DW_FORM_SEC_OFFSET: u8 = 0x17;
+const DW_FORM_EXPRLOC: u8 = 0x18;
 const INFO_VERSION: u16 = 4;
 const ADDRESS_SIZE_64: u8 = 8;
+const DW_OP_REG0: u8 = 0x50;
+const DW_OP_REGX: u8 = 0x90;
+const DW_OP_FBREG: u8 = 0x91;
 
 /// Build DWARF sections for one JIT function.
 ///
@@ -77,6 +110,35 @@ pub fn build_jit_dwarf_sections(
     file_name: &str,
     directory: Option<&str>,
 ) -> Result<JitDwarfSections, DwarfPrepError> {
+    let target_arch = if cfg!(target_arch = "x86_64") {
+        DwarfTargetArch::X86_64
+    } else if cfg!(target_arch = "aarch64") {
+        DwarfTargetArch::Aarch64
+    } else {
+        return Err(DwarfPrepError::UnsupportedTargetArch);
+    };
+    build_jit_dwarf_sections_with_variables(
+        target_arch,
+        code_address,
+        code_size,
+        source_map,
+        file_name,
+        directory,
+        file_name,
+        &[],
+    )
+}
+
+pub fn build_jit_dwarf_sections_with_variables(
+    target_arch: DwarfTargetArch,
+    code_address: u64,
+    code_size: u64,
+    source_map: &[(u32, u32)],
+    file_name: &str,
+    directory: Option<&str>,
+    subprogram_name: &str,
+    variables: &[DwarfVariable],
+) -> Result<JitDwarfSections, DwarfPrepError> {
     if file_name.as_bytes().contains(&0) {
         return Err(DwarfPrepError::InteriorNul { field: "file_name" });
     }
@@ -85,6 +147,21 @@ pub fn build_jit_dwarf_sections(
             return Err(DwarfPrepError::InteriorNul { field: "directory" });
         }
     }
+    if subprogram_name.as_bytes().contains(&0) {
+        return Err(DwarfPrepError::InteriorNul {
+            field: "subprogram_name",
+        });
+    }
+    for variable in variables {
+        if variable.name.as_bytes().contains(&0) {
+            return Err(DwarfPrepError::InteriorNul {
+                field: "variable_name",
+            });
+        }
+    }
+
+    let (debug_loc, variable_loc_offsets) = build_debug_loc_section(variables);
+    let frame_base_expr = expr_reg(frame_base_register(target_arch));
 
     Ok(JitDwarfSections {
         debug_line: build_debug_line_section(
@@ -95,37 +172,110 @@ pub fn build_jit_dwarf_sections(
             directory,
         )?,
         debug_abbrev: build_debug_abbrev_section(),
-        debug_info: build_debug_info_section(code_address, code_size, file_name),
+        debug_info: build_debug_info_section(
+            code_address,
+            code_size,
+            file_name,
+            subprogram_name,
+            &frame_base_expr,
+            variables,
+            &variable_loc_offsets,
+        ),
+        debug_loc,
     })
 }
 
 pub fn build_debug_abbrev_section() -> Vec<u8> {
-    vec![
-        0x01, // abbrev code = 1
-        DW_TAG_COMPILE_UNIT,
-        DW_CHILDREN_NO,
-        DW_AT_STMT_LIST,
-        DW_FORM_SEC_OFFSET,
-        DW_AT_LOW_PC,
-        DW_FORM_ADDR,
-        DW_AT_HIGH_PC,
-        DW_FORM_DATA8,
-        DW_AT_NAME,
-        DW_FORM_STRING,
-        0x00,
-        0x00, // end attribute specs
-        0x00, // end abbrev table
-    ]
+    let mut out = Vec::new();
+    // Abbrev 1: compile unit (has children: subprogram DIE).
+    push_uleb128(&mut out, 1);
+    out.push(DW_TAG_COMPILE_UNIT);
+    out.push(DW_CHILDREN_YES);
+    out.push(DW_AT_STMT_LIST);
+    out.push(DW_FORM_SEC_OFFSET);
+    out.push(DW_AT_LOW_PC);
+    out.push(DW_FORM_ADDR);
+    out.push(DW_AT_HIGH_PC);
+    out.push(DW_FORM_DATA8);
+    out.push(DW_AT_NAME);
+    out.push(DW_FORM_STRING);
+    out.push(0);
+    out.push(0);
+
+    // Abbrev 2: subprogram (has children: variable DIEs).
+    push_uleb128(&mut out, 2);
+    out.push(DW_TAG_SUBPROGRAM);
+    out.push(DW_CHILDREN_YES);
+    out.push(DW_AT_NAME);
+    out.push(DW_FORM_STRING);
+    out.push(DW_AT_LOW_PC);
+    out.push(DW_FORM_ADDR);
+    out.push(DW_AT_HIGH_PC);
+    out.push(DW_FORM_DATA8);
+    out.push(DW_AT_FRAME_BASE);
+    out.push(DW_FORM_EXPRLOC);
+    out.push(0);
+    out.push(0);
+
+    // Abbrev 3: variable.
+    push_uleb128(&mut out, 3);
+    out.push(DW_TAG_VARIABLE);
+    out.push(DW_CHILDREN_NO);
+    out.push(DW_AT_NAME);
+    out.push(DW_FORM_STRING);
+    out.push(DW_AT_LOCATION);
+    out.push(DW_FORM_SEC_OFFSET);
+    out.push(0);
+    out.push(0);
+
+    // End abbrev table.
+    out.push(0);
+    out
 }
 
-pub fn build_debug_info_section(code_address: u64, code_size: u64, file_name: &str) -> Vec<u8> {
+pub fn build_debug_info_section(
+    code_address: u64,
+    code_size: u64,
+    file_name: &str,
+    subprogram_name: &str,
+    frame_base_expr: &[u8],
+    variables: &[DwarfVariable],
+    variable_loc_offsets: &[u32],
+) -> Vec<u8> {
+    assert_eq!(
+        variables.len(),
+        variable_loc_offsets.len(),
+        "each variable must have a matching .debug_loc offset"
+    );
+
     let mut die = Vec::new();
-    // Single compile unit DIE using abbreviation 1.
+    // Compile unit DIE (abbrev 1).
     push_uleb128(&mut die, 1);
     die.extend_from_slice(&0u32.to_le_bytes()); // DW_AT_stmt_list -> .debug_line offset 0
     die.extend_from_slice(&code_address.to_le_bytes()); // DW_AT_low_pc
     die.extend_from_slice(&code_size.to_le_bytes()); // DW_AT_high_pc as length (DW_FORM_data8)
     die.extend_from_slice(file_name.as_bytes()); // DW_AT_name
+    die.push(0);
+
+    // Subprogram DIE (abbrev 2) as a child of CU.
+    push_uleb128(&mut die, 2);
+    die.extend_from_slice(subprogram_name.as_bytes());
+    die.push(0);
+    die.extend_from_slice(&code_address.to_le_bytes()); // DW_AT_low_pc
+    die.extend_from_slice(&code_size.to_le_bytes()); // DW_AT_high_pc as length
+    push_uleb128(&mut die, frame_base_expr.len() as u64);
+    die.extend_from_slice(frame_base_expr);
+
+    // Variable DIEs (abbrev 3) as children of subprogram.
+    for (variable, loc_offset) in variables.iter().zip(variable_loc_offsets.iter().copied()) {
+        push_uleb128(&mut die, 3);
+        die.extend_from_slice(variable.name.as_bytes());
+        die.push(0);
+        die.extend_from_slice(&loc_offset.to_le_bytes()); // DW_AT_location -> .debug_loc offset
+    }
+
+    // End of subprogram children, then end of CU children.
+    die.push(0);
     die.push(0);
 
     let unit_length = 2u32 + 4u32 + 1u32 + (die.len() as u32);
@@ -136,6 +286,74 @@ pub fn build_debug_info_section(code_address: u64, code_size: u64, file_name: &s
     section.push(ADDRESS_SIZE_64);
     section.extend_from_slice(&die);
     section
+}
+
+pub fn build_debug_loc_section(variables: &[DwarfVariable]) -> (Vec<u8>, Vec<u32>) {
+    let mut section = Vec::<u8>::new();
+    let mut offsets = Vec::<u32>::with_capacity(variables.len());
+    for variable in variables {
+        offsets.push(section.len() as u32);
+        for loc in &variable.locations {
+            if loc.end <= loc.start {
+                continue;
+            }
+            section.extend_from_slice(&loc.start.to_le_bytes());
+            section.extend_from_slice(&loc.end.to_le_bytes());
+            section.extend_from_slice(&(loc.expression.len() as u16).to_le_bytes());
+            section.extend_from_slice(&loc.expression);
+        }
+        // End-of-list marker for one variable.
+        section.extend_from_slice(&0u64.to_le_bytes());
+        section.extend_from_slice(&0u64.to_le_bytes());
+    }
+    (section, offsets)
+}
+
+pub fn dwarf_register_from_hw_encoding(target_arch: DwarfTargetArch, hw_enc: u8) -> Option<u16> {
+    match target_arch {
+        DwarfTargetArch::X86_64 => Some(match hw_enc {
+            0 => 0,  // rax
+            1 => 2,  // rcx
+            2 => 1,  // rdx
+            3 => 3,  // rbx
+            4 => 7,  // rsp
+            5 => 6,  // rbp
+            6 => 4,  // rsi
+            7 => 5,  // rdi
+            8 => 8,  // r8
+            9 => 9,  // r9
+            10 => 10, // r10
+            11 => 11, // r11
+            12 => 12, // r12
+            13 => 13, // r13
+            14 => 14, // r14
+            15 => 15, // r15
+            _ => return None,
+        }),
+        DwarfTargetArch::Aarch64 => (hw_enc <= 31).then_some(hw_enc as u16),
+    }
+}
+
+pub fn frame_base_register(target_arch: DwarfTargetArch) -> u16 {
+    match target_arch {
+        DwarfTargetArch::X86_64 => 7, // rsp
+        DwarfTargetArch::Aarch64 => 29, // x29 (fp)
+    }
+}
+
+pub fn expr_reg(dwarf_reg: u16) -> Vec<u8> {
+    if dwarf_reg < 32 {
+        return vec![DW_OP_REG0 + (dwarf_reg as u8)];
+    }
+    let mut out = vec![DW_OP_REGX];
+    push_uleb128(&mut out, dwarf_reg as u64);
+    out
+}
+
+pub fn expr_fbreg(offset: i64) -> Vec<u8> {
+    let mut out = vec![DW_OP_FBREG];
+    push_sleb128(&mut out, offset);
+    out
 }
 
 pub fn build_debug_line_section(
@@ -424,20 +642,30 @@ mod tests {
     }
 
     #[test]
-    fn debug_abbrev_contains_compile_unit_abbrev() {
+    fn debug_abbrev_contains_cu_subprogram_variable_abbrevs() {
         let abbrev = build_debug_abbrev_section();
-        assert_eq!(
-            abbrev,
-            vec![
-                0x01, 0x11, 0x00, 0x10, 0x17, 0x11, 0x01, 0x12, 0x07, 0x03, 0x08, 0x00, 0x00,
-                0x00
-            ]
-        );
+        assert_eq!(abbrev[0], 0x01); // CU abbrev code
+        assert!(abbrev.contains(&DW_TAG_COMPILE_UNIT));
+        assert!(abbrev.contains(&DW_TAG_SUBPROGRAM));
+        assert!(abbrev.contains(&DW_TAG_VARIABLE));
+        assert_eq!(abbrev.last().copied(), Some(0));
     }
 
     #[test]
-    fn debug_info_contains_single_compile_unit_die() {
-        let info = build_debug_info_section(0x1234, 0x56, "decoder.ra");
+    fn debug_info_contains_cu_subprogram_and_variables() {
+        let variables = vec![DwarfVariable {
+            name: "my_struct.count".to_string(),
+            locations: vec![],
+        }];
+        let info = build_debug_info_section(
+            0x1234,
+            0x56,
+            "decoder.ra",
+            "kajit::decode::Example",
+            &expr_reg(frame_base_register(DwarfTargetArch::X86_64)),
+            &variables,
+            &[0],
+        );
 
         let unit_length = u32::from_le_bytes(info[0..4].try_into().unwrap()) as usize;
         assert_eq!(info.len(), 4 + unit_length);
@@ -455,15 +683,99 @@ mod tests {
         i += 8;
         let end = info[i..].iter().position(|b| *b == 0).unwrap();
         assert_eq!(&info[i..i + end], b"decoder.ra");
+        i += end + 1;
+
+        assert_eq!(parse_uleb(&info, &mut i), 2); // subprogram
+        let end = info[i..].iter().position(|b| *b == 0).unwrap();
+        assert_eq!(&info[i..i + end], b"kajit::decode::Example");
+        i += end + 1;
+        assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x1234);
+        i += 8;
+        assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x56);
+        i += 8;
+        let frame_base_len = parse_uleb(&info, &mut i) as usize;
+        assert!(frame_base_len > 0);
+        i += frame_base_len;
+
+        assert_eq!(parse_uleb(&info, &mut i), 3); // variable
+        let end = info[i..].iter().position(|b| *b == 0).unwrap();
+        assert_eq!(&info[i..i + end], b"my_struct.count");
+        i += end + 1;
+        assert_eq!(u32::from_le_bytes(info[i..i + 4].try_into().unwrap()), 0);
+        i += 4;
+
+        assert_eq!(info[i], 0); // end subprogram children
+        assert_eq!(info[i + 1], 0); // end CU children
+    }
+
+    #[test]
+    fn debug_loc_builds_per_variable_lists_with_terminators() {
+        let vars = vec![
+            DwarfVariable {
+                name: "a".to_string(),
+                locations: vec![
+                    DwarfLocationRange {
+                        start: 0x10,
+                        end: 0x20,
+                        expression: expr_reg(10),
+                    },
+                    DwarfLocationRange {
+                        start: 0x20,
+                        end: 0x40,
+                        expression: expr_fbreg(-24),
+                    },
+                ],
+            },
+            DwarfVariable {
+                name: "b".to_string(),
+                locations: vec![],
+            },
+        ];
+
+        let (loc, offsets) = build_debug_loc_section(&vars);
+        assert_eq!(offsets.len(), 2);
+        assert_eq!(offsets[0], 0);
+        assert!(offsets[1] > offsets[0]);
+        assert!(!loc.is_empty());
+
+        let first_start = u64::from_le_bytes(loc[0..8].try_into().unwrap());
+        let first_end = u64::from_le_bytes(loc[8..16].try_into().unwrap());
+        assert_eq!(first_start, 0x10);
+        assert_eq!(first_end, 0x20);
+    }
+
+    #[test]
+    fn register_mapping_is_arch_specific_at_runtime() {
+        let x64_rcx = dwarf_register_from_hw_encoding(DwarfTargetArch::X86_64, 1).unwrap();
+        let arm_x1 = dwarf_register_from_hw_encoding(DwarfTargetArch::Aarch64, 1).unwrap();
+        assert_eq!(x64_rcx, 2);
+        assert_eq!(arm_x1, 1);
     }
 
     #[test]
     fn build_jit_dwarf_sections_populates_all_sections() {
-        let sections =
-            build_jit_dwarf_sections(0x1000, 8, &[(0, 0)], "decoder.ra", Some("jit")).unwrap();
+        let sections = build_jit_dwarf_sections_with_variables(
+            DwarfTargetArch::X86_64,
+            0x1000,
+            8,
+            &[(0, 0)],
+            "decoder.ra",
+            Some("jit"),
+            "kajit::decode::Bools",
+            &[DwarfVariable {
+                name: "flag".to_string(),
+                locations: vec![DwarfLocationRange {
+                    start: 0x1000,
+                    end: 0x1004,
+                    expression: expr_reg(0),
+                }],
+            }],
+        )
+        .unwrap();
         assert!(!sections.debug_line.is_empty());
         assert!(!sections.debug_abbrev.is_empty());
         assert!(!sections.debug_info.is_empty());
+        assert!(!sections.debug_loc.is_empty());
         assert!(!sections.is_empty());
     }
 }
