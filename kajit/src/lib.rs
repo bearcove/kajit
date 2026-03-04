@@ -158,6 +158,20 @@ pub fn debug_ra_mir_human_text(
     scrub_volatile_intrinsic_addrs(&format!("{}", ra.human()))
 }
 
+/// Build decoder IR (after default pre-regalloc passes) and return the RA-MIR program.
+///
+/// This preserves real intrinsic function pointers and is intended for
+/// in-process debugging tools (e.g. differential checking).
+pub fn debug_ra_program(
+    shape: &'static facet::Shape,
+    ir_decoder: &dyn format::Decoder,
+) -> regalloc_mir::RaProgram {
+    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    compiler::run_default_passes_from_env(&mut func);
+    let linear = linearize::linearize(&mut func);
+    regalloc_mir::lower_linear_ir(&linear)
+}
+
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
 ///
 /// Intended for snapshot tests and debugging.
