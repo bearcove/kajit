@@ -942,6 +942,91 @@ pub fn encode_asr_imm(width: Width, rd: Reg, rn: Reg, shift: u8) -> Result<u32, 
     Ok(base | ((shift as u32) << 16) | (imms << 10) | (rn << 5) | rd)
 }
 
+pub fn encode_lsr_imm(width: Width, rd: Reg, rn: Reg, shift: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let (max_shift, base, imms) = match width {
+        Width::W32 => (31u8, 0x5300_0000u32, 31u32),
+        Width::X64 => (63u8, 0xD340_0000u32, 63u32),
+    };
+    if shift > max_shift {
+        return Err(EmitError::InvalidShiftAmount { width, amount: shift });
+    }
+    Ok(base | ((shift as u32) << 16) | (imms << 10) | (rn << 5) | rd)
+}
+
+pub fn encode_and_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    if imm == 0 || !imm.is_power_of_two() {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "and imm",
+            value: imm as i64,
+        });
+    }
+    let width_bits = match width {
+        Width::W32 => 32u32,
+        Width::X64 => 64u32,
+    };
+    let bit = imm.trailing_zeros();
+    if bit >= width_bits {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "and imm",
+            value: imm as i64,
+        });
+    }
+    if width == Width::W32 && (imm >> 32) != 0 {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "and imm",
+            value: imm as i64,
+        });
+    }
+    let n = if width == Width::X64 { 1u32 } else { 0u32 };
+    let immr = (width_bits - bit) % width_bits;
+    let imms = 0u32;
+    let base = match width {
+        Width::W32 => 0x1200_0000u32,
+        Width::X64 => 0x9200_0000u32,
+    };
+    Ok(base | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd)
+}
+
+pub fn encode_orr_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    if imm == 0 || !imm.is_power_of_two() {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "orr imm",
+            value: imm as i64,
+        });
+    }
+    let width_bits = match width {
+        Width::W32 => 32u32,
+        Width::X64 => 64u32,
+    };
+    let bit = imm.trailing_zeros();
+    if bit >= width_bits {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "orr imm",
+            value: imm as i64,
+        });
+    }
+    if width == Width::W32 && (imm >> 32) != 0 {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "orr imm",
+            value: imm as i64,
+        });
+    }
+    let n = if width == Width::X64 { 1u32 } else { 0u32 };
+    let immr = (width_bits - bit) % width_bits;
+    let imms = 0u32;
+    let base = match width {
+        Width::W32 => 0x3200_0000u32,
+        Width::X64 => 0xB200_0000u32,
+    };
+    Ok(base | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd)
+}
+
 pub fn encode_csel(
     width: Width,
     rd: Reg,
@@ -1135,6 +1220,37 @@ mod tests {
         assert_eq!(encode_sxtw(Reg::from_raw(18), Reg::from_raw(19)).unwrap(), 0x9340_7E72);
 
         assert_eq!(encode_blr(Reg::from_raw(20)).unwrap(), 0xD63F_0280);
+    }
+
+    #[test]
+    fn lsr_imm_w32() {
+        let w = encode_lsr_imm(Width::W32, Reg::X10, Reg::X9, 1).unwrap();
+        assert_eq!(w & 0x1f, 10);
+        assert_eq!((w >> 5) & 0x1f, 9);
+        assert_eq!((w >> 16) & 0x3f, 1);
+        assert_eq!((w >> 10) & 0x3f, 31);
+        assert_eq!(w >> 24, 0x53);
+    }
+
+    #[test]
+    fn and_imm_w32_bit0() {
+        let w = encode_and_imm(Width::W32, Reg::X11, Reg::X9, 1).unwrap();
+        assert_eq!(w & 0x1f, 11);
+        assert_eq!((w >> 5) & 0x1f, 9);
+    }
+
+    #[test]
+    fn orr_imm_w32_0x80() {
+        let w = encode_orr_imm(Width::W32, Reg::X9, Reg::X11, 0x80).unwrap();
+        assert_eq!(w & 0x1f, 9);
+        assert_eq!((w >> 5) & 0x1f, 11);
+    }
+
+    #[test]
+    fn orr_imm_x64_bit1() {
+        let w = encode_orr_imm(Width::X64, Reg::X13, Reg::X13, 2).unwrap();
+        assert_eq!(w & 0x1f, 13);
+        assert_eq!((w >> 5) & 0x1f, 13);
     }
 
     #[test]
