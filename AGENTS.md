@@ -71,10 +71,10 @@ Use `opts` stage to see RVSDG snapshots between each optimization pass.
 Debug JIT-compiled code with source-level stepping through RA-MIR listings:
 
 ```bash
-cargo nextest run --profile lldb -E 'test(=json::bool_true_false)'
+scripts/lldb-test.sh json::bool_true_false
 ```
 
-Set `KAJIT_DEBUG=1` to enable DWARF emission (the `lldb` profile does this automatically). This generates:
+Set `KAJIT_DEBUG=1` to enable DWARF emission (the helper script does this automatically). This generates:
 - RA-MIR listing files at `/tmp/kajit-debug/*.ra-mir`
 - DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` in the JIT ELF
 - GDB JIT interface registration so LLDB/GDB can discover the code

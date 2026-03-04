@@ -1071,10 +1071,12 @@ fn compile_linear_ir_decoder_with_options(
         .find_map(|op| match op {
             crate::linearize::LinearOp::FuncStart {
                 lambda_id, shape, ..
-            } if lambda_id.index() == 0 => Some(format!("fad::decode::{}", shape.type_identifier)),
+            } if lambda_id.index() == 0 => {
+                Some(format!("kajit::decode::{}", shape.type_identifier))
+            }
             _ => None,
         })
-        .unwrap_or_else(|| "fad::decode::<ir-root>".to_string());
+        .unwrap_or_else(|| "kajit::decode::<ir-root>".to_string());
     let symbol = crate::jit_debug::JitSymbolEntry {
         name: root_name.clone(),
         offset: entry,
@@ -1128,7 +1130,7 @@ pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> C
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
         core::mem::transmute(buf.code_ptr().add(entry))
     };
-    let root_name = "fad::decode::<ra-mir-text>";
+    let root_name = "kajit::decode::<ra-mir-text>";
     let symbol = crate::jit_debug::JitSymbolEntry {
         name: root_name.to_string(),
         offset: entry,
