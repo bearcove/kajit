@@ -1,6 +1,6 @@
 #![allow(clippy::useless_conversion)]
 
-use dynasmrt::{DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
+use kajit_emit::x64::{self, LabelId, Mem};
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
 use std::collections::BTreeMap;
 
@@ -18,7 +18,7 @@ mod edits;
 mod emit;
 
 pub(crate) struct FunctionCtx {
-    pub(crate) error_exit: DynamicLabel,
+    pub(crate) error_exit: LabelId,
     pub(crate) data_results: Vec<crate::ir::VReg>,
     pub(crate) lambda_id: crate::ir::LambdaId,
 }
@@ -36,19 +36,19 @@ pub(crate) struct LambdaEdgeEditMap {
 }
 
 pub(crate) struct EdgeTrampoline {
-    pub(crate) label: DynamicLabel,
-    pub(crate) target: DynamicLabel,
+    pub(crate) label: LabelId,
+    pub(crate) target: LabelId,
     pub(crate) moves: Vec<(Allocation, Allocation)>,
 }
 
 pub(crate) struct Lowerer {
     pub(crate) ectx: EmitCtx,
-    /// DynamicLabel for each block, indexed by (lambda_index, block_id).
-    pub(crate) block_labels: BTreeMap<(u32, u32), DynamicLabel>,
-    pub(crate) lambda_labels: Vec<DynamicLabel>,
+    /// LabelId for each block, indexed by (lambda_index, block_id).
+    pub(crate) block_labels: BTreeMap<(u32, u32), LabelId>,
+    pub(crate) lambda_labels: Vec<LabelId>,
     pub(crate) slot_base: u32,
     pub(crate) spill_base: u32,
-    pub(crate) entry: Option<dynasmrt::AssemblyOffset>,
+    pub(crate) entry: Option<u32>,
     pub(crate) current_func: Option<FunctionCtx>,
     pub(crate) const_vregs: Vec<Option<u64>>,
     pub(crate) edits_by_lambda: BTreeMap<u32, LambdaEditMap>,
@@ -58,7 +58,7 @@ pub(crate) struct Lowerer {
     pub(crate) forward_branch_blocks: BTreeMap<(u32, u32), u32>,
     pub(crate) allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
     pub(crate) return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
-    pub(crate) edge_trampoline_labels: BTreeMap<(u32, usize, usize), DynamicLabel>,
+    pub(crate) edge_trampoline_labels: BTreeMap<(u32, usize, usize), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
 }
@@ -113,7 +113,7 @@ impl Lowerer {
                 block_labels.insert(key, ectx.new_label());
             }
         }
-        let lambda_labels: Vec<DynamicLabel> = (0..=lambda_max).map(|_| ectx.new_label()).collect();
+        let lambda_labels: Vec<LabelId> = (0..=lambda_max).map(|_| ectx.new_label()).collect();
 
         let mut forward_branch_blocks = BTreeMap::<(u32, u32), u32>::new();
         for func in &program.funcs {
@@ -203,7 +203,7 @@ impl Lowerer {
         self.slot_base + (s.index() as u32) * 8
     }
 
-    pub(super) fn block_label(&self, lambda_id: u32, block_id: BlockId) -> DynamicLabel {
+    pub(super) fn block_label(&self, lambda_id: u32, block_id: BlockId) -> LabelId {
         self.block_labels[&(lambda_id, block_id.0)]
     }
 
@@ -243,10 +243,10 @@ impl Lowerer {
     fn emit_inst(&mut self, op: &LinearOp) {
         match op {
             LinearOp::Const { dst, value } => {
-                dynasm!(self.ectx.ops
-                    ; .arch x64
-                    ; mov r10, QWORD *value as i64
-                );
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_imm64(10, *value, buf))
+                    .expect("mov");
                 self.emit_store_def_r10(*dst, 0);
                 self.set_const(*dst, Some(*value));
             }
@@ -271,16 +271,25 @@ impl Lowerer {
             }
             LinearOp::AdvanceCursorBy { src } => {
                 self.emit_load_use_r10(*src, 0);
-                dynasm!(self.ectx.ops ; .arch x64 ; add r12, r10);
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_add_r64_r64(12, 10, buf))
+                    .expect("add");
             }
             LinearOp::SaveCursor { dst } => {
-                dynasm!(self.ectx.ops ; .arch x64 ; mov r10, r12);
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_r64(10, 12, buf))
+                    .expect("mov");
                 self.emit_store_def_r10(*dst, 0);
                 self.set_const(*dst, None);
             }
             LinearOp::RestoreCursor { src } => {
                 self.emit_load_use_r10(*src, 0);
-                dynasm!(self.ectx.ops ; .arch x64 ; mov r12, r10);
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_r64(12, 10, buf))
+                    .expect("mov");
             }
 
             LinearOp::WriteToField { src, offset, width } => {
@@ -301,11 +310,17 @@ impl Lowerer {
             LinearOp::WriteToSlot { slot, src } => {
                 self.emit_load_use_r10(*src, 0);
                 let off = self.slot_off(*slot) as i32;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], r10);
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: off }, 10, buf))
+                    .expect("mov");
             }
             LinearOp::ReadFromSlot { dst, slot } => {
                 let off = self.slot_off(*slot) as i32;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov r10, [rsp + off]);
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 4, disp: off }, buf))
+                    .expect("mov");
                 self.emit_store_def_r10(*dst, 0);
                 self.set_const(*dst, None);
             }

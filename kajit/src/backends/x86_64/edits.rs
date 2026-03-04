@@ -1,4 +1,5 @@
 use super::*;
+use kajit_emit::x64::{self, LabelId, Mem};
 
 impl Lowerer {
     pub(super) fn emit_edit_move(&mut self, from: Allocation, to: Allocation) {
@@ -12,12 +13,18 @@ impl Lowerer {
             (Some(from_reg), None, None, Some(to_stack)) => {
                 let off = self.spill_off(to_stack) as i32;
                 let enc = from_reg.hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov [rsp + off], Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: off }, enc, buf))
+                    .expect("mov");
             }
             (None, Some(from_stack), Some(to_reg), None) => {
                 let off = self.spill_off(from_stack) as i32;
                 let enc = to_reg.hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; mov Rq(enc), [rsp + off]);
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_m(enc, Mem { base: 4, disp: off }, buf))
+                    .expect("mov");
             }
             (None, Some(from_stack), None, Some(to_stack)) => {
                 if from_stack == to_stack {
@@ -25,11 +32,13 @@ impl Lowerer {
                 }
                 let from_off = self.spill_off(from_stack) as i32;
                 let to_off = self.spill_off(to_stack) as i32;
-                dynasm!(self.ectx.ops
-                    ; .arch x64
-                    ; mov r10, [rsp + from_off]
-                    ; mov [rsp + to_off], r10
-                );
+                self.ectx
+                    .emit
+                    .emit_with(|buf| {
+                        x64::encode_mov_r64_m(10, Mem { base: 4, disp: from_off }, buf)?;
+                        x64::encode_mov_m_r64(Mem { base: 4, disp: to_off }, 10, buf)
+                    })
+                    .expect("mov");
             }
             _ => {}
         }
@@ -128,8 +137,8 @@ impl Lowerer {
         &mut self,
         linear_op_index: usize,
         succ_index: usize,
-        actual_target: DynamicLabel,
-    ) -> DynamicLabel {
+        actual_target: LabelId,
+    ) -> LabelId {
         let Some(lambda_id) = self
             .current_func
             .as_ref()

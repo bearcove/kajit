@@ -1,4 +1,5 @@
 use super::*;
+use kajit_emit::x64::{self, LabelId, Mem};
 
 impl Lowerer {
     pub(super) fn emit_call_intrinsic_with_args(
@@ -16,10 +17,19 @@ impl Lowerer {
 
         self.flush_all_vregs();
 
-        dynasm!(self.ectx.ops
-            ; .arch x64
-            ; mov [r15 + CTX_INPUT_PTR as i32], r12
-        );
+        self.ectx
+            .emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR as i32,
+                    },
+                    12,
+                    buf,
+                )
+            })
+            .expect("mov");
 
         #[cfg(not(windows))]
         {
@@ -39,10 +49,16 @@ impl Lowerer {
             for (i, arg) in args.iter().copied().enumerate() {
                 self.push_intrinsic_arg(arg, i);
             }
-            dynasm!(self.ectx.ops ; .arch x64 ; mov rdi, r15);
+            self.ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_r64_r64(7, 15, buf))
+                .expect("mov");
             for i in (0..args.len()).rev() {
                 let enc = abi_regs[i].hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_pop_r64(enc, buf))
+                    .expect("pop");
             }
         }
 
@@ -62,27 +78,54 @@ impl Lowerer {
             for (i, arg) in args.iter().copied().enumerate() {
                 self.push_intrinsic_arg(arg, i);
             }
-            dynasm!(self.ectx.ops ; .arch x64 ; mov rcx, r15);
+            self.ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_r64_r64(1, 15, buf))
+                .expect("mov");
             for i in (0..args.len()).rev() {
                 let enc = abi_regs[i].hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_pop_r64(enc, buf))
+                    .expect("pop");
             }
         }
 
-        let ptr_val = fn_ptr as i64;
-        dynasm!(self.ectx.ops
-            ; .arch x64
-            ; mov rax, QWORD ptr_val
-            ; call rax
-        );
+        let ptr_val = fn_ptr as u64;
+        self.ectx
+            .emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(0, ptr_val, buf)?;
+                x64::encode_call_r64(0, buf)
+            })
+            .expect("call");
 
-        dynasm!(self.ectx.ops
-            ; .arch x64
-            ; mov r12, [r15 + CTX_INPUT_PTR as i32]
-            ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>error_exit
-        );
+        self.ectx
+            .emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("reload");
+        self.ectx
+            .emit
+            .emit_jnz_label(error_exit)
+            .expect("jnz error_exit");
     }
 
     // r[impl ir.intrinsics]
@@ -145,7 +188,10 @@ impl Lowerer {
             }
             for i in (0..args.len()).rev() {
                 let enc = abi_regs[i].hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_pop_r64(enc, buf))
+                    .expect("pop");
             }
         }
 
@@ -168,16 +214,21 @@ impl Lowerer {
             }
             for i in (0..args.len()).rev() {
                 let enc = abi_regs[i].hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_pop_r64(enc, buf))
+                    .expect("pop");
             }
         }
 
-        let ptr_val = fn_ptr as i64;
-        dynasm!(self.ectx.ops
-            ; .arch x64
-            ; mov rax, QWORD ptr_val
-            ; call rax
-        );
+        let ptr_val = fn_ptr as u64;
+        self.ectx
+            .emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_imm64(0, ptr_val, buf)?;
+                x64::encode_call_r64(0, buf)
+            })
+            .expect("call");
     }
 
     pub(super) fn emit_call_pure(
@@ -253,7 +304,7 @@ impl Lowerer {
 
     pub(super) fn emit_call_lambda(
         &mut self,
-        label: DynamicLabel,
+        label: LabelId,
         args: &[crate::ir::VReg],
         results: &[crate::ir::VReg],
     ) {
@@ -282,10 +333,19 @@ impl Lowerer {
             .expect("CallLambda outside function")
             .error_exit;
         self.flush_all_vregs();
-        dynasm!(self.ectx.ops
-            ; .arch x64
-            ; mov [r15 + CTX_INPUT_PTR as i32], r12
-        );
+        self.ectx
+            .emit
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR as i32,
+                    },
+                    12,
+                    buf,
+                )
+            })
+            .expect("mov");
 
         #[cfg(not(windows))]
         {
@@ -298,10 +358,19 @@ impl Lowerer {
             for (i, &_arg) in args.iter().enumerate() {
                 self.push_allocation_operand(i, i);
             }
-            dynasm!(self.ectx.ops ; .arch x64 ; lea rdi, [r14] ; mov rsi, r15);
+            self.ectx
+                .emit
+                .emit_with(|buf| {
+                    x64::encode_lea_r64_m(7, Mem { base: 14, disp: 0 }, buf)?;
+                    x64::encode_mov_r64_r64(6, 15, buf)
+                })
+                .expect("arg setup");
             for i in (0..args.len()).rev() {
                 let enc = abi_data_regs[i].hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_pop_r64(enc, buf))
+                    .expect("pop");
             }
         }
         #[cfg(windows)]
@@ -313,21 +382,52 @@ impl Lowerer {
             for (i, &_arg) in args.iter().enumerate() {
                 self.push_allocation_operand(i, i);
             }
-            dynasm!(self.ectx.ops ; .arch x64 ; lea rcx, [r14] ; mov rdx, r15);
+            self.ectx
+                .emit
+                .emit_with(|buf| {
+                    x64::encode_lea_r64_m(1, Mem { base: 14, disp: 0 }, buf)?;
+                    x64::encode_mov_r64_r64(2, 15, buf)
+                })
+                .expect("arg setup");
             for i in (0..args.len()).rev() {
                 let enc = abi_data_regs[i].hw_enc() as u8;
-                dynasm!(self.ectx.ops ; .arch x64 ; pop Rq(enc));
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_pop_r64(enc, buf))
+                    .expect("pop");
             }
         }
 
-        dynasm!(self.ectx.ops ; .arch x64 ; call =>label);
-        dynasm!(self.ectx.ops
-            ; .arch x64
-            ; mov r12, [r15 + CTX_INPUT_PTR as i32]
-            ; mov r10d, [r15 + CTX_ERROR_CODE as i32]
-            ; test r10d, r10d
-            ; jnz =>error_exit
-        );
+        self.ectx
+            .emit
+            .emit_call_label(label)
+            .expect("call label");
+        self.ectx
+            .emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_test_r32_r32(10, 10, buf)
+            })
+            .expect("reload");
+        self.ectx
+            .emit
+            .emit_jnz_label(error_exit)
+            .expect("jnz error_exit");
 
         let rax = PReg::new(0, RegClass::Int);
         let rdx = PReg::new(2, RegClass::Int);

@@ -4,8 +4,8 @@ use crate::regalloc_mir::RaProgram;
 
 #[cfg(target_arch = "x86_64")]
 pub struct LinearBackendResult {
-    pub buf: dynasmrt::ExecutableBuffer,
-    pub entry: dynasmrt::AssemblyOffset,
+    pub buf: kajit_emit::x64::FinalizedEmission,
+    pub entry: u32,
     pub source_map: Option<kajit_emit::SourceMap>,
 }
 
