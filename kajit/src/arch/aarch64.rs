@@ -3878,40 +3878,40 @@ impl EmitCtx {
     pub fn emit_jit_f64_parse(&mut self, offset: u32) {
         let error_exit = self.error_exit;
 
-        let l_ws = self.ops.new_dynamic_label();
-        let l_ws_done = self.ops.new_dynamic_label();
-        let l_no_sign = self.ops.new_dynamic_label();
-        let l_skip_lz = self.ops.new_dynamic_label();
-        let l_skip_lz_end = self.ops.new_dynamic_label();
-        let l_int_loop = self.ops.new_dynamic_label();
-        let l_int_done = self.ops.new_dynamic_label();
-        let l_int_ovf = self.ops.new_dynamic_label();
-        let l_int_ovf_end = self.ops.new_dynamic_label();
-        let l_no_dot = self.ops.new_dynamic_label();
-        let l_frac_lz = self.ops.new_dynamic_label();
-        let l_frac_lz_end = self.ops.new_dynamic_label();
-        let l_frac_loop = self.ops.new_dynamic_label();
-        let l_frac_done = self.ops.new_dynamic_label();
-        let l_frac_ovf = self.ops.new_dynamic_label();
-        let l_frac_ovf_end = self.ops.new_dynamic_label();
-        let l_no_exp = self.ops.new_dynamic_label();
-        let l_exp_pos = self.ops.new_dynamic_label();
-        let l_exp_loop = self.ops.new_dynamic_label();
-        let l_exp_done = self.ops.new_dynamic_label();
-        let l_zero = self.ops.new_dynamic_label();
-        let l_exact_int = self.ops.new_dynamic_label();
-        let l_uscale = self.ops.new_dynamic_label();
-        let l_pos_overflow = self.ops.new_dynamic_label();
-        let l_neg_underflow = self.ops.new_dynamic_label();
-        let l_need_lo_mul = self.ops.new_dynamic_label();
-        let l_after_lo_mul = self.ops.new_dynamic_label();
-        let l_pack_normal = self.ops.new_dynamic_label();
-        let l_pack_inf = self.ops.new_dynamic_label();
-        let l_apply_sign = self.ops.new_dynamic_label();
-        let l_done = self.ops.new_dynamic_label();
-        let l_skip_cold = self.ops.new_dynamic_label();
-        let l_err_num = self.ops.new_dynamic_label();
-        let l_err_eof = self.ops.new_dynamic_label();
+        let l_ws = self.emit.new_label();
+        let l_ws_done = self.emit.new_label();
+        let l_no_sign = self.emit.new_label();
+        let l_skip_lz = self.emit.new_label();
+        let l_skip_lz_end = self.emit.new_label();
+        let l_int_loop = self.emit.new_label();
+        let l_int_done = self.emit.new_label();
+        let l_int_ovf = self.emit.new_label();
+        let l_int_ovf_end = self.emit.new_label();
+        let l_no_dot = self.emit.new_label();
+        let l_frac_lz = self.emit.new_label();
+        let l_frac_lz_end = self.emit.new_label();
+        let l_frac_loop = self.emit.new_label();
+        let l_frac_done = self.emit.new_label();
+        let l_frac_ovf = self.emit.new_label();
+        let l_frac_ovf_end = self.emit.new_label();
+        let l_no_exp = self.emit.new_label();
+        let l_exp_pos = self.emit.new_label();
+        let l_exp_loop = self.emit.new_label();
+        let l_exp_done = self.emit.new_label();
+        let l_zero = self.emit.new_label();
+        let l_exact_int = self.emit.new_label();
+        let l_uscale = self.emit.new_label();
+        let l_pos_overflow = self.emit.new_label();
+        let l_neg_underflow = self.emit.new_label();
+        let l_need_lo_mul = self.emit.new_label();
+        let l_after_lo_mul = self.emit.new_label();
+        let l_pack_normal = self.emit.new_label();
+        let l_pack_inf = self.emit.new_label();
+        let l_apply_sign = self.emit.new_label();
+        let l_done = self.emit.new_label();
+        let l_skip_cold = self.emit.new_label();
+        let l_err_num = self.emit.new_label();
+        let l_err_eof = self.emit.new_label();
 
         let error_code_invalid = ErrorCode::InvalidJsonNumber as u32;
         let error_code_eof = ErrorCode::UnexpectedEof as u32;
@@ -3926,412 +3926,949 @@ impl EmitCtx {
         let LOG2_10_HI = (jit_f64::LOG2_10_NUM as u32) >> 16;
 
         // ── Whitespace skip ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; =>l_ws
-            ; cmp x19, x20
-            ; b.hs =>l_ws_done
-            ; ldrb w8, [x19]
-            ; cmp w8, #0x20
-            ; b.eq #20
-            ; cmp w8, #0x09
-            ; b.lo =>l_ws_done
-            ; cmp w8, #0x0d
-            ; b.hi =>l_ws_done
-            ; add x19, x19, #1
-            ; b =>l_ws
-            ; =>l_ws_done
+        self.emit.bind_label(l_ws).expect("bind");
+        self.emit.emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_ws_done)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
         );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x20, false).expect("cmp"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_b_cond(aarch64::Condition::Eq, 5).expect("b.eq"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x09, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Lo, l_ws_done)
+            .expect("b.lo");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x0d, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hi, l_ws_done)
+            .expect("b.hi");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit
+            .emit_b_label(l_ws)
+            .expect("b");
+        self.emit.bind_label(l_ws_done).expect("bind");
 
         // ── Sign ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; cmp x19, x20
-            ; b.hs =>l_err_eof
-            ; mov x0, #0
-            ; ldrb w8, [x19]
-            ; cmp w8, #0x2d
-            ; b.ne =>l_no_sign
-            ; mov x0, #1
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_err_eof
-            ; ldrb w8, [x19]
-            ; =>l_no_sign
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
         );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_err_eof)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X0, 0, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x2d, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_no_sign)
+            .expect("b.ne");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X0, 1, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_err_eof)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit.bind_label(l_no_sign).expect("bind");
 
         // ── Digit extraction ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x9, #0
-            ; mov x10, #0
-            ; mov x11, #0
-            ; mov x12, #0
-            ; mov x13, #0
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X9, 0, 0).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X10, 0, 0).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X11, 0, 0).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X12, 0, 0).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X13, 0, 0).expect("mov"));
 
-            // Leading integer zeros
-            ; =>l_skip_lz
-            ; cmp w8, #0x30
-            ; b.ne =>l_skip_lz_end
-            ; orr x13, x13, #2
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_skip_lz_end
-            ; ldrb w8, [x19]
-            ; b =>l_skip_lz
-            ; =>l_skip_lz_end
-
-            // Integer digit loop
-            ; =>l_int_loop
-            ; sub w1, w8, #0x30
-            ; cmp w1, #9
-            ; b.hi =>l_int_done
-            ; orr x13, x13, #2
-            ; cmp x10, #19
-            ; b.hs =>l_int_ovf
-            ; mov x2, #10
-            ; madd x9, x9, x2, x1
-            ; add x10, x10, #1
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_int_done
-            ; ldrb w8, [x19]
-            ; b =>l_int_loop
-
-            ; =>l_int_ovf
-            ; add x12, x12, #1
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_int_ovf_end
-            ; ldrb w8, [x19]
-            ; sub w1, w8, #0x30
-            ; cmp w1, #9
-            ; b.ls =>l_int_ovf
-            ; =>l_int_ovf_end
-            ; =>l_int_done
+        // Leading integer zeros
+        self.emit.bind_label(l_skip_lz).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x30, false).expect("cmp"),
         );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_skip_lz_end)
+            .expect("b.ne");
+        self.emit
+            .emit_word(aarch64::encode_orr_imm(aarch64::Width::X64, Reg::X13, Reg::X13, 2).expect("orr"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_skip_lz_end)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit
+            .emit_b_label(l_skip_lz)
+            .expect("b");
+        self.emit.bind_label(l_skip_lz_end).expect("bind");
+
+        // Integer digit loop
+        self.emit.bind_label(l_int_loop).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::W32, Reg::X1, Reg::X8, 0x30, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X1, 9, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hi, l_int_done)
+            .expect("b.hi");
+        self.emit
+            .emit_word(aarch64::encode_orr_imm(aarch64::Width::X64, Reg::X13, Reg::X13, 2).expect("orr"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X10, 19, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_int_ovf)
+            .expect("b.hs");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, 10, 0).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_madd(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X2, Reg::X1).expect("madd"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X10, Reg::X10, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_int_done)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit
+            .emit_b_label(l_int_loop)
+            .expect("b");
+
+        self.emit.bind_label(l_int_ovf).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X12, Reg::X12, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_int_ovf_end)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::W32, Reg::X1, Reg::X8, 0x30, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X1, 9, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ls, l_int_ovf)
+            .expect("b.ls");
+        self.emit
+            .emit_b_label(l_int_ovf_end)
+            .expect("b");
+        self.emit.bind_label(l_int_ovf_end).expect("bind");
+        self.emit.bind_label(l_int_done).expect("bind");
 
         // ── Decimal point ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; cmp x19, x20
-            ; b.hs =>l_no_dot
-            ; cmp w8, #0x2e
-            ; b.ne =>l_no_dot
-            ; orr x13, x13, #1
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_no_dot
-            ; ldrb w8, [x19]
-
-            ; cbnz x10, =>l_frac_lz_end
-            ; =>l_frac_lz
-            ; cmp w8, #0x30
-            ; b.ne =>l_frac_lz_end
-            ; orr x13, x13, #2
-            ; add x11, x11, #1
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_frac_lz_end
-            ; ldrb w8, [x19]
-            ; b =>l_frac_lz
-            ; =>l_frac_lz_end
-
-            ; =>l_frac_loop
-            ; sub w1, w8, #0x30
-            ; cmp w1, #9
-            ; b.hi =>l_frac_done
-            ; orr x13, x13, #2
-            ; cmp x10, #19
-            ; b.hs =>l_frac_ovf
-            ; mov x2, #10
-            ; madd x9, x9, x2, x1
-            ; add x10, x10, #1
-            ; add x11, x11, #1
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_frac_done
-            ; ldrb w8, [x19]
-            ; b =>l_frac_loop
-
-            ; =>l_frac_ovf
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_frac_ovf_end
-            ; ldrb w8, [x19]
-            ; sub w1, w8, #0x30
-            ; cmp w1, #9
-            ; b.ls =>l_frac_ovf
-            ; =>l_frac_ovf_end
-            ; =>l_frac_done
-            ; =>l_no_dot
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
         );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_no_dot)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x2e, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_no_dot)
+            .expect("b.ne");
+        self.emit
+            .emit_word(aarch64::encode_orr_imm(aarch64::Width::X64, Reg::X13, Reg::X13, 1).expect("orr"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_no_dot)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+
+        self.emit
+            .emit_cbnz_label(aarch64::Width::X64, Reg::X10, l_frac_lz_end)
+            .expect("cbnz");
+        self.emit.bind_label(l_frac_lz).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x30, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_frac_lz_end)
+            .expect("b.ne");
+        self.emit
+            .emit_word(aarch64::encode_orr_imm(aarch64::Width::X64, Reg::X13, Reg::X13, 2).expect("orr"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X11, Reg::X11, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_frac_lz_end)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit
+            .emit_b_label(l_frac_lz)
+            .expect("b");
+        self.emit.bind_label(l_frac_lz_end).expect("bind");
+
+        self.emit.bind_label(l_frac_loop).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::W32, Reg::X1, Reg::X8, 0x30, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X1, 9, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hi, l_frac_done)
+            .expect("b.hi");
+        self.emit
+            .emit_word(aarch64::encode_orr_imm(aarch64::Width::X64, Reg::X13, Reg::X13, 2).expect("orr"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X10, 19, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_frac_ovf)
+            .expect("b.hs");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, 10, 0).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_madd(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X2, Reg::X1).expect("madd"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X10, Reg::X10, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X11, Reg::X11, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_frac_done)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit
+            .emit_b_label(l_frac_loop)
+            .expect("b");
+
+        self.emit.bind_label(l_frac_ovf).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_frac_ovf_end)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::W32, Reg::X1, Reg::X8, 0x30, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X1, 9, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ls, l_frac_ovf)
+            .expect("b.ls");
+        self.emit
+            .emit_b_label(l_frac_ovf_end)
+            .expect("b");
+        self.emit.bind_label(l_frac_ovf_end).expect("bind");
+        self.emit.bind_label(l_frac_done).expect("bind");
+        self.emit
+            .emit_b_label(l_no_dot)
+            .expect("b");
 
         // ── Validation ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; tst x13, #2
-            ; b.eq =>l_err_num
-        );
+        self.emit
+            .emit_word(aarch64::encode_tst_imm(aarch64::Width::X64, Reg::X13, 2).expect("tst"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, l_err_num)
+            .expect("b.eq");
 
         // ── Exponent ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x14, #0
-            ; cmp x19, x20
-            ; b.hs =>l_no_exp
-            ; cmp w8, #0x65
-            ; b.eq #8
-            ; cmp w8, #0x45
-            ; b.ne =>l_no_exp
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_err_num
-            ; ldrb w8, [x19]
-            ; mov x15, #0
-            ; cmp w8, #0x2d
-            ; b.ne =>l_exp_pos
-            ; mov x15, #1
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_err_num
-            ; ldrb w8, [x19]
-            ; b =>l_exp_loop
-            ; =>l_exp_pos
-            ; cmp w8, #0x2b
-            ; b.ne =>l_exp_loop
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_err_num
-            ; ldrb w8, [x19]
-
-            // Validate first exponent digit
-            ; sub w1, w8, #0x30
-            ; cmp w1, #9
-            ; b.hi =>l_err_num       // bare 'e'/'e+'/etc
-
-            ; =>l_exp_loop
-            ; sub w1, w8, #0x30
-            ; cmp w1, #9
-            ; b.hi =>l_exp_done
-            ; mov x2, #10
-            ; madd x14, x14, x2, x1
-            ; mov x2, #9999
-            ; cmp x14, x2
-            ; csel x14, x2, x14, hi
-            ; add x19, x19, #1
-            ; cmp x19, x20
-            ; b.hs =>l_exp_done
-            ; ldrb w8, [x19]
-            ; b =>l_exp_loop
-
-            ; =>l_exp_done
-            ; cbz x15, #8
-            ; neg x14, x14
-            ; =>l_no_exp
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X14, 0, 0).expect("mov"),
         );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_no_exp)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x65, false).expect("cmp"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_b_cond(aarch64::Condition::Eq, 2).expect("b.eq"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x45, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_no_exp)
+            .expect("b.ne");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_err_num)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X15, 0, 0).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x2d, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_exp_pos)
+            .expect("b.ne");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X15, 1, 0).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_err_num)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit
+            .emit_b_label(l_exp_loop)
+            .expect("b");
+
+        self.emit.bind_label(l_exp_pos).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X8, 0x2b, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_exp_loop)
+            .expect("b.ne");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_err_num)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+
+        // Validate first exponent digit
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::W32, Reg::X1, Reg::X8, 0x30, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X1, 9, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hi, l_err_num)
+            .expect("b.hi");
+
+        self.emit.bind_label(l_exp_loop).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::W32, Reg::X1, Reg::X8, 0x30, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X1, 9, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hi, l_exp_done)
+            .expect("b.hi");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, 10, 0).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_madd(aarch64::Width::X64, Reg::X14, Reg::X14, Reg::X2, Reg::X1).expect("madd"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, 9999, 0).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X14, 9999, false).expect("cmp"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_csel(
+                aarch64::Width::X64,
+                Reg::X14,
+                Reg::X2,
+                Reg::X14,
+                aarch64::Condition::Hi,
+            ).expect("csel"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_exp_done)
+            .expect("b.hs");
+        self.emit.emit_word(
+            aarch64::encode_ldrb_imm(Reg::X8, Reg::X19, 0).expect("ldrb"),
+        );
+        self.emit
+            .emit_b_label(l_exp_loop)
+            .expect("b");
+
+        self.emit.bind_label(l_exp_done).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X15, 0, false).expect("cmp"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_b_cond(aarch64::Condition::Eq, 2).expect("b.eq"));
+        self.emit
+            .emit_word(aarch64::encode_neg(aarch64::Width::X64, Reg::X14, Reg::X14).expect("neg"));
+        self.emit.bind_label(l_no_exp).expect("bind");
 
         // ── Compute p, dispatch ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; add x12, x14, x12     // p = exp + dropped
-            ; sub x12, x12, x11     // p -= frac_digits
+        self.emit.emit_word(
+            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X12, Reg::X14, Reg::X12).expect("add"),
+        ); // p = exp + dropped
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X12, Reg::X12, Reg::X11).expect("sub"),
+        ); // p -= frac_digits
 
-            ; cbz x9, =>l_zero
+        self.emit
+            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X9, 0, false).expect("cmp"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, l_zero)
+            .expect("b.eq");
 
-            ; tst x13, #1           // has_dot?
-            ; b.ne =>l_uscale
-            ; cbnz x14, =>l_uscale  // exp != 0?
-            ; mov x1, #1
-            ; lsl x1, x1, #53
-            ; cmp x9, x1
-            ; b.hs =>l_uscale
-
-            ; =>l_exact_int
-            ; ucvtf d0, x9
-            ; fmov x7, d0
-            ; b =>l_apply_sign
-
-            ; =>l_zero
-            ; mov x7, #0
-            ; b =>l_apply_sign
+        self.emit
+            .emit_word(aarch64::encode_tst_imm(aarch64::Width::X64, Reg::X13, 1).expect("tst"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_uscale)
+            .expect("b.ne");
+        self.emit
+            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X14, 0, false).expect("cmp"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, l_uscale)
+            .expect("b.ne");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X1, 1, 0).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X1, Reg::X1, 53).expect("lsl"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::X1).expect("cmp"),
         );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_uscale)
+            .expect("b.hs");
+
+        self.emit.bind_label(l_exact_int).expect("bind");
+        self.emit
+            .emit_word(aarch64::encode_ucvtf_d_x(0, Reg::X9).expect("ucvtf"));
+        self.emit
+            .emit_word(aarch64::encode_fmov_x_d(Reg::X7, 0).expect("fmov"));
+        self.emit
+            .emit_b_label(l_apply_sign)
+            .expect("b");
+
+        self.emit.bind_label(l_zero).expect("bind");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X7, 0, 0).expect("mov"));
+        self.emit
+            .emit_b_label(l_apply_sign)
+            .expect("b");
 
         // ── uscale ──
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; =>l_uscale
+        self.emit.bind_label(l_uscale).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X12, 347, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Gt, l_pos_overflow)
+            .expect("b.gt");
+        self.emit
+            .emit_word(aarch64::encode_cmn_imm(aarch64::Width::W32, Reg::X12, 348, false).expect("cmn"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Lt, l_neg_underflow)
+            .expect("b.lt");
 
-            // Range check p (signed comparison)
-            ; cmp w12, #347
-            ; b.gt =>l_pos_overflow
-            ; cmn w12, #348
-            ; b.lt =>l_neg_underflow
+        // lp = (p * 108853) >> 15  → x14
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X1, LOG2_10_LO as u16, 0)
+                .expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::W32, Reg::X1, LOG2_10_HI as u16, 16)
+                .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_smull(Reg::X14, Reg::X12, Reg::X1).expect("smull"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_asr_imm(aarch64::Width::X64, Reg::X14, Reg::X14, 15).expect("asr"),
+        );
 
-            // lp = (p * 108853) >> 15  → x14
-            ; movz w1, LOG2_10_LO
-            ; movk w1, LOG2_10_HI, lsl #16
-            ; smull x14, w12, w1
-            ; asr x14, x14, #15         // x14 = lp
+        // clz → x4
+        self.emit.emit_word(
+            aarch64::encode_clz(aarch64::Width::X64, Reg::X4, Reg::X9).expect("clz"),
+        );
 
-            // clz → x4
-            ; clz x4, x9
+        // e = min(1074, clz - 11 - lp) → x6
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X6, Reg::X4, 11, false).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X6, Reg::X6, Reg::X14).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X1, 1074, 0).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X6, Reg::X1).expect("cmp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_csel(
+                aarch64::Width::X64,
+                Reg::X6,
+                Reg::X1,
+                Reg::X6,
+                aarch64::Condition::Gt,
+            )
+            .expect("csel"),
+        );
 
-            // e = min(1074, clz - 11 - lp) → x6
-            ; sub x6, x4, #11
-            ; sub x6, x6, x14
-            ; mov x1, #1074
-            ; cmp x6, x1
-            ; csel x6, x1, x6, gt
+        // s = clz - e - lp - 3 → x3
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X3, Reg::X4, Reg::X6).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X3, Reg::X3, Reg::X14).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X3, Reg::X3, 3, false).expect("sub"),
+        );
 
-            // s = clz - e - lp - 3 → x3
-            ; sub x3, x4, x6            // clz - e
-            ; sub x3, x3, x14           // clz - e - lp
-            ; sub x3, x3, #3            // s
+        // left-justify: x5 = d << clz
+        self.emit.emit_word(
+            aarch64::encode_lsl_reg(aarch64::Width::X64, Reg::X5, Reg::X9, Reg::X4).expect("lsl"),
+        );
 
-            // left-justify: x5 = d << clz
-            ; lsl x5, x9, x4
+        // Table lookup: index = p + 348
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::W32, Reg::X8, Reg::X12, 348, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X1, tab_lo as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X1, tab_hi16 as u16, 16).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X1, tab_hi32 as u16, 32).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X1, tab_hi48 as u16, 48).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X8, Reg::X8, 4).expect("lsl"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X1, Reg::X1, Reg::X8).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X1, Reg::X2, Reg::X1, 0).expect("ldp"),
+        );
 
-            // Table lookup: index = p + 348
-            ; add w8, w12, #348
-            ; movz x1, #tab_lo
-            ; movk x1, #tab_hi16, lsl #16
-            ; movk x1, #tab_hi32, lsl #32
-            ; movk x1, #tab_hi48, lsl #48
-            ; add x1, x1, x8, lsl #4    // &table[idx]
-            ; ldp x1, x2, [x1]          // x1=pm_hi, x2=pm_lo
+        // mul128(x_left, pm_hi): hi=umulh, mid=mul
+        self.emit.emit_word(
+            aarch64::encode_umulh(Reg::X4, Reg::X5, Reg::X1).expect("umulh"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mul(aarch64::Width::X64, Reg::X8, Reg::X5, Reg::X1).expect("mul"),
+        );
 
-            // mul128(x_left, pm_hi): hi=umulh, mid=mul
-            ; umulh x4, x5, x1          // x4 = hi
-            ; mul x8, x5, x1            // x8 = mid
+        // mask = (1 << (s & 63)) - 1
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X15, 63, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_and_reg(
+                aarch64::Width::X64,
+                Reg::X14,
+                Reg::X3,
+                Reg::X15,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("and"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X15, 1, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsl_reg(aarch64::Width::X64, Reg::X15, Reg::X15, Reg::X14)
+                .expect("lsl"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X15, Reg::X15, 1, false).expect("sub"),
+        );
 
-            // mask = (1 << (s & 63)) - 1
-            ; and x14, x3, #63
-            ; mov x15, #1
-            ; lsl x15, x15, x14
-            ; sub x15, x15, #1          // x15 = mask
+        // if hi & mask == 0: need second multiply
+        self.emit.emit_word(
+            aarch64::encode_and_reg(
+                aarch64::Width::X64,
+                Reg::X15,
+                Reg::X4,
+                Reg::X15,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("and"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X15, 0, false).expect("cmp"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, l_need_lo_mul)
+            .expect("b.eq");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X7, 1, 0).expect("mov"));
+        self.emit.emit_b_label(l_after_lo_mul).expect("b");
 
-            // if hi & mask == 0: need second multiply
-            ; tst x4, x15
-            ; b.eq =>l_need_lo_mul
-            ; mov x7, #1                // sticky = 1
-            ; b =>l_after_lo_mul
+        self.emit.bind_label(l_need_lo_mul).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_umulh(Reg::X14, Reg::X5, Reg::X2).expect("umulh"),
+        );
+        // sticky = (mid - mid2 > 1) ? 1 : 0
+        self.emit.emit_word(
+            aarch64::encode_subs_reg(
+                aarch64::Width::X64,
+                Reg::X15,
+                Reg::X8,
+                Reg::X14,
+            )
+            .expect("subs"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X15, 1, false).expect("cmp"));
+        self.emit
+            .emit_word(aarch64::encode_cset(aarch64::Width::X64, Reg::X7, aarch64::Condition::Hi).expect("cset"));
+        // if mid < mid2: hi -= 1
+        self.emit
+            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X8, Reg::X14).expect("cmp"));
+        self.emit
+            .emit_word(aarch64::encode_b_cond(aarch64::Condition::Hs, 2).expect("b.hs"));
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X4, Reg::X4, 1, false).expect("sub"),
+        );
 
-            ; =>l_need_lo_mul
-            ; umulh x14, x5, x2         // x14 = mid2
-            // sticky = (mid - mid2 > 1) ? 1 : 0
-            ; subs x15, x8, x14         // x15 = mid - mid2
-            ; cmp x15, #1
-            ; cset x7, hi               // x7 = sticky
-            // if mid < mid2: hi -= 1
-            ; cmp x8, x14
-            ; b.hs #8                   // skip if mid >= mid2
-            ; sub x4, x4, #1
-
-            ; =>l_after_lo_mul
-
-            // top = (s >= 64) ? 0 : (hi >> s)
-            ; lsr x14, x4, x3           // x14 = hi >> s
-            ; cmp x3, #64
-            ; csel x14, xzr, x14, hs    // x14 = 0 if s >= 64
-
-            // u = top | sticky
-            ; orr x7, x14, x7
+        self.emit.bind_label(l_after_lo_mul).expect("bind");
+        // top = (s >= 64) ? 0 : (hi >> s)
+        self.emit.emit_word(
+            aarch64::encode_lsr_reg(aarch64::Width::X64, Reg::X14, Reg::X4, Reg::X3).expect("lsr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X3, 64, false).expect("cmp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_csel(
+                aarch64::Width::X64,
+                Reg::X14,
+                Reg::XZR,
+                Reg::X14,
+                aarch64::Condition::Hs,
+            )
+            .expect("csel"),
+        );
+        // u = top | sticky
+        self.emit.emit_word(
+            aarch64::encode_orr_reg(
+                aarch64::Width::X64,
+                Reg::X7,
+                Reg::X14,
+                Reg::X7,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("orr"),
         );
 
         // ── Overflow check + round + pack ──
-        dynasm!(self.ops
-            ; .arch aarch64
-
-            // unmin(2^53) = (1<<55) - 2 = 0x007FFFFFFFFFFFFFFE
-            ; movz x1, #0xFFFE
-            ; movk x1, #0xFFFF, lsl #16
-            ; movk x1, #0xFFFF, lsl #32
-            ; movk x1, #0x007F, lsl #48
-            ; cmp x7, x1
-            ; b.lo #20                   // skip overflow adjust (4 insns = 16 bytes + 4)
-            ; lsr x14, x7, #1
-            ; and x15, x7, #1
-            ; orr x7, x14, x15          // u = (u>>1)|(u&1)
-            ; sub x6, x6, #1            // e -= 1
-
-            // Round: (u + 1 + ((u >> 2) & 1)) >> 2
-            ; lsr x1, x7, #2
-            ; and x1, x1, #1
-            ; add x7, x7, #1
-            ; add x7, x7, x1
-            ; lsr x7, x7, #2            // x7 = rounded mantissa
-
-            // Pack: check bit 52
-            ; mov x1, #1
-            ; lsl x1, x1, #52
-            ; tst x7, x1
-            ; b.eq =>l_apply_sign        // subnormal: bits = x7
-
-            // Normal: biased = 1075 - e
-            ; =>l_pack_normal
-            ; mov x1, #1075
-            ; sub x1, x1, x6            // x1 = biased
-            ; cmp x1, #2047
-            ; b.hs =>l_pack_inf
-
-            // bits = (x7 & ~(1<<52)) | (biased << 52)
-            ; mov x8, #1
-            ; lsl x8, x8, #52
-            ; bic x7, x7, x8            // clear bit 52
-            ; lsl x1, x1, #52           // biased << 52
-            ; orr x7, x7, x1
-            ; b =>l_apply_sign
-
-            ; =>l_pack_inf
-            ; movz x7, #0x7FF0, lsl #48
-            ; b =>l_apply_sign
+        // unmin(2^53) = (1<<55) - 2 = 0x007FFFFFFFFFFFFFFE
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X1, 0xFFFE, 0).expect("movz"),
         );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X1, 0xFFFF, 16).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X1, 0xFFFF, 32).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, Reg::X1, 0x007F, 48).expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X7, Reg::X1).expect("cmp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_b_cond(aarch64::Condition::Lo, 5).expect("b.lo"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X14, Reg::X7, 1).expect("lsr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_and_imm(aarch64::Width::X64, Reg::X15, Reg::X7, 1).expect("and"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_orr_reg(
+                aarch64::Width::X64,
+                Reg::X7,
+                Reg::X14,
+                Reg::X15,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("orr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X6, Reg::X6, 1, false).expect("sub"),
+        );
+
+        // Round: (u + 1 + ((u >> 2) & 1)) >> 2
+        self.emit.emit_word(
+            aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X1, Reg::X7, 2).expect("lsr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_and_imm(aarch64::Width::X64, Reg::X1, Reg::X1, 1).expect("and"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X7, Reg::X7, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X7, Reg::X7, Reg::X1).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X7, Reg::X7, 2).expect("lsr"),
+        );
+
+        // Pack: check bit 52
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X1, 1, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X1, Reg::X1, 52).expect("lsl"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_tst_imm(aarch64::Width::X64, Reg::X7, 1u64 << 52).expect("tst"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, l_apply_sign)
+            .expect("b.eq");
+
+        // Normal: biased = 1075 - e
+        self.emit.bind_label(l_pack_normal).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X1, 1075, 0).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X1, Reg::X1, Reg::X6).expect("sub"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X1, 2047, false).expect("cmp"),
+        );
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, l_pack_inf)
+            .expect("b.hs");
+
+        // bits = (x7 & ~(1<<52)) | (biased << 52)
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X8, 1, 0).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X8, Reg::X8, 52).expect("lsl"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_bic(
+                aarch64::Width::X64,
+                Reg::X7,
+                Reg::X7,
+                Reg::X8,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("bic"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X1, Reg::X1, 52).expect("lsl"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_orr_reg(
+                aarch64::Width::X64,
+                Reg::X7,
+                Reg::X7,
+                Reg::X1,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("orr"),
+        );
+        self.emit.emit_b_label(l_apply_sign).expect("b");
+
+        self.emit.bind_label(l_pack_inf).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X7, 0x7FF0, 48).expect("movz"),
+        );
+        self.emit.emit_b_label(l_apply_sign).expect("b");
 
         // ── Apply sign + store + update cursor ──
-        dynasm!(self.ops
-            ; .arch aarch64
-
-            ; =>l_pos_overflow
-            ; movz x7, #0x7FF0, lsl #48  // +infinity
-            ; b =>l_apply_sign
-
-            ; =>l_neg_underflow
-            ; mov x7, #0                  // +0.0
-            // fall through to l_apply_sign
+        self.emit.bind_label(l_pos_overflow).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X7, 0x7FF0, 48).expect("movz"),
         );
+        self.emit.emit_b_label(l_apply_sign).expect("b");
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; =>l_apply_sign
-            ; cbz x0, =>l_done
-            ; mov x1, #1
-            ; lsl x1, x1, #63
-            ; orr x7, x7, x1
-            ; =>l_done
-            ; str x7, [x21, #offset]
-            ; str x19, [x22, #CTX_INPUT_PTR]
+        self.emit.bind_label(l_neg_underflow).expect("bind");
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X7, 0, 0).expect("movz"));
+        // fall through to l_apply_sign
+
+        self.emit.bind_label(l_apply_sign).expect("bind");
+        self.emit
+            .emit_cbz_label(aarch64::Width::X64, Reg::X0, l_done)
+            .expect("cbz");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X1, 1, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X1, Reg::X1, 63).expect("lsl"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_orr_reg(
+                aarch64::Width::X64,
+                Reg::X7,
+                Reg::X7,
+                Reg::X1,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("orr"),
+        );
+        self.emit.bind_label(l_done).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X7, Reg::X21, offset).expect("str"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("str"),
         );
 
         // ── Cold: error paths ──
         // Jump over cold paths from the hot path — but we use b =>l_apply_sign
         // to skip, so no skip branch needed here (cold paths are placed after l_done).
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; b =>l_skip_cold
+        self.emit.emit_b_label(l_skip_cold).expect("b");
 
-            ; =>l_err_num
-            ; movz w8, #error_code_invalid
-            ; str w8, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
-
-            ; =>l_err_eof
-            ; movz w8, #error_code_eof
-            ; str w8, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
-
-            ; =>l_skip_cold
+        self.emit.bind_label(l_err_num).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X8, error_code_invalid as u16, 0).expect("movz"),
         );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X8,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
+
+        self.emit.bind_label(l_err_eof).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X8, error_code_eof as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X8,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
+
+        self.emit.bind_label(l_skip_cold).expect("bind");
     }
 
     /// Commit and finalize the assembler, returning the executable buffer.
