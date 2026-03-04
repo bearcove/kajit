@@ -10,6 +10,23 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  kajit-emit:
+    runs-on: depot-ubuntu-24.04-16
+    name: test (kajit-emit)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Test kajit-emit
+        run: cargo nextest run -p kajit-emit
+
   test:
     strategy:
       fail-fast: false
