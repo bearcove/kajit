@@ -61,9 +61,41 @@ KAJIT_DUMP_FILTER='json::all_scalars' \
 cargo nextest run -p kajit --test corpus -E 'test(=rvsdg_json::all_scalars)'
 ```
 
-On Apple Silicon, combine with x86_64 Rosetta validation:
+On Apple Silicon, run x86_64 tests via Rosetta:
 
 ```bash
-KAJIT_OPTS='-regalloc' cargo xtask test-x86_64 --full -- \
+KAJIT_OPTS='-regalloc' \
+KAJIT_DUMP_STAGES='ir,linear,ra,edits' \
+KAJIT_DUMP_FILTER='postcard::scalar_u16_v1' \
+cargo nextest run -p kajit --target x86_64-apple-darwin \
   --test corpus -E 'test(=postcard::scalar_u16_v1)'
 ```
+
+## Reading dump files
+
+Each dump file is named `<format>__<case>__<arch>__<stage>.txt`, e.g. `postcard__scalar_u64__v3__x86_64__ra.txt`.
+
+**`ir.txt`** — RVSDG IR after optimization passes. Nodes are `nN = Op [inputs] -> [outputs]`. Region arguments are `argN`.
+
+**`linear.txt`** — LinearIr after linearization and register allocation lowering. Instructions are numbered; `lin=N` indices in other dumps refer to these.
+
+**`ra.txt`** — RA-MIR (regalloc input). Vregs are `vN`; hardware-pinned operands appear as `vN/hwM` where `hwM` is the physical register index (arch-specific: on x86_64, hw0=rax, hw1=rcx, hw2=rdx, ...).
+
+**`edits.txt`** — Regalloc output edits. Each line is a move inserted on a block edge: `pN -> pM` (reg-to-reg), `pN -> stackM` (spill), or `stackM -> pN` (reload). Physical register indices match `ra.txt`. The file may also contain just a count if there are many edits.
+
+**`opts.txt`** — RVSDG snapshots between each optimization pass, labeled by pass name.
+
+## Getting disassembly
+
+There is no `disasm` dump stage. To disassemble JIT-compiled output, use the `disasm_bytes` helper inside a backend test:
+
+```rust
+// in kajit/src/backends/x86_64/mod.rs tests
+let lin = linearize(&mut func);
+let deser = compiler::compile_linear_ir_decoder(&lin, false);
+println!("{}", disasm_bytes(deser.code(), Some(deser.entry_offset())));
+```
+
+For corpus tests, add a temporary `println!` to the corpus test harness in `kajit/tests/corpus.rs`, wrapping the compile step and calling the same `disasm_bytes` helper (you'll need to expose it or inline the capstone call).
+
+To check what comparison type (`jb` vs `jl`, etc.) a branch emits, look at `kajit/src/backends/x86_64/emit.rs` for the relevant IR op (e.g. `CmpLt`, `CmpLtu`) and note which conditional jump instruction it produces.
