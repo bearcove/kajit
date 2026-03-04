@@ -79,6 +79,38 @@ pub struct JitSymbolEntry {
     pub size: usize,
 }
 
+/// Produce a Rust v0 mangled symbol from path segments.
+///
+/// Example:
+/// `rust_v0_mangle(&["kajit", "decode", "Bools"])` -> `"_RNvNtC5kajit6decode5Bools"`.
+///
+/// The first segment is the crate root. Middle segments use type namespace
+/// (`Nt`). The last segment uses value namespace (`Nv`) since it is the
+/// callable item.
+pub(crate) fn rust_v0_mangle(segments: &[&str]) -> String {
+    assert!(segments.len() >= 2, "need at least crate + item");
+
+    let mut mangled = String::from("_R");
+
+    for index in (1..segments.len()).rev() {
+        if index == segments.len() - 1 {
+            mangled.push_str("Nv");
+        } else {
+            mangled.push_str("Nt");
+        }
+    }
+
+    mangled.push('C');
+    let crate_name = segments[0];
+    mangled.push_str(&format!("{}{}", crate_name.len(), crate_name));
+
+    for segment in &segments[1..] {
+        mangled.push_str(&format!("{}{}", segment.len(), segment));
+    }
+
+    mangled
+}
+
 /// Owns the GDB JIT registration. Unregisters on drop.
 pub struct JitRegistration {
     entry: *mut JitCodeEntry,
@@ -647,5 +679,22 @@ mod tests {
         assert!(names.contains(&".debug_line".to_string()));
         assert!(names.contains(&".debug_abbrev".to_string()));
         assert!(names.contains(&".debug_info".to_string()));
+    }
+
+    #[test]
+    fn rust_v0_mangle_basic() {
+        assert_eq!(
+            rust_v0_mangle(&["kajit", "decode", "Bools"]),
+            "_RNvNtC5kajit6decode5Bools"
+        );
+        assert_eq!(rust_v0_mangle(&["kajit", "decode"]), "_RNvC5kajit6decode");
+    }
+
+    #[test]
+    fn rust_v0_mangle_has_v0_prefix_and_wrappers() {
+        let mangled = rust_v0_mangle(&["kajit", "decode", "ra_mir_text"]);
+        assert!(mangled.starts_with("_R"));
+        assert!(mangled.contains("Nv"));
+        assert!(mangled.contains("C5kajit"));
     }
 }
