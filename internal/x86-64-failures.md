@@ -88,6 +88,14 @@ Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same ph
 
 **Pivot**: Seven hypotheses, seven dead ends. Stop theorizing top-down. Find WHERE `InvalidVarint` is actually emitted in the generated x86_64 code and trace backward from there. See **Prompt A8** below.
 
+**Prompt A8 diagnosis**:
+- `InvalidVarint` has two sites: `n35` (`last_cont != 0`) and `n43` (`extra != 0`), both in post-loop gamma nodes.
+- Manual IR trace with `[0x80, 0x01]`: loop exits after 1 iteration (byte=0x01), `last_cont=0`, `last_low=1`, `extra=0`. **Neither site should fire.**
+- IR is structurally identical between x86_64 and aarch64 dumps. aarch64 passes.
+- Bug is purely in x86_64 codegen, downstream of IR.
+
+**New hypothesis**: The post-loop gamma checks are using the WRONG values. `last_cont` (v24, theta output) and `last_low` (v14, theta output) are placed into registers by exit-edge edits. If the exit-edge edit puts `v26` (rem_bool=8≠0=true) where `v24` (cont_bool=0=false) is expected, the `last_cont != 0` check fires → `InvalidVarint`. The `-regalloc` case corroborates: without exit-edge edits, the wrong register is used and the loop runs too long → `UnexpectedEof` instead. See **Prompt A9** below.
+
 ---
 
 ## ~~Group 2: Codegen snapshot diffs — control flow and intrinsic emission~~ FIXED (commit e4d888d / fix in x86_64/mod.rs)
@@ -264,6 +272,38 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 > **Step 4 — Does aarch64 produce the correct result?**
 >
 > Run the equivalent aarch64 test to confirm it passes, then note any structural differences between the aarch64 and x86_64 IR dumps for this case (they should be identical — if they differ, that difference is the bug).
+>
+> Do not fix anything — produce a diagnosis with specific file:line evidence.
+
+### ~~Prompt A8~~ — DIAGNOSED (IR correct; both ErrorExit sites should NOT fire; bug is in x86_64 post-loop output values)
+
+### Prompt A9 — Trace the theta EXIT-edge edits; find which post-loop value is wrong
+
+> You are investigating a miscompilation in kajit's x86_64 JIT for `postcard::scalar_u64_v3` (128u64, `[0x80, 0x01]`).
+>
+> **Known**:
+> - IR is correct and identical to aarch64. Manual trace: loop exits after 1 iteration, `last_cont=0`, `last_low=1`, neither `InvalidVarint` site should fire.
+> - With edits: `InvalidVarint` fires anyway — post-loop checks see wrong values.
+> - Without edits (`-regalloc`): `UnexpectedEof` — loop runs too long (stale condition register).
+> - Theta outputs `v14` (last_low = low 7 bits of last byte) and `v24` (last_cont = continuation bit of last byte) are placed into registers by exit-edge edits on the theta loop's exit.
+>
+> **Hypothesis**: An exit-edge edit is putting `v26` (rem_bool = true) where `v24` (cont_bool = false) is expected, or some equivalent value crossing. The post-loop `last_cont != 0` check then fires.
+>
+> **Step 1 — bisect with `-all_opts`:**
+> ```bash
+> KAJIT_OPTS='-all_opts' cargo nextest run -p kajit --target x86_64-apple-darwin \
+>   --test corpus -E 'test(=postcard::scalar_u64_v3)'
+> ```
+> Does it pass or fail? If it passes, the bug is in an optimization pass. If it fails, the bug is in base codegen regardless of opts.
+>
+> **Step 2 — theta exit-edge edits:**
+> From the 24 edits, identify which ones are on the **theta exit edge** (from the loop body/header to the post-loop block, taken when the loop condition is false). List them. What does each one move, and where does it put it?
+>
+> **Step 3 — post-loop register assignments:**
+> In the RA dump, after the theta loop exits into the post-loop block, what physical registers hold `v14` and `v24`? Are those the same registers that the post-loop `n35`/`n43` gamma nodes read from?
+>
+> **Step 4 — compare exit-edge on aarch64:**
+> In the aarch64 RA dump, what edits (if any) are on the theta exit edge? Does aarch64 have any crossed values there?
 >
 > Do not fix anything — produce a diagnosis with specific file:line evidence.
 
