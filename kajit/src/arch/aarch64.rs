@@ -91,53 +91,92 @@ impl EmitCtx {
 
     /// Load a function pointer into x8 and call it via `blr x8`.
     fn emit_call_fn_ptr(&mut self, ptr: *const u8) {
-        load_imm64!(self.ops, x8, ptr as u64);
-        dynasm!(self.ops ; .arch aarch64 ; blr x8);
+        let val = ptr as u64;
+        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X8, (val & 0xFFFF) as u16, 0).expect("movz"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X8, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X8, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X8, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"));
+        self.emit.emit_word(aarch64::encode_blr(Reg::X8).expect("blr"));
     }
 
     /// Flush the cached input cursor (x19) back to ctx.input_ptr.
     fn emit_flush_input_cursor(&mut self) {
-        dynasm!(self.ops ; .arch aarch64 ; str x19, [x22, #CTX_INPUT_PTR]);
+        self
+            .emit
+            .emit_word(aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            ).expect("str"));
     }
 
     /// Reload the cached input cursor from ctx and check the error flag.
     /// Branches to `error_exit` if `ctx.error.code != 0`.
     fn emit_reload_cursor_and_check_error(&mut self) {
         let error_exit = self.error_exit;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x19, [x22, #CTX_INPUT_PTR]
-            ; ldr w9, [x22, #CTX_ERROR_CODE]
-            ; cbnz w9, =>error_exit
-        );
+        self.emit.emit_word(aarch64::encode_ldr_imm(
+            aarch64::Width::X64,
+            Reg::X19,
+            Reg::X22,
+            CTX_INPUT_PTR as u32,
+        ).expect("ldr"));
+        self.emit.emit_word(aarch64::encode_ldr_imm(
+            aarch64::Width::W32,
+            Reg::X9,
+            Reg::X22,
+            CTX_ERROR_CODE as u32,
+        ).expect("ldr"));
+        self.emit.emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit).expect("cbnz");
     }
 
     /// Check the error flag without reloading the cursor.
     /// Branches to `error_exit` if `ctx.error.code != 0`.
     fn emit_check_error(&mut self) {
         let error_exit = self.error_exit;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr w9, [x22, #CTX_ERROR_CODE]
-            ; cbnz w9, =>error_exit
-        );
+        self.emit.emit_word(aarch64::encode_ldr_imm(
+            aarch64::Width::W32,
+            Reg::X9,
+            Reg::X22,
+            CTX_ERROR_CODE as u32,
+        ).expect("ldr"));
+        self.emit.emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit).expect("cbnz");
     }
 
     /// Flush the cached output cursor (x19) back to ctx for encoding.
     fn emit_enc_flush_output_cursor(&mut self) {
-        dynasm!(self.ops ; .arch aarch64 ; str x19, [x22, #ENC_OUTPUT_PTR]);
+        self
+            .emit
+            .emit_word(aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                ENC_OUTPUT_PTR as u32,
+            ).expect("str"));
     }
 
     /// Reload output_ptr and output_end from ctx and check the error flag.
     fn emit_enc_reload_and_check_error(&mut self) {
         let error_exit = self.error_exit;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x19, [x22, #ENC_OUTPUT_PTR]
-            ; ldr x20, [x22, #ENC_OUTPUT_END]
-            ; ldr w9, [x22, #ENC_ERROR_CODE]
-            ; cbnz w9, =>error_exit
-        );
+        self.emit.emit_word(aarch64::encode_ldr_imm(
+            aarch64::Width::X64,
+            Reg::X19,
+            Reg::X22,
+            ENC_OUTPUT_PTR as u32,
+        ).expect("ldr"));
+        self.emit.emit_word(aarch64::encode_ldr_imm(
+            aarch64::Width::X64,
+            Reg::X20,
+            Reg::X22,
+            ENC_OUTPUT_END as u32,
+        ).expect("ldr"));
+        self.emit.emit_word(aarch64::encode_ldr_imm(
+            aarch64::Width::W32,
+            Reg::X9,
+            Reg::X22,
+            ENC_ERROR_CODE as u32,
+        ).expect("ldr"));
+        self.emit.emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit).expect("cbnz");
     }
 
     /// Emit a function prologue. Returns the entry offset and a fresh error_exit label.
