@@ -1,6 +1,7 @@
 //! Intrinsic and lambda call emission for aarch64.
 
 use super::*;
+use kajit_emit::aarch64::{self, Reg};
 
 impl Lowerer {
     pub(super) fn emit_set_abi_reg_from_intrinsic_arg(&mut self, abi_arg: u8, arg: IntrinsicArg) {
@@ -9,13 +10,90 @@ impl Lowerer {
                 self.emit_set_abi_arg_from_allocation(abi_arg, operand_index)
             }
             IntrinsicArg::OutField(offset) => match abi_arg {
-                1 => dynasm!(self.ectx.ops ; .arch aarch64 ; add x1, x21, #offset),
-                2 => dynasm!(self.ectx.ops ; .arch aarch64 ; add x2, x21, #offset),
-                3 => dynasm!(self.ectx.ops ; .arch aarch64 ; add x3, x21, #offset),
-                4 => dynasm!(self.ectx.ops ; .arch aarch64 ; add x4, x21, #offset),
-                5 => dynasm!(self.ectx.ops ; .arch aarch64 ; add x5, x21, #offset),
-                6 => dynasm!(self.ectx.ops ; .arch aarch64 ; add x6, x21, #offset),
-                7 => dynasm!(self.ectx.ops ; .arch aarch64 ; add x7, x21, #offset),
+                1 => self
+                    .ectx
+                    .emit
+                    .emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X1,
+                            Reg::X21,
+                            offset as u16,
+                            false,
+                        )
+                        .expect("add")),
+                2 => self
+                    .ectx
+                    .emit
+                    .emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X2,
+                            Reg::X21,
+                            offset as u16,
+                            false,
+                        )
+                        .expect("add")),
+                3 => self
+                    .ectx
+                    .emit
+                    .emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X3,
+                            Reg::X21,
+                            offset as u16,
+                            false,
+                        )
+                        .expect("add")),
+                4 => self
+                    .ectx
+                    .emit
+                    .emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X4,
+                            Reg::X21,
+                            offset as u16,
+                            false,
+                        )
+                        .expect("add")),
+                5 => self
+                    .ectx
+                    .emit
+                    .emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X5,
+                            Reg::X21,
+                            offset as u16,
+                            false,
+                        )
+                        .expect("add")),
+                6 => self
+                    .ectx
+                    .emit
+                    .emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X6,
+                            Reg::X21,
+                            offset as u16,
+                            false,
+                        )
+                        .expect("add")),
+                7 => self
+                    .ectx
+                    .emit
+                    .emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X7,
+                            Reg::X21,
+                            offset as u16,
+                            false,
+                        )
+                        .expect("add")),
                 _ => unreachable!("unsupported intrinsic ABI arg register x{abi_arg}"),
             },
         }
@@ -43,10 +121,17 @@ impl Lowerer {
 
         self.flush_all_vregs();
 
-        dynasm!(self.ectx.ops
-            ; .arch aarch64
-            ; str x19, [x22, #CTX_INPUT_PTR]
-            ; mov x0, x22
+        self.ectx.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("str"),
+        );
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
         );
 
         for (i, arg) in args.iter().copied().enumerate() {
@@ -58,24 +143,50 @@ impl Lowerer {
         let p1 = ((ptr >> 16) & 0xFFFF) as u32;
         let p2 = ((ptr >> 32) & 0xFFFF) as u32;
         let p3 = ((ptr >> 48) & 0xFFFF) as u32;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; movz x16, #p0);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X16, p0 as u16, 0).expect("movz"));
         if p1 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x16, #p1, LSL #16);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p1 as u16, 1).expect("movk"),
+            );
         }
         if p2 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x16, #p2, LSL #32);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p2 as u16, 2).expect("movk"),
+            );
         }
         if p3 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x16, #p3, LSL #48);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p3 as u16, 3).expect("movk"),
+            );
         }
-        dynasm!(self.ectx.ops ; .arch aarch64 ; blr x16);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_blr(Reg::X16).expect("blr"));
 
-        dynasm!(self.ectx.ops
-            ; .arch aarch64
-            ; ldr x19, [x22, #CTX_INPUT_PTR]
-            ; ldr w9, [x22, #CTX_ERROR_CODE]
-            ; cbnz w9, =>error_exit
+        self.ectx.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("ldr"),
         );
+        self.ectx.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("ldr"),
+        );
+        self.ectx
+            .emit
+            .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
+            .expect("cbnz");
     }
 
     // r[impl ir.intrinsics]
@@ -97,7 +208,9 @@ impl Lowerer {
                     .map(|(i, _vreg)| IntrinsicArg::VReg { operand_index: i })
                     .collect();
                 self.emit_call_intrinsic_with_args(fn_ptr, &call_args);
-                dynasm!(self.ectx.ops ; .arch aarch64 ; mov x9, x0);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X0).expect("mov"),
+                );
                 self.emit_store_def_x9(dst, dst_operand_index);
             }
             None => {
@@ -132,17 +245,27 @@ impl Lowerer {
         let p1 = ((ptr >> 16) & 0xFFFF) as u32;
         let p2 = ((ptr >> 32) & 0xFFFF) as u32;
         let p3 = ((ptr >> 48) & 0xFFFF) as u32;
-        dynasm!(self.ectx.ops ; .arch aarch64 ; movz x16, #p0);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X16, p0 as u16, 0).expect("movz"));
         if p1 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x16, #p1, LSL #16);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p1 as u16, 1).expect("movk"),
+            );
         }
         if p2 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x16, #p2, LSL #32);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p2 as u16, 2).expect("movk"),
+            );
         }
         if p3 != 0 {
-            dynasm!(self.ectx.ops ; .arch aarch64 ; movk x16, #p3, LSL #48);
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p3 as u16, 3).expect("movk"),
+            );
         }
-        dynasm!(self.ectx.ops ; .arch aarch64 ; blr x16);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_blr(Reg::X16).expect("blr"));
     }
 
     pub(super) fn emit_call_pure(
@@ -201,11 +324,15 @@ impl Lowerer {
 
         if let Some(&alloc) = result_allocs.first() {
             self.emit_load_x9_from_allocation(alloc);
-            dynasm!(self.ectx.ops ; .arch aarch64 ; mov x0, x9);
+            self.ectx.emit.emit_word(
+                aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X9).expect("mov"),
+            );
         }
         if let Some(&alloc) = result_allocs.get(1) {
             self.emit_load_x9_from_allocation(alloc);
-            dynasm!(self.ectx.ops ; .arch aarch64 ; mov x1, x9);
+            self.ectx.emit.emit_word(
+                aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"),
+            );
         }
     }
 
@@ -237,14 +364,20 @@ impl Lowerer {
             .expect("CallLambda outside function")
             .error_exit;
         self.flush_all_vregs();
-        dynasm!(self.ectx.ops
-            ; .arch aarch64
-            ; str x19, [x22, #CTX_INPUT_PTR]
+        self.ectx.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("str"),
         );
-        dynasm!(self.ectx.ops
-            ; .arch aarch64
-            ; mov x0, x21
-            ; mov x1, x22
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X21).expect("mov"),
+        );
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X22).expect("mov"),
         );
 
         for (i, &arg) in args.iter().enumerate() {
@@ -252,13 +385,29 @@ impl Lowerer {
             self.emit_set_abi_arg_from_allocation((i + 2) as u8, i);
         }
 
-        dynasm!(self.ectx.ops ; .arch aarch64 ; bl =>label);
-        dynasm!(self.ectx.ops
-            ; .arch aarch64
-            ; ldr x19, [x22, #CTX_INPUT_PTR]
-            ; ldr w9, [x22, #CTX_ERROR_CODE]
-            ; cbnz w9, =>error_exit
+        self.ectx.emit.emit_bl_label(label).expect("bl");
+        self.ectx.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("ldr"),
         );
+        self.ectx.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("ldr"),
+        );
+        self.ectx
+            .emit
+            .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
+            .expect("cbnz");
 
         if let Some(&dst) = results.first() {
             let _ = dst;
