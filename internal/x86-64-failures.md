@@ -60,9 +60,11 @@ The i64 field reads 0 instead of -1000000000000. Every other scalar is correct. 
 - `W8` loads/stores and shift ops are correctly 64-bit; `r10d` uses elsewhere are intentional (error codes, booleans)
 - `kajit_read_u64` is an out-pointer intrinsic, not a return-value intrinsic; return-value path captures full `rax`
 
-**Next question**: Are those 24 edge edits around the `rcx/cl` constraint correct? Is the shift count vreg being saved/restored correctly across loop iterations, or is a clobber of `rcx` corrupting the accumulated u64 value?
+**Prompt A2 diagnosis**: rcx is not clobbered before `shl`. The 24 edits are spill/reload pressure, none write p1 at the shift site. rcx is live with the correct count when `shl r10, cl` executes.
 
-See **Prompt A2** below.
+**BUT**: the investigator reported concrete allocations `lhs=p7, rhs=p1, dst=p1`. On x86, `shl r10, cl` writes the result to r10 (lhs/p7). Yet regalloc allocated `dst=p1` (rcx). Any subsequent read of v15 (the shift result) reads from rcx, which still holds the old shift count. **This is the bug.** The result register is wrong.
+
+Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same physical register as `rhs` (hw1/rcx) instead of being tied to `lhs`. See **Prompt A3** below.
 
 ---
 
@@ -88,28 +90,31 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 
 ## Investigation Prompts
 
-### ~~Prompt A~~ — DIAGNOSED (see above)
+### ~~Prompt A~~ — DIAGNOSED
 
-### Prompt A2 — Verify rcx/cl edge edits around the varint shift loop
+### ~~Prompt A2~~ — DIAGNOSED (rcx not clobbered; wrong dst register is the bug)
 
-> You are investigating a runtime failure in kajit's x86_64 JIT: postcard `scalar_u64_v3` (value = 128u64) fails with `DeserError { code: InvalidVarint, offset: 0 }`. The IR and LinearIr are correct. The root cause has been narrowed to the x86 shift constraint.
+### Prompt A3 — Confirm the dst=rhs misallocation for Shl and trace how it happens
+
+> You are investigating a miscompilation in kajit's x86_64 JIT for `postcard::scalar_u64_v3` (128u64).
+>
+> **The bug**: For the `Shl` instruction in the varint theta loop, regalloc2 allocates `dst=p1` (rcx), but x86 `shl lhs, cl` writes the result to `lhs` (p7), not to rcx. Any use of the Shl result (v15) reads from rcx (still holding the shift count), not the shifted value.
+>
+> Concrete allocation observed: `lhs=p7, rhs=p1, dst=p1` at lin=39 for `v15 = Shl v14, v48/hw1`.
 >
 > Known facts:
-> - x86 RA-MIR forces `Shl` shift-count to `hw1` (rcx/cl): `kajit-mir/src/regalloc_mir.rs:1214-1217`
-> - x86 emits `shl r10, cl`: `kajit/src/backends/x86_64/emit.rs:143-144`
-> - This generates 24 register edits for x86 vs 1 for aarch64 on this loop
-> - The error fires at offset 0, meaning the accumulated value is wrong from the very first multi-byte read
->
-> Use `KAJIT_DUMP_STAGES=1` (see `docs/pipeline-debugging.md`) to dump the x86_64 pipeline for `postcard::scalar_u64_v3` and examine the edits file.
+> - `Shl` RHS is pinned to `hw1` (rcx) in RA lowering: `kajit-mir/src/regalloc_mir.rs:1214-1217`
+> - `emit.rs:143-144` emits `shl r10, cl` (writes result to lhs register)
+> - `dst=p1` means regalloc believes the output is in rcx — contradicting x86 semantics
 >
 > Investigate:
-> 1. Read `docs/pipeline-debugging.md` to understand how to produce and read the stage dumps.
-> 2. Look at the 24 edge edits in the x86_64 edits dump. What vregs are being moved around the shift instruction?
-> 3. Is `rcx` (hw1) live with the shift-count value when `shl` executes, or has it been overwritten by another edit?
-> 4. Does the varint loop use `rcx` for anything else (e.g., as a scratch reg for a move), potentially clobbering the shift count?
-> 5. Is there a missing `rcx` clobber declaration for the `Shl` instruction that would cause regalloc2 to leave a live value in `rcx` across the shift?
+> 1. In `kajit-mir/src/regalloc_mir.rs`, find the `Shl` lowering. How is the `dst` operand passed to regalloc2 — is it expressed as a fixed constraint, a tied-to-lhs constraint, or a free allocation? Cite the exact lines.
+> 2. In `regalloc_engine.rs`, how does the engine handle a binop whose result should be tied to its lhs? Is there a `tied_input` / `reuse_input` constraint mechanism?
+> 3. Is the `dst` of `Shl` being marked as a fresh output (free allocation) instead of tied to lhs? If so, regalloc2 can freely assign it to any register including rcx — which it does, since rcx is already live there.
+> 4. Check `emit.rs` at the Shl case: does it write the result to `dst` register or to `lhs` register? If it writes to lhs but regalloc assigned dst≠lhs, the result lands in the wrong place.
+> 5. How does the aarch64 backend handle this? Does aarch64 Shl tie dst to lhs, and if so, where?
 >
-> Do not fix anything yet — produce a diagnosis with specific file:line evidence.
+> Do not fix anything — produce a diagnosis with specific file:line evidence.
 
 ---
 
