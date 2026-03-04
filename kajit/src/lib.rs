@@ -10,8 +10,6 @@ pub mod ir;
 pub mod ir_backend;
 pub mod backends;
 
-#[cfg(target_arch = "x86_64")]
-pub mod ir_backend_x64;
 pub mod ir_parse;
 pub mod ir_passes;
 pub mod jit_debug;

@@ -31,7 +31,7 @@ pub fn compile_linear_ir_with_alloc(
     #[cfg(target_arch = "x86_64")]
     {
         let _ = (ir, max_spillslots); // x64 backend reads from ra_mir directly
-        crate::ir_backend_x64::compile(ra_mir, alloc)
+        crate::backends::x86_64::compile(ra_mir, alloc)
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -49,7 +49,7 @@ pub fn compile_linear_ir_with_alloc(
 pub fn compile_ra_program(ra_mir: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendResult {
     #[cfg(target_arch = "x86_64")]
     {
-        crate::ir_backend_x64::compile(ra_mir, alloc)
+        crate::backends::x86_64::compile(ra_mir, alloc)
     }
 
     #[cfg(target_arch = "aarch64")]
