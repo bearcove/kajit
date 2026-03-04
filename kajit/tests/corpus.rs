@@ -490,6 +490,7 @@ struct CodegenArtifacts {
     linear_text: String,
     ra_text: String,
     edits: usize,
+    edits_text: String,
     opt_timeline: Vec<(String, String)>,
 }
 
@@ -502,12 +503,14 @@ where
     let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
     let linear_text = kajit::debug_linear_ir_text(shape, decoder);
     let edits = kajit::regalloc_edit_count(shape, decoder);
+    let edits_text = kajit::regalloc_edits_text(shape, decoder);
     let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, decoder);
     CodegenArtifacts {
         ir_text,
         linear_text,
         ra_text,
         edits,
+        edits_text,
         opt_timeline,
     }
 }
@@ -614,7 +617,7 @@ fn maybe_dump_codegen_artifacts(format_label: &str, case: &str, artifacts: &Code
         dump_stage(format_label, case, "ra", &artifacts.ra_text);
     }
     if should_dump_stage("edits") {
-        dump_stage(format_label, case, "edits", &format!("{}", artifacts.edits));
+        dump_stage(format_label, case, "edits", &artifacts.edits_text);
     }
     if should_dump_stage("opts") {
         for (index, (pass_name, ir_text)) in artifacts.opt_timeline.iter().enumerate() {
@@ -695,7 +698,7 @@ where
                 case,
                 std::env::consts::ARCH
             ),
-            format!("{}", artifacts.edits)
+            artifacts.edits_text
         );
     }
 }

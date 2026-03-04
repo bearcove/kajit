@@ -62,6 +62,20 @@ pub fn regalloc_edit_count_with_options<F: format::Decoder>(
     compiler::regalloc_edit_count_with_options(shape, decoder, pipeline_opts)
 }
 
+/// Return a detailed regalloc edits dump for the compiled decoder pipeline.
+pub fn regalloc_edits_text<F: format::Decoder>(shape: &'static facet::Shape, decoder: &F) -> String {
+    compiler::regalloc_edits_text(shape, decoder)
+}
+
+/// Return a detailed regalloc edits dump with explicit pipeline options.
+pub fn regalloc_edits_text_with_options<F: format::Decoder>(
+    shape: &'static facet::Shape,
+    decoder: &F,
+    pipeline_opts: &PipelineOptions,
+) -> String {
+    compiler::regalloc_edits_text_with_options(shape, decoder, pipeline_opts)
+}
+
 /// Compile a deserializer from already-linearized IR.
 pub fn compile_decoder_linear_ir(
     ir: &linearize::LinearIr,
