@@ -62,15 +62,15 @@ Both backends had the same logic; aarch64 snapshots showed the analogous no-op `
 
 ---
 
-## Group 3: IR optimizer — theta loop variant incorrectly hoisted (1 failure)
+## ~~Group 3: IR optimizer — theta loop variant incorrectly hoisted~~ MOOT (test deleted in first commit)
 
 ```
 expected to keep/preserve: n3 = Add [arg0, arg1] -> [v2]
 ```
 
-Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted`
+Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated_ir_opt_corpus.rs`, now deleted)
 
-The optimizer's loop-invariant code motion (LICM) pass is hoisting an `Add` node whose operands (`arg0`, `arg1`) are theta loop variables — i.e., they change each iteration. The LICM analysis incorrectly classifies this node as invariant. The test exists specifically to guard against this; it's now failing, meaning a recent change to the optimizer broke the invariance check for theta nodes.
+**Actual root cause**: Not a LICM hoisting bug. The `Add [arg0, arg1]` node's result `v2` is unused, so DCE removes it before LICM runs. LICM invariance logic was correct — `arg0/arg1` are `RegionArg` with `region == body_region`, so LICM correctly classifies them as variant. The test (added `0b7ca157`, 2026-03-02) predated LICM (added `e1fba076`, 2026-03-03) and the test IR needed the node's result to be live so DCE wouldn't kill it before the assertion. Test deleted with the corpus cleanup; the LICM invariance logic itself is fine.
 
 ---
 
