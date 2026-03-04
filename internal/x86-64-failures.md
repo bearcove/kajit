@@ -76,6 +76,14 @@ Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same ph
 
 **Prompt A5 diagnosis**: Also ruled out. Fast-path split is `(byte & 0x80) != 0` booleanized via `cmp/setnz/movzx`, then `test/jz`. Not a signed/unsigned `<` comparison at all. Slow path IS correctly taken for 0x80. Bug is inside the theta loop body or its exit condition. See **Prompt A6** below.
 
+**Prompt A6 diagnosis**:
+- With `-regalloc` (edits disabled): `UnexpectedEof` — loop runs past the buffer end; loop condition uses stale data (no edge edits to set it up correctly).
+- With edits: `InvalidVarint` — loop terminates after exactly 10 iterations. `offset: 0` in the error is the input cursor position — it never advanced past byte 0. So the same byte (0x80, with continuation bit) is being read every iteration until the 10-byte safety limit fires.
+- No intrinsic call in the loop body — `read_bytes(1)` is inline.
+- Theta loop condition `v27` → `test r8, r8` / `jnz` is correct in structure.
+
+**New hypothesis**: The cursor is not advancing inside the theta loop on x86_64. `read_bytes(1)` emits an inline cursor advance. One of the 24 edge edits on the theta back-edge is incorrectly restoring the cursor to its pre-loop value (spilled before the loop, reloaded on each iteration). Without those edits, the cursor advances correctly in a register but the loop condition is stale → `UnexpectedEof`. See **Prompt A7** below.
+
 ---
 
 ## ~~Group 2: Codegen snapshot diffs — control flow and intrinsic emission~~ FIXED (commit e4d888d / fix in x86_64/mod.rs)
@@ -205,6 +213,28 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 > Also: what intrinsic is called inside the theta loop to read the next byte? On x86_64, calls clobber rax, rcx, rdx, rsi, rdi, r8, r9, r10, r11. After the call, are loop-carried values (accumulator vreg, shift-count vreg) in caller-saved registers that the call may have clobbered — and if so, are they saved/restored by edits before/after the call?
 >
 > Do not fix anything — report the bisect outcome and produce a diagnosis with specific file:line evidence.
+
+### ~~Prompt A6~~ — DIAGNOSED (cursor not advancing; edits restore cursor to pre-loop value on back-edge)
+
+### Prompt A7 — Find the back-edge edit that clobbers the cursor; trace read_bytes emit
+
+> You are investigating a miscompilation in kajit's x86_64 JIT for `postcard::scalar_u64_v3` (128u64).
+>
+> **Known**: With regalloc edits applied, the varint theta loop reads byte 0 (0x80) on every iteration — the input cursor never advances. After 10 iterations the 10-byte safety limit fires: `InvalidVarint at offset 0`. Without edits (`KAJIT_OPTS='-regalloc'`), the cursor DOES advance correctly (different failure mode: `UnexpectedEof`). Therefore one of the 24 edge edits on the theta loop back-edge is restoring the cursor register to its pre-loop (pre-advance) value, undoing the advance on each iteration.
+>
+> Investigate:
+>
+> 1. In `kajit/src/backends/x86_64/emit.rs:45`, read the full implementation of `emit_read_bytes`. What registers does it use? Which register holds the cursor (input position) before and after the emit? Specifically: does it read the cursor from a register, or from a memory field in the DeserContext struct? Does it write the updated cursor back to memory or keep it in a register?
+>
+> 2. In the RA-MIR dump (`postcard__scalar_u64__v3__x86_64__ra.txt`), find the `read_bytes(1)` instruction in loop block `b4`. What vregs are its inputs and outputs? Which vreg represents the cursor / input-position state, and what physical register (`pN`) does it get allocated to?
+>
+> 3. From the 24 edits, identify which ones are on the **theta back-edge** (the edge from the loop body back to the loop header). List them. Does any of them write to the physical register that holds the cursor vreg's output (after the read)?
+>
+> 4. If a back-edge edit writes the cursor register: what is the source of that write? Is it reloading from a stack slot that was spilled before the loop (i.e. the pre-advance cursor value)?
+>
+> 5. Compare to aarch64: in the aarch64 RA-MIR dump for the same case, what edits (if any) appear on the theta back-edge? Does aarch64 have the same edit pattern or not?
+>
+> Do not fix anything — produce a diagnosis with specific file:line evidence.
 
 ---
 
