@@ -574,10 +574,11 @@ impl Lowerer {
 
         let entry = self.entry.expect("missing root FuncStart for lambda 0");
         let buf = self.ectx.finalize();
+        let source_map = Some(buf.source_map.clone());
         LinearBackendResult {
             buf,
             entry,
-            source_map: None,
+            source_map,
         }
     }
 }

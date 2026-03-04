@@ -53,7 +53,10 @@ pub fn compile_linear_ir_with_alloc(
 /// This is the entry point for the RA-MIR text test workflow: parse RA-MIR
 /// text into an RaProgram, then run regalloc2 + codegen without needing a
 /// LinearIr.
-pub fn compile_ra_program(ra_mir: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendResult {
+pub fn compile_ra_program(
+    ra_mir: &RaProgram,
+    alloc: &AllocatedProgram,
+) -> LinearBackendResult {
     #[cfg(target_arch = "x86_64")]
     {
         crate::backends::x86_64::compile(ra_mir, alloc)
