@@ -50,6 +50,8 @@ Failing test: `json::all_scalars`
 
 The i64 field reads 0 instead of -1000000000000. Every other scalar is correct. This is almost certainly the same root cause as the postcard failures — the x86_64 codegen for 64-bit integer load/store/decode is broken. JSON encodes i64 in text; the JIT-generated decoder is presumably converting the string to an integer, and the 64-bit conversion path produces 0.
 
+**ROOT CAUSE FOUND (Prompt A12)**: RA block params are built from `live_in` bitset in ascending vreg order (`regalloc_mir.rs:1001-1012`). When LICM hoists 6 constants out of the theta body, they get lower vreg indices and sort BEFORE existing loop-carried values, shifting them by +6. Edge edits then read/write the wrong params. Without LICM: `b4 [v37, v39, v47, v48, v49]`. With LICM: `b4 [v13, v17, v19, v21, v23, v25, v37, v39, v47, v48, v49]`. This is a **positional indexing** bug — see issue #163.
+
 **Diagnosis (Prompt A)**: Not a 32-bit truncation bug, not a calling convention bug. Root cause is the `rcx/cl` fixed-register constraint for x86 shift instructions in the varint loop.
 
 - `scalar_u64_v3` = `128u64` — first value requiring a multi-byte postcard varint
@@ -95,6 +97,17 @@ Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same ph
 - Bug is purely in x86_64 codegen, downstream of IR.
 
 **New hypothesis**: The post-loop gamma checks are using the WRONG values. `last_cont` (v24, theta output) and `last_low` (v14, theta output) are placed into registers by exit-edge edits. If the exit-edge edit puts `v26` (rem_bool=8≠0=true) where `v24` (cont_bool=0=false) is expected, the `last_cont != 0` check fires → `InvalidVarint`. The `-regalloc` case corroborates: without exit-edge edits, the wrong register is used and the loop runs too long → `UnexpectedEof` instead. See **Prompt A9** below.
+
+**Prompt A9 diagnosis**: Exit-edge value crossing hypothesis NOT supported — there are no theta exit-edge edits. All 4 edits are back-edge edits on `lin=50, succ=0`. aarch64 has 0 edits total for this case.
+
+**BREAKTHROUGH — per-pass bisect**:
+- `-all_opts` → **PASS** (confirmed: bug is in an optimization pass)
+- `-pass.bounds_check_coalescing` → FAIL
+- `-pass.theta_loop_invariant_hoist` → **PASS** ← the culprit
+- `-pass.inline_apply` → FAIL
+- `-pass.dead_code_elimination` → FAIL
+
+**Root cause is in `theta_loop_invariant_hoist`** (the LICM pass). It hoists something out of the theta loop that should stay inside, corrupting the loop's semantics. This also explains why the IR "looked correct" in earlier prompts — the IR was dumped post-optimization, showing the already-corrupted LICM output. See **Prompt A10** below.
 
 ---
 
@@ -276,6 +289,14 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 > Do not fix anything — produce a diagnosis with specific file:line evidence.
 
 ### ~~Prompt A8~~ — DIAGNOSED (IR correct; both ErrorExit sites should NOT fire; bug is in x86_64 post-loop output values)
+
+### ~~Prompt A9~~ — DIAGNOSED (no exit-edge edits; led to per-pass bisect breakthrough)
+
+### ~~Prompt A10~~ — DIAGNOSED (LICM hoists 6 constants; code inspection says logic is correct; but dumps confirm structural change)
+
+**Prompt A10 result**: LICM moves 6 `Const` nodes out of the theta body. The invariance classification logic IS correct (constants are genuinely invariant). But hoisting them changes the theta's interface: 6 new inputs/outputs, loop block arity changes, edit count jumps 18→24. The IR is semantically valid but the structural change causes x86_64 regalloc to miscompile.
+
+### Prompt A11 — Diff theta wiring before/after LICM (see `.handoffs/a11-licm-wiring.md`)
 
 ### Prompt A9 — Trace the theta EXIT-edge edits; find which post-loop value is wrong
 
