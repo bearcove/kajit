@@ -85,6 +85,39 @@ Each dump file is named `<format>__<case>__<arch>__<stage>.txt`, e.g. `postcard_
 
 **`opts.txt`** — RVSDG snapshots between each optimization pass, labeled by pass name.
 
+## LLDB debugging of JIT code
+
+Run any test under LLDB with the `lldb` nextest profile. This enables the GDB JIT loader, sets `KAJIT_DEBUG=1` (so DWARF `.debug_line` is emitted), and breaks on JIT code registration:
+
+```bash
+cargo nextest run --profile lldb -E 'test(=json::bool_true_false)'
+```
+
+When LLDB stops at `__jit_debug_register_code`, the JIT code has been registered. You can then:
+
+```
+# Confirm JIT images are loaded
+(lldb) image list
+# Look for JIT(...) entries
+
+# Look up a JIT address
+(lldb) image lookup -a <pc>
+
+# Find registered decode/encode symbols
+(lldb) image lookup -rn 'fad::decode::'
+(lldb) image lookup -rn 'fad::encode::'
+
+# Set a breakpoint on a JIT function and continue
+(lldb) breakpoint set -rn 'fad::decode::.*'
+(lldb) continue
+
+# Once stopped in JIT code, source-level stepping uses the .ra-mir listing
+(lldb) source info
+(lldb) step
+```
+
+The `.ra-mir` listing files are written to `/tmp/kajit-debug/`. Each listing line corresponds to an RA-MIR instruction — DWARF `.debug_line` maps native code offsets to these lines, so `source info` and `step` navigate the RA-MIR.
+
 ## Getting disassembly
 
 There is no `disasm` dump stage. To disassemble JIT-compiled output, use the `disasm_bytes` helper inside a backend test:
