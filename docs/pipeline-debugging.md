@@ -129,9 +129,12 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 (lldb) image dump sections JIT(0x...)
 
 # Dump the line table (use the .ra-mir filename, not the full path)
-(lldb) image dump line-table fad__decode__Bools.ra-mir
+(lldb) image dump line-table kajit__decode__Bools.ra-mir
 
-# Set a breakpoint on JIT code by address (name-based breakpoints on JIT symbols may not resolve)
+# Set a breakpoint on JIT code by regex name (-r, not -n)
+(lldb) breakpoint set -r 'kajit::decode::Bools'
+
+# Or by address (get address from image lookup -rn)
 (lldb) breakpoint set -a <address>
 
 # Once stopped in JIT code, source-level stepping uses the .ra-mir listing
@@ -152,7 +155,7 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 
 ### Known limitations
 
-- **Breakpoints by name** on JIT symbols (`breakpoint set -n "kajit::decode::Bools"`) may show as "pending, no locations" because LLDB can't map the symbol to a loadable section. Use `breakpoint set -a <address>` instead — get the address from `image lookup -rn`.
+- **Breakpoints by name** require `-r` (regex), not `-n` (exact name). LLDB's `-n` doesn't resolve JIT symbols. Use `breakpoint set -r 'kajit::decode::Bools'` or `breakpoint set -a <address>`.
 - The helper script is intended for local interactive LLDB sessions; it is not a nextest run wrapper.
 - The GDB JIT loader must be explicitly enabled on LLDB: `settings set plugin.jit-loader.gdb.enable on` (the wrapper script does this automatically).
 
