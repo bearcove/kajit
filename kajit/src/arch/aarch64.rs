@@ -348,24 +348,18 @@ impl EmitCtx {
     }
 
     /// Allocate a new dynamic label.
-    pub fn new_label(&mut self) -> DynamicLabel {
-        self.ops.new_dynamic_label()
+    pub fn new_label(&mut self) -> LabelId {
+        self.emit.new_label()
     }
 
     /// Bind a dynamic label at the current position.
-    pub fn bind_label(&mut self, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; =>label
-        );
+    pub fn bind_label(&mut self, label: LabelId) {
+        self.emit.bind_label(label).expect("bind_label failed");
     }
 
     /// Emit an unconditional branch to the given label.
-    pub fn emit_branch(&mut self, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; b =>label
-        );
+    pub fn emit_branch(&mut self, label: LabelId) {
+        self.emit.b_label(label).expect("emit_branch failed");
     }
 
     /// Write an error code to ctx and branch to error_exit.
