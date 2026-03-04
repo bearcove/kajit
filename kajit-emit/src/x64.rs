@@ -15,6 +15,20 @@ pub struct FinalizedEmission {
     pub source_map: SourceMap,
 }
 
+impl FinalizedEmission {
+    pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
+        crate::build_trace(&self.code, &self.source_map)
+    }
+
+    pub fn trace_text(&self) -> Result<String, crate::TraceError> {
+        crate::format_trace(&self.code, &self.source_map)
+    }
+
+    pub fn source_map_le(&self) -> Result<Vec<u8>, crate::SourceMapError> {
+        crate::encode_source_map_le(&self.source_map)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operand {
     Reg(u8),
@@ -790,6 +804,18 @@ mod tests {
                 0x0f, 0x85, 0xef, 0xff, 0xff, 0xff, // jnz -17
             ]
         );
+
+        let trace = finalized.trace_text().unwrap();
+        assert_eq!(
+            trace,
+            "00000000 inst=10 bytes=0f8405000000\n00000006 inst=11 bytes=e8f5ffffff\n0000000b inst=12 bytes=0f85efffffff"
+        );
+
+        let source_map_encoded = finalized.source_map_le().unwrap();
+        assert_eq!(
+            crate::decode_source_map_le(&source_map_encoded).unwrap(),
+            finalized.source_map
+        );
     }
 
     #[test]
@@ -816,5 +842,53 @@ mod tests {
         let mut buf = Vec::new();
         let err = encode_mov_r64_r64(0, 16, &mut buf).unwrap_err();
         assert!(matches!(err, EmitError::InvalidRegister { reg: 16 }));
+    }
+
+    #[test]
+    fn encode_disp_size_boundaries() {
+        let mut buf = Vec::new();
+        encode_mov_m_r64(Mem { base: 5, disp: 0 }, 10, &mut buf).unwrap();
+        assert_eq!(buf, [0x4c, 0x89, 0x55, 0x00]);
+
+        buf.clear();
+        encode_mov_m_r64(Mem { base: 5, disp: 127 }, 10, &mut buf).unwrap();
+        assert_eq!(buf, [0x4c, 0x89, 0x55, 0x7f]);
+
+        buf.clear();
+        encode_mov_m_r64(Mem { base: 5, disp: 128 }, 10, &mut buf).unwrap();
+        assert_eq!(buf, [0x4c, 0x89, 0x95, 0x80, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn encode_rex_for_low_byte_registers() {
+        let mut buf = Vec::new();
+        encode_setne_r8(4, &mut buf).unwrap(); // spl
+        assert_eq!(buf, [0x40, 0x0f, 0x95, 0xc4]);
+
+        buf.clear();
+        encode_movzx_r64_rm8(0, Operand::Reg(4), &mut buf).unwrap(); // movzx rax, spl
+        assert_eq!(buf, [0x48, 0x0f, 0xb6, 0xc4]);
+    }
+
+    #[test]
+    fn emitter_resolves_forward_and_backward_jumps() {
+        let mut emitter = Emitter::new();
+        let start = emitter.new_label();
+        let target = emitter.new_label();
+        emitter.bind_label(start).unwrap();
+        emitter.emit_jmp_label(1, target).unwrap();
+        emitter.emit_bytes(2, &[0x90, 0x90]); // 2 nops
+        emitter.bind_label(target).unwrap();
+        emitter.emit_jz_label(3, start).unwrap();
+
+        let finalized = emitter.finalize().unwrap();
+        assert_eq!(
+            finalized.code,
+            vec![
+                0xe9, 0x02, 0x00, 0x00, 0x00, // jmp +2
+                0x90, 0x90, // nops
+                0x0f, 0x84, 0xf3, 0xff, 0xff, 0xff, // jz -13
+            ]
+        );
     }
 }

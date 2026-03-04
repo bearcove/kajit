@@ -78,6 +78,20 @@ pub struct FinalizedEmission {
     pub source_map: SourceMap,
 }
 
+impl FinalizedEmission {
+    pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
+        crate::build_trace(&self.code, &self.source_map)
+    }
+
+    pub fn trace_text(&self) -> Result<String, crate::TraceError> {
+        crate::format_trace(&self.code, &self.source_map)
+    }
+
+    pub fn source_map_le(&self) -> Result<Vec<u8>, crate::SourceMapError> {
+        crate::encode_source_map_le(&self.source_map)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EmitError {
     InvalidRegister {
@@ -801,6 +815,18 @@ mod tests {
         assert_eq!(word(&finalized.code[0..4]), 0x1400_0002);
         assert_eq!(word(&finalized.code[4..8]), 0xB4FF_FFF0);
         assert_eq!(word(&finalized.code[8..12]), 0x97FF_FFFE);
+
+        let trace = finalized.trace_text().unwrap();
+        assert_eq!(
+            trace,
+            "00000000 inst=10 bytes=02000014\n00000004 inst=11 bytes=f0ffffb4\n00000008 inst=12 bytes=feffff97"
+        );
+
+        let source_map_encoded = finalized.source_map_le().unwrap();
+        assert_eq!(
+            crate::decode_source_map_le(&source_map_encoded).unwrap(),
+            finalized.source_map
+        );
     }
 
     #[test]
@@ -830,5 +856,79 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn encode_boundaries_and_rejections() {
+        assert_eq!(encode_b(-(1 << 25)).unwrap(), 0x1600_0000);
+        assert_eq!(encode_b((1 << 25) - 1).unwrap(), 0x15FF_FFFF);
+        assert!(matches!(
+            encode_b(-(1 << 25) - 1),
+            Err(EmitError::InvalidImmediate {
+                instruction: "b",
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode_b(1 << 25),
+            Err(EmitError::InvalidImmediate {
+                instruction: "b",
+                ..
+            })
+        ));
+
+        assert_eq!(encode_cbz(Width::X64, 0, -(1 << 18)).unwrap(), 0xB480_0000);
+        assert_eq!(
+            encode_cbz(Width::X64, 0, (1 << 18) - 1).unwrap(),
+            0xB47F_FFE0
+        );
+        assert!(matches!(
+            encode_cbz(Width::X64, 0, -(1 << 18) - 1),
+            Err(EmitError::InvalidImmediate {
+                instruction: "cbz",
+                ..
+            })
+        ));
+        assert!(matches!(
+            encode_cbz(Width::X64, 0, 1 << 18),
+            Err(EmitError::InvalidImmediate {
+                instruction: "cbz",
+                ..
+            })
+        ));
+
+        assert_eq!(
+            encode_ldr_imm(Width::X64, 1, 2, 4095 * 8).unwrap(),
+            0xF97F_FC41
+        );
+        assert!(matches!(
+            encode_ldr_imm(Width::X64, 1, 2, 4095 * 8 + 8),
+            Err(EmitError::InvalidOffset { .. })
+        ));
+        assert!(matches!(
+            encode_ldr_imm(Width::X64, 1, 2, 10),
+            Err(EmitError::InvalidOffset { .. })
+        ));
+
+        assert!(matches!(
+            encode_movz(Width::W32, 1, 0x1234, 32),
+            Err(EmitError::InvalidMovWideShift { .. })
+        ));
+        assert!(matches!(
+            encode_add_imm(Width::X64, 0, 0, 0x1000, false),
+            Err(EmitError::InvalidImmediate {
+                instruction: "add/sub imm12",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn emitter_rejects_double_label_bind() {
+        let mut emitter = Emitter::new();
+        let label = emitter.new_label();
+        emitter.bind_label(label).unwrap();
+        let err = emitter.bind_label(label).unwrap_err();
+        assert!(matches!(err, EmitError::LabelAlreadyBound { .. }));
     }
 }
