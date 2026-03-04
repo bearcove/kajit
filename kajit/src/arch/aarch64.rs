@@ -92,95 +92,133 @@ impl EmitCtx {
     /// Load a function pointer into x8 and call it via `blr x8`.
     fn emit_call_fn_ptr(&mut self, ptr: *const u8) {
         self.emit_load_imm64(Reg::X8, ptr as u64);
-        self.emit.emit_word(aarch64::encode_blr(Reg::X8).expect("blr"));
+        self.emit
+            .emit_word(aarch64::encode_blr(Reg::X8).expect("blr"));
     }
 
     /// Load a 64-bit immediate into a register using movz + 3×movk.
     fn emit_load_imm64(&mut self, rd: Reg, val: u64) {
-        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, rd, (val & 0xFFFF) as u16, 0).expect("movz"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"));
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, rd, (val & 0xFFFF) as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 16) & 0xFFFF) as u16, 16)
+                .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 32) & 0xFFFF) as u16, 32)
+                .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 48) & 0xFFFF) as u16, 48)
+                .expect("movk"),
+        );
     }
 
     /// Flush the cached input cursor (x19) back to ctx.input_ptr.
     fn emit_flush_input_cursor(&mut self) {
-        self
-            .emit
-            .emit_word(aarch64::encode_str_imm(
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
                 aarch64::Width::X64,
                 Reg::X19,
                 Reg::X22,
                 CTX_INPUT_PTR as u32,
-            ).expect("str"));
+            )
+            .expect("str"),
+        );
     }
 
     /// Reload the cached input cursor from ctx and check the error flag.
     /// Branches to `error_exit` if `ctx.error.code != 0`.
     fn emit_reload_cursor_and_check_error(&mut self) {
         let error_exit = self.error_exit;
-        self.emit.emit_word(aarch64::encode_ldr_imm(
-            aarch64::Width::X64,
-            Reg::X19,
-            Reg::X22,
-            CTX_INPUT_PTR as u32,
-        ).expect("ldr"));
-        self.emit.emit_word(aarch64::encode_ldr_imm(
-            aarch64::Width::W32,
-            Reg::X9,
-            Reg::X22,
-            CTX_ERROR_CODE as u32,
-        ).expect("ldr"));
-        self.emit.emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit).expect("cbnz");
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("ldr"),
+        );
+        self.emit
+            .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
+            .expect("cbnz");
     }
 
     /// Check the error flag without reloading the cursor.
     /// Branches to `error_exit` if `ctx.error.code != 0`.
     fn emit_check_error(&mut self) {
         let error_exit = self.error_exit;
-        self.emit.emit_word(aarch64::encode_ldr_imm(
-            aarch64::Width::W32,
-            Reg::X9,
-            Reg::X22,
-            CTX_ERROR_CODE as u32,
-        ).expect("ldr"));
-        self.emit.emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit).expect("cbnz");
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("ldr"),
+        );
+        self.emit
+            .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
+            .expect("cbnz");
     }
 
     /// Flush the cached output cursor (x19) back to ctx for encoding.
     fn emit_enc_flush_output_cursor(&mut self) {
-        self
-            .emit
-            .emit_word(aarch64::encode_str_imm(
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
                 aarch64::Width::X64,
                 Reg::X19,
                 Reg::X22,
                 ENC_OUTPUT_PTR as u32,
-            ).expect("str"));
+            )
+            .expect("str"),
+        );
     }
 
     /// Reload output_ptr and output_end from ctx and check the error flag.
     fn emit_enc_reload_and_check_error(&mut self) {
         let error_exit = self.error_exit;
-        self.emit.emit_word(aarch64::encode_ldr_imm(
-            aarch64::Width::X64,
-            Reg::X19,
-            Reg::X22,
-            ENC_OUTPUT_PTR as u32,
-        ).expect("ldr"));
-        self.emit.emit_word(aarch64::encode_ldr_imm(
-            aarch64::Width::X64,
-            Reg::X20,
-            Reg::X22,
-            ENC_OUTPUT_END as u32,
-        ).expect("ldr"));
-        self.emit.emit_word(aarch64::encode_ldr_imm(
-            aarch64::Width::W32,
-            Reg::X9,
-            Reg::X22,
-            ENC_ERROR_CODE as u32,
-        ).expect("ldr"));
-        self.emit.emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit).expect("cbnz");
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X19,
+                Reg::X22,
+                ENC_OUTPUT_PTR as u32,
+            )
+            .expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::X64,
+                Reg::X20,
+                Reg::X22,
+                ENC_OUTPUT_END as u32,
+            )
+            .expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                ENC_ERROR_CODE as u32,
+            )
+            .expect("ldr"),
+        );
+        self.emit
+            .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
+            .expect("cbnz");
     }
 
     /// Emit a function prologue. Returns the entry offset and a fresh error_exit label.
@@ -199,28 +237,23 @@ impl EmitCtx {
         let frame_size = self.frame_size;
 
         self.emit.emit_word(
-            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::SP, Reg::SP, frame_size as u16, false)
-                .expect("sub"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_stp(
+            aarch64::encode_sub_imm(
                 aarch64::Width::X64,
-                Reg::X29,
-                Reg::X30,
                 Reg::SP,
-                0,
+                Reg::SP,
+                frame_size as u16,
+                false,
             )
-            .expect("stp"),
+            .expect("sub"),
         );
         self.emit.emit_word(
-            aarch64::encode_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect(
-                "stp",
-            ),
+            aarch64::encode_stp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("stp"),
         );
         self.emit.emit_word(
-            aarch64::encode_stp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect(
-                "stp",
-            ),
+            aarch64::encode_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect("stp"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_stp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect("stp"),
         );
         let extra_pairs = ((self.base_frame - BASE_FRAME) / 16) as usize;
         assert!(
@@ -246,14 +279,14 @@ impl EmitCtx {
             );
         }
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X29, Reg::SP, 0, false).expect(
-                "add",
-            ),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X29, Reg::SP, 0, false).expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X0).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X22, Reg::X1).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X0).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X22, Reg::X1).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_ldr_imm(
                 aarch64::Width::X64,
@@ -317,22 +350,26 @@ impl EmitCtx {
             );
         }
         self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32)
-                .expect("ldp"),
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect("ldp"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16)
-                .expect("ldp"),
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect("ldp"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
-                .expect("ldp"),
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("ldp"),
         );
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::SP, Reg::SP, frame_size as u16, false)
-                .expect("add"),
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::SP,
+                Reg::SP,
+                frame_size as u16,
+                false,
+            )
+            .expect("add"),
         );
-        self.emit.emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
+        self.emit
+            .emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
         self.emit.bind_label(error_exit).expect("bind");
         if extra_pairs >= 3 {
             self.emit.emit_word(
@@ -353,22 +390,26 @@ impl EmitCtx {
             );
         }
         self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32)
-                .expect("ldp"),
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect("ldp"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16)
-                .expect("ldp"),
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect("ldp"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
-                .expect("ldp"),
+            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("ldp"),
         );
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::SP, Reg::SP, frame_size as u16, false)
-                .expect("add"),
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::SP,
+                Reg::SP,
+                frame_size as u16,
+                false,
+            )
+            .expect("add"),
         );
-        self.emit.emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
+        self.emit
+            .emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
     }
 
     /// Emit a call to another emitted function.
@@ -389,8 +430,9 @@ impl EmitCtx {
             )
             .expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X22).expect("mov"),
+        );
         self.emit.emit_bl_label(label).expect("bl");
         self.emit_reload_cursor_and_check_error();
     }
@@ -402,7 +444,9 @@ impl EmitCtx {
     /// After the call: reloads input_ptr from ctx, checks error slot.
     pub fn emit_call_intrinsic(&mut self, fn_ptr: *const u8, field_offset: u32) {
         self.emit_flush_input_cursor();
-        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_add_imm(
                 aarch64::Width::X64,
@@ -421,7 +465,9 @@ impl EmitCtx {
     /// Flushes cursor, calls, reloads cursor, checks error.
     pub fn emit_call_intrinsic_ctx_only(&mut self, fn_ptr: *const u8) {
         self.emit_flush_input_cursor();
-        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -430,7 +476,9 @@ impl EmitCtx {
     /// x0 = ctx, x1 = sp + sp_offset. Flushes/reloads cursor, checks error.
     pub fn emit_call_intrinsic_ctx_and_stack_out(&mut self, fn_ptr: *const u8, sp_offset: u32) {
         self.emit_flush_input_cursor();
-        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_add_imm(
                 aarch64::Width::X64,
@@ -454,7 +502,9 @@ impl EmitCtx {
         sp_offset2: u32,
     ) {
         self.emit_flush_input_cursor();
-        self.emit.emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_add_imm(
                 aarch64::Width::X64,
@@ -491,30 +541,49 @@ impl EmitCtx {
         expected_len: u32,
     ) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X0,
-                Reg::SP,
-                arg0_sp_offset,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X0, Reg::SP, arg0_sp_offset)
+                .expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X1,
-                Reg::SP,
-                arg1_sp_offset,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X1, Reg::SP, arg1_sp_offset)
+                .expect("ldr"),
         );
         let val = expected_ptr as u64;
-        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (val & 0xFFFF) as u16, 0).expect("movz"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"));
-        self.emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X3, expected_len as u16, 0).expect("movz"));
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (val & 0xFFFF) as u16, 0)
+                .expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X2,
+                ((val >> 16) & 0xFFFF) as u16,
+                16,
+            )
+            .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X2,
+                ((val >> 32) & 0xFFFF) as u16,
+                32,
+            )
+            .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X2,
+                ((val >> 48) & 0xFFFF) as u16,
+                48,
+            )
+            .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X3, expected_len as u16, 0)
+                .expect("movz"),
+        );
         self.emit_call_fn_ptr(fn_ptr);
     }
 
@@ -530,7 +599,7 @@ impl EmitCtx {
 
     /// Emit an unconditional branch to the given label.
     pub fn emit_branch(&mut self, label: LabelId) {
-        self.emit.b_label(label).expect("emit_branch failed");
+        self.emit.emit_b_label(label).expect("emit_branch failed");
     }
 
     /// Write an error code to ctx and branch to error_exit.
@@ -544,8 +613,13 @@ impl EmitCtx {
         );
         // str w9, [x22, #CTX_ERROR_CODE]
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
-                .expect("encode_str_imm"),
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("encode_str_imm"),
         );
         // b =>error_exit
         self.emit.emit_b_label(error_exit).expect("emit_b_label");
@@ -557,13 +631,17 @@ impl EmitCtx {
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, start_sp_offset)
                 .expect("ldr"),
         );
-        self.emit
-            .emit_word(aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"));
+        self.emit.emit_word(
+            aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
+        );
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, len_sp_offset)
                 .expect("str"),
         );
-        self.emit.emit_word(aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
+        );
     }
 
     /// Emit `cbnz x0, label` — branch if x0 is nonzero.
@@ -575,25 +653,24 @@ impl EmitCtx {
 
     /// Zero a 64-bit stack slot at sp + offset.
     pub fn emit_zero_stack_slot(&mut self, sp_offset: u32) {
-        self.emit.emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::XZR, Reg::SP, sp_offset).expect("str"));
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::XZR, Reg::SP, sp_offset)
+                .expect("str"),
+        );
     }
 
     /// Load a byte from sp + sp_offset, compare with byte_val, branch if equal.
-    pub fn emit_stack_byte_cmp_branch(
-        &mut self,
-        sp_offset: u32,
-        byte_val: u8,
-        label: LabelId,
-    ) {
+    pub fn emit_stack_byte_cmp_branch(&mut self, sp_offset: u32, byte_val: u8, label: LabelId) {
         let byte_val = byte_val as u32;
-        self.emit.emit_word(
-            aarch64::encode_ldrb_imm(Reg::X9, Reg::SP, sp_offset).expect("ldrb"),
-        );
+        self.emit
+            .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::SP, sp_offset).expect("ldrb"));
         self.emit.emit_word(
             aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, byte_val as u16, false)
                 .expect("cmp"),
         );
-        self.emit.emit_b_cond_label(aarch64::Condition::Eq, label).expect("b.eq");
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, label)
+            .expect("b.eq");
     }
 
     /// Set bit `bit_index` in a 64-bit stack slot at sp + sp_offset.
@@ -603,8 +680,7 @@ impl EmitCtx {
         let mask_hi = ((mask >> 16) & 0xFFFF) as u16;
 
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset)
-                .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset).expect("ldr"),
         );
 
         if mask <= 0xFFFF {
@@ -632,8 +708,7 @@ impl EmitCtx {
             .expect("orr"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset)
-                .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset).expect("str"),
         );
     }
 
@@ -647,8 +722,7 @@ impl EmitCtx {
         let error_code = crate::context::ErrorCode::MissingRequiredField as u32;
 
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset)
-                .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, sp_offset).expect("ldr"),
         );
 
         if expected_mask <= 0xFFFF {
@@ -677,18 +751,25 @@ impl EmitCtx {
             )
             .expect("and"),
         );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X11, Reg::X10).expect("cmp"),
+        );
         self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X11, Reg::X10).expect("cmp"));
-        self.emit.emit_b_cond_label(aarch64::Condition::Eq, ok_label).expect("b.eq");
+            .emit_b_cond_label(aarch64::Condition::Eq, ok_label)
+            .expect("b.eq");
 
         // Not all required fields were seen — write error and bail
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0)
-                .expect("movz"),
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
-                .expect("str"),
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(ok_label).expect("bind");
@@ -842,36 +923,45 @@ impl EmitCtx {
         let ws_done = self.emit.new_label();
 
         self.emit.bind_label(ws_loop).expect("bind");
-        self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Hs, ws_done)
             .expect("b.hs");
         self.emit
             .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b' ' as u16, false).expect("cmp"));
-        self.emit
-            .emit_b_cond_label(aarch64::Condition::Eq, ws_advance)
-            .expect("b.eq");
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'\n' as u16, false).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b' ' as u16, false).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Eq, ws_advance)
             .expect("b.eq");
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'\r' as u16, false).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'\n' as u16, false)
+                .expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Eq, ws_advance)
             .expect("b.eq");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'\r' as u16, false)
+                .expect("cmp"),
+        );
         self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'\t' as u16, false).expect("cmp"));
+            .emit_b_cond_label(aarch64::Condition::Eq, ws_advance)
+            .expect("b.eq");
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'\t' as u16, false)
+                .expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Ne, ws_done)
             .expect("b.ne");
         self.emit.bind_label(ws_advance).expect("bind");
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
         self.emit.emit_b_label(ws_loop).expect("b");
         self.emit.bind_label(ws_done).expect("bind");
@@ -888,30 +978,36 @@ impl EmitCtx {
 
         self.emit_inline_skip_ws();
 
-        self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Hs, error_exit)
             .expect("b.hs");
         self.emit
             .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b',' as u16, false).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b',' as u16, false).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Eq, got_comma)
             .expect("b.eq");
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b']' as u16, false).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b']' as u16, false).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Eq, got_end)
             .expect("b.eq");
-        self.emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"));
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE).expect("str"),
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(got_comma).expect("bind");
@@ -937,30 +1033,36 @@ impl EmitCtx {
 
         self.emit_inline_skip_ws();
 
-        self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Hs, error_exit)
             .expect("b.hs");
         self.emit
             .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b',' as u16, false).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b',' as u16, false).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Eq, got_comma)
             .expect("b.eq");
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'}' as u16, false).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, b'}' as u16, false).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Eq, got_end)
             .expect("b.eq");
-        self.emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"));
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE).expect("str"),
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(got_comma).expect("bind");
@@ -977,7 +1079,10 @@ impl EmitCtx {
 
     /// Store the cached cursor (x19) to a stack slot.
     pub fn emit_save_cursor_to_stack(&mut self, sp_offset: u32) {
-        self.emit.emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::SP, sp_offset).expect("str"));
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::SP, sp_offset)
+                .expect("str"),
+        );
     }
 
     /// Emit: skip whitespace, expect and consume `"`, branch to error_exit if not found.
@@ -991,28 +1096,33 @@ impl EmitCtx {
         self.emit_inline_skip_ws();
 
         // Check bounds + opening '"'
-        self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Hs, not_quote)
             .expect("b.hs");
         self.emit
             .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
-        self.emit
-            .emit_word(aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 0x22, false).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, 0x22, false).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Ne, not_quote)
             .expect("b.ne");
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
         self.emit.emit_b_label(ok).expect("b");
 
         self.emit.bind_label(not_quote).expect("bind");
-        self.emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"));
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE).expect("str"),
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(ok).expect("bind");
@@ -1034,13 +1144,22 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
         );
-        self.emit.emit_word(aarch64::encode_add_imm(aarch64::Width::X64, Reg::X11, Reg::X19, 1, false).expect("add"));
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X11, Reg::X22, CTX_INPUT_PTR as u32)
-                .expect("str"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X11, Reg::X19, 1, false)
+                .expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::X64,
+                Reg::X11,
+                Reg::X22,
+                CTX_INPUT_PTR as u32,
+            )
+            .expect("str"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_add_imm(
                 aarch64::Width::X64,
@@ -1051,10 +1170,12 @@ impl EmitCtx {
             )
             .expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X9).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::X10).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X9).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::X10).expect("mov"),
+        );
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -1075,8 +1196,9 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_add_imm(
                 aarch64::Width::X64,
@@ -1087,10 +1209,12 @@ impl EmitCtx {
             )
             .expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X9).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::X10).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X9).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::X10).expect("mov"),
+        );
         self.emit_call_fn_ptr(fn_ptr);
         self.emit_reload_cursor_and_check_error();
     }
@@ -1116,12 +1240,15 @@ impl EmitCtx {
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, len_save_sp_offset)
                 .expect("str"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::W32, Reg::X2, Reg::X10).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::W32, Reg::X2, Reg::X10).expect("mov"),
+        );
         self.emit_call_fn_ptr(fn_ptr);
         // x0 = buf pointer (or null on error) — no cursor reload needed
         self.emit_check_error();
@@ -1139,8 +1266,9 @@ impl EmitCtx {
         let len_off = field_offset + string_offsets.len_offset;
         let cap_off = field_offset + string_offsets.cap_offset;
 
-        self.emit
-            .emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::X0, Reg::X21, ptr_off).expect("str"));
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X0, Reg::X21, ptr_off).expect("str"),
+        );
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, len_sp_offset)
                 .expect("ldr"),
@@ -1151,7 +1279,10 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, cap_off).expect("str"),
         );
-        self.emit.emit_word(aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
+        );
     }
 
     /// Emit inline key-reading slow path call: fn(ctx, start, prefix_len, &key_ptr, &key_len).
@@ -1170,12 +1301,15 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X19, Reg::X9).expect("sub"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X10).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::X10).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_add_imm(
                 aarch64::Width::X64,
@@ -1219,26 +1353,45 @@ impl EmitCtx {
             } else {
                 let lo = val32 & 0xFFFF;
                 let hi = (val32 >> 16) & 0xFFFF;
-                self.emit
-                    .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X9, lo as u16, 0).expect("movz"));
-                self.emit
-                    .emit_word(aarch64::encode_movk(aarch64::Width::W32, Reg::X9, hi as u16, 16).expect("movk"));
+                self.emit.emit_word(
+                    aarch64::encode_movz(aarch64::Width::W32, Reg::X9, lo as u16, 0).expect("movz"),
+                );
+                self.emit.emit_word(
+                    aarch64::encode_movk(aarch64::Width::W32, Reg::X9, hi as u16, 16)
+                        .expect("movk"),
+                );
             }
         } else {
             self.emit.emit_word(
-                aarch64::encode_movz(aarch64::Width::X64, Reg::X9, (val & 0xFFFF) as u16, 0).expect("movz"),
+                aarch64::encode_movz(aarch64::Width::X64, Reg::X9, (val & 0xFFFF) as u16, 0)
+                    .expect("movz"),
             );
             self.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((val >> 16) & 0xFFFF) as u16, 16)
-                    .expect("movk"),
+                aarch64::encode_movk(
+                    aarch64::Width::X64,
+                    Reg::X9,
+                    ((val >> 16) & 0xFFFF) as u16,
+                    16,
+                )
+                .expect("movk"),
             );
             self.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((val >> 32) & 0xFFFF) as u16, 32)
-                    .expect("movk"),
+                aarch64::encode_movk(
+                    aarch64::Width::X64,
+                    Reg::X9,
+                    ((val >> 32) & 0xFFFF) as u16,
+                    32,
+                )
+                .expect("movk"),
             );
             self.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((val >> 48) & 0xFFFF) as u16, 48)
-                    .expect("movk"),
+                aarch64::encode_movk(
+                    aarch64::Width::X64,
+                    Reg::X9,
+                    ((val >> 48) & 0xFFFF) as u16,
+                    48,
+                )
+                .expect("movk"),
             );
         }
         // Store to [out + 0]
@@ -1249,16 +1402,12 @@ impl EmitCtx {
             2 => self
                 .emit
                 .emit_word(aarch64::encode_strh_imm(Reg::X9, Reg::X21, 0).expect("strh")),
-            4 => self
-                .emit
-                .emit_word(
-                    aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X21, 0).expect("str"),
-                ),
-            8 => self
-                .emit
-                .emit_word(
-                    aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, 0).expect("str"),
-                ),
+            4 => self.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X21, 0).expect("str"),
+            ),
+            8 => self.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, 0).expect("str"),
+            ),
             _ => panic!("unsupported discriminant size: {size}"),
         }
     }
@@ -1279,29 +1428,37 @@ impl EmitCtx {
         let slow_path = self.emit.new_label();
         let done_label = self.emit.new_label();
 
-        self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
             .expect("b.hs");
-        self.emit.emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
-        self.emit.emit_tbnz_label(Reg::X9, 7, slow_path).expect("tbnz");
+        self.emit
+            .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
+        self.emit
+            .emit_tbnz_label(Reg::X9, 7, slow_path)
+            .expect("tbnz");
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
         self.emit.emit_b_label(done_label).expect("b");
         self.emit.bind_label(slow_path).expect("bind");
 
         // Slow path: call full varint decode intrinsic into temp on stack
         self.emit_flush_input_cursor();
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::SP, 48, false).expect("add"),
         );
         self.emit_call_fn_ptr(slow_intrinsic);
         self.emit_reload_cursor_and_check_error();
-        self.emit.emit_word(aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::SP, 48).expect("ldr"));
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::SP, 48).expect("ldr"),
+        );
         self.emit.emit_b_label(done_label).expect("b");
         self.emit.bind_label(eof_label).expect("bind");
         self.emit.emit_word(
@@ -1332,7 +1489,9 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, imm as u16, false).expect("cmp"),
         );
-        self.emit.emit_b_cond_label(aarch64::Condition::Eq, label).expect("b.eq");
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Eq, label)
+            .expect("b.eq");
     }
 
     /// Emit a branch-to-error for unknown variant (sets UnknownVariant error code).
@@ -1344,8 +1503,13 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
-                .expect("str"),
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
     }
@@ -1353,40 +1517,69 @@ impl EmitCtx {
     /// Save the cached input_ptr (x19) to a stack slot.
     pub fn emit_save_input_ptr(&mut self, stack_offset: u32) {
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::SP, stack_offset).expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::SP, stack_offset)
+                .expect("str"),
         );
     }
 
     /// Restore the cached input_ptr (x19) from a stack slot.
     pub fn emit_restore_input_ptr(&mut self, stack_offset: u32) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::SP, stack_offset).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::SP, stack_offset)
+                .expect("ldr"),
         );
     }
 
     /// Store a 64-bit immediate into a stack slot at sp + offset.
     pub fn emit_store_imm64_to_stack(&mut self, stack_offset: u32, value: u64) {
         if value == 0 {
-            self.emit
-                .emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::XZR, Reg::SP, stack_offset).expect("str"));
+            self.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::X64, Reg::XZR, Reg::SP, stack_offset)
+                    .expect("str"),
+            );
         } else {
             // Load immediate into x9, then store
-            self.emit
-                .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X9, (value & 0xFFFF) as u16, 0).expect("movz"));
+            self.emit.emit_word(
+                aarch64::encode_movz(aarch64::Width::X64, Reg::X9, (value & 0xFFFF) as u16, 0)
+                    .expect("movz"),
+            );
             if value > 0xFFFF {
-                self.emit
-                    .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((value >> 16) & 0xFFFF) as u16, 16).expect("movk"));
+                self.emit.emit_word(
+                    aarch64::encode_movk(
+                        aarch64::Width::X64,
+                        Reg::X9,
+                        ((value >> 16) & 0xFFFF) as u16,
+                        16,
+                    )
+                    .expect("movk"),
+                );
             }
             if value > 0xFFFF_FFFF {
-                self.emit
-                    .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((value >> 32) & 0xFFFF) as u16, 32).expect("movk"));
+                self.emit.emit_word(
+                    aarch64::encode_movk(
+                        aarch64::Width::X64,
+                        Reg::X9,
+                        ((value >> 32) & 0xFFFF) as u16,
+                        32,
+                    )
+                    .expect("movk"),
+                );
             }
             if value > 0xFFFF_FFFF_FFFF {
-                self.emit
-                    .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((value >> 48) & 0xFFFF) as u16, 48).expect("movk"));
+                self.emit.emit_word(
+                    aarch64::encode_movk(
+                        aarch64::Width::X64,
+                        Reg::X9,
+                        ((value >> 48) & 0xFFFF) as u16,
+                        48,
+                    )
+                    .expect("movk"),
+                );
             }
-            self.emit
-                .emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("str"));
+            self.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset)
+                    .expect("str"),
+            );
         }
     }
 
@@ -1394,22 +1587,46 @@ impl EmitCtx {
     /// Loads the slot, ANDs with the immediate, stores back.
     pub fn emit_and_imm64_on_stack(&mut self, stack_offset: u32, mask: u64) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset)
+                .expect("ldr"),
         );
         // Load mask into x10
-        self.emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X10, (mask & 0xFFFF) as u16, 0).expect("movz"));
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X10, (mask & 0xFFFF) as u16, 0)
+                .expect("movz"),
+        );
         if mask > 0xFFFF {
-            self.emit
-                .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X10, ((mask >> 16) & 0xFFFF) as u16, 16).expect("movk"));
+            self.emit.emit_word(
+                aarch64::encode_movk(
+                    aarch64::Width::X64,
+                    Reg::X10,
+                    ((mask >> 16) & 0xFFFF) as u16,
+                    16,
+                )
+                .expect("movk"),
+            );
         }
         if mask > 0xFFFF_FFFF {
-            self.emit
-                .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X10, ((mask >> 32) & 0xFFFF) as u16, 32).expect("movk"));
+            self.emit.emit_word(
+                aarch64::encode_movk(
+                    aarch64::Width::X64,
+                    Reg::X10,
+                    ((mask >> 32) & 0xFFFF) as u16,
+                    32,
+                )
+                .expect("movk"),
+            );
         }
         if mask > 0xFFFF_FFFF_FFFF {
-            self.emit
-                .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X10, ((mask >> 48) & 0xFFFF) as u16, 48).expect("movk"));
+            self.emit.emit_word(
+                aarch64::encode_movk(
+                    aarch64::Width::X64,
+                    Reg::X10,
+                    ((mask >> 48) & 0xFFFF) as u16,
+                    48,
+                )
+                .expect("movk"),
+            );
         }
         self.emit.emit_word(
             aarch64::encode_and_reg(
@@ -1423,7 +1640,8 @@ impl EmitCtx {
             .expect("and"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset)
+                .expect("str"),
         );
     }
 
@@ -1431,30 +1649,40 @@ impl EmitCtx {
     /// If so, branch to `label`.
     pub fn emit_popcount_eq1_branch(&mut self, stack_offset: u32, label: LabelId) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset)
+                .expect("ldr"),
         );
         // popcount == 1 iff (x & (x-1)) == 0 && x != 0
         self.emit.emit_word(
             aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X10, Reg::X9, 1, false).expect("sub"),
         );
-        self.emit.emit_word(aarch64::encode_tst_reg(aarch64::Width::X64, Reg::X9, Reg::X10).expect("tst"));
-        self.emit.emit_word(aarch64::encode_b_cond(aarch64::Condition::Ne, 3).expect("b.ne"));
-        self.emit.emit_cbnz_label(aarch64::Width::X64, Reg::X9, label).expect("cbnz");
+        self.emit.emit_word(
+            aarch64::encode_tst_reg(aarch64::Width::X64, Reg::X9, Reg::X10).expect("tst"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_b_cond(aarch64::Condition::Ne, 3).expect("b.ne"));
+        self.emit
+            .emit_cbnz_label(aarch64::Width::X64, Reg::X9, label)
+            .expect("cbnz");
     }
 
     /// Check if the stack slot at sp + offset is zero. If so, branch to `label`.
     pub fn emit_stack_zero_branch(&mut self, stack_offset: u32, label: LabelId) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset)
+                .expect("ldr"),
         );
-        self.emit.emit_cbz_label(aarch64::Width::X64, Reg::X9, label).expect("cbz");
+        self.emit
+            .emit_cbz_label(aarch64::Width::X64, Reg::X9, label)
+            .expect("cbz");
     }
 
     /// Load the stack slot at sp + offset into x9, then branch to `label` if
     /// bit `bit_index` is set.
     pub fn emit_test_bit_branch(&mut self, stack_offset: u32, bit_index: u32, label: LabelId) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset)
+                .expect("ldr"),
         );
         self.emit
             .emit_tbnz_label(Reg::X9, bit_index as u8, label)
@@ -1463,16 +1691,14 @@ impl EmitCtx {
 
     /// Test a single bit at `bit_index` in the u64 at `[sp + stack_offset]`.
     /// Branch to `label` if the bit is CLEAR (zero) — i.e., the field was NOT seen.
-    pub fn emit_test_bit_branch_zero(
-        &mut self,
-        stack_offset: u32,
-        bit_index: u32,
-        label: LabelId,
-    ) {
+    pub fn emit_test_bit_branch_zero(&mut self, stack_offset: u32, bit_index: u32, label: LabelId) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset)
+                .expect("ldr"),
         );
-        self.emit.emit_tbz_label(Reg::X9, bit_index as u8, label).expect("tbz");
+        self.emit
+            .emit_tbz_label(Reg::X9, bit_index as u8, label)
+            .expect("tbz");
     }
 
     /// Emit an error (write error code to ctx, branch to error_exit).
@@ -1483,8 +1709,13 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
-                .expect("str"),
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
     }
@@ -1492,7 +1723,8 @@ impl EmitCtx {
     /// Advance the cached cursor by n bytes (inline, no function call).
     pub fn emit_advance_cursor_by(&mut self, n: u32) {
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, n as u16, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, n as u16, false)
+                .expect("add"),
         );
     }
 
@@ -1545,17 +1777,22 @@ impl EmitCtx {
         );
         self.emit.emit_tbz_label(Reg::X8, 0, non_ws).expect("tbz");
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
         self.emit.emit_b_label(ws_loop).expect("b");
 
         self.emit.bind_label(non_ws).expect("bind");
         self.emit.emit_word(
-            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X10, expected as u16, false).expect("cmp"),
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X10, expected as u16, false)
+                .expect("cmp"),
         );
-        self.emit.emit_b_cond_label(aarch64::Condition::Ne, err_lbl).expect("b.ne");
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Ne, err_lbl)
+            .expect("b.ne");
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
         self.emit.emit_b_label(done).expect("b");
 
@@ -1564,8 +1801,13 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, err_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
-                .expect("str"),
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
 
@@ -1579,11 +1821,18 @@ impl EmitCtx {
     pub fn emit_redirect_out_to_stack(&mut self, scratch_offset: u32) {
         let save_slot = scratch_offset - 8;
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X21, Reg::SP, save_slot).expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X21, Reg::SP, save_slot)
+                .expect("str"),
         );
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X21, Reg::SP, scratch_offset as u16, false)
-                .expect("add"),
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X21,
+                Reg::SP,
+                scratch_offset as u16,
+                false,
+            )
+            .expect("add"),
         );
     }
 
@@ -1591,7 +1840,8 @@ impl EmitCtx {
     pub fn emit_restore_out(&mut self, scratch_offset: u32) {
         let save_slot = scratch_offset - 8;
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, save_slot).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, save_slot)
+                .expect("ldr"),
         );
     }
 
@@ -1604,15 +1854,36 @@ impl EmitCtx {
         offset: u32,
     ) {
         let val = init_none_fn as u64;
-        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (val & 0xFFFF) as u16, 0).expect("movz"));
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (val & 0xFFFF) as u16, 0)
+                .expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((val >> 16) & 0xFFFF) as u16,
+                16,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((val >> 32) & 0xFFFF) as u16,
+                32,
+            )
+            .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((val >> 48) & 0xFFFF) as u16,
+                48,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
             aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::X21, offset as u16, false)
@@ -1631,15 +1902,36 @@ impl EmitCtx {
         extra_ptr: *const u8,
     ) {
         let fn_val = fn_ptr as u64;
-        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (fn_val & 0xFFFF) as u16, 0).expect("movz"));
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((fn_val >> 16) & 0xFFFF) as u16, 16).expect("movk"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (fn_val & 0xFFFF) as u16, 0)
+                .expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((fn_val >> 32) & 0xFFFF) as u16, 32).expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((fn_val >> 16) & 0xFFFF) as u16,
+                16,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((fn_val >> 48) & 0xFFFF) as u16, 48).expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((fn_val >> 32) & 0xFFFF) as u16,
+                32,
+            )
+            .expect("movk"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((fn_val >> 48) & 0xFFFF) as u16,
+                48,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
             aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::X21, offset as u16, false)
@@ -1647,19 +1939,35 @@ impl EmitCtx {
         );
         let extra_val = extra_ptr as u64;
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (extra_val & 0xFFFF) as u16, 0).expect("movz"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (extra_val & 0xFFFF) as u16, 0)
+                .expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((extra_val >> 16) & 0xFFFF) as u16, 16)
-                .expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X2,
+                ((extra_val >> 16) & 0xFFFF) as u16,
+                16,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((extra_val >> 32) & 0xFFFF) as u16, 32)
-                .expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X2,
+                ((extra_val >> 32) & 0xFFFF) as u16,
+                32,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X2, ((extra_val >> 48) & 0xFFFF) as u16, 48)
-                .expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X2,
+                ((extra_val >> 48) & 0xFFFF) as u16,
+                48,
+            )
+            .expect("movk"),
         );
         self.emit_call_fn_ptr(wrapper_fn);
     }
@@ -1675,24 +1983,49 @@ impl EmitCtx {
     ) {
         let val = init_some_fn as u64;
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (val & 0xFFFF) as u16, 0).expect("movz"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X0, (val & 0xFFFF) as u16, 0)
+                .expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((val >> 16) & 0xFFFF) as u16,
+                16,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((val >> 32) & 0xFFFF) as u16,
+                32,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
-            aarch64::encode_movk(aarch64::Width::X64, Reg::X0, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"),
+            aarch64::encode_movk(
+                aarch64::Width::X64,
+                Reg::X0,
+                ((val >> 48) & 0xFFFF) as u16,
+                48,
+            )
+            .expect("movk"),
         );
         self.emit.emit_word(
             aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::X21, offset as u16, false)
                 .expect("add"),
         );
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X2, Reg::SP, scratch_offset as u16, false)
-                .expect("add"),
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X2,
+                Reg::SP,
+                scratch_offset as u16,
+                false,
+            )
+            .expect("add"),
         );
         self.emit_call_fn_ptr(wrapper_fn);
     }
@@ -1716,15 +2049,19 @@ impl EmitCtx {
     /// it survives across the function call boundary.
     pub fn emit_call_vec_alloc(&mut self, alloc_fn: *const u8, elem_size: u32, elem_align: u32) {
         self.emit_flush_input_cursor();
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"));
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (elem_size as u16), 0).expect("movz"),
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
         );
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X3, (elem_align as u16), 0).expect("movz"),
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (elem_size as u16), 0)
+                .expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X3, (elem_align as u16), 0)
+                .expect("movz"),
         );
         self.emit_call_fn_ptr(alloc_fn);
         self.emit_reload_cursor_and_check_error();
@@ -1748,10 +2085,12 @@ impl EmitCtx {
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, cap_slot).expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X10, Reg::X10, Reg::X10).expect("add"),
+            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X10, Reg::X10, Reg::X10)
+                .expect("add"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X1, Reg::SP, buf_slot).expect("ldr"),
         );
@@ -1761,8 +2100,9 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X3, Reg::SP, cap_slot).expect("ldr"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X4, Reg::X10).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X4, Reg::X10).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_movz(aarch64::Width::X64, Reg::X5, elem_size as u16, 0).expect("movz"),
         );
@@ -1778,7 +2118,8 @@ impl EmitCtx {
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, cap_slot).expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X10, Reg::X10, Reg::X10).expect("add"),
+            aarch64::encode_add_reg(aarch64::Width::X64, Reg::X10, Reg::X10, Reg::X10)
+                .expect("add"),
         );
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, cap_slot).expect("str"),
@@ -1796,8 +2137,9 @@ impl EmitCtx {
         elem_align: u32,
     ) {
         self.emit_flush_input_cursor();
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
+        );
         self.emit.emit_word(
             aarch64::encode_movz(aarch64::Width::X64, Reg::X1, count as u16, 0).expect("movz"),
         );
@@ -1821,7 +2163,8 @@ impl EmitCtx {
         initial_cap: u32,
     ) {
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot).expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot)
+                .expect("str"),
         );
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X0, Reg::SP, buf_slot).expect("str"),
@@ -1830,7 +2173,8 @@ impl EmitCtx {
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::XZR, Reg::SP, len_slot).expect("str"),
         );
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X10, initial_cap as u16, 0).expect("movz"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X10, initial_cap as u16, 0)
+                .expect("movz"),
         );
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, cap_slot).expect("str"),
@@ -1840,7 +2184,13 @@ impl EmitCtx {
     /// Check ctx.error.code and branch to label if nonzero.
     pub fn emit_check_error_branch(&mut self, label: LabelId) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X10, Reg::X22, CTX_ERROR_CODE as u32).expect("ldr"),
+            aarch64::encode_ldr_imm(
+                aarch64::Width::W32,
+                Reg::X10,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X10, label)
@@ -1871,34 +2221,41 @@ impl EmitCtx {
         elem_size: u32,
     ) {
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot).expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot)
+                .expect("str"),
         );
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X0, Reg::SP, buf_slot).expect("str"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X23, Reg::SP, save_x23_slot).expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X23, Reg::SP, save_x23_slot)
+                .expect("str"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X24, Reg::SP, save_x24_slot).expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X24, Reg::SP, save_x24_slot)
+                .expect("str"),
         );
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X23, Reg::X0).expect("mov"));
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, count_slot).expect("ldr"),
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X23, Reg::X0).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, count_slot)
+                .expect("ldr"),
         );
         self.emit.emit_word(
             aarch64::encode_movz(aarch64::Width::X64, Reg::X11, elem_size as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_madd(aarch64::Width::X64, Reg::X24, Reg::X10, Reg::X11, Reg::X0).expect("madd"),
+            aarch64::encode_madd(aarch64::Width::X64, Reg::X24, Reg::X10, Reg::X11, Reg::X0)
+                .expect("madd"),
         );
     }
 
     /// Set out = cursor (x21 = x23). Single register move, no memory access.
     pub fn emit_vec_loop_load_cursor(&mut self, _cursor_slot: u32) {
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X23).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X23).expect("mov"),
+        );
     }
 
     /// Advance cursor register, check error, branch back if cursor < end.
@@ -1912,7 +2269,13 @@ impl EmitCtx {
         error_cleanup_label: LabelId,
     ) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X10, Reg::X22, CTX_ERROR_CODE as u32).expect("ldr"),
+            aarch64::encode_ldr_imm(
+                aarch64::Width::W32,
+                Reg::X10,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X10, error_cleanup_label)
@@ -1990,15 +2353,17 @@ impl EmitCtx {
         let slow_path = self.emit.new_label();
         let eof_label = self.emit.new_label();
 
-        self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+        );
         self.emit
             .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
             .expect("b.hs");
         self.emit
             .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("add"),
         );
         self.emit
             .emit_tbnz_label(Reg::X9, 7, slow_path)
@@ -2011,8 +2376,9 @@ impl EmitCtx {
             self.emit.emit_word(
                 aarch64::encode_and_imm(aarch64::Width::W32, Reg::X11, Reg::X9, 1).expect("and"),
             );
-            self.emit
-                .emit_word(aarch64::encode_neg(aarch64::Width::W32, Reg::X11, Reg::X11).expect("neg"));
+            self.emit.emit_word(
+                aarch64::encode_neg(aarch64::Width::W32, Reg::X11, Reg::X11).expect("neg"),
+            );
             self.emit.emit_word(
                 aarch64::encode_eor_reg(
                     aarch64::Width::W32,
@@ -2062,19 +2428,24 @@ impl EmitCtx {
         // === Slow path (out-of-line) ===
         self.emit.bind_label(slow_path).expect("bind");
         self.emit.emit_word(
-            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("sub"),
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                .expect("sub"),
         );
         self.emit_flush_input_cursor();
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X23).expect("mov"));
-        self.emit_call_fn_ptr(intrinsic_fn_ptr);
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR).expect("ldr"),
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE).expect("ldr"),
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X23).expect("mov"),
+        );
+        self.emit_call_fn_ptr(intrinsic_fn_ptr);
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_cleanup)
@@ -2099,18 +2470,18 @@ impl EmitCtx {
 
         // === EOF (cold) ===
         self.emit.bind_label(eof_label).expect("bind");
-        self.emit
-            .emit_word(
-                aarch64::encode_movz(
-                    aarch64::Width::W32,
-                    Reg::X9,
-                    crate::context::ErrorCode::UnexpectedEof as u16,
-                    0,
-                )
-                .expect("movz"),
-            );
         self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE).expect("str"),
+            aarch64::encode_movz(
+                aarch64::Width::W32,
+                Reg::X9,
+                crate::context::ErrorCode::UnexpectedEof as u16,
+                0,
+            )
+            .expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_cleanup).expect("b");
     }
@@ -2118,10 +2489,12 @@ impl EmitCtx {
     /// Restore x23/x24 from stack. Must be called on every exit path from a Vec loop.
     pub fn emit_vec_restore_callee_saved(&mut self, save_x23_slot: u32, save_x24_slot: u32) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X23, Reg::SP, save_x23_slot).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X23, Reg::SP, save_x23_slot)
+                .expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X24, Reg::SP, save_x24_slot).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X24, Reg::SP, save_x24_slot)
+                .expect("ldr"),
         );
     }
 
@@ -2133,13 +2506,15 @@ impl EmitCtx {
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, buf_slot).expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, counter_slot).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, counter_slot)
+                .expect("ldr"),
         );
         self.emit.emit_word(
             aarch64::encode_movz(aarch64::Width::X64, Reg::X11, elem_size as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_madd(aarch64::Width::X64, Reg::X21, Reg::X10, Reg::X11, Reg::X21).expect("madd"),
+            aarch64::encode_madd(aarch64::Width::X64, Reg::X21, Reg::X10, Reg::X11, Reg::X21)
+                .expect("madd"),
         );
     }
 
@@ -2159,7 +2534,8 @@ impl EmitCtx {
         let cap_off = base_offset + offsets.cap_offset;
 
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot)
+                .expect("ldr"),
         );
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, buf_slot).expect("ldr"),
@@ -2194,7 +2570,8 @@ impl EmitCtx {
 
         // Vec::new() writes: ptr = NonNull::dangling() = elem_align as *mut T, len = 0, cap = 0.
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X10, elem_align as u16, 0).expect("movz"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X10, elem_align as u16, 0)
+                .expect("movz"),
         );
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::X21, ptr_off).expect("str"),
@@ -2220,7 +2597,8 @@ impl EmitCtx {
     ) {
         let error_exit = self.error_exit;
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X21, Reg::SP, saved_out_slot)
+                .expect("ldr"),
         );
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X0, Reg::SP, buf_slot).expect("ldr"),
@@ -2247,22 +2625,18 @@ impl EmitCtx {
     }
 
     /// Compare two stack slot values and branch if equal (len == cap for growth check).
-    pub fn emit_cmp_stack_slots_branch_eq(
-        &mut self,
-        slot_a: u32,
-        slot_b: u32,
-        label: LabelId,
-    ) {
+    pub fn emit_cmp_stack_slots_branch_eq(&mut self, slot_a: u32, slot_b: u32, label: LabelId) {
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, slot_a).expect("ldr"),
         );
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X11, Reg::SP, slot_b).expect("ldr"),
         );
+        self.emit.emit_word(
+            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X10, Reg::X11).expect("cmp"),
+        );
         self.emit
-            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X10, Reg::X11).expect("cmp"));
-        self.emit
-            .emit_b_cond_label(aarch64::Condition::EQ, label)
+            .emit_b_cond_label(aarch64::Condition::Eq, label)
             .expect("b.eq");
     }
 
@@ -2272,7 +2646,8 @@ impl EmitCtx {
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, slot).expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X10, Reg::X10, 1, false).expect("add"),
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X10, Reg::X10, 1, false)
+                .expect("add"),
         );
         self.emit.emit_word(
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, slot).expect("str"),
@@ -2314,16 +2689,19 @@ impl EmitCtx {
         // Load from_pair_slice_fn via x8, then mov to x0 (can't load directly
         // into x0 because emit_call_fn_ptr will clobber x8).
         self.emit_load_imm64(Reg::X8, from_pair_slice_fn as u64);
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X8).expect("mov"));
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X1, Reg::SP, saved_out_slot).expect("ldr"),
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X8).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X1, Reg::SP, saved_out_slot)
+                .expect("ldr"),
         );
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X2, Reg::SP, buf_slot).expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X3, Reg::SP, count_slot).expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X3, Reg::SP, count_slot)
+                .expect("ldr"),
         );
         self.emit_call_fn_ptr(trampoline);
     }
@@ -2334,14 +2712,18 @@ impl EmitCtx {
     pub fn emit_call_map_from_pairs_empty(&mut self, from_pair_slice_fn: *const u8) {
         let trampoline = crate::intrinsics::kajit_map_build as *const u8;
         self.emit_load_imm64(Reg::X8, from_pair_slice_fn as u64);
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X8).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X21).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::XZR).expect("mov"));
-        self.emit
-            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::XZR).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X8).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X21).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::XZR).expect("mov"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::XZR).expect("mov"),
+        );
         self.emit_call_fn_ptr(trampoline);
     }
 
@@ -2363,91 +2745,144 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X1, Reg::SP, cap_slot).expect("ldr"),
         );
-        self.emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, pair_stride as u16, 0).expect("movz"));
-        self.emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X3, pair_align as u16, 0).expect("movz"));
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, pair_stride as u16, 0)
+                .expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X3, pair_align as u16, 0).expect("movz"),
+        );
         self.emit_call_fn_ptr(free_fn);
     }
 
     // ── Recipe emission ─────────────────────────────────────────────
-
     /// Emit a recipe — interpret a sequence of micro-ops into aarch64 instructions.
     pub fn emit_recipe(&mut self, recipe: &Recipe) {
         let error_exit = self.error_exit;
 
         // Allocate dynamic labels for the recipe
-        let labels: Vec<DynamicLabel> = (0..recipe.label_count)
-            .map(|_| self.ops.new_dynamic_label())
+        let labels: Vec<LabelId> = (0..recipe.label_count)
+            .map(|_| self.emit.new_label())
             .collect();
 
         // Shared EOF error label (lazily bound on first use)
-        let eof_label = self.ops.new_dynamic_label();
+        let eof_label = self.emit.new_label();
 
         for op in &recipe.ops {
             match op {
                 Op::BoundsCheck { count } => {
                     if *count == 1 {
-                        dynasm!(self.ops
-                            ; .arch aarch64
-                            ; cmp x19, x20
-                            ; b.hs =>eof_label
+                        self.emit.emit_word(
+                            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20)
+                                .expect("cmp"),
                         );
+                        self.emit
+                            .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
+                            .expect("b.hs");
                     } else {
                         let count = *count;
-                        dynasm!(self.ops
-                            ; .arch aarch64
-                            ; sub x9, x20, x19
-                            ; cmp x9, #count
-                            ; b.lo =>eof_label
+                        self.emit.emit_word(
+                            aarch64::encode_sub_reg(
+                                aarch64::Width::X64,
+                                Reg::X9,
+                                Reg::X20,
+                                Reg::X19,
+                            )
+                            .expect("sub"),
                         );
+                        self.emit.emit_word(
+                            aarch64::encode_cmp_imm(
+                                aarch64::Width::X64,
+                                Reg::X9,
+                                count as u16,
+                                false,
+                            )
+                            .expect("cmp"),
+                        );
+                        self.emit
+                            .emit_b_cond_label(aarch64::Condition::Lo, eof_label)
+                            .expect("b.lo");
                     }
                 }
                 Op::LoadByte { dst } => match dst {
-                    Slot::A => dynasm!(self.ops ; .arch aarch64 ; ldrb w9, [x19]),
-                    Slot::B => dynasm!(self.ops ; .arch aarch64 ; ldrb w10, [x19]),
+                    Slot::A => self
+                        .emit
+                        .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb")),
+                    Slot::B => self
+                        .emit
+                        .emit_word(aarch64::encode_ldrb_imm(Reg::X10, Reg::X19, 0).expect("ldrb")),
                 },
                 Op::LoadFromCursor { dst, width } => match (dst, width) {
-                    (Slot::A, Width::W4) => dynasm!(self.ops ; .arch aarch64 ; ldr w9, [x19]),
-                    (Slot::A, Width::W8) => dynasm!(self.ops ; .arch aarch64 ; ldr x9, [x19]),
-                    (Slot::B, Width::W4) => dynasm!(self.ops ; .arch aarch64 ; ldr w10, [x19]),
-                    (Slot::B, Width::W8) => dynasm!(self.ops ; .arch aarch64 ; ldr x10, [x19]),
+                    (Slot::A, Width::W4) => self.emit.emit_word(
+                        aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X19, 0)
+                            .expect("ldr"),
+                    ),
+                    (Slot::A, Width::W8) => self.emit.emit_word(
+                        aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X19, 0)
+                            .expect("ldr"),
+                    ),
+                    (Slot::B, Width::W4) => self.emit.emit_word(
+                        aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X10, Reg::X19, 0)
+                            .expect("ldr"),
+                    ),
+                    (Slot::B, Width::W8) => self.emit.emit_word(
+                        aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::X19, 0)
+                            .expect("ldr"),
+                    ),
                     _ => panic!("unsupported LoadFromCursor width"),
                 },
                 Op::StoreToOut { src, offset, width } => {
                     let offset = *offset;
                     match (src, width) {
-                        (Slot::A, Width::W1) => {
-                            dynasm!(self.ops ; .arch aarch64 ; strb w9, [x21, #offset])
-                        }
-                        (Slot::A, Width::W2) => {
-                            dynasm!(self.ops ; .arch aarch64 ; strh w9, [x21, #offset])
-                        }
-                        (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str w9, [x21, #offset])
-                        }
-                        (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str x9, [x21, #offset])
-                        }
-                        (Slot::B, Width::W1) => {
-                            dynasm!(self.ops ; .arch aarch64 ; strb w10, [x21, #offset])
-                        }
-                        (Slot::B, Width::W2) => {
-                            dynasm!(self.ops ; .arch aarch64 ; strh w10, [x21, #offset])
-                        }
-                        (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str w10, [x21, #offset])
-                        }
-                        (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str x10, [x21, #offset])
-                        }
+                        (Slot::A, Width::W1) => self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X9, Reg::X21, offset).expect("strb"),
+                        ),
+                        (Slot::A, Width::W2) => self.emit.emit_word(
+                            aarch64::encode_strh_imm(Reg::X9, Reg::X21, offset).expect("strh"),
+                        ),
+                        (Slot::A, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X21, offset)
+                                .expect("str"),
+                        ),
+                        (Slot::A, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, offset)
+                                .expect("str"),
+                        ),
+                        (Slot::B, Width::W1) => self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X10, Reg::X21, offset).expect("strb"),
+                        ),
+                        (Slot::B, Width::W2) => self.emit.emit_word(
+                            aarch64::encode_strh_imm(Reg::X10, Reg::X21, offset).expect("strh"),
+                        ),
+                        (Slot::B, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_str_imm(
+                                aarch64::Width::W32,
+                                Reg::X10,
+                                Reg::X21,
+                                offset,
+                            )
+                            .expect("str"),
+                        ),
+                        (Slot::B, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_str_imm(
+                                aarch64::Width::X64,
+                                Reg::X10,
+                                Reg::X21,
+                                offset,
+                            )
+                            .expect("str"),
+                        ),
                     }
                 }
                 Op::StoreByteToStack { src, sp_offset } => {
                     let sp_offset = *sp_offset;
                     match src {
-                        Slot::A => dynasm!(self.ops ; .arch aarch64 ; strb w9, [sp, #sp_offset]),
-                        Slot::B => dynasm!(self.ops ; .arch aarch64 ; strb w10, [sp, #sp_offset]),
+                        Slot::A => self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X9, Reg::SP, sp_offset).expect("strb"),
+                        ),
+                        Slot::B => self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X10, Reg::SP, sp_offset).expect("strb"),
+                        ),
                     }
                 }
                 Op::StoreToStack {
@@ -2457,18 +2892,42 @@ impl EmitCtx {
                 } => {
                     let sp_offset = *sp_offset;
                     match (src, width) {
-                        (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str w9, [sp, #sp_offset])
-                        }
-                        (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str x9, [sp, #sp_offset])
-                        }
-                        (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str w10, [sp, #sp_offset])
-                        }
-                        (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; str x10, [sp, #sp_offset])
-                        }
+                        (Slot::A, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_str_imm(
+                                aarch64::Width::W32,
+                                Reg::X9,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("str"),
+                        ),
+                        (Slot::A, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_str_imm(
+                                aarch64::Width::X64,
+                                Reg::X9,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("str"),
+                        ),
+                        (Slot::B, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_str_imm(
+                                aarch64::Width::W32,
+                                Reg::X10,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("str"),
+                        ),
+                        (Slot::B, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_str_imm(
+                                aarch64::Width::X64,
+                                Reg::X10,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("str"),
+                        ),
                         _ => panic!("unsupported StoreToStack width"),
                     }
                 }
@@ -2479,44 +2938,119 @@ impl EmitCtx {
                 } => {
                     let sp_offset = *sp_offset;
                     match (dst, width) {
-                        (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr w9, [sp, #sp_offset])
-                        }
-                        (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr x9, [sp, #sp_offset])
-                        }
-                        (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr w10, [sp, #sp_offset])
-                        }
-                        (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr x10, [sp, #sp_offset])
-                        }
+                        (Slot::A, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(
+                                aarch64::Width::W32,
+                                Reg::X9,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("ldr"),
+                        ),
+                        (Slot::A, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(
+                                aarch64::Width::X64,
+                                Reg::X9,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("ldr"),
+                        ),
+                        (Slot::B, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(
+                                aarch64::Width::W32,
+                                Reg::X10,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("ldr"),
+                        ),
+                        (Slot::B, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(
+                                aarch64::Width::X64,
+                                Reg::X10,
+                                Reg::SP,
+                                sp_offset,
+                            )
+                            .expect("ldr"),
+                        ),
                         _ => panic!("unsupported LoadFromStack width"),
                     }
                 }
                 Op::AdvanceCursor { count } => {
                     let count = *count;
-                    dynasm!(self.ops ; .arch aarch64 ; add x19, x19, #count);
+                    self.emit.emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X19,
+                            Reg::X19,
+                            count as u16,
+                            false,
+                        )
+                        .expect("add"),
+                    );
                 }
                 Op::AdvanceCursorBySlot { slot } => match slot {
-                    Slot::A => dynasm!(self.ops ; .arch aarch64 ; add x19, x19, x9),
-                    Slot::B => dynasm!(self.ops ; .arch aarch64 ; add x19, x19, x10),
+                    Slot::A => self.emit.emit_word(
+                        aarch64::encode_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X9)
+                            .expect("add"),
+                    ),
+                    Slot::B => self.emit.emit_word(
+                        aarch64::encode_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X10)
+                            .expect("add"),
+                    ),
                 },
                 Op::ZigzagDecode { slot } => match slot {
-                    Slot::A => dynasm!(self.ops
-                        ; .arch aarch64
-                        ; lsr w10, w9, #1
-                        ; and w11, w9, #1
-                        ; neg w11, w11
-                        ; eor w9, w10, w11
-                    ),
-                    Slot::B => dynasm!(self.ops
-                        ; .arch aarch64
-                        ; lsr w11, w10, #1
-                        ; and w9, w10, #1
-                        ; neg w9, w9
-                        ; eor w10, w11, w9
-                    ),
+                    Slot::A => {
+                        self.emit.emit_word(
+                            aarch64::encode_lsr_imm(aarch64::Width::W32, Reg::X10, Reg::X9, 1)
+                                .expect("lsr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_and_imm(aarch64::Width::W32, Reg::X11, Reg::X9, 1)
+                                .expect("and"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_neg(aarch64::Width::W32, Reg::X11, Reg::X11)
+                                .expect("neg"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_eor_reg(
+                                aarch64::Width::W32,
+                                Reg::X9,
+                                Reg::X10,
+                                Reg::X11,
+                                aarch64::Shift::Lsl,
+                                0,
+                            )
+                            .expect("eor"),
+                        );
+                    }
+                    Slot::B => {
+                        self.emit.emit_word(
+                            aarch64::encode_lsr_imm(aarch64::Width::W32, Reg::X11, Reg::X10, 1)
+                                .expect("lsr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_and_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 1)
+                                .expect("and"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_neg(aarch64::Width::W32, Reg::X9, Reg::X9)
+                                .expect("neg"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_eor_reg(
+                                aarch64::Width::W32,
+                                Reg::X10,
+                                Reg::X11,
+                                Reg::X9,
+                                aarch64::Shift::Lsl,
+                                0,
+                            )
+                            .expect("eor"),
+                        );
+                    }
                 },
                 Op::ValidateMax {
                     slot,
@@ -2525,44 +3059,63 @@ impl EmitCtx {
                 } => {
                     let max_val = *max_val;
                     let error_code = *error as u32;
-                    let invalid_label = self.ops.new_dynamic_label();
-                    let ok_label = self.ops.new_dynamic_label();
+                    let invalid_label = self.emit.new_label();
+                    let ok_label = self.emit.new_label();
                     match slot {
-                        Slot::A => dynasm!(self.ops
-                            ; .arch aarch64
-                            ; cmp w9, #max_val
-                            ; b.hi =>invalid_label
+                        Slot::A => self.emit.emit_word(
+                            aarch64::encode_cmp_imm(
+                                aarch64::Width::W32,
+                                Reg::X9,
+                                max_val as u16,
+                                false,
+                            )
+                            .expect("cmp"),
                         ),
-                        Slot::B => dynasm!(self.ops
-                            ; .arch aarch64
-                            ; cmp w10, #max_val
-                            ; b.hi =>invalid_label
+                        Slot::B => self.emit.emit_word(
+                            aarch64::encode_cmp_imm(
+                                aarch64::Width::W32,
+                                Reg::X10,
+                                max_val as u16,
+                                false,
+                            )
+                            .expect("cmp"),
                         ),
                     }
-                    dynasm!(self.ops
-                        ; .arch aarch64
-                        ; b =>ok_label
-                        ; =>invalid_label
-                        ; movz w9, #error_code
-                        ; str w9, [x22, #CTX_ERROR_CODE]
-                        ; b =>error_exit
-                        ; =>ok_label
+                    self.emit
+                        .emit_b_cond_label(aarch64::Condition::Hi, invalid_label)
+                        .expect("b.hi");
+                    self.emit.emit_b_label(ok_label).expect("b");
+                    self.emit.bind_label(invalid_label).expect("bind");
+                    self.emit.emit_word(
+                        aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0)
+                            .expect("movz"),
                     );
+                    self.emit.emit_word(
+                        aarch64::encode_str_imm(
+                            aarch64::Width::W32,
+                            Reg::X9,
+                            Reg::X22,
+                            CTX_ERROR_CODE as u32,
+                        )
+                        .expect("str"),
+                    );
+                    self.emit.emit_b_label(error_exit).expect("b");
+                    self.emit.bind_label(ok_label).expect("bind");
                 }
                 Op::TestBit7Branch { slot, target } => {
                     let label = labels[*target];
                     match slot {
-                        Slot::A => dynasm!(self.ops ; .arch aarch64 ; tbnz w9, #7, =>label),
-                        Slot::B => dynasm!(self.ops ; .arch aarch64 ; tbnz w10, #7, =>label),
+                        Slot::A => self.emit.emit_tbnz_label(Reg::X9, 7, label).expect("tbnz"),
+                        Slot::B => self.emit.emit_tbnz_label(Reg::X10, 7, label).expect("tbnz"),
                     }
                 }
                 Op::Branch { target } => {
                     let label = labels[*target];
-                    dynasm!(self.ops ; .arch aarch64 ; b =>label);
+                    self.emit.emit_b_label(label).expect("b");
                 }
                 Op::BindLabel { index } => {
                     let label = labels[*index];
-                    dynasm!(self.ops ; .arch aarch64 ; =>label);
+                    self.emit.bind_label(label).expect("bind");
                 }
                 Op::CallIntrinsic {
                     fn_ptr,
@@ -2570,10 +3123,19 @@ impl EmitCtx {
                 } => {
                     let field_offset = *field_offset;
                     self.emit_flush_input_cursor();
-                    dynasm!(self.ops
-                        ; .arch aarch64
-                        ; mov x0, x22
-                        ; add x1, x21, #field_offset
+                    self.emit.emit_word(
+                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22)
+                            .expect("mov"),
+                    );
+                    self.emit.emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X1,
+                            Reg::X21,
+                            field_offset as u16,
+                            false,
+                        )
+                        .expect("add"),
                     );
                     self.emit_call_fn_ptr(*fn_ptr);
                     self.emit_reload_cursor_and_check_error();
@@ -2581,17 +3143,32 @@ impl EmitCtx {
                 Op::CallIntrinsicStackOut { fn_ptr, sp_offset } => {
                     let sp_offset = *sp_offset;
                     self.emit_flush_input_cursor();
-                    dynasm!(self.ops
-                        ; .arch aarch64
-                        ; mov x0, x22
-                        ; add x1, sp, #sp_offset
+                    self.emit.emit_word(
+                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22)
+                            .expect("mov"),
+                    );
+                    self.emit.emit_word(
+                        aarch64::encode_add_imm(
+                            aarch64::Width::X64,
+                            Reg::X1,
+                            Reg::SP,
+                            sp_offset as u16,
+                            false,
+                        )
+                        .expect("add"),
                     );
                     self.emit_call_fn_ptr(*fn_ptr);
                     self.emit_reload_cursor_and_check_error();
                 }
                 Op::ComputeRemaining { dst } => match dst {
-                    Slot::A => dynasm!(self.ops ; .arch aarch64 ; sub x9, x20, x19),
-                    Slot::B => dynasm!(self.ops ; .arch aarch64 ; sub x10, x20, x19),
+                    Slot::A => self.emit.emit_word(
+                        aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X20, Reg::X19)
+                            .expect("sub"),
+                    ),
+                    Slot::B => self.emit.emit_word(
+                        aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X10, Reg::X20, Reg::X19)
+                            .expect("sub"),
+                    ),
                 },
                 Op::CmpBranchLo { lhs, rhs, on_fail } => {
                     let target = match on_fail {
@@ -2599,22 +3176,36 @@ impl EmitCtx {
                         ErrorTarget::ErrorExit => error_exit,
                     };
                     match (lhs, rhs) {
-                        (Slot::A, Slot::B) => dynasm!(self.ops
-                            ; .arch aarch64
-                            ; cmp x9, x10
-                            ; b.lo =>target
-                        ),
-                        (Slot::B, Slot::A) => dynasm!(self.ops
-                            ; .arch aarch64
-                            ; cmp x10, x9
-                            ; b.lo =>target
-                        ),
+                        (Slot::A, Slot::B) => {
+                            self.emit.emit_word(
+                                aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::X10)
+                                    .expect("cmp"),
+                            );
+                            self.emit
+                                .emit_b_cond_label(aarch64::Condition::Lo, target)
+                                .expect("b.lo");
+                        }
+                        (Slot::B, Slot::A) => {
+                            self.emit.emit_word(
+                                aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X10, Reg::X9)
+                                    .expect("cmp"),
+                            );
+                            self.emit
+                                .emit_b_cond_label(aarch64::Condition::Lo, target)
+                                .expect("b.lo");
+                        }
                         _ => panic!("CmpBranchLo requires different slots"),
                     }
                 }
                 Op::SaveCursor { dst } => match dst {
-                    Slot::A => dynasm!(self.ops ; .arch aarch64 ; mov x9, x19),
-                    Slot::B => dynasm!(self.ops ; .arch aarch64 ; mov x10, x19),
+                    Slot::A => self.emit.emit_word(
+                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X19)
+                            .expect("mov"),
+                    ),
+                    Slot::B => self.emit.emit_word(
+                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X10, Reg::X19)
+                            .expect("mov"),
+                    ),
                 },
                 Op::CallValidateAllocCopy {
                     fn_ptr,
@@ -2622,14 +3213,29 @@ impl EmitCtx {
                     len_src,
                 } => {
                     self.emit_flush_input_cursor();
-                    dynasm!(self.ops ; .arch aarch64 ; mov x0, x22);
+                    self.emit.emit_word(
+                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22)
+                            .expect("mov"),
+                    );
                     match data_src {
-                        Slot::A => dynasm!(self.ops ; .arch aarch64 ; mov x1, x9),
-                        Slot::B => dynasm!(self.ops ; .arch aarch64 ; mov x1, x10),
+                        Slot::A => self.emit.emit_word(
+                            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9)
+                                .expect("mov"),
+                        ),
+                        Slot::B => self.emit.emit_word(
+                            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X10)
+                                .expect("mov"),
+                        ),
                     }
                     match len_src {
-                        Slot::A => dynasm!(self.ops ; .arch aarch64 ; mov w2, w9),
-                        Slot::B => dynasm!(self.ops ; .arch aarch64 ; mov w2, w10),
+                        Slot::A => self.emit.emit_word(
+                            aarch64::encode_mov_reg(aarch64::Width::W32, Reg::X2, Reg::X9)
+                                .expect("mov"),
+                        ),
+                        Slot::B => self.emit.emit_word(
+                            aarch64::encode_mov_reg(aarch64::Width::W32, Reg::X2, Reg::X10)
+                                .expect("mov"),
+                        ),
                     }
                     self.emit_call_fn_ptr(*fn_ptr);
                     self.emit_check_error();
@@ -2645,20 +3251,49 @@ impl EmitCtx {
                     let len_offset = *base_offset + *len_off;
                     let cap_offset = *base_offset + *cap_off;
                     // x0 = buf pointer from previous call return
-                    dynasm!(self.ops ; .arch aarch64 ; str x0, [x21, #ptr_offset]);
+                    self.emit.emit_word(
+                        aarch64::encode_str_imm(aarch64::Width::X64, Reg::X0, Reg::X21, ptr_offset)
+                            .expect("str"),
+                    );
                     match len_slot {
                         Slot::A => {
-                            dynasm!(self.ops
-                                ; .arch aarch64
-                                ; str x9, [x21, #len_offset]
-                                ; str x9, [x21, #cap_offset]
+                            self.emit.emit_word(
+                                aarch64::encode_str_imm(
+                                    aarch64::Width::X64,
+                                    Reg::X9,
+                                    Reg::X21,
+                                    len_offset,
+                                )
+                                .expect("str"),
+                            );
+                            self.emit.emit_word(
+                                aarch64::encode_str_imm(
+                                    aarch64::Width::X64,
+                                    Reg::X9,
+                                    Reg::X21,
+                                    cap_offset,
+                                )
+                                .expect("str"),
                             );
                         }
                         Slot::B => {
-                            dynasm!(self.ops
-                                ; .arch aarch64
-                                ; str x10, [x21, #len_offset]
-                                ; str x10, [x21, #cap_offset]
+                            self.emit.emit_word(
+                                aarch64::encode_str_imm(
+                                    aarch64::Width::X64,
+                                    Reg::X10,
+                                    Reg::X21,
+                                    len_offset,
+                                )
+                                .expect("str"),
+                            );
+                            self.emit.emit_word(
+                                aarch64::encode_str_imm(
+                                    aarch64::Width::X64,
+                                    Reg::X10,
+                                    Reg::X21,
+                                    cap_offset,
+                                )
+                                .expect("str"),
                             );
                         }
                     }
@@ -2674,179 +3309,460 @@ impl EmitCtx {
                 Op::LoadFromInput { dst, offset, width } => {
                     let offset = *offset;
                     match (dst, width) {
-                        (Slot::A, Width::W1) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldrb w9, [x21, #offset])
-                        }
-                        (Slot::A, Width::W2) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldrh w9, [x21, #offset])
-                        }
-                        (Slot::A, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr w9, [x21, #offset])
-                        }
-                        (Slot::A, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr x9, [x21, #offset])
-                        }
-                        (Slot::B, Width::W1) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldrb w10, [x21, #offset])
-                        }
-                        (Slot::B, Width::W2) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldrh w10, [x21, #offset])
-                        }
-                        (Slot::B, Width::W4) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr w10, [x21, #offset])
-                        }
-                        (Slot::B, Width::W8) => {
-                            dynasm!(self.ops ; .arch aarch64 ; ldr x10, [x21, #offset])
-                        }
+                        (Slot::A, Width::W1) => self.emit.emit_word(
+                            aarch64::encode_ldrb_imm(Reg::X9, Reg::X21, offset).expect("ldrb"),
+                        ),
+                        (Slot::A, Width::W2) => self.emit.emit_word(
+                            aarch64::encode_ldrh_imm(Reg::X9, Reg::X21, offset).expect("ldrh"),
+                        ),
+                        (Slot::A, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X21, offset)
+                                .expect("ldr"),
+                        ),
+                        (Slot::A, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X21, offset)
+                                .expect("ldr"),
+                        ),
+                        (Slot::B, Width::W1) => self.emit.emit_word(
+                            aarch64::encode_ldrb_imm(Reg::X10, Reg::X21, offset).expect("ldrb"),
+                        ),
+                        (Slot::B, Width::W2) => self.emit.emit_word(
+                            aarch64::encode_ldrh_imm(Reg::X10, Reg::X21, offset).expect("ldrh"),
+                        ),
+                        (Slot::B, Width::W4) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(
+                                aarch64::Width::W32,
+                                Reg::X10,
+                                Reg::X21,
+                                offset,
+                            )
+                            .expect("ldr"),
+                        ),
+                        (Slot::B, Width::W8) => self.emit.emit_word(
+                            aarch64::encode_ldr_imm(
+                                aarch64::Width::X64,
+                                Reg::X10,
+                                Reg::X21,
+                                offset,
+                            )
+                            .expect("ldr"),
+                        ),
                     }
                 }
                 Op::StoreToOutput { src, width } => match (src, width) {
                     (Slot::A, Width::W1) => {
-                        dynasm!(self.ops ; .arch aarch64 ; strb w9, [x19] ; add x19, x19, #1)
+                        self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X9, Reg::X19, 0).expect("strb"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                1,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                     (Slot::A, Width::W2) => {
-                        dynasm!(self.ops ; .arch aarch64 ; strh w9, [x19] ; add x19, x19, #2)
+                        self.emit.emit_word(
+                            aarch64::encode_strh_imm(Reg::X9, Reg::X19, 0).expect("strh"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                2,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                     (Slot::A, Width::W4) => {
-                        dynasm!(self.ops ; .arch aarch64 ; str w9, [x19] ; add x19, x19, #4)
+                        self.emit.emit_word(
+                            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X19, 0)
+                                .expect("str"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                4,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                     (Slot::A, Width::W8) => {
-                        dynasm!(self.ops ; .arch aarch64 ; str x9, [x19] ; add x19, x19, #8)
+                        self.emit.emit_word(
+                            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X19, 0)
+                                .expect("str"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                8,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                     (Slot::B, Width::W1) => {
-                        dynasm!(self.ops ; .arch aarch64 ; strb w10, [x19] ; add x19, x19, #1)
+                        self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X10, Reg::X19, 0).expect("strb"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                1,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                     (Slot::B, Width::W2) => {
-                        dynasm!(self.ops ; .arch aarch64 ; strh w10, [x19] ; add x19, x19, #2)
+                        self.emit.emit_word(
+                            aarch64::encode_strh_imm(Reg::X10, Reg::X19, 0).expect("strh"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                2,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                     (Slot::B, Width::W4) => {
-                        dynasm!(self.ops ; .arch aarch64 ; str w10, [x19] ; add x19, x19, #4)
+                        self.emit.emit_word(
+                            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X10, Reg::X19, 0)
+                                .expect("str"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                4,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                     (Slot::B, Width::W8) => {
-                        dynasm!(self.ops ; .arch aarch64 ; str x10, [x19] ; add x19, x19, #8)
+                        self.emit.emit_word(
+                            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::X19, 0)
+                                .expect("str"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                8,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                 },
                 Op::WriteByte { value } => {
                     let value = *value as u32;
-                    dynasm!(self.ops
-                        ; .arch aarch64
-                        ; mov w9, #value
-                        ; strb w9, [x19]
-                        ; add x19, x19, #1
+                    self.emit.emit_word(
+                        aarch64::encode_movz(aarch64::Width::W32, Reg::X9, value as u16, 0)
+                            .expect("movz"),
+                    );
+                    self.emit
+                        .emit_word(aarch64::encode_strb_imm(Reg::X9, Reg::X19, 0).expect("strb"));
+                    self.emit.emit_word(
+                        aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false)
+                            .expect("add"),
                     );
                 }
                 Op::AdvanceOutput { count } => {
                     let count = *count;
                     if count > 0 {
-                        dynasm!(self.ops ; .arch aarch64 ; add x19, x19, #count);
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                count as u16,
+                                false,
+                            )
+                            .expect("add"),
+                        );
                     }
                 }
                 Op::AdvanceOutputBySlot { slot } => match slot {
-                    Slot::A => dynasm!(self.ops ; .arch aarch64 ; add x19, x19, x9),
-                    Slot::B => dynasm!(self.ops ; .arch aarch64 ; add x19, x19, x10),
+                    Slot::A => self.emit.emit_word(
+                        aarch64::encode_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X9)
+                            .expect("add"),
+                    ),
+                    Slot::B => self.emit.emit_word(
+                        aarch64::encode_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X10)
+                            .expect("add"),
+                    ),
                 },
                 Op::OutputBoundsCheck { count } => {
                     let count = *count;
-                    let have_space = self.ops.new_dynamic_label();
+                    let have_space = self.emit.new_label();
                     let grow_fn = crate::intrinsics::kajit_output_grow as *const u8;
 
-                    dynasm!(self.ops
-                        ; .arch aarch64
-                        ; sub x11, x20, x19
-                        ; cmp x11, #count
-                        ; b.hs =>have_space
+                    self.emit.emit_word(
+                        aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X11, Reg::X20, Reg::X19)
+                            .expect("sub"),
                     );
+                    self.emit.emit_word(
+                        aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X11, count as u16, false)
+                            .expect("cmp"),
+                    );
+                    self.emit
+                        .emit_b_cond_label(aarch64::Condition::Hs, have_space)
+                        .expect("b.hs");
                     self.emit_enc_flush_output_cursor();
-                    dynasm!(self.ops
-                        ; .arch aarch64
-                        ; mov x0, x22
-                        ; movz x1, #count, LSL #0
+                    self.emit.emit_word(
+                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22)
+                            .expect("mov"),
+                    );
+                    self.emit.emit_word(
+                        aarch64::encode_movz(aarch64::Width::X64, Reg::X1, count as u16, 0)
+                            .expect("movz"),
                     );
                     self.emit_call_fn_ptr(grow_fn);
                     self.emit_enc_reload_and_check_error();
-                    dynasm!(self.ops ; .arch aarch64 ; =>have_space);
+                    self.emit.bind_label(have_space).expect("bind");
                 }
                 Op::SignExtend { slot, from } => match (slot, from) {
-                    (Slot::A, Width::W1) => dynasm!(self.ops ; .arch aarch64 ; sxtb w9, w9),
-                    (Slot::A, Width::W2) => dynasm!(self.ops ; .arch aarch64 ; sxth w9, w9),
-                    (Slot::B, Width::W1) => dynasm!(self.ops ; .arch aarch64 ; sxtb w10, w10),
-                    (Slot::B, Width::W2) => dynasm!(self.ops ; .arch aarch64 ; sxth w10, w10),
+                    (Slot::A, Width::W1) => self
+                        .emit
+                        .emit_word(aarch64::encode_sxtb(Reg::X9, Reg::X9).expect("sxtb")),
+                    (Slot::A, Width::W2) => self
+                        .emit
+                        .emit_word(aarch64::encode_sxth(Reg::X9, Reg::X9).expect("sxth")),
+                    (Slot::B, Width::W1) => self
+                        .emit
+                        .emit_word(aarch64::encode_sxtb(Reg::X10, Reg::X10).expect("sxtb")),
+                    (Slot::B, Width::W2) => self
+                        .emit
+                        .emit_word(aarch64::encode_sxth(Reg::X10, Reg::X10).expect("sxth")),
                     (_, Width::W4 | Width::W8) => {} // already at natural width
                 },
                 Op::ZigzagEncode { slot, wide } => match (slot, wide) {
                     // zigzag encode 32-bit: (n << 1) ^ (n >> 31)
-                    (Slot::A, false) => dynasm!(self.ops
-                        ; .arch aarch64
-                        ; lsl w10, w9, #1
-                        ; asr w11, w9, #31
-                        ; eor w9, w10, w11
-                    ),
-                    (Slot::B, false) => dynasm!(self.ops
-                        ; .arch aarch64
-                        ; lsl w11, w10, #1
-                        ; asr w9, w10, #31
-                        ; eor w10, w11, w9
-                    ),
+                    (Slot::A, false) => {
+                        self.emit.emit_word(
+                            aarch64::encode_lsl_imm(aarch64::Width::W32, Reg::X10, Reg::X9, 1)
+                                .expect("lsl"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_asr_imm(aarch64::Width::W32, Reg::X11, Reg::X9, 31)
+                                .expect("asr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_eor_reg(
+                                aarch64::Width::W32,
+                                Reg::X9,
+                                Reg::X10,
+                                Reg::X11,
+                                aarch64::Shift::Lsl,
+                                0,
+                            )
+                            .expect("eor"),
+                        );
+                    }
+                    (Slot::B, false) => {
+                        self.emit.emit_word(
+                            aarch64::encode_lsl_imm(aarch64::Width::W32, Reg::X11, Reg::X10, 1)
+                                .expect("lsl"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_asr_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 31)
+                                .expect("asr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_eor_reg(
+                                aarch64::Width::W32,
+                                Reg::X10,
+                                Reg::X11,
+                                Reg::X9,
+                                aarch64::Shift::Lsl,
+                                0,
+                            )
+                            .expect("eor"),
+                        );
+                    }
                     // zigzag encode 64-bit: (n << 1) ^ (n >> 63)
-                    (Slot::A, true) => dynasm!(self.ops
-                        ; .arch aarch64
-                        ; lsl x10, x9, #1
-                        ; asr x11, x9, #63
-                        ; eor x9, x10, x11
-                    ),
-                    (Slot::B, true) => dynasm!(self.ops
-                        ; .arch aarch64
-                        ; lsl x11, x10, #1
-                        ; asr x9, x10, #63
-                        ; eor x10, x11, x9
-                    ),
+                    (Slot::A, true) => {
+                        self.emit.emit_word(
+                            aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X10, Reg::X9, 1)
+                                .expect("lsl"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_asr_imm(aarch64::Width::X64, Reg::X11, Reg::X9, 63)
+                                .expect("asr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_eor_reg(
+                                aarch64::Width::X64,
+                                Reg::X9,
+                                Reg::X10,
+                                Reg::X11,
+                                aarch64::Shift::Lsl,
+                                0,
+                            )
+                            .expect("eor"),
+                        );
+                    }
+                    (Slot::B, true) => {
+                        self.emit.emit_word(
+                            aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X11, Reg::X10, 1)
+                                .expect("lsl"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_asr_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 63)
+                                .expect("asr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_eor_reg(
+                                aarch64::Width::X64,
+                                Reg::X10,
+                                Reg::X11,
+                                Reg::X9,
+                                aarch64::Shift::Lsl,
+                                0,
+                            )
+                            .expect("eor"),
+                        );
+                    }
                 },
                 Op::EncodeVarint { slot, wide } => {
                     // Inline varint encoding loop.
                     // While value >= 0x80: write (byte | 0x80), shift right 7.
                     // Then write final byte.
-                    let loop_label = self.ops.new_dynamic_label();
-                    let done_label = self.ops.new_dynamic_label();
+                    let loop_label = self.emit.new_label();
+                    let done_label = self.emit.new_label();
 
                     if *wide {
                         // 64-bit varint: use x11 register
                         match slot {
-                            Slot::A => dynasm!(self.ops ; .arch aarch64 ; mov x11, x9),
-                            Slot::B => dynasm!(self.ops ; .arch aarch64 ; mov x11, x10),
+                            Slot::A => self.emit.emit_word(
+                                aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X11, Reg::X9)
+                                    .expect("mov"),
+                            ),
+                            Slot::B => self.emit.emit_word(
+                                aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X11, Reg::X10)
+                                    .expect("mov"),
+                            ),
                         }
-                        dynasm!(self.ops
-                            ; .arch aarch64
-                            ; =>loop_label
-                            ; cmp x11, #0x80
-                            ; b.lo =>done_label
-                            ; orr w9, w11, #0x80
-                            ; strb w9, [x19]
-                            ; add x19, x19, #1
-                            ; lsr x11, x11, #7
-                            ; b =>loop_label
-                            ; =>done_label
-                            ; strb w11, [x19]
-                            ; add x19, x19, #1
+                        self.emit.bind_label(loop_label).expect("bind");
+                        self.emit.emit_word(
+                            aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X11, 0x80, false)
+                                .expect("cmp"),
+                        );
+                        self.emit
+                            .emit_b_cond_label(aarch64::Condition::Lo, done_label)
+                            .expect("b.lo");
+                        self.emit.emit_word(
+                            aarch64::encode_orr_imm(aarch64::Width::W32, Reg::X9, Reg::X11, 0x80)
+                                .expect("orr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X9, Reg::X19, 0).expect("strb"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                1,
+                                false,
+                            )
+                            .expect("add"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X11, Reg::X11, 7)
+                                .expect("lsr"),
+                        );
+                        self.emit.emit_b_label(loop_label).expect("b");
+                        self.emit.bind_label(done_label).expect("bind");
+                        self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X11, Reg::X19, 0).expect("strb"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                1,
+                                false,
+                            )
+                            .expect("add"),
                         );
                     } else {
                         // 32-bit varint: use w11 register
                         match slot {
-                            Slot::A => dynasm!(self.ops ; .arch aarch64 ; mov w11, w9),
-                            Slot::B => dynasm!(self.ops ; .arch aarch64 ; mov w11, w10),
+                            Slot::A => self.emit.emit_word(
+                                aarch64::encode_mov_reg(aarch64::Width::W32, Reg::X11, Reg::X9)
+                                    .expect("mov"),
+                            ),
+                            Slot::B => self.emit.emit_word(
+                                aarch64::encode_mov_reg(aarch64::Width::W32, Reg::X11, Reg::X10)
+                                    .expect("mov"),
+                            ),
                         }
-                        dynasm!(self.ops
-                            ; .arch aarch64
-                            ; =>loop_label
-                            ; cmp w11, #0x80
-                            ; b.lo =>done_label
-                            ; orr w9, w11, #0x80
-                            ; strb w9, [x19]
-                            ; add x19, x19, #1
-                            ; lsr w11, w11, #7
-                            ; b =>loop_label
-                            ; =>done_label
-                            ; strb w11, [x19]
-                            ; add x19, x19, #1
+                        self.emit.bind_label(loop_label).expect("bind");
+                        self.emit.emit_word(
+                            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X11, 0x80, false)
+                                .expect("cmp"),
+                        );
+                        self.emit
+                            .emit_b_cond_label(aarch64::Condition::Lo, done_label)
+                            .expect("b.lo");
+                        self.emit.emit_word(
+                            aarch64::encode_orr_imm(aarch64::Width::W32, Reg::X9, Reg::X11, 0x80)
+                                .expect("orr"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X9, Reg::X19, 0).expect("strb"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                1,
+                                false,
+                            )
+                            .expect("add"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_lsr_imm(aarch64::Width::W32, Reg::X11, Reg::X11, 7)
+                                .expect("lsr"),
+                        );
+                        self.emit.emit_b_label(loop_label).expect("b");
+                        self.emit.bind_label(done_label).expect("bind");
+                        self.emit.emit_word(
+                            aarch64::encode_strb_imm(Reg::X11, Reg::X19, 0).expect("strb"),
+                        );
+                        self.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::X19,
+                                Reg::X19,
+                                1,
+                                false,
+                            )
+                            .expect("add"),
                         );
                     }
                 }
@@ -2854,19 +3770,25 @@ impl EmitCtx {
         }
 
         // Jump over cold path, then emit shared EOF error
-        let done_label = self.ops.new_dynamic_label();
+        let done_label = self.emit.new_label();
         let eof_code = crate::context::ErrorCode::UnexpectedEof as u32;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; b =>done_label
-            ; =>eof_label
-            ; movz w9, #eof_code
-            ; str w9, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
-            ; =>done_label
+        self.emit.emit_b_label(done_label).expect("b");
+        self.emit.bind_label(eof_label).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, eof_code as u16, 0).expect("movz"),
         );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
+        self.emit.bind_label(done_label).expect("bind");
     }
-
     // ── JIT f64 parser (uscale algorithm) ───────────────────────────────
     //
     // r[impl deser.json.scalar.float]
