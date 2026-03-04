@@ -66,6 +66,10 @@ The i64 field reads 0 instead of -1000000000000. Every other scalar is correct. 
 
 Root cause: the Shl RA-MIR instruction's `dst` is being allocated to the same physical register as `rhs` (hw1/rcx) instead of being tied to `lhs`. See **Prompt A3** below.
 
+**Prompt A3 diagnosis**: Also wrong. The emitter does NOT rely on x86 two-address semantics. It loads lhs → r10, operates (shl r10, cl), then explicitly stores r10 → dst (`emit_store_def_r10`). So dst=rcx is fine — the correct shifted value is written to rcx. Same pattern on aarch64: load lhs → x9, lsl x9, store x9 → dst. No dst-lhs tie is needed. Both hypotheses (rcx clobber, dst mismatch) are ruled out.
+
+**New hypothesis**: With 24 spill edits on x86 vs 1 on aarch64, the spill/reload machinery is under heavy stress. Possible culprits: wrong stack slot assigned, wrong load width (32-bit load of a 64-bit spilled value), or frame setup that misaligns the stack and causes a reload to read garbage. See **Prompt A4** below.
+
 ---
 
 ## ~~Group 2: Codegen snapshot diffs — control flow and intrinsic emission~~ FIXED (commit e4d888d / fix in x86_64/mod.rs)
@@ -92,7 +96,9 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 
 ### ~~Prompt A~~ — DIAGNOSED
 
-### ~~Prompt A2~~ — DIAGNOSED (rcx not clobbered; wrong dst register is the bug)
+### ~~Prompt A2~~ — DIAGNOSED (rcx not clobbered)
+
+### ~~Prompt A3~~ — DIAGNOSED (dst=rhs is not a bug; emitter uses r10 temp + explicit store to dst)
 
 ### Prompt A3 — Confirm the dst=rhs misallocation for Shl and trace how it happens
 
@@ -113,6 +119,26 @@ Failing test: `ir_opt_asserts_theta_loop_variant_not_hoisted` (was in `generated
 > 3. Is the `dst` of `Shl` being marked as a fresh output (free allocation) instead of tied to lhs? If so, regalloc2 can freely assign it to any register including rcx — which it does, since rcx is already live there.
 > 4. Check `emit.rs` at the Shl case: does it write the result to `dst` register or to `lhs` register? If it writes to lhs but regalloc assigned dst≠lhs, the result lands in the wrong place.
 > 5. How does the aarch64 backend handle this? Does aarch64 Shl tie dst to lhs, and if so, where?
+>
+> Do not fix anything — produce a diagnosis with specific file:line evidence.
+
+### Prompt A4 — Trace the actual spill/reload machinery for the varint loop on x86_64
+
+> You are investigating a miscompilation in kajit's x86_64 JIT for `postcard::scalar_u64_v3` (128u64, encoded as two postcard varint bytes [0x80, 0x01]).
+>
+> **What has been ruled out:**
+> - 32-bit register truncation — loads/stores are correctly 64-bit
+> - rcx/cl clobber before `shl r10, cl` — rcx is correctly live at the shift site
+> - dst-lhs mismatch — emitter uses r10 as temp, stores r10 → dst explicitly; dst=rcx is fine
+>
+> **Current hypothesis:** With 24 spill/reload edits on x86 vs 1 on aarch64, the failure may be in the spill machinery itself. Candidates: wrong stack slot index used for a reload, 32-bit load width when the spilled value is 64-bit, or a stack frame layout bug that misaligns slots and causes a reload to read garbage.
+>
+> Investigate:
+> 1. Use `KAJIT_DUMP_STAGES='ir,linear,ra,edits'` + `KAJIT_DUMP_FILTER='postcard::scalar_u64__v3'` to produce x86_64 stage dumps (run a test that exercises the postcard scalar_u64_v3 corpus path, e.g. `cargo nextest run -p kajit --target x86_64-apple-darwin --test corpus -E 'test(=postcard::scalar_u64_v3)'`). Read `docs/pipeline-debugging.md` for the full dump workflow.
+> 2. In the edits dump, list all 24 edits. For each stack-slot load (reload), note the slot index and the width of the load instruction emitted. Are all 64-bit vregs reloaded with 64-bit loads (QWORD), or are any using 32-bit (DWORD)?
+> 3. In `kajit/src/backends/x86_64/edits.rs`, find the function that emits a stack-slot reload. What width does it use? Does it vary by vreg type, or is it always the same?
+> 4. In `kajit/src/backends/x86_64/` (frame setup / stack allocation), how are stack slot sizes determined? Is there any place a 64-bit value might get a 32-bit slot?
+> 5. As a direct empirical check: look at the actual emitted disassembly for the varint loop (from the x86_64 stage dump or by adding a disasm call). Do any of the reload instructions use `mov r_, dword [rsp+...]` where `QWORD` would be expected?
 >
 > Do not fix anything — produce a diagnosis with specific file:line evidence.
 
