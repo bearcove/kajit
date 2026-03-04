@@ -301,7 +301,7 @@ impl Emitter {
     pub fn emit_cbz_label(
         &mut self,
         width: Width,
-        rt: u8,
+        rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
         self.emit_word(encode_cbz(width, rt, 0)?);
@@ -316,7 +316,7 @@ impl Emitter {
     pub fn emit_cbnz_label(
         &mut self,
         width: Width,
-        rt: u8,
+        rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
         self.emit_word(encode_cbnz(width, rt, 0)?);
@@ -328,7 +328,7 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_tbz_label(&mut self, rt: u8, bit: u8, label: LabelId) -> Result<(), EmitError> {
+    pub fn emit_tbz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
         self.emit_word(encode_tbz(rt, bit, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -338,7 +338,7 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_tbnz_label(&mut self, rt: u8, bit: u8, label: LabelId) -> Result<(), EmitError> {
+    pub fn emit_tbnz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
         self.emit_word(encode_tbnz(rt, bit, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -436,15 +436,15 @@ fn check_signed_bits(instruction: &'static str, value: i64, bits: u8) -> Result<
 fn emit_logical_shifted_reg(
     base: u32,
     width: Width,
-    rd: u8,
-    rn: u8,
-    rm: u8,
+    rd: Reg,
+    rn: Reg,
+    rm: Reg,
     shift: Shift,
     amount: u8,
 ) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     let amount = check_shift_amount(width, amount)?;
     Ok((width.sf() << 31)
         | base
@@ -455,12 +455,12 @@ fn emit_logical_shifted_reg(
         | rd)
 }
 
-pub fn encode_mov_reg(width: Width, rd: u8, rm: u8) -> Result<u32, EmitError> {
-    encode_orr_reg(width, rd, 31, rm, Shift::Lsl, 0)
+pub fn encode_mov_reg(width: Width, rd: Reg, rm: Reg) -> Result<u32, EmitError> {
+    encode_orr_reg(width, rd, Reg::XZR, rm, Shift::Lsl, 0)
 }
 
-pub fn encode_movz(width: Width, rd: u8, imm16: u16, shift: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
+pub fn encode_movz(width: Width, rd: Reg, imm16: u16, shift: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
     if !matches!(shift, 0 | 16 | 32 | 48) {
         return Err(EmitError::InvalidMovWideShift { width, shift });
     }
@@ -471,8 +471,8 @@ pub fn encode_movz(width: Width, rd: u8, imm16: u16, shift: u8) -> Result<u32, E
     Ok((width.sf() << 31) | 0x5280_0000 | (hw << 21) | ((imm16 as u32) << 5) | rd)
 }
 
-pub fn encode_movk(width: Width, rd: u8, imm16: u16, shift: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
+pub fn encode_movk(width: Width, rd: Reg, imm16: u16, shift: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
     if !matches!(shift, 0 | 16 | 32 | 48) {
         return Err(EmitError::InvalidMovWideShift { width, shift });
     }
@@ -485,13 +485,13 @@ pub fn encode_movk(width: Width, rd: u8, imm16: u16, shift: u8) -> Result<u32, E
 
 fn encode_load_store_unsigned(
     base: u32,
-    rt: u8,
-    rn: u8,
+    rt: Reg,
+    rn: Reg,
     offset: u32,
     align: u32,
 ) -> Result<u32, EmitError> {
-    let rt = check_reg(rt)?;
-    let rn = check_reg(rn)?;
+    let rt = check_reg(rt);
+    let rn = check_reg(rn);
     let max = 4095 * align;
     if !offset.is_multiple_of(align) || offset > max {
         return Err(EmitError::InvalidOffset {
@@ -509,14 +509,14 @@ fn encode_pair_signed_offset(
     instruction: &'static str,
     base: u32,
     width: Width,
-    rt1: u8,
-    rt2: u8,
-    rn: u8,
+    rt1: Reg,
+    rt2: Reg,
+    rn: Reg,
     offset: i16,
 ) -> Result<u32, EmitError> {
-    let rt1 = check_reg(rt1)?;
-    let rt2 = check_reg(rt2)?;
-    let rn = check_reg(rn)?;
+    let rt1 = check_reg(rt1);
+    let rt2 = check_reg(rt2);
+    let rn = check_reg(rn);
     let align = match width {
         Width::W32 => 4,
         Width::X64 => 8,
@@ -538,7 +538,7 @@ fn encode_pair_signed_offset(
     Ok(base | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1)
 }
 
-pub fn encode_ldr_imm(width: Width, rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
+pub fn encode_ldr_imm(width: Width, rt: Reg, rn: Reg, offset: u32) -> Result<u32, EmitError> {
     let base = match width {
         Width::W32 => 0xB940_0000,
         Width::X64 => 0xF940_0000,
@@ -550,7 +550,7 @@ pub fn encode_ldr_imm(width: Width, rt: u8, rn: u8, offset: u32) -> Result<u32, 
     encode_load_store_unsigned(base, rt, rn, offset, align)
 }
 
-pub fn encode_str_imm(width: Width, rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
+pub fn encode_str_imm(width: Width, rt: Reg, rn: Reg, offset: u32) -> Result<u32, EmitError> {
     let base = match width {
         Width::W32 => 0xB900_0000,
         Width::X64 => 0xF900_0000,
@@ -562,27 +562,27 @@ pub fn encode_str_imm(width: Width, rt: u8, rn: u8, offset: u32) -> Result<u32, 
     encode_load_store_unsigned(base, rt, rn, offset, align)
 }
 
-pub fn encode_ldrb_imm(rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
+pub fn encode_ldrb_imm(rt: Reg, rn: Reg, offset: u32) -> Result<u32, EmitError> {
     encode_load_store_unsigned(0x3940_0000, rt, rn, offset, 1)
 }
 
-pub fn encode_ldrh_imm(rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
+pub fn encode_ldrh_imm(rt: Reg, rn: Reg, offset: u32) -> Result<u32, EmitError> {
     encode_load_store_unsigned(0x7940_0000, rt, rn, offset, 2)
 }
 
-pub fn encode_strb_imm(rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
+pub fn encode_strb_imm(rt: Reg, rn: Reg, offset: u32) -> Result<u32, EmitError> {
     encode_load_store_unsigned(0x3900_0000, rt, rn, offset, 1)
 }
 
-pub fn encode_strh_imm(rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
+pub fn encode_strh_imm(rt: Reg, rn: Reg, offset: u32) -> Result<u32, EmitError> {
     encode_load_store_unsigned(0x7900_0000, rt, rn, offset, 2)
 }
 
 pub fn encode_stp(
     width: Width,
-    rt1: u8,
-    rt2: u8,
-    rn: u8,
+    rt1: Reg,
+    rt2: Reg,
+    rn: Reg,
     offset: i16,
 ) -> Result<u32, EmitError> {
     let base = match width {
@@ -594,9 +594,9 @@ pub fn encode_stp(
 
 pub fn encode_ldp(
     width: Width,
-    rt1: u8,
-    rt2: u8,
-    rn: u8,
+    rt1: Reg,
+    rt2: Reg,
+    rn: Reg,
     offset: i16,
 ) -> Result<u32, EmitError> {
     let base = match width {
@@ -606,35 +606,35 @@ pub fn encode_ldp(
     encode_pair_signed_offset("ldp", base, width, rt1, rt2, rn, offset)
 }
 
-pub fn encode_ret(rn: u8) -> Result<u32, EmitError> {
-    let rn = check_reg(rn)?;
+pub fn encode_ret(rn: Reg) -> Result<u32, EmitError> {
+    let rn = check_reg(rn);
     Ok(0xD65F_0000 | (rn << 5))
 }
 
-pub fn encode_add_reg(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_add_reg(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok((width.sf() << 31) | 0x0B00_0000 | (rm << 16) | (rn << 5) | rd)
 }
 
-pub fn encode_sub_reg(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_sub_reg(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok((width.sf() << 31) | 0x4B00_0000 | (rm << 16) | (rn << 5) | rd)
 }
 
 fn encode_add_sub_imm(
     width: Width,
-    rd: u8,
-    rn: u8,
+    rd: Reg,
+    rn: Reg,
     imm12: u16,
     shift12: bool,
     is_sub: bool,
 ) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
     if imm12 > 0x0fff {
         return Err(EmitError::InvalidImmediate {
             instruction: "add/sub imm12",
@@ -652,8 +652,8 @@ fn encode_add_sub_imm(
 
 pub fn encode_add_imm(
     width: Width,
-    rd: u8,
-    rn: u8,
+    rd: Reg,
+    rn: Reg,
     imm12: u16,
     shift12: bool,
 ) -> Result<u32, EmitError> {
@@ -662,8 +662,8 @@ pub fn encode_add_imm(
 
 pub fn encode_sub_imm(
     width: Width,
-    rd: u8,
-    rn: u8,
+    rd: Reg,
+    rn: Reg,
     imm12: u16,
     shift12: bool,
 ) -> Result<u32, EmitError> {
@@ -672,9 +672,9 @@ pub fn encode_sub_imm(
 
 pub fn encode_and_reg(
     width: Width,
-    rd: u8,
-    rn: u8,
-    rm: u8,
+    rd: Reg,
+    rn: Reg,
+    rm: Reg,
     shift: Shift,
     amount: u8,
 ) -> Result<u32, EmitError> {
@@ -683,9 +683,9 @@ pub fn encode_and_reg(
 
 pub fn encode_orr_reg(
     width: Width,
-    rd: u8,
-    rn: u8,
-    rm: u8,
+    rd: Reg,
+    rn: Reg,
+    rm: Reg,
     shift: Shift,
     amount: u8,
 ) -> Result<u32, EmitError> {
@@ -694,41 +694,41 @@ pub fn encode_orr_reg(
 
 pub fn encode_eor_reg(
     width: Width,
-    rd: u8,
-    rn: u8,
-    rm: u8,
+    rd: Reg,
+    rn: Reg,
+    rm: Reg,
     shift: Shift,
     amount: u8,
 ) -> Result<u32, EmitError> {
     emit_logical_shifted_reg(0x4A00_0000, width, rd, rn, rm, shift, amount)
 }
 
-pub fn encode_lsl_reg(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_lsl_reg(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok((width.sf() << 31) | 0x1AC0_2000 | (rm << 16) | (rn << 5) | rd)
 }
 
-pub fn encode_lsr_reg(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_lsr_reg(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok((width.sf() << 31) | 0x1AC0_2400 | (rm << 16) | (rn << 5) | rd)
 }
 
-pub fn encode_neg(width: Width, rd: u8, rm: u8) -> Result<u32, EmitError> {
-    encode_sub_reg(width, rd, 31, rm)
+pub fn encode_neg(width: Width, rd: Reg, rm: Reg) -> Result<u32, EmitError> {
+    encode_sub_reg(width, rd, Reg::XZR, rm)
 }
 
-pub fn encode_cmp_reg(width: Width, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_cmp_reg(width: Width, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok((width.sf() << 31) | 0x6B00_001F | (rm << 16) | (rn << 5))
 }
 
-pub fn encode_cmp_imm(width: Width, rn: u8, imm12: u16, shift12: bool) -> Result<u32, EmitError> {
-    let rn = check_reg(rn)?;
+pub fn encode_cmp_imm(width: Width, rn: Reg, imm12: u16, shift12: bool) -> Result<u32, EmitError> {
+    let rn = check_reg(rn);
     if imm12 > 0x0fff {
         return Err(EmitError::InvalidImmediate {
             instruction: "cmp imm12",
@@ -742,15 +742,15 @@ pub fn encode_cmp_imm(width: Width, rn: u8, imm12: u16, shift12: bool) -> Result
     Ok(base | ((shift12 as u32) << 22) | ((imm12 as u32) << 10) | (rn << 5))
 }
 
-pub fn encode_subs_reg(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_subs_reg(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok((width.sf() << 31) | 0x6B00_0000 | (rm << 16) | (rn << 5) | rd)
 }
 
-pub fn encode_cmn_imm(width: Width, rn: u8, imm12: u16, shift12: bool) -> Result<u32, EmitError> {
-    let rn = check_reg(rn)?;
+pub fn encode_cmn_imm(width: Width, rn: Reg, imm12: u16, shift12: bool) -> Result<u32, EmitError> {
+    let rn = check_reg(rn);
     if imm12 > 0x0fff {
         return Err(EmitError::InvalidImmediate {
             instruction: "cmn imm12",
@@ -764,28 +764,28 @@ pub fn encode_cmn_imm(width: Width, rn: u8, imm12: u16, shift12: bool) -> Result
     Ok(base | ((shift12 as u32) << 22) | ((imm12 as u32) << 10) | (rn << 5))
 }
 
-pub fn encode_cbz(width: Width, rt: u8, imm19: i32) -> Result<u32, EmitError> {
-    check_reg(rt)?;
+pub fn encode_cbz(width: Width, rt: Reg, imm19: i32) -> Result<u32, EmitError> {
+    let rt = check_reg(rt);
     check_signed_bits("cbz", imm19 as i64, 19)?;
     let base = match width {
         Width::W32 => 0x3400_0000,
         Width::X64 => 0xB400_0000,
     };
-    Ok(base | (((imm19 as u32) & 0x7ffff) << 5) | (rt as u32))
+    Ok(base | (((imm19 as u32) & 0x7ffff) << 5) | rt)
 }
 
-pub fn encode_cbnz(width: Width, rt: u8, imm19: i32) -> Result<u32, EmitError> {
-    check_reg(rt)?;
+pub fn encode_cbnz(width: Width, rt: Reg, imm19: i32) -> Result<u32, EmitError> {
+    let rt = check_reg(rt);
     check_signed_bits("cbnz", imm19 as i64, 19)?;
     let base = match width {
         Width::W32 => 0x3500_0000,
         Width::X64 => 0xB500_0000,
     };
-    Ok(base | (((imm19 as u32) & 0x7ffff) << 5) | (rt as u32))
+    Ok(base | (((imm19 as u32) & 0x7ffff) << 5) | rt)
 }
 
-pub fn encode_tbz(rt: u8, bit: u8, imm14: i32) -> Result<u32, EmitError> {
-    check_reg(rt)?;
+pub fn encode_tbz(rt: Reg, bit: u8, imm14: i32) -> Result<u32, EmitError> {
+    let rt = check_reg(rt);
     if bit > 63 {
         return Err(EmitError::InvalidImmediate {
             instruction: "tbz bit",
@@ -799,11 +799,11 @@ pub fn encode_tbz(rt: u8, bit: u8, imm14: i32) -> Result<u32, EmitError> {
         | 0x3600_0000
         | (b40 << 19)
         | (((imm14 as u32) & 0x3fff) << 5)
-        | (rt as u32))
+        | rt)
 }
 
-pub fn encode_tbnz(rt: u8, bit: u8, imm14: i32) -> Result<u32, EmitError> {
-    check_reg(rt)?;
+pub fn encode_tbnz(rt: Reg, bit: u8, imm14: i32) -> Result<u32, EmitError> {
+    let rt = check_reg(rt);
     if bit > 63 {
         return Err(EmitError::InvalidImmediate {
             instruction: "tbnz bit",
@@ -817,7 +817,7 @@ pub fn encode_tbnz(rt: u8, bit: u8, imm14: i32) -> Result<u32, EmitError> {
         | 0x3700_0000
         | (b40 << 19)
         | (((imm14 as u32) & 0x3fff) << 5)
-        | (rt as u32))
+        | rt)
 }
 
 pub fn encode_b_cond(cond: Condition, imm19: i32) -> Result<u32, EmitError> {
@@ -825,8 +825,8 @@ pub fn encode_b_cond(cond: Condition, imm19: i32) -> Result<u32, EmitError> {
     Ok(0x5400_0000 | (((imm19 as u32) & 0x7ffff) << 5) | (cond as u32))
 }
 
-pub fn encode_cset(width: Width, rd: u8, condition: Condition) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
+pub fn encode_cset(width: Width, rd: Reg, condition: Condition) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
     let inv = condition.invert() as u32;
     let base = match width {
         Width::W32 => 0x1A9F_07E0,
@@ -835,9 +835,9 @@ pub fn encode_cset(width: Width, rd: u8, condition: Condition) -> Result<u32, Em
     Ok(base | (inv << 12) | rd)
 }
 
-pub fn encode_tst_reg(width: Width, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_tst_reg(width: Width, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     let base = match width {
         Width::W32 => 0x6A00_001F,
         Width::X64 => 0xEA00_001F,
@@ -845,8 +845,8 @@ pub fn encode_tst_reg(width: Width, rn: u8, rm: u8) -> Result<u32, EmitError> {
     Ok(base | (rm << 16) | (rn << 5))
 }
 
-pub fn encode_tst_imm(width: Width, rn: u8, imm: u64) -> Result<u32, EmitError> {
-    let rn = check_reg(rn)?;
+pub fn encode_tst_imm(width: Width, rn: Reg, imm: u64) -> Result<u32, EmitError> {
+    let rn = check_reg(rn);
     if imm == 0 || !imm.is_power_of_two() {
         return Err(EmitError::InvalidImmediate {
             instruction: "tst imm",
@@ -880,53 +880,53 @@ pub fn encode_tst_imm(width: Width, rn: u8, imm: u64) -> Result<u32, EmitError> 
     Ok(base | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5))
 }
 
-pub fn encode_sxtb(rd: u8, rn: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
+pub fn encode_sxtb(rd: Reg, rn: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
     Ok(0x9340_1C00 | (rn << 5) | rd)
 }
 
-pub fn encode_sxth(rd: u8, rn: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
+pub fn encode_sxth(rd: Reg, rn: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
     Ok(0x9340_3C00 | (rn << 5) | rd)
 }
 
-pub fn encode_sxtw(rd: u8, rn: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
+pub fn encode_sxtw(rd: Reg, rn: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
     Ok(0x9340_7C00 | (rn << 5) | rd)
 }
 
-pub fn encode_madd(width: Width, rd: u8, rn: u8, rm: u8, ra: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
-    let ra = check_reg(ra)?;
+pub fn encode_madd(width: Width, rd: Reg, rn: Reg, rm: Reg, ra: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
+    let ra = check_reg(ra);
     Ok((width.sf() << 31) | 0x1B00_0000 | (rm << 16) | (ra << 10) | (rn << 5) | rd)
 }
 
-pub fn encode_mul(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    encode_madd(width, rd, rn, rm, 31)
+pub fn encode_mul(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    encode_madd(width, rd, rn, rm, Reg::XZR)
 }
 
-pub fn encode_umulh(rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_umulh(rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok(0x9BC0_7C00 | (rm << 16) | (rn << 5) | rd)
 }
 
-pub fn encode_smull(rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+pub fn encode_smull(rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok(0x9B20_7C00 | (rm << 16) | (rn << 5) | rd)
 }
 
-pub fn encode_asr_imm(width: Width, rd: u8, rn: u8, shift: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
+pub fn encode_asr_imm(width: Width, rd: Reg, rn: Reg, shift: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
     let max_shift = match width {
         Width::W32 => 31,
         Width::X64 => 63,
@@ -944,20 +944,20 @@ pub fn encode_asr_imm(width: Width, rd: u8, rn: u8, shift: u8) -> Result<u32, Em
 
 pub fn encode_csel(
     width: Width,
-    rd: u8,
-    rn: u8,
-    rm: u8,
+    rd: Reg,
+    rn: Reg,
+    rm: Reg,
     cond: Condition,
 ) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
-    let rm = check_reg(rm)?;
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
     Ok((width.sf() << 31) | 0x1A80_0000 | (rm << 16) | ((cond as u32) << 12) | (rn << 5) | rd)
 }
 
-pub fn encode_clz(width: Width, rd: u8, rn: u8) -> Result<u32, EmitError> {
-    let rd = check_reg(rd)?;
-    let rn = check_reg(rn)?;
+pub fn encode_clz(width: Width, rd: Reg, rn: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
     let base = match width {
         Width::W32 => 0x5AC0_1000,
         Width::X64 => 0xDAC0_1000,
@@ -967,9 +967,9 @@ pub fn encode_clz(width: Width, rd: u8, rn: u8) -> Result<u32, EmitError> {
 
 pub fn encode_bic(
     width: Width,
-    rd: u8,
-    rn: u8,
-    rm: u8,
+    rd: Reg,
+    rn: Reg,
+    rm: Reg,
     shift: Shift,
     amount: u8,
 ) -> Result<u32, EmitError> {
@@ -986,8 +986,8 @@ pub fn encode_bl(imm26: i32) -> Result<u32, EmitError> {
     Ok(0x9400_0000 | ((imm26 as u32) & 0x03ff_ffff))
 }
 
-pub fn encode_blr(rn: u8) -> Result<u32, EmitError> {
-    let rn = check_reg(rn)?;
+pub fn encode_blr(rn: Reg) -> Result<u32, EmitError> {
+    let rn = check_reg(rn);
     Ok(0xD63F_0000 | (rn << 5))
 }
 
