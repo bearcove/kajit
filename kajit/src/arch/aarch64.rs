@@ -91,12 +91,16 @@ impl EmitCtx {
 
     /// Load a function pointer into x8 and call it via `blr x8`.
     fn emit_call_fn_ptr(&mut self, ptr: *const u8) {
-        let val = ptr as u64;
-        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X8, (val & 0xFFFF) as u16, 0).expect("movz"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X8, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X8, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"));
-        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X8, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"));
+        self.emit_load_imm64(Reg::X8, ptr as u64);
         self.emit.emit_word(aarch64::encode_blr(Reg::X8).expect("blr"));
+    }
+
+    /// Load a 64-bit immediate into a register using movz + 3×movk.
+    fn emit_load_imm64(&mut self, rd: Reg, val: u64) {
+        self.emit.emit_word(aarch64::encode_movz(aarch64::Width::X64, rd, (val & 0xFFFF) as u16, 0).expect("movz"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 16) & 0xFFFF) as u16, 16).expect("movk"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 32) & 0xFFFF) as u16, 32).expect("movk"));
+        self.emit.emit_word(aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 48) & 0xFFFF) as u16, 48).expect("movk"));
     }
 
     /// Flush the cached input cursor (x19) back to ctx.input_ptr.
@@ -2137,11 +2141,10 @@ impl EmitCtx {
 
     /// Compare the count register (w9 on aarch64, r10d on x64) with zero
     /// and branch to label if equal.
-    pub fn emit_cbz_count(&mut self, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; cbz w9, =>label
-        );
+    pub fn emit_cbz_count(&mut self, label: LabelId) {
+        self.emit
+            .emit_cbz_label(aarch64::Width::W32, Reg::X9, label)
+            .expect("cbz");
     }
 
     /// Compare two stack slot values and branch if equal (len == cap for growth check).
@@ -2149,24 +2152,31 @@ impl EmitCtx {
         &mut self,
         slot_a: u32,
         slot_b: u32,
-        label: DynamicLabel,
+        label: LabelId,
     ) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x10, [sp, #slot_a]
-            ; ldr x11, [sp, #slot_b]
-            ; cmp x10, x11
-            ; b.eq =>label
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, slot_a).expect("ldr"),
         );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X11, Reg::SP, slot_b).expect("ldr"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X10, Reg::X11).expect("cmp"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::EQ, label)
+            .expect("b.eq");
     }
 
     /// Increment a stack slot value by 1.
     pub fn emit_inc_stack_slot(&mut self, slot: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x10, [sp, #slot]
-            ; add x10, x10, #1
-            ; str x10, [sp, #slot]
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, slot).expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X10, Reg::X10, 1, false).expect("add"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X10, Reg::SP, slot).expect("str"),
         );
     }
 
@@ -2176,9 +2186,15 @@ impl EmitCtx {
     ///
     /// Used in map loops to move from the key slot to the value slot within a pair.
     pub fn emit_advance_out_by(&mut self, offset: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; add x21, x21, #offset
+        self.emit.emit_word(
+            aarch64::encode_add_imm(
+                aarch64::Width::X64,
+                Reg::X21,
+                Reg::X21,
+                offset as u16,
+                false,
+            )
+            .expect("add"),
         );
     }
 
@@ -2198,13 +2214,17 @@ impl EmitCtx {
         let trampoline = crate::intrinsics::kajit_map_build as *const u8;
         // Load from_pair_slice_fn via x8, then mov to x0 (can't load directly
         // into x0 because emit_call_fn_ptr will clobber x8).
-        load_imm64!(self.ops, x8, from_pair_slice_fn as u64);
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x0, x8
-            ; ldr x1, [sp, #saved_out_slot]
-            ; ldr x2, [sp, #buf_slot]
-            ; ldr x3, [sp, #count_slot]
+        self.emit_load_imm64(Reg::X8, from_pair_slice_fn as u64);
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X8).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X1, Reg::SP, saved_out_slot).expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X2, Reg::SP, buf_slot).expect("ldr"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X3, Reg::SP, count_slot).expect("ldr"),
         );
         self.emit_call_fn_ptr(trampoline);
     }
@@ -2214,14 +2234,15 @@ impl EmitCtx {
     /// Same trampoline pattern as `emit_call_map_from_pairs`.
     pub fn emit_call_map_from_pairs_empty(&mut self, from_pair_slice_fn: *const u8) {
         let trampoline = crate::intrinsics::kajit_map_build as *const u8;
-        load_imm64!(self.ops, x8, from_pair_slice_fn as u64);
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x0, x8
-            ; mov x1, x21
-            ; mov x2, xzr
-            ; mov x3, xzr
-        );
+        self.emit_load_imm64(Reg::X8, from_pair_slice_fn as u64);
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X8).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X21).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X2, Reg::XZR).expect("mov"));
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X3, Reg::XZR).expect("mov"));
         self.emit_call_fn_ptr(trampoline);
     }
 
@@ -2237,13 +2258,16 @@ impl EmitCtx {
         pair_stride: u32,
         pair_align: u32,
     ) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x0, [sp, #buf_slot]
-            ; ldr x1, [sp, #cap_slot]
-            ; movz x2, pair_stride
-            ; movz x3, pair_align
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X0, Reg::SP, buf_slot).expect("ldr"),
         );
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X1, Reg::SP, cap_slot).expect("ldr"),
+        );
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X2, pair_stride as u16, 0).expect("movz"));
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X3, pair_align as u16, 0).expect("movz"));
         self.emit_call_fn_ptr(free_fn);
     }
 
