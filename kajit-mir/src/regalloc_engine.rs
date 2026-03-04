@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
 use kajit_ir::ErrorCode;
-use kajit_lir::{BinOpKind, LinearOp};
+use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use regalloc2::{
     Allocation, Block, Edit, Inst, InstRange, MachineEnv, Operand, OperandConstraint, OperandKind,
     OperandPos, Output, PReg, PRegSet, RegAllocError, RegClass, RegallocOptions, VReg,
@@ -916,6 +916,7 @@ pub fn allocate_linear_ir(
 }
 
 const MAX_SIM_STEPS: usize = 1_000_000;
+const SLOT_ADDR_STRIDE: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionTraceEntry {
@@ -1045,6 +1046,260 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
     }
 }
 
+fn exec_unaryop(op: UnaryOpKind, src: u64) -> u64 {
+    match op {
+        UnaryOpKind::ZigzagDecode { wide } => {
+            if wide {
+                ((src >> 1) as i64 ^ -((src & 1) as i64)) as u64
+            } else {
+                let s = src as u32;
+                let v = ((s >> 1) as i32) ^ -((s & 1) as i32);
+                v as i64 as u64
+            }
+        }
+        UnaryOpKind::SignExtend { from_width } => match from_width {
+            kajit_ir::Width::W1 => (src as u8 as i8 as i64) as u64,
+            kajit_ir::Width::W2 => (src as u16 as i16 as i64) as u64,
+            kajit_ir::Width::W4 => (src as u32 as i32 as i64) as u64,
+            kajit_ir::Width::W8 => src,
+        },
+    }
+}
+
+#[repr(C)]
+struct RuntimeErrorSlot {
+    code: u32,
+    offset: u32,
+}
+
+#[repr(C)]
+struct RuntimeDeserContext {
+    input_ptr: *const u8,
+    input_end: *const u8,
+    error: RuntimeErrorSlot,
+    key_scratch_ptr: *mut u8,
+    key_scratch_cap: usize,
+    trusted_utf8: bool,
+}
+
+impl RuntimeDeserContext {
+    fn new(input: &[u8]) -> Self {
+        let ptr = input.as_ptr();
+        Self {
+            input_ptr: ptr,
+            input_end: unsafe { ptr.add(input.len()) },
+            error: RuntimeErrorSlot { code: 0, offset: 0 },
+            key_scratch_ptr: core::ptr::null_mut(),
+            key_scratch_cap: 0,
+            trusted_utf8: false,
+        }
+    }
+}
+
+impl Drop for RuntimeDeserContext {
+    fn drop(&mut self) {
+        if self.key_scratch_cap > 0 {
+            unsafe {
+                let layout = std::alloc::Layout::from_size_align_unchecked(self.key_scratch_cap, 1);
+                std::alloc::dealloc(self.key_scratch_ptr, layout);
+            }
+        }
+    }
+}
+
+fn error_code_from_u32(code: u32) -> ErrorCode {
+    match code {
+        0 => ErrorCode::Ok,
+        1 => ErrorCode::UnexpectedEof,
+        2 => ErrorCode::InvalidVarint,
+        3 => ErrorCode::InvalidUtf8,
+        4 => ErrorCode::UnsupportedShape,
+        5 => ErrorCode::ExpectedObjectStart,
+        6 => ErrorCode::ExpectedColon,
+        7 => ErrorCode::ExpectedStringKey,
+        8 => ErrorCode::UnterminatedString,
+        9 => ErrorCode::InvalidJsonNumber,
+        10 => ErrorCode::MissingRequiredField,
+        11 => ErrorCode::UnexpectedCharacter,
+        12 => ErrorCode::NumberOutOfRange,
+        13 => ErrorCode::InvalidBool,
+        14 => ErrorCode::UnknownVariant,
+        15 => ErrorCode::ExpectedTagKey,
+        16 => ErrorCode::AmbiguousVariant,
+        17 => ErrorCode::AllocError,
+        18 => ErrorCode::InvalidEscapeSequence,
+        19 => ErrorCode::UnknownField,
+        _ => ErrorCode::UnexpectedCharacter,
+    }
+}
+
+struct SimulatorRuntime {
+    input_base: *const u8,
+    input_len: usize,
+    slots: Vec<u64>,
+    slot_mem: Vec<u8>,
+    ctx: RuntimeDeserContext,
+}
+
+impl SimulatorRuntime {
+    fn new(input: &[u8], slot_count: usize) -> Self {
+        Self {
+            input_base: input.as_ptr(),
+            input_len: input.len(),
+            slots: vec![0; slot_count],
+            slot_mem: vec![0; slot_count.saturating_mul(SLOT_ADDR_STRIDE)],
+            ctx: RuntimeDeserContext::new(input),
+        }
+    }
+
+    fn ensure_slot(&mut self, slot: usize) {
+        if slot >= self.slots.len() {
+            self.slots.resize(slot + 1, 0);
+        }
+        let needed_bytes = (slot + 1) * SLOT_ADDR_STRIDE;
+        if self.slot_mem.len() < needed_bytes {
+            self.slot_mem.resize(needed_bytes, 0);
+        }
+    }
+
+    fn slot_addr_value(&mut self, slot: usize) -> u64 {
+        self.ensure_slot(slot);
+        let ptr = self.slot_mem.as_mut_ptr();
+        unsafe { ptr.add(slot * SLOT_ADDR_STRIDE) as u64 }
+    }
+}
+
+fn set_trap_if_none(trap: &mut Option<crate::InterpreterTrap>, cursor: usize, code: ErrorCode) {
+    if trap.is_none() {
+        *trap = Some(crate::InterpreterTrap {
+            code,
+            offset: cursor as u32,
+        });
+    }
+}
+
+fn run_call_intrinsic(
+    sim: &mut SimulatorRuntime,
+    cursor: &mut usize,
+    trap: &mut Option<crate::InterpreterTrap>,
+    func: usize,
+    args: &[u64],
+    out_ptr: Option<*mut u8>,
+) -> u64 {
+    sim.ctx.input_ptr = unsafe { sim.input_base.add(*cursor) };
+    sim.ctx.input_end = unsafe { sim.input_base.add(sim.input_len) };
+    sim.ctx.error.code = 0;
+    sim.ctx.error.offset = 0;
+
+    let ctx_ptr = &mut sim.ctx as *mut RuntimeDeserContext;
+    let ret = unsafe {
+        match (out_ptr, args.len()) {
+            (None, 0) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext) -> u64 =
+                    core::mem::transmute(func);
+                f(ctx_ptr)
+            }
+            (None, 1) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64) -> u64 =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0])
+            }
+            (None, 2) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64) -> u64 =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0], args[1])
+            }
+            (None, 3) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64) -> u64 =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0], args[1], args[2])
+            }
+            (None, 4) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, u64) -> u64 =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0], args[1], args[2], args[3])
+            }
+            (None, 5) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, u64, u64) -> u64 =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0], args[1], args[2], args[3], args[4])
+            }
+            (Some(out), 0) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, *mut u8) =
+                    core::mem::transmute(func);
+                f(ctx_ptr, out);
+                0
+            }
+            (Some(out), 1) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, *mut u8) =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0], out);
+                0
+            }
+            (Some(out), 2) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, *mut u8) =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0], args[1], out);
+                0
+            }
+            (Some(out), 3) => {
+                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, *mut u8) =
+                    core::mem::transmute(func);
+                f(ctx_ptr, args[0], args[1], args[2], out);
+                0
+            }
+            _ => 0,
+        }
+    };
+
+    *cursor = unsafe { sim.ctx.input_ptr.offset_from(sim.input_base) as usize };
+    if sim.ctx.error.code != 0 {
+        *trap = Some(crate::InterpreterTrap {
+            code: error_code_from_u32(sim.ctx.error.code),
+            offset: sim.ctx.error.offset,
+        });
+    }
+    ret
+}
+
+fn run_call_pure(func: usize, args: &[u64]) -> u64 {
+    unsafe {
+        match args.len() {
+            0 => {
+                let f: unsafe extern "C" fn() -> u64 = core::mem::transmute(func);
+                f()
+            }
+            1 => {
+                let f: unsafe extern "C" fn(u64) -> u64 = core::mem::transmute(func);
+                f(args[0])
+            }
+            2 => {
+                let f: unsafe extern "C" fn(u64, u64) -> u64 = core::mem::transmute(func);
+                f(args[0], args[1])
+            }
+            3 => {
+                let f: unsafe extern "C" fn(u64, u64, u64) -> u64 = core::mem::transmute(func);
+                f(args[0], args[1], args[2])
+            }
+            4 => {
+                let f: unsafe extern "C" fn(u64, u64, u64, u64) -> u64 = core::mem::transmute(func);
+                f(args[0], args[1], args[2], args[3])
+            }
+            5 => {
+                let f: unsafe extern "C" fn(u64, u64, u64, u64, u64) -> u64 =
+                    core::mem::transmute(func);
+                f(args[0], args[1], args[2], args[3], args[4])
+            }
+            6 => {
+                let f: unsafe extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 =
+                    core::mem::transmute(func);
+                f(args[0], args[1], args[2], args[3], args[4], args[5])
+            }
+            _ => 0,
+        }
+    }
+}
+
 fn find_inst_index_for_linear(
     inst_index_by_linear: &HashMap<usize, usize>,
     linear_op_index: usize,
@@ -1117,6 +1372,196 @@ fn find_succ_index(
         })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn execute_sim_linear_op(
+    op: &LinearOp,
+    block_id: crate::BlockId,
+    inst: &crate::RaInst,
+    inst_allocs: &[Allocation],
+    regs: &mut HashMap<PReg, u64>,
+    spills: &mut HashMap<usize, u64>,
+    sim: &mut SimulatorRuntime,
+    cursor: &mut usize,
+    output: &mut Vec<u8>,
+    trap: &mut Option<crate::InterpreterTrap>,
+) -> Result<(), RegallocEngineError> {
+    match op {
+        LinearOp::Const { dst, value } => {
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            write_allocation(regs, spills, dst_alloc, *value);
+        }
+        LinearOp::Copy { dst, src } => {
+            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let value = read_allocation(regs, spills, src_alloc);
+            write_allocation(regs, spills, dst_alloc, value);
+        }
+        LinearOp::BinOp { op, dst, lhs, rhs } => {
+            let lhs_alloc = find_operand_alloc(inst, inst_allocs, *lhs, RaOperandKind::Use)?;
+            let rhs_alloc = find_operand_alloc(inst, inst_allocs, *rhs, RaOperandKind::Use)?;
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let lhs_val = read_allocation(regs, spills, lhs_alloc);
+            let rhs_val = read_allocation(regs, spills, rhs_alloc);
+            write_allocation(regs, spills, dst_alloc, exec_binop(*op, lhs_val, rhs_val));
+        }
+        LinearOp::UnaryOp { op, dst, src } => {
+            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let src_val = read_allocation(regs, spills, src_alloc);
+            write_allocation(regs, spills, dst_alloc, exec_unaryop(*op, src_val));
+        }
+        LinearOp::BoundsCheck { count } => {
+            if *cursor + (*count as usize) > sim.input_len {
+                set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
+            }
+        }
+        LinearOp::ReadBytes { dst, count } => {
+            let count = *count as usize;
+            if *cursor + count > sim.input_len {
+                set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
+            } else {
+                let input = unsafe { std::slice::from_raw_parts(sim.input_base, sim.input_len) };
+                let mut value = 0u64;
+                for i in 0..count {
+                    value |= (input[*cursor + i] as u64) << (i * 8);
+                }
+                *cursor += count;
+                let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                write_allocation(regs, spills, dst_alloc, value);
+            }
+        }
+        LinearOp::PeekByte { dst } => {
+            if *cursor >= sim.input_len {
+                set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
+            } else {
+                let input = unsafe { std::slice::from_raw_parts(sim.input_base, sim.input_len) };
+                let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                write_allocation(regs, spills, dst_alloc, input[*cursor] as u64);
+            }
+        }
+        LinearOp::AdvanceCursor { count } => {
+            let count = *count as usize;
+            if *cursor + count > sim.input_len {
+                set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
+            } else {
+                *cursor += count;
+            }
+        }
+        LinearOp::AdvanceCursorBy { src } => {
+            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let count = read_allocation(regs, spills, src_alloc) as usize;
+            if *cursor + count > sim.input_len {
+                set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
+            } else {
+                *cursor += count;
+            }
+        }
+        LinearOp::SaveCursor { dst } => {
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            write_allocation(regs, spills, dst_alloc, *cursor as u64);
+        }
+        LinearOp::RestoreCursor { src } => {
+            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let next = read_allocation(regs, spills, src_alloc) as usize;
+            if next > sim.input_len {
+                set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
+            } else {
+                *cursor = next;
+            }
+        }
+        LinearOp::WriteToField { src, offset, width } => {
+            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let value = read_allocation(regs, spills, src_alloc);
+            let width_bytes = width.bytes() as usize;
+            let base = *offset as usize;
+            if output.len() < base + width_bytes {
+                output.resize(base + width_bytes, 0);
+            }
+            for i in 0..width_bytes {
+                output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
+            }
+        }
+        LinearOp::ReadFromField { dst, offset, width } => {
+            let width_bytes = width.bytes() as usize;
+            let base = *offset as usize;
+            if output.len() < base + width_bytes {
+                output.resize(base + width_bytes, 0);
+            }
+            let mut value = 0u64;
+            for i in 0..width_bytes {
+                value |= (output[base + i] as u64) << (i * 8);
+            }
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            write_allocation(regs, spills, dst_alloc, value);
+        }
+        LinearOp::SlotAddr { dst, slot } => {
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let addr = sim.slot_addr_value(slot.index());
+            write_allocation(regs, spills, dst_alloc, addr);
+        }
+        LinearOp::WriteToSlot { slot, src } => {
+            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let value = read_allocation(regs, spills, src_alloc);
+            let slot = slot.index();
+            sim.ensure_slot(slot);
+            sim.slots[slot] = value;
+        }
+        LinearOp::ReadFromSlot { dst, slot } => {
+            let slot = slot.index();
+            sim.ensure_slot(slot);
+            let value = sim.slots[slot];
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            write_allocation(regs, spills, dst_alloc, value);
+        }
+        LinearOp::CallIntrinsic {
+            func,
+            args,
+            dst,
+            field_offset,
+        } => {
+            let mut args_values = Vec::with_capacity(args.len());
+            for arg in args {
+                let arg_alloc = find_operand_alloc(inst, inst_allocs, *arg, RaOperandKind::Use)?;
+                args_values.push(read_allocation(regs, spills, arg_alloc));
+            }
+            let out_ptr = if dst.is_none() {
+                let offset = *field_offset as usize;
+                if output.len() < offset + 64 {
+                    output.resize(offset + 64, 0);
+                }
+                Some(unsafe { output.as_mut_ptr().add(offset) })
+            } else {
+                None
+            };
+            let ret = run_call_intrinsic(sim, cursor, trap, func.0, &args_values, out_ptr);
+            if let Some(dst) = dst {
+                let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                write_allocation(regs, spills, dst_alloc, ret);
+            }
+        }
+        LinearOp::CallPure { func, args, dst } => {
+            let mut args_values = Vec::with_capacity(args.len());
+            for arg in args {
+                let arg_alloc = find_operand_alloc(inst, inst_allocs, *arg, RaOperandKind::Use)?;
+                args_values.push(read_allocation(regs, spills, arg_alloc));
+            }
+            let ret = run_call_pure(func.0, &args_values);
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            write_allocation(regs, spills, dst_alloc, ret);
+        }
+        LinearOp::ErrorExit { code } => {
+            set_trap_if_none(trap, *cursor, *code);
+        }
+        other => {
+            return Err(RegallocEngineError::Simulation(format!(
+                "unsupported op in simulation at b{}: {other:?}",
+                block_id.0
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn simulate_execution(
     allocated: &AllocatedProgram,
     input: &[u8],
@@ -1174,6 +1619,7 @@ pub fn simulate_execution(
     let mut regs = HashMap::<PReg, u64>::new();
     let mut spills = HashMap::<usize, u64>::new();
     let mut output = vec![0u8; infer_output_size_for_function(func)];
+    let mut sim = SimulatorRuntime::new(input, allocated.ra_program.slot_count as usize);
     let mut cursor = 0usize;
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut returned = false;
@@ -1210,102 +1656,18 @@ pub fn simulate_execution(
                 ))
             })?;
 
-            match &inst.op {
-                LinearOp::Const { dst, value } => {
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    write_allocation(&mut regs, &mut spills, dst_alloc, *value);
-                }
-                LinearOp::Copy { dst, src } => {
-                    let src_alloc =
-                        find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    let value = read_allocation(&regs, &spills, src_alloc);
-                    write_allocation(&mut regs, &mut spills, dst_alloc, value);
-                }
-                LinearOp::BinOp { op, dst, lhs, rhs } => {
-                    let lhs_alloc =
-                        find_operand_alloc(inst, inst_allocs, *lhs, RaOperandKind::Use)?;
-                    let rhs_alloc =
-                        find_operand_alloc(inst, inst_allocs, *rhs, RaOperandKind::Use)?;
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    let lhs_val = read_allocation(&regs, &spills, lhs_alloc);
-                    let rhs_val = read_allocation(&regs, &spills, rhs_alloc);
-                    write_allocation(
-                        &mut regs,
-                        &mut spills,
-                        dst_alloc,
-                        exec_binop(*op, lhs_val, rhs_val),
-                    );
-                }
-                LinearOp::BoundsCheck { count } => {
-                    if cursor + (*count as usize) > input.len() {
-                        trap = Some(crate::InterpreterTrap {
-                            code: ErrorCode::UnexpectedEof,
-                            offset: cursor as u32,
-                        });
-                    }
-                }
-                LinearOp::ReadBytes { dst, count } => {
-                    let count = *count as usize;
-                    if cursor + count > input.len() {
-                        trap = Some(crate::InterpreterTrap {
-                            code: ErrorCode::UnexpectedEof,
-                            offset: cursor as u32,
-                        });
-                    } else {
-                        let mut value = 0u64;
-                        for i in 0..count {
-                            value |= (input[cursor + i] as u64) << (i * 8);
-                        }
-                        cursor += count;
-                        let dst_alloc =
-                            find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                        write_allocation(&mut regs, &mut spills, dst_alloc, value);
-                    }
-                }
-                LinearOp::WriteToField { src, offset, width } => {
-                    let src_alloc =
-                        find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
-                    let value = read_allocation(&regs, &spills, src_alloc);
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    if output.len() < base + width_bytes {
-                        output.resize(base + width_bytes, 0);
-                    }
-                    for i in 0..width_bytes {
-                        output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
-                    }
-                }
-                LinearOp::ReadFromField { dst, offset, width } => {
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    if output.len() < base + width_bytes {
-                        output.resize(base + width_bytes, 0);
-                    }
-                    let mut value = 0u64;
-                    for i in 0..width_bytes {
-                        value |= (output[base + i] as u64) << (i * 8);
-                    }
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    write_allocation(&mut regs, &mut spills, dst_alloc, value);
-                }
-                LinearOp::ErrorExit { code } => {
-                    trap = Some(crate::InterpreterTrap {
-                        code: *code,
-                        offset: cursor as u32,
-                    });
-                }
-                op => {
-                    return Err(RegallocEngineError::Simulation(format!(
-                        "unsupported op in simulation at b{}: {op:?}",
-                        block.id.0
-                    )));
-                }
-            }
+            execute_sim_linear_op(
+                &inst.op,
+                block.id,
+                inst,
+                inst_allocs,
+                &mut regs,
+                &mut spills,
+                &mut sim,
+                &mut cursor,
+                &mut output,
+                &mut trap,
+            )?;
 
             if let Some(edits) = edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::After))
             {
@@ -1531,6 +1893,7 @@ pub fn simulate_execution_trace(
     let mut regs = HashMap::<PReg, u64>::new();
     let mut spills = HashMap::<usize, u64>::new();
     let mut output = vec![0u8; infer_output_size_for_function(func)];
+    let mut sim = SimulatorRuntime::new(input, allocated.ra_program.slot_count as usize);
     let mut cursor = 0usize;
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut returned = false;
@@ -1568,102 +1931,18 @@ pub fn simulate_execution_trace(
                 ))
             })?;
 
-            match &inst.op {
-                LinearOp::Const { dst, value } => {
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    write_allocation(&mut regs, &mut spills, dst_alloc, *value);
-                }
-                LinearOp::Copy { dst, src } => {
-                    let src_alloc =
-                        find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    let value = read_allocation(&regs, &spills, src_alloc);
-                    write_allocation(&mut regs, &mut spills, dst_alloc, value);
-                }
-                LinearOp::BinOp { op, dst, lhs, rhs } => {
-                    let lhs_alloc =
-                        find_operand_alloc(inst, inst_allocs, *lhs, RaOperandKind::Use)?;
-                    let rhs_alloc =
-                        find_operand_alloc(inst, inst_allocs, *rhs, RaOperandKind::Use)?;
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    let lhs_val = read_allocation(&regs, &spills, lhs_alloc);
-                    let rhs_val = read_allocation(&regs, &spills, rhs_alloc);
-                    write_allocation(
-                        &mut regs,
-                        &mut spills,
-                        dst_alloc,
-                        exec_binop(*op, lhs_val, rhs_val),
-                    );
-                }
-                LinearOp::BoundsCheck { count } => {
-                    if cursor + (*count as usize) > input.len() {
-                        trap = Some(crate::InterpreterTrap {
-                            code: ErrorCode::UnexpectedEof,
-                            offset: cursor as u32,
-                        });
-                    }
-                }
-                LinearOp::ReadBytes { dst, count } => {
-                    let count = *count as usize;
-                    if cursor + count > input.len() {
-                        trap = Some(crate::InterpreterTrap {
-                            code: ErrorCode::UnexpectedEof,
-                            offset: cursor as u32,
-                        });
-                    } else {
-                        let mut value = 0u64;
-                        for i in 0..count {
-                            value |= (input[cursor + i] as u64) << (i * 8);
-                        }
-                        cursor += count;
-                        let dst_alloc =
-                            find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                        write_allocation(&mut regs, &mut spills, dst_alloc, value);
-                    }
-                }
-                LinearOp::WriteToField { src, offset, width } => {
-                    let src_alloc =
-                        find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
-                    let value = read_allocation(&regs, &spills, src_alloc);
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    if output.len() < base + width_bytes {
-                        output.resize(base + width_bytes, 0);
-                    }
-                    for i in 0..width_bytes {
-                        output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
-                    }
-                }
-                LinearOp::ReadFromField { dst, offset, width } => {
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    if output.len() < base + width_bytes {
-                        output.resize(base + width_bytes, 0);
-                    }
-                    let mut value = 0u64;
-                    for i in 0..width_bytes {
-                        value |= (output[base + i] as u64) << (i * 8);
-                    }
-                    let dst_alloc =
-                        find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
-                    write_allocation(&mut regs, &mut spills, dst_alloc, value);
-                }
-                LinearOp::ErrorExit { code } => {
-                    trap = Some(crate::InterpreterTrap {
-                        code: *code,
-                        offset: cursor as u32,
-                    });
-                }
-                op => {
-                    return Err(RegallocEngineError::Simulation(format!(
-                        "unsupported op in simulation at b{}: {op:?}",
-                        block.id.0
-                    )));
-                }
-            }
+            execute_sim_linear_op(
+                &inst.op,
+                block.id,
+                inst,
+                inst_allocs,
+                &mut regs,
+                &mut spills,
+                &mut sim,
+                &mut cursor,
+                &mut output,
+                &mut trap,
+            )?;
 
             if let Some(edits) = edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::After))
             {
@@ -1850,37 +2129,36 @@ fn ideal_trace(
     program: &RaProgram,
     input: &[u8],
 ) -> Result<Vec<DifferentialState>, RegallocEngineError> {
-    let mut session = crate::DebuggerSession::new(program, input).map_err(|err| {
-        RegallocEngineError::Simulation(format!("ideal debugger init failed: {err}"))
-    })?;
-    let mut trace = Vec::new();
+    let func = program
+        .funcs
+        .first()
+        .ok_or_else(|| RegallocEngineError::Simulation("RA-MIR program has no functions".to_string()))?;
+    let (_, entries) = crate::execute_function_with_trace(
+        func,
+        program.vreg_count as usize,
+        program.slot_count as usize,
+        input,
+    )
+    .map_err(|err| RegallocEngineError::Simulation(format!("ideal interpreter failed: {err}")))?;
 
-    loop {
-        let before = session.state();
-        if before.halted {
-            break;
-        }
-        session.step_forward().map_err(|err| {
-            RegallocEngineError::Simulation(format!("ideal debugger step failed: {err}"))
-        })?;
-        let state = session.state();
-        trace.push(DifferentialState {
-            step_index: state.step_count,
+    Ok(entries
+        .into_iter()
+        .map(|entry| DifferentialState {
+            step_index: entry.step_index,
             position: ExecutionPosition {
-                block: state.location.block,
-                next_inst_index: state.location.next_inst_index,
-                at_terminator: state.location.at_terminator,
+                block: entry.block,
+                next_inst_index: entry.next_inst_index,
+                at_terminator: entry.at_terminator,
             },
-            cursor: state.cursor,
-            output: state.output,
-            trap: state.trap,
-            returned: state.returned,
-            vregs: Some(state.vregs),
+            cursor: entry.cursor,
+            output: entry.output,
+            trap: entry.trap,
+            returned: entry.returned,
+            vregs: Some(entry.vregs),
             physical_registers: None,
             spillslots: None,
-        });
-    }
-    Ok(trace)
+        })
+        .collect())
 }
 
 fn first_differing_field(
