@@ -218,7 +218,7 @@ impl Lowerer {
             .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X10, lo as u16, 0).expect("movz"));
         if value > 0xFFFF {
             self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::W32, Reg::X10, hi as u16, 1).expect("movk"),
+                aarch64::encode_movk(aarch64::Width::W32, Reg::X10, hi as u16, 16).expect("movk"),
             );
         }
     }
@@ -233,17 +233,17 @@ impl Lowerer {
             .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X10, p0 as u16, 0).expect("movz"));
         if p1 != 0 {
             self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p1 as u16, 1).expect("movk"),
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p1 as u16, 16).expect("movk"),
             );
         }
         if p2 != 0 {
             self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p2 as u16, 2).expect("movk"),
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p2 as u16, 32).expect("movk"),
             );
         }
         if p3 != 0 {
             self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p3 as u16, 3).expect("movk"),
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p3 as u16, 48).expect("movk"),
             );
         }
     }
@@ -258,17 +258,17 @@ impl Lowerer {
             .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X9, p0 as u16, 0).expect("movz"));
         if p1 != 0 {
             self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p1 as u16, 1).expect("movk"),
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p1 as u16, 16).expect("movk"),
             );
         }
         if p2 != 0 {
             self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p2 as u16, 2).expect("movk"),
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p2 as u16, 32).expect("movk"),
             );
         }
         if p3 != 0 {
             self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p3 as u16, 3).expect("movk"),
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p3 as u16, 48).expect("movk"),
             );
         }
     }
