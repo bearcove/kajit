@@ -17,17 +17,20 @@ const MAP_FAILED: *mut u8 = !0usize as *mut u8;
 #[cfg(target_os = "macos")]
 const MAP_JIT: i32 = 0x0800;
 
-#[cfg(target_os = "macos")]
 type MmapProt = i32;
 
-extern "C" {
+unsafe extern "C" {
     fn mmap(addr: *mut u8, len: usize, prot: MmapProt, flags: i32, fd: i32, offset: i64) -> *mut u8;
     fn munmap(addr: *mut u8, len: usize) -> i32;
+}
+
+#[cfg(target_os = "linux")]
+unsafe extern "C" {
     fn mprotect(addr: *mut u8, len: usize, prot: MmapProt) -> i32;
 }
 
 #[cfg(target_os = "macos")]
-extern "C" {
+unsafe extern "C" {
     fn pthread_jit_write_protect_np(enabled: i32);
     fn sys_icache_invalidate(start: *mut u8, len: usize);
 }
@@ -39,7 +42,7 @@ pub struct ExecutableBuffer {
 }
 
 impl ExecutableBuffer {
-    fn allocate(mut bytes: Vec<u8>) -> Self {
+    fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
         let prot = if cfg!(target_os = "macos") {
             PROT_READ | PROT_EXEC
@@ -60,14 +63,14 @@ impl ExecutableBuffer {
         #[cfg(target_os = "macos")]
         unsafe {
             pthread_jit_write_protect_np(0);
-            ptr.copy_from_nonoverlapping(bytes.as_mut_ptr(), bytes.len());
+            ptr.copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
             pthread_jit_write_protect_np(1);
             sys_icache_invalidate(ptr, bytes.len());
         }
 
         #[cfg(not(target_os = "macos"))]
         unsafe {
-            ptr.copy_from_nonoverlapping(bytes.as_mut_ptr(), bytes.len());
+            ptr.copy_from_nonoverlapping(bytes.as_ptr(), bytes.len());
             let ok = mprotect(ptr, len, PROT_READ | PROT_EXEC);
             if ok != 0 {
                 munmap(ptr, len);
@@ -235,6 +238,7 @@ pub struct LabelId(u32);
 
 #[derive(Debug)]
 pub struct FinalizedEmission {
+    pub code: Vec<u8>,
     pub exec: ExecutableBuffer,
     pub source_map: SourceMap,
 }
@@ -249,11 +253,11 @@ impl FinalizedEmission {
     }
 
     pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
-        crate::build_trace(self.exec.as_ref(), &self.source_map)
+        crate::build_trace(&self.code, &self.source_map)
     }
 
     pub fn trace_text(&self) -> Result<String, crate::TraceError> {
-        crate::format_trace(self.exec.as_ref(), &self.source_map)
+        crate::format_trace(&self.code, &self.source_map)
     }
 
     pub fn source_map_le(&self) -> Result<Vec<u8>, crate::SourceMapError> {
@@ -509,8 +513,11 @@ impl Emitter {
                 .copy_from_slice(&patched.to_le_bytes());
         }
 
+        let code = std::mem::take(&mut self.buf);
+        let exec = ExecutableBuffer::allocate(&code);
         Ok(FinalizedEmission {
-            exec: ExecutableBuffer::allocate(self.buf),
+            code,
+            exec,
             source_map: self.source_map,
         })
     }
@@ -1981,7 +1988,6 @@ mod tests {
 
         let finalized = emitter.finalize().unwrap();
         let code = finalized.exec.as_ref();
-        let code = finalized.exec.as_ref();
         assert_eq!(
             finalized.source_map,
             vec![
@@ -2086,6 +2092,7 @@ mod tests {
         emitter.bind_label(done).unwrap();
 
         let finalized = emitter.finalize().unwrap();
+        let code = finalized.exec.as_ref();
         assert_eq!(
             finalized.source_map,
             vec![
