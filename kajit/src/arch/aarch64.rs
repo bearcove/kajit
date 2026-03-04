@@ -1157,29 +1157,53 @@ impl EmitCtx {
         if size <= 4 {
             let val32 = val as u32;
             if val32 <= 0xFFFF {
-                dynasm!(self.ops ; .arch aarch64 ; movz w9, val32);
+                self.emit.emit_word(
+                    aarch64::encode_movz(aarch64::Width::W32, Reg::X9, val32 as u16, 0)
+                        .expect("movz"),
+                );
             } else {
                 let lo = val32 & 0xFFFF;
                 let hi = (val32 >> 16) & 0xFFFF;
-                dynasm!(self.ops ; .arch aarch64
-                    ; movz w9, lo
-                    ; movk w9, hi, LSL #16
-                );
+                self.emit
+                    .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X9, lo as u16, 0).expect("movz"));
+                self.emit
+                    .emit_word(aarch64::encode_movk(aarch64::Width::W32, Reg::X9, hi as u16, 16).expect("movk"));
             }
         } else {
-            dynasm!(self.ops ; .arch aarch64
-                ; movz x9, #((val) & 0xFFFF) as u32
-                ; movk x9, #((val >> 16) & 0xFFFF) as u32, LSL #16
-                ; movk x9, #((val >> 32) & 0xFFFF) as u32, LSL #32
-                ; movk x9, #((val >> 48) & 0xFFFF) as u32, LSL #48
+            self.emit.emit_word(
+                aarch64::encode_movz(aarch64::Width::X64, Reg::X9, (val & 0xFFFF) as u16, 0).expect("movz"),
+            );
+            self.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((val >> 16) & 0xFFFF) as u16, 16)
+                    .expect("movk"),
+            );
+            self.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((val >> 32) & 0xFFFF) as u16, 32)
+                    .expect("movk"),
+            );
+            self.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((val >> 48) & 0xFFFF) as u16, 48)
+                    .expect("movk"),
             );
         }
         // Store to [out + 0]
         match size {
-            1 => dynasm!(self.ops ; .arch aarch64 ; strb w9, [x21]),
-            2 => dynasm!(self.ops ; .arch aarch64 ; strh w9, [x21]),
-            4 => dynasm!(self.ops ; .arch aarch64 ; str w9, [x21]),
-            8 => dynasm!(self.ops ; .arch aarch64 ; str x9, [x21]),
+            1 => self
+                .emit
+                .emit_word(aarch64::encode_strb_imm(Reg::X9, Reg::X21, 0).expect("strb")),
+            2 => self
+                .emit
+                .emit_word(aarch64::encode_strh_imm(Reg::X9, Reg::X21, 0).expect("strh")),
+            4 => self
+                .emit
+                .emit_word(
+                    aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X21, 0).expect("str"),
+                ),
+            8 => self
+                .emit
+                .emit_word(
+                    aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, 0).expect("str"),
+                ),
             _ => panic!("unsupported discriminant size: {size}"),
         }
     }
@@ -1196,51 +1220,64 @@ impl EmitCtx {
     /// After this, the caller emits `emit_cmp_imm_branch_eq` for each variant.
     pub fn emit_read_postcard_discriminant(&mut self, slow_intrinsic: *const u8) {
         let error_exit = self.error_exit;
-        let eof_label = self.ops.new_dynamic_label();
-        let slow_path = self.ops.new_dynamic_label();
-        let done_label = self.ops.new_dynamic_label();
+        let eof_label = self.emit.new_label();
+        let slow_path = self.emit.new_label();
+        let done_label = self.emit.new_label();
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; cmp x19, x20
-            ; b.hs =>eof_label
-            ; ldrb w9, [x19]
-            ; tbnz w9, #7, =>slow_path
-            ; add x19, x19, #1
-            ; b =>done_label
-            ; =>slow_path
+        self.emit
+            .emit_word(aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"));
+        self.emit
+            .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
+            .expect("b.hs");
+        self.emit.emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
+        self.emit.emit_tbnz_label(Reg::X9, 7, slow_path).expect("tbnz");
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, 1, false).expect("add"),
         );
+        self.emit.emit_b_label(done_label).expect("b");
+        self.emit.bind_label(slow_path).expect("bind");
+
         // Slow path: call full varint decode intrinsic into temp on stack
         self.emit_flush_input_cursor();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; mov x0, x22
-            ; add x1, sp, #48
+        self.emit
+            .emit_word(aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"));
+        self.emit.emit_word(
+            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X1, Reg::SP, 48, false).expect("add"),
         );
         self.emit_call_fn_ptr(slow_intrinsic);
         self.emit_reload_cursor_and_check_error();
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr w9, [sp, #48]
-            ; b =>done_label
-
-            ; =>eof_label
-            ; movz w9, crate::context::ErrorCode::UnexpectedEof as u32
-            ; str w9, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
-
-            ; =>done_label
+        self.emit.emit_word(aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::SP, 48).expect("ldr"));
+        self.emit.emit_b_label(done_label).expect("b");
+        self.emit.bind_label(eof_label).expect("bind");
+        self.emit.emit_word(
+            aarch64::encode_movz(
+                aarch64::Width::W32,
+                Reg::X9,
+                crate::context::ErrorCode::UnexpectedEof as u16,
+                0,
+            )
+            .expect("movz"),
         );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(
+                aarch64::Width::W32,
+                Reg::X9,
+                Reg::X22,
+                CTX_ERROR_CODE as u32,
+            )
+            .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
+        self.emit.bind_label(done_label).expect("bind");
     }
 
     /// Compare w9 (discriminant) with immediate `imm` and branch to `label`
     /// if equal.
-    pub fn emit_cmp_imm_branch_eq(&mut self, imm: u32, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; cmp w9, #imm
-            ; b.eq =>label
+    pub fn emit_cmp_imm_branch_eq(&mut self, imm: u32, label: LabelId) {
+        self.emit.emit_word(
+            aarch64::encode_cmp_imm(aarch64::Width::W32, Reg::X9, imm as u16, false).expect("cmp"),
         );
+        self.emit.emit_b_cond_label(aarch64::Condition::Eq, label).expect("b.eq");
     }
 
     /// Emit a branch-to-error for unknown variant (sets UnknownVariant error code).
@@ -1248,130 +1285,125 @@ impl EmitCtx {
         let error_exit = self.error_exit;
         let error_code = crate::context::ErrorCode::UnknownVariant as u32;
 
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; movz w9, #error_code
-            ; str w9, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
+                .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
     }
 
     /// Save the cached input_ptr (x19) to a stack slot.
     pub fn emit_save_input_ptr(&mut self, stack_offset: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; str x19, [sp, #stack_offset]
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::SP, stack_offset).expect("str"),
         );
     }
 
     /// Restore the cached input_ptr (x19) from a stack slot.
     pub fn emit_restore_input_ptr(&mut self, stack_offset: u32) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x19, [sp, #stack_offset]
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::SP, stack_offset).expect("ldr"),
         );
     }
 
     /// Store a 64-bit immediate into a stack slot at sp + offset.
     pub fn emit_store_imm64_to_stack(&mut self, stack_offset: u32, value: u64) {
         if value == 0 {
-            dynasm!(self.ops
-                ; .arch aarch64
-                ; str xzr, [sp, #stack_offset]
-            );
+            self.emit
+                .emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::XZR, Reg::SP, stack_offset).expect("str"));
         } else {
             // Load immediate into x9, then store
-            dynasm!(self.ops
-                ; .arch aarch64
-                ; movz x9, #((value) & 0xFFFF) as u32
-            );
+            self.emit
+                .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X9, (value & 0xFFFF) as u16, 0).expect("movz"));
             if value > 0xFFFF {
-                dynasm!(self.ops ; .arch aarch64
-                    ; movk x9, #((value >> 16) & 0xFFFF) as u32, LSL #16
-                );
+                self.emit
+                    .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((value >> 16) & 0xFFFF) as u16, 16).expect("movk"));
             }
             if value > 0xFFFF_FFFF {
-                dynasm!(self.ops ; .arch aarch64
-                    ; movk x9, #((value >> 32) & 0xFFFF) as u32, LSL #32
-                );
+                self.emit
+                    .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((value >> 32) & 0xFFFF) as u16, 32).expect("movk"));
             }
             if value > 0xFFFF_FFFF_FFFF {
-                dynasm!(self.ops ; .arch aarch64
-                    ; movk x9, #((value >> 48) & 0xFFFF) as u32, LSL #48
-                );
+                self.emit
+                    .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X9, ((value >> 48) & 0xFFFF) as u16, 48).expect("movk"));
             }
-            dynasm!(self.ops
-                ; .arch aarch64
-                ; str x9, [sp, #stack_offset]
-            );
+            self.emit
+                .emit_word(aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("str"));
         }
     }
 
     /// AND a 64-bit immediate into a stack slot at sp + offset.
     /// Loads the slot, ANDs with the immediate, stores back.
     pub fn emit_and_imm64_on_stack(&mut self, stack_offset: u32, mask: u64) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #stack_offset]
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
         );
         // Load mask into x10
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; movz x10, #((mask) & 0xFFFF) as u32
-        );
+        self.emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X10, (mask & 0xFFFF) as u16, 0).expect("movz"));
         if mask > 0xFFFF {
-            dynasm!(self.ops ; .arch aarch64
-                ; movk x10, #((mask >> 16) & 0xFFFF) as u32, LSL #16
-            );
+            self.emit
+                .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X10, ((mask >> 16) & 0xFFFF) as u16, 16).expect("movk"));
         }
         if mask > 0xFFFF_FFFF {
-            dynasm!(self.ops ; .arch aarch64
-                ; movk x10, #((mask >> 32) & 0xFFFF) as u32, LSL #32
-            );
+            self.emit
+                .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X10, ((mask >> 32) & 0xFFFF) as u16, 32).expect("movk"));
         }
         if mask > 0xFFFF_FFFF_FFFF {
-            dynasm!(self.ops ; .arch aarch64
-                ; movk x10, #((mask >> 48) & 0xFFFF) as u32, LSL #48
-            );
+            self.emit
+                .emit_word(aarch64::encode_movk(aarch64::Width::X64, Reg::X10, ((mask >> 48) & 0xFFFF) as u16, 48).expect("movk"));
         }
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; and x9, x9, x10
-            ; str x9, [sp, #stack_offset]
+        self.emit.emit_word(
+            aarch64::encode_and_reg(
+                aarch64::Width::X64,
+                Reg::X9,
+                Reg::X9,
+                Reg::X10,
+                aarch64::Shift::Lsl,
+                0,
+            )
+            .expect("and"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("str"),
         );
     }
 
     /// Check if the stack slot at sp + offset has exactly one bit set (popcount == 1).
     /// If so, branch to `label`.
-    pub fn emit_popcount_eq1_branch(&mut self, stack_offset: u32, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #stack_offset]
-            // popcount == 1 iff (x & (x-1)) == 0 && x != 0
-            ; sub x10, x9, #1
-            ; tst x9, x10           // sets Z if (x & (x-1)) == 0
-            ; b.ne #12              // skip if more than 1 bit
-            ; cbnz x9, =>label      // branch if nonzero (exactly 1 bit)
+    pub fn emit_popcount_eq1_branch(&mut self, stack_offset: u32, label: LabelId) {
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
         );
+        // popcount == 1 iff (x & (x-1)) == 0 && x != 0
+        self.emit.emit_word(
+            aarch64::encode_sub_imm(aarch64::Width::X64, Reg::X10, Reg::X9, 1, false).expect("sub"),
+        );
+        self.emit.emit_word(aarch64::encode_tst_reg(aarch64::Width::X64, Reg::X9, Reg::X10).expect("tst"));
+        self.emit.emit_word(aarch64::encode_b_cond(aarch64::Condition::Ne, 3).expect("b.ne"));
+        self.emit.emit_cbnz_label(aarch64::Width::X64, Reg::X9, label).expect("cbnz");
     }
 
     /// Check if the stack slot at sp + offset is zero. If so, branch to `label`.
-    pub fn emit_stack_zero_branch(&mut self, stack_offset: u32, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #stack_offset]
-            ; cbz x9, =>label
+    pub fn emit_stack_zero_branch(&mut self, stack_offset: u32, label: LabelId) {
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
         );
+        self.emit.emit_cbz_label(aarch64::Width::X64, Reg::X9, label).expect("cbz");
     }
 
     /// Load the stack slot at sp + offset into x9, then branch to `label` if
     /// bit `bit_index` is set.
-    pub fn emit_test_bit_branch(&mut self, stack_offset: u32, bit_index: u32, label: DynamicLabel) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #stack_offset]
-            ; tbnz x9, #bit_index, =>label
+    pub fn emit_test_bit_branch(&mut self, stack_offset: u32, bit_index: u32, label: LabelId) {
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
         );
+        self.emit
+            .emit_tbnz_label(Reg::X9, bit_index as u8, label)
+            .expect("tbnz");
     }
 
     /// Test a single bit at `bit_index` in the u64 at `[sp + stack_offset]`.
@@ -1380,25 +1412,26 @@ impl EmitCtx {
         &mut self,
         stack_offset: u32,
         bit_index: u32,
-        label: DynamicLabel,
+        label: LabelId,
     ) {
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; ldr x9, [sp, #stack_offset]
-            ; tbz x9, #bit_index, =>label
+        self.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, stack_offset).expect("ldr"),
         );
+        self.emit.emit_tbz_label(Reg::X9, bit_index as u8, label).expect("tbz");
     }
 
     /// Emit an error (write error code to ctx, branch to error_exit).
     pub fn emit_error(&mut self, code: crate::context::ErrorCode) {
         let error_exit = self.error_exit;
         let error_code = code as u32;
-        dynasm!(self.ops
-            ; .arch aarch64
-            ; movz w9, #error_code
-            ; str w9, [x22, #CTX_ERROR_CODE]
-            ; b =>error_exit
+        self.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE as u32)
+                .expect("str"),
+        );
+        self.emit.emit_b_label(error_exit).expect("b");
     }
 
     /// Advance the cached cursor by n bytes (inline, no function call).
