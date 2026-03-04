@@ -141,6 +141,7 @@ pub enum EmitError {
 enum FixupKind {
     Imm26,
     Imm19,
+    Imm14,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +274,40 @@ impl Emitter {
         Ok(())
     }
 
+    pub fn emit_tbz_label(&mut self, rt: u8, bit: u8, label: LabelId) -> Result<(), EmitError> {
+        self.emit_word(encode_tbz(rt, bit, 0)?);
+        self.fixups.push(Fixup {
+            at_offset: self.current_offset() - 4,
+            label,
+            kind: FixupKind::Imm14,
+        });
+        Ok(())
+    }
+
+    pub fn emit_tbnz_label(&mut self, rt: u8, bit: u8, label: LabelId) -> Result<(), EmitError> {
+        self.emit_word(encode_tbnz(rt, bit, 0)?);
+        self.fixups.push(Fixup {
+            at_offset: self.current_offset() - 4,
+            label,
+            kind: FixupKind::Imm14,
+        });
+        Ok(())
+    }
+
+    pub fn emit_b_cond_label(
+        &mut self,
+        cond: Condition,
+        label: LabelId,
+    ) -> Result<(), EmitError> {
+        self.emit_word(encode_b_cond(cond, 0)?);
+        self.fixups.push(Fixup {
+            at_offset: self.current_offset() - 4,
+            label,
+            kind: FixupKind::Imm19,
+        });
+        Ok(())
+    }
+
     pub fn finalize(mut self) -> Result<FinalizedEmission, EmitError> {
         for fixup in self.fixups.iter().copied() {
             let target = self
@@ -304,6 +339,10 @@ impl Emitter {
                 FixupKind::Imm19 => {
                     check_signed_bits("branch19", delta_words, 19)?;
                     (word & !(0x7ffff << 5)) | (((delta_words as u32) & 0x7ffff) << 5)
+                }
+                FixupKind::Imm14 => {
+                    check_signed_bits("branch14", delta_words, 14)?;
+                    (word & !(0x3fff << 5)) | (((delta_words as u32) & 0x3fff) << 5)
                 }
             };
 
@@ -416,6 +455,39 @@ fn encode_load_store_unsigned(
     Ok(base | (imm12 << 10) | (rn << 5) | rt)
 }
 
+fn encode_pair_signed_offset(
+    instruction: &'static str,
+    base: u32,
+    width: Width,
+    rt1: u8,
+    rt2: u8,
+    rn: u8,
+    offset: i16,
+) -> Result<u32, EmitError> {
+    let rt1 = check_reg(rt1)?;
+    let rt2 = check_reg(rt2)?;
+    let rn = check_reg(rn)?;
+    let align = match width {
+        Width::W32 => 4,
+        Width::X64 => 8,
+    } as i16;
+    if offset % align != 0 {
+        return Err(EmitError::InvalidImmediate {
+            instruction,
+            value: offset as i64,
+        });
+    }
+    let scaled = offset / align;
+    if !(-64..=63).contains(&scaled) {
+        return Err(EmitError::InvalidImmediate {
+            instruction,
+            value: offset as i64,
+        });
+    }
+    let imm7 = (scaled as i32 as u32) & 0x7f;
+    Ok(base | (imm7 << 15) | (rt2 << 10) | (rn << 5) | rt1)
+}
+
 pub fn encode_ldr_imm(width: Width, rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
     let base = match width {
         Width::W32 => 0xB940_0000,
@@ -454,6 +526,39 @@ pub fn encode_strb_imm(rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
 
 pub fn encode_strh_imm(rt: u8, rn: u8, offset: u32) -> Result<u32, EmitError> {
     encode_load_store_unsigned(0x7900_0000, rt, rn, offset, 2)
+}
+
+pub fn encode_stp(
+    width: Width,
+    rt1: u8,
+    rt2: u8,
+    rn: u8,
+    offset: i16,
+) -> Result<u32, EmitError> {
+    let base = match width {
+        Width::W32 => 0x2900_0000,
+        Width::X64 => 0xA900_0000,
+    };
+    encode_pair_signed_offset("stp", base, width, rt1, rt2, rn, offset)
+}
+
+pub fn encode_ldp(
+    width: Width,
+    rt1: u8,
+    rt2: u8,
+    rn: u8,
+    offset: i16,
+) -> Result<u32, EmitError> {
+    let base = match width {
+        Width::W32 => 0x2940_0000,
+        Width::X64 => 0xA940_0000,
+    };
+    encode_pair_signed_offset("ldp", base, width, rt1, rt2, rn, offset)
+}
+
+pub fn encode_ret(rn: u8) -> Result<u32, EmitError> {
+    let rn = check_reg(rn)?;
+    Ok(0xD65F_0000 | (rn << 5))
 }
 
 pub fn encode_add_reg(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
@@ -587,6 +692,28 @@ pub fn encode_cmp_imm(width: Width, rn: u8, imm12: u16, shift12: bool) -> Result
     Ok(base | ((shift12 as u32) << 22) | ((imm12 as u32) << 10) | (rn << 5))
 }
 
+pub fn encode_subs_reg(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd)?;
+    let rn = check_reg(rn)?;
+    let rm = check_reg(rm)?;
+    Ok((width.sf() << 31) | 0x6B00_0000 | (rm << 16) | (rn << 5) | rd)
+}
+
+pub fn encode_cmn_imm(width: Width, rn: u8, imm12: u16, shift12: bool) -> Result<u32, EmitError> {
+    let rn = check_reg(rn)?;
+    if imm12 > 0x0fff {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "cmn imm12",
+            value: imm12 as i64,
+        });
+    }
+    let base = match width {
+        Width::W32 => 0x3100_001F,
+        Width::X64 => 0xB100_001F,
+    };
+    Ok(base | ((shift12 as u32) << 22) | ((imm12 as u32) << 10) | (rn << 5))
+}
+
 pub fn encode_cbz(width: Width, rt: u8, imm19: i32) -> Result<u32, EmitError> {
     check_reg(rt)?;
     check_signed_bits("cbz", imm19 as i64, 19)?;
@@ -607,6 +734,47 @@ pub fn encode_cbnz(width: Width, rt: u8, imm19: i32) -> Result<u32, EmitError> {
     Ok(base | (((imm19 as u32) & 0x7ffff) << 5) | (rt as u32))
 }
 
+pub fn encode_tbz(rt: u8, bit: u8, imm14: i32) -> Result<u32, EmitError> {
+    check_reg(rt)?;
+    if bit > 63 {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "tbz bit",
+            value: bit as i64,
+        });
+    }
+    check_signed_bits("tbz", imm14 as i64, 14)?;
+    let b5 = (bit >> 5) as u32;
+    let b40 = (bit & 0x1f) as u32;
+    Ok((b5 << 31)
+        | 0x3600_0000
+        | (b40 << 19)
+        | (((imm14 as u32) & 0x3fff) << 5)
+        | (rt as u32))
+}
+
+pub fn encode_tbnz(rt: u8, bit: u8, imm14: i32) -> Result<u32, EmitError> {
+    check_reg(rt)?;
+    if bit > 63 {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "tbnz bit",
+            value: bit as i64,
+        });
+    }
+    check_signed_bits("tbnz", imm14 as i64, 14)?;
+    let b5 = (bit >> 5) as u32;
+    let b40 = (bit & 0x1f) as u32;
+    Ok((b5 << 31)
+        | 0x3700_0000
+        | (b40 << 19)
+        | (((imm14 as u32) & 0x3fff) << 5)
+        | (rt as u32))
+}
+
+pub fn encode_b_cond(cond: Condition, imm19: i32) -> Result<u32, EmitError> {
+    check_signed_bits("b.cond", imm19 as i64, 19)?;
+    Ok(0x5400_0000 | (((imm19 as u32) & 0x7ffff) << 5) | (cond as u32))
+}
+
 pub fn encode_cset(width: Width, rd: u8, condition: Condition) -> Result<u32, EmitError> {
     let rd = check_reg(rd)?;
     let inv = condition.invert() as u32;
@@ -615,6 +783,51 @@ pub fn encode_cset(width: Width, rd: u8, condition: Condition) -> Result<u32, Em
         Width::X64 => 0x9A9F_07E0,
     };
     Ok(base | (inv << 12) | rd)
+}
+
+pub fn encode_tst_reg(width: Width, rn: u8, rm: u8) -> Result<u32, EmitError> {
+    let rn = check_reg(rn)?;
+    let rm = check_reg(rm)?;
+    let base = match width {
+        Width::W32 => 0x6A00_001F,
+        Width::X64 => 0xEA00_001F,
+    };
+    Ok(base | (rm << 16) | (rn << 5))
+}
+
+pub fn encode_tst_imm(width: Width, rn: u8, imm: u64) -> Result<u32, EmitError> {
+    let rn = check_reg(rn)?;
+    if imm == 0 || !imm.is_power_of_two() {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "tst imm",
+            value: imm as i64,
+        });
+    }
+    let width_bits = match width {
+        Width::W32 => 32u32,
+        Width::X64 => 64u32,
+    };
+    let bit = imm.trailing_zeros();
+    if bit >= width_bits {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "tst imm",
+            value: imm as i64,
+        });
+    }
+    if width == Width::W32 && (imm >> 32) != 0 {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "tst imm",
+            value: imm as i64,
+        });
+    }
+    let n = if width == Width::X64 { 1u32 } else { 0u32 };
+    let immr = (width_bits - bit) % width_bits;
+    let imms = 0u32;
+    let base = match width {
+        Width::W32 => 0x7200_001F,
+        Width::X64 => 0xF200_001F,
+    };
+    Ok(base | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5))
 }
 
 pub fn encode_sxtb(rd: u8, rn: u8) -> Result<u32, EmitError> {
@@ -633,6 +846,84 @@ pub fn encode_sxtw(rd: u8, rn: u8) -> Result<u32, EmitError> {
     let rd = check_reg(rd)?;
     let rn = check_reg(rn)?;
     Ok(0x9340_7C00 | (rn << 5) | rd)
+}
+
+pub fn encode_madd(width: Width, rd: u8, rn: u8, rm: u8, ra: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd)?;
+    let rn = check_reg(rn)?;
+    let rm = check_reg(rm)?;
+    let ra = check_reg(ra)?;
+    Ok((width.sf() << 31) | 0x1B00_0000 | (rm << 16) | (ra << 10) | (rn << 5) | rd)
+}
+
+pub fn encode_mul(width: Width, rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
+    encode_madd(width, rd, rn, rm, 31)
+}
+
+pub fn encode_umulh(rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd)?;
+    let rn = check_reg(rn)?;
+    let rm = check_reg(rm)?;
+    Ok(0x9BC0_7C00 | (rm << 16) | (rn << 5) | rd)
+}
+
+pub fn encode_smull(rd: u8, rn: u8, rm: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd)?;
+    let rn = check_reg(rn)?;
+    let rm = check_reg(rm)?;
+    Ok(0x9B20_7C00 | (rm << 16) | (rn << 5) | rd)
+}
+
+pub fn encode_asr_imm(width: Width, rd: u8, rn: u8, shift: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd)?;
+    let rn = check_reg(rn)?;
+    let max_shift = match width {
+        Width::W32 => 31,
+        Width::X64 => 63,
+    };
+    if shift > max_shift {
+        return Err(EmitError::InvalidShiftAmount { width, amount: shift });
+    }
+    let base = match width {
+        Width::W32 => 0x1300_0000,
+        Width::X64 => 0x9340_0000,
+    };
+    let imms = max_shift as u32;
+    Ok(base | ((shift as u32) << 16) | (imms << 10) | (rn << 5) | rd)
+}
+
+pub fn encode_csel(
+    width: Width,
+    rd: u8,
+    rn: u8,
+    rm: u8,
+    cond: Condition,
+) -> Result<u32, EmitError> {
+    let rd = check_reg(rd)?;
+    let rn = check_reg(rn)?;
+    let rm = check_reg(rm)?;
+    Ok((width.sf() << 31) | 0x1A80_0000 | (rm << 16) | ((cond as u32) << 12) | (rn << 5) | rd)
+}
+
+pub fn encode_clz(width: Width, rd: u8, rn: u8) -> Result<u32, EmitError> {
+    let rd = check_reg(rd)?;
+    let rn = check_reg(rn)?;
+    let base = match width {
+        Width::W32 => 0x5AC0_1000,
+        Width::X64 => 0xDAC0_1000,
+    };
+    Ok(base | (rn << 5) | rd)
+}
+
+pub fn encode_bic(
+    width: Width,
+    rd: u8,
+    rn: u8,
+    rm: u8,
+    shift: Shift,
+    amount: u8,
+) -> Result<u32, EmitError> {
+    emit_logical_shifted_reg(0x0A20_0000, width, rd, rn, rm, shift, amount)
 }
 
 pub fn encode_b(imm26: i32) -> Result<u32, EmitError> {
@@ -797,6 +1088,48 @@ mod tests {
     }
 
     #[test]
+    fn encode_pair_load_store_ret_and_branches() {
+        assert_eq!(encode_stp(Width::X64, 29, 30, 31, 0).unwrap(), 0xA900_7BFD);
+        assert_eq!(encode_ldp(Width::X64, 29, 30, 31, 0).unwrap(), 0xA940_7BFD);
+        assert_eq!(encode_stp(Width::W32, 1, 2, 3, -4).unwrap(), 0x293F_8861);
+        assert_eq!(encode_ldp(Width::W32, 1, 2, 3, -4).unwrap(), 0x297F_8861);
+        assert_eq!(encode_ret(30).unwrap(), 0xD65F_03C0);
+
+        assert_eq!(encode_tbz(1, 7, 3).unwrap(), 0x3638_0061);
+        assert_eq!(encode_tbnz(1, 7, 3).unwrap(), 0x3738_0061);
+        assert_eq!(encode_b_cond(Condition::Eq, 3).unwrap(), 0x5400_0060);
+    }
+
+    #[test]
+    fn encode_test_and_misc_integer_ops() {
+        assert_eq!(encode_tst_reg(Width::X64, 14, 15).unwrap(), 0xEA0F_01DF);
+        assert_eq!(encode_tst_reg(Width::W32, 14, 15).unwrap(), 0x6A0F_01DF);
+        assert_eq!(encode_tst_imm(Width::X64, 9, 1).unwrap(), 0xF240_013F);
+        assert_eq!(encode_tst_imm(Width::W32, 9, 1).unwrap(), 0x7200_013F);
+
+        assert_eq!(encode_madd(Width::X64, 4, 1, 2, 3).unwrap(), 0x9B02_0C24);
+        assert_eq!(encode_madd(Width::W32, 4, 1, 2, 3).unwrap(), 0x1B02_0C24);
+        assert_eq!(encode_asr_imm(Width::X64, 1, 2, 5).unwrap(), 0x9345_FC41);
+        assert_eq!(encode_asr_imm(Width::W32, 1, 2, 5).unwrap(), 0x1305_7C41);
+        assert_eq!(
+            encode_csel(Width::X64, 9, 10, 11, Condition::Ne).unwrap(),
+            0x9A8B_1149
+        );
+        assert_eq!(encode_subs_reg(Width::X64, 6, 7, 8).unwrap(), 0xEB08_00E6);
+        assert_eq!(encode_subs_reg(Width::W32, 6, 7, 8).unwrap(), 0x6B08_00E6);
+        assert_eq!(encode_cmn_imm(Width::X64, 14, 0xff, false).unwrap(), 0xB103_FDDF);
+        assert_eq!(encode_mul(Width::X64, 6, 7, 8).unwrap(), 0x9B08_7CE6);
+        assert_eq!(encode_umulh(6, 7, 8).unwrap(), 0x9BC8_7CE6);
+        assert_eq!(encode_clz(Width::X64, 9, 10).unwrap(), 0xDAC0_1149);
+        assert_eq!(encode_clz(Width::W32, 9, 10).unwrap(), 0x5AC0_1149);
+        assert_eq!(
+            encode_bic(Width::X64, 9, 10, 11, Shift::Lsl, 0).unwrap(),
+            0x8A2B_0149
+        );
+        assert_eq!(encode_smull(9, 10, 11).unwrap(), 0x9B2B_7D49);
+    }
+
+    #[test]
     fn encode_branches_and_cb_branches() {
         assert_eq!(encode_b(1).unwrap(), 0x1400_0001);
         assert_eq!(encode_b(-1).unwrap(), 0x17FF_FFFF);
@@ -911,6 +1244,69 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn emitter_resolves_tbz_tbnz_and_b_cond_fixups() {
+        let mut emitter = Emitter::new();
+        let start = emitter.new_label();
+        let done = emitter.new_label();
+
+        emitter.bind_label(start).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 2,
+            line: 1,
+            column: 1,
+        });
+        emitter.emit_tbz_label(0, 7, done).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 2,
+            line: 2,
+            column: 1,
+        });
+        emitter.emit_tbnz_label(1, 5, start).unwrap();
+        emitter.set_source_location(crate::SourceLocation {
+            file: 2,
+            line: 3,
+            column: 1,
+        });
+        emitter.emit_b_cond_label(Condition::Eq, start).unwrap();
+        emitter.bind_label(done).unwrap();
+
+        let finalized = emitter.finalize().unwrap();
+        assert_eq!(
+            finalized.source_map,
+            vec![
+                crate::SourceMapEntry {
+                    offset: 0,
+                    location: crate::SourceLocation {
+                        file: 2,
+                        line: 1,
+                        column: 1,
+                    },
+                },
+                crate::SourceMapEntry {
+                    offset: 4,
+                    location: crate::SourceLocation {
+                        file: 2,
+                        line: 2,
+                        column: 1,
+                    },
+                },
+                crate::SourceMapEntry {
+                    offset: 8,
+                    location: crate::SourceLocation {
+                        file: 2,
+                        line: 3,
+                        column: 1,
+                    },
+                },
+            ]
+        );
+
+        assert_eq!(word(&finalized.code[0..4]), 0x3638_0060);
+        assert_eq!(word(&finalized.code[4..8]), 0x372F_FFE1);
+        assert_eq!(word(&finalized.code[8..12]), 0x54FF_FFC0);
     }
 
     #[test]
