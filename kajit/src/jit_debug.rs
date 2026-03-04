@@ -283,30 +283,30 @@ fn build_elf(
                 data: &dwarf.debug_line,
             });
         }
-        if !dwarf.debug_str.is_empty() {
+        if !dwarf.debug_abbrev.is_empty() {
             extras.push(ExtraSection {
-                name: ".debug_str",
-                sh_type: SHT_STRTAB,
+                name: ".debug_abbrev",
+                sh_type: SHT_PROGBITS,
                 sh_flags: 0,
                 sh_addr: 0,
                 sh_link: 0,
                 sh_info: 0,
                 sh_addralign: 1,
                 sh_entsize: 0,
-                data: &dwarf.debug_str,
+                data: &dwarf.debug_abbrev,
             });
         }
-        if !dwarf.debug_line_str.is_empty() {
+        if !dwarf.debug_info.is_empty() {
             extras.push(ExtraSection {
-                name: ".debug_line_str",
-                sh_type: SHT_STRTAB,
+                name: ".debug_info",
+                sh_type: SHT_PROGBITS,
                 sh_flags: 0,
                 sh_addr: 0,
                 sh_link: 0,
                 sh_info: 0,
                 sh_addralign: 1,
                 sh_entsize: 0,
-                data: &dwarf.debug_line_str,
+                data: &dwarf.debug_info,
             });
         }
     }
@@ -572,5 +572,7 @@ mod tests {
 
         let names = read_section_names(&elf);
         assert!(names.contains(&".debug_line".to_string()));
+        assert!(names.contains(&".debug_abbrev".to_string()));
+        assert!(names.contains(&".debug_info".to_string()));
     }
 }
