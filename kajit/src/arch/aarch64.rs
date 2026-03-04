@@ -1,4 +1,5 @@
-use dynasmrt::{AssemblyOffset, DynamicLabel, DynasmApi, DynasmLabelApi, dynasm};
+use dynasmrt::{DynasmApi, DynasmLabelApi, dynasm};
+use kajit_emit::aarch64::{Emitter, LabelId};
 
 use crate::context::{
     CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR, ENC_ERROR_CODE, ENC_OUTPUT_END, ENC_OUTPUT_PTR,
@@ -6,8 +7,6 @@ use crate::context::{
 };
 use crate::jit_f64;
 use crate::recipe::{ErrorTarget, Op, Recipe, Slot, Width};
-
-pub type Assembler = dynasmrt::aarch64::Assembler;
 
 /// Load a 64-bit immediate into an aarch64 register using movz + 3×movk.
 macro_rules! load_imm64 {
@@ -30,9 +29,10 @@ pub const REGALLOC_BASE_FRAME: u32 = 96;
 
 /// Emission context — wraps the assembler plus bookkeeping labels.
 pub struct EmitCtx {
-    pub ops: Assembler,
-    pub error_exit: DynamicLabel,
-    pub entry: AssemblyOffset,
+    pub ops: dynasmrt::aarch64::Assembler,
+    pub emit: Emitter,
+    pub error_exit: LabelId,
+    pub entry: u32,
     pub base_frame: u32,
     /// Total frame size (base + extra, 16-byte aligned).
     pub frame_size: u32,
@@ -68,12 +68,14 @@ impl EmitCtx {
 
     fn new_with_base(extra_stack: u32, base_frame: u32) -> Self {
         let frame_size = (base_frame + extra_stack + 15) & !15;
-        let mut ops = Assembler::new().expect("failed to create assembler");
-        let error_exit = ops.new_dynamic_label();
-        let entry = AssemblyOffset(0);
+        let ops = dynasmrt::aarch64::Assembler::new().expect("failed to create assembler");
+        let mut emit = Emitter::new();
+        let error_exit = emit.new_label();
+        let entry = 0u32;
 
         EmitCtx {
             ops,
+            emit,
             error_exit,
             entry,
             base_frame,
