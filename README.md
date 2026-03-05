@@ -22,8 +22,8 @@ deserializer through a multi-stage pipeline:
 3. **Linearization** — the RVSDG is flattened to a linear instruction sequence
    (`LinearIr`) with explicit labels and branches.
 
-4. **Register allocation** — the linear IR is lowered to a CFG-based machine IR
-   (`RaProgram`) and fed into [regalloc2](https://crates.io/crates/regalloc2).
+4. **Register allocation** — the linear IR is lowered to canonical CFG-MIR
+   (`cfg_mir::Program`) and fed into [regalloc2](https://crates.io/crates/regalloc2).
 
 5. **Codegen** — the allocated program is emitted as aarch64 or x86_64 machine
    code via [dynasmrt](https://crates.io/crates/dynasmrt) and mapped executable.

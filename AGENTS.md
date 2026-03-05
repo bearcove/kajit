@@ -30,7 +30,7 @@ Full reference: `docs/pipeline-debugging.md`
 
 For regalloc/backend failures, run differential harnesses before dumps/LLDB.
 
-- RA interpreter vs post-regalloc simulation:
+- Ideal interpreter vs post-regalloc CFG simulation:
   - `kajit_mir::regalloc_engine::differential_check_program`
 - CFG simulation vs JIT machine code:
   - `kajit::differential_check_linear_ir_vs_jit`
@@ -78,7 +78,7 @@ Print all available options: `KAJIT_OPTS=help cargo nextest run -p kajit --test 
 ### Stage dumps
 
 Dump pipeline artifacts with environment variables:
-- `KAJIT_DUMP_STAGES` — comma-separated: `ir`, `linear`, `ra`, `edits`, `opts`, `all`
+- `KAJIT_DUMP_STAGES` — comma-separated: `ir`, `linear`, `cfg`, `edits`, `opts`, `all`
 - `KAJIT_DUMP_FILTER` — substring match on `<format>::<case>` (e.g. `postcard::scalar_u64_v3`)
 - `KAJIT_DUMP_DIR` — output directory (default: `target/kajit-stage-dumps`)
 
@@ -96,14 +96,14 @@ Canonical CFG-MIR now has a round-trippable text format.
 
 ### LLDB debugging of JIT code
 
-Debug JIT-compiled code with source-level stepping through RA-MIR listings:
+Debug JIT-compiled code with source-level stepping through CFG-MIR listings:
 
 ```bash
 scripts/lldb-test.sh json::bool_true_false
 ```
 
 Set `KAJIT_DEBUG=1` to enable DWARF emission (the helper script does this automatically). This generates:
-- RA-MIR listing files at `/tmp/kajit-debug/*.ra-mir`
+- CFG-MIR listing files at `/tmp/kajit-debug/*.cfg-mir`
 - DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` in the JIT ELF
 - GDB JIT interface registration so LLDB/GDB can discover the code
 
