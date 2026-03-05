@@ -640,12 +640,10 @@ impl Lowerer {
                 }
             }
             BinOpKind::And => {
-                if matches!(rhs_const, Some(0x7f | 0x7e | 0x80 | 0x1)) {
-                    let c = rhs_const.expect("just matched Some");
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_and_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c)
-                            .expect("and"),
-                    );
+                if let Some(c) = rhs_const
+                    && let Ok(word) = aarch64::encode_and_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c)
+                {
+                    self.ectx.emit.emit_word(word);
                 } else {
                     self.emit_load_use_x10(rhs, 1);
                     self.ectx.emit.emit_word(
