@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
-use kajit_mir::{BlockId, DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
+use kajit_mir::cfg_mir::BlockId;
+use kajit_mir::{DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::mcp_server::{McpServerOptions, ServerHandler, server_runtime};
 use rust_mcp_sdk::schema::{
@@ -16,12 +17,12 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
 #[mcp_tool(
     name = "session_new",
-    description = "Create a new RA-MIR debugger session."
+    description = "Create a new CFG-MIR debugger session."
 )]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 struct SessionNewTool {
-    /// RA-MIR text program
-    ra_mir_text: String,
+    /// CFG-MIR text program
+    cfg_mir_text: String,
     /// Input bytes as hex string (e.g. '8101' or '[0x81, 0x01]')
     #[serde(default)]
     input_hex: Option<String>,
@@ -174,10 +175,10 @@ impl MirHandler {
     }
 
     fn session_new(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
-        let mir_text = arg_str(args, "ra_mir_text")?;
+        let mir_text = arg_str(args, "cfg_mir_text")?;
         let input_hex = arg_opt_str(args, "input_hex").unwrap_or_default();
         let input = parse_hex_input(&input_hex)?;
-        let program = kajit_mir_text::parse_ra_mir(&mir_text).map_err(|e| e.to_string())?;
+        let program = kajit_mir_text::parse_cfg_mir(&mir_text).map_err(|e| e.to_string())?;
         let session = DebuggerSession::new(&program, &input).map_err(|e| e.to_string())?;
 
         let mut state = self.lock_state()?;
@@ -520,7 +521,7 @@ async fn run() -> Result<(), String> {
             name: "kajit-mir-mcp".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             description: Some(
-                "Session-based RA-MIR debugger (step/run/inspect) for kajit-mir".into(),
+                "Session-based CFG-MIR debugger (step/run/inspect) for kajit-mir".into(),
             ),
             title: Some("Kajit MIR Debugger".into()),
             icons: vec![],
@@ -534,7 +535,7 @@ async fn run() -> Result<(), String> {
         },
         protocol_version: LATEST_PROTOCOL_VERSION.into(),
         instructions: Some(
-            "RA-MIR interpreter debugger over MCP. Use tools/list then tools/call.".into(),
+            "CFG-MIR interpreter debugger over MCP. Use tools/list then tools/call.".into(),
         ),
         meta: None,
     };
