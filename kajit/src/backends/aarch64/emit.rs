@@ -860,7 +860,7 @@ impl Lowerer {
         lambda_id: u32,
         predicate: crate::ir::VReg,
         term: &RaTerminator,
-        linear_op_index: usize,
+        from_block_id: u32,
     ) {
         let RaTerminator::JumpTable {
             targets, default, ..
@@ -888,11 +888,8 @@ impl Lowerer {
         }
         for (index, target_block) in targets.iter().enumerate() {
             let resolved = self.resolve_forwarded_block(lambda_id, *target_block);
-            let target = self.edge_target_label(
-                linear_op_index,
-                index,
-                self.block_label(lambda_id, resolved),
-            );
+            let target =
+                self.edge_target_label(from_block_id, index, self.block_label(lambda_id, resolved));
             let idx = index as u32;
             if let Some(r) = pred_reg {
                 self.emit_load_u32_w10(idx);
@@ -927,7 +924,7 @@ impl Lowerer {
         let default_succ_index = targets.len();
         let resolved_default = self.resolve_forwarded_block(lambda_id, *default);
         let default_target = self.edge_target_label(
-            linear_op_index,
+            from_block_id,
             default_succ_index,
             self.block_label(lambda_id, resolved_default),
         );

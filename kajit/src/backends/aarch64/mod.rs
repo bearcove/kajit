@@ -31,8 +31,8 @@ pub(crate) struct LambdaEditMap {
 
 #[derive(Default)]
 pub(crate) struct LambdaEdgeEditMap {
-    pub(crate) before: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
-    pub(crate) after: BTreeMap<(usize, usize), Vec<(Allocation, Allocation)>>,
+    pub(crate) before: BTreeMap<(u32, usize), Vec<(Allocation, Allocation)>>,
+    pub(crate) after: BTreeMap<(u32, usize), Vec<(Allocation, Allocation)>>,
 }
 
 pub(crate) struct EdgeTrampoline {
@@ -55,13 +55,13 @@ pub(crate) struct Lowerer {
     pub(crate) forward_branch_blocks: BTreeMap<(u32, u32), u32>,
     pub(crate) allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
     pub(crate) return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
-    pub(crate) edge_trampoline_labels: BTreeMap<(u32, usize, usize), LabelId>,
+    pub(crate) edge_trampoline_labels: BTreeMap<(u32, u32, usize), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
     pub(crate) apply_regalloc_edits: bool,
     pub(crate) no_edit_edge_tmp_base: u32,
     pub(crate) edge_args_by_lambda:
-        BTreeMap<u32, BTreeMap<(usize, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>>,
+        BTreeMap<u32, BTreeMap<(u32, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -309,25 +309,27 @@ impl Lowerer {
         let mut edge_edits_by_lambda = BTreeMap::<u32, LambdaEdgeEditMap>::new();
         let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<Allocation>>>::new();
         let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
-        let mut edge_args_by_lambda = BTreeMap::<
-            u32,
-            BTreeMap<(usize, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>,
-        >::new();
+        let mut edge_args_by_lambda =
+            BTreeMap::<u32, BTreeMap<(u32, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>>::new();
+        let mut block_id_by_term_linear_by_lambda = BTreeMap::<u32, BTreeMap<usize, u32>>::new();
         for func in &program.funcs {
             let lambda_id = func.lambda_id.index() as u32;
             let mut by_edge = BTreeMap::new();
+            let mut by_term_linear = BTreeMap::new();
             for block in &func.blocks {
-                let linear_op_index = block.term_linear_op_index;
+                let from_block_id = block.id.0;
+                by_term_linear.insert(block.term_linear_op_index, from_block_id);
                 for (succ_index, edge) in block.succs.iter().enumerate() {
                     let moves = edge
                         .args
                         .iter()
                         .map(|arg| (arg.source, arg.target))
                         .collect();
-                    by_edge.insert((linear_op_index, succ_index), moves);
+                    by_edge.insert((from_block_id, succ_index), moves);
                 }
             }
             edge_args_by_lambda.insert(lambda_id, by_edge);
+            block_id_by_term_linear_by_lambda.insert(lambda_id, by_term_linear);
         }
 
         for func in &alloc.functions {
@@ -429,7 +431,14 @@ impl Lowerer {
                 else {
                     continue;
                 };
-                let key = (edge_edit.from_linear_op_index, edge_edit.succ_index);
+                let Some(from_block_id) = block_id_by_term_linear_by_lambda
+                    .get(&lambda_id)
+                    .and_then(|by_linear| by_linear.get(&edge_edit.from_linear_op_index))
+                    .copied()
+                else {
+                    continue;
+                };
+                let key = (from_block_id, edge_edit.succ_index);
                 let bucket = match edge_edit.pos {
                     InstPosition::Before => &mut lambda_edge_entry.before,
                     InstPosition::After => &mut lambda_edge_entry.after,
@@ -545,7 +554,7 @@ impl Lowerer {
 
     fn edge_edit_moves(
         &self,
-        linear_op_index: usize,
+        from_block_id: u32,
         succ_index: usize,
     ) -> Vec<(Allocation, Allocation)> {
         let Some(lambda_id) = self
@@ -560,7 +569,7 @@ impl Lowerer {
             let Some(by_edge) = self.edge_args_by_lambda.get(&lambda_id) else {
                 return Vec::new();
             };
-            let Some(edge_args) = by_edge.get(&(linear_op_index, succ_index)) else {
+            let Some(edge_args) = by_edge.get(&(from_block_id, succ_index)) else {
                 return Vec::new();
             };
             return edge_args
@@ -576,7 +585,7 @@ impl Lowerer {
         let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
             return Vec::new();
         };
-        let key = (linear_op_index, succ_index);
+        let key = (from_block_id, succ_index);
         let mut moves = Vec::new();
         if let Some(before) = by_lambda.before.get(&key) {
             moves.extend(before.iter().copied());
@@ -733,6 +742,7 @@ impl Lowerer {
     ) {
         let lambda_id = func.lambda_id.index() as u32;
         let linear_op_index = block.term_linear_op_index;
+        let from_block_id = block.id.0;
 
         self.current_inst_allocs = if self.no_edit_mode() {
             Some(self.canonical_allocs_for_terminator(&block.term))
@@ -754,12 +764,9 @@ impl Lowerer {
             }
             RaTerminator::Branch { target } => {
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
-                let target_label = self.edge_target_label(
-                    linear_op_index,
-                    0,
-                    self.block_label(lambda_id, resolved),
-                );
-                let is_redundant_fallthrough = if self.has_edge_edits(linear_op_index, 0) {
+                let target_label =
+                    self.edge_target_label(from_block_id, 0, self.block_label(lambda_id, resolved));
+                let is_redundant_fallthrough = if self.has_edge_edits(from_block_id, 0) {
                     false
                 } else if let Some(next) = next_block {
                     let resolved_next = self.resolve_forwarded_block(lambda_id, next.id);
@@ -777,20 +784,17 @@ impl Lowerer {
                 fallthrough: _,
             } => {
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
-                let taken_target = self.edge_target_label(
-                    linear_op_index,
-                    0,
-                    self.block_label(lambda_id, resolved),
-                );
+                let taken_target =
+                    self.edge_target_label(from_block_id, 0, self.block_label(lambda_id, resolved));
                 if let Some(cond_const) = self.const_of(*cond) {
                     if cond_const != 0 {
                         self.ectx.emit_branch(taken_target);
                     } else {
-                        self.apply_fallthrough_edge_edits(linear_op_index, 1);
+                        self.apply_fallthrough_edge_edits(from_block_id, 1);
                     }
                 } else {
                     self.emit_branch_if(*cond, taken_target, false);
-                    self.apply_fallthrough_edge_edits(linear_op_index, 1);
+                    self.apply_fallthrough_edge_edits(from_block_id, 1);
                 }
             }
             RaTerminator::BranchIfZero {
@@ -799,24 +803,21 @@ impl Lowerer {
                 fallthrough: _,
             } => {
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
-                let taken_target = self.edge_target_label(
-                    linear_op_index,
-                    0,
-                    self.block_label(lambda_id, resolved),
-                );
+                let taken_target =
+                    self.edge_target_label(from_block_id, 0, self.block_label(lambda_id, resolved));
                 if let Some(cond_const) = self.const_of(*cond) {
                     if cond_const == 0 {
                         self.ectx.emit_branch(taken_target);
                     } else {
-                        self.apply_fallthrough_edge_edits(linear_op_index, 1);
+                        self.apply_fallthrough_edge_edits(from_block_id, 1);
                     }
                 } else {
                     self.emit_branch_if(*cond, taken_target, true);
-                    self.apply_fallthrough_edge_edits(linear_op_index, 1);
+                    self.apply_fallthrough_edge_edits(from_block_id, 1);
                 }
             }
             RaTerminator::JumpTable { predicate, .. } => {
-                self.emit_jump_table(lambda_id, *predicate, &block.term, linear_op_index);
+                self.emit_jump_table(lambda_id, *predicate, &block.term, from_block_id);
             }
         }
 
