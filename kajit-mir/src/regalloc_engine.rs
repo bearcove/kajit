@@ -1213,7 +1213,7 @@ fn build_inst_index_by_linear(func: &AllocatedFunction) -> HashMap<usize, usize>
             inst_index_by_linear
                 .entry(*linear)
                 .and_modify(|existing| {
-                    if inst_idx > *existing {
+                    if inst_idx < *existing {
                         *existing = inst_idx;
                     }
                 })
@@ -2244,7 +2244,7 @@ pub fn simulate_execution(
             inst_index_by_linear
                 .entry(*linear)
                 .and_modify(|existing| {
-                    if inst_idx > *existing {
+                    if inst_idx < *existing {
                         *existing = inst_idx;
                     }
                 })
@@ -2507,7 +2507,7 @@ pub fn simulate_execution_trace(
             inst_index_by_linear
                 .entry(*linear)
                 .and_modify(|existing| {
-                    if inst_idx > *existing {
+                    if inst_idx < *existing {
                         *existing = inst_idx;
                     }
                 })
