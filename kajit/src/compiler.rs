@@ -175,13 +175,12 @@ fn build_ra_mir_listing(program: &crate::regalloc_mir::RaProgram) -> (String, Ha
                     .or_insert(next_line);
                 next_line += 1;
             }
-            if let Some(linear_op_index) = block.term_linear_op_index {
-                lines.push(format_ra_terminator(&block.term));
-                line_by_linear_op
-                    .entry(linear_op_index)
-                    .or_insert(next_line);
-                next_line += 1;
-            }
+            let linear_op_index = block.term_linear_op_index;
+            lines.push(format_ra_terminator(&block.term));
+            line_by_linear_op
+                .entry(linear_op_index)
+                .or_insert(next_line);
+            next_line += 1;
         }
     }
     let mut listing = lines.join("\n");

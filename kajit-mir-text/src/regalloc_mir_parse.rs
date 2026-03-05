@@ -559,7 +559,7 @@ fn resolve(funcs_ast: Vec<AstRaFunc>) -> Result<RaProgram, ParseError> {
             }
 
             // The terminator gets the next index after the last instruction.
-            let term_linear_op_index = Some(next_linear_op_index);
+            let term_linear_op_index = next_linear_op_index;
             next_linear_op_index += 1;
 
             blocks.push(RaBlock {

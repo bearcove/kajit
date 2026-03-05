@@ -615,7 +615,7 @@ mod differential_tests {
                             clobbers: regalloc_mir::RaClobbers::default(),
                         },
                     ],
-                    term_linear_op_index: Some(2),
+                    term_linear_op_index: 2,
                     term: regalloc_mir::RaTerminator::Return,
                     preds: Vec::new(),
                     succs: Vec::new(),
