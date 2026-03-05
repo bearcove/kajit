@@ -2,7 +2,7 @@
 
 use kajit_emit::aarch64::{self, LabelId, Reg};
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass, SpillSlot};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::arch::{BASE_FRAME, EmitCtx};
 use crate::ir::Width;
@@ -261,6 +261,11 @@ impl Lowerer {
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
             let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
             let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
+            let edge_move_set: HashSet<(Allocation, Allocation)> = func
+                .edge_edits
+                .iter()
+                .filter_map(|edge_edit| Self::normalize_edit_move(edge_edit.from, edge_edit.to))
+                .collect();
             let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
             let mut prev_linear = None;
             for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
@@ -307,6 +312,9 @@ impl Lowerer {
                             .push((from, to));
                     }
                     (InstPosition::Before, None) => {
+                        if edge_move_set.contains(&(from, to)) {
+                            continue;
+                        }
                         if let Some(linear_op_index) =
                             next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
                         {
@@ -325,6 +333,9 @@ impl Lowerer {
                         }
                     }
                     (InstPosition::After, None) => {
+                        if edge_move_set.contains(&(from, to)) {
+                            continue;
+                        }
                         if let Some(linear_op_index) =
                             prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
                         {
