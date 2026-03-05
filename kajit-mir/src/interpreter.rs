@@ -37,6 +37,9 @@ pub struct InterpreterTraceEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InterpreterError {
     NoFunctions,
+    UnknownLambda {
+        lambda: usize,
+    },
     UnknownBlock {
         block: BlockId,
     },
@@ -67,6 +70,7 @@ impl std::fmt::Display for InterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoFunctions => write!(f, "RA-MIR program has no functions"),
+            Self::UnknownLambda { lambda } => write!(f, "unknown lambda @{lambda}"),
             Self::UnknownBlock { block } => write!(f, "unknown block b{}", block.0),
             Self::MissingEdge { from, to } => {
                 write!(f, "missing CFG edge b{} -> b{}", from.0, to.0)
@@ -205,13 +209,7 @@ pub fn execute_program(
     program: &RaProgram,
     input: &[u8],
 ) -> Result<InterpreterOutcome, InterpreterError> {
-    let func = program.funcs.first().ok_or(InterpreterError::NoFunctions)?;
-    execute_function(
-        func,
-        program.vreg_count as usize,
-        program.slot_count as usize,
-        input,
-    )
+    execute_program_with_trace(program, input).map(|(outcome, _)| outcome)
 }
 
 /// Execute a single RA-MIR function.
@@ -224,25 +222,80 @@ pub fn execute_function(
     execute_function_with_trace(func, vreg_count, slot_count, input).map(|(outcome, _)| outcome)
 }
 
+pub fn execute_program_with_trace(
+    program: &RaProgram,
+    input: &[u8],
+) -> Result<(InterpreterOutcome, Vec<InterpreterTraceEntry>), InterpreterError> {
+    if program.funcs.is_empty() {
+        return Err(InterpreterError::NoFunctions);
+    }
+    let mut lambda_indices = HashMap::with_capacity(program.funcs.len());
+    for (index, func) in program.funcs.iter().enumerate() {
+        lambda_indices.insert(func.lambda_id.index(), index);
+    }
+
+    let mut state = InterpreterState::new(
+        input,
+        program.vreg_count as usize,
+        program.slot_count as usize,
+        infer_program_output_size(program),
+    );
+    let mut trace = Vec::new();
+    let mut steps = 0usize;
+    let _ = execute_function_inner(
+        program,
+        &lambda_indices,
+        0,
+        &mut state,
+        &mut trace,
+        &mut steps,
+    )?;
+    let outcome = InterpreterOutcome {
+        vregs: state.vregs,
+        output: state.output,
+        cursor: state.cursor,
+        trap: state.trap,
+    };
+    Ok((outcome, trace))
+}
+
 pub fn execute_function_with_trace(
     func: &RaFunction,
     vreg_count: usize,
     slot_count: usize,
     input: &[u8],
 ) -> Result<(InterpreterOutcome, Vec<InterpreterTraceEntry>), InterpreterError> {
+    let program = RaProgram {
+        funcs: vec![func.clone()],
+        vreg_count: vreg_count as u32,
+        slot_count: slot_count as u32,
+    };
+    execute_program_with_trace(&program, input)
+}
+
+fn execute_function_inner(
+    program: &RaProgram,
+    lambda_indices: &HashMap<usize, usize>,
+    func_index: usize,
+    state: &mut InterpreterState<'_>,
+    trace: &mut Vec<InterpreterTraceEntry>,
+    steps: &mut usize,
+) -> Result<Vec<u64>, InterpreterError> {
+    let func = program
+        .funcs
+        .get(func_index)
+        .ok_or(InterpreterError::NoFunctions)?;
     let block_indices = build_block_index(func);
-    let mut state = InterpreterState::new(input, vreg_count, slot_count, infer_output_size(func));
     let mut current = func.entry;
-    let mut steps = 0usize;
-    let mut trace = Vec::new();
 
     loop {
-        if steps >= MAX_EXEC_STEPS {
+        if *steps >= MAX_EXEC_STEPS {
             return Err(InterpreterError::StepLimitExceeded {
                 limit: MAX_EXEC_STEPS,
             });
         }
-        steps += 1;
+        *steps += 1;
+        let step_index = *steps;
 
         let block_idx = *block_indices
             .get(&current)
@@ -385,7 +438,7 @@ pub fn execute_function_with_trace(
                     } else {
                         None
                     };
-                    let ret = run_call_intrinsic(&mut state, func.0, &args_values, out_ptr);
+                    let ret = run_call_intrinsic(state, func.0, &args_values, out_ptr);
                     if state.trap.is_some() {
                         break;
                     }
@@ -399,6 +452,74 @@ pub fn execute_function_with_trace(
                     let ret = run_call_pure(func.0, &args_values);
                     state.write_vreg(dst.index(), ret);
                 }
+                LinearOp::CallLambda {
+                    target,
+                    args,
+                    results,
+                } => {
+                    let target_index = if let Some(&target_index) =
+                        lambda_indices.get(&target.index())
+                    {
+                        target_index
+                    } else {
+                        let mut known = lambda_indices.keys().copied().collect::<Vec<_>>();
+                        known.sort_unstable();
+                        return Err(InterpreterError::UnsupportedOp {
+                            block: block.id,
+                            op: format!(
+                                "CallLambda @{} has no target function; known lambdas: {known:?}",
+                                target.index()
+                            ),
+                        });
+                    };
+                    let target_func = &program.funcs[target_index];
+                    if target_func.data_args.len() != args.len() {
+                        return Err(InterpreterError::UnsupportedOp {
+                            block: block.id,
+                            op: format!(
+                                "CallLambda @{} arg arity mismatch: expected {}, got {}",
+                                target.index(),
+                                target_func.data_args.len(),
+                                args.len()
+                            ),
+                        });
+                    }
+
+                    let arg_values = args
+                        .iter()
+                        .map(|v| state.read_vreg(v.index()))
+                        .collect::<Vec<_>>();
+                    for (param, value) in target_func.data_args.iter().zip(arg_values) {
+                        state.write_vreg(param.index(), value);
+                    }
+                    let caller_out_ptr = state.out_ptr;
+                    let callee_results = execute_function_inner(
+                        program,
+                        lambda_indices,
+                        target_index,
+                        state,
+                        trace,
+                        steps,
+                    )?;
+                    state.out_ptr = caller_out_ptr;
+                    if state.trap.is_some() {
+                        break;
+                    }
+                    if callee_results.len() != results.len() {
+                        return Err(InterpreterError::UnsupportedOp {
+                            block: block.id,
+                            op: format!(
+                                "CallLambda @{} result arity mismatch: expected {}, got {}",
+                                target.index(),
+                                results.len(),
+                                callee_results.len()
+                            ),
+                        });
+                    }
+                    for (dst, value) in results.iter().zip(callee_results.iter()) {
+                        state.write_vreg(dst.index(), *value);
+                    }
+                }
                 op => {
                     return Err(InterpreterError::UnsupportedOp {
                         block: block.id,
@@ -408,7 +529,7 @@ pub fn execute_function_with_trace(
             }
 
             trace.push(InterpreterTraceEntry {
-                step_index: steps,
+                step_index,
                 block: block.id,
                 next_inst_index: inst_index + 1,
                 at_terminator: inst_index + 1 >= block.insts.len(),
@@ -421,19 +542,13 @@ pub fn execute_function_with_trace(
         }
 
         if state.trap.is_some() {
-            let outcome = InterpreterOutcome {
-                vregs: state.vregs.clone(),
-                output: state.output.clone(),
-                cursor: state.cursor,
-                trap: state.trap,
-            };
-            return Ok((outcome, trace));
+            return Ok(Vec::new());
         }
 
         match &block.term {
             RaTerminator::Return => {
                 trace.push(InterpreterTraceEntry {
-                    step_index: steps,
+                    step_index,
                     block: block.id,
                     next_inst_index: block.insts.len(),
                     at_terminator: true,
@@ -443,18 +558,17 @@ pub fn execute_function_with_trace(
                     trap: None,
                     returned: true,
                 });
-                let outcome = InterpreterOutcome {
-                    vregs: state.vregs,
-                    output: state.output,
-                    cursor: state.cursor,
-                    trap: None,
-                };
-                return Ok((outcome, trace));
+                let data_results = func
+                    .data_results
+                    .iter()
+                    .map(|vreg| state.read_vreg(vreg.index()))
+                    .collect::<Vec<_>>();
+                return Ok(data_results);
             }
             RaTerminator::ErrorExit { code } => {
                 state.trap(*code);
                 trace.push(InterpreterTraceEntry {
-                    step_index: steps,
+                    step_index,
                     block: block.id,
                     next_inst_index: block.insts.len(),
                     at_terminator: true,
@@ -464,22 +578,16 @@ pub fn execute_function_with_trace(
                     trap: state.trap,
                     returned: false,
                 });
-                let outcome = InterpreterOutcome {
-                    vregs: state.vregs,
-                    output: state.output,
-                    cursor: state.cursor,
-                    trap: state.trap,
-                };
-                return Ok((outcome, trace));
+                return Ok(Vec::new());
             }
             RaTerminator::Branch { target } => {
-                apply_edge_args(func, &block_indices, &mut state, block.id, *target)?;
+                apply_edge_args(func, &block_indices, state, block.id, *target)?;
                 let target_block_idx = *block_indices
                     .get(target)
                     .ok_or(InterpreterError::UnknownBlock { block: *target })?;
                 let at_terminator = 0 >= func.blocks[target_block_idx].insts.len();
                 trace.push(InterpreterTraceEntry {
-                    step_index: steps,
+                    step_index,
                     block: *target,
                     next_inst_index: 0,
                     at_terminator,
@@ -498,13 +606,13 @@ pub fn execute_function_with_trace(
             } => {
                 let branch = state.read_vreg(cond.index()) != 0;
                 let next = if branch { *target } else { *fallthrough };
-                apply_edge_args(func, &block_indices, &mut state, block.id, next)?;
+                apply_edge_args(func, &block_indices, state, block.id, next)?;
                 let target_block_idx = *block_indices
                     .get(&next)
                     .ok_or(InterpreterError::UnknownBlock { block: next })?;
                 let at_terminator = 0 >= func.blocks[target_block_idx].insts.len();
                 trace.push(InterpreterTraceEntry {
-                    step_index: steps,
+                    step_index,
                     block: next,
                     next_inst_index: 0,
                     at_terminator,
@@ -523,13 +631,13 @@ pub fn execute_function_with_trace(
             } => {
                 let branch = state.read_vreg(cond.index()) == 0;
                 let next = if branch { *target } else { *fallthrough };
-                apply_edge_args(func, &block_indices, &mut state, block.id, next)?;
+                apply_edge_args(func, &block_indices, state, block.id, next)?;
                 let target_block_idx = *block_indices
                     .get(&next)
                     .ok_or(InterpreterError::UnknownBlock { block: next })?;
                 let at_terminator = 0 >= func.blocks[target_block_idx].insts.len();
                 trace.push(InterpreterTraceEntry {
-                    step_index: steps,
+                    step_index,
                     block: next,
                     next_inst_index: 0,
                     at_terminator,
@@ -754,6 +862,15 @@ fn build_block_index(func: &RaFunction) -> HashMap<BlockId, usize> {
         out.insert(block.id, idx);
     }
     out
+}
+
+fn infer_program_output_size(program: &RaProgram) -> usize {
+    program
+        .funcs
+        .iter()
+        .map(infer_output_size)
+        .max()
+        .unwrap_or(0)
 }
 
 fn infer_output_size(func: &RaFunction) -> usize {

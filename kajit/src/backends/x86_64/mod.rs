@@ -175,6 +175,12 @@ impl Lowerer {
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
             let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
             let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
+            let term_inst_indices: std::collections::HashSet<usize> = func
+                .term_inst_indices_by_block
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
             let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
             let mut prev_linear = None;
             for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
@@ -285,12 +291,18 @@ impl Lowerer {
                 let Some(inst_allocs) = func.inst_allocs.get(inst_index) else {
                     continue;
                 };
+                let is_term_inst = term_inst_indices.contains(&inst_index);
                 match allocs_entry.entry(linear_op_index) {
                     std::collections::btree_map::Entry::Vacant(slot) => {
                         slot.insert(inst_allocs.clone());
                     }
                     std::collections::btree_map::Entry::Occupied(mut slot) => {
-                        if slot.get().is_empty() && !inst_allocs.is_empty() {
+                        if !is_term_inst {
+                            if inst_allocs.is_empty() && !slot.get().is_empty() {
+                                continue;
+                            }
+                            slot.insert(inst_allocs.clone());
+                        } else if slot.get().len() < inst_allocs.len() {
                             slot.insert(inst_allocs.clone());
                         }
                     }
