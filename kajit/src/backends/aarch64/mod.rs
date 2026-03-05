@@ -445,7 +445,16 @@ impl Lowerer {
                 let Some(inst_allocs) = func.inst_allocs.get(inst_index) else {
                     continue;
                 };
-                allocs_entry.insert(linear_op_index, inst_allocs.clone());
+                match allocs_entry.entry(linear_op_index) {
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(inst_allocs.clone());
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                        if slot.get().is_empty() && !inst_allocs.is_empty() {
+                            slot.insert(inst_allocs.clone());
+                        }
+                    }
+                }
             }
         }
         Self {
