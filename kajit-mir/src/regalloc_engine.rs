@@ -525,7 +525,7 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
             }
 
             let to_params = blocks[to].params.clone();
-            let from_linear_op_index = blocks[from].term_linear_op_index;
+            let edge_block_term_linear_index = blocks[from].term_linear_op_index;
             let from_block_id = if from < func.blocks.len() {
                 crate::BlockId(func.blocks[from].id.0)
             } else {
@@ -537,7 +537,7 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
                 raw_inst_op_ids: Vec::new(),
                 term_kind: BlockTermKind::BranchLike,
                 term_returns_data_results: false,
-                term_linear_op_index: from_linear_op_index,
+                term_linear_op_index: edge_block_term_linear_index,
                 term_op_id: None,
                 term_uses: Vec::new(),
                 succs: vec![to],
@@ -668,7 +668,7 @@ fn split_critical_edges_cfg(
             }
 
             let to_params = blocks[to].params.clone();
-            let from_linear_op_index = blocks[from].term_linear_op_index;
+            let edge_block_term_linear_index = blocks[from].term_linear_op_index;
             let from_block_id = if from < func.blocks.len() {
                 crate::BlockId(func.blocks[from].id.0)
             } else {
@@ -681,7 +681,7 @@ fn split_critical_edges_cfg(
                 raw_inst_op_ids: Vec::new(),
                 term_kind: BlockTermKind::BranchLike,
                 term_returns_data_results: false,
-                term_linear_op_index: from_linear_op_index,
+                term_linear_op_index: edge_block_term_linear_index,
                 term_op_id: None,
                 term_uses: Vec::new(),
                 succs: vec![to],
