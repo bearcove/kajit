@@ -2681,9 +2681,14 @@ impl EmitCtx {
         let eof_label = self.emit.new_label();
 
         // === Hot loop ===
+        // EOF check: cmp then branch immediately (before anything clobbers flags)
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))
+            .expect("vec varint eof cmp");
+        self.emit.emit_jae_label(eof_label).expect("vec varint eof");
+        // Load byte, advance cursor, test high bit for multi-byte varint
         self.emit
             .emit_with(|buf| {
-                x64::encode_cmp_r64_r64(12, 13, buf)?;
                 x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
                 x64::encode_add_r64_imm32(12, 1, buf)?;
                 x64::encode_mov_r32_imm32(11, 0x80, buf)?;
@@ -2693,7 +2698,6 @@ impl EmitCtx {
         self.emit
             .emit_jne_label(slow_path)
             .expect("vec varint slow path");
-        self.emit.emit_jae_label(eof_label).expect("vec varint eof");
 
         if zigzag {
             self.emit
