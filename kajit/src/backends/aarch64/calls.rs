@@ -1,87 +1,104 @@
 //! Intrinsic and lambda call emission for aarch64.
 
 use super::*;
+use crate::backends::parallel_moves::emit_parallel_moves;
 use kajit_emit::aarch64::{self, Reg};
+use regalloc2::{Allocation, PReg, RegClass};
 
 impl Lowerer {
-    pub(super) fn emit_set_abi_reg_from_intrinsic_arg(&mut self, abi_arg: u8, arg: IntrinsicArg) {
-        match arg {
-            IntrinsicArg::VReg { operand_index } => {
-                self.emit_set_abi_arg_from_allocation(abi_arg, operand_index)
+    fn emit_set_abi_out_field_arg(&mut self, abi_arg: u8, offset: u32) {
+        match abi_arg {
+            1 => self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(
+                    aarch64::Width::X64,
+                    Reg::X1,
+                    Reg::X21,
+                    offset as u16,
+                    false,
+                )
+                .expect("add"),
+            ),
+            2 => self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(
+                    aarch64::Width::X64,
+                    Reg::X2,
+                    Reg::X21,
+                    offset as u16,
+                    false,
+                )
+                .expect("add"),
+            ),
+            3 => self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(
+                    aarch64::Width::X64,
+                    Reg::X3,
+                    Reg::X21,
+                    offset as u16,
+                    false,
+                )
+                .expect("add"),
+            ),
+            4 => self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(
+                    aarch64::Width::X64,
+                    Reg::X4,
+                    Reg::X21,
+                    offset as u16,
+                    false,
+                )
+                .expect("add"),
+            ),
+            5 => self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(
+                    aarch64::Width::X64,
+                    Reg::X5,
+                    Reg::X21,
+                    offset as u16,
+                    false,
+                )
+                .expect("add"),
+            ),
+            6 => self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(
+                    aarch64::Width::X64,
+                    Reg::X6,
+                    Reg::X21,
+                    offset as u16,
+                    false,
+                )
+                .expect("add"),
+            ),
+            7 => self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(
+                    aarch64::Width::X64,
+                    Reg::X7,
+                    Reg::X21,
+                    offset as u16,
+                    false,
+                )
+                .expect("add"),
+            ),
+            _ => unreachable!("unsupported intrinsic ABI arg register x{abi_arg}"),
+        }
+    }
+
+    fn emit_set_abi_intrinsic_args_parallel(&mut self, first_abi_reg: u8, args: &[IntrinsicArg]) {
+        let mut reg_moves = Vec::<(Allocation, Allocation)>::new();
+        let mut out_field_args = Vec::<(u8, u32)>::new();
+        for (index, arg) in args.iter().copied().enumerate() {
+            let abi_arg = first_abi_reg + index as u8;
+            match arg {
+                IntrinsicArg::VReg { operand_index } => {
+                    let from = self.current_alloc(operand_index);
+                    let to = Allocation::reg(PReg::new(abi_arg as usize, RegClass::Int));
+                    reg_moves.push((from, to));
+                }
+                IntrinsicArg::OutField(offset) => out_field_args.push((abi_arg, offset)),
             }
-            IntrinsicArg::OutField(offset) => match abi_arg {
-                1 => self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(
-                        aarch64::Width::X64,
-                        Reg::X1,
-                        Reg::X21,
-                        offset as u16,
-                        false,
-                    )
-                    .expect("add"),
-                ),
-                2 => self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(
-                        aarch64::Width::X64,
-                        Reg::X2,
-                        Reg::X21,
-                        offset as u16,
-                        false,
-                    )
-                    .expect("add"),
-                ),
-                3 => self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(
-                        aarch64::Width::X64,
-                        Reg::X3,
-                        Reg::X21,
-                        offset as u16,
-                        false,
-                    )
-                    .expect("add"),
-                ),
-                4 => self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(
-                        aarch64::Width::X64,
-                        Reg::X4,
-                        Reg::X21,
-                        offset as u16,
-                        false,
-                    )
-                    .expect("add"),
-                ),
-                5 => self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(
-                        aarch64::Width::X64,
-                        Reg::X5,
-                        Reg::X21,
-                        offset as u16,
-                        false,
-                    )
-                    .expect("add"),
-                ),
-                6 => self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(
-                        aarch64::Width::X64,
-                        Reg::X6,
-                        Reg::X21,
-                        offset as u16,
-                        false,
-                    )
-                    .expect("add"),
-                ),
-                7 => self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(
-                        aarch64::Width::X64,
-                        Reg::X7,
-                        Reg::X21,
-                        offset as u16,
-                        false,
-                    )
-                    .expect("add"),
-                ),
-                _ => unreachable!("unsupported intrinsic ABI arg register x{abi_arg}"),
-            },
+        }
+        emit_parallel_moves(self, &reg_moves);
+        for (abi_arg, offset) in out_field_args {
+            self.emit_set_abi_out_field_arg(abi_arg, offset);
         }
     }
 
@@ -120,9 +137,7 @@ impl Lowerer {
             aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
         );
 
-        for (i, arg) in args.iter().copied().enumerate() {
-            self.emit_set_abi_reg_from_intrinsic_arg((i + 1) as u8, arg);
-        }
+        self.emit_set_abi_intrinsic_args_parallel(1, args);
 
         let ptr = fn_ptr as u64;
         let p0 = (ptr & 0xFFFF) as u32;
@@ -222,9 +237,7 @@ impl Lowerer {
 
         self.flush_all_vregs();
 
-        for (i, arg) in args.iter().copied().enumerate() {
-            self.emit_set_abi_reg_from_intrinsic_arg(i as u8, arg);
-        }
+        self.emit_set_abi_intrinsic_args_parallel(0, args);
 
         let ptr = fn_ptr as u64;
         let p0 = (ptr & 0xFFFF) as u32;
@@ -394,10 +407,17 @@ impl Lowerer {
             aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X22).expect("mov"),
         );
 
-        for (i, &arg) in args.iter().enumerate() {
-            let _ = arg;
-            self.emit_set_abi_arg_from_allocation((i + 2) as u8, i);
-        }
+        let lambda_moves: Vec<(Allocation, Allocation)> = args
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                (
+                    self.current_alloc(i),
+                    Allocation::reg(PReg::new(i + 2, RegClass::Int)),
+                )
+            })
+            .collect();
+        emit_parallel_moves(self, &lambda_moves);
 
         self.ectx.emit.emit_bl_label(label).expect("bl");
         self.ectx.emit.emit_word(

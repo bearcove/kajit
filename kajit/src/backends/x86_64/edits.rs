@@ -1,4 +1,5 @@
 use super::*;
+use crate::backends::parallel_moves::{emit_parallel_moves, MoveEmitter};
 use kajit_emit::x64::{self, LabelId, Mem};
 
 impl Lowerer {
@@ -78,11 +79,7 @@ impl Lowerer {
         if edits.is_empty() {
             return;
         }
-
-        self.flush_all_vregs();
-        for (from, to) in edits {
-            self.emit_edit_move(from, to);
-        }
+        emit_parallel_moves(self, &edits);
     }
 
     pub(super) fn resolve_forwarded_block(&self, lambda_id: u32, block_id: BlockId) -> BlockId {
@@ -137,10 +134,7 @@ impl Lowerer {
         if moves.is_empty() {
             return;
         }
-        self.flush_all_vregs();
-        for (from, to) in moves {
-            self.emit_edit_move(from, to);
-        }
+        emit_parallel_moves(self, &moves);
     }
 
     pub(super) fn has_edge_edits(&self, linear_op_index: usize, succ_index: usize) -> bool {
@@ -190,13 +184,36 @@ impl Lowerer {
         let trampolines = std::mem::take(&mut self.edge_trampolines);
         for trampoline in trampolines {
             self.ectx.bind_label(trampoline.label);
-            if !trampoline.moves.is_empty() {
-                self.flush_all_vregs();
-                for (from, to) in trampoline.moves {
-                    self.emit_edit_move(from, to);
-                }
-            }
+            emit_parallel_moves(self, &trampoline.moves);
             self.ectx.emit_branch(trampoline.target);
         }
+    }
+}
+
+impl MoveEmitter for Lowerer {
+    fn flush_all_vregs(&mut self) {
+        Lowerer::flush_all_vregs(self);
+    }
+
+    fn emit_move(&mut self, from: Allocation, to: Allocation) {
+        self.emit_edit_move(from, to);
+    }
+
+    fn save_move_src_to_tmp(&mut self, tmp_index: usize, from: Allocation) {
+        self.emit_load_r10_from_allocation(from);
+        let tmp_off = self.parallel_move_tmp_base + (tmp_index as u32) * 8;
+        self.ectx
+            .emit
+            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: tmp_off as i32 }, 10, buf))
+            .expect("mov");
+    }
+
+    fn restore_move_tmp_to_dst(&mut self, tmp_index: usize, to: Allocation) {
+        let tmp_off = self.parallel_move_tmp_base + (tmp_index as u32) * 8;
+        self.ectx
+            .emit
+            .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 4, disp: tmp_off as i32 }, buf))
+            .expect("mov");
+        self.emit_store_r10_to_allocation(to);
     }
 }

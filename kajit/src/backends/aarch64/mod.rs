@@ -2,7 +2,7 @@
 
 use kajit_emit::aarch64::{self, LabelId, Reg};
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass, SpillSlot};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::arch::{BASE_FRAME, EmitCtx};
 use crate::ir::Width;
@@ -120,6 +120,80 @@ impl Lowerer {
         max_moves as u32
     }
 
+    fn max_progpoint_move_count(alloc: &AllocatedProgram) -> u32 {
+        let mut max_moves = 0usize;
+        for func in &alloc.functions {
+            let mut before_by_linear = BTreeMap::<usize, usize>::new();
+            let mut after_by_linear = BTreeMap::<usize, usize>::new();
+            let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
+            let mut prev_linear = None;
+            for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
+                prev_linear_by_inst[idx] = prev_linear;
+                if maybe_linear.is_some() {
+                    prev_linear = maybe_linear;
+                }
+            }
+            let mut next_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
+            let mut next_linear = None;
+            for idx in (0..func.inst_linear_op_indices.len()).rev() {
+                next_linear_by_inst[idx] = next_linear;
+                if func.inst_linear_op_indices[idx].is_some() {
+                    next_linear = func.inst_linear_op_indices[idx];
+                }
+            }
+            for (prog_point, edit) in &func.edits {
+                let Edit::Move { from, to } = edit;
+                let Some(_) = Self::normalize_edit_move(*from, *to) else {
+                    continue;
+                };
+                let inst_index = prog_point.inst().index();
+                let mapped_linear = func
+                    .inst_linear_op_indices
+                    .get(inst_index)
+                    .and_then(|lin| *lin);
+                match (prog_point.pos(), mapped_linear) {
+                    (InstPosition::Before, Some(linear_op_index)) => {
+                        *before_by_linear.entry(linear_op_index).or_default() += 1;
+                    }
+                    (InstPosition::After, Some(linear_op_index)) => {
+                        *after_by_linear.entry(linear_op_index).or_default() += 1;
+                    }
+                    (InstPosition::Before, None) => {
+                        if let Some(linear_op_index) =
+                            next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            *before_by_linear.entry(linear_op_index).or_default() += 1;
+                        } else if let Some(linear_op_index) =
+                            prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            *after_by_linear.entry(linear_op_index).or_default() += 1;
+                        }
+                    }
+                    (InstPosition::After, None) => {
+                        if let Some(linear_op_index) =
+                            prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            *after_by_linear.entry(linear_op_index).or_default() += 1;
+                        } else if let Some(linear_op_index) =
+                            next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            *before_by_linear.entry(linear_op_index).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            let local_max = before_by_linear
+                .values()
+                .copied()
+                .chain(after_by_linear.values().copied())
+                .max();
+            if let Some(local_max) = local_max {
+                max_moves = max_moves.max(local_max);
+            }
+        }
+        max_moves as u32
+    }
+
     pub(super) fn new_label_id(&mut self) -> LabelId {
         self.ectx.new_label()
     }
@@ -188,13 +262,15 @@ impl Lowerer {
             max_spillslots
         };
         let max_edge_args = Self::max_edge_move_count(program, alloc, no_edit_mode);
+        let max_progpoint_moves = Self::max_progpoint_move_count(alloc);
+        let max_parallel_moves = max_edge_args.max(max_progpoint_moves);
         let extra_saved_pairs = Self::regalloc_extra_saved_pairs(alloc);
         let slot_base = BASE_FRAME + extra_saved_pairs * 16;
         let slot_bytes = program.slot_count * 8;
         let spill_base = slot_base + slot_bytes;
         let spill_bytes = required_spillslots as u32 * 8;
         let no_edit_edge_tmp_base = spill_base + spill_bytes;
-        let edge_tmp_bytes = max_edge_args * 8;
+        let edge_tmp_bytes = max_parallel_moves * 8;
         let extra_stack = slot_bytes + spill_bytes + edge_tmp_bytes + 8;
 
         let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs);
@@ -261,11 +337,6 @@ impl Lowerer {
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
             let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
             let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
-            let edge_move_set: HashSet<(Allocation, Allocation)> = func
-                .edge_edits
-                .iter()
-                .filter_map(|edge_edit| Self::normalize_edit_move(edge_edit.from, edge_edit.to))
-                .collect();
             let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
             let mut prev_linear = None;
             for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
@@ -312,9 +383,6 @@ impl Lowerer {
                             .push((from, to));
                     }
                     (InstPosition::Before, None) => {
-                        if edge_move_set.contains(&(from, to)) {
-                            continue;
-                        }
                         if let Some(linear_op_index) =
                             next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
                         {
@@ -333,9 +401,6 @@ impl Lowerer {
                         }
                     }
                     (InstPosition::After, None) => {
-                        if edge_move_set.contains(&(from, to)) {
-                            continue;
-                        }
                         if let Some(linear_op_index) =
                             prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
                         {
@@ -513,38 +578,6 @@ impl Lowerer {
             moves.extend(after.iter().copied());
         }
         moves
-    }
-
-    fn emit_edge_moves(&mut self, moves: &[(Allocation, Allocation)]) {
-        if moves.is_empty() {
-            return;
-        }
-        self.flush_all_vregs();
-        let filtered_moves: Vec<(Allocation, Allocation)> = moves
-            .iter()
-            .copied()
-            .filter(|(from, to)| *from != *to && !from.is_none() && !to.is_none())
-            .collect();
-        if filtered_moves.is_empty() {
-            return;
-        }
-
-        for (i, (from, _)) in filtered_moves.iter().enumerate() {
-            self.emit_load_x9_from_allocation(*from);
-            let tmp_off = self.no_edit_edge_tmp_base + (i as u32) * 8;
-            self.ectx.emit.emit_word(
-                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, tmp_off)
-                    .expect("str"),
-            );
-        }
-        for (i, (_, to)) in filtered_moves.iter().enumerate() {
-            let tmp_off = self.no_edit_edge_tmp_base + (i as u32) * 8;
-            self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, tmp_off)
-                    .expect("ldr"),
-            );
-            let _ = self.emit_store_x9_to_allocation(*to);
-        }
     }
 
     pub(super) fn const_of(&self, v: crate::ir::VReg) -> Option<u64> {
