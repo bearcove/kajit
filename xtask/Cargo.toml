@@ -9,6 +9,8 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
+kajit-mir = { path = "../kajit-mir" }
+kajit-mir-text = { path = "../kajit-mir-text" }
 prettyplease = "0.2"
 proc-macro2 = "1"
 quote = "1"

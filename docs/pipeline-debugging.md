@@ -126,6 +126,19 @@ One-shot helper:
 let value: T = kajit::deserialize_from_cfg_mir_text(cfg_mir_text, input)?;
 ```
 
+For differential minimization from a saved CFG-MIR file:
+
+```bash
+cargo run --manifest-path xtask/Cargo.toml -- \
+  minimize-cfg-mir \
+  path/to/failing.cfg-mir \
+  8080808080
+```
+
+This parses the CFG-MIR text, runs the predicate-preserving minimizer with the
+regalloc differential oracle for the provided input bytes, prints a short
+summary to stderr, and writes the reduced CFG-MIR program to stdout.
+
 ### Minimization loop
 
 1. Start from a failing IR/CFG text snapshot in a regression test.
