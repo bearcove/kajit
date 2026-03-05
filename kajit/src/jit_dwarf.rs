@@ -77,6 +77,7 @@ const OPCODE_BASE: u8 = 13;
 const STANDARD_OPCODE_LENGTHS: [u8; 12] = [0, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0, 1];
 
 const DW_TAG_COMPILE_UNIT: u8 = 0x11;
+const DW_TAG_BASE_TYPE: u8 = 0x24;
 const DW_TAG_SUBPROGRAM: u8 = 0x2e;
 const DW_TAG_VARIABLE: u8 = 0x34;
 const DW_CHILDREN_YES: u8 = 0x01;
@@ -86,12 +87,18 @@ const DW_AT_NAME: u8 = 0x03;
 const DW_AT_STMT_LIST: u8 = 0x10;
 const DW_AT_LOW_PC: u8 = 0x11;
 const DW_AT_HIGH_PC: u8 = 0x12;
+const DW_AT_BYTE_SIZE: u8 = 0x0b;
 const DW_AT_FRAME_BASE: u8 = 0x40;
+const DW_AT_TYPE: u8 = 0x49;
+const DW_AT_ENCODING: u8 = 0x3e;
 const DW_FORM_ADDR: u8 = 0x01;
 const DW_FORM_DATA8: u8 = 0x07;
 const DW_FORM_STRING: u8 = 0x08;
+const DW_FORM_DATA1: u8 = 0x0b;
+const DW_FORM_REF4: u8 = 0x13;
 const DW_FORM_SEC_OFFSET: u8 = 0x17;
 const DW_FORM_EXPRLOC: u8 = 0x18;
+const DW_ATE_UNSIGNED: u8 = 0x07;
 const INFO_VERSION: u16 = 4;
 const ADDRESS_SIZE_64: u8 = 8;
 const DW_OP_REG0: u8 = 0x50;
@@ -204,8 +211,21 @@ pub fn build_debug_abbrev_section() -> Vec<u8> {
     out.push(0);
     out.push(0);
 
-    // Abbrev 2: subprogram (has children: variable DIEs).
+    // Abbrev 2: base type (u64).
     push_uleb128(&mut out, 2);
+    out.push(DW_TAG_BASE_TYPE);
+    out.push(DW_CHILDREN_NO);
+    out.push(DW_AT_NAME);
+    out.push(DW_FORM_STRING);
+    out.push(DW_AT_ENCODING);
+    out.push(DW_FORM_DATA1);
+    out.push(DW_AT_BYTE_SIZE);
+    out.push(DW_FORM_DATA1);
+    out.push(0);
+    out.push(0);
+
+    // Abbrev 3: subprogram (has children: variable DIEs).
+    push_uleb128(&mut out, 3);
     out.push(DW_TAG_SUBPROGRAM);
     out.push(DW_CHILDREN_YES);
     out.push(DW_AT_NAME);
@@ -219,14 +239,16 @@ pub fn build_debug_abbrev_section() -> Vec<u8> {
     out.push(0);
     out.push(0);
 
-    // Abbrev 3: variable.
-    push_uleb128(&mut out, 3);
+    // Abbrev 4: variable.
+    push_uleb128(&mut out, 4);
     out.push(DW_TAG_VARIABLE);
     out.push(DW_CHILDREN_NO);
     out.push(DW_AT_NAME);
     out.push(DW_FORM_STRING);
     out.push(DW_AT_LOCATION);
     out.push(DW_FORM_SEC_OFFSET);
+    out.push(DW_AT_TYPE);
+    out.push(DW_FORM_REF4);
     out.push(0);
     out.push(0);
 
@@ -259,8 +281,16 @@ pub fn build_debug_info_section(
     die.extend_from_slice(file_name.as_bytes()); // DW_AT_name
     die.push(0);
 
-    // Subprogram DIE (abbrev 2) as a child of CU.
+    // Base type DIE (abbrev 2), used by variable DIEs in phase #173.
+    let base_type_die_offset = 11u32 + (die.len() as u32);
     push_uleb128(&mut die, 2);
+    die.extend_from_slice(b"u64");
+    die.push(0);
+    die.push(DW_ATE_UNSIGNED);
+    die.push(8);
+
+    // Subprogram DIE (abbrev 3) as a child of CU.
+    push_uleb128(&mut die, 3);
     die.extend_from_slice(subprogram_name.as_bytes());
     die.push(0);
     die.extend_from_slice(&code_address.to_le_bytes()); // DW_AT_low_pc
@@ -270,10 +300,11 @@ pub fn build_debug_info_section(
 
     // Variable DIEs (abbrev 3) as children of subprogram.
     for (variable, loc_offset) in variables.iter().zip(variable_loc_offsets.iter().copied()) {
-        push_uleb128(&mut die, 3);
+        push_uleb128(&mut die, 4);
         die.extend_from_slice(variable.name.as_bytes());
         die.push(0);
         die.extend_from_slice(&loc_offset.to_le_bytes()); // DW_AT_location -> .debug_loc offset
+        die.extend_from_slice(&base_type_die_offset.to_le_bytes()); // DW_AT_type -> u64
     }
 
     // End of subprogram children, then end of CU children.
@@ -699,7 +730,17 @@ mod tests {
         assert_eq!(&info[i..i + end], b"decoder.ra");
         i += end + 1;
 
-        assert_eq!(parse_uleb(&info, &mut i), 2); // subprogram
+        let base_type_offset = i as u32;
+        assert_eq!(parse_uleb(&info, &mut i), 2); // base type
+        let end = info[i..].iter().position(|b| *b == 0).unwrap();
+        assert_eq!(&info[i..i + end], b"u64");
+        i += end + 1;
+        assert_eq!(info[i], DW_ATE_UNSIGNED);
+        i += 1;
+        assert_eq!(info[i], 8);
+        i += 1;
+
+        assert_eq!(parse_uleb(&info, &mut i), 3); // subprogram
         let end = info[i..].iter().position(|b| *b == 0).unwrap();
         assert_eq!(&info[i..i + end], b"kajit::decode::Example");
         i += end + 1;
@@ -711,11 +752,16 @@ mod tests {
         assert!(frame_base_len > 0);
         i += frame_base_len;
 
-        assert_eq!(parse_uleb(&info, &mut i), 3); // variable
+        assert_eq!(parse_uleb(&info, &mut i), 4); // variable
         let end = info[i..].iter().position(|b| *b == 0).unwrap();
         assert_eq!(&info[i..i + end], b"my_struct.count");
         i += end + 1;
         assert_eq!(u32::from_le_bytes(info[i..i + 4].try_into().unwrap()), 0);
+        i += 4;
+        assert_eq!(
+            u32::from_le_bytes(info[i..i + 4].try_into().unwrap()),
+            base_type_offset
+        );
         i += 4;
 
         assert_eq!(info[i], 0); // end subprogram children
