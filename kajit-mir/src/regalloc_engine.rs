@@ -1,6 +1,4 @@
-//! regalloc2 integration over RA-MIR.
-//!
-//! This module adapts `regalloc_mir::RaProgram` to `regalloc2::Function`.
+//! regalloc2 integration over canonical CFG MIR.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
@@ -13,39 +11,8 @@ use regalloc2::{
 };
 
 use crate::cfg_mir::{self, OpId};
-use crate::{FixedReg, OperandKind as RaOperandKind, RaFunction, RaProgram};
+use crate::{FixedReg, OperandKind as RaOperandKind};
 use kajit_ir::LambdaId;
-
-/// Materialized allocation result for one function.
-#[derive(Debug, Clone)]
-pub struct EdgeEdit {
-    pub from_block_id: crate::BlockId,
-    pub succ_index: usize,
-    pub pos: regalloc2::InstPosition,
-    pub from: Allocation,
-    pub to: Allocation,
-}
-
-/// Materialized allocation result for one function.
-#[derive(Debug, Clone)]
-pub struct AllocatedFunction {
-    pub lambda_id: LambdaId,
-    pub num_spillslots: usize,
-    pub edits: Vec<(regalloc2::ProgPoint, Edit)>,
-    pub inst_allocs: Vec<Vec<Allocation>>,
-    pub inst_operands: Vec<Vec<(kajit_ir::VReg, RaOperandKind)>>,
-    pub inst_linear_op_indices: Vec<Option<usize>>,
-    pub term_inst_indices_by_block: Vec<Option<usize>>,
-    pub edge_edits: Vec<EdgeEdit>,
-    pub return_result_allocs: Vec<Allocation>,
-}
-
-/// Materialized allocation result for a full RA-MIR program.
-#[derive(Debug, Clone)]
-pub struct AllocatedProgram {
-    pub ra_program: RaProgram,
-    pub functions: Vec<AllocatedFunction>,
-}
 
 /// Materialized allocation result for a full canonical CFG MIR program.
 #[derive(Debug, Clone)]
@@ -178,8 +145,6 @@ fn align_succ_arg_sources_to_target(
 
 #[derive(Debug, Clone, Copy)]
 struct EdgeBlockInfo {
-    from_block_id: crate::BlockId,
-    succ_index: usize,
     cfg_edge_id: Option<cfg_mir::EdgeId>,
 }
 
@@ -187,7 +152,6 @@ struct EdgeBlockInfo {
 struct AdapterFunction {
     blocks: Vec<AdapterBlock>,
     insts: Vec<AdapterInst>,
-    inst_linear_op_indices: Vec<Option<usize>>,
     inst_op_ids: Vec<Option<cfg_mir::OpId>>,
     inst_edge_infos: Vec<Option<EdgeBlockInfo>>,
     num_vregs: usize,
@@ -429,17 +393,6 @@ fn lower_operand(op: crate::regalloc_mir::RaOperand) -> Operand {
     Operand::new(vreg, constraint, kind, pos)
 }
 
-fn lower_term_uses(term: &crate::regalloc_mir::RaTerminator) -> Vec<kajit_ir::VReg> {
-    match term {
-        crate::regalloc_mir::RaTerminator::BranchIf { cond, .. }
-        | crate::regalloc_mir::RaTerminator::BranchIfZero { cond, .. } => vec![*cond],
-        crate::regalloc_mir::RaTerminator::JumpTable { predicate, .. } => vec![*predicate],
-        crate::regalloc_mir::RaTerminator::Return
-        | crate::regalloc_mir::RaTerminator::ErrorExit { .. }
-        | crate::regalloc_mir::RaTerminator::Branch { .. } => Vec::new(),
-    }
-}
-
 fn lower_term_uses_cfg(term: &cfg_mir::Terminator) -> Vec<kajit_ir::VReg> {
     match term {
         cfg_mir::Terminator::BranchIf { cond, .. }
@@ -475,123 +428,6 @@ fn map_cfg_clobbers(clobbers: cfg_mir::Clobbers) -> crate::RaClobbers {
         caller_saved_gpr: clobbers.caller_saved_gpr,
         caller_saved_simd: clobbers.caller_saved_simd,
     }
-}
-
-fn map_ra_operand(op: crate::RaOperand) -> cfg_mir::Operand {
-    cfg_mir::Operand {
-        vreg: op.vreg,
-        kind: match op.kind {
-            RaOperandKind::Use => cfg_mir::OperandKind::Use,
-            RaOperandKind::Def => cfg_mir::OperandKind::Def,
-        },
-        class: match op.class {
-            crate::RegClass::Gpr => cfg_mir::RegClass::Gpr,
-            crate::RegClass::Simd => cfg_mir::RegClass::Simd,
-        },
-        fixed: op.fixed.map(|fixed| match fixed {
-            FixedReg::AbiArg(i) => cfg_mir::FixedReg::AbiArg(i),
-            FixedReg::AbiRet(i) => cfg_mir::FixedReg::AbiRet(i),
-            FixedReg::HwReg(enc) => cfg_mir::FixedReg::HwReg(enc),
-        }),
-    }
-}
-
-fn map_ra_clobbers(clobbers: crate::RaClobbers) -> cfg_mir::Clobbers {
-    cfg_mir::Clobbers {
-        caller_saved_gpr: clobbers.caller_saved_gpr,
-        caller_saved_simd: clobbers.caller_saved_simd,
-    }
-}
-
-fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBlockInfo>>) {
-    let mut blocks: Vec<WorkBlock> = func
-        .blocks
-        .iter()
-        .map(|b| {
-            let term_kind = match b.term {
-                crate::regalloc_mir::RaTerminator::Return
-                | crate::regalloc_mir::RaTerminator::ErrorExit { .. } => BlockTermKind::Ret,
-                _ => BlockTermKind::BranchLike,
-            };
-            let term_returns_data_results =
-                matches!(b.term, crate::regalloc_mir::RaTerminator::Return);
-            WorkBlock {
-                raw_insts: b.insts.clone(),
-                raw_inst_op_ids: vec![None; b.insts.len()],
-                term_kind,
-                term_returns_data_results,
-                term_linear_op_index: b.term_linear_op_index,
-                term_op_id: None,
-                term_uses: lower_term_uses(&b.term),
-                succs: b.succs.iter().map(|s| s.to.0 as usize).collect(),
-                preds: b.preds.iter().map(|p| p.0 as usize).collect(),
-                params: b.params.clone(),
-                succ_args: b
-                    .succs
-                    .iter()
-                    .map(|s| {
-                        align_succ_arg_sources_to_target(
-                            &func.blocks[s.to.0 as usize].params,
-                            &s.args,
-                        )
-                    })
-                    .collect(),
-            }
-        })
-        .collect();
-    let mut edge_infos = vec![None; blocks.len()];
-
-    let mut from = 0usize;
-    while from < blocks.len() {
-        let succ_count = blocks[from].succs.len();
-        for succ_idx in 0..succ_count {
-            let to = blocks[from].succs[succ_idx];
-            if succ_count <= 1 || blocks[to].preds.len() <= 1 {
-                continue;
-            }
-
-            let to_params = blocks[to].params.clone();
-            let edge_block_term_linear_index = blocks[from].term_linear_op_index;
-            let from_block_id = if from < func.blocks.len() {
-                crate::BlockId(func.blocks[from].id.0)
-            } else {
-                crate::BlockId(from as u32)
-            };
-            let edge_succ_args = to_params.clone();
-            let edge_block = WorkBlock {
-                raw_insts: Vec::new(),
-                raw_inst_op_ids: Vec::new(),
-                term_kind: BlockTermKind::BranchLike,
-                term_returns_data_results: false,
-                term_linear_op_index: edge_block_term_linear_index,
-                term_op_id: None,
-                term_uses: Vec::new(),
-                succs: vec![to],
-                preds: vec![from],
-                params: to_params,
-                succ_args: vec![edge_succ_args],
-            };
-            let edge_id = blocks.len();
-            blocks.push(edge_block);
-            edge_infos.push(Some(EdgeBlockInfo {
-                from_block_id,
-                succ_index: succ_idx,
-                cfg_edge_id: None,
-            }));
-
-            blocks[from].succs[succ_idx] = edge_id;
-
-            let pred_slot = blocks[to]
-                .preds
-                .iter()
-                .position(|&p| p == from)
-                .expect("target block should list source as predecessor");
-            blocks[to].preds[pred_slot] = edge_id;
-        }
-        from += 1;
-    }
-
-    (blocks, edge_infos)
 }
 
 fn split_critical_edges_cfg(
@@ -695,11 +531,6 @@ fn split_critical_edges_cfg(
 
             let to_params = blocks[to].params.clone();
             let edge_block_term_linear_index = blocks[from].term_linear_op_index;
-            let from_block_id = if from < func.blocks.len() {
-                crate::BlockId(func.blocks[from].id.0)
-            } else {
-                crate::BlockId(from as u32)
-            };
             let cfg_edge_id = func.blocks[from].succs[succ_idx];
             let edge_succ_args = to_params.clone();
             let edge_block = WorkBlock {
@@ -718,8 +549,6 @@ fn split_critical_edges_cfg(
             let edge_id = blocks.len();
             blocks.push(edge_block);
             edge_infos.push(Some(EdgeBlockInfo {
-                from_block_id,
-                succ_index: succ_idx,
                 cfg_edge_id: Some(cfg_edge_id),
             }));
 
@@ -748,7 +577,6 @@ impl AdapterFunction {
     ) -> Self {
         let trace_self_loop = std::env::var_os("KAJIT_TRACE_SELF_LOOP").is_some();
         let mut adapter_insts = Vec::<AdapterInst>::new();
-        let mut inst_linear_op_indices = Vec::<Option<usize>>::new();
         let mut inst_op_ids = Vec::<Option<cfg_mir::OpId>>::new();
         let mut inst_edge_infos = Vec::<Option<EdgeBlockInfo>>::new();
         let mut adapter_blocks = Vec::<AdapterBlock>::new();
@@ -757,11 +585,6 @@ impl AdapterFunction {
             let start = Inst::new(adapter_insts.len());
 
             if block_index == 0 {
-                let entry_linear_op_index = b
-                    .raw_insts
-                    .first()
-                    .map(|inst| inst.linear_op_index)
-                    .unwrap_or(b.term_linear_op_index);
                 let mut entry_operands = Vec::new();
                 for (arg_idx, &arg) in data_args.iter().enumerate() {
                     let fixed = fixed_preg(FixedReg::AbiArg((arg_idx + 2) as u8))
@@ -787,7 +610,6 @@ impl AdapterFunction {
                         ret_value_operand_start: 0,
                         ret_value_operand_count: 0,
                     });
-                    inst_linear_op_indices.push(Some(entry_linear_op_index));
                     inst_op_ids.push(None);
                     inst_edge_infos.push(None);
                 }
@@ -821,7 +643,6 @@ impl AdapterFunction {
                     ret_value_operand_start: 0,
                     ret_value_operand_count: 0,
                 });
-                inst_linear_op_indices.push(Some(inst.linear_op_index));
                 inst_op_ids.push(b.raw_inst_op_ids.get(inst_i).and_then(|id| *id));
                 inst_edge_infos.push(None);
             }
@@ -874,7 +695,6 @@ impl AdapterFunction {
                 ret_value_operand_start,
                 ret_value_operand_count,
             });
-            inst_linear_op_indices.push(Some(b.term_linear_op_index));
             inst_op_ids.push(b.term_op_id);
             inst_edge_infos.push(edge_infos[block_index]);
 
@@ -917,23 +737,11 @@ impl AdapterFunction {
         Self {
             blocks: adapter_blocks,
             insts: adapter_insts,
-            inst_linear_op_indices,
             inst_op_ids,
             inst_edge_infos,
             num_vregs,
             empty_vregs: Vec::new(),
         }
-    }
-
-    fn from_ra(func: &RaFunction, num_vregs: usize) -> Self {
-        let (blocks, edge_infos) = split_critical_edges_ra(func);
-        Self::from_work_blocks(
-            &func.data_args,
-            &func.data_results,
-            num_vregs,
-            blocks,
-            edge_infos,
-        )
     }
 
     fn from_cfg(func: &cfg_mir::Function, num_vregs: usize) -> Result<Self, RegallocEngineError> {
@@ -1015,106 +823,6 @@ impl regalloc2::Function for AdapterFunction {
     fn allow_multiple_vreg_defs(&self) -> bool {
         true
     }
-}
-
-fn materialize_output(
-    out: &Output,
-    adapter: &AdapterFunction,
-    lambda_id: LambdaId,
-    original_block_count: usize,
-) -> AllocatedFunction {
-    let mut inst_allocs = Vec::with_capacity(adapter.insts.len());
-    let mut inst_operands = Vec::with_capacity(adapter.insts.len());
-    for i in 0..adapter.insts.len() {
-        inst_allocs.push(out.inst_allocs(Inst::new(i)).to_vec());
-        inst_operands.push(adapter.insts[i].operand_vregs.clone());
-    }
-    let mut return_result_allocs = Vec::<Allocation>::new();
-    for (inst_index, inst) in adapter.insts.iter().enumerate() {
-        if inst.ret_value_operand_count == 0 {
-            continue;
-        }
-        let term_allocs = &inst_allocs[inst_index];
-        let start = inst.ret_value_operand_start;
-        let end = start + inst.ret_value_operand_count;
-        assert!(
-            end <= term_allocs.len(),
-            "missing return alloc operands for lambda {:?}: expected range {start}..{end}, got {}",
-            lambda_id,
-            term_allocs.len()
-        );
-        let candidate = term_allocs[start..end].to_vec();
-        if return_result_allocs.is_empty() {
-            return_result_allocs = candidate;
-        } else if return_result_allocs != candidate {
-            panic!(
-                "inconsistent return allocs for lambda {:?}: {:?} vs {:?}",
-                lambda_id, return_result_allocs, candidate
-            );
-        }
-    }
-    let mut edge_edits = Vec::new();
-    for (prog_point, edit) in &out.edits {
-        let inst_index = prog_point.inst().index();
-        let Some(edge_info) = adapter
-            .inst_edge_infos
-            .get(inst_index)
-            .and_then(|info| *info)
-        else {
-            continue;
-        };
-        let Edit::Move { from, to } = edit;
-        edge_edits.push(EdgeEdit {
-            from_block_id: edge_info.from_block_id,
-            succ_index: edge_info.succ_index,
-            pos: prog_point.pos(),
-            from: *from,
-            to: *to,
-        });
-    }
-    let mut term_inst_indices_by_block = vec![None; original_block_count];
-    for block_idx in 0..original_block_count.min(adapter.blocks.len()) {
-        term_inst_indices_by_block[block_idx] =
-            Some(adapter.blocks[block_idx].inst_range.last().index());
-    }
-    AllocatedFunction {
-        lambda_id,
-        num_spillslots: out.num_spillslots,
-        edits: out.edits.clone(),
-        inst_allocs,
-        inst_operands,
-        inst_linear_op_indices: adapter.inst_linear_op_indices.clone(),
-        term_inst_indices_by_block,
-        edge_edits,
-        return_result_allocs,
-    }
-}
-
-fn allocate_ra_function(
-    func: &RaFunction,
-    vreg_count: usize,
-    env: &MachineEnv,
-    options: &RegallocOptions,
-) -> Result<AllocatedFunction, RegallocEngineError> {
-    let adapter = AdapterFunction::from_ra(func, vreg_count);
-    let out = regalloc2::run(&adapter, env, options)?;
-
-    // r[impl ir.regalloc.checker]
-    #[cfg(debug_assertions)]
-    {
-        let mut checker = regalloc2::checker::Checker::new(&adapter, env);
-        checker.prepare(&out);
-        checker
-            .run()
-            .map_err(|errs| RegallocEngineError::Checker(format!("{errs:?}")))?;
-    }
-
-    Ok(materialize_output(
-        &out,
-        &adapter,
-        func.lambda_id,
-        func.blocks.len(),
-    ))
 }
 
 fn allocate_cfg_function(
@@ -1240,291 +948,6 @@ fn verify_allocation_is_valid(
     Err(RegallocEngineError::StaticVerifier(format!(
         "{edge_label}: invalid {field} allocation kind {alloc:?}"
     )))
-}
-
-fn build_inst_index_by_linear(func: &AllocatedFunction) -> HashMap<usize, usize> {
-    let mut inst_index_by_linear = HashMap::<usize, usize>::new();
-    for (inst_idx, maybe_linear) in func.inst_linear_op_indices.iter().enumerate() {
-        if let Some(linear) = maybe_linear {
-            inst_index_by_linear
-                .entry(*linear)
-                .and_modify(|existing| {
-                    if inst_idx < *existing {
-                        *existing = inst_idx;
-                    }
-                })
-                .or_insert(inst_idx);
-        }
-    }
-    inst_index_by_linear
-}
-
-fn find_alloc_for_vreg_in_inst(
-    func: &AllocatedFunction,
-    inst_idx: usize,
-    vreg: kajit_ir::VReg,
-    preferred_kind: Option<RaOperandKind>,
-) -> Option<Allocation> {
-    let operands = func.inst_operands.get(inst_idx)?;
-    let allocs = func.inst_allocs.get(inst_idx)?;
-    for ((operand_vreg, operand_kind), alloc) in operands.iter().zip(allocs.iter().copied()) {
-        if *operand_vreg != vreg {
-            continue;
-        }
-        if preferred_kind.is_none_or(|k| *operand_kind == k) {
-            return Some(alloc);
-        }
-    }
-    None
-}
-
-fn infer_block_param_entry_alloc(
-    func: &AllocatedFunction,
-    inst_index_by_linear: &HashMap<usize, usize>,
-    block: &crate::RaBlock,
-    param: kajit_ir::VReg,
-) -> Option<Allocation> {
-    for inst in &block.insts {
-        let inst_idx = *inst_index_by_linear.get(&inst.linear_op_index)?;
-        if let Some(a) =
-            find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
-        {
-            return Some(a);
-        }
-        if let Some(a) =
-            find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Def))
-        {
-            return Some(a);
-        }
-    }
-    let term_linear = block.term_linear_op_index;
-    let inst_idx = *inst_index_by_linear.get(&term_linear)?;
-    if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use)) {
-        return Some(a);
-    }
-    None
-}
-
-fn infer_vreg_alloc_at_block_end(
-    func: &AllocatedFunction,
-    inst_index_by_linear: &HashMap<usize, usize>,
-    block: &crate::RaBlock,
-    vreg: kajit_ir::VReg,
-) -> Option<Allocation> {
-    let term_linear = block.term_linear_op_index;
-    if let Some(&inst_idx) = inst_index_by_linear.get(&term_linear)
-        && let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Use))
-    {
-        return Some(a);
-    }
-    None
-}
-
-#[derive(Clone)]
-struct ExpectedEdgeTransfer {
-    source_vreg: kajit_ir::VReg,
-    target_vreg: kajit_ir::VReg,
-    source_alloc: Option<Allocation>,
-    target_alloc: Option<Allocation>,
-}
-
-fn expected_transfers_for_edge(
-    ra_func: &RaFunction,
-    func: &AllocatedFunction,
-    inst_index_by_linear: &HashMap<usize, usize>,
-    from_block_id: crate::BlockId,
-    succ_index: usize,
-) -> Vec<ExpectedEdgeTransfer> {
-    let mut out = Vec::new();
-    let Some(pred_block) = ra_func.blocks.iter().find(|b| b.id == from_block_id) else {
-        return out;
-    };
-    let Some(edge) = pred_block.succs.get(succ_index) else {
-        return out;
-    };
-    let Some(succ_block) = ra_func.blocks.iter().find(|b| b.id == edge.to) else {
-        return out;
-    };
-
-    for arg in &edge.args {
-        let source_alloc =
-            infer_vreg_alloc_at_block_end(func, inst_index_by_linear, pred_block, arg.source);
-        let target_alloc =
-            infer_block_param_entry_alloc(func, inst_index_by_linear, succ_block, arg.target);
-        out.push(ExpectedEdgeTransfer {
-            source_vreg: arg.source,
-            target_vreg: arg.target,
-            source_alloc,
-            target_alloc,
-        });
-    }
-
-    out
-}
-
-fn verify_function_static_edge_edits(
-    ra_func: Option<&RaFunction>,
-    func: &AllocatedFunction,
-) -> Result<(), RegallocEngineError> {
-    let scratch_regs: HashSet<PReg> = machine_env()
-        .scratch_by_class
-        .into_iter()
-        .flatten()
-        .collect();
-    let inst_index_by_linear = ra_func.map(|_| build_inst_index_by_linear(func));
-
-    let mut by_edge = BTreeMap::<(u32, usize), Vec<&EdgeEdit>>::new();
-    for edge in &func.edge_edits {
-        by_edge
-            .entry((edge.from_block_id.0, edge.succ_index))
-            .or_default()
-            .push(edge);
-    }
-
-    let mut edge_keys = BTreeSet::<(u32, usize)>::new();
-    edge_keys.extend(by_edge.keys().copied());
-    if let Some(ra_func) = ra_func {
-        for block in &ra_func.blocks {
-            for succ_index in 0..block.succs.len() {
-                edge_keys.insert((block.id.0, succ_index));
-            }
-        }
-    }
-
-    for (from_block_id, succ_index) in edge_keys {
-        let edits = by_edge
-            .get(&(from_block_id, succ_index))
-            .cloned()
-            .unwrap_or_default();
-        let edge_label = format!(
-            "lambda @{} edge (from=b{from_block_id}, succ={succ_index})",
-            func.lambda_id.index()
-        );
-        let expected = if let (Some(ra_func), Some(inst_index_by_linear)) =
-            (ra_func, inst_index_by_linear.as_ref())
-        {
-            expected_transfers_for_edge(
-                ra_func,
-                func,
-                inst_index_by_linear,
-                crate::BlockId(from_block_id),
-                succ_index,
-            )
-        } else {
-            Vec::new()
-        };
-        let mut last_write_by_destination = HashMap::<Allocation, (Allocation, Allocation)>::new();
-        for edit in &edits {
-            verify_allocation_is_valid(edit.from, func.num_spillslots, "source", &edge_label)?;
-            verify_allocation_is_valid(edit.to, func.num_spillslots, "target", &edge_label)?;
-            // Regalloc2 edits are already serialized by (ProgPoint, priority, resolver
-            // order). If multiple edits target the same destination, the last one wins.
-            last_write_by_destination.insert(edit.to, (edit.from, edit.to));
-        }
-
-        // Coverage check: all inferred target allocations for block params must be written by
-        // at least one edge edit unless source and target are already in place.
-        let actual_targets: HashSet<Allocation> =
-            last_write_by_destination.keys().copied().collect();
-        let mut tracked_transfers = Vec::<(usize, Allocation, Allocation)>::new();
-        let mut expected_complete = true;
-        for transfer in &expected {
-            let (Some(source_alloc), Some(target_alloc)) =
-                (transfer.source_alloc, transfer.target_alloc)
-            else {
-                expected_complete = false;
-                continue;
-            };
-            if source_alloc == target_alloc {
-                continue;
-            }
-            tracked_transfers.push((tracked_transfers.len(), source_alloc, target_alloc));
-            if !actual_targets.contains(&target_alloc) {
-                return Err(RegallocEngineError::StaticVerifier(format!(
-                    "{edge_label}: missing edge edit to cover block param v{} from v{} (expected target {:?})",
-                    transfer.target_vreg.index(),
-                    transfer.source_vreg.index(),
-                    target_alloc
-                )));
-            }
-        }
-
-        // Source/target correctness: symbolically execute edge moves and ensure each
-        // expected transfer source value arrives at the expected target allocation.
-        if !tracked_transfers.is_empty() {
-            let mut symbols = HashMap::<Allocation, HashSet<usize>>::new();
-            for (transfer_id, source_alloc, _) in &tracked_transfers {
-                symbols
-                    .entry(*source_alloc)
-                    .or_default()
-                    .insert(*transfer_id);
-            }
-
-            // Preserve emitted edit ordering, applying Before moves then After moves.
-            let mut suspicious_extra = None;
-            for edit in edits
-                .iter()
-                .copied()
-                .filter(|e| e.pos == regalloc2::InstPosition::Before)
-                .chain(
-                    edits
-                        .iter()
-                        .copied()
-                        .filter(|e| e.pos == regalloc2::InstPosition::After),
-                )
-            {
-                let moved = symbols.get(&edit.from).cloned().unwrap_or_default();
-                if moved.is_empty()
-                    && expected_complete
-                    && edit
-                        .to
-                        .as_reg()
-                        .is_none_or(|reg| !scratch_regs.contains(&reg))
-                {
-                    suspicious_extra = Some((edit.from, edit.to));
-                }
-                if !moved.is_empty() {
-                    symbols.insert(edit.to, moved);
-                }
-            }
-
-            for (transfer_id, source_alloc, target_alloc) in &tracked_transfers {
-                let delivered = symbols
-                    .get(target_alloc)
-                    .is_some_and(|set| set.contains(transfer_id));
-                if !delivered {
-                    return Err(RegallocEngineError::StaticVerifier(format!(
-                        "{edge_label}: edge edits do not deliver source {:?} to expected target {:?}",
-                        source_alloc, target_alloc
-                    )));
-                }
-            }
-            if let Some((from, to)) = suspicious_extra {
-                return Err(RegallocEngineError::StaticVerifier(format!(
-                    "{edge_label}: suspicious extra edge edit {:?} -> {:?} (not connected to any expected block-param transfer)",
-                    from, to
-                )));
-            }
-        }
-
-        // regalloc2 emits edge edits as an already-serialized sequence. A later
-        // read from the same location can legitimately consume the value written
-        // by an earlier move in that sequence.
-    }
-
-    Ok(())
-}
-
-pub fn verify_static_edge_edits(program: &AllocatedProgram) -> Result<(), RegallocEngineError> {
-    for func in &program.functions {
-        let ra_func = program
-            .ra_program
-            .funcs
-            .iter()
-            .find(|candidate| candidate.lambda_id == func.lambda_id);
-        verify_function_static_edge_edits(ra_func, func)?;
-    }
-    Ok(())
 }
 
 fn find_cfg_alloc_for_vreg_in_op(
@@ -1767,35 +1190,6 @@ pub fn verify_static_edge_edits_cfg(
     Ok(())
 }
 
-// r[impl ir.regalloc.engine]
-pub fn allocate_program(program: &RaProgram) -> Result<AllocatedProgram, RegallocEngineError> {
-    let env = machine_env();
-    let options = RegallocOptions {
-        verbose_log: false,
-        validate_ssa: false,
-        algorithm: regalloc2::Algorithm::Ion,
-    };
-
-    let mut functions = Vec::with_capacity(program.funcs.len());
-    for func in &program.funcs {
-        functions.push(allocate_ra_function(
-            func,
-            program.vreg_count as usize,
-            &env,
-            &options,
-        )?);
-    }
-    let allocated = AllocatedProgram {
-        ra_program: program.clone(),
-        functions,
-    };
-
-    #[cfg(debug_assertions)]
-    verify_static_edge_edits(&allocated)?;
-
-    Ok(allocated)
-}
-
 /// Run regalloc2 over canonical CFG MIR.
 pub fn allocate_cfg_program(
     program: &cfg_mir::Program,
@@ -1875,29 +1269,6 @@ pub enum DifferentialCheckResult {
     },
     Diverged(DifferentialDivergence),
     Error(String),
-}
-
-fn infer_output_size_for_function(func: &RaFunction) -> usize {
-    func.blocks
-        .iter()
-        .flat_map(|block| block.insts.iter())
-        .filter_map(|inst| match &inst.op {
-            LinearOp::WriteToField { offset, width, .. }
-            | LinearOp::ReadFromField { offset, width, .. } => {
-                Some(*offset as usize + width.bytes() as usize)
-            }
-            _ => None,
-        })
-        .max()
-        .unwrap_or(0)
-}
-
-fn execution_position(block: &crate::RaBlock, next_inst_index: usize) -> ExecutionPosition {
-    ExecutionPosition {
-        block: block.id,
-        next_inst_index,
-        at_terminator: next_inst_index >= block.insts.len(),
-    }
 }
 
 fn read_allocation(
@@ -2256,20 +1627,6 @@ fn run_call_pure(func: usize, args: &[u64]) -> u64 {
     }
 }
 
-fn find_inst_index_for_linear(
-    inst_index_by_linear: &HashMap<usize, usize>,
-    linear_op_index: usize,
-) -> Result<usize, RegallocEngineError> {
-    inst_index_by_linear
-        .get(&linear_op_index)
-        .copied()
-        .ok_or_else(|| {
-            RegallocEngineError::Simulation(format!(
-                "missing allocated instruction for linear op {linear_op_index}"
-            ))
-        })
-}
-
 fn find_operand_alloc(
     inst: &crate::RaInst,
     inst_allocs: &[Allocation],
@@ -2287,45 +1644,6 @@ fn find_operand_alloc(
         vreg.index(),
         inst.linear_op_index
     )))
-}
-
-fn find_term_use_alloc(
-    term: &crate::RaTerminator,
-    term_allocs: &[Allocation],
-    vreg: kajit_ir::VReg,
-    linear_op_index: usize,
-) -> Result<Allocation, RegallocEngineError> {
-    let uses = lower_term_uses(term);
-    for (idx, use_vreg) in uses.into_iter().enumerate() {
-        if use_vreg == vreg {
-            return term_allocs.get(idx).copied().ok_or_else(|| {
-                RegallocEngineError::Simulation(format!(
-                    "missing term allocation for v{} in linear op {linear_op_index}",
-                    vreg.index()
-                ))
-            });
-        }
-    }
-    Err(RegallocEngineError::Simulation(format!(
-        "missing term use v{} in linear op {linear_op_index}",
-        vreg.index()
-    )))
-}
-
-fn find_succ_index(
-    block: &crate::RaBlock,
-    to: crate::BlockId,
-) -> Result<usize, RegallocEngineError> {
-    block
-        .succs
-        .iter()
-        .position(|edge| edge.to == to)
-        .ok_or_else(|| {
-            RegallocEngineError::Simulation(format!(
-                "missing CFG edge b{} -> b{}",
-                block.id.0, to.0
-            ))
-        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3261,555 +2579,6 @@ pub fn simulate_execution_trace_cfg(
     Ok(trace)
 }
 
-pub fn simulate_execution(
-    allocated: &AllocatedProgram,
-    input: &[u8],
-) -> Result<ExecutionResult, RegallocEngineError> {
-    let func = allocated.ra_program.funcs.first().ok_or_else(|| {
-        RegallocEngineError::Simulation("RA-MIR program has no functions".to_string())
-    })?;
-    let alloc_func = allocated
-        .functions
-        .iter()
-        .find(|f| f.lambda_id == func.lambda_id)
-        .or_else(|| allocated.functions.first())
-        .ok_or_else(|| {
-            RegallocEngineError::Simulation("allocated program has no functions".to_string())
-        })?;
-
-    let mut block_indices = HashMap::with_capacity(func.blocks.len());
-    for (idx, block) in func.blocks.iter().enumerate() {
-        block_indices.insert(block.id, idx);
-    }
-
-    let mut inst_index_by_linear = HashMap::<usize, usize>::new();
-    for (inst_idx, maybe_linear) in alloc_func.inst_linear_op_indices.iter().enumerate() {
-        if let Some(linear) = maybe_linear {
-            inst_index_by_linear
-                .entry(*linear)
-                .and_modify(|existing| {
-                    if inst_idx < *existing {
-                        *existing = inst_idx;
-                    }
-                })
-                .or_insert(inst_idx);
-        }
-    }
-
-    let mut edits_by_progpoint =
-        BTreeMap::<(usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
-    for (prog_point, edit) in &alloc_func.edits {
-        let Edit::Move { from, to } = edit;
-        edits_by_progpoint
-            .entry((prog_point.inst().index(), prog_point.pos()))
-            .or_default()
-            .push((*from, *to));
-    }
-
-    let mut edge_edits =
-        BTreeMap::<(u32, usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
-    for edge in &alloc_func.edge_edits {
-        edge_edits
-            .entry((edge.from_block_id.0, edge.succ_index, edge.pos))
-            .or_default()
-            .push((edge.from, edge.to));
-    }
-
-    let mut regs = HashMap::<PReg, u64>::new();
-    let mut spills = HashMap::<usize, u64>::new();
-    let mut output = vec![0u8; infer_output_size_for_function(func)];
-    let mut sim = SimulatorRuntime::new(input, allocated.ra_program.slot_count as usize);
-    sim.init_out_ptr(&mut output);
-    let mut cursor = 0usize;
-    let mut trap: Option<crate::InterpreterTrap> = None;
-    let mut returned = false;
-    let mut current = func.entry;
-    let mut next_inst = 0usize;
-    let mut steps = 0usize;
-
-    while trap.is_none() && !returned {
-        if steps >= MAX_SIM_STEPS {
-            return Err(RegallocEngineError::Simulation(format!(
-                "simulation exceeded step limit ({MAX_SIM_STEPS})"
-            )));
-        }
-        steps += 1;
-
-        let block_idx = *block_indices.get(&current).ok_or_else(|| {
-            RegallocEngineError::Simulation(format!("unknown block b{}", current.0))
-        })?;
-        let block = &func.blocks[block_idx];
-
-        if next_inst < block.insts.len() {
-            let inst = &block.insts[next_inst];
-            let inst_idx = find_inst_index_for_linear(&inst_index_by_linear, inst.linear_op_index)?;
-
-            if let Some(edits) =
-                edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::Before))
-            {
-                apply_moves(&mut regs, &mut spills, edits);
-            }
-
-            let inst_allocs = alloc_func.inst_allocs.get(inst_idx).ok_or_else(|| {
-                RegallocEngineError::Simulation(format!(
-                    "missing inst allocs for adapter inst {inst_idx}"
-                ))
-            })?;
-
-            execute_sim_linear_op(
-                &inst.op,
-                block.id,
-                inst,
-                inst_allocs,
-                &mut regs,
-                &mut spills,
-                &mut sim,
-                &mut cursor,
-                &mut output,
-                &mut trap,
-            )?;
-
-            if let Some(edits) = edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::After))
-            {
-                apply_moves(&mut regs, &mut spills, edits);
-            }
-
-            next_inst += 1;
-            continue;
-        }
-
-        let term_linear = block.term_linear_op_index;
-        let term_inst_idx = alloc_func
-            .term_inst_indices_by_block
-            .get(block.id.0 as usize)
-            .copied()
-            .flatten();
-
-        if let Some(term_inst_idx) = term_inst_idx
-            && let Some(edits) =
-                edits_by_progpoint.get(&(term_inst_idx, regalloc2::InstPosition::Before))
-        {
-            apply_moves(&mut regs, &mut spills, edits);
-        }
-
-        match &block.term {
-            crate::RaTerminator::Return => {
-                returned = true;
-            }
-            crate::RaTerminator::ErrorExit { code } => {
-                trap = Some(crate::InterpreterTrap {
-                    code: *code,
-                    offset: cursor as u32,
-                });
-            }
-            crate::RaTerminator::Branch { target } => {
-                let succ_index = find_succ_index(block, *target)?;
-                let from_block_id = block.id.0;
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                current = *target;
-                next_inst = 0;
-            }
-            crate::RaTerminator::BranchIf {
-                cond,
-                target,
-                fallthrough,
-            } => {
-                let term_inst_idx = term_inst_idx.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term inst index for b{} branch_if",
-                        block.id.0
-                    ))
-                })?;
-                let term_allocs = alloc_func.inst_allocs.get(term_inst_idx).ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term allocs for adapter inst {term_inst_idx}"
-                    ))
-                })?;
-                let cond_alloc = find_term_use_alloc(&block.term, term_allocs, *cond, term_linear)?;
-                let cond_value = read_allocation(&regs, &spills, cond_alloc);
-                let next_block = if cond_value != 0 {
-                    *target
-                } else {
-                    *fallthrough
-                };
-                let succ_index = find_succ_index(block, next_block)?;
-                let from_block_id = block.id.0;
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                current = next_block;
-                next_inst = 0;
-            }
-            crate::RaTerminator::BranchIfZero {
-                cond,
-                target,
-                fallthrough,
-            } => {
-                let term_inst_idx = term_inst_idx.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term inst index for b{} branch_if_zero",
-                        block.id.0
-                    ))
-                })?;
-                let term_allocs = alloc_func.inst_allocs.get(term_inst_idx).ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term allocs for adapter inst {term_inst_idx}"
-                    ))
-                })?;
-                let cond_alloc = find_term_use_alloc(&block.term, term_allocs, *cond, term_linear)?;
-                let cond_value = read_allocation(&regs, &spills, cond_alloc);
-                let next_block = if cond_value == 0 {
-                    *target
-                } else {
-                    *fallthrough
-                };
-                let succ_index = find_succ_index(block, next_block)?;
-                let from_block_id = block.id.0;
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                current = next_block;
-                next_inst = 0;
-            }
-            term => {
-                return Err(RegallocEngineError::Simulation(format!(
-                    "unsupported terminator in simulation at b{}: {term:?}",
-                    block.id.0
-                )));
-            }
-        }
-
-        if let Some(term_inst_idx) = term_inst_idx
-            && let Some(edits) =
-                edits_by_progpoint.get(&(term_inst_idx, regalloc2::InstPosition::After))
-        {
-            apply_moves(&mut regs, &mut spills, edits);
-        }
-    }
-
-    let current_block_idx = *block_indices.get(&current).ok_or_else(|| {
-        RegallocEngineError::Simulation(format!("unknown final block b{}", current.0))
-    })?;
-    let current_block = &func.blocks[current_block_idx];
-
-    Ok(ExecutionResult {
-        state: ExecutionState {
-            physical_registers: regs,
-            spillslots: spills,
-            position: execution_position(current_block, next_inst),
-        },
-        output,
-        cursor,
-        trap,
-        returned,
-    })
-}
-
-pub fn simulate_execution_trace(
-    allocated: &AllocatedProgram,
-    input: &[u8],
-) -> Result<Vec<ExecutionTraceEntry>, RegallocEngineError> {
-    let func = allocated.ra_program.funcs.first().ok_or_else(|| {
-        RegallocEngineError::Simulation("RA-MIR program has no functions".to_string())
-    })?;
-    let alloc_func = allocated
-        .functions
-        .iter()
-        .find(|f| f.lambda_id == func.lambda_id)
-        .or_else(|| allocated.functions.first())
-        .ok_or_else(|| {
-            RegallocEngineError::Simulation("allocated program has no functions".to_string())
-        })?;
-
-    let mut block_indices = HashMap::with_capacity(func.blocks.len());
-    for (idx, block) in func.blocks.iter().enumerate() {
-        block_indices.insert(block.id, idx);
-    }
-
-    let mut inst_index_by_linear = HashMap::<usize, usize>::new();
-    for (inst_idx, maybe_linear) in alloc_func.inst_linear_op_indices.iter().enumerate() {
-        if let Some(linear) = maybe_linear {
-            inst_index_by_linear
-                .entry(*linear)
-                .and_modify(|existing| {
-                    if inst_idx < *existing {
-                        *existing = inst_idx;
-                    }
-                })
-                .or_insert(inst_idx);
-        }
-    }
-
-    let mut edits_by_progpoint =
-        BTreeMap::<(usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
-    for (prog_point, edit) in &alloc_func.edits {
-        let Edit::Move { from, to } = edit;
-        edits_by_progpoint
-            .entry((prog_point.inst().index(), prog_point.pos()))
-            .or_default()
-            .push((*from, *to));
-    }
-
-    let mut edge_edits =
-        BTreeMap::<(u32, usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
-    for edge in &alloc_func.edge_edits {
-        edge_edits
-            .entry((edge.from_block_id.0, edge.succ_index, edge.pos))
-            .or_default()
-            .push((edge.from, edge.to));
-    }
-
-    let mut regs = HashMap::<PReg, u64>::new();
-    let mut spills = HashMap::<usize, u64>::new();
-    let mut output = vec![0u8; infer_output_size_for_function(func)];
-    let mut sim = SimulatorRuntime::new(input, allocated.ra_program.slot_count as usize);
-    sim.init_out_ptr(&mut output);
-    let mut cursor = 0usize;
-    let mut trap: Option<crate::InterpreterTrap> = None;
-    let mut returned = false;
-    let mut current = func.entry;
-    let mut next_inst = 0usize;
-    let mut steps = 0usize;
-    let mut trace = Vec::<ExecutionTraceEntry>::new();
-
-    while trap.is_none() && !returned {
-        if steps >= MAX_SIM_STEPS {
-            return Err(RegallocEngineError::Simulation(format!(
-                "simulation exceeded step limit ({MAX_SIM_STEPS})"
-            )));
-        }
-        steps += 1;
-
-        let block_idx = *block_indices.get(&current).ok_or_else(|| {
-            RegallocEngineError::Simulation(format!("unknown block b{}", current.0))
-        })?;
-        let block = &func.blocks[block_idx];
-
-        if next_inst < block.insts.len() {
-            let inst = &block.insts[next_inst];
-            let inst_idx = find_inst_index_for_linear(&inst_index_by_linear, inst.linear_op_index)?;
-
-            if let Some(edits) =
-                edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::Before))
-            {
-                apply_moves(&mut regs, &mut spills, edits);
-            }
-
-            let inst_allocs = alloc_func.inst_allocs.get(inst_idx).ok_or_else(|| {
-                RegallocEngineError::Simulation(format!(
-                    "missing inst allocs for adapter inst {inst_idx}"
-                ))
-            })?;
-
-            execute_sim_linear_op(
-                &inst.op,
-                block.id,
-                inst,
-                inst_allocs,
-                &mut regs,
-                &mut spills,
-                &mut sim,
-                &mut cursor,
-                &mut output,
-                &mut trap,
-            )?;
-
-            if let Some(edits) = edits_by_progpoint.get(&(inst_idx, regalloc2::InstPosition::After))
-            {
-                apply_moves(&mut regs, &mut spills, edits);
-            }
-
-            next_inst += 1;
-            trace.push(ExecutionTraceEntry {
-                step_index: steps,
-                state: ExecutionState {
-                    physical_registers: regs.clone(),
-                    spillslots: spills.clone(),
-                    position: execution_position(block, next_inst),
-                },
-                output: output.clone(),
-                cursor,
-                trap,
-                returned,
-            });
-            continue;
-        }
-
-        let term_linear = block.term_linear_op_index;
-        let term_inst_idx = alloc_func
-            .term_inst_indices_by_block
-            .get(block.id.0 as usize)
-            .copied()
-            .flatten();
-
-        if let Some(term_inst_idx) = term_inst_idx
-            && let Some(edits) =
-                edits_by_progpoint.get(&(term_inst_idx, regalloc2::InstPosition::Before))
-        {
-            apply_moves(&mut regs, &mut spills, edits);
-        }
-
-        match &block.term {
-            crate::RaTerminator::Return => {
-                returned = true;
-            }
-            crate::RaTerminator::ErrorExit { code } => {
-                trap = Some(crate::InterpreterTrap {
-                    code: *code,
-                    offset: cursor as u32,
-                });
-            }
-            crate::RaTerminator::Branch { target } => {
-                let succ_index = find_succ_index(block, *target)?;
-                let from_block_id = block.id.0;
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                current = *target;
-                next_inst = 0;
-            }
-            crate::RaTerminator::BranchIf {
-                cond,
-                target,
-                fallthrough,
-            } => {
-                let term_inst_idx = term_inst_idx.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term inst index for b{} branch_if",
-                        block.id.0
-                    ))
-                })?;
-                let term_allocs = alloc_func.inst_allocs.get(term_inst_idx).ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term allocs for adapter inst {term_inst_idx}"
-                    ))
-                })?;
-                let cond_alloc = find_term_use_alloc(&block.term, term_allocs, *cond, term_linear)?;
-                let cond_value = read_allocation(&regs, &spills, cond_alloc);
-                let next_block = if cond_value != 0 {
-                    *target
-                } else {
-                    *fallthrough
-                };
-                let succ_index = find_succ_index(block, next_block)?;
-                let from_block_id = block.id.0;
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                current = next_block;
-                next_inst = 0;
-            }
-            crate::RaTerminator::BranchIfZero {
-                cond,
-                target,
-                fallthrough,
-            } => {
-                let term_inst_idx = term_inst_idx.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term inst index for b{} branch_if_zero",
-                        block.id.0
-                    ))
-                })?;
-                let term_allocs = alloc_func.inst_allocs.get(term_inst_idx).ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term allocs for adapter inst {term_inst_idx}"
-                    ))
-                })?;
-                let cond_alloc = find_term_use_alloc(&block.term, term_allocs, *cond, term_linear)?;
-                let cond_value = read_allocation(&regs, &spills, cond_alloc);
-                let next_block = if cond_value == 0 {
-                    *target
-                } else {
-                    *fallthrough
-                };
-                let succ_index = find_succ_index(block, next_block)?;
-                let from_block_id = block.id.0;
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                if let Some(edits) =
-                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
-                {
-                    apply_moves(&mut regs, &mut spills, edits);
-                }
-                current = next_block;
-                next_inst = 0;
-            }
-            term => {
-                return Err(RegallocEngineError::Simulation(format!(
-                    "unsupported terminator in simulation at b{}: {term:?}",
-                    block.id.0
-                )));
-            }
-        }
-
-        if let Some(term_inst_idx) = term_inst_idx
-            && let Some(edits) =
-                edits_by_progpoint.get(&(term_inst_idx, regalloc2::InstPosition::After))
-        {
-            apply_moves(&mut regs, &mut spills, edits);
-        }
-
-        let current_block_idx = *block_indices.get(&current).ok_or_else(|| {
-            RegallocEngineError::Simulation(format!("unknown block b{}", current.0))
-        })?;
-        let current_block = &func.blocks[current_block_idx];
-        trace.push(ExecutionTraceEntry {
-            step_index: steps,
-            state: ExecutionState {
-                physical_registers: regs.clone(),
-                spillslots: spills.clone(),
-                position: execution_position(current_block, next_inst),
-            },
-            output: output.clone(),
-            cursor,
-            trap,
-            returned,
-        });
-    }
-
-    Ok(trace)
-}
-
 fn ideal_trace(
     program: &cfg_mir::Program,
     input: &[u8],
@@ -3976,256 +2745,6 @@ fn compare_differential_states(
     }
 }
 
-fn cfg_edge_id_for_ra_succ(
-    from_block: crate::BlockId,
-    succ_index: usize,
-    expected_to: Option<crate::BlockId>,
-    edge_id_by_from_succ: &HashMap<(u32, usize), cfg_mir::EdgeId>,
-    cfg_edges: &[cfg_mir::Edge],
-) -> Result<cfg_mir::EdgeId, RegallocEngineError> {
-    let edge_id = *edge_id_by_from_succ
-        .get(&(from_block.0, succ_index))
-        .ok_or_else(|| {
-            RegallocEngineError::Simulation(format!(
-                "missing cfg edge for ra block b{} succ {}",
-                from_block.0, succ_index
-            ))
-        })?;
-    if let Some(expected_to) = expected_to {
-        let actual_to = cfg_edges
-            .get(edge_id.index())
-            .ok_or_else(|| {
-                RegallocEngineError::Simulation(format!("cfg edge e{} is out of bounds", edge_id.0))
-            })?
-            .to;
-        let expected_to = cfg_mir::BlockId::new(expected_to.0);
-        if actual_to != expected_to {
-            return Err(RegallocEngineError::Simulation(format!(
-                "cfg edge e{} from ra block b{} succ {} points to b{}, expected b{}",
-                edge_id.0, from_block.0, succ_index, actual_to.0, expected_to.0
-            )));
-        }
-    }
-    Ok(edge_id)
-}
-
-fn map_ra_term_to_cfg(
-    block: &crate::RaBlock,
-    edge_id_by_from_succ: &HashMap<(u32, usize), cfg_mir::EdgeId>,
-    cfg_edges: &[cfg_mir::Edge],
-) -> Result<cfg_mir::Terminator, RegallocEngineError> {
-    match &block.term {
-        crate::RaTerminator::Return => Ok(cfg_mir::Terminator::Return),
-        crate::RaTerminator::ErrorExit { code } => {
-            Ok(cfg_mir::Terminator::ErrorExit { code: *code })
-        }
-        crate::RaTerminator::Branch { target } => Ok(cfg_mir::Terminator::Branch {
-            edge: cfg_edge_id_for_ra_succ(
-                block.id,
-                0,
-                Some(*target),
-                edge_id_by_from_succ,
-                cfg_edges,
-            )?,
-        }),
-        crate::RaTerminator::BranchIf {
-            cond,
-            target,
-            fallthrough,
-        } => Ok(cfg_mir::Terminator::BranchIf {
-            cond: *cond,
-            taken: cfg_edge_id_for_ra_succ(
-                block.id,
-                0,
-                Some(*target),
-                edge_id_by_from_succ,
-                cfg_edges,
-            )?,
-            fallthrough: cfg_edge_id_for_ra_succ(
-                block.id,
-                1,
-                Some(*fallthrough),
-                edge_id_by_from_succ,
-                cfg_edges,
-            )?,
-        }),
-        crate::RaTerminator::BranchIfZero {
-            cond,
-            target,
-            fallthrough,
-        } => Ok(cfg_mir::Terminator::BranchIfZero {
-            cond: *cond,
-            taken: cfg_edge_id_for_ra_succ(
-                block.id,
-                0,
-                Some(*target),
-                edge_id_by_from_succ,
-                cfg_edges,
-            )?,
-            fallthrough: cfg_edge_id_for_ra_succ(
-                block.id,
-                1,
-                Some(*fallthrough),
-                edge_id_by_from_succ,
-                cfg_edges,
-            )?,
-        }),
-        crate::RaTerminator::JumpTable {
-            predicate,
-            targets,
-            default,
-        } => {
-            let mut cfg_targets = Vec::with_capacity(targets.len());
-            for (idx, target) in targets.iter().enumerate() {
-                cfg_targets.push(cfg_edge_id_for_ra_succ(
-                    block.id,
-                    idx,
-                    Some(*target),
-                    edge_id_by_from_succ,
-                    cfg_edges,
-                )?);
-            }
-            let cfg_default = cfg_edge_id_for_ra_succ(
-                block.id,
-                targets.len(),
-                Some(*default),
-                edge_id_by_from_succ,
-                cfg_edges,
-            )?;
-            Ok(cfg_mir::Terminator::JumpTable {
-                predicate: *predicate,
-                targets: cfg_targets,
-                default: cfg_default,
-            })
-        }
-    }
-}
-
-fn lower_ra_program_to_cfg(program: &RaProgram) -> Result<cfg_mir::Program, RegallocEngineError> {
-    let mut funcs = Vec::with_capacity(program.funcs.len());
-
-    for (func_index, ra_func) in program.funcs.iter().enumerate() {
-        let mut edge_id_by_from_succ = HashMap::<(u32, usize), cfg_mir::EdgeId>::new();
-        let mut cfg_edges = Vec::<cfg_mir::Edge>::new();
-        for block in &ra_func.blocks {
-            for (succ_index, succ) in block.succs.iter().enumerate() {
-                let edge_id = cfg_mir::EdgeId::new(cfg_edges.len() as u32);
-                edge_id_by_from_succ.insert((block.id.0, succ_index), edge_id);
-                cfg_edges.push(cfg_mir::Edge {
-                    id: edge_id,
-                    from: cfg_mir::BlockId::new(block.id.0),
-                    to: cfg_mir::BlockId::new(succ.to.0),
-                    args: succ
-                        .args
-                        .iter()
-                        .map(|arg| cfg_mir::EdgeArg {
-                            target: arg.target,
-                            source: arg.source,
-                        })
-                        .collect(),
-                });
-            }
-        }
-
-        let mut preds_by_block = HashMap::<cfg_mir::BlockId, Vec<cfg_mir::EdgeId>>::new();
-        for edge in &cfg_edges {
-            preds_by_block.entry(edge.to).or_default().push(edge.id);
-        }
-
-        let mut cfg_insts = Vec::<cfg_mir::Inst>::new();
-        let mut cfg_terms = Vec::<cfg_mir::Terminator>::new();
-        let mut cfg_blocks = Vec::<cfg_mir::Block>::with_capacity(ra_func.blocks.len());
-
-        for block in &ra_func.blocks {
-            let mut block_insts = Vec::<cfg_mir::InstId>::with_capacity(block.insts.len());
-            for inst in &block.insts {
-                let inst_id = cfg_mir::InstId::new(cfg_insts.len() as u32);
-                cfg_insts.push(cfg_mir::Inst {
-                    id: inst_id,
-                    op: inst.op.clone(),
-                    operands: inst.operands.iter().copied().map(map_ra_operand).collect(),
-                    clobbers: map_ra_clobbers(inst.clobbers),
-                });
-                block_insts.push(inst_id);
-            }
-
-            let succs = (0..block.succs.len())
-                .map(|succ_index| {
-                    cfg_edge_id_for_ra_succ(
-                        block.id,
-                        succ_index,
-                        Some(block.succs[succ_index].to),
-                        &edge_id_by_from_succ,
-                        &cfg_edges,
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let term_id = cfg_mir::TermId::new(cfg_terms.len() as u32);
-            let term = map_ra_term_to_cfg(block, &edge_id_by_from_succ, &cfg_edges)?;
-            cfg_terms.push(term);
-
-            let block_id = cfg_mir::BlockId::new(block.id.0);
-            let preds = preds_by_block.remove(&block_id).unwrap_or_default();
-            cfg_blocks.push(cfg_mir::Block {
-                id: block_id,
-                params: block.params.clone(),
-                insts: block_insts,
-                term: term_id,
-                preds,
-                succs,
-            });
-        }
-
-        let cfg_func = cfg_mir::Function {
-            id: cfg_mir::FunctionId::new(func_index as u32),
-            lambda_id: ra_func.lambda_id,
-            entry: cfg_mir::BlockId::new(ra_func.entry.0),
-            data_args: ra_func.data_args.clone(),
-            data_results: ra_func.data_results.clone(),
-            blocks: cfg_blocks,
-            edges: cfg_edges,
-            insts: cfg_insts,
-            terms: cfg_terms,
-        };
-        cfg_func.validate().map_err(|err| {
-            RegallocEngineError::Simulation(format!(
-                "ra->cfg conversion produced invalid function @{}: {err}",
-                ra_func.lambda_id.index()
-            ))
-        })?;
-        funcs.push(cfg_func);
-    }
-
-    Ok(cfg_mir::Program {
-        funcs,
-        vreg_count: program.vreg_count,
-        slot_count: program.slot_count,
-    })
-}
-
-pub fn differential_check(allocated: &AllocatedProgram, input: &[u8]) -> DifferentialCheckResult {
-    let cfg_program = match lower_ra_program_to_cfg(&allocated.ra_program) {
-        Ok(v) => v,
-        Err(err) => {
-            return DifferentialCheckResult::Error(format!("ra->cfg conversion failed: {err}"));
-        }
-    };
-    let ideal = match ideal_trace(&cfg_program, input) {
-        Ok(v) => v,
-        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
-    };
-    let post_trace = match simulate_execution_trace(allocated, input) {
-        Ok(v) => v,
-        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
-    };
-    let post = post_trace
-        .into_iter()
-        .map(differential_state_from_trace_entry)
-        .collect::<Vec<_>>();
-    compare_differential_states(ideal, post)
-}
-
 pub fn differential_check_cfg(
     ideal_program: &cfg_mir::Program,
     allocated: &AllocatedCfgProgram,
@@ -4249,7 +2768,6 @@ pub fn differential_check_cfg(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lower_linear_ir;
     use facet::Facet;
     use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, IrOp, Width, run_default_passes};
     use kajit_ir_text::parse_ir;
@@ -4423,10 +2941,10 @@ lambda @0 (shape: "u8") {
         let mut func =
             parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
-        let _alloc = allocate_program(&ra).unwrap_or_else(|e| {
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let _alloc = allocate_cfg_program(&cfg).unwrap_or_else(|e| {
             panic!(
-                "regalloc should allocate textual theta fixture: {e}\n--- linear ---\n{lin}\n--- ra-mir ---\n{ra}"
+                "regalloc should allocate textual theta fixture: {e}\n--- linear ---\n{lin}\n--- cfg-mir ---\n{cfg}"
             )
         });
     }
@@ -4462,10 +2980,10 @@ lambda @0 (shape: "u8") {
             parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
-        let _alloc = allocate_program(&ra).unwrap_or_else(|e| {
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let _alloc = allocate_cfg_program(&cfg).unwrap_or_else(|e| {
             panic!(
-                "regalloc should allocate textual theta fixture after passes: {e}\n--- linear ---\n{lin}\n--- ra-mir ---\n{ra}"
+                "regalloc should allocate textual theta fixture after passes: {e}\n--- linear ---\n{lin}\n--- cfg-mir ---\n{cfg}"
             )
         });
     }
@@ -4541,7 +3059,7 @@ lambda @0 (shape: "u8") {
         let mut func = build_stress_ir();
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
         let env = machine_env();
         let options = RegallocOptions {
             verbose_log: false,
@@ -4549,7 +3067,8 @@ lambda @0 (shape: "u8") {
             algorithm: regalloc2::Algorithm::Ion,
         };
 
-        let adapter = AdapterFunction::from_ra(&ra.funcs[0], ra.vreg_count as usize);
+        let adapter =
+            AdapterFunction::from_cfg(&cfg.funcs[0], cfg.vreg_count as usize).expect("valid cfg");
         let mut out = regalloc2::run(&adapter, &env, &options).expect("allocation should succeed");
         if !out.allocs.is_empty() {
             // Corrupt the first allocation with the wrong register class on purpose.
@@ -4559,190 +3078,6 @@ lambda @0 (shape: "u8") {
         let mut checker = regalloc2::checker::Checker::new(&adapter, &env);
         checker.prepare(&out);
         let _ = checker.run();
-    }
-
-    #[test]
-    fn static_edge_edit_verifier_accepts_allocated_program() {
-        let mut func = build_stress_ir();
-        run_default_passes(&mut func);
-        let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
-        let alloc = allocate_program(&ra).expect("allocation should succeed");
-        verify_static_edge_edits(&alloc).expect("static verifier should accept allocator output");
-    }
-
-    #[test]
-    fn static_edge_edit_verifier_accepts_duplicate_dest() {
-        let edge_key_succ = 0usize;
-        let edge_key_from_block = crate::BlockId(7);
-        let bad = AllocatedProgram {
-            ra_program: RaProgram {
-                funcs: Vec::new(),
-                vreg_count: 0,
-                slot_count: 0,
-            },
-            functions: vec![AllocatedFunction {
-                lambda_id: LambdaId::new(0),
-                num_spillslots: 2,
-                edits: Vec::new(),
-                inst_allocs: Vec::new(),
-                inst_operands: Vec::new(),
-                inst_linear_op_indices: Vec::new(),
-                term_inst_indices_by_block: Vec::new(),
-                edge_edits: vec![
-                    EdgeEdit {
-                        from_block_id: edge_key_from_block,
-                        succ_index: edge_key_succ,
-                        pos: regalloc2::InstPosition::After,
-                        from: Allocation::reg(preg_int(0)),
-                        to: Allocation::reg(preg_int(1)),
-                    },
-                    EdgeEdit {
-                        from_block_id: edge_key_from_block,
-                        succ_index: edge_key_succ,
-                        pos: regalloc2::InstPosition::After,
-                        from: Allocation::reg(preg_int(2)),
-                        to: Allocation::reg(preg_int(1)),
-                    },
-                ],
-                return_result_allocs: Vec::new(),
-            }],
-        };
-        verify_static_edge_edits(&bad).expect("duplicate destination writes are allowed");
-    }
-
-    fn synthetic_edge_fixture() -> AllocatedProgram {
-        let source_vreg = kajit_ir::VReg::new(10);
-        let target_vreg = kajit_ir::VReg::new(11);
-        let from_block = crate::BlockId(0);
-        let from_linear = 100usize;
-        let succ_linear = 200usize;
-
-        let ra_func = crate::RaFunction {
-            lambda_id: LambdaId::new(0),
-            entry: crate::BlockId(0),
-            data_args: Vec::new(),
-            data_results: Vec::new(),
-            blocks: vec![
-                crate::RaBlock {
-                    id: crate::BlockId(0),
-                    label: None,
-                    params: Vec::new(),
-                    insts: Vec::new(),
-                    term_linear_op_index: from_linear,
-                    term: crate::RaTerminator::Branch {
-                        target: crate::BlockId(1),
-                    },
-                    preds: Vec::new(),
-                    succs: vec![crate::RaEdge {
-                        to: crate::BlockId(1),
-                        args: vec![crate::RaEdgeArg {
-                            target: target_vreg,
-                            source: source_vreg,
-                        }],
-                    }],
-                },
-                crate::RaBlock {
-                    id: crate::BlockId(1),
-                    label: None,
-                    params: vec![target_vreg],
-                    insts: vec![crate::RaInst {
-                        linear_op_index: succ_linear,
-                        op: LinearOp::Const {
-                            dst: kajit_ir::VReg::new(12),
-                            value: 1,
-                        },
-                        operands: vec![crate::RaOperand {
-                            vreg: target_vreg,
-                            kind: crate::OperandKind::Use,
-                            class: crate::RegClass::Gpr,
-                            fixed: None,
-                        }],
-                        clobbers: crate::RaClobbers::default(),
-                    }],
-                    term_linear_op_index: succ_linear,
-                    term: crate::RaTerminator::Return,
-                    preds: vec![crate::BlockId(0)],
-                    succs: Vec::new(),
-                },
-            ],
-        };
-
-        AllocatedProgram {
-            ra_program: RaProgram {
-                funcs: vec![ra_func],
-                vreg_count: 32,
-                slot_count: 0,
-            },
-            functions: vec![AllocatedFunction {
-                lambda_id: LambdaId::new(0),
-                num_spillslots: 0,
-                edits: Vec::new(),
-                inst_allocs: vec![
-                    vec![Allocation::reg(preg_int(0))],
-                    vec![Allocation::reg(preg_int(1))],
-                ],
-                inst_operands: vec![
-                    vec![(source_vreg, crate::OperandKind::Use)],
-                    vec![(target_vreg, crate::OperandKind::Use)],
-                ],
-                inst_linear_op_indices: vec![Some(from_linear), Some(succ_linear)],
-                term_inst_indices_by_block: vec![Some(0), None],
-                edge_edits: vec![EdgeEdit {
-                    from_block_id: from_block,
-                    succ_index: 0,
-                    pos: regalloc2::InstPosition::After,
-                    from: Allocation::reg(preg_int(0)),
-                    to: Allocation::reg(preg_int(1)),
-                }],
-                return_result_allocs: Vec::new(),
-            }],
-        }
-    }
-
-    #[test]
-    fn static_edge_edit_verifier_accepts_expected_edge_edit_set() {
-        let alloc = synthetic_edge_fixture();
-        verify_static_edge_edits(&alloc).expect("expected edge edit set should pass");
-    }
-
-    #[test]
-    fn static_edge_edit_verifier_rejects_missing_required_edge_edit() {
-        let mut alloc = synthetic_edge_fixture();
-        let alloc_func = alloc
-            .functions
-            .first_mut()
-            .expect("allocated program should have one function");
-        alloc_func.edge_edits.clear();
-
-        let err = verify_static_edge_edits(&alloc).expect_err("missing edge edit must fail");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("missing edge edit to cover block param"),
-            "unexpected verifier error: {msg}"
-        );
-    }
-
-    #[test]
-    fn static_edge_edit_verifier_rejects_wrong_source_target_edit() {
-        let mut alloc = synthetic_edge_fixture();
-        let alloc_func = alloc
-            .functions
-            .first_mut()
-            .expect("allocated program should have one function");
-
-        let edit = alloc_func
-            .edge_edits
-            .first_mut()
-            .expect("first edge edit should exist");
-        edit.from = Allocation::reg(preg_int(2));
-
-        let err = verify_static_edge_edits(&alloc).expect_err("wrong edge edit mapping must fail");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("do not deliver source"),
-            "unexpected verifier error: {msg}"
-        );
     }
 
     fn synthetic_cfg_edge_fixture() -> AllocatedCfgProgram {
@@ -4909,12 +3244,11 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
-        let alloc = allocate_program(&ra).expect("allocation should succeed");
         let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("allocation should succeed");
 
         let input = [0x78_u8, 0x56, 0x34, 0x12];
-        let sim = simulate_execution(&alloc, &input).expect("simulation should succeed");
+        let sim = simulate_execution_cfg(&alloc, &input).expect("simulation should succeed");
         let interp = crate::execute_program(&cfg, &input).expect("interpreter should succeed");
 
         assert_eq!(sim.output, interp.output);
@@ -4924,88 +3258,6 @@ lambda @0 (shape: "u8") {
             sim.returned,
             "expected simulator to finish with a return terminator"
         );
-    }
-
-    #[test]
-    fn cfg_post_regalloc_simulation_matches_ra_post_regalloc() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
-        {
-            let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let value = rb.read_bytes(4);
-            rb.write_to_field(value, 0, Width::W4);
-            rb.set_results(&[]);
-        }
-        let mut func = builder.finish();
-        let lin = linearize(&mut func);
-
-        let ra = lower_linear_ir(&lin);
-        let ra_alloc = allocate_program(&ra).expect("ra allocation should succeed");
-
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
-        let cfg_alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
-
-        let input = [0x78_u8, 0x56, 0x34, 0x12];
-        let ra_sim = simulate_execution(&ra_alloc, &input).expect("ra simulation should succeed");
-        let cfg_sim =
-            simulate_execution_cfg(&cfg_alloc, &input).expect("cfg simulation should succeed");
-
-        assert_eq!(cfg_sim.output, ra_sim.output);
-        assert_eq!(cfg_sim.cursor, ra_sim.cursor);
-        assert_eq!(cfg_sim.trap, ra_sim.trap);
-        assert_eq!(cfg_sim.returned, ra_sim.returned);
-    }
-
-    #[test]
-    fn cfg_post_regalloc_trace_matches_ra_post_regalloc_trace() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
-        {
-            let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let value = rb.read_bytes(4);
-            rb.write_to_field(value, 0, Width::W4);
-            rb.set_results(&[]);
-        }
-        let mut func = builder.finish();
-        let lin = linearize(&mut func);
-
-        let ra = lower_linear_ir(&lin);
-        let ra_alloc = allocate_program(&ra).expect("ra allocation should succeed");
-
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
-        let cfg_alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
-
-        let input = [0x78_u8, 0x56, 0x34, 0x12];
-        let ra_trace =
-            simulate_execution_trace(&ra_alloc, &input).expect("ra trace simulation should work");
-        let cfg_trace = simulate_execution_trace_cfg(&cfg_alloc, &input)
-            .expect("cfg trace simulation should work");
-
-        assert_eq!(
-            cfg_trace.len(),
-            ra_trace.len(),
-            "cfg and ra traces should execute the same number of steps"
-        );
-
-        for (step, (cfg_step, ra_step)) in cfg_trace.iter().zip(&ra_trace).enumerate() {
-            assert_eq!(
-                cfg_step.step_index, ra_step.step_index,
-                "step_index mismatch at step {step}"
-            );
-            assert_eq!(
-                cfg_step.cursor, ra_step.cursor,
-                "cursor mismatch at step {step}"
-            );
-            assert_eq!(cfg_step.trap, ra_step.trap, "trap mismatch at step {step}");
-            assert_eq!(
-                cfg_step.returned, ra_step.returned,
-                "return flag mismatch at step {step}"
-            );
-            assert_eq!(
-                cfg_step.output, ra_step.output,
-                "output mismatch at step {step}"
-            );
-        }
     }
 
     #[test]
@@ -5062,7 +3314,7 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
-    fn allocate_program_materializes_lambda_return_result_allocs() {
+    fn allocate_cfg_program_materializes_lambda_return_result_allocs() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
         {
@@ -5081,8 +3333,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
-        let alloc = allocate_program(&ra).expect("ra allocation should succeed");
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
         let child_alloc = alloc
             .functions
             .iter()
@@ -5096,7 +3348,7 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
-    fn allocate_program_assigns_call_lambda_abi_operands() {
+    fn allocate_cfg_program_assigns_call_lambda_abi_operands() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
         {
@@ -5115,31 +3367,28 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
-        let alloc = allocate_program(&ra).expect("ra allocation should succeed");
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
         let root_alloc = alloc
             .functions
             .iter()
             .find(|f| f.lambda_id.index() == 0)
             .expect("root lambda allocation should exist");
-        let root_func = ra
+        let root_func = cfg
             .funcs
             .iter()
             .find(|f| f.lambda_id.index() == 0)
             .expect("root lambda function should exist");
-        let call = root_func
-            .blocks
+        let call_inst = root_func
+            .insts
             .iter()
-            .flat_map(|b| b.insts.iter())
             .find(|inst| matches!(inst.op, LinearOp::CallLambda { .. }))
             .expect("root should contain CallLambda");
-        let call_inst_index = root_alloc
-            .inst_linear_op_indices
-            .iter()
-            .position(|idx| *idx == Some(call.linear_op_index))
+        let call_allocs = root_alloc
+            .op_allocs
+            .get(&OpId::Inst(call_inst.id))
             .expect("call op should have allocation metadata");
-        let call_allocs = &root_alloc.inst_allocs[call_inst_index];
 
         assert!(
             call_allocs
@@ -5160,7 +3409,7 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
-    fn allocate_program_wires_lambda_data_arg_from_abi_register() {
+    fn allocate_cfg_program_wires_lambda_data_arg_from_abi_register() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
         {
@@ -5179,10 +3428,10 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
-        let alloc = allocate_program(&ra).expect("ra allocation should succeed");
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
-        let child_func = ra
+        let child_func = cfg
             .funcs
             .iter()
             .find(|f| f.lambda_id == child)
@@ -5194,9 +3443,8 @@ lambda @0 (shape: "u8") {
             .expect("child lambda allocation should exist");
         let data_arg = child_func.data_args[0];
         let add_inst = child_func
-            .blocks
+            .insts
             .iter()
-            .flat_map(|b| b.insts.iter())
             .find(|inst| {
                 matches!(
                     inst.op,
@@ -5207,17 +3455,19 @@ lambda @0 (shape: "u8") {
                 )
             })
             .expect("child should contain add");
-        let add_inst_index = child_alloc
-            .inst_linear_op_indices
-            .iter()
-            .position(|idx| *idx == Some(add_inst.linear_op_index))
-            .expect("add op should have allocation metadata");
-        let add_operands = &child_alloc.inst_operands[add_inst_index];
+        let add_op = OpId::Inst(add_inst.id);
+        let add_operands = child_alloc
+            .op_operands
+            .get(&add_op)
+            .expect("add op should have operand metadata");
         let data_arg_operand_index = add_operands
             .iter()
             .position(|(vreg, kind)| *vreg == data_arg && *kind == RaOperandKind::Use)
             .expect("add should use child data arg");
-        let data_arg_alloc = child_alloc.inst_allocs[add_inst_index][data_arg_operand_index];
+        let data_arg_alloc = child_alloc
+            .op_allocs
+            .get(&add_op)
+            .expect("add op should have allocation metadata")[data_arg_operand_index];
 
         let direct_abi = data_arg_alloc.as_reg().is_some_and(|reg| reg.hw_enc() == 2);
         if !direct_abi {
@@ -5225,14 +3475,7 @@ lambda @0 (shape: "u8") {
                 let Edit::Move { from, to } = edit;
                 let from_abi_arg2 = from.as_reg().is_some_and(|reg| reg.hw_enc() == 2);
                 let to_matches = *to == data_arg_alloc;
-                let before_add = point
-                    .inst()
-                    .index()
-                    .checked_add(0)
-                    .and_then(|inst_idx| child_alloc.inst_linear_op_indices.get(inst_idx).copied())
-                    .flatten()
-                    == Some(add_inst.linear_op_index)
-                    && matches!(point.pos(), regalloc2::InstPosition::Before);
+                let before_add = *point == cfg_mir::ProgPoint::Before(add_op);
                 from_abi_arg2 && to_matches && before_add
             });
             assert!(

@@ -293,7 +293,7 @@ pub fn from_str<'input, T: facet::Facet<'input>>(
 
 /// Deserialize into a raw output buffer and return its bytes.
 ///
-/// This is intended for RA-MIR differential testing and minimization workflows
+/// This is intended for CFG-MIR differential testing and minimization workflows
 /// where only output memory bytes and error slots matter.
 pub fn deserialize_raw(
     deser: &CompiledDecoder,
