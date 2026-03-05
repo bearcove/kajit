@@ -20,7 +20,8 @@ const MAP_JIT: i32 = 0x0800;
 type MmapProt = i32;
 
 unsafe extern "C" {
-    fn mmap(addr: *mut u8, len: usize, prot: MmapProt, flags: i32, fd: i32, offset: i64) -> *mut u8;
+    fn mmap(addr: *mut u8, len: usize, prot: MmapProt, flags: i32, fd: i32, offset: i64)
+    -> *mut u8;
     fn munmap(addr: *mut u8, len: usize) -> i32;
 }
 

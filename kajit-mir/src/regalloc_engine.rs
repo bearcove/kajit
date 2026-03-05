@@ -543,11 +543,8 @@ impl AdapterFunction {
             for inst in &b.raw_insts {
                 let operands: Vec<Operand> =
                     inst.operands.iter().copied().map(lower_operand).collect();
-                let operand_vregs: Vec<(kajit_ir::VReg, RaOperandKind)> = inst
-                    .operands
-                    .iter()
-                    .map(|op| (op.vreg, op.kind))
-                    .collect();
+                let operand_vregs: Vec<(kajit_ir::VReg, RaOperandKind)> =
+                    inst.operands.iter().map(|op| (op.vreg, op.kind)).collect();
                 let mut clobbers = PRegSet::empty();
                 if inst.clobbers.caller_saved_gpr {
                     clobbers.union_from(caller_saved_gprs());
@@ -777,7 +774,8 @@ fn materialize_output(
     }
     let mut term_inst_indices_by_block = vec![None; original_block_count];
     for block_idx in 0..original_block_count.min(adapter.blocks.len()) {
-        term_inst_indices_by_block[block_idx] = Some(adapter.blocks[block_idx].inst_range.last().index());
+        term_inst_indices_by_block[block_idx] =
+            Some(adapter.blocks[block_idx].inst_range.last().index());
     }
     AllocatedFunction {
         lambda_id,
@@ -886,18 +884,21 @@ fn infer_block_param_entry_alloc(
 ) -> Option<Allocation> {
     for inst in &block.insts {
         let inst_idx = *inst_index_by_linear.get(&inst.linear_op_index)?;
-        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
+        if let Some(a) =
+            find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
         {
             return Some(a);
         }
-        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Def))
+        if let Some(a) =
+            find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Def))
         {
             return Some(a);
         }
     }
     if let Some(term_linear) = block.term_linear_op_index {
         let inst_idx = *inst_index_by_linear.get(&term_linear)?;
-        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
+        if let Some(a) =
+            find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
         {
             return Some(a);
         }
@@ -1007,8 +1008,16 @@ fn verify_function_static_edge_edits(
             "lambda @{} edge (lin={from_linear_op_index}, succ={succ_index})",
             func.lambda_id.index()
         );
-        let expected = if let (Some(ra_func), Some(inst_index_by_linear)) = (ra_func, inst_index_by_linear.as_ref()) {
-            expected_transfers_for_edge(ra_func, func, inst_index_by_linear, from_linear_op_index, succ_index)
+        let expected = if let (Some(ra_func), Some(inst_index_by_linear)) =
+            (ra_func, inst_index_by_linear.as_ref())
+        {
+            expected_transfers_for_edge(
+                ra_func,
+                func,
+                inst_index_by_linear,
+                from_linear_op_index,
+                succ_index,
+            )
         } else {
             Vec::new()
         };
@@ -1032,7 +1041,8 @@ fn verify_function_static_edge_edits(
         let mut tracked_transfers = Vec::<(usize, Allocation, Allocation)>::new();
         let mut expected_complete = true;
         for transfer in &expected {
-            let (Some(source_alloc), Some(target_alloc)) = (transfer.source_alloc, transfer.target_alloc)
+            let (Some(source_alloc), Some(target_alloc)) =
+                (transfer.source_alloc, transfer.target_alloc)
             else {
                 expected_complete = false;
                 continue;
@@ -1502,8 +1512,14 @@ fn run_call_intrinsic(
                 f(ctx_ptr, args[0], args[1], args[2], args[3])
             }
             (None, 5) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, u64, u64) -> u64 =
-                    core::mem::transmute(func);
+                let f: unsafe extern "C" fn(
+                    *mut RuntimeDeserContext,
+                    u64,
+                    u64,
+                    u64,
+                    u64,
+                    u64,
+                ) -> u64 = core::mem::transmute(func);
                 f(ctx_ptr, args[0], args[1], args[2], args[3], args[4])
             }
             (Some(out), 0) => {
@@ -2417,10 +2433,9 @@ fn ideal_trace(
     program: &RaProgram,
     input: &[u8],
 ) -> Result<Vec<DifferentialState>, RegallocEngineError> {
-    let func = program
-        .funcs
-        .first()
-        .ok_or_else(|| RegallocEngineError::Simulation("RA-MIR program has no functions".to_string()))?;
+    let func = program.funcs.first().ok_or_else(|| {
+        RegallocEngineError::Simulation("RA-MIR program has no functions".to_string())
+    })?;
     let (_, entries) = crate::execute_function_with_trace(
         func,
         program.vreg_count as usize,
@@ -3044,8 +3059,7 @@ lambda @0 (shape: "u8") {
             .expect("first edge edit should exist");
         edit.from = Allocation::reg(preg_int(2));
 
-        let err =
-            verify_static_edge_edits(&alloc).expect_err("wrong edge edit mapping must fail");
+        let err = verify_static_edge_edits(&alloc).expect_err("wrong edge edit mapping must fail");
         let msg = err.to_string();
         assert!(
             msg.contains("do not deliver source"),

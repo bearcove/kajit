@@ -685,7 +685,10 @@ mod tests {
 
         let ph = read_program_header(&elf, 0);
         assert_eq!(u32::from_le_bytes(ph[0..4].try_into().unwrap()), PT_LOAD);
-        assert_eq!(u32::from_le_bytes(ph[4..8].try_into().unwrap()), PF_R | PF_X);
+        assert_eq!(
+            u32::from_le_bytes(ph[4..8].try_into().unwrap()),
+            PF_R | PF_X
+        );
         assert_eq!(u64::from_le_bytes(ph[8..16].try_into().unwrap()), 0); // p_offset
         assert_eq!(u64::from_le_bytes(ph[16..24].try_into().unwrap()), 0x1000); // p_vaddr
         assert_eq!(u64::from_le_bytes(ph[24..32].try_into().unwrap()), 0x1000); // p_paddr

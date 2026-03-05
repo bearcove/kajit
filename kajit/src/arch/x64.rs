@@ -62,7 +62,16 @@ impl EmitCtx {
     /// Flush the cached input cursor (r12) back to ctx.input_ptr.
     fn emit_flush_input_cursor(&mut self) {
         self.emit
-            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 12, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    12,
+                    buf,
+                )
+            })
             .expect("flush input cursor");
     }
 
@@ -72,12 +81,28 @@ impl EmitCtx {
         let error_exit = self.error_exit;
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
-                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    buf,
+                )?;
                 x64::encode_test_r32_r32(10, 10, buf)
             })
             .expect("reload cursor and test");
-        self.emit.emit_jnz_label(error_exit).expect("reload cursor error");
+        self.emit
+            .emit_jnz_label(error_exit)
+            .expect("reload cursor error");
     }
 
     /// Check the error flag without reloading the cursor.
@@ -86,7 +111,14 @@ impl EmitCtx {
         let error_exit = self.error_exit;
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    buf,
+                )?;
                 x64::encode_test_r32_r32(10, 10, buf)
             })
             .expect("check error");
@@ -96,7 +128,16 @@ impl EmitCtx {
     /// Flush the cached output cursor (r12) back to ctx for encoding.
     fn emit_enc_flush_output_cursor(&mut self) {
         self.emit
-            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 15, disp: ENC_OUTPUT_PTR }, 12, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_PTR,
+                    },
+                    12,
+                    buf,
+                )
+            })
             .expect("flush output cursor");
     }
 
@@ -105,13 +146,36 @@ impl EmitCtx {
         let error_exit = self.error_exit;
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: ENC_OUTPUT_PTR }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 15, disp: ENC_OUTPUT_END }, buf)?;
-                x64::encode_mov_r32_m(10, Mem { base: 15, disp: ENC_ERROR_CODE }, buf)?;
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    13,
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_END,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: ENC_ERROR_CODE,
+                    },
+                    buf,
+                )?;
                 x64::encode_test_r32_r32(10, 10, buf)
             })
             .expect("reload output and test");
-        self.emit.emit_jnz_label(error_exit).expect("reload output error");
+        self.emit
+            .emit_jnz_label(error_exit)
+            .expect("reload output error");
     }
 
     /// Create a new EmitCtx. Does not emit any code.
@@ -179,8 +243,22 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 15, buf)?;
                 x64::encode_mov_r64_r64(14, 7, buf)?;
                 x64::encode_mov_r64_r64(15, 6, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 15, disp: CTX_INPUT_END }, buf)
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    13,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_END,
+                    },
+                    buf,
+                )
             })
             .expect("begin prologue");
         #[cfg(windows)]
@@ -196,8 +274,22 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(Mem { base: 4, disp: 72 }, 15, buf)?;
                 x64::encode_mov_r64_r64(14, 1, buf)?;
                 x64::encode_mov_r64_r64(15, 2, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 15, disp: CTX_INPUT_END }, buf)
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    13,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_END,
+                    },
+                    buf,
+                )
             })
             .expect("begin prologue windows");
 
@@ -214,7 +306,14 @@ impl EmitCtx {
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 12, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    12,
+                    buf,
+                )?;
                 x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
                 x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
                 x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
@@ -229,7 +328,14 @@ impl EmitCtx {
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 12, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    12,
+                    buf,
+                )?;
                 x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
                 x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
                 x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
@@ -284,14 +390,28 @@ impl EmitCtx {
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_lea_r64_m(7, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    7,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(6, 15, buf)
             })
             .expect("lea rdi/rsi");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_lea_r64_m(1, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    1,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(2, 15, buf)
             })
             .expect("lea rcx/rdx");
@@ -310,14 +430,28 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("mov rdi/rsi");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(1, 15, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("mov rcx/rdx");
         self.emit_call_fn_ptr(fn_ptr);
@@ -348,14 +482,28 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 4, disp: sp_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("mov rdi/lea rsi");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(1, 15, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("mov rcx/lea rdx");
         self.emit_call_fn_ptr(fn_ptr);
@@ -375,16 +523,44 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 4, disp: sp_offset1 as i32 }, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset2 as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset1 as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset2 as i32,
+                    },
+                    buf,
+                )
             })
             .expect("mov ctx+args");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(1, 15, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset1 as i32 }, buf)?;
-                x64::encode_lea_r64_m(8, Mem { base: 4, disp: sp_offset2 as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset1 as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_lea_r64_m(
+                    8,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset2 as i32,
+                    },
+                    buf,
+                )
             })
             .expect("mov ctx+args");
         self.emit_call_fn_ptr(fn_ptr);
@@ -407,8 +583,22 @@ impl EmitCtx {
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(7, Mem { base: 4, disp: arg0_sp_offset as i32 }, buf)?;
-                x64::encode_mov_r64_m(6, Mem { base: 4, disp: arg1_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    7,
+                    Mem {
+                        base: 4,
+                        disp: arg0_sp_offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    6,
+                    Mem {
+                        base: 4,
+                        disp: arg1_sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(2, expected_addr as u64, buf)?;
                 x64::encode_mov_r32_imm32(1, expected_len, buf)
             })
@@ -416,8 +606,22 @@ impl EmitCtx {
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(1, Mem { base: 4, disp: arg0_sp_offset as i32 }, buf)?;
-                x64::encode_mov_r64_m(2, Mem { base: 4, disp: arg1_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    1,
+                    Mem {
+                        base: 4,
+                        disp: arg0_sp_offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: arg1_sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(8, expected_addr as u64, buf)?;
                 x64::encode_mov_r32_imm32(9, expected_len, buf)
             })
@@ -452,10 +656,19 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
-                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("store error code");
-        self.emit.emit_jmp_label(error_exit).expect("jmp error_exit");
+        self.emit
+            .emit_jmp_label(error_exit)
+            .expect("jmp error_exit");
     }
 
     /// Compute len = cursor - [rsp+start_slot], store to [rsp+len_slot], advance cursor past `"`.
@@ -463,8 +676,22 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(0, 12, buf)?;
-                x64::encode_sub_r64_m(0, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: len_sp_offset as i32 }, 0, buf)?;
+                x64::encode_sub_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: start_sp_offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: len_sp_offset as i32,
+                    },
+                    0,
+                    buf,
+                )?;
                 x64::encode_add_r64_imm32(12, 1, buf)?;
                 Ok(())
             })
@@ -482,17 +709,21 @@ impl EmitCtx {
     /// Zero a 64-bit stack slot at rsp + offset.
     pub fn emit_zero_stack_slot(&mut self, sp_offset: u32) {
         self.emit
-            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset as i32 }, 0, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    },
+                    0,
+                    buf,
+                )
+            })
             .expect("zero slot");
     }
 
     /// Load a byte from rsp + sp_offset, compare with byte_val, branch if equal.
-    pub fn emit_stack_byte_cmp_branch(
-        &mut self,
-        sp_offset: u32,
-        byte_val: u8,
-        label: LabelId,
-    ) {
+    pub fn emit_stack_byte_cmp_branch(&mut self, sp_offset: u32, byte_val: u8, label: LabelId) {
         let byte_val = byte_val as i32;
         self.emit
             .emit_with(|buf| {
@@ -517,10 +748,24 @@ impl EmitCtx {
 
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(10, mask as u64, buf)?;
                 x64::encode_or_r64_r64(0, 10, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset as i32 }, 0, buf)
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    },
+                    0,
+                    buf,
+                )
             })
             .expect("set bit on stack");
     }
@@ -535,7 +780,14 @@ impl EmitCtx {
 
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(10, expected_mask as u64, buf)?;
                 x64::encode_and_r64_r64(0, 10, buf)?;
                 x64::encode_cmp_r64_r64(0, 10, buf)?;
@@ -544,7 +796,16 @@ impl EmitCtx {
             .expect("check bitset");
         self.emit.emit_je_label(ok_label).expect("je");
         self.emit
-            .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
+            })
             .expect("set error");
         self.emit.emit_jmp_label(error_exit).expect("jmp");
         self.emit.bind_label(ok_label).expect("bind ok");
@@ -677,7 +938,9 @@ impl EmitCtx {
             })
             .expect("check quote");
         self.emit.emit_je_label(found_quote).expect("found quote");
-        self.emit.emit_jmp_label(found_escape).expect("found escape");
+        self.emit
+            .emit_jmp_label(found_escape)
+            .expect("found escape");
         self.emit.bind_label(advance_16).expect("bind advance_16");
         self.emit
             .emit_with(|buf| x64::encode_add_r64_imm32(12, 16, buf))
@@ -721,11 +984,7 @@ impl EmitCtx {
             .emit_with(|buf| {
                 x64::encode_cmp_r64_r64(12, 13, buf)?;
                 x64::encode_jcc_rel32(buf, x64::Condition::Hs, 0)?;
-                x64::encode_movzx_r32_rm8(
-                    10,
-                    x64::Operand::Mem(Mem { base: 12, disp: 0 }),
-                    buf,
-                )?;
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
                 x64::encode_cmp_r64_imm32(10, b' ' as u32, buf)?;
                 Ok(())
             })
@@ -765,11 +1024,7 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_cmp_r64_r64(12, 13, buf)?;
-                x64::encode_movzx_r32_rm8(
-                    10,
-                    x64::Operand::Mem(Mem { base: 12, disp: 0 }),
-                    buf,
-                )?;
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
                 x64::encode_add_r64_imm32(12, 1, buf)?;
                 x64::encode_cmp_r64_imm32(10, b',' as u32, buf)?;
                 Ok(())
@@ -783,7 +1038,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
-                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("write array error");
         self.emit.emit_jmp_label(error_exit).expect("array err");
@@ -819,11 +1081,7 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_cmp_r64_r64(12, 13, buf)?;
-                x64::encode_movzx_r32_rm8(
-                    10,
-                    x64::Operand::Mem(Mem { base: 12, disp: 0 }),
-                    buf,
-                )?;
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)?;
                 x64::encode_add_r64_imm32(12, 1, buf)?;
                 x64::encode_cmp_r64_imm32(10, b',' as u32, buf)?;
                 Ok(())
@@ -837,7 +1095,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
-                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("write object error");
         self.emit.emit_jmp_label(error_exit).expect("obj err");
@@ -848,7 +1113,9 @@ impl EmitCtx {
                 x64::encode_mov_m_r8(4, sp_offset as i32, 11, buf)
             })
             .expect("write object comma");
-        self.emit.emit_jmp_label(done).expect("obj comma_or_end done");
+        self.emit
+            .emit_jmp_label(done)
+            .expect("obj comma_or_end done");
         self.emit.bind_label(got_end).expect("bind end");
         self.emit
             .emit_with(|buf| {
@@ -862,7 +1129,16 @@ impl EmitCtx {
     /// Store the cached cursor (r12) to a stack slot.
     pub fn emit_save_cursor_to_stack(&mut self, sp_offset: u32) {
         self.emit
-            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset as i32 }, 12, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: sp_offset as i32,
+                    },
+                    12,
+                    buf,
+                )
+            })
             .expect("save cursor");
     }
 
@@ -879,9 +1155,13 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))
             .expect("check input bounds");
-        self.emit.emit_jcc_label(not_quote, x64::Condition::Hi).expect("not_quote bounds");
         self.emit
-            .emit_with(|buf| x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf))
+            .emit_jcc_label(not_quote, x64::Condition::Hi)
+            .expect("not_quote bounds");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_movzx_r32_rm8(10, x64::Operand::Mem(Mem { base: 12, disp: 0 }), buf)
+            })
             .expect("load quote byte");
         self.emit
             .emit_with(|buf| x64::encode_cmp_r64_imm32(10, b'"' as u32, buf))
@@ -894,7 +1174,14 @@ impl EmitCtx {
         self.emit.bind_label(not_quote).expect("bind not_quote");
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, error_code as u32, buf)?;
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    error_code as u32,
+                    buf,
+                )?;
                 Ok(())
             })
             .expect("write quote error");
@@ -915,11 +1202,25 @@ impl EmitCtx {
         // Compute len = r12 - start, flush cursor advanced past closing '"'
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: start_sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(0, 12, buf)?;
                 x64::encode_sub_r64_r64(0, 10, buf)?;
                 x64::encode_lea_r64_m(11, Mem { base: 12, disp: 1 }, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 15, disp: CTX_INPUT_PTR }, 11, buf)
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    11,
+                    buf,
+                )
             })
             .expect("compute string finish args");
         // Args: ctx, out+offset, start, len
@@ -927,7 +1228,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(2, 10, buf)?;
                 x64::encode_mov_r64_r64(1, 0, buf)
             })
@@ -936,7 +1244,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(1, 15, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(8, 10, buf)?;
                 x64::encode_mov_r64_r64(9, 0, buf)
             })
@@ -957,7 +1272,14 @@ impl EmitCtx {
     ) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: start_sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(0, 12, buf)?;
                 x64::encode_sub_r64_r64(0, 10, buf)?;
                 Ok(())
@@ -968,7 +1290,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(2, 10, buf)?;
                 x64::encode_mov_r64_r64(1, 0, buf)?;
                 Ok(())
@@ -978,7 +1307,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(1, 15, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(8, 10, buf)?;
                 x64::encode_mov_r64_r64(9, 0, buf)?;
                 Ok(())
@@ -1000,7 +1336,14 @@ impl EmitCtx {
     ) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: start_sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(11, 12, buf)?;
                 x64::encode_sub_r64_r64(11, 10, buf)?;
                 x64::encode_mov_m_r64(
@@ -1009,26 +1352,30 @@ impl EmitCtx {
                         disp: len_save_sp_offset as i32,
                     },
                     11,
-                    buf
+                    buf,
                 )?;
                 Ok(())
             })
             .expect("compute alloc_copy len");
         self.emit_flush_input_cursor();
         #[cfg(not(windows))]
-        self.emit.emit_with(|buf| {
-            x64::encode_mov_r64_r64(7, 15, buf)?;
-            x64::encode_mov_r64_r64(6, 10, buf)?;
-            x64::encode_mov_r64_r64(2, 11, buf)?;
-            Ok(())
-        }).expect("setup validate_alloc args");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_mov_r64_r64(6, 10, buf)?;
+                x64::encode_mov_r64_r64(2, 11, buf)?;
+                Ok(())
+            })
+            .expect("setup validate_alloc args");
         #[cfg(windows)]
-        self.emit.emit_with(|buf| {
-            x64::encode_mov_r64_r64(1, 15, buf)?;
-            x64::encode_mov_r64_r64(2, 10, buf)?;
-            x64::encode_mov_r64_r64(8, 11, buf)?;
-            Ok(())
-        }).expect("setup validate_alloc args");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(1, 15, buf)?;
+                x64::encode_mov_r64_r64(2, 10, buf)?;
+                x64::encode_mov_r64_r64(8, 11, buf)?;
+                Ok(())
+            })
+            .expect("setup validate_alloc args");
         self.emit_call_fn_ptr(fn_ptr);
         // rax = buf pointer — no cursor reload needed
         self.emit_check_error();
@@ -1049,10 +1396,38 @@ impl EmitCtx {
 
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 14, disp: ptr_off }, 0, buf)?;
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: len_sp_offset as i32 }, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: len_off }, 10, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: cap_off }, 10, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: ptr_off,
+                    },
+                    0,
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: len_sp_offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: len_off,
+                    },
+                    10,
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: cap_off,
+                    },
+                    10,
+                    buf,
+                )?;
                 x64::encode_add_r64_imm32(12, 1, buf)
             })
             .expect("write malum string fields");
@@ -1071,7 +1446,14 @@ impl EmitCtx {
         // Compute prefix_len = r12 - start
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: start_sp_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: start_sp_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(0, 12, buf)?;
                 x64::encode_sub_r64_r64(0, 10, buf)?;
                 Ok(())
@@ -1089,8 +1471,22 @@ impl EmitCtx {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
                 x64::encode_mov_r64_r64(6, 10, buf)?;
                 x64::encode_mov_r64_r64(2, 0, buf)?;
-                x64::encode_lea_r64_m(1, Mem { base: 4, disp: key_ptr_sp_offset as i32 }, buf)?;
-                x64::encode_lea_r64_m(8, Mem { base: 4, disp: key_len_sp_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    1,
+                    Mem {
+                        base: 4,
+                        disp: key_ptr_sp_offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_lea_r64_m(
+                    8,
+                    Mem {
+                        base: 4,
+                        disp: key_len_sp_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("setup key_slow args");
         #[cfg(windows)]
@@ -1099,9 +1495,30 @@ impl EmitCtx {
                 x64::encode_mov_r64_r64(1, 15, buf)?;
                 x64::encode_mov_r64_r64(2, 10, buf)?;
                 x64::encode_mov_r64_r64(8, 0, buf)?;
-                x64::encode_lea_r64_m(9, Mem { base: 4, disp: key_ptr_sp_offset as i32 }, buf)?;
-                x64::encode_lea_r64_m(0, Mem { base: 4, disp: key_len_sp_offset as i32 }, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 0x20 }, 0, buf)
+                x64::encode_lea_r64_m(
+                    9,
+                    Mem {
+                        base: 4,
+                        disp: key_ptr_sp_offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_lea_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: key_len_sp_offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: 0x20,
+                    },
+                    0,
+                    buf,
+                )
             })
             .expect("setup key_slow args windows");
 
@@ -1140,14 +1557,7 @@ impl EmitCtx {
                 self.emit
                     .emit_with(|buf| {
                         x64::encode_mov_r32_imm32(0, imm, buf)?;
-                        x64::encode_mov_m_r32(
-                            Mem {
-                                base: 14,
-                                disp: 0,
-                            },
-                            0,
-                            buf,
-                        )
+                        x64::encode_mov_m_r32(Mem { base: 14, disp: 0 }, 0, buf)
                     })
                     .expect("write discr 4 bytes");
             }
@@ -1156,14 +1566,7 @@ impl EmitCtx {
                 self.emit
                     .emit_with(|buf| {
                         x64::encode_mov_r64_imm64(0, val as u64, buf)?;
-                        x64::encode_mov_m_r64(
-                            Mem {
-                                base: 14,
-                                disp: 0,
-                            },
-                            0,
-                            buf,
-                        )
+                        x64::encode_mov_m_r64(Mem { base: 14, disp: 0 }, 0, buf)
                     })
                     .expect("write discr 8 bytes");
             }
@@ -1210,39 +1613,91 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 4, disp: BASE_FRAME as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 4,
+                        disp: BASE_FRAME as i32,
+                    },
+                    buf,
+                )
             })
             .expect("setup postcard discr args");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(1, 15, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 4, disp: BASE_FRAME as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: BASE_FRAME as i32,
+                    },
+                    buf,
+                )
             })
             .expect("setup postcard discr args");
         self.emit_call_fn_ptr(slow_intrinsic);
         let error_exit = self.error_exit;
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
-                x64::encode_mov_r64_m(11, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    11,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    buf,
+                )?;
                 x64::encode_cmp_r64_imm32(11, 0, buf)?;
                 Ok(())
             })
             .expect("load postcard discr result");
-        self.emit.emit_jne_label(error_exit).expect("postcard discr error");
         self.emit
-            .emit_with(|buf| x64::encode_mov_r32_m(10, Mem { base: 4, disp: BASE_FRAME as i32 }, buf))
+            .emit_jne_label(error_exit)
+            .expect("postcard discr error");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: BASE_FRAME as i32,
+                    },
+                    buf,
+                )
+            })
             .expect("load discr");
         self.emit.emit_jmp_label(done_label).expect("done label");
         self.emit.bind_label(eof_label).expect("bind eof");
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r32_imm32(10, crate::context::ErrorCode::UnexpectedEof as u32, buf)?;
-                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+                x64::encode_mov_r32_imm32(
+                    10,
+                    crate::context::ErrorCode::UnexpectedEof as u32,
+                    buf,
+                )?;
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("write eof error");
-        self.emit.emit_jmp_label(error_exit).expect("branch eof error");
+        self.emit
+            .emit_jmp_label(error_exit)
+            .expect("branch eof error");
         self.emit.bind_label(done_label).expect("bind done");
     }
 
@@ -1261,9 +1716,20 @@ impl EmitCtx {
         let error_code = crate::context::ErrorCode::UnknownVariant as i32;
 
         self.emit
-            .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, error_code as u32, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    error_code as u32,
+                    buf,
+                )
+            })
             .expect("write unknown variant");
-        self.emit.emit_jmp_label(error_exit).expect("jump unknown variant");
+        self.emit
+            .emit_jmp_label(error_exit)
+            .expect("jump unknown variant");
     }
 
     /// Save the cached input_ptr (r12) to a stack slot.
@@ -1320,7 +1786,14 @@ impl EmitCtx {
     pub fn emit_and_imm64_on_stack(&mut self, stack_offset: u32, mask: u64) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(10, mask, buf)?;
                 x64::encode_and_r64_r64(0, 10, buf)?;
                 x64::encode_mov_m_r64(
@@ -1342,7 +1815,14 @@ impl EmitCtx {
 
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(10, 0, buf)?;
                 x64::encode_sub_r64_imm32(10, 1, buf)?;
                 x64::encode_mov_r64_r64(11, 0, buf)?;
@@ -1361,9 +1841,20 @@ impl EmitCtx {
     /// Check if the stack slot at rsp + offset is zero. If so, branch to `label`.
     pub fn emit_stack_zero_branch(&mut self, stack_offset: u32, label: LabelId) {
         self.emit
-            .emit_with(|buf| x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    buf,
+                )
+            })
             .expect("load slot for zero check");
-        self.emit.emit_with(|buf| x64::encode_cmp_r64_imm32(0, 0, buf)).expect("compare zero");
+        self.emit
+            .emit_with(|buf| x64::encode_cmp_r64_imm32(0, 0, buf))
+            .expect("compare zero");
         self.emit.emit_jz_label(label).expect("branch zero");
     }
 
@@ -1373,7 +1864,14 @@ impl EmitCtx {
         let mask = (1u64 << bit_index) as i64;
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(10, mask as u64, buf)?;
                 x64::encode_and_r64_r64(0, 10, buf)?;
                 Ok(())
@@ -1384,16 +1882,18 @@ impl EmitCtx {
 
     /// Test a single bit at `bit_index` in the u64 at `[rsp + stack_offset]`.
     /// Branch to `label` if the bit is CLEAR (zero) — i.e., the field was NOT seen.
-    pub fn emit_test_bit_branch_zero(
-        &mut self,
-        stack_offset: u32,
-        bit_index: u32,
-        label: LabelId,
-    ) {
+    pub fn emit_test_bit_branch_zero(&mut self, stack_offset: u32, bit_index: u32, label: LabelId) {
         let mask = (1u64 << bit_index) as i64;
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: stack_offset as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: stack_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(10, mask as u64, buf)?;
                 x64::encode_and_r64_r64(0, 10, buf)?;
                 Ok(())
@@ -1407,7 +1907,16 @@ impl EmitCtx {
         let error_exit = self.error_exit;
         let error_code = code as i32;
         self.emit
-            .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, error_code as u32, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    error_code as u32,
+                    buf,
+                )
+            })
             .expect("write error code");
         self.emit.emit_jmp_label(error_exit).expect("jump error");
     }
@@ -1471,7 +1980,9 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| x64::encode_cmp_r64_imm32(10, expected as u32, buf))
             .expect("check expected");
-        self.emit.emit_jne_label(err_lbl).expect("expected mismatch");
+        self.emit
+            .emit_jne_label(err_lbl)
+            .expect("expected mismatch");
         self.emit
             .emit_with(|buf| x64::encode_add_r64_imm32(12, 1, buf))
             .expect("consume expected");
@@ -1480,7 +1991,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r32_imm32(10, err_code as u32, buf)?;
-                x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 10, buf)
+                x64::encode_mov_m_r32(
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("write parse error");
         self.emit.emit_jmp_label(error_exit).expect("error branch");
@@ -1501,7 +2019,14 @@ impl EmitCtx {
                     14,
                     buf,
                 )?;
-                x64::encode_lea_r64_m(14, Mem { base: 4, disp: scratch_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    14,
+                    Mem {
+                        base: 4,
+                        disp: scratch_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("redirect output");
     }
@@ -1537,14 +2062,28 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(7, init_none_val as u64, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 14, disp: offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 14,
+                        disp: offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("setup init none");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(1, init_none_val as u64, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 14, disp: offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 14,
+                        disp: offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("setup init none");
         self.emit_call_fn_ptr(wrapper_fn);
@@ -1567,7 +2106,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(7, fn_val as u64, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 14, disp: offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 14,
+                        disp: offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(2, extra_val as u64, buf)
             })
             .expect("setup trampoline3");
@@ -1575,7 +2121,14 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(1, fn_val as u64, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 14, disp: offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 14,
+                        disp: offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(8, extra_val as u64, buf)
             })
             .expect("setup trampoline3");
@@ -1598,16 +2151,44 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(7, init_some_val as u64, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 14, disp: offset as i32 }, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 4, disp: scratch_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 14,
+                        disp: offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: scratch_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("setup init some");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(1, init_some_val as u64, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 14, disp: offset as i32 }, buf)?;
-                x64::encode_lea_r64_m(8, Mem { base: 4, disp: scratch_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 14,
+                        disp: offset as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_lea_r64_m(
+                    8,
+                    Mem {
+                        base: 4,
+                        disp: scratch_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("setup init some");
         self.emit_call_fn_ptr(wrapper_fn);
@@ -1628,13 +2209,14 @@ impl EmitCtx {
         self.emit_flush_input_cursor();
         // args: ctx, count, elem_size, elem_align
         #[cfg(not(windows))]
-        self.emit.emit_with(|buf| {
-            x64::encode_mov_r64_r64(7, 15, buf)?;
-            x64::encode_mov_r32_imm32(6, count as u32, buf)?;
-            x64::encode_mov_r32_imm32(2, elem_size as u32, buf)?;
-            x64::encode_mov_r32_imm32(1, elem_align as u32, buf)
-        })
-        .expect("setup json vec alloc");
+        self.emit
+            .emit_with(|buf| {
+                x64::encode_mov_r64_r64(7, 15, buf)?;
+                x64::encode_mov_r32_imm32(6, count as u32, buf)?;
+                x64::encode_mov_r32_imm32(2, elem_size as u32, buf)?;
+                x64::encode_mov_r32_imm32(1, elem_align as u32, buf)
+            })
+            .expect("setup json vec alloc");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
@@ -1659,10 +2241,31 @@ impl EmitCtx {
     ) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 4, disp: saved_out_slot as i32 }, 14, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: buf_slot as i32 }, 0, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: saved_out_slot as i32,
+                    },
+                    14,
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    0,
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(10, 0, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: len_slot as i32 }, 10, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: len_slot as i32,
+                    },
+                    10,
+                    buf,
+                )?;
                 x64::encode_mov_r32_imm32(11, initial_cap as u32, buf)?;
                 x64::encode_mov_m_r32(
                     Mem {
@@ -1670,7 +2273,7 @@ impl EmitCtx {
                         disp: cap_slot as i32,
                     },
                     11,
-                    buf
+                    buf,
                 )?;
                 x64::encode_mov_r32_imm32(11, 0, buf)?;
                 x64::encode_mov_m_r32(
@@ -1679,7 +2282,7 @@ impl EmitCtx {
                         disp: cap_slot as i32 + 4,
                     },
                     11,
-                    buf
+                    buf,
                 )
             })
             .expect("init json vec loop");
@@ -1689,13 +2292,18 @@ impl EmitCtx {
     pub fn emit_check_error_branch(&mut self, label: LabelId) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    buf,
+                )?;
                 x64::encode_test_r32_r32(10, 10, buf)
             })
             .expect("check error branch");
-        self.emit
-            .emit_jnz_label(label)
-            .expect("check error branch");
+        self.emit.emit_jnz_label(label).expect("check error branch");
     }
 
     /// Save the count register (w9 on aarch64, r10d on x64) to a stack slot.
@@ -1704,7 +2312,14 @@ impl EmitCtx {
     pub fn emit_save_count_to_stack(&mut self, slot: u32) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 4, disp: slot as i32 }, 10, buf)
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: slot as i32,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("save count to stack");
     }
@@ -1763,12 +2378,40 @@ impl EmitCtx {
             // 7th arg (elem_align) pushed before call.
             self.emit
                 .emit_with(|buf| {
-                    x64::encode_mov_r64_m(10, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(
+                        10,
+                        Mem {
+                            base: 4,
+                            disp: cap_slot as i32,
+                        },
+                        buf,
+                    )?;
                     x64::encode_shl_r64_imm8(10, 1, buf)?;
                     x64::encode_mov_r64_r64(7, 15, buf)?;
-                    x64::encode_mov_r64_m(6, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                    x64::encode_mov_r64_m(2, Mem { base: 4, disp: len_slot as i32 }, buf)?;
-                    x64::encode_mov_r64_m(1, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(
+                        6,
+                        Mem {
+                            base: 4,
+                            disp: buf_slot as i32,
+                        },
+                        buf,
+                    )?;
+                    x64::encode_mov_r64_m(
+                        2,
+                        Mem {
+                            base: 4,
+                            disp: len_slot as i32,
+                        },
+                        buf,
+                    )?;
+                    x64::encode_mov_r64_m(
+                        1,
+                        Mem {
+                            base: 4,
+                            disp: cap_slot as i32,
+                        },
+                        buf,
+                    )?;
                     x64::encode_mov_r64_r64(8, 10, buf)?;
                     x64::encode_mov_r32_imm32(9, elem_size as u32, buf)?;
                     x64::encode_mov_r32_imm32(11, elem_align as u32, buf)?;
@@ -1792,12 +2435,40 @@ impl EmitCtx {
             // Stack: [rsp+32]=new_cap, [rsp+40]=elem_size, [rsp+48]=elem_align
             self.emit
                 .emit_with(|buf| {
-                    x64::encode_mov_r64_m(10, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(
+                        10,
+                        Mem {
+                            base: 4,
+                            disp: cap_slot as i32,
+                        },
+                        buf,
+                    )?;
                     x64::encode_shl_r64_imm8(10, 1, buf)?;
                     x64::encode_mov_r64_r64(1, 15, buf)?;
-                    x64::encode_mov_r64_m(2, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                    x64::encode_mov_r64_m(8, Mem { base: 4, disp: len_slot as i32 }, buf)?;
-                    x64::encode_mov_r64_m(9, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                    x64::encode_mov_r64_m(
+                        2,
+                        Mem {
+                            base: 4,
+                            disp: buf_slot as i32,
+                        },
+                        buf,
+                    )?;
+                    x64::encode_mov_r64_m(
+                        8,
+                        Mem {
+                            base: 4,
+                            disp: len_slot as i32,
+                        },
+                        buf,
+                    )?;
+                    x64::encode_mov_r64_m(
+                        9,
+                        Mem {
+                            base: 4,
+                            disp: cap_slot as i32,
+                        },
+                        buf,
+                    )?;
                     x64::encode_sub_r64_imm32(4, 64, buf)?;
                     x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 10, buf)?;
                     x64::encode_mov_r32_imm32(11, elem_size as u32, buf)?;
@@ -1815,10 +2486,31 @@ impl EmitCtx {
         self.emit_reload_cursor_and_check_error();
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 4, disp: buf_slot as i32 }, 0, buf)?;
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    0,
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_shl_r64_imm8(10, 1, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: cap_slot as i32 }, 10, buf)
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("update vec cap");
     }
@@ -1842,14 +2534,49 @@ impl EmitCtx {
     ) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 4, disp: saved_out_slot as i32 }, 14, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: buf_slot as i32 }, 0, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: save_rbx_slot as i32 }, 3, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: saved_out_slot as i32,
+                    },
+                    14,
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    0,
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: save_rbx_slot as i32,
+                    },
+                    3,
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(3, 0, buf)?;
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: count_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: count_slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_imul_r64_r64_imm32(10, 10, elem_size as u32, buf)?;
                 x64::encode_add_r64_r64(10, 0, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: end_slot as i32 }, 10, buf)
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: end_slot as i32,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("init vec loop cursor");
     }
@@ -1873,7 +2600,14 @@ impl EmitCtx {
     ) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    buf,
+                )?;
                 x64::encode_test_r32_r32(10, 10, buf)
             })
             .expect("check vec loop error");
@@ -1883,10 +2617,19 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
-                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+                x64::encode_cmp_r64_m(
+                    3,
+                    Mem {
+                        base: 4,
+                        disp: end_slot as i32,
+                    },
+                    buf,
+                )
             })
             .expect("advance vec loop cursor");
-        self.emit.emit_jbe_label(loop_label).expect("vec loop check");
+        self.emit
+            .emit_jbe_label(loop_label)
+            .expect("vec loop check");
     }
 
     /// Advance the cursor register and loop back, without checking the error flag.
@@ -1903,10 +2646,19 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
-                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+                x64::encode_cmp_r64_m(
+                    3,
+                    Mem {
+                        base: 4,
+                        disp: end_slot as i32,
+                    },
+                    buf,
+                )
             })
             .expect("advance vec loop cursor");
-        self.emit.emit_jbe_label(loop_label).expect("vec loop check");
+        self.emit
+            .emit_jbe_label(loop_label)
+            .expect("vec loop check");
     }
 
     /// Emit a tight varint Vec loop body for x64. Writes directly to `[rbx]`
@@ -1935,10 +2687,10 @@ impl EmitCtx {
                 x64::encode_test_r32_r32(10, 11, buf)
             })
             .expect("vec varint hot-loop");
-        self.emit.emit_jne_label(slow_path).expect("vec varint slow path");
         self.emit
-            .emit_jae_label(eof_label)
-            .expect("vec varint eof");
+            .emit_jne_label(slow_path)
+            .expect("vec varint slow path");
+        self.emit.emit_jae_label(eof_label).expect("vec varint eof");
 
         if zigzag {
             self.emit
@@ -1974,16 +2726,27 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
-                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+                x64::encode_cmp_r64_m(
+                    3,
+                    Mem {
+                        base: 4,
+                        disp: end_slot as i32,
+                    },
+                    buf,
+                )
             })
             .expect("advance vec loop cursor");
-        self.emit.emit_jbe_label(loop_label).expect("vec varint loop");
+        self.emit
+            .emit_jbe_label(loop_label)
+            .expect("vec varint loop");
         self.emit
             .emit_jmp_label(done_label)
             .expect("vec varint done");
 
         // === Slow path (out-of-line) ===
-        self.emit.bind_label(slow_path).expect("bind vec varint slow");
+        self.emit
+            .bind_label(slow_path)
+            .expect("bind vec varint slow");
         self.emit
             .emit_with(|buf| x64::encode_sub_r64_imm32(12, 1, buf))
             .expect("undo varint increment");
@@ -2007,8 +2770,22 @@ impl EmitCtx {
         // Reload input pointer and check error (branches to error_cleanup, not error_exit)
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: CTX_INPUT_PTR }, buf)?;
-                x64::encode_mov_r32_m(10, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: CTX_INPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r32_m(
+                    10,
+                    Mem {
+                        base: 15,
+                        disp: CTX_ERROR_CODE,
+                    },
+                    buf,
+                )?;
                 x64::encode_test_r32_r32(10, 10, buf)
             })
             .expect("vec varint slow reload");
@@ -2018,17 +2795,34 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_add_r64_imm32(3, elem_size as u32, buf)?;
-                x64::encode_cmp_r64_m(3, Mem { base: 4, disp: end_slot as i32 }, buf)
+                x64::encode_cmp_r64_m(
+                    3,
+                    Mem {
+                        base: 4,
+                        disp: end_slot as i32,
+                    },
+                    buf,
+                )
             })
             .expect("vec varint slow advance");
-        self.emit.emit_jbe_label(loop_label).expect("vec varint continue");
-        self.emit.emit_jmp_label(done_label).expect("vec varint slow done");
+        self.emit
+            .emit_jbe_label(loop_label)
+            .expect("vec varint continue");
+        self.emit
+            .emit_jmp_label(done_label)
+            .expect("vec varint slow done");
 
         // === EOF (cold) ===
-        self.emit.bind_label(eof_label).expect("bind vec varint eof");
+        self.emit
+            .bind_label(eof_label)
+            .expect("bind vec varint eof");
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r32_imm32(10, crate::context::ErrorCode::UnexpectedEof as u32, buf)?;
+                x64::encode_mov_r32_imm32(
+                    10,
+                    crate::context::ErrorCode::UnexpectedEof as u32,
+                    buf,
+                )?;
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
@@ -2047,7 +2841,16 @@ impl EmitCtx {
     /// Restore rbx from stack. Must be called on every exit path from a Vec loop.
     pub fn emit_vec_restore_callee_saved(&mut self, save_rbx_slot: u32, _end_slot: u32) {
         self.emit
-            .emit_with(|buf| x64::encode_mov_r64_m(3, Mem { base: 4, disp: save_rbx_slot as i32 }, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    3,
+                    Mem {
+                        base: 4,
+                        disp: save_rbx_slot as i32,
+                    },
+                    buf,
+                )
+            })
             .expect("restore vec callee");
     }
 
@@ -2057,8 +2860,22 @@ impl EmitCtx {
     pub fn emit_vec_loop_slot(&mut self, buf_slot: u32, counter_slot: u32, elem_size: u32) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(14, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(10, Mem { base: 4, disp: counter_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    14,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: counter_slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_imul_r64_r64_imm32(10, 10, elem_size as u32, buf)?;
                 x64::encode_add_r64_r64(14, 10, buf)
             })
@@ -2082,13 +2899,62 @@ impl EmitCtx {
 
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(14, Mem { base: 4, disp: saved_out_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: ptr_off }, 0, buf)?;
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: len_slot as i32 }, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: len_off }, 0, buf)?;
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: cap_off }, 0, buf)
+                x64::encode_mov_r64_m(
+                    14,
+                    Mem {
+                        base: 4,
+                        disp: saved_out_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: ptr_off,
+                    },
+                    0,
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: len_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: len_off,
+                    },
+                    0,
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: cap_off,
+                    },
+                    0,
+                    buf,
+                )
             })
             .expect("store vec fields");
     }
@@ -2108,10 +2974,31 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(10, elem_align as u64, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: ptr_off }, 10, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: ptr_off,
+                    },
+                    10,
+                    buf,
+                )?;
                 x64::encode_mov_r64_imm64(10, 0, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: len_off }, 10, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 14, disp: cap_off }, 10, buf)
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: len_off,
+                    },
+                    10,
+                    buf,
+                )?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 14,
+                        disp: cap_off,
+                    },
+                    10,
+                    buf,
+                )
             })
             .expect("store empty vec");
     }
@@ -2130,14 +3017,37 @@ impl EmitCtx {
         let error_exit = self.error_exit;
 
         self.emit
-            .emit_with(|buf| x64::encode_mov_r64_m(14, Mem { base: 4, disp: saved_out_slot as i32 }, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    14,
+                    Mem {
+                        base: 4,
+                        disp: saved_out_slot as i32,
+                    },
+                    buf,
+                )
+            })
             .expect("load saved out");
         // args: buf, cap, elem_size, elem_align
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(7, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(6, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    7,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    6,
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r32_imm32(2, elem_size as u32, buf)?;
                 x64::encode_mov_r32_imm32(1, elem_align as u32, buf)
             })
@@ -2145,8 +3055,22 @@ impl EmitCtx {
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(1, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(2, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    1,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r32_imm32(8, elem_size as u32, buf)?;
                 x64::encode_mov_r32_imm32(9, elem_align as u32, buf)
             })
@@ -2167,16 +3091,25 @@ impl EmitCtx {
     }
 
     /// Compare two stack slot values and branch if equal (len == cap for growth check).
-    pub fn emit_cmp_stack_slots_branch_eq(
-        &mut self,
-        slot_a: u32,
-        slot_b: u32,
-        label: LabelId,
-    ) {
+    pub fn emit_cmp_stack_slots_branch_eq(&mut self, slot_a: u32, slot_b: u32, label: LabelId) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: slot_a as i32 }, buf)?;
-                x64::encode_cmp_r64_m(0, Mem { base: 4, disp: slot_b as i32 }, buf)
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: slot_a as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_cmp_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: slot_b as i32,
+                    },
+                    buf,
+                )
             })
             .expect("compare stack slots");
         self.emit.emit_je_label(label).expect("stack slots equal");
@@ -2186,9 +3119,23 @@ impl EmitCtx {
     pub fn emit_inc_stack_slot(&mut self, slot: u32) {
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(0, Mem { base: 4, disp: slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    0,
+                    Mem {
+                        base: 4,
+                        disp: slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_add_r64_imm32(0, 1, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: slot as i32 }, 0, buf)
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: slot as i32,
+                    },
+                    0,
+                    buf,
+                )
             })
             .expect("inc stack slot");
     }
@@ -2224,18 +3171,60 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(7, fn_val as u64, buf)?;
-                x64::encode_mov_r64_m(6, Mem { base: 4, disp: saved_out_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(2, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(1, Mem { base: 4, disp: count_slot as i32 }, buf)
+                x64::encode_mov_r64_m(
+                    6,
+                    Mem {
+                        base: 4,
+                        disp: saved_out_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    1,
+                    Mem {
+                        base: 4,
+                        disp: count_slot as i32,
+                    },
+                    buf,
+                )
             })
             .expect("map from pairs");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_imm64(1, fn_val as u64, buf)?;
-                x64::encode_mov_r64_m(2, Mem { base: 4, disp: saved_out_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(8, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(9, Mem { base: 4, disp: count_slot as i32 }, buf)
+                x64::encode_mov_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: saved_out_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    8,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    9,
+                    Mem {
+                        base: 4,
+                        disp: count_slot as i32,
+                    },
+                    buf,
+                )
             })
             .expect("map from pairs");
         self.emit_call_fn_ptr(crate::intrinsics::kajit_map_build as *const () as *const u8);
@@ -2279,12 +3268,26 @@ impl EmitCtx {
         cap_slot: u32,
         pair_stride: u32,
         pair_align: u32,
-        ) {
+    ) {
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(7, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(6, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    7,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    6,
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r32_imm32(2, pair_stride as u32, buf)?;
                 x64::encode_mov_r32_imm32(1, pair_align as u32, buf)
             })
@@ -2292,8 +3295,22 @@ impl EmitCtx {
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_r64_m(1, Mem { base: 4, disp: buf_slot as i32 }, buf)?;
-                x64::encode_mov_r64_m(2, Mem { base: 4, disp: cap_slot as i32 }, buf)?;
+                x64::encode_mov_r64_m(
+                    1,
+                    Mem {
+                        base: 4,
+                        disp: buf_slot as i32,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    2,
+                    Mem {
+                        base: 4,
+                        disp: cap_slot as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r32_imm32(8, pair_stride as u32, buf)?;
                 x64::encode_mov_r32_imm32(9, pair_align as u32, buf)
             })
@@ -2319,16 +3336,18 @@ impl EmitCtx {
             match op {
                 Op::BoundsCheck { count } => {
                     if *count == 1 {
-                        self.emit.emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))?;
+                        self.emit
+                            .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))?;
                         self.emit.emit_jae_label(eof_label);
                     } else {
                         let count = *count as i32;
-                        self.emit.emit_with(|buf| {
-                            x64::encode_mov_r64_r64(10, 13, buf)?;
-                            x64::encode_sub_r64_r64(10, 12, buf)?;
-                            x64::encode_cmp_r64_imm32(10, count as u32, buf)
-                        })
-                        .expect("bounds check");
+                        self.emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_r64(10, 13, buf)?;
+                                x64::encode_sub_r64_r64(10, 12, buf)?;
+                                x64::encode_cmp_r64_imm32(10, count as u32, buf)
+                            })
+                            .expect("bounds check");
                         self.emit.emit_jb_label(eof_label);
                     }
                 }
@@ -2339,7 +3358,7 @@ impl EmitCtx {
                             x64::encode_movzx_r32_rm8(
                                 10,
                                 x64::Operand::Mem(Mem { base: 12, disp: 0 }),
-                                buf
+                                buf,
                             )
                         })
                         .expect("load byte slot a"),
@@ -2349,81 +3368,83 @@ impl EmitCtx {
                             x64::encode_movzx_r32_rm8(
                                 11,
                                 x64::Operand::Mem(Mem { base: 12, disp: 0 }),
-                                buf
+                                buf,
                             )
                         })
                         .expect("load byte slot b"),
                 },
                 Op::LoadFromCursor { dst, width } => match (dst, width) {
-                    (Slot::A, Width::W4) => {
-                        self.emit
-                            .emit_with(|buf| x64::encode_mov_r32_m(10, Mem { base: 12, disp: 0 }, buf))
-                            .expect("load slot a w4")
-                    }
-                    (Slot::A, Width::W8) => {
-                        self.emit
-                            .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 12, disp: 0 }, buf))
-                            .expect("load slot a w8")
-                    }
-                    (Slot::B, Width::W4) => {
-                        self.emit
-                            .emit_with(|buf| x64::encode_mov_r32_m(11, Mem { base: 12, disp: 0 }, buf))
-                            .expect("load slot b w4")
-                    }
-                    (Slot::B, Width::W8) => {
-                        self.emit
-                            .emit_with(|buf| x64::encode_mov_r64_m(11, Mem { base: 12, disp: 0 }, buf))
-                            .expect("load slot b w8")
-                    }
+                    (Slot::A, Width::W4) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r32_m(10, Mem { base: 12, disp: 0 }, buf))
+                        .expect("load slot a w4"),
+                    (Slot::A, Width::W8) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 12, disp: 0 }, buf))
+                        .expect("load slot a w8"),
+                    (Slot::B, Width::W4) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r32_m(11, Mem { base: 12, disp: 0 }, buf))
+                        .expect("load slot b w4"),
+                    (Slot::B, Width::W8) => self
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_m(11, Mem { base: 12, disp: 0 }, buf))
+                        .expect("load slot b w8"),
                     _ => panic!("unsupported LoadFromCursor width"),
                 },
                 Op::StoreToOut { src, offset, width } => {
                     let offset = *offset as i32;
                     match (src, width) {
-                        (Slot::A, Width::W1) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r8(14, offset, 10, buf))
-                                .expect("store to out w1")
-                        }
-                        (Slot::A, Width::W2) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r16(14, offset, 10, buf))
-                                .expect("store to out w2")
-                        }
-                        (Slot::A, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 10, buf))
-                                .expect("store to out w4")
-                        }
-                        (Slot::A, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_m_r64(Mem { base: 14, disp: offset }, 10, buf)
-                                })
-                                .expect("store to out w8")
-                        }
-                        (Slot::B, Width::W1) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r8(14, offset, 11, buf))
-                                .expect("store to out w1")
-                        }
-                        (Slot::B, Width::W2) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r16(14, offset, 11, buf))
-                                .expect("store to out w2")
-                        }
-                        (Slot::B, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 11, buf))
-                                .expect("store to out w4")
-                        }
-                        (Slot::B, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_m_r64(Mem { base: 14, disp: offset }, 11, buf)
-                                })
-                                .expect("store to out w8")
-                        }
+                        (Slot::A, Width::W1) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r8(14, offset, 10, buf))
+                            .expect("store to out w1"),
+                        (Slot::A, Width::W2) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r16(14, offset, 10, buf))
+                            .expect("store to out w2"),
+                        (Slot::A, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 10, buf))
+                            .expect("store to out w4"),
+                        (Slot::A, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r64(
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    10,
+                                    buf,
+                                )
+                            })
+                            .expect("store to out w8"),
+                        (Slot::B, Width::W1) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r8(14, offset, 11, buf))
+                            .expect("store to out w1"),
+                        (Slot::B, Width::W2) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r16(14, offset, 11, buf))
+                            .expect("store to out w2"),
+                        (Slot::B, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 11, buf))
+                            .expect("store to out w4"),
+                        (Slot::B, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r64(
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    11,
+                                    buf,
+                                )
+                            })
+                            .expect("store to out w8"),
                     }
                 }
                 Op::StoreByteToStack { src, sp_offset } => {
@@ -2446,30 +3467,40 @@ impl EmitCtx {
                 } => {
                     let sp_offset = *sp_offset as i32;
                     match (src, width) {
-                        (Slot::A, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 10, buf))
-                                .expect("store stack a w4")
-                        }
-                        (Slot::A, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset }, 10, buf)
-                                })
-                                .expect("store stack a w8")
-                        }
-                        (Slot::B, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 11, buf))
-                                .expect("store stack b w4")
-                        }
-                        (Slot::B, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_m_r64(Mem { base: 4, disp: sp_offset }, 11, buf)
-                                })
-                                .expect("store stack b w8")
-                        }
+                        (Slot::A, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 10, buf))
+                            .expect("store stack a w4"),
+                        (Slot::A, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r64(
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    10,
+                                    buf,
+                                )
+                            })
+                            .expect("store stack a w8"),
+                        (Slot::B, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 11, buf))
+                            .expect("store stack b w4"),
+                        (Slot::B, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r64(
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    11,
+                                    buf,
+                                )
+                            })
+                            .expect("store stack b w8"),
                         _ => panic!("unsupported StoreToStack width"),
                     }
                 }
@@ -2480,34 +3511,58 @@ impl EmitCtx {
                 } => {
                     let sp_offset = *sp_offset as i32;
                     match (dst, width) {
-                        (Slot::A, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r32_m(10, Mem { base: 4, disp: sp_offset }, buf)
-                                })
-                                .expect("load stack a w4")
-                        }
-                        (Slot::A, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r64_m(10, Mem { base: 4, disp: sp_offset }, buf)
-                                })
-                                .expect("load stack a w8")
-                        }
-                        (Slot::B, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r32_m(11, Mem { base: 4, disp: sp_offset }, buf)
-                                })
-                                .expect("load stack b w4")
-                        }
-                        (Slot::B, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r64_m(11, Mem { base: 4, disp: sp_offset }, buf)
-                                })
-                                .expect("load stack b w8")
-                        }
+                        (Slot::A, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r32_m(
+                                    10,
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load stack a w4"),
+                        (Slot::A, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_m(
+                                    10,
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load stack a w8"),
+                        (Slot::B, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r32_m(
+                                    11,
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load stack b w4"),
+                        (Slot::B, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_m(
+                                    11,
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load stack b w8"),
                         _ => panic!("unsupported LoadFromStack width"),
                     }
                 }
@@ -2561,41 +3616,41 @@ impl EmitCtx {
                     let invalid_label = self.emit.new_label();
                     let ok_label = self.emit.new_label();
                     match slot {
-                        Slot::A => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_cmp_r64_imm32(10, max_val as u32, buf))
-                                .expect("validate max a")
-                        }
-                        Slot::B => {
-                            self.emit
-                                .emit_with(|buf| x64::encode_cmp_r64_imm32(11, max_val as u32, buf))
-                                .expect("validate max b")
-                        }
+                        Slot::A => self
+                            .emit
+                            .emit_with(|buf| x64::encode_cmp_r64_imm32(10, max_val as u32, buf))
+                            .expect("validate max a"),
+                        Slot::B => self
+                            .emit
+                            .emit_with(|buf| x64::encode_cmp_r64_imm32(11, max_val as u32, buf))
+                            .expect("validate max b"),
                     }
                     self.emit
                         .emit_ja_label(invalid_label)
-                        .expect("validate max branch")?
-                        ;
+                        .expect("validate max branch")?;
                     self.emit
                         .emit_jmp_label(ok_label)
-                        .expect("validate max ok jump")?
-                        ;
+                        .expect("validate max ok jump")?;
                     self.emit
                         .bind_label(invalid_label)
                         .expect("bind invalid label")?;
                     self.emit
                         .emit_with(|buf| {
                             x64::encode_mov_r32_imm32(9, error_code as u32, buf)?;
-                            x64::encode_mov_m_r32(Mem { base: 15, disp: CTX_ERROR_CODE }, 9, buf)
+                            x64::encode_mov_m_r32(
+                                Mem {
+                                    base: 15,
+                                    disp: CTX_ERROR_CODE,
+                                },
+                                9,
+                                buf,
+                            )
                         })
-                        .expect("write error code")
-                        ;
+                        .expect("write error code");
                     self.emit
                         .emit_jmp_label(error_exit)
                         .expect("validate error_exit")?;
-                    self.emit
-                        .bind_label(ok_label)
-                        .expect("bind ok label")?;
+                    self.emit.bind_label(ok_label).expect("bind ok label")?;
                 }
                 Op::TestBit7Branch { slot, target } => {
                     let label = labels[*target];
@@ -2638,14 +3693,28 @@ impl EmitCtx {
                     self.emit
                         .emit_with(|buf| {
                             x64::encode_mov_r64_r64(7, 15, buf)?;
-                            x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset }, buf)
+                            x64::encode_lea_r64_m(
+                                6,
+                                Mem {
+                                    base: 14,
+                                    disp: field_offset,
+                                },
+                                buf,
+                            )
                         })
                         .expect("call intrinsic args");
                     #[cfg(windows)]
                     self.emit
                         .emit_with(|buf| {
                             x64::encode_mov_r64_r64(1, 15, buf)?;
-                            x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset }, buf)
+                            x64::encode_lea_r64_m(
+                                2,
+                                Mem {
+                                    base: 14,
+                                    disp: field_offset,
+                                },
+                                buf,
+                            )
                         })
                         .expect("call intrinsic args");
                     self.emit_call_fn_ptr(*fn_ptr);
@@ -2658,14 +3727,28 @@ impl EmitCtx {
                     self.emit
                         .emit_with(|buf| {
                             x64::encode_mov_r64_r64(7, 15, buf)?;
-                            x64::encode_lea_r64_m(6, Mem { base: 4, disp: sp_offset }, buf)
+                            x64::encode_lea_r64_m(
+                                6,
+                                Mem {
+                                    base: 4,
+                                    disp: sp_offset,
+                                },
+                                buf,
+                            )
                         })
                         .expect("call intrinsic stack out args");
                     #[cfg(windows)]
                     self.emit
                         .emit_with(|buf| {
                             x64::encode_mov_r64_r64(1, 15, buf)?;
-                            x64::encode_lea_r64_m(2, Mem { base: 4, disp: sp_offset }, buf)
+                            x64::encode_lea_r64_m(
+                                2,
+                                Mem {
+                                    base: 4,
+                                    disp: sp_offset,
+                                },
+                                buf,
+                            )
                         })
                         .expect("call intrinsic stack out args");
                     self.emit_call_fn_ptr(*fn_ptr);
@@ -2787,7 +3870,14 @@ impl EmitCtx {
                     // Use r11d for error check to preserve r10 (Slot::A) for WriteMalumString
                     self.emit
                         .emit_with(|buf| {
-                            x64::encode_mov_r32_m(11, Mem { base: 15, disp: CTX_ERROR_CODE }, buf)?;
+                            x64::encode_mov_r32_m(
+                                11,
+                                Mem {
+                                    base: 15,
+                                    disp: CTX_ERROR_CODE,
+                                },
+                                buf,
+                            )?;
                             x64::encode_test_r32_r32(11, 11, buf)
                         })
                         .expect("validate copy error check");
@@ -2878,173 +3968,169 @@ impl EmitCtx {
                 Op::LoadFromInput { dst, offset, width } => {
                     let offset = *offset as i32;
                     match (dst, width) {
-                        (Slot::A, Width::W1) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_movzx_r32_rm8(
-                                        10,
-                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
-                                        buf,
-                                    )
-                                })
-                                .expect("load input a w1")
-                        }
-                        (Slot::A, Width::W2) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_movzx_r32_rm16(
-                                        10,
-                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
-                                        buf,
-                                    )
-                                })
-                                .expect("load input a w2")
-                        }
-                        (Slot::A, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r32_m(10, Mem { base: 14, disp: offset }, buf)
-                                })
-                                .expect("load input a w4")
-                        }
-                        (Slot::A, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r64_m(10, Mem { base: 14, disp: offset }, buf)
-                                })
-                                .expect("load input a w8")
-                        }
-                        (Slot::B, Width::W1) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_movzx_r32_rm8(
-                                        11,
-                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
-                                        buf,
-                                    )
-                                })
-                                .expect("load input b w1")
-                        }
-                        (Slot::B, Width::W2) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_movzx_r32_rm16(
-                                        11,
-                                        x64::Operand::Mem(Mem { base: 14, disp: offset }),
-                                        buf,
-                                    )
-                                })
-                                .expect("load input b w2")
-                        }
-                        (Slot::B, Width::W4) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r32_m(11, Mem { base: 14, disp: offset }, buf)
-                                })
-                                .expect("load input b w4")
-                        }
-                        (Slot::B, Width::W8) => {
-                            self.emit
-                                .emit_with(|buf| {
-                                    x64::encode_mov_r64_m(11, Mem { base: 14, disp: offset }, buf)
-                                })
-                                .expect("load input b w8")
-                        }
+                        (Slot::A, Width::W1) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_movzx_r32_rm8(
+                                    10,
+                                    x64::Operand::Mem(Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    }),
+                                    buf,
+                                )
+                            })
+                            .expect("load input a w1"),
+                        (Slot::A, Width::W2) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_movzx_r32_rm16(
+                                    10,
+                                    x64::Operand::Mem(Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    }),
+                                    buf,
+                                )
+                            })
+                            .expect("load input a w2"),
+                        (Slot::A, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r32_m(
+                                    10,
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load input a w4"),
+                        (Slot::A, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_m(
+                                    10,
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load input a w8"),
+                        (Slot::B, Width::W1) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_movzx_r32_rm8(
+                                    11,
+                                    x64::Operand::Mem(Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    }),
+                                    buf,
+                                )
+                            })
+                            .expect("load input b w1"),
+                        (Slot::B, Width::W2) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_movzx_r32_rm16(
+                                    11,
+                                    x64::Operand::Mem(Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    }),
+                                    buf,
+                                )
+                            })
+                            .expect("load input b w2"),
+                        (Slot::B, Width::W4) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r32_m(
+                                    11,
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load input b w4"),
+                        (Slot::B, Width::W8) => self
+                            .emit
+                            .emit_with(|buf| {
+                                x64::encode_mov_r64_m(
+                                    11,
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    buf,
+                                )
+                            })
+                            .expect("load input b w8"),
                     }
                 }
                 Op::StoreToOutput { src, width } => match (src, width) {
-                    (Slot::A, Width::W1) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r8(12, 0, 10, buf)?;
-                                x64::encode_add_r64_imm32(12, 1, buf)
-                            })
-                            .expect("store output a w1")
-                    }
-                    (Slot::A, Width::W2) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r16(12, 0, 10, buf)?;
-                                x64::encode_add_r64_imm32(12, 2, buf)
-                            })
-                            .expect("store output a w2")
-                    }
-                    (Slot::A, Width::W4) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r32(
-                                    Mem {
-                                        base: 12,
-                                        disp: 0,
-                                    },
-                                    10,
-                                    buf,
-                                )?;
-                                x64::encode_add_r64_imm32(12, 4, buf)
-                            })
-                            .expect("store output a w4")
-                    }
-                    (Slot::A, Width::W8) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r64(
-                                    Mem {
-                                        base: 12,
-                                        disp: 0,
-                                    },
-                                    10,
-                                    buf,
-                                )?;
-                                x64::encode_add_r64_imm32(12, 8, buf)
-                            })
-                            .expect("store output a w8")
-                    }
-                    (Slot::B, Width::W1) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r8(12, 0, 11, buf)?;
-                                x64::encode_add_r64_imm32(12, 1, buf)
-                            })
-                            .expect("store output b w1")
-                    }
-                    (Slot::B, Width::W2) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r16(12, 0, 11, buf)?;
-                                x64::encode_add_r64_imm32(12, 2, buf)
-                            })
-                            .expect("store output b w2")
-                    }
-                    (Slot::B, Width::W4) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r32(
-                                    Mem {
-                                        base: 12,
-                                        disp: 0,
-                                    },
-                                    11,
-                                    buf,
-                                )?;
-                                x64::encode_add_r64_imm32(12, 4, buf)
-                            })
-                            .expect("store output b w4")
-                    }
-                    (Slot::B, Width::W8) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_m_r64(
-                                    Mem {
-                                        base: 12,
-                                        disp: 0,
-                                    },
-                                    11,
-                                    buf,
-                                )?;
-                                x64::encode_add_r64_imm32(12, 8, buf)
-                            })
-                            .expect("store output b w8")
-                    }
+                    (Slot::A, Width::W1) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r8(12, 0, 10, buf)?;
+                            x64::encode_add_r64_imm32(12, 1, buf)
+                        })
+                        .expect("store output a w1"),
+                    (Slot::A, Width::W2) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r16(12, 0, 10, buf)?;
+                            x64::encode_add_r64_imm32(12, 2, buf)
+                        })
+                        .expect("store output a w2"),
+                    (Slot::A, Width::W4) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r32(Mem { base: 12, disp: 0 }, 10, buf)?;
+                            x64::encode_add_r64_imm32(12, 4, buf)
+                        })
+                        .expect("store output a w4"),
+                    (Slot::A, Width::W8) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r64(Mem { base: 12, disp: 0 }, 10, buf)?;
+                            x64::encode_add_r64_imm32(12, 8, buf)
+                        })
+                        .expect("store output a w8"),
+                    (Slot::B, Width::W1) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r8(12, 0, 11, buf)?;
+                            x64::encode_add_r64_imm32(12, 1, buf)
+                        })
+                        .expect("store output b w1"),
+                    (Slot::B, Width::W2) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r16(12, 0, 11, buf)?;
+                            x64::encode_add_r64_imm32(12, 2, buf)
+                        })
+                        .expect("store output b w2"),
+                    (Slot::B, Width::W4) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r32(Mem { base: 12, disp: 0 }, 11, buf)?;
+                            x64::encode_add_r64_imm32(12, 4, buf)
+                        })
+                        .expect("store output b w4"),
+                    (Slot::B, Width::W8) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_m_r64(Mem { base: 12, disp: 0 }, 11, buf)?;
+                            x64::encode_add_r64_imm32(12, 8, buf)
+                        })
+                        .expect("store output b w8"),
                 },
                 Op::WriteByte { value } => {
                     let value = *value as i8;
@@ -3108,7 +4194,9 @@ impl EmitCtx {
                     self.emit_call_fn_ptr(crate::intrinsics::kajit_output_grow as *const u8);
                     self.emit_enc_reload_and_check_error();
 
-                    self.emit.bind_label(have_space).expect("bind output bounds done");
+                    self.emit
+                        .bind_label(have_space)
+                        .expect("bind output bounds done");
                 }
                 Op::SignExtend { slot, from } => match (slot, from) {
                     (Slot::A, Width::W1) => self
@@ -3131,47 +4219,43 @@ impl EmitCtx {
                 },
                 Op::ZigzagEncode { slot, wide } => match (slot, wide) {
                     // zigzag encode 32-bit: (n << 1) ^ (n >> 31)
-                    (Slot::A, false) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_r64_r64(11, 10, buf)?;
-                                x64::encode_shl_r64_imm8(11, 1, buf)?;
-                                x64::encode_sar_r64_imm8(10, 31, buf)?;
-                                x64::encode_xor_r64_r64(10, 11, buf)
-                            })
-                            .expect("zigzag encode a")
-                    }
-                    (Slot::B, false) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_r64_r64(10, 11, buf)?;
-                                x64::encode_shl_r64_imm8(10, 1, buf)?;
-                                x64::encode_sar_r64_imm8(11, 31, buf)?;
-                                x64::encode_xor_r64_r64(11, 10, buf)
-                            })
-                            .expect("zigzag encode b")
-                    }
+                    (Slot::A, false) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(11, 10, buf)?;
+                            x64::encode_shl_r64_imm8(11, 1, buf)?;
+                            x64::encode_sar_r64_imm8(10, 31, buf)?;
+                            x64::encode_xor_r64_r64(10, 11, buf)
+                        })
+                        .expect("zigzag encode a"),
+                    (Slot::B, false) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(10, 11, buf)?;
+                            x64::encode_shl_r64_imm8(10, 1, buf)?;
+                            x64::encode_sar_r64_imm8(11, 31, buf)?;
+                            x64::encode_xor_r64_r64(11, 10, buf)
+                        })
+                        .expect("zigzag encode b"),
                     // zigzag encode 64-bit: (n << 1) ^ (n >> 63)
-                    (Slot::A, true) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_r64_r64(11, 10, buf)?;
-                                x64::encode_shl_r64_imm8(11, 1, buf)?;
-                                x64::encode_sar_r64_imm8(10, 63, buf)?;
-                                x64::encode_xor_r64_r64(10, 11, buf)
-                            })
-                            .expect("zigzag encode wide a")
-                    }
-                    (Slot::B, true) => {
-                        self.emit
-                            .emit_with(|buf| {
-                                x64::encode_mov_r64_r64(10, 11, buf)?;
-                                x64::encode_shl_r64_imm8(10, 1, buf)?;
-                                x64::encode_sar_r64_imm8(11, 63, buf)?;
-                                x64::encode_xor_r64_r64(11, 10, buf)
-                            })
-                            .expect("zigzag encode wide b")
-                    }
+                    (Slot::A, true) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(11, 10, buf)?;
+                            x64::encode_shl_r64_imm8(11, 1, buf)?;
+                            x64::encode_sar_r64_imm8(10, 63, buf)?;
+                            x64::encode_xor_r64_r64(10, 11, buf)
+                        })
+                        .expect("zigzag encode wide a"),
+                    (Slot::B, true) => self
+                        .emit
+                        .emit_with(|buf| {
+                            x64::encode_mov_r64_r64(10, 11, buf)?;
+                            x64::encode_shl_r64_imm8(10, 1, buf)?;
+                            x64::encode_sar_r64_imm8(11, 63, buf)?;
+                            x64::encode_xor_r64_r64(11, 10, buf)
+                        })
+                        .expect("zigzag encode wide b"),
                 },
                 Op::EncodeVarint { slot, wide } => {
                     // Inline varint encoding loop.
@@ -3223,7 +4307,9 @@ impl EmitCtx {
         // Jump over cold path, then emit shared EOF error
         let done_label = self.emit.new_label();
         let eof_code = crate::context::ErrorCode::UnexpectedEof as u32;
-        self.emit.emit_jmp_label(done_label).expect("skip eof block");
+        self.emit
+            .emit_jmp_label(done_label)
+            .expect("skip eof block");
         self.emit.bind_label(eof_label).expect("bind eof");
         self.emit
             .emit_with(|buf| {
@@ -3277,8 +4363,22 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 15, buf)?;
                 x64::encode_mov_r64_r64(14, 7, buf)?;
                 x64::encode_mov_r64_r64(15, 6, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: ENC_OUTPUT_PTR }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 15, disp: ENC_OUTPUT_END }, buf)
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    13,
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_END,
+                    },
+                    buf,
+                )
             })
             .expect("begin encode prologue");
         #[cfg(windows)]
@@ -3293,25 +4393,46 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(Mem { base: 4, disp: 72 }, 15, buf)?;
                 x64::encode_mov_r64_r64(14, 1, buf)?;
                 x64::encode_mov_r64_r64(15, 2, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 15, disp: ENC_OUTPUT_PTR }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 15, disp: ENC_OUTPUT_END }, buf)
+                x64::encode_mov_r64_m(
+                    12,
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_PTR,
+                    },
+                    buf,
+                )?;
+                x64::encode_mov_r64_m(
+                    13,
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_END,
+                    },
+                    buf,
+                )
             })
             .expect("begin encode prologue windows");
 
         self.error_exit = error_exit;
         (entry, error_exit)
-        }
+    }
 
-        /// Emit the success epilogue and error exit for an encode function.
-        ///
-        /// Flushes output_ptr back to ctx on success.
-        pub fn end_encode_func(&mut self, error_exit: LabelId) {
-            let frame_size = self.frame_size;
+    /// Emit the success epilogue and error exit for an encode function.
+    ///
+    /// Flushes output_ptr back to ctx on success.
+    pub fn end_encode_func(&mut self, error_exit: LabelId) {
+        let frame_size = self.frame_size;
 
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 15, disp: ENC_OUTPUT_PTR }, 12, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_PTR,
+                    },
+                    12,
+                    buf,
+                )?;
                 x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
                 x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
                 x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
@@ -3322,9 +4443,7 @@ impl EmitCtx {
                 x64::encode_ret(buf)
             })
             .expect("end encode");
-        self.emit
-            .bind_label(error_exit)
-            .expect("bind error_exit");
+        self.emit.bind_label(error_exit).expect("bind error_exit");
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
@@ -3340,7 +4459,14 @@ impl EmitCtx {
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_mov_m_r64(Mem { base: 15, disp: ENC_OUTPUT_PTR }, 12, buf)?;
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 15,
+                        disp: ENC_OUTPUT_PTR,
+                    },
+                    12,
+                    buf,
+                )?;
                 x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
                 x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
                 x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
@@ -3379,14 +4505,28 @@ impl EmitCtx {
         #[cfg(not(windows))]
         self.emit
             .emit_with(|buf| {
-                x64::encode_lea_r64_m(7, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    7,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(6, 15, buf)
             })
             .expect("call emitted func args");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
-                x64::encode_lea_r64_m(1, Mem { base: 14, disp: field_offset as i32 }, buf)?;
+                x64::encode_lea_r64_m(
+                    1,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )?;
                 x64::encode_mov_r64_r64(2, 15, buf)
             })
             .expect("call emitted func args win");
@@ -3443,14 +4583,28 @@ impl EmitCtx {
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(7, 15, buf)?;
-                x64::encode_lea_r64_m(6, Mem { base: 14, disp: field_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    6,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("enc intrinsic with input args");
         #[cfg(windows)]
         self.emit
             .emit_with(|buf| {
                 x64::encode_mov_r64_r64(1, 2, buf)?;
-                x64::encode_lea_r64_m(2, Mem { base: 14, disp: field_offset as i32 }, buf)
+                x64::encode_lea_r64_m(
+                    2,
+                    Mem {
+                        base: 14,
+                        disp: field_offset as i32,
+                    },
+                    buf,
+                )
             })
             .expect("enc intrinsic with input args windows");
         self.emit_call_fn_ptr(fn_ptr);
@@ -3591,12 +4745,7 @@ impl EmitCtx {
                 self.emit
                     .emit_with(|buf| {
                         x64::encode_mov_r32_imm32(10, bytes[offset as usize] as u32, buf)?;
-                        x64::encode_mov_m_r8(
-                            12,
-                            offset as i32,
-                            10,
-                            buf,
-                        )
+                        x64::encode_mov_m_r8(12, offset as i32, 10, buf)
                     })
                     .expect("write static 1");
             }
@@ -3637,7 +4786,8 @@ impl EmitCtx {
     /// The value is left in eax/rax (32-bit for W1/W2/W4, 64-bit for W8).
     pub fn emit_enc_load_from_input(&mut self, offset: u32, width: Width) {
         match width {
-            Width::W1 => self.emit
+            Width::W1 => self
+                .emit
                 .emit_with(|buf| {
                     x64::encode_movzx_r32_rm8(
                         0,
@@ -3649,7 +4799,8 @@ impl EmitCtx {
                     )
                 })
                 .expect("enc load 1"),
-            Width::W2 => self.emit
+            Width::W2 => self
+                .emit
                 .emit_with(|buf| {
                     x64::encode_movzx_r32_rm16(
                         0,
@@ -3661,11 +4812,31 @@ impl EmitCtx {
                     )
                 })
                 .expect("enc load 2"),
-            Width::W4 => self.emit
-                .emit_with(|buf| x64::encode_mov_r32_m(0, Mem { base: 14, disp: offset as i32 }, buf))
+            Width::W4 => self
+                .emit
+                .emit_with(|buf| {
+                    x64::encode_mov_r32_m(
+                        0,
+                        Mem {
+                            base: 14,
+                            disp: offset as i32,
+                        },
+                        buf,
+                    )
+                })
                 .expect("enc load 4"),
-            Width::W8 => self.emit
-                .emit_with(|buf| x64::encode_mov_r64_m(0, Mem { base: 14, disp: offset as i32 }, buf))
+            Width::W8 => self
+                .emit
+                .emit_with(|buf| {
+                    x64::encode_mov_r64_m(
+                        0,
+                        Mem {
+                            base: 14,
+                            disp: offset as i32,
+                        },
+                        buf,
+                    )
+                })
                 .expect("enc load 8"),
         }
     }
@@ -3673,25 +4844,29 @@ impl EmitCtx {
     /// Store a value from eax/rax to the output buffer and advance the cursor.
     pub fn emit_enc_store_to_output(&mut self, width: Width) {
         match width {
-            Width::W1 => self.emit
+            Width::W1 => self
+                .emit
                 .emit_with(|buf| {
                     x64::encode_mov_m_r8(12, 0, 0, buf)?;
                     x64::encode_add_r64_imm32(12, 1, buf)
                 })
                 .expect("enc store 1"),
-            Width::W2 => self.emit
+            Width::W2 => self
+                .emit
                 .emit_with(|buf| {
                     x64::encode_mov_m_r16(12, 0, 0, buf)?;
                     x64::encode_add_r64_imm32(12, 2, buf)
                 })
                 .expect("enc store 2"),
-            Width::W4 => self.emit
+            Width::W4 => self
+                .emit
                 .emit_with(|buf| {
                     x64::encode_mov_m_r32(Mem { base: 12, disp: 0 }, 0, buf)?;
                     x64::encode_add_r64_imm32(12, 4, buf)
                 })
                 .expect("enc store 4"),
-            Width::W8 => self.emit
+            Width::W8 => self
+                .emit
                 .emit_with(|buf| {
                     x64::encode_mov_m_r64(Mem { base: 12, disp: 0 }, 0, buf)?;
                     x64::encode_add_r64_imm32(12, 8, buf)

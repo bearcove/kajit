@@ -9,25 +9,57 @@ impl Lowerer {
                 .ectx
                 .emit
                 .emit_with(|buf| {
-                    x64::encode_movzx_r32_rm8(10, Operand::Mem(Mem { base: 14, disp: off }), buf)
+                    x64::encode_movzx_r32_rm8(
+                        10,
+                        Operand::Mem(Mem {
+                            base: 14,
+                            disp: off,
+                        }),
+                        buf,
+                    )
                 })
                 .expect("movzx"),
             Width::W2 => self
                 .ectx
                 .emit
                 .emit_with(|buf| {
-                    x64::encode_movzx_r32_rm16(10, Operand::Mem(Mem { base: 14, disp: off }), buf)
+                    x64::encode_movzx_r32_rm16(
+                        10,
+                        Operand::Mem(Mem {
+                            base: 14,
+                            disp: off,
+                        }),
+                        buf,
+                    )
                 })
                 .expect("movzx"),
             Width::W4 => self
                 .ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_r32_m(10, Mem { base: 14, disp: off }, buf))
+                .emit_with(|buf| {
+                    x64::encode_mov_r32_m(
+                        10,
+                        Mem {
+                            base: 14,
+                            disp: off,
+                        },
+                        buf,
+                    )
+                })
                 .expect("mov"),
             Width::W8 => self
                 .ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 14, disp: off }, buf))
+                .emit_with(|buf| {
+                    x64::encode_mov_r64_m(
+                        10,
+                        Mem {
+                            base: 14,
+                            disp: off,
+                        },
+                        buf,
+                    )
+                })
                 .expect("mov"),
         }
         self.emit_store_def_r10(dst, 0);
@@ -46,17 +78,44 @@ impl Lowerer {
             Width::W2 => self
                 .ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_m_r16(Mem { base: 14, disp: off }, 10, buf))
+                .emit_with(|buf| {
+                    x64::encode_mov_m_r16(
+                        Mem {
+                            base: 14,
+                            disp: off,
+                        },
+                        10,
+                        buf,
+                    )
+                })
                 .expect("mov"),
             Width::W4 => self
                 .ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 14, disp: off }, 10, buf))
+                .emit_with(|buf| {
+                    x64::encode_mov_m_r32(
+                        Mem {
+                            base: 14,
+                            disp: off,
+                        },
+                        10,
+                        buf,
+                    )
+                })
                 .expect("mov"),
             Width::W8 => self
                 .ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 14, disp: off }, 10, buf))
+                .emit_with(|buf| {
+                    x64::encode_mov_m_r64(
+                        Mem {
+                            base: 14,
+                            disp: off,
+                        },
+                        10,
+                        buf,
+                    )
+                })
                 .expect("mov"),
         }
     }
@@ -82,7 +141,16 @@ impl Lowerer {
         let slot_off = self.slot_off(slot) as i32;
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_lea_r64_m(10, Mem { base: 4, disp: slot_off }, buf))
+            .emit_with(|buf| {
+                x64::encode_lea_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: slot_off,
+                    },
+                    buf,
+                )
+            })
             .expect("lea");
         self.emit_store_def_r10(dst, 0);
         self.set_const(dst, None);
@@ -94,12 +162,16 @@ impl Lowerer {
             1 => self
                 .ectx
                 .emit
-                .emit_with(|buf| x64::encode_movzx_r32_rm8(10, Operand::Mem(Mem { base: 12, disp: 0 }), buf))
+                .emit_with(|buf| {
+                    x64::encode_movzx_r32_rm8(10, Operand::Mem(Mem { base: 12, disp: 0 }), buf)
+                })
                 .expect("movzx"),
             2 => self
                 .ectx
                 .emit
-                .emit_with(|buf| x64::encode_movzx_r32_rm16(10, Operand::Mem(Mem { base: 12, disp: 0 }), buf))
+                .emit_with(|buf| {
+                    x64::encode_movzx_r32_rm16(10, Operand::Mem(Mem { base: 12, disp: 0 }), buf)
+                })
                 .expect("movzx"),
             4 => self
                 .ectx
@@ -122,7 +194,9 @@ impl Lowerer {
         self.emit_recipe_ops(vec![Op::BoundsCheck { count: 1 }]);
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_movzx_r32_rm8(10, Operand::Mem(Mem { base: 12, disp: 0 }), buf))
+            .emit_with(|buf| {
+                x64::encode_movzx_r32_rm8(10, Operand::Mem(Mem { base: 12, disp: 0 }), buf)
+            })
             .expect("movzx");
         self.emit_store_def_r10(dst, 0);
         self.set_const(dst, None);
@@ -316,12 +390,7 @@ impl Lowerer {
         self.set_const(dst, None);
     }
 
-    pub(super) fn emit_branch_if(
-        &mut self,
-        cond: crate::ir::VReg,
-        target: LabelId,
-        invert: bool,
-    ) {
+    pub(super) fn emit_branch_if(&mut self, cond: crate::ir::VReg, target: LabelId, invert: bool) {
         let _ = cond;
         let alloc = self.current_alloc(0);
         self.emit_branch_if_allocation(alloc, target, invert);

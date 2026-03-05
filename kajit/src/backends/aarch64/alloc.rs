@@ -58,13 +58,8 @@ impl Lowerer {
         }
         let r = preg.hw_enc() as u8;
         self.ectx.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::from_raw(r),
-                Reg::SP,
-                off,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::from_raw(r), Reg::SP, off)
+                .expect("str"),
         );
         true
     }
@@ -75,13 +70,8 @@ impl Lowerer {
         }
         let r = preg.hw_enc() as u8;
         self.ectx.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::from_raw(r),
-                Reg::SP,
-                off,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::from_raw(r), Reg::SP, off)
+                .expect("ldr"),
         );
         true
     }
@@ -124,8 +114,7 @@ impl Lowerer {
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
             self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, off)
-                    .expect("ldr"),
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, off).expect("ldr"),
             );
             return;
         }
@@ -178,13 +167,8 @@ impl Lowerer {
             let off = self.spill_off(slot);
             let target_r = target.hw_enc() as u8;
             self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(
-                    aarch64::Width::X64,
-                    Reg::from_raw(target_r),
-                    Reg::SP,
-                    off,
-                )
-                .expect("ldr"),
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::from_raw(target_r), Reg::SP, off)
+                    .expect("ldr"),
             );
             return;
         }
@@ -213,9 +197,9 @@ impl Lowerer {
     pub(super) fn emit_load_u32_w10(&mut self, value: u32) {
         let lo = value & 0xFFFF;
         let hi = (value >> 16) & 0xFFFF;
-        self.ectx
-            .emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::W32, Reg::X10, lo as u16, 0).expect("movz"));
+        self.ectx.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::W32, Reg::X10, lo as u16, 0).expect("movz"),
+        );
         if value > 0xFFFF {
             self.ectx.emit.emit_word(
                 aarch64::encode_movk(aarch64::Width::W32, Reg::X10, hi as u16, 16).expect("movk"),
@@ -228,9 +212,9 @@ impl Lowerer {
         let p1 = ((value >> 16) & 0xFFFF) as u32;
         let p2 = ((value >> 32) & 0xFFFF) as u32;
         let p3 = ((value >> 48) & 0xFFFF) as u32;
-        self.ectx
-            .emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X10, p0 as u16, 0).expect("movz"));
+        self.ectx.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X10, p0 as u16, 0).expect("movz"),
+        );
         if p1 != 0 {
             self.ectx.emit.emit_word(
                 aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p1 as u16, 16).expect("movk"),
@@ -253,9 +237,9 @@ impl Lowerer {
         let p1 = ((value >> 16) & 0xFFFF) as u32;
         let p2 = ((value >> 32) & 0xFFFF) as u32;
         let p3 = ((value >> 48) & 0xFFFF) as u32;
-        self.ectx
-            .emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X9, p0 as u16, 0).expect("movz"));
+        self.ectx.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X9, p0 as u16, 0).expect("movz"),
+        );
         if p1 != 0 {
             self.ectx.emit.emit_word(
                 aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p1 as u16, 16).expect("movk"),

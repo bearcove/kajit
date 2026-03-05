@@ -345,16 +345,16 @@ pub fn build_debug_loc_section(variables: &[DwarfVariable]) -> (Vec<u8>, Vec<u32
 pub fn dwarf_register_from_hw_encoding(target_arch: DwarfTargetArch, hw_enc: u8) -> Option<u16> {
     match target_arch {
         DwarfTargetArch::X86_64 => Some(match hw_enc {
-            0 => 0,  // rax
-            1 => 2,  // rcx
-            2 => 1,  // rdx
-            3 => 3,  // rbx
-            4 => 7,  // rsp
-            5 => 6,  // rbp
-            6 => 4,  // rsi
-            7 => 5,  // rdi
-            8 => 8,  // r8
-            9 => 9,  // r9
+            0 => 0,   // rax
+            1 => 2,   // rcx
+            2 => 1,   // rdx
+            3 => 3,   // rbx
+            4 => 7,   // rsp
+            5 => 6,   // rbp
+            6 => 4,   // rsi
+            7 => 5,   // rdi
+            8 => 8,   // r8
+            9 => 9,   // r9
             10 => 10, // r10
             11 => 11, // r11
             12 => 12, // r12
@@ -369,7 +369,7 @@ pub fn dwarf_register_from_hw_encoding(target_arch: DwarfTargetArch, hw_enc: u8)
 
 pub fn frame_base_register(target_arch: DwarfTargetArch) -> u16 {
     match target_arch {
-        DwarfTargetArch::X86_64 => 7, // rsp
+        DwarfTargetArch::X86_64 => 7,   // rsp
         DwarfTargetArch::Aarch64 => 29, // x29 (fp)
     }
 }
@@ -722,7 +722,10 @@ mod tests {
         assert_eq!(parse_uleb(&info, &mut i), 1);
         assert_eq!(u32::from_le_bytes(info[i..i + 4].try_into().unwrap()), 0);
         i += 4;
-        assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x1234);
+        assert_eq!(
+            u64::from_le_bytes(info[i..i + 8].try_into().unwrap()),
+            0x1234
+        );
         i += 8;
         assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x56);
         i += 8;
@@ -744,7 +747,10 @@ mod tests {
         let end = info[i..].iter().position(|b| *b == 0).unwrap();
         assert_eq!(&info[i..i + end], b"kajit::decode::Example");
         i += end + 1;
-        assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x1234);
+        assert_eq!(
+            u64::from_le_bytes(info[i..i + 8].try_into().unwrap()),
+            0x1234
+        );
         i += 8;
         assert_eq!(u64::from_le_bytes(info[i..i + 8].try_into().unwrap()), 0x56);
         i += 8;
