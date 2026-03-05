@@ -112,8 +112,8 @@ pub fn compile_decoder_from_ir_text(
 /// Compile a deserializer from an already-constructed RaProgram.
 ///
 /// Runs regalloc2 + codegen, skipping IR/LIR entirely.
-pub fn compile_decoder_from_ra_program(program: &regalloc_mir::RaProgram) -> CompiledDecoder {
-    compiler::compile_ra_program_decoder(program)
+pub fn compile_decoder_from_ra_program(_program: &regalloc_mir::RaProgram) -> CompiledDecoder {
+    panic!("strict cfg backend path: compiling from RaProgram is disabled")
 }
 
 /// Compile a deserializer from RA-MIR text.
@@ -124,8 +124,8 @@ pub fn compile_decoder_from_ra_program(program: &regalloc_mir::RaProgram) -> Com
 /// This is intended for regression tests and bug minimization: paste a
 /// failing RA-MIR snapshot, edit it down to a minimal reproducer, and re-run.
 pub fn compile_decoder_from_ra_mir_text(mir_text: &str) -> CompiledDecoder {
-    let program = regalloc_mir_parse::parse_ra_mir(mir_text).expect("RA-MIR text should parse");
-    compile_decoder_from_ra_program(&program)
+    let _ = mir_text;
+    panic!("strict cfg backend path: compiling from RA-MIR text is disabled")
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + RA-MIR dumps.
