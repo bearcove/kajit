@@ -1334,6 +1334,7 @@ fn compile_linear_ir_decoder_with_options(
     pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
+    let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
     // r[impl ir.regalloc.ra-mir]
     // Build allocator-oriented CFG IR before machine emission.
@@ -1345,7 +1346,12 @@ fn compile_linear_ir_decoder_with_options(
     maybe_disable_regalloc_edits(&mut regalloc_alloc, &pipeline_opts);
 
     let (buf, entry, source_map) = {
-        let result = crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
+        let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
+            ir,
+            &ra_mir,
+            &regalloc_alloc,
+            apply_regalloc_edits,
+        );
         materialize_backend_result(result)
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
@@ -1440,13 +1446,16 @@ fn compile_linear_ir_decoder_with_options(
 /// This is the backend for the RA-MIR text test workflow.
 pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
+    let pipeline_opts = PipelineOptions::from_env();
+    let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
     let mut alloc = crate::regalloc_engine::allocate_program(program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-    maybe_disable_regalloc_edits(&mut alloc, &PipelineOptions::from_env());
+    maybe_disable_regalloc_edits(&mut alloc, &pipeline_opts);
 
     let (buf, entry, source_map) = {
-        let result = crate::ir_backend::compile_ra_program(program, &alloc);
+        let result =
+            crate::ir_backend::compile_ra_program_with_mode(program, &alloc, apply_regalloc_edits);
         materialize_backend_result(result)
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =

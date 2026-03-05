@@ -281,6 +281,18 @@ impl Lowerer {
                 data_args.len()
             );
         }
+        if !self.no_edit_mode() {
+            return;
+        }
+        for (index, vreg) in data_args.iter().copied().enumerate() {
+            let source_reg = Reg::from_raw(index as u8);
+            if index != 9 {
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, source_reg).expect("mov"),
+                );
+            }
+            let _ = self.emit_store_x9_to_allocation(self.canonical_alloc_for_vreg(vreg));
+        }
     }
 
     pub(super) fn emit_load_lambda_results_to_ret_regs(
@@ -293,6 +305,22 @@ impl Lowerer {
                 "aarch64 CallLambda supports at most 2 data results, got {}",
                 data_results.len()
             );
+        }
+
+        if self.no_edit_mode() {
+            if let Some(&result) = data_results.first() {
+                self.emit_load_x9_from_allocation(self.canonical_alloc_for_vreg(result));
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X9).expect("mov"),
+                );
+            }
+            if let Some(&result) = data_results.get(1) {
+                self.emit_load_x9_from_allocation(self.canonical_alloc_for_vreg(result));
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"),
+                );
+            }
+            return;
         }
 
         let result_allocs = self
