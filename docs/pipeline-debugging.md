@@ -102,6 +102,35 @@ both harnesses in a focused test:
 These report the first divergent `step_index` and field (`position`, `cursor`,
 `trap`, `returned`, or `output`) so you can target one exact transition.
 
+### Interpreter execution trace
+
+When you need the ideal-side execution history itself, capture the append-only
+interpreter event log:
+
+- `kajit_mir::execute_program_with_event_trace(&cfg_program, input)`
+- `kajit_mir::execute_function_with_event_trace(func, vreg_count, slot_count, input)`
+
+The returned `InterpreterExecutionTrace` records:
+- vreg writes
+- slot writes
+- output writes
+- cursor changes
+- out-ptr changes
+- block entries
+- terminator decisions
+- call enter/return
+- trap/return events
+
+Useful queries:
+- `trace.last_write_to_vreg(vreg)`
+- `trace.writes_to_vreg(vreg)`
+- `trace.entries_to_block(lambda, block)`
+- `trace.render_text()`
+
+Use this trace when the differential harness tells you "where" the first
+divergence is, but you still need to answer "what actually mutated around that
+step?".
+
 ### What the differential result means
 
 The harness is not only answering "did this fail?". It gives a stable
