@@ -107,9 +107,7 @@ This is the "go straight to goal" plan. Each milestone is expected to break the 
 until the full sequence lands.
 
 Progress (strict-main-cleanup branch):
-- Completed: 1 through 8 (canonical CFG-MIR introduced, regalloc + simulator + differential + debugger ported, legacy RA-MIR plumbing removed from production API/code paths).
-- In progress: 9 (debug/dump naming and ergonomics cleanup).
-- Pending: 10 (full end-to-end stabilization matrix).
+- Completed: 1 through 10 (canonical CFG-MIR introduced, regalloc + simulator + differential + debugger ported, legacy RA-MIR plumbing removed, debug/dump + DWARF mapping updated to CFG-MIR op identity, and end-to-end stabilization validated on both aarch64 and x86_64 test matrices).
 
 1. Introduce canonical post-linearization IR
 - Add `CfgMir` types (`Function/Block/Edge/Inst/Term`) with typed IDs (`OpId`, `EdgeId`, ...).
