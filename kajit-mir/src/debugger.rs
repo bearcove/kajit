@@ -3,30 +3,36 @@ use std::collections::HashMap;
 use kajit_ir::ErrorCode;
 use kajit_lir::{BinOpKind, LinearOp};
 
-use crate::{BlockId, InterpreterTrap, RaFunction, RaProgram, RaTerminator};
+use crate::InterpreterTrap;
+use crate::cfg_mir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebuggerError {
     NoFunctions,
     UnknownBlock {
-        block: BlockId,
+        block: cfg_mir::BlockId,
     },
-    MissingEdge {
-        from: BlockId,
-        to: BlockId,
+    UnknownEdge {
+        edge: cfg_mir::EdgeId,
+    },
+    UnknownInst {
+        inst: cfg_mir::InstId,
+    },
+    UnknownTerm {
+        term: cfg_mir::TermId,
     },
     EdgeArgArityMismatch {
-        from: BlockId,
-        to: BlockId,
+        from: cfg_mir::BlockId,
+        to: cfg_mir::BlockId,
         expected: usize,
         got: usize,
     },
     UnsupportedOp {
-        block: BlockId,
+        block: cfg_mir::BlockId,
         op: String,
     },
     UnsupportedTerminator {
-        block: BlockId,
+        block: cfg_mir::BlockId,
         term: String,
     },
 }
@@ -34,11 +40,13 @@ pub enum DebuggerError {
 impl std::fmt::Display for DebuggerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoFunctions => write!(f, "RA-MIR program has no functions"),
+            Self::NoFunctions => write!(f, "CFG-MIR program has no functions"),
             Self::UnknownBlock { block } => write!(f, "unknown block b{}", block.0),
-            Self::MissingEdge { from, to } => {
-                write!(f, "missing CFG edge b{} -> b{}", from.0, to.0)
+            Self::UnknownEdge { edge } => {
+                write!(f, "unknown edge e{}", edge.0)
             }
+            Self::UnknownInst { inst } => write!(f, "unknown inst i{}", inst.0),
+            Self::UnknownTerm { term } => write!(f, "unknown term t{}", term.0),
             Self::EdgeArgArityMismatch {
                 from,
                 to,
@@ -50,12 +58,12 @@ impl std::fmt::Display for DebuggerError {
                 from.0, to.0, expected, got
             ),
             Self::UnsupportedOp { block, op } => {
-                write!(f, "unsupported RA-MIR op in block b{}: {}", block.0, op)
+                write!(f, "unsupported CFG-MIR op in block b{}: {}", block.0, op)
             }
             Self::UnsupportedTerminator { block, term } => {
                 write!(
                     f,
-                    "unsupported RA-MIR terminator in block b{}: {}",
+                    "unsupported CFG-MIR terminator in block b{}: {}",
                     block.0, term
                 )
             }
@@ -67,7 +75,7 @@ impl std::error::Error for DebuggerError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramLocation {
-    pub block: BlockId,
+    pub block: cfg_mir::BlockId,
     pub next_inst_index: usize,
     pub at_terminator: bool,
 }
@@ -107,7 +115,7 @@ pub struct StepEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunUntilTarget {
-    Block(BlockId),
+    Block(cfg_mir::BlockId),
     Trap,
     Return,
 }
@@ -119,28 +127,28 @@ struct SessionSnapshot {
     vregs: Vec<u64>,
     trap: Option<InterpreterTrap>,
     returned: bool,
-    current: BlockId,
+    current: cfg_mir::BlockId,
     next_inst: usize,
     steps: usize,
 }
 
 pub struct DebuggerSession {
-    func: RaFunction,
-    block_indices: HashMap<BlockId, usize>,
+    func: cfg_mir::Function,
+    block_indices: HashMap<cfg_mir::BlockId, usize>,
     input: Vec<u8>,
     cursor: usize,
     output: Vec<u8>,
     vregs: Vec<u64>,
     trap: Option<InterpreterTrap>,
     returned: bool,
-    current: BlockId,
+    current: cfg_mir::BlockId,
     next_inst: usize,
     steps: usize,
     history: Vec<SessionSnapshot>,
 }
 
 impl DebuggerSession {
-    pub fn new(program: &RaProgram, input: &[u8]) -> Result<Self, DebuggerError> {
+    pub fn new(program: &cfg_mir::Program, input: &[u8]) -> Result<Self, DebuggerError> {
         let func = program
             .funcs
             .first()
@@ -211,16 +219,36 @@ impl DebuggerSession {
 
         let step_detail;
         let step_kind;
-        let block = self.current_block()?;
-        if self.next_inst < block.insts.len() {
-            let op = block.insts[self.next_inst].op.clone();
-            self.execute_op(block.id, &op)?;
+        let (block_id, inst_len) = {
+            let block = self.current_block()?;
+            (block.id, block.insts.len())
+        };
+        if self.next_inst < inst_len {
+            let inst_id = {
+                let block = self.current_block()?;
+                block.insts[self.next_inst]
+            };
+            let op = self
+                .func
+                .inst(inst_id)
+                .ok_or(DebuggerError::UnknownInst { inst: inst_id })?
+                .op
+                .clone();
+            self.execute_op(block_id, &op)?;
             self.next_inst += 1;
             step_detail = format!("{op:?}");
             step_kind = StepKind::Instruction;
         } else {
-            let term = block.term.clone();
-            self.execute_terminator(block.id, &term)?;
+            let term_id = {
+                let block = self.current_block()?;
+                block.term
+            };
+            let term = self
+                .func
+                .term(term_id)
+                .ok_or(DebuggerError::UnknownTerm { term: term_id })?
+                .clone();
+            self.execute_terminator(block_id, &term)?;
             step_detail = format!("{term:?}");
             step_kind = StepKind::Terminator;
         }
@@ -296,7 +324,7 @@ impl DebuggerSession {
         }
     }
 
-    fn current_block(&self) -> Result<&crate::RaBlock, DebuggerError> {
+    fn current_block(&self) -> Result<&cfg_mir::Block, DebuggerError> {
         let idx = *self
             .block_indices
             .get(&self.current)
@@ -356,7 +384,7 @@ impl DebuggerSession {
         }
     }
 
-    fn execute_op(&mut self, block: BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
+    fn execute_op(&mut self, block: cfg_mir::BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
         match op {
             LinearOp::Const { dst, value } => self.write_vreg(dst.index(), *value),
             LinearOp::Copy { dst, src } => {
@@ -421,47 +449,44 @@ impl DebuggerSession {
 
     fn execute_terminator(
         &mut self,
-        block_id: BlockId,
-        term: &RaTerminator,
+        block_id: cfg_mir::BlockId,
+        term: &cfg_mir::Terminator,
     ) -> Result<(), DebuggerError> {
         match term {
-            RaTerminator::Return => {
+            cfg_mir::Terminator::Return => {
                 self.returned = true;
             }
-            RaTerminator::ErrorExit { code } => {
+            cfg_mir::Terminator::ErrorExit { code } => {
                 self.trap(*code);
             }
-            RaTerminator::Branch { target } => {
-                self.apply_edge_args(block_id, *target)?;
-                self.current = *target;
+            cfg_mir::Terminator::Branch { edge } => {
+                self.apply_edge(*edge)?;
                 self.next_inst = 0;
             }
-            RaTerminator::BranchIf {
+            cfg_mir::Terminator::BranchIf {
                 cond,
-                target,
+                taken,
                 fallthrough,
             } => {
                 let next = if self.read_vreg(cond.index()) != 0 {
-                    *target
+                    *taken
                 } else {
                     *fallthrough
                 };
-                self.apply_edge_args(block_id, next)?;
-                self.current = next;
+                self.apply_edge(next)?;
                 self.next_inst = 0;
             }
-            RaTerminator::BranchIfZero {
+            cfg_mir::Terminator::BranchIfZero {
                 cond,
-                target,
+                taken,
                 fallthrough,
             } => {
                 let next = if self.read_vreg(cond.index()) == 0 {
-                    *target
+                    *taken
                 } else {
                     *fallthrough
                 };
-                self.apply_edge_args(block_id, next)?;
-                self.current = next;
+                self.apply_edge(next)?;
                 self.next_inst = 0;
             }
             term => {
@@ -475,22 +500,18 @@ impl DebuggerSession {
         Ok(())
     }
 
-    fn apply_edge_args(&mut self, from: BlockId, to: BlockId) -> Result<(), DebuggerError> {
-        let from_idx = *self
-            .block_indices
-            .get(&from)
-            .ok_or(DebuggerError::UnknownBlock { block: from })?;
+    fn apply_edge(&mut self, edge_id: cfg_mir::EdgeId) -> Result<(), DebuggerError> {
+        let edge = self
+            .func
+            .edge(edge_id)
+            .ok_or(DebuggerError::UnknownEdge { edge: edge_id })?;
+        let from = edge.from;
+        let to = edge.to;
         let to_idx = *self
             .block_indices
             .get(&to)
             .ok_or(DebuggerError::UnknownBlock { block: to })?;
-        let from_block = &self.func.blocks[from_idx];
         let to_block = &self.func.blocks[to_idx];
-        let edge = from_block
-            .succs
-            .iter()
-            .find(|edge| edge.to == to)
-            .ok_or(DebuggerError::MissingEdge { from, to })?;
 
         if edge.args.len() != to_block.params.len() {
             return Err(DebuggerError::EdgeArgArityMismatch {
@@ -509,11 +530,12 @@ impl DebuggerSession {
         for (target, value) in transfers {
             self.write_vreg(target, value);
         }
+        self.current = to;
         Ok(())
     }
 }
 
-fn build_block_index(func: &RaFunction) -> HashMap<BlockId, usize> {
+fn build_block_index(func: &cfg_mir::Function) -> HashMap<cfg_mir::BlockId, usize> {
     let mut out = HashMap::with_capacity(func.blocks.len());
     for (idx, block) in func.blocks.iter().enumerate() {
         out.insert(block.id, idx);
@@ -521,16 +543,19 @@ fn build_block_index(func: &RaFunction) -> HashMap<BlockId, usize> {
     out
 }
 
-fn infer_output_size(func: &RaFunction) -> usize {
+fn infer_output_size(func: &cfg_mir::Function) -> usize {
     func.blocks
         .iter()
         .flat_map(|block| block.insts.iter())
-        .filter_map(|inst| match &inst.op {
-            LinearOp::WriteToField { offset, width, .. }
-            | LinearOp::ReadFromField { offset, width, .. } => {
-                Some(*offset as usize + width.bytes() as usize)
+        .filter_map(|inst_id| {
+            let inst = func.inst(*inst_id)?;
+            match &inst.op {
+                LinearOp::WriteToField { offset, width, .. }
+                | LinearOp::ReadFromField { offset, width, .. } => {
+                    Some(*offset as usize + width.bytes() as usize)
+                }
+                _ => None,
             }
-            _ => None,
         })
         .max()
         .unwrap_or(0)
@@ -566,78 +591,83 @@ mod tests {
     use kajit_ir::{ErrorCode, LambdaId, VReg, Width};
     use kajit_lir::LinearOp;
 
-    use crate::{
-        BlockId, DebuggerSession, RaBlock, RaClobbers, RaFunction, RaInst, RaProgram, RaTerminator,
-    };
+    use crate::{DebuggerSession, cfg_mir};
 
     fn v(index: u32) -> VReg {
         VReg::new(index)
     }
 
-    fn test_inst(op: LinearOp) -> RaInst {
-        RaInst {
-            linear_op_index: 0,
+    fn test_inst(id: u32, op: LinearOp) -> cfg_mir::Inst {
+        cfg_mir::Inst {
+            id: cfg_mir::InstId(id),
             op,
             operands: Vec::new(),
-            clobbers: RaClobbers {
-                caller_saved_gpr: false,
-                caller_saved_simd: false,
-            },
+            clobbers: cfg_mir::Clobbers::default(),
         }
     }
 
-    fn make_simple_program() -> RaProgram {
-        let b0 = RaBlock {
-            id: BlockId(0),
-            label: None,
+    fn make_simple_program() -> cfg_mir::Program {
+        let b0 = cfg_mir::Block {
+            id: cfg_mir::BlockId(0),
             params: Vec::new(),
-            insts: vec![
-                test_inst(LinearOp::Const {
-                    dst: v(0),
-                    value: 0x2a,
-                }),
-                test_inst(LinearOp::WriteToField {
-                    src: v(0),
-                    offset: 0,
-                    width: Width::W1,
-                }),
-            ],
-            term_linear_op_index: 1,
-            term: RaTerminator::Return,
+            insts: vec![cfg_mir::InstId(0), cfg_mir::InstId(1)],
+            term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
         };
-        RaProgram {
-            funcs: vec![RaFunction {
+        cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId(0),
                 lambda_id: LambdaId::new(0),
-                entry: BlockId(0),
+                entry: cfg_mir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
                 blocks: vec![b0],
+                edges: Vec::new(),
+                insts: vec![
+                    test_inst(
+                        0,
+                        LinearOp::Const {
+                            dst: v(0),
+                            value: 0x2a,
+                        },
+                    ),
+                    test_inst(
+                        1,
+                        LinearOp::WriteToField {
+                            src: v(0),
+                            offset: 0,
+                            width: Width::W1,
+                        },
+                    ),
+                ],
+                terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 1,
             slot_count: 0,
         }
     }
 
-    fn make_trap_program() -> RaProgram {
-        let b0 = RaBlock {
-            id: BlockId(0),
-            label: None,
+    fn make_trap_program() -> cfg_mir::Program {
+        let b0 = cfg_mir::Block {
+            id: cfg_mir::BlockId(0),
             params: Vec::new(),
-            insts: vec![test_inst(LinearOp::BoundsCheck { count: 1 })],
-            term_linear_op_index: 1,
-            term: RaTerminator::Return,
+            insts: vec![cfg_mir::InstId(0)],
+            term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
         };
-        RaProgram {
-            funcs: vec![RaFunction {
+        cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId(0),
                 lambda_id: LambdaId::new(0),
-                entry: BlockId(0),
+                entry: cfg_mir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
                 blocks: vec![b0],
+                edges: Vec::new(),
+                insts: vec![test_inst(0, LinearOp::BoundsCheck { count: 1 })],
+                terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 0,
             slot_count: 0,
