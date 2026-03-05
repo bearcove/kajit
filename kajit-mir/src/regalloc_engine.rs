@@ -1832,14 +1832,6 @@ pub fn allocate_cfg_program(
     Ok(allocated)
 }
 
-/// Run regalloc2 on linear IR by first lowering to RA-MIR.
-pub fn allocate_linear_ir(
-    ir: &kajit_lir::LinearIr,
-) -> Result<AllocatedProgram, RegallocEngineError> {
-    let ra = crate::regalloc_mir::lower_linear_ir(ir);
-    allocate_program(&ra)
-}
-
 const MAX_SIM_STEPS: usize = 1_000_000;
 const SLOT_ADDR_STRIDE: usize = 16;
 
@@ -4254,22 +4246,6 @@ pub fn differential_check_cfg(
     compare_differential_states(ideal, post)
 }
 
-pub fn differential_check_program(program: RaProgram, input: &[u8]) -> DifferentialCheckResult {
-    let cfg_program = match lower_ra_program_to_cfg(&program) {
-        Ok(v) => v,
-        Err(err) => {
-            return DifferentialCheckResult::Error(format!("ra->cfg conversion failed: {err}"));
-        }
-    };
-    let allocated = match allocate_cfg_program(&cfg_program) {
-        Ok(v) => v,
-        Err(err) => {
-            return DifferentialCheckResult::Error(format!("cfg allocation failed: {err}"));
-        }
-    };
-    differential_check_cfg(&cfg_program, &allocated, input)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4412,7 +4388,8 @@ mod tests {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate gamma/theta");
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate gamma/theta");
         assert!(!alloc.functions.is_empty());
     }
 
@@ -4499,12 +4476,13 @@ lambda @0 (shape: "u8") {
         let mut func = build_stress_ir();
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate stress IR");
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate stress IR");
         assert!(
             alloc.functions.iter().any(|f| f.lambda_id.index() == 0),
             "expected allocation output to include root lambda"
         );
-        let total_inst_allocs: usize = alloc.functions.iter().map(|f| f.inst_allocs.len()).sum();
+        let total_inst_allocs: usize = alloc.functions.iter().map(|f| f.op_allocs.len()).sum();
         assert!(
             total_inst_allocs > 100,
             "expected sizeable stress IR lowering, got {} insts",
@@ -4533,8 +4511,9 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate call-heavy IR");
-        assert!(!alloc.functions[0].inst_allocs.is_empty());
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate call-heavy IR");
+        assert!(!alloc.functions[0].op_allocs.is_empty());
     }
 
     #[test]
@@ -4545,7 +4524,8 @@ lambda @0 (shape: "u8") {
         let mut func = build_stress_ir();
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let alloc = allocate_linear_ir(&lin).expect("regalloc2 should allocate stress IR");
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate stress IR");
 
         let total_edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
         assert!(
@@ -4586,7 +4566,8 @@ lambda @0 (shape: "u8") {
         let mut func = build_stress_ir();
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let alloc = allocate_linear_ir(&lin).expect("allocation should succeed");
+        let ra = lower_linear_ir(&lin);
+        let alloc = allocate_program(&ra).expect("allocation should succeed");
         verify_static_edge_edits(&alloc).expect("static verifier should accept allocator output");
     }
 
@@ -5039,10 +5020,11 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
         let input = [0x78_u8, 0x56, 0x34, 0x12];
-        let result = differential_check_program(ra, &input);
+        let result = differential_check_cfg(&cfg, &alloc, &input);
         match result {
             DifferentialCheckResult::Match { .. } => {}
             other => panic!("expected differential check to match, got: {other:?}"),
@@ -5069,9 +5051,10 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let ra = lower_linear_ir(&lin);
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
-        let result = differential_check_program(ra, &[]);
+        let result = differential_check_cfg(&cfg, &alloc, &[]);
         match result {
             DifferentialCheckResult::Match { .. } => {}
             other => panic!("expected differential check to match, got: {other:?}"),
