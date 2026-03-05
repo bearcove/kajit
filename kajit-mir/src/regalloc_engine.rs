@@ -12,6 +12,7 @@ use regalloc2::{
     OperandPos, Output, PReg, PRegSet, RegAllocError, RegClass, RegallocOptions, VReg,
 };
 
+use crate::cfg_mir::{self, OpId};
 use crate::{FixedReg, OperandKind as RaOperandKind, RaFunction, RaProgram};
 use kajit_ir::LambdaId;
 
@@ -43,6 +44,13 @@ pub struct AllocatedFunction {
 #[derive(Debug, Clone)]
 pub struct AllocatedProgram {
     pub ra_program: RaProgram,
+    pub functions: Vec<AllocatedFunction>,
+}
+
+/// Materialized allocation result for a full canonical CFG MIR program.
+#[derive(Debug, Clone)]
+pub struct AllocatedCfgProgram {
+    pub cfg_program: cfg_mir::Program,
     pub functions: Vec<AllocatedFunction>,
 }
 
@@ -132,21 +140,18 @@ struct WorkBlock {
     succs: Vec<usize>,
     preds: Vec<usize>,
     params: Vec<kajit_ir::VReg>,
-    succ_args: Vec<Vec<crate::RaEdgeArg>>,
+    succ_args: Vec<Vec<kajit_ir::VReg>>,
 }
 
-fn align_succ_args_to_target(
+fn align_succ_arg_sources_to_target(
     target_params: &[kajit_ir::VReg],
     args: &[crate::RaEdgeArg],
-) -> Vec<crate::RaEdgeArg> {
+) -> Vec<kajit_ir::VReg> {
     let source_by_target: HashMap<_, _> = args.iter().map(|arg| (arg.target, arg.source)).collect();
 
     target_params
         .iter()
-        .map(|target| crate::RaEdgeArg {
-            target: *target,
-            source: source_by_target.get(target).copied().unwrap_or(*target),
-        })
+        .map(|target| source_by_target.get(target).copied().unwrap_or(*target))
         .collect()
 }
 
@@ -412,7 +417,44 @@ fn lower_term_uses(term: &crate::regalloc_mir::RaTerminator) -> Vec<kajit_ir::VR
     }
 }
 
-fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBlockInfo>>) {
+fn lower_term_uses_cfg(term: &cfg_mir::Terminator) -> Vec<kajit_ir::VReg> {
+    match term {
+        cfg_mir::Terminator::BranchIf { cond, .. }
+        | cfg_mir::Terminator::BranchIfZero { cond, .. } => vec![*cond],
+        cfg_mir::Terminator::JumpTable { predicate, .. } => vec![*predicate],
+        cfg_mir::Terminator::Return
+        | cfg_mir::Terminator::ErrorExit { .. }
+        | cfg_mir::Terminator::Branch { .. } => Vec::new(),
+    }
+}
+
+fn map_cfg_operand(op: cfg_mir::Operand) -> crate::RaOperand {
+    crate::RaOperand {
+        vreg: op.vreg,
+        kind: match op.kind {
+            cfg_mir::OperandKind::Use => RaOperandKind::Use,
+            cfg_mir::OperandKind::Def => RaOperandKind::Def,
+        },
+        class: match op.class {
+            cfg_mir::RegClass::Gpr => crate::RegClass::Gpr,
+            cfg_mir::RegClass::Simd => crate::RegClass::Simd,
+        },
+        fixed: op.fixed.map(|fixed| match fixed {
+            cfg_mir::FixedReg::AbiArg(i) => FixedReg::AbiArg(i),
+            cfg_mir::FixedReg::AbiRet(i) => FixedReg::AbiRet(i),
+            cfg_mir::FixedReg::HwReg(enc) => FixedReg::HwReg(enc),
+        }),
+    }
+}
+
+fn map_cfg_clobbers(clobbers: cfg_mir::Clobbers) -> crate::RaClobbers {
+    crate::RaClobbers {
+        caller_saved_gpr: clobbers.caller_saved_gpr,
+        caller_saved_simd: clobbers.caller_saved_simd,
+    }
+}
+
+fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBlockInfo>>) {
     let mut blocks: Vec<WorkBlock> = func
         .blocks
         .iter()
@@ -437,7 +479,10 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                     .succs
                     .iter()
                     .map(|s| {
-                        align_succ_args_to_target(&func.blocks[s.to.0 as usize].params, &s.args)
+                        align_succ_arg_sources_to_target(
+                            &func.blocks[s.to.0 as usize].params,
+                            &s.args,
+                        )
                     })
                     .collect(),
             }
@@ -456,14 +501,7 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
 
             let to_params = blocks[to].params.clone();
             let from_linear_op_index = blocks[from].term_linear_op_index;
-            let edge_succ_args = to_params
-                .iter()
-                .copied()
-                .map(|v| crate::RaEdgeArg {
-                    source: v,
-                    target: v,
-                })
-                .collect();
+            let edge_succ_args = to_params.clone();
             let edge_block = WorkBlock {
                 raw_insts: Vec::new(),
                 term_kind: BlockTermKind::BranchLike,
@@ -497,10 +535,146 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
     (blocks, edge_infos)
 }
 
+fn split_critical_edges_cfg(
+    func: &cfg_mir::Function,
+) -> Result<(Vec<WorkBlock>, Vec<Option<EdgeBlockInfo>>), RegallocEngineError> {
+    let schedule = func
+        .derive_schedule()
+        .map_err(|err| RegallocEngineError::Checker(err.to_string()))?;
+
+    let mut blocks: Vec<WorkBlock> = func
+        .blocks
+        .iter()
+        .map(|b| {
+            let term = &func.terms[b.term.index()];
+            let term_kind = match term {
+                cfg_mir::Terminator::Return | cfg_mir::Terminator::ErrorExit { .. } => {
+                    BlockTermKind::Ret
+                }
+                _ => BlockTermKind::BranchLike,
+            };
+            let term_returns_data_results = matches!(term, cfg_mir::Terminator::Return);
+            let raw_insts = b
+                .insts
+                .iter()
+                .map(|inst_id| {
+                    let inst = &func.insts[inst_id.index()];
+                    let linear_op_index = schedule
+                        .op_to_index
+                        .get(&OpId::Inst(*inst_id))
+                        .copied()
+                        .expect("schedule should include every instruction")
+                        as usize;
+                    crate::RaInst {
+                        linear_op_index,
+                        op: inst.op.clone(),
+                        operands: inst.operands.iter().copied().map(map_cfg_operand).collect(),
+                        clobbers: map_cfg_clobbers(inst.clobbers),
+                    }
+                })
+                .collect();
+            let term_linear_op_index = schedule
+                .op_to_index
+                .get(&OpId::Term(b.term))
+                .copied()
+                .expect("schedule should include every terminator")
+                as usize;
+            WorkBlock {
+                raw_insts,
+                term_kind,
+                term_returns_data_results,
+                term_linear_op_index,
+                term_uses: lower_term_uses_cfg(term),
+                succs: b
+                    .succs
+                    .iter()
+                    .map(|edge_id| func.edges[edge_id.index()].to.index())
+                    .collect(),
+                preds: b
+                    .preds
+                    .iter()
+                    .map(|edge_id| func.edges[edge_id.index()].from.index())
+                    .collect(),
+                params: b.params.clone(),
+                succ_args: b
+                    .succs
+                    .iter()
+                    .map(|edge_id| {
+                        let edge = &func.edges[edge_id.index()];
+                        let aligned_args: Vec<crate::RaEdgeArg> = edge
+                            .args
+                            .iter()
+                            .copied()
+                            .map(|arg| crate::RaEdgeArg {
+                                source: arg.source,
+                                target: arg.target,
+                            })
+                            .collect();
+                        align_succ_arg_sources_to_target(
+                            &func.blocks[edge.to.index()].params,
+                            &aligned_args,
+                        )
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    let mut edge_infos = vec![None; blocks.len()];
+
+    let mut from = 0usize;
+    while from < blocks.len() {
+        let succ_count = blocks[from].succs.len();
+        for succ_idx in 0..succ_count {
+            let to = blocks[from].succs[succ_idx];
+            if succ_count <= 1 || blocks[to].preds.len() <= 1 {
+                continue;
+            }
+
+            let to_params = blocks[to].params.clone();
+            let from_linear_op_index = blocks[from].term_linear_op_index;
+            let edge_succ_args = to_params.clone();
+            let edge_block = WorkBlock {
+                raw_insts: Vec::new(),
+                term_kind: BlockTermKind::BranchLike,
+                term_returns_data_results: false,
+                term_linear_op_index: from_linear_op_index,
+                term_uses: Vec::new(),
+                succs: vec![to],
+                preds: vec![from],
+                params: to_params,
+                succ_args: vec![edge_succ_args],
+            };
+            let edge_id = blocks.len();
+            blocks.push(edge_block);
+            edge_infos.push(Some(EdgeBlockInfo {
+                from_linear_op_index,
+                succ_index: succ_idx,
+            }));
+
+            blocks[from].succs[succ_idx] = edge_id;
+
+            let pred_slot = blocks[to]
+                .preds
+                .iter()
+                .position(|&p| p == from)
+                .expect("target block should list source as predecessor");
+            blocks[to].preds[pred_slot] = edge_id;
+        }
+        from += 1;
+    }
+
+    Ok((blocks, edge_infos))
+}
+
 impl AdapterFunction {
-    fn from_ra(func: &RaFunction, num_vregs: usize) -> Self {
+    fn from_work_blocks(
+        data_args: &[kajit_ir::VReg],
+        data_results: &[kajit_ir::VReg],
+        num_vregs: usize,
+        mut blocks: Vec<WorkBlock>,
+        edge_infos: Vec<Option<EdgeBlockInfo>>,
+    ) -> Self {
         let trace_self_loop = std::env::var_os("KAJIT_TRACE_SELF_LOOP").is_some();
-        let (mut blocks, edge_infos) = split_critical_edges(func);
         let mut adapter_insts = Vec::<AdapterInst>::new();
         let mut inst_linear_op_indices = Vec::<Option<usize>>::new();
         let mut inst_edge_infos = Vec::<Option<EdgeBlockInfo>>::new();
@@ -516,7 +690,7 @@ impl AdapterFunction {
                     .map(|inst| inst.linear_op_index)
                     .unwrap_or(b.term_linear_op_index);
                 let mut entry_operands = Vec::new();
-                for (arg_idx, &arg) in func.data_args.iter().enumerate() {
+                for (arg_idx, &arg) in data_args.iter().enumerate() {
                     let fixed = fixed_preg(FixedReg::AbiArg((arg_idx + 2) as u8))
                         .expect("entry data arg has unsupported ABI register index");
                     entry_operands.push(Operand::new(
@@ -529,8 +703,7 @@ impl AdapterFunction {
                 if !entry_operands.is_empty() {
                     adapter_insts.push(AdapterInst {
                         operands: entry_operands,
-                        operand_vregs: func
-                            .data_args
+                        operand_vregs: data_args
                             .iter()
                             .copied()
                             .map(|arg| (arg, RaOperandKind::Def))
@@ -589,8 +762,8 @@ impl AdapterFunction {
             let mut ret_value_operand_count = 0usize;
             if b.term_returns_data_results {
                 ret_value_operand_start = term_operands.len();
-                ret_value_operand_count = func.data_results.len();
-                for (i, &result) in func.data_results.iter().enumerate() {
+                ret_value_operand_count = data_results.len();
+                for (i, &result) in data_results.iter().enumerate() {
                     let fixed = fixed_preg(FixedReg::AbiRet(i as u8))
                         .expect("return data result has unsupported ABI register index");
                     term_operands.push(Operand::new(
@@ -611,7 +784,7 @@ impl AdapterFunction {
                 .collect::<Vec<_>>();
             if b.term_returns_data_results {
                 term_operand_vregs.extend(
-                    func.data_results
+                    data_results
                         .iter()
                         .copied()
                         .map(|v| (v, RaOperandKind::Use)),
@@ -638,7 +811,7 @@ impl AdapterFunction {
                 succ_args: b
                     .succ_args
                     .iter()
-                    .map(|args| args.iter().map(|arg| int_vreg(arg.source)).collect())
+                    .map(|args| args.iter().copied().map(int_vreg).collect())
                     .collect(),
             });
             if trace_self_loop {
@@ -673,6 +846,28 @@ impl AdapterFunction {
             num_vregs,
             empty_vregs: Vec::new(),
         }
+    }
+
+    fn from_ra(func: &RaFunction, num_vregs: usize) -> Self {
+        let (blocks, edge_infos) = split_critical_edges_ra(func);
+        Self::from_work_blocks(
+            &func.data_args,
+            &func.data_results,
+            num_vregs,
+            blocks,
+            edge_infos,
+        )
+    }
+
+    fn from_cfg(func: &cfg_mir::Function, num_vregs: usize) -> Result<Self, RegallocEngineError> {
+        let (blocks, edge_infos) = split_critical_edges_cfg(func)?;
+        Ok(Self::from_work_blocks(
+            &func.data_args,
+            &func.data_results,
+            num_vregs,
+            blocks,
+            edge_infos,
+        ))
     }
 }
 
@@ -828,6 +1023,32 @@ fn allocate_ra_function(
     let out = regalloc2::run(&adapter, env, options)?;
 
     // r[impl ir.regalloc.checker]
+    #[cfg(debug_assertions)]
+    {
+        let mut checker = regalloc2::checker::Checker::new(&adapter, env);
+        checker.prepare(&out);
+        checker
+            .run()
+            .map_err(|errs| RegallocEngineError::Checker(format!("{errs:?}")))?;
+    }
+
+    Ok(materialize_output(
+        &out,
+        &adapter,
+        func.lambda_id,
+        func.blocks.len(),
+    ))
+}
+
+fn allocate_cfg_function(
+    func: &cfg_mir::Function,
+    vreg_count: usize,
+    env: &MachineEnv,
+    options: &RegallocOptions,
+) -> Result<AllocatedFunction, RegallocEngineError> {
+    let adapter = AdapterFunction::from_cfg(func, vreg_count)?;
+    let out = regalloc2::run(&adapter, env, options)?;
+
     #[cfg(debug_assertions)]
     {
         let mut checker = regalloc2::checker::Checker::new(&adapter, env);
@@ -1185,6 +1406,37 @@ pub fn allocate_program(program: &RaProgram) -> Result<AllocatedProgram, Regallo
     verify_static_edge_edits(&allocated)?;
 
     Ok(allocated)
+}
+
+/// Run regalloc2 over canonical CFG MIR.
+pub fn allocate_cfg_program(
+    program: &cfg_mir::Program,
+) -> Result<AllocatedCfgProgram, RegallocEngineError> {
+    program
+        .validate()
+        .map_err(|err| RegallocEngineError::Checker(err.to_string()))?;
+
+    let env = machine_env();
+    let options = RegallocOptions {
+        verbose_log: false,
+        validate_ssa: false,
+        algorithm: regalloc2::Algorithm::Ion,
+    };
+
+    let mut functions = Vec::with_capacity(program.funcs.len());
+    for func in &program.funcs {
+        functions.push(allocate_cfg_function(
+            func,
+            program.vreg_count as usize,
+            &env,
+            &options,
+        )?);
+    }
+
+    Ok(AllocatedCfgProgram {
+        cfg_program: program.clone(),
+        functions,
+    })
 }
 
 /// Run regalloc2 on linear IR by first lowering to RA-MIR.
@@ -2599,6 +2851,56 @@ mod tests {
             rb.set_results(&[]);
         }
         builder.finish()
+    }
+
+    #[test]
+    fn regalloc2_allocates_cfg_mir_program() {
+        let mut func = build_stress_ir();
+        let lin = linearize(&mut func);
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate cfg_mir");
+
+        assert_eq!(alloc.functions.len(), cfg.funcs.len());
+        assert!(
+            alloc.functions.iter().all(|f| !f.inst_allocs.is_empty()),
+            "expected instruction allocation vectors for cfg_mir functions"
+        );
+    }
+
+    #[test]
+    fn regalloc2_allocates_cfg_mir_gamma_theta_program() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            let pred = rb.const_val(1);
+            let init_count = rb.const_val(5);
+            let one = rb.const_val(1);
+
+            let gamma_out = rb.gamma(pred, &[init_count], 2, |branch_idx, bb| {
+                let args = bb.region_args(1);
+                let val = if branch_idx == 0 {
+                    args[0]
+                } else {
+                    bb.binop(IrOp::Add, args[0], one)
+                };
+                bb.set_results(&[val]);
+            });
+            let _ = rb.theta(&[gamma_out[0], one], |bb| {
+                let args = bb.region_args(2);
+                let counter = args[0];
+                let one = args[1];
+                let next = bb.binop(IrOp::Sub, counter, one);
+                bb.set_results(&[next, next, one]);
+            });
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc =
+            allocate_cfg_program(&cfg).expect("regalloc2 should allocate cfg_mir gamma/theta");
+
+        assert_eq!(alloc.functions.len(), 1);
     }
 
     // r[verify ir.regalloc.engine]
