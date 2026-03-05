@@ -369,3 +369,297 @@ impl core::fmt::Display for DeserError {
 }
 
 impl std::error::Error for DeserError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DifferentialFailure {
+    pub code: ErrorCode,
+    pub offset: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DifferentialOutcome {
+    Success { output: Vec<u8> },
+    Failure(DifferentialFailure),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DifferentialMismatch {
+    FirstDivergentByte {
+        index: usize,
+        interpreter: u8,
+        jit: u8,
+    },
+    OutputLength {
+        shared_prefix: usize,
+        interpreter_len: usize,
+        jit_len: usize,
+    },
+    FailureMismatch {
+        interpreter: DifferentialFailure,
+        jit: DifferentialFailure,
+    },
+    OutcomeKindMismatch {
+        interpreter: DifferentialOutcome,
+        jit: DifferentialOutcome,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DifferentialReport {
+    pub interpreter: DifferentialOutcome,
+    pub jit: DifferentialOutcome,
+    pub mismatch: Option<DifferentialMismatch>,
+}
+
+impl DifferentialReport {
+    pub fn is_match(&self) -> bool {
+        self.mismatch.is_none()
+    }
+}
+
+#[derive(Debug)]
+pub enum DifferentialHarnessError {
+    Interpreter(kajit_mir::InterpreterError),
+}
+
+impl core::fmt::Display for DifferentialHarnessError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Interpreter(err) => write!(f, "interpreter execution failed: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for DifferentialHarnessError {}
+
+impl From<kajit_mir::InterpreterError> for DifferentialHarnessError {
+    fn from(value: kajit_mir::InterpreterError) -> Self {
+        Self::Interpreter(value)
+    }
+}
+
+pub fn infer_ra_program_output_size(program: &regalloc_mir::RaProgram) -> usize {
+    program
+        .funcs
+        .iter()
+        .flat_map(|func| func.blocks.iter())
+        .flat_map(|block| block.insts.iter())
+        .filter_map(|inst| match &inst.op {
+            linearize::LinearOp::WriteToField { offset, width, .. }
+            | linearize::LinearOp::ReadFromField { offset, width, .. } => {
+                Some(*offset as usize + width.bytes() as usize)
+            }
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn normalize_interpreter_outcome(
+    outcome: kajit_mir::InterpreterOutcome,
+    output_size: usize,
+) -> DifferentialOutcome {
+    match outcome.trap {
+        Some(trap) => DifferentialOutcome::Failure(DifferentialFailure {
+            code: trap.code,
+            offset: trap.offset,
+        }),
+        None => {
+            let mut output = outcome.output;
+            if output.len() < output_size {
+                output.resize(output_size, 0);
+            } else if output.len() > output_size {
+                output.truncate(output_size);
+            }
+            DifferentialOutcome::Success { output }
+        }
+    }
+}
+
+fn normalize_jit_outcome(
+    outcome: Result<Vec<u8>, DeserError>,
+    output_size: usize,
+) -> DifferentialOutcome {
+    match outcome {
+        Ok(mut output) => {
+            if output.len() < output_size {
+                output.resize(output_size, 0);
+            } else if output.len() > output_size {
+                output.truncate(output_size);
+            }
+            DifferentialOutcome::Success { output }
+        }
+        Err(err) => DifferentialOutcome::Failure(DifferentialFailure {
+            code: err.code,
+            offset: err.offset,
+        }),
+    }
+}
+
+fn compare_differential_outcomes(
+    interpreter: &DifferentialOutcome,
+    jit: &DifferentialOutcome,
+) -> Option<DifferentialMismatch> {
+    match (interpreter, jit) {
+        (
+            DifferentialOutcome::Success {
+                output: interpreter,
+            },
+            DifferentialOutcome::Success { output: jit },
+        ) => {
+            let shared = interpreter.len().min(jit.len());
+            for i in 0..shared {
+                if interpreter[i] != jit[i] {
+                    return Some(DifferentialMismatch::FirstDivergentByte {
+                        index: i,
+                        interpreter: interpreter[i],
+                        jit: jit[i],
+                    });
+                }
+            }
+            if interpreter.len() != jit.len() {
+                return Some(DifferentialMismatch::OutputLength {
+                    shared_prefix: shared,
+                    interpreter_len: interpreter.len(),
+                    jit_len: jit.len(),
+                });
+            }
+            None
+        }
+        (DifferentialOutcome::Failure(interpreter), DifferentialOutcome::Failure(jit)) => {
+            if interpreter == jit {
+                None
+            } else {
+                Some(DifferentialMismatch::FailureMismatch {
+                    interpreter: *interpreter,
+                    jit: *jit,
+                })
+            }
+        }
+        _ => Some(DifferentialMismatch::OutcomeKindMismatch {
+            interpreter: interpreter.clone(),
+            jit: jit.clone(),
+        }),
+    }
+}
+
+pub fn differential_check_program_vs_jit(
+    program: &regalloc_mir::RaProgram,
+    input: &[u8],
+) -> Result<DifferentialReport, DifferentialHarnessError> {
+    let output_size = infer_ra_program_output_size(program);
+    differential_check_program_vs_jit_with_output_size(program, input, output_size)
+}
+
+pub fn differential_check_program_vs_jit_with_output_size(
+    program: &regalloc_mir::RaProgram,
+    input: &[u8],
+    output_size: usize,
+) -> Result<DifferentialReport, DifferentialHarnessError> {
+    let interpreter = kajit_mir::execute_program(program, input)?;
+    let interpreter = normalize_interpreter_outcome(interpreter, output_size);
+    let decoder = compile_decoder_from_ra_program(program);
+    let jit = normalize_jit_outcome(deserialize_raw(&decoder, input, output_size), output_size);
+    let mismatch = compare_differential_outcomes(&interpreter, &jit);
+    Ok(DifferentialReport {
+        interpreter,
+        jit,
+        mismatch,
+    })
+}
+
+#[cfg(test)]
+mod differential_tests {
+    use super::*;
+
+    fn tiny_const_write_program() -> regalloc_mir::RaProgram {
+        let v0 = ir::VReg::new(0);
+        regalloc_mir::RaProgram {
+            funcs: vec![regalloc_mir::RaFunction {
+                lambda_id: ir::LambdaId::new(0),
+                entry: regalloc_mir::BlockId(0),
+                data_args: Vec::new(),
+                data_results: Vec::new(),
+                blocks: vec![regalloc_mir::RaBlock {
+                    id: regalloc_mir::BlockId(0),
+                    label: None,
+                    params: Vec::new(),
+                    insts: vec![
+                        regalloc_mir::RaInst {
+                            linear_op_index: 0,
+                            op: linearize::LinearOp::Const {
+                                dst: v0,
+                                value: 0x4433_2211,
+                            },
+                            operands: vec![regalloc_mir::RaOperand {
+                                vreg: v0,
+                                kind: regalloc_mir::OperandKind::Def,
+                                class: regalloc_mir::RegClass::Gpr,
+                                fixed: None,
+                            }],
+                            clobbers: regalloc_mir::RaClobbers::default(),
+                        },
+                        regalloc_mir::RaInst {
+                            linear_op_index: 1,
+                            op: linearize::LinearOp::WriteToField {
+                                src: v0,
+                                offset: 0,
+                                width: ir::Width::W4,
+                            },
+                            operands: vec![regalloc_mir::RaOperand {
+                                vreg: v0,
+                                kind: regalloc_mir::OperandKind::Use,
+                                class: regalloc_mir::RegClass::Gpr,
+                                fixed: None,
+                            }],
+                            clobbers: regalloc_mir::RaClobbers::default(),
+                        },
+                    ],
+                    term_linear_op_index: Some(2),
+                    term: regalloc_mir::RaTerminator::Return,
+                    preds: Vec::new(),
+                    succs: Vec::new(),
+                }],
+            }],
+            vreg_count: 1,
+            slot_count: 0,
+        }
+    }
+
+    #[test]
+    fn differential_harness_matches_tiny_ra_program() {
+        let program = tiny_const_write_program();
+        let report =
+            differential_check_program_vs_jit(&program, &[]).expect("harness should execute");
+        assert!(
+            report.is_match(),
+            "unexpected mismatch: {:?}",
+            report.mismatch
+        );
+        assert_eq!(
+            report.interpreter,
+            DifferentialOutcome::Success {
+                output: vec![0x11, 0x22, 0x33, 0x44]
+            }
+        );
+    }
+
+    #[test]
+    fn differential_harness_reports_first_divergent_byte() {
+        let interpreter = DifferentialOutcome::Success {
+            output: vec![1, 2, 3],
+        };
+        let jit = DifferentialOutcome::Success {
+            output: vec![1, 9, 3],
+        };
+        let mismatch = compare_differential_outcomes(&interpreter, &jit);
+        assert_eq!(
+            mismatch,
+            Some(DifferentialMismatch::FirstDivergentByte {
+                index: 1,
+                interpreter: 2,
+                jit: 9,
+            })
+        );
+    }
+}
