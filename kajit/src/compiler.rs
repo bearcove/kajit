@@ -1165,7 +1165,8 @@ pub fn regalloc_edit_count_with_options(
     let mut func = build_decoder_ir(shape, ir_decoder);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
-    let alloc = crate::regalloc_engine::allocate_linear_ir(&linear)
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed while counting edits: {err}"));
     alloc.functions.iter().map(|f| f.edits.len()).sum()
 }
@@ -1179,20 +1180,21 @@ pub fn regalloc_edits_text_with_options(
     let mut func = build_decoder_ir(shape, ir_decoder);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
-    let ra_mir = crate::regalloc_mir::lower_linear_ir(&linear);
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
     let alloc = if pipeline_opts.resolve_regalloc(true) {
-        let mut alloc = crate::regalloc_engine::allocate_program(&ra_mir).unwrap_or_else(|err| {
-            panic!("regalloc2 allocation failed while formatting edits: {err}")
-        });
-        maybe_disable_regalloc_edits(&mut alloc, pipeline_opts);
+        let mut alloc =
+            crate::regalloc_engine::allocate_cfg_program(&cfg_program).unwrap_or_else(|err| {
+                panic!("regalloc2 allocation failed while formatting edits: {err}")
+            });
+        maybe_disable_regalloc_edits_cfg(&mut alloc, pipeline_opts);
         alloc
     } else {
-        no_regalloc_alloc_for_program(&ra_mir)
+        no_regalloc_alloc_for_cfg_program(&cfg_program)
     };
     format_allocated_regalloc_edits(&alloc)
 }
 
-fn format_allocated_regalloc_edits(alloc: &crate::regalloc_engine::AllocatedProgram) -> String {
+fn format_allocated_regalloc_edits(alloc: &crate::regalloc_engine::AllocatedCfgProgram) -> String {
     let mut out = String::new();
     let total_pp_edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
     let total_edge_edits: usize = alloc.functions.iter().map(|f| f.edge_edits.len()).sum();
@@ -1228,8 +1230,8 @@ fn format_allocated_regalloc_edits(alloc: &crate::regalloc_engine::AllocatedProg
             let _ = std::fmt::Write::write_fmt(
                 &mut out,
                 format_args!(
-                    "    - edge from=b{} succ={} pos={:?} move {:?} -> {:?}\n",
-                    edge.from_block_id.0, edge.succ_index, edge.pos, edge.from, edge.to
+                    "    - edge e{} pos={:?} move {:?} -> {:?}\n",
+                    edge.edge.0, edge.pos, edge.from, edge.to
                 ),
             );
         }
@@ -1323,6 +1325,20 @@ fn maybe_disable_regalloc_edits(
     }
 }
 
+fn maybe_disable_regalloc_edits_cfg(
+    alloc: &mut crate::regalloc_engine::AllocatedCfgProgram,
+    pipeline_opts: &PipelineOptions,
+) {
+    if pipeline_opts.resolve_regalloc(true) {
+        return;
+    }
+
+    for func in &mut alloc.functions {
+        func.edits.clear();
+        func.edge_edits.clear();
+    }
+}
+
 fn no_regalloc_alloc_for_program(
     ra_mir: &crate::regalloc_mir::RaProgram,
 ) -> crate::regalloc_engine::AllocatedProgram {
@@ -1348,6 +1364,29 @@ fn no_regalloc_alloc_for_program(
     }
 }
 
+fn no_regalloc_alloc_for_cfg_program(
+    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+) -> crate::regalloc_engine::AllocatedCfgProgram {
+    let functions = cfg_program
+        .funcs
+        .iter()
+        .map(|func| crate::regalloc_engine::AllocatedCfgFunction {
+            lambda_id: func.lambda_id,
+            num_spillslots: 0,
+            edits: Vec::new(),
+            op_allocs: std::collections::HashMap::new(),
+            op_operands: std::collections::HashMap::new(),
+            edge_edits: Vec::new(),
+            return_result_allocs: Vec::new(),
+        })
+        .collect();
+
+    crate::regalloc_engine::AllocatedCfgProgram {
+        cfg_program: cfg_program.clone(),
+        functions,
+    }
+}
+
 /// Compile a deserializer from already-linearized IR.
 ///
 /// This is the first backend-adapter entrypoint used by the IR migration.
@@ -1366,24 +1405,20 @@ fn compile_linear_ir_decoder_with_options(
     let jit_debug = jit_debug_enabled();
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
-    // r[impl ir.regalloc.ra-mir]
-    // Build allocator-oriented CFG IR before machine emission.
-    let ra_mir = crate::regalloc_mir::lower_linear_ir(ir);
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(ir);
     let regalloc_alloc = if apply_regalloc_edits {
-        // r[impl ir.regalloc.engine]
-        // Run regalloc2 over RA-MIR and thread allocation artifacts into emission.
-        let mut alloc = crate::regalloc_engine::allocate_program(&ra_mir)
+        let mut alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
             .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-        maybe_disable_regalloc_edits(&mut alloc, &pipeline_opts);
+        maybe_disable_regalloc_edits_cfg(&mut alloc, &pipeline_opts);
         alloc
     } else {
-        no_regalloc_alloc_for_program(&ra_mir)
+        no_regalloc_alloc_for_cfg_program(&cfg_program)
     };
 
     let (buf, entry, source_map) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
             ir,
-            &ra_mir,
+            &cfg_program,
             &regalloc_alloc,
             apply_regalloc_edits,
         );
@@ -1423,46 +1458,7 @@ fn compile_linear_ir_decoder_with_options(
         size: buf.len().saturating_sub(entry),
     };
     let registration = if jit_debug {
-        let (listing, line_by_linear_op) = build_ra_mir_listing(&ra_mir);
-        let listing_path = write_ra_mir_listing_file(&root_display_name, &listing);
-        let target_arch = jit_dwarf_target_arch();
-        let root_shape = ir.ops.iter().find_map(|op| match op {
-            crate::linearize::LinearOp::FuncStart {
-                lambda_id, shape, ..
-            } if lambda_id.index() == 0 => Some(*shape),
-            _ => None,
-        });
-        let dwarf_variables = if let (Some(shape), Some(sm)) = (root_shape, source_map.as_ref()) {
-            build_dwarf_variables_from_regalloc(
-                ir,
-                &ra_mir,
-                &regalloc_alloc,
-                sm,
-                buf.len(),
-                shape,
-                target_arch,
-            )
-        } else {
-            Vec::new()
-        };
-        let dwarf = listing_path.as_deref().and_then(|path| {
-            build_dwarf_from_source_map(
-                buf.code_ptr(),
-                buf.len(),
-                source_map.as_ref(),
-                path,
-                &line_by_linear_op,
-                &root_display_name,
-                &dwarf_variables,
-                target_arch,
-            )
-        });
-        crate::jit_debug::register_jit_code_with_dwarf(
-            buf.code_ptr(),
-            buf.len(),
-            &[symbol],
-            dwarf.as_ref(),
-        )
+        crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
     } else {
         crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
     };

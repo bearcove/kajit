@@ -75,7 +75,7 @@ impl Lowerer {
     }
 
     // r[impl ir.regalloc.edits]
-    pub(super) fn apply_regalloc_edits(&mut self, linear_op_index: usize, pos: InstPosition) {
+    pub(super) fn apply_regalloc_edits(&mut self, op_id: cfg_mir::OpId, pos: InstPosition) {
         let lambda_id = match self.current_func.as_ref() {
             Some(func) => func.lambda_id.index() as u32,
             None => return,
@@ -85,8 +85,8 @@ impl Lowerer {
             .edits_by_lambda
             .get(&lambda_id)
             .and_then(|by_lambda| match pos {
-                InstPosition::Before => by_lambda.before.get(&linear_op_index),
-                InstPosition::After => by_lambda.after.get(&linear_op_index),
+                InstPosition::Before => by_lambda.before.get(&op_id),
+                InstPosition::After => by_lambda.after.get(&op_id),
             })
             .cloned()
             .unwrap_or_default();
@@ -97,14 +97,18 @@ impl Lowerer {
         emit_parallel_moves(self, &edits);
     }
 
-    pub(super) fn resolve_forwarded_block(&self, lambda_id: u32, block_id: BlockId) -> BlockId {
+    pub(super) fn resolve_forwarded_block(
+        &self,
+        lambda_id: u32,
+        block_id: cfg_mir::BlockId,
+    ) -> cfg_mir::BlockId {
         let mut resolved = block_id;
         let mut hops = 0usize;
         while hops < 64 {
             let Some(&next_block) = self.forward_branch_blocks.get(&(lambda_id, resolved.0)) else {
                 break;
             };
-            let next_id = BlockId(next_block);
+            let next_id = cfg_mir::BlockId(next_block);
             if next_id == resolved {
                 break;
             }
@@ -114,22 +118,21 @@ impl Lowerer {
         resolved
     }
 
-    pub(super) fn apply_fallthrough_edge_edits(&mut self, from_block_id: u32, succ_index: usize) {
-        let moves = self.edge_edit_moves(from_block_id, succ_index);
+    pub(super) fn apply_fallthrough_edge_edits(&mut self, edge_id: cfg_mir::EdgeId) {
+        let moves = self.edge_edit_moves(edge_id);
         if moves.is_empty() {
             return;
         }
         emit_parallel_moves(self, &moves);
     }
 
-    pub(super) fn has_edge_edits(&self, from_block_id: u32, succ_index: usize) -> bool {
-        !self.edge_edit_moves(from_block_id, succ_index).is_empty()
+    pub(super) fn has_edge_edits(&self, edge_id: cfg_mir::EdgeId) -> bool {
+        !self.edge_edit_moves(edge_id).is_empty()
     }
 
     pub(super) fn edge_target_label(
         &mut self,
-        from_block_id: u32,
-        succ_index: usize,
+        edge_id: cfg_mir::EdgeId,
         actual_target: LabelId,
     ) -> LabelId {
         let Some(lambda_id) = self
@@ -139,21 +142,17 @@ impl Lowerer {
         else {
             return actual_target;
         };
-        let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
-            return actual_target;
-        };
-        let key = (from_block_id, succ_index);
-        let has_edits = by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
+        let has_edits = self.has_edge_edits(edge_id);
         if !has_edits {
             return actual_target;
         }
 
-        let cache_key = (lambda_id, from_block_id, succ_index);
+        let cache_key = (lambda_id, edge_id);
         if let Some(label) = self.edge_trampoline_labels.get(&cache_key).copied() {
             return label;
         }
 
-        let moves = self.edge_edit_moves(from_block_id, succ_index);
+        let moves = self.edge_edit_moves(edge_id);
 
         let label = self.new_label_id();
         self.edge_trampoline_labels.insert(cache_key, label);

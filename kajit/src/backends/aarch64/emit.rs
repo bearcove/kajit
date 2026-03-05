@@ -859,15 +859,10 @@ impl Lowerer {
         &mut self,
         lambda_id: u32,
         predicate: crate::ir::VReg,
-        term: &RaTerminator,
-        from_block_id: u32,
+        targets: &[cfg_mir::EdgeId],
+        default: cfg_mir::EdgeId,
+        func: &cfg_mir::Function,
     ) {
-        let RaTerminator::JumpTable {
-            targets, default, ..
-        } = term
-        else {
-            unreachable!();
-        };
         let _ = predicate;
         let alloc = self.current_alloc(0);
         let pred_reg = alloc.as_reg().map(|r| {
@@ -886,10 +881,13 @@ impl Lowerer {
         } else if pred_reg.is_none() {
             panic!("unexpected none allocation for jumptable predicate");
         }
-        for (index, target_block) in targets.iter().enumerate() {
-            let resolved = self.resolve_forwarded_block(lambda_id, *target_block);
-            let target =
-                self.edge_target_label(from_block_id, index, self.block_label(lambda_id, resolved));
+        for (index, edge_id) in targets.iter().enumerate() {
+            let target_block = func
+                .edge(*edge_id)
+                .expect("jump-table target edge should exist")
+                .to;
+            let resolved = self.resolve_forwarded_block(lambda_id, target_block);
+            let target = self.edge_target_label(*edge_id, self.block_label(lambda_id, resolved));
             let idx = index as u32;
             if let Some(r) = pred_reg {
                 self.emit_load_u32_w10(idx);
@@ -921,13 +919,13 @@ impl Lowerer {
                     .expect("b.eq");
             }
         }
-        let default_succ_index = targets.len();
-        let resolved_default = self.resolve_forwarded_block(lambda_id, *default);
-        let default_target = self.edge_target_label(
-            from_block_id,
-            default_succ_index,
-            self.block_label(lambda_id, resolved_default),
-        );
+        let default_block = func
+            .edge(default)
+            .expect("jump-table default edge should exist")
+            .to;
+        let resolved_default = self.resolve_forwarded_block(lambda_id, default_block);
+        let default_target =
+            self.edge_target_label(default, self.block_label(lambda_id, resolved_default));
         self.ectx.emit_branch(default_target);
     }
 }

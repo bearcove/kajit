@@ -34,7 +34,7 @@ define_id!(EdgeId);
 define_id!(InstId);
 define_id!(TermId);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum OpId {
     Inst(InstId),
     Term(TermId),
