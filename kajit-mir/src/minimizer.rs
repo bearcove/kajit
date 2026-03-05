@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::cfg_mir;
 
@@ -9,6 +9,7 @@ pub struct ProgramSize {
     pub insts: usize,
     pub terms: usize,
     pub edges: usize,
+    pub edge_args: usize,
     pub block_params: usize,
 }
 
@@ -20,6 +21,7 @@ impl ProgramSize {
             insts: 0,
             terms: 0,
             edges: 0,
+            edge_args: 0,
             block_params: 0,
         };
         for func in &program.funcs {
@@ -27,6 +29,7 @@ impl ProgramSize {
             size.insts += func.insts.len();
             size.terms += func.terms.len();
             size.edges += func.edges.len();
+            size.edge_args += func.edges.iter().map(|edge| edge.args.len()).sum::<usize>();
             size.block_params += func
                 .blocks
                 .iter()
@@ -36,11 +39,12 @@ impl ProgramSize {
         size
     }
 
-    fn weight(self) -> (usize, usize, usize, usize, usize, usize) {
+    fn weight(self) -> (usize, usize, usize, usize, usize, usize, usize) {
         (
             self.blocks,
             self.insts,
             self.edges,
+            self.edge_args,
             self.terms,
             self.block_params,
             self.funcs,
@@ -148,6 +152,31 @@ where
 fn generate_candidates(program: &cfg_mir::Program) -> Vec<Candidate> {
     let mut out = Vec::new();
     for (func_index, func) in program.funcs.iter().enumerate() {
+        for block in &func.blocks {
+            let unused_params = unused_block_params(func, block);
+            for param in unused_params {
+                if let Some(candidate_program) =
+                    remove_block_param(program, func_index, block.id, param)
+                {
+                    out.push(Candidate {
+                        strategy: "remove_unused_block_param",
+                        program: candidate_program,
+                    });
+                }
+            }
+        }
+
+        for block in &func.blocks {
+            if let Some(candidate_program) =
+                collapse_trampoline_block(program, func_index, block.id)
+            {
+                out.push(Candidate {
+                    strategy: "collapse_trampoline_block",
+                    program: candidate_program,
+                });
+            }
+        }
+
         let reachable = reachable_blocks(func);
         for block in &func.blocks {
             if block.id == func.entry || reachable.contains(&block.id) {
@@ -162,6 +191,53 @@ fn generate_candidates(program: &cfg_mir::Program) -> Vec<Candidate> {
         }
     }
     out
+}
+
+fn unused_block_params(func: &cfg_mir::Function, block: &cfg_mir::Block) -> Vec<kajit_ir::VReg> {
+    let used = used_vregs(func);
+    block
+        .params
+        .iter()
+        .copied()
+        .filter(|param| !used.contains(param))
+        .collect()
+}
+
+fn used_vregs(func: &cfg_mir::Function) -> BTreeSet<kajit_ir::VReg> {
+    let mut used = BTreeSet::new();
+    for &vreg in &func.data_args {
+        used.insert(vreg);
+    }
+    for &vreg in &func.data_results {
+        used.insert(vreg);
+    }
+    for inst in &func.insts {
+        for operand in &inst.operands {
+            if operand.kind == cfg_mir::OperandKind::Use {
+                used.insert(operand.vreg);
+            }
+        }
+    }
+    for term in &func.terms {
+        match term {
+            cfg_mir::Terminator::BranchIf { cond, .. }
+            | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                used.insert(*cond);
+            }
+            cfg_mir::Terminator::JumpTable { predicate, .. } => {
+                used.insert(*predicate);
+            }
+            cfg_mir::Terminator::Return
+            | cfg_mir::Terminator::ErrorExit { .. }
+            | cfg_mir::Terminator::Branch { .. } => {}
+        }
+    }
+    for edge in &func.edges {
+        for arg in &edge.args {
+            used.insert(arg.source);
+        }
+    }
+    used
 }
 
 fn reachable_blocks(func: &cfg_mir::Function) -> BTreeSet<cfg_mir::BlockId> {
@@ -199,6 +275,98 @@ fn remove_block(
     let mut out = program.clone();
     out.funcs[func_index] = rebuilt;
     out.validate().ok()?;
+    Some(out)
+}
+
+fn remove_block_param(
+    program: &cfg_mir::Program,
+    func_index: usize,
+    block_id: cfg_mir::BlockId,
+    param: kajit_ir::VReg,
+) -> Option<cfg_mir::Program> {
+    let mut out = program.clone();
+    let func = out.funcs.get_mut(func_index)?;
+    let block = func.blocks.get_mut(block_id.index())?;
+    let before_len = block.params.len();
+    block.params.retain(|candidate| *candidate != param);
+    if block.params.len() == before_len {
+        return None;
+    }
+
+    for edge_id in block.preds.clone() {
+        let edge = func.edges.get_mut(edge_id.index())?;
+        edge.args.retain(|arg| arg.target != param);
+    }
+
+    func.validate().ok()?;
+    out.validate().ok()?;
+    Some(out)
+}
+
+fn collapse_trampoline_block(
+    program: &cfg_mir::Program,
+    func_index: usize,
+    block_id: cfg_mir::BlockId,
+) -> Option<cfg_mir::Program> {
+    let mut out = program.clone();
+    let func = out.funcs.get_mut(func_index)?;
+    let block = func.block(block_id)?.clone();
+    if block.id == func.entry || !block.insts.is_empty() || block.preds.is_empty() {
+        return None;
+    }
+
+    let cfg_mir::Terminator::Branch { edge: out_edge_id } = func.term(block.term)?.clone() else {
+        return None;
+    };
+    let out_edge = func.edge(out_edge_id)?.clone();
+    let successor_id = out_edge.to;
+
+    let successor = func.block(successor_id)?.clone();
+    let mut successor_preds = successor
+        .preds
+        .iter()
+        .copied()
+        .filter(|edge_id| *edge_id != out_edge_id)
+        .collect::<Vec<_>>();
+
+    for pred_edge_id in &block.preds {
+        let pred_edge = func.edge(*pred_edge_id)?.clone();
+        let composed_args = compose_edge_args(&block.params, &pred_edge.args, &out_edge.args)?;
+        let edge = func.edges.get_mut(pred_edge_id.index())?;
+        edge.to = successor_id;
+        edge.args = composed_args;
+        successor_preds.push(*pred_edge_id);
+    }
+
+    func.blocks.get_mut(successor_id.index())?.preds = successor_preds;
+    let rebuilt = rebuild_function_without_block(func, block_id)?;
+    rebuilt.validate().ok()?;
+    out.funcs[func_index] = rebuilt;
+    out.validate().ok()?;
+    Some(out)
+}
+
+fn compose_edge_args(
+    params: &[kajit_ir::VReg],
+    pred_args: &[cfg_mir::EdgeArg],
+    succ_args: &[cfg_mir::EdgeArg],
+) -> Option<Vec<cfg_mir::EdgeArg>> {
+    let param_set = params.iter().copied().collect::<BTreeSet<_>>();
+    let pred_source_by_target = pred_args
+        .iter()
+        .map(|arg| (arg.target, arg.source))
+        .collect::<BTreeMap<_, _>>();
+    let mut out = Vec::with_capacity(succ_args.len());
+    for arg in succ_args {
+        if !param_set.contains(&arg.source) {
+            return None;
+        }
+        let source = pred_source_by_target.get(&arg.source).copied()?;
+        out.push(cfg_mir::EdgeArg {
+            target: arg.target,
+            source,
+        });
+    }
     Some(out)
 }
 
@@ -451,6 +619,174 @@ mod tests {
         }
     }
 
+    fn unused_block_param_program() -> cfg_mir::Program {
+        cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId::new(0),
+                lambda_id: LambdaId::new(0),
+                entry: cfg_mir::BlockId::new(0),
+                data_args: Vec::new(),
+                data_results: Vec::new(),
+                blocks: vec![
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId::new(0),
+                        params: Vec::new(),
+                        insts: vec![cfg_mir::InstId::new(0)],
+                        term: cfg_mir::TermId::new(0),
+                        preds: Vec::new(),
+                        succs: vec![cfg_mir::EdgeId::new(0)],
+                    },
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId::new(1),
+                        params: vec![vreg(1)],
+                        insts: Vec::new(),
+                        term: cfg_mir::TermId::new(1),
+                        preds: vec![cfg_mir::EdgeId::new(0)],
+                        succs: Vec::new(),
+                    },
+                ],
+                edges: vec![cfg_mir::Edge {
+                    id: cfg_mir::EdgeId::new(0),
+                    from: cfg_mir::BlockId::new(0),
+                    to: cfg_mir::BlockId::new(1),
+                    args: vec![cfg_mir::EdgeArg {
+                        target: vreg(1),
+                        source: vreg(0),
+                    }],
+                }],
+                insts: vec![cfg_mir::Inst {
+                    id: cfg_mir::InstId::new(0),
+                    op: LinearOp::Const {
+                        dst: vreg(0),
+                        value: 7,
+                    },
+                    operands: vec![cfg_mir::Operand {
+                        vreg: vreg(0),
+                        kind: cfg_mir::OperandKind::Def,
+                        class: cfg_mir::RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: cfg_mir::Clobbers::default(),
+                }],
+                terms: vec![
+                    cfg_mir::Terminator::Branch {
+                        edge: cfg_mir::EdgeId::new(0),
+                    },
+                    cfg_mir::Terminator::Return,
+                ],
+            }],
+            vreg_count: 2,
+            slot_count: 0,
+        }
+    }
+
+    fn trampoline_program() -> cfg_mir::Program {
+        cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId::new(0),
+                lambda_id: LambdaId::new(0),
+                entry: cfg_mir::BlockId::new(0),
+                data_args: Vec::new(),
+                data_results: Vec::new(),
+                blocks: vec![
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId::new(0),
+                        params: Vec::new(),
+                        insts: vec![cfg_mir::InstId::new(0)],
+                        term: cfg_mir::TermId::new(0),
+                        preds: Vec::new(),
+                        succs: vec![cfg_mir::EdgeId::new(0)],
+                    },
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId::new(1),
+                        params: vec![vreg(1)],
+                        insts: Vec::new(),
+                        term: cfg_mir::TermId::new(1),
+                        preds: vec![cfg_mir::EdgeId::new(0)],
+                        succs: vec![cfg_mir::EdgeId::new(1)],
+                    },
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId::new(2),
+                        params: vec![vreg(2)],
+                        insts: vec![cfg_mir::InstId::new(1)],
+                        term: cfg_mir::TermId::new(2),
+                        preds: vec![cfg_mir::EdgeId::new(1)],
+                        succs: Vec::new(),
+                    },
+                ],
+                edges: vec![
+                    cfg_mir::Edge {
+                        id: cfg_mir::EdgeId::new(0),
+                        from: cfg_mir::BlockId::new(0),
+                        to: cfg_mir::BlockId::new(1),
+                        args: vec![cfg_mir::EdgeArg {
+                            target: vreg(1),
+                            source: vreg(0),
+                        }],
+                    },
+                    cfg_mir::Edge {
+                        id: cfg_mir::EdgeId::new(1),
+                        from: cfg_mir::BlockId::new(1),
+                        to: cfg_mir::BlockId::new(2),
+                        args: vec![cfg_mir::EdgeArg {
+                            target: vreg(2),
+                            source: vreg(1),
+                        }],
+                    },
+                ],
+                insts: vec![
+                    cfg_mir::Inst {
+                        id: cfg_mir::InstId::new(0),
+                        op: LinearOp::Const {
+                            dst: vreg(0),
+                            value: 9,
+                        },
+                        operands: vec![cfg_mir::Operand {
+                            vreg: vreg(0),
+                            kind: cfg_mir::OperandKind::Def,
+                            class: cfg_mir::RegClass::Gpr,
+                            fixed: None,
+                        }],
+                        clobbers: cfg_mir::Clobbers::default(),
+                    },
+                    cfg_mir::Inst {
+                        id: cfg_mir::InstId::new(1),
+                        op: LinearOp::Copy {
+                            dst: vreg(3),
+                            src: vreg(2),
+                        },
+                        operands: vec![
+                            cfg_mir::Operand {
+                                vreg: vreg(3),
+                                kind: cfg_mir::OperandKind::Def,
+                                class: cfg_mir::RegClass::Gpr,
+                                fixed: None,
+                            },
+                            cfg_mir::Operand {
+                                vreg: vreg(2),
+                                kind: cfg_mir::OperandKind::Use,
+                                class: cfg_mir::RegClass::Gpr,
+                                fixed: None,
+                            },
+                        ],
+                        clobbers: cfg_mir::Clobbers::default(),
+                    },
+                ],
+                terms: vec![
+                    cfg_mir::Terminator::Branch {
+                        edge: cfg_mir::EdgeId::new(0),
+                    },
+                    cfg_mir::Terminator::Branch {
+                        edge: cfg_mir::EdgeId::new(1),
+                    },
+                    cfg_mir::Terminator::Return,
+                ],
+            }],
+            vreg_count: 4,
+            slot_count: 0,
+        }
+    }
+
     #[test]
     fn minimizer_rejects_uninteresting_seed() {
         let program = dead_block_program();
@@ -470,6 +806,48 @@ mod tests {
         assert_eq!(stats.accepted, 1);
         assert_eq!(stats.steps[0].strategy, "remove_unreachable_block");
         assert!(stats.final_size.is_smaller_than(stats.initial_size));
+    }
+
+    #[test]
+    fn minimizer_removes_unused_block_param() {
+        let program = unused_block_param_program();
+        let (reduced, stats) =
+            minimize_cfg_program(&program, |_| Ok::<_, ()>(true)).expect("seed should minimize");
+
+        reduced.validate().expect("reduced program should validate");
+        assert!(reduced.funcs[0].blocks[1].params.is_empty());
+        assert!(reduced.funcs[0].edges[0].args.is_empty());
+        assert_eq!(stats.accepted, 1);
+        assert_eq!(stats.steps[0].strategy, "remove_unused_block_param");
+        assert!(stats.final_size.is_smaller_than(stats.initial_size));
+    }
+
+    #[test]
+    fn minimizer_collapses_trampoline_block() {
+        let program = trampoline_program();
+        let (reduced, stats) =
+            minimize_cfg_program(&program, |_| Ok::<_, ()>(true)).expect("seed should minimize");
+
+        reduced.validate().expect("reduced program should validate");
+        assert_eq!(reduced.funcs[0].blocks.len(), 2);
+        assert_eq!(reduced.funcs[0].edges.len(), 1);
+        assert_eq!(
+            reduced.funcs[0].blocks[1].preds,
+            vec![cfg_mir::EdgeId::new(0)]
+        );
+        assert_eq!(
+            reduced.funcs[0].edges[0].args,
+            vec![cfg_mir::EdgeArg {
+                target: vreg(2),
+                source: vreg(0),
+            }]
+        );
+        assert!(
+            stats
+                .steps
+                .iter()
+                .any(|step| step.strategy == "collapse_trampoline_block")
+        );
     }
 
     #[test]
