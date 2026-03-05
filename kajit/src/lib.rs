@@ -626,6 +626,83 @@ mod differential_tests {
         }
     }
 
+    fn tiny_out_ptr_roundtrip_program() -> regalloc_mir::RaProgram {
+        let v0 = ir::VReg::new(0);
+        let v1 = ir::VReg::new(1);
+        regalloc_mir::RaProgram {
+            funcs: vec![regalloc_mir::RaFunction {
+                lambda_id: ir::LambdaId::new(0),
+                entry: regalloc_mir::BlockId(0),
+                data_args: Vec::new(),
+                data_results: Vec::new(),
+                blocks: vec![regalloc_mir::RaBlock {
+                    id: regalloc_mir::BlockId(0),
+                    label: None,
+                    params: Vec::new(),
+                    insts: vec![
+                        regalloc_mir::RaInst {
+                            linear_op_index: 0,
+                            op: linearize::LinearOp::SaveOutPtr { dst: v1 },
+                            operands: vec![regalloc_mir::RaOperand {
+                                vreg: v1,
+                                kind: regalloc_mir::OperandKind::Def,
+                                class: regalloc_mir::RegClass::Gpr,
+                                fixed: None,
+                            }],
+                            clobbers: regalloc_mir::RaClobbers::default(),
+                        },
+                        regalloc_mir::RaInst {
+                            linear_op_index: 1,
+                            op: linearize::LinearOp::SetOutPtr { src: v1 },
+                            operands: vec![regalloc_mir::RaOperand {
+                                vreg: v1,
+                                kind: regalloc_mir::OperandKind::Use,
+                                class: regalloc_mir::RegClass::Gpr,
+                                fixed: None,
+                            }],
+                            clobbers: regalloc_mir::RaClobbers::default(),
+                        },
+                        regalloc_mir::RaInst {
+                            linear_op_index: 2,
+                            op: linearize::LinearOp::Const {
+                                dst: v0,
+                                value: 0x4433_2211,
+                            },
+                            operands: vec![regalloc_mir::RaOperand {
+                                vreg: v0,
+                                kind: regalloc_mir::OperandKind::Def,
+                                class: regalloc_mir::RegClass::Gpr,
+                                fixed: None,
+                            }],
+                            clobbers: regalloc_mir::RaClobbers::default(),
+                        },
+                        regalloc_mir::RaInst {
+                            linear_op_index: 3,
+                            op: linearize::LinearOp::WriteToField {
+                                src: v0,
+                                offset: 0,
+                                width: ir::Width::W4,
+                            },
+                            operands: vec![regalloc_mir::RaOperand {
+                                vreg: v0,
+                                kind: regalloc_mir::OperandKind::Use,
+                                class: regalloc_mir::RegClass::Gpr,
+                                fixed: None,
+                            }],
+                            clobbers: regalloc_mir::RaClobbers::default(),
+                        },
+                    ],
+                    term_linear_op_index: 4,
+                    term: regalloc_mir::RaTerminator::Return,
+                    preds: Vec::new(),
+                    succs: Vec::new(),
+                }],
+            }],
+            vreg_count: 2,
+            slot_count: 0,
+        }
+    }
+
     #[test]
     fn differential_harness_matches_tiny_ra_program() {
         let program = tiny_const_write_program();
@@ -660,6 +737,24 @@ mod differential_tests {
                 interpreter: 2,
                 jit: 9,
             })
+        );
+    }
+
+    #[test]
+    fn differential_harness_supports_out_ptr_roundtrip_ops() {
+        let program = tiny_out_ptr_roundtrip_program();
+        let report =
+            differential_check_program_vs_jit(&program, &[]).expect("harness should execute");
+        assert!(
+            report.is_match(),
+            "unexpected mismatch: {:?}",
+            report.mismatch
+        );
+        assert_eq!(
+            report.interpreter,
+            DifferentialOutcome::Success {
+                output: vec![0x11, 0x22, 0x33, 0x44]
+            }
         );
     }
 }
