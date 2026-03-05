@@ -644,6 +644,10 @@ impl EmitCtx {
         self.emit.set_source_location(location);
     }
 
+    pub fn current_source_location(&self) -> kajit_emit::SourceLocation {
+        self.emit.current_source_location()
+    }
+
     /// Emit an unconditional branch to the given label.
     pub fn emit_branch(&mut self, label: LabelId) {
         self.emit.emit_jmp_label(label).expect("jmp");

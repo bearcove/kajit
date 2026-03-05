@@ -78,6 +78,23 @@ pub fn regalloc_edits_text_with_options<F: format::Decoder>(
     compiler::regalloc_edits_text_with_options(shape, decoder, pipeline_opts)
 }
 
+/// Return a deterministic machine-emission trace annotated with CFG-MIR provenance.
+pub fn emission_trace_text<F: format::Decoder>(
+    shape: &'static facet::Shape,
+    decoder: &F,
+) -> String {
+    compiler::emission_trace_text(shape, decoder)
+}
+
+/// Return a deterministic emission trace with explicit pipeline options.
+pub fn emission_trace_text_with_options<F: format::Decoder>(
+    shape: &'static facet::Shape,
+    decoder: &F,
+    pipeline_opts: &PipelineOptions,
+) -> String {
+    compiler::emission_trace_text_with_options(shape, decoder, pipeline_opts)
+}
+
 /// Compile a deserializer from already-linearized IR.
 pub fn compile_decoder_linear_ir(
     ir: &linearize::LinearIr,
@@ -109,17 +126,20 @@ pub fn compile_decoder_from_ir_text(
 
 /// Compile a deserializer from canonical CFG-MIR text.
 ///
-/// Parses the CFG-MIR text with Kajit's built-in intrinsic registry, runs
-/// regalloc (unless `KAJIT_OPTS='-regalloc'`), and returns an executable
-/// decoder.
+/// Parses the CFG-MIR text with the provided symbol registry, runs regalloc
+/// (unless `KAJIT_OPTS='-regalloc'`), and returns an executable decoder.
 pub fn compile_decoder_from_cfg_mir_text(
     cfg_mir_text: &str,
+    registry: &ir::IntrinsicRegistry,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
-    let registry = known_intrinsic_registry();
-    let cfg_program = kajit_mir_text::parse_cfg_mir_with_registry(cfg_mir_text, &registry)
+    let cfg_program = kajit_mir_text::parse_cfg_mir_with_registry(cfg_mir_text, registry)
         .expect("CFG-MIR text should parse");
-    compiler::compile_cfg_mir_decoder(&cfg_program, trusted_utf8_input)
+    compiler::compile_cfg_mir_decoder_with_registry(
+        &cfg_program,
+        Some(registry),
+        trusted_utf8_input,
+    )
 }
 
 /// Compile from IR text and immediately deserialize one input.
@@ -139,7 +159,8 @@ pub fn deserialize_from_cfg_mir_text<'input, T: facet::Facet<'input>>(
     cfg_mir_text: &str,
     input: &'input [u8],
 ) -> Result<T, DeserError> {
-    let decoder = compile_decoder_from_cfg_mir_text(cfg_mir_text, false);
+    let registry = symbol_registry_for_shape(T::SHAPE);
+    let decoder = compile_decoder_from_cfg_mir_text(cfg_mir_text, &registry, false);
     deserialize(&decoder, input)
 }
 
@@ -152,10 +173,10 @@ pub fn debug_ir_and_cfg_mir_text(
 ) -> (String, String) {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
-    let registry = known_intrinsic_registry();
-    let ir_text = scrub_volatile_const_addrs(&format!("{}", func.display_with_registry(&registry)));
+    let registry = symbol_registry_for_shape(shape);
+    let ir_text = format!("{}", func.display_with_registry(&registry));
     let cfg = debug_cfg_mir(shape, ir_decoder);
-    let cfg_text = scrub_volatile_const_addrs(&format!("{}", cfg.display_with_registry(&registry)));
+    let cfg_text = format!("{}", cfg.display_with_registry(&registry));
     (ir_text, cfg_text)
 }
 
@@ -167,8 +188,8 @@ pub fn debug_cfg_mir_text(
     ir_decoder: &dyn format::Decoder,
 ) -> String {
     let cfg = debug_cfg_mir(shape, ir_decoder);
-    let registry = known_intrinsic_registry();
-    scrub_volatile_const_addrs(&format!("{}", cfg.display_with_registry(&registry)))
+    let registry = symbol_registry_for_shape(shape);
+    format!("{}", cfg.display_with_registry(&registry))
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return the CFG-MIR program.
@@ -205,8 +226,8 @@ pub fn debug_linear_ir_text(
     ir_decoder: &dyn format::Decoder,
 ) -> String {
     let linear = debug_linear_ir(shape, ir_decoder);
-    let registry = known_intrinsic_registry();
-    scrub_volatile_const_addrs(&format!("{}", linear.display_with_registry(&registry)))
+    let registry = symbol_registry_for_shape(shape);
+    format!("{}", linear.display_with_registry(&registry))
 }
 
 /// Build decoder IR and return textual RVSDG checkpoints before/after each enabled optimization pass.
@@ -227,10 +248,10 @@ pub fn debug_ir_opt_timeline_text_with_options(
     pipeline_opts: &PipelineOptions,
 ) -> Vec<(String, String)> {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
-    let registry = known_intrinsic_registry();
+    let registry = symbol_registry_for_shape(shape);
     let mut checkpoints = vec![(
         "initial".to_string(),
-        scrub_volatile_const_addrs(&format!("{}", func.display_with_registry(&registry))),
+        format!("{}", func.display_with_registry(&registry)),
     )];
 
     compiler::run_configured_default_passes_with_observer(
@@ -239,7 +260,7 @@ pub fn debug_ir_opt_timeline_text_with_options(
         |pass, func| {
             checkpoints.push((
                 pass.to_string(),
-                scrub_volatile_const_addrs(&format!("{}", func.display_with_registry(&registry))),
+                format!("{}", func.display_with_registry(&registry)),
             ));
         },
     );
@@ -259,44 +280,23 @@ pub fn known_intrinsic_registry() -> ir::IntrinsicRegistry {
     registry
 }
 
-fn scrub_volatile_const_addrs(text: &str) -> String {
-    // Pointer-valued const operands are still process-local and not yet
-    // symbolically rendered. Scrub only those constant payloads.
-    let text = scrub_hex_after_prefix_with_min_len(&text, "Const(0x", 9);
-    scrub_hex_after_prefix_with_min_len(&text, "const(0x", 9)
+/// Build a registry containing built-in intrinsics plus shape-specific named constants.
+pub fn symbol_registry_for_shape(shape: &'static facet::Shape) -> ir::IntrinsicRegistry {
+    compiler::symbol_registry_for_shape(shape)
 }
 
-fn scrub_hex_after_prefix_with_min_len(input: &str, prefix: &str, min_hex_len: usize) -> String {
-    let mut out = String::with_capacity(input.len());
-    let bytes = input.as_bytes();
-    let prefix_bytes = prefix.as_bytes();
-    let mut i = 0;
-
-    while i < bytes.len() {
-        if i + prefix_bytes.len() <= bytes.len()
-            && &bytes[i..i + prefix_bytes.len()] == prefix_bytes
-        {
-            out.push_str(prefix);
-            i += prefix_bytes.len();
-
-            let start = i;
-            while i < bytes.len() && bytes[i].is_ascii_hexdigit() {
-                i += 1;
-            }
-
-            if i - start >= min_hex_len {
-                out.push_str("<ptr>");
-            } else {
-                out.push_str(&input[start..i]);
-            }
-            continue;
-        }
-
-        out.push(bytes[i] as char);
-        i += 1;
+/// Render the shape-specific named constant table used by text debug helpers.
+pub fn debug_const_registry_text(shape: &'static facet::Shape) -> String {
+    let mut entries = symbol_registry_for_shape(shape)
+        .const_entries()
+        .map(|(name, value)| format!("const @{name} = {value:#x}"))
+        .collect::<Vec<_>>();
+    entries.sort();
+    let mut text = entries.join("\n");
+    if !text.is_empty() {
+        text.push('\n');
     }
-
-    out
+    text
 }
 
 // r[impl api.output]

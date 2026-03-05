@@ -159,12 +159,21 @@ fn main() {
 }
 
 fn minimize_cfg_mir(args: &[String]) {
-    let Some((path, input, input_label)) = parse_minimize_cfg_mir_args(args) else {
+    let Some((path, input, input_label, corpus_test)) = parse_minimize_cfg_mir_args(args) else {
         eprintln!(
             "usage: cargo run --manifest-path xtask/Cargo.toml -- minimize-cfg-mir <cfg-mir-path> <hex-input>\n       cargo run --manifest-path xtask/Cargo.toml -- minimize-cfg-mir <cfg-mir-path> --corpus-test <exact-corpus-test-name>"
         );
         std::process::exit(2);
     };
+
+    if let Some(test_name) = corpus_test.as_deref() {
+        let reduced = minimize_cfg_mir_via_corpus_test(path, test_name).unwrap_or_else(|err| {
+            eprintln!("{err}");
+            std::process::exit(1);
+        });
+        print!("{reduced}");
+        return;
+    }
 
     let text = fs::read_to_string(path).unwrap_or_else(|err| {
         eprintln!("failed to read {}: {err}", path);
@@ -245,14 +254,14 @@ fn print_corpus_cfg_mir(args: &[String]) {
     print!("{cfg_mir}");
 }
 
-fn parse_minimize_cfg_mir_args(args: &[String]) -> Option<(&str, Vec<u8>, String)> {
+fn parse_minimize_cfg_mir_args(args: &[String]) -> Option<(&str, Vec<u8>, String, Option<String>)> {
     match args {
         [path, input_hex] => {
             let input = parse_hex_bytes(input_hex).unwrap_or_else(|err| {
                 eprintln!("invalid hex input `{input_hex}`: {err}");
                 std::process::exit(2);
             });
-            Some((path.as_str(), input, input_hex.clone()))
+            Some((path.as_str(), input, input_hex.clone(), None))
         }
         [path, flag, test_name] if flag == "--corpus-test" => {
             let input_hex = fetch_corpus_input_hex(test_name).unwrap_or_else(|err| {
@@ -269,10 +278,76 @@ fn parse_minimize_cfg_mir_args(args: &[String]) -> Option<(&str, Vec<u8>, String
                 path.as_str(),
                 input,
                 format!("corpus test {test_name} ({input_hex})"),
+                Some(test_name.clone()),
             ))
         }
         _ => None,
     }
+}
+
+fn minimize_cfg_mir_via_corpus_test(path: &str, test_name: &str) -> Result<String, String> {
+    let filter = format!("test(={test_name})");
+    let root = workspace_root();
+    let path =
+        fs::canonicalize(path).map_err(|err| format!("failed to canonicalize {}: {err}", path))?;
+
+    let list_output = Command::new("cargo")
+        .args([
+            "nextest", "list", "-p", "kajit", "--test", "corpus", "-E", &filter,
+        ])
+        .current_dir(&root)
+        .output()
+        .map_err(|err| format!("failed to run cargo nextest list: {err}"))?;
+    if !list_output.status.success() {
+        let stderr = String::from_utf8_lossy(&list_output.stderr);
+        return Err(format!("cargo nextest list failed:\n{stderr}"));
+    }
+
+    let run_output = Command::new("cargo")
+        .args([
+            "nextest",
+            "run",
+            "-p",
+            "kajit",
+            "--test",
+            "corpus",
+            "--no-capture",
+            "-E",
+            &filter,
+        ])
+        .env("KAJIT_MINIMIZE_CFG_MIR", &path)
+        .current_dir(&root)
+        .output()
+        .map_err(|err| format!("failed to run cargo nextest run: {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    let stderr = String::from_utf8_lossy(&run_output.stderr);
+    let Some(cfg_mir) =
+        extract_case_minimized_cfg_mir(&stdout).or_else(|| extract_case_minimized_cfg_mir(&stderr))
+    else {
+        if let Some(message) = extract_minimizer_status_line(&stderr)
+            .or_else(|| extract_minimizer_status_line(&stdout))
+        {
+            return Err(message);
+        }
+
+        let mut message = if !run_output.status.success() {
+            format!("cargo nextest run failed before emitting minimized CFG-MIR for `{test_name}`")
+        } else {
+            format!("minimized CFG-MIR block was not found for `{test_name}`")
+        };
+        if !stdout.trim().is_empty() {
+            message.push_str("\nstdout:\n");
+            message.push_str(&stdout);
+        }
+        if !stderr.trim().is_empty() {
+            message.push_str("\nstderr:\n");
+            message.push_str(&stderr);
+        }
+        return Err(message);
+    };
+
+    Ok(cfg_mir)
 }
 
 fn fetch_corpus_input_hex(test_name: &str) -> Result<String, String> {
@@ -502,10 +577,33 @@ fn extract_case_cfg_mir(output: &str) -> Option<String> {
     Some(rest[..end_index].trim_matches('\n').to_owned() + "\n")
 }
 
+fn extract_case_minimized_cfg_mir(output: &str) -> Option<String> {
+    let begin = "KAJIT_CASE_MINIMIZED_CFG_MIR_BEGIN";
+    let end = "KAJIT_CASE_MINIMIZED_CFG_MIR_END";
+    let start = output.find(begin)?;
+    let rest = &output[start + begin.len()..];
+    let end_index = rest.find(end)?;
+    Some(rest[..end_index].trim_matches('\n').to_owned() + "\n")
+}
+
+fn extract_minimizer_status_line(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let line = line.trim();
+        if line.starts_with("seed program is not differentially interesting")
+            || line.starts_with("differential minimization failed:")
+        {
+            Some(line.to_owned())
+        } else {
+            None
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_case_cfg_mir, extract_case_input_hex, parse_hex_bytes, parse_minimize_cfg_mir_args,
+        extract_case_cfg_mir, extract_case_input_hex, extract_case_minimized_cfg_mir,
+        extract_minimizer_status_line, parse_hex_bytes, parse_minimize_cfg_mir_args,
     };
 
     #[test]
@@ -542,10 +640,32 @@ mod tests {
     #[test]
     fn parse_minimize_cfg_mir_args_accepts_raw_hex() {
         let args = vec!["seed.cfg".to_owned(), "2a00ff".to_owned()];
-        let (path, input, label) = parse_minimize_cfg_mir_args(&args).expect("args should parse");
+        let (path, input, label, corpus_test) =
+            parse_minimize_cfg_mir_args(&args).expect("args should parse");
         assert_eq!(path, "seed.cfg");
         assert_eq!(input, vec![0x2a, 0x00, 0xff]);
         assert_eq!(label, "2a00ff");
+        assert_eq!(corpus_test, None);
+    }
+
+    #[test]
+    fn extract_case_minimized_cfg_mir_finds_marker_block() {
+        assert_eq!(
+            extract_case_minimized_cfg_mir(
+                "noise\nKAJIT_CASE_MINIMIZED_CFG_MIR_BEGIN\nfunc @0 {}\nKAJIT_CASE_MINIMIZED_CFG_MIR_END\nmore"
+            ),
+            Some("func @0 {}\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_minimizer_status_line_finds_interestingness_failure() {
+        assert_eq!(
+            extract_minimizer_status_line(
+                "noise\nseed program is not differentially interesting for input 012a\nmore"
+            ),
+            Some("seed program is not differentially interesting for input 012a".to_owned())
+        );
     }
 }
 

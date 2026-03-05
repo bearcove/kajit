@@ -38,6 +38,7 @@ pub(crate) struct EdgeTrampoline {
     pub(crate) label: LabelId,
     pub(crate) target: LabelId,
     pub(crate) moves: Vec<(Allocation, Allocation)>,
+    pub(crate) source_location: kajit_emit::SourceLocation,
 }
 
 pub(crate) struct Lowerer {

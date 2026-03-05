@@ -173,6 +173,7 @@ impl Lowerer {
             label,
             target: actual_target,
             moves,
+            source_location: self.ectx.current_source_location(),
         });
         label
     }
@@ -180,6 +181,7 @@ impl Lowerer {
     pub(super) fn emit_edge_trampolines(&mut self) {
         let trampolines = std::mem::take(&mut self.edge_trampolines);
         for trampoline in trampolines {
+            self.ectx.set_source_location(trampoline.source_location);
             self.ectx.bind_label(trampoline.label);
             emit_parallel_moves(self, &trampoline.moves);
             self.ectx.emit_branch(trampoline.target);

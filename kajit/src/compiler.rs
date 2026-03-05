@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use facet::{
-    Def, EnumRepr, KnownPointer, OptionDef, PointerDef, ScalarType, Shape, StructKind, Type,
-    UserType,
+    ConstParamKind, Def, EnumRepr, KnownPointer, OptionDef, PointerDef, ScalarType, Shape,
+    StructKind, Type, UserType,
 };
 
 use crate::arch::EmitCtx;
@@ -20,6 +20,7 @@ pub struct CompiledDecoder {
     buf: kajit_emit::x64::FinalizedEmission,
     #[cfg(target_arch = "aarch64")]
     buf: kajit_emit::aarch64::FinalizedEmission,
+    cfg_mir_line_text_by_line: Vec<String>,
     entry: usize,
     func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
     trusted_utf8_input: bool,
@@ -52,6 +53,20 @@ impl CompiledDecoder {
     /// Whether `from_str` can safely enable trusted UTF-8 mode for this format.
     pub fn supports_trusted_utf8_input(&self) -> bool {
         self.trusted_utf8_input
+    }
+
+    /// Deterministic machine-emission trace annotated with CFG-MIR provenance.
+    pub fn emission_trace_text(&self) -> Result<String, kajit_emit::TraceError> {
+        #[cfg(target_arch = "x86_64")]
+        let entries = self.buf.trace_entries()?;
+
+        #[cfg(target_arch = "aarch64")]
+        let entries = self.buf.trace_entries()?;
+
+        Ok(format_emission_trace_entries(
+            &entries,
+            &self.cfg_mir_line_text_by_line,
+        ))
     }
 }
 
@@ -116,101 +131,63 @@ fn sanitize_debug_file_stem(name: &str) -> String {
     }
 }
 
-fn format_cfg_terminator(term: &crate::regalloc_engine::cfg_mir::Terminator) -> String {
-    match term {
-        crate::regalloc_engine::cfg_mir::Terminator::Return => "return".to_string(),
-        crate::regalloc_engine::cfg_mir::Terminator::ErrorExit { code } => {
-            format!("error_exit {code:?}")
-        }
-        crate::regalloc_engine::cfg_mir::Terminator::Branch { edge } => {
-            format!("branch e{}", edge.0)
-        }
-        crate::regalloc_engine::cfg_mir::Terminator::BranchIf {
-            cond,
-            taken,
-            fallthrough,
-        } => format!(
-            "branch_if v{} -> e{} else e{}",
-            cond.index(),
-            taken.0,
-            fallthrough.0
-        ),
-        crate::regalloc_engine::cfg_mir::Terminator::BranchIfZero {
-            cond,
-            taken,
-            fallthrough,
-        } => format!(
-            "branch_if_zero v{} -> e{} else e{}",
-            cond.index(),
-            taken.0,
-            fallthrough.0
-        ),
-        crate::regalloc_engine::cfg_mir::Terminator::JumpTable {
-            predicate,
-            targets,
-            default,
-        } => {
-            let targets = targets
-                .iter()
-                .map(|target| format!("e{}", target.0))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(
-                "jump_table v{} [{}] default e{}",
-                predicate.index(),
-                targets,
-                default.0
-            )
-        }
-    }
+struct CfgMirListing {
+    text: String,
+    line_text_by_line: Vec<String>,
 }
 
 fn build_cfg_mir_listing(
     program: &crate::regalloc_engine::cfg_mir::Program,
-) -> (String, HashMap<usize, u32>) {
-    let mut lines = Vec::new();
-    let mut line_by_derived_index = HashMap::<usize, u32>::new();
-    let mut next_derived_index = 0usize;
-    let mut next_line = 1u32;
-    for func in &program.funcs {
-        let lambda = func.lambda_id.index();
-        for block in &func.blocks {
-            let block_id = block.id.0;
-            for inst_id in &block.insts {
-                let inst = func
-                    .inst(*inst_id)
-                    .expect("block instruction should exist for debug listing");
-                let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
-                lines.push(format!(
-                    "f{lambda} b{block_id} op={op_id:?} idx={next_derived_index} :: {:?}",
-                    inst.op
-                ));
-                line_by_derived_index
-                    .entry(next_derived_index)
-                    .or_insert(next_line);
-                next_derived_index += 1;
-                next_line += 1;
-            }
-            let term = func
-                .term(block.term)
-                .expect("block terminator should exist for debug listing");
-            let op_id = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
-            lines.push(format!(
-                "f{lambda} b{block_id} op={op_id:?} idx={next_derived_index} :: {}",
-                format_cfg_terminator(term)
-            ));
-            line_by_derived_index
-                .entry(next_derived_index)
-                .or_insert(next_line);
-            next_derived_index += 1;
-            next_line += 1;
-        }
-    }
+    registry: Option<&crate::ir::IntrinsicRegistry>,
+) -> CfgMirListing {
+    let lines = program.debug_line_listing_with_registry(registry);
     let mut listing = lines.join("\n");
     if !listing.is_empty() {
         listing.push('\n');
     }
-    (listing, line_by_derived_index)
+    CfgMirListing {
+        text: listing,
+        line_text_by_line: lines,
+    }
+}
+
+fn format_emission_trace_entries(
+    entries: &[kajit_emit::TraceEntry],
+    cfg_mir_line_text_by_line: &[String],
+) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            let hex = entry
+                .bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let line_text = entry
+                .location
+                .line
+                .checked_sub(1)
+                .and_then(|idx| cfg_mir_line_text_by_line.get(idx as usize))
+                .map(String::as_str)
+                .unwrap_or("<unknown cfg-mir provenance>");
+            let bytes = if should_redact_trace_bytes(line_text) {
+                format!("<redacted:{}>", entry.bytes.len())
+            } else {
+                hex
+            };
+            format!(
+                "{:08x} line={} col={} bytes={} :: {}",
+                entry.offset, entry.location.line, entry.location.column, bytes, line_text
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn should_redact_trace_bytes(line_text: &str) -> bool {
+    line_text.contains("const(@")
+        || line_text.contains("call_intrinsic(@")
+        || line_text.contains("call_pure(@")
 }
 
 fn write_cfg_mir_listing_file(type_name: &str, listing: &str) -> Option<PathBuf> {
@@ -454,6 +431,143 @@ fn get_option_def(shape: &'static Shape) -> Option<&'static OptionDef> {
     match &shape.def {
         Def::Option(opt_def) => Some(opt_def),
         _ => None,
+    }
+}
+
+pub(crate) fn symbol_registry_for_shape(shape: &'static Shape) -> crate::ir::IntrinsicRegistry {
+    let mut registry = crate::ir::IntrinsicRegistry::empty();
+    for (name, func) in crate::intrinsics::known_intrinsics() {
+        registry.register(name, func);
+    }
+    for (name, func) in crate::json_intrinsics::known_intrinsics() {
+        registry.register(name, func);
+    }
+
+    let mut seen = HashSet::new();
+    collect_shape_symbols(shape, &mut seen, &mut registry);
+    registry
+}
+
+fn collect_shape_symbols(
+    shape: &'static Shape,
+    seen: &mut HashSet<usize>,
+    registry: &mut crate::ir::IntrinsicRegistry,
+) {
+    let shape_key = shape as *const Shape as usize;
+    if !seen.insert(shape_key) {
+        return;
+    }
+
+    if let Type::User(UserType::Struct(st)) = &shape.ty {
+        for field in st.fields {
+            if field.is_flattened() {
+                collect_shape_symbols(field.shape(), seen, registry);
+                continue;
+            }
+
+            let name = field.effective_name();
+            registry.register_const(
+                format!("json_key_ptr.{}", encode_symbol_bytes(name)),
+                name.as_ptr() as u64,
+            );
+            collect_shape_symbols(field.shape(), seen, registry);
+        }
+    } else if let Type::User(UserType::Enum(enum_type)) = &shape.ty {
+        for variant in enum_type.variants {
+            for field in variant.data.fields {
+                collect_shape_symbols(field.shape(), seen, registry);
+            }
+        }
+    }
+
+    match &shape.def {
+        Def::Map(map_def) => {
+            collect_shape_symbols(map_def.k, seen, registry);
+            collect_shape_symbols(map_def.v, seen, registry);
+        }
+        Def::Set(set_def) => collect_shape_symbols(set_def.t, seen, registry),
+        Def::List(list_def) => collect_shape_symbols(list_def.t, seen, registry),
+        Def::Array(array_def) => collect_shape_symbols(array_def.t, seen, registry),
+        Def::NdArray(ndarray_def) => collect_shape_symbols(ndarray_def.t, seen, registry),
+        Def::Slice(slice_def) => collect_shape_symbols(slice_def.t, seen, registry),
+        Def::Option(opt_def) => {
+            let type_id = instantiated_shape_symbol_key(opt_def.t);
+            registry.register_const(
+                format!("option_init_none.{type_id}"),
+                opt_def.vtable.init_none as *const () as usize as u64,
+            );
+            registry.register_const(
+                format!("option_init_some.{type_id}"),
+                opt_def.vtable.init_some as *const () as usize as u64,
+            );
+            collect_shape_symbols(opt_def.t, seen, registry);
+        }
+        Def::Result(result_def) => {
+            collect_shape_symbols(result_def.t, seen, registry);
+            collect_shape_symbols(result_def.e, seen, registry);
+        }
+        Def::Pointer(pointer_def) => {
+            if let Some(pointee) = pointer_def.pointee {
+                collect_shape_symbols(pointee, seen, registry);
+            }
+        }
+        Def::Undefined | Def::Scalar | Def::DynamicValue(_) => {}
+        _ => {}
+    }
+}
+
+fn encode_symbol_bytes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    for byte in text.as_bytes() {
+        use core::fmt::Write as _;
+        write!(&mut out, "{byte:02x}").expect("writing to String should not fail");
+    }
+    out
+}
+
+fn instantiated_shape_symbol_key(shape: &'static Shape) -> String {
+    let mut out = String::new();
+    append_instantiated_shape_symbol_key(shape, &mut out);
+    out
+}
+
+fn append_instantiated_shape_symbol_key(shape: &'static Shape, out: &mut String) {
+    use core::fmt::Write as _;
+
+    write!(out, "d{:032x}", shape.decl_id.0).expect("writing to String should not fail");
+
+    if !shape.type_params.is_empty() {
+        out.push_str("__t");
+        for (index, param) in shape.type_params.iter().enumerate() {
+            write!(out, "_{index}_").expect("writing to String should not fail");
+            append_instantiated_shape_symbol_key(param.shape(), out);
+        }
+    }
+
+    if !shape.const_params.is_empty() {
+        out.push_str("__c");
+        for (index, param) in shape.const_params.iter().enumerate() {
+            write!(out, "_{index}_").expect("writing to String should not fail");
+            out.push(const_param_kind_symbol(param.kind));
+            write!(out, "{:x}", param.value).expect("writing to String should not fail");
+        }
+    }
+}
+
+fn const_param_kind_symbol(kind: ConstParamKind) -> char {
+    match kind {
+        ConstParamKind::Bool => 'b',
+        ConstParamKind::Char => 'c',
+        ConstParamKind::U8 => 'h',
+        ConstParamKind::U16 => 't',
+        ConstParamKind::U32 => 'j',
+        ConstParamKind::U64 => 'm',
+        ConstParamKind::Usize => 'u',
+        ConstParamKind::I8 => 'a',
+        ConstParamKind::I16 => 's',
+        ConstParamKind::I32 => 'i',
+        ConstParamKind::I64 => 'l',
+        ConstParamKind::Isize => 'n',
     }
 }
 
@@ -903,6 +1017,12 @@ pub fn regalloc_edits_text(shape: &'static Shape, ir_decoder: &dyn Decoder) -> S
     regalloc_edits_text_with_options(shape, ir_decoder, &pipeline_opts)
 }
 
+/// Build IR + linear form, compile through the backend, and return a deterministic emission trace.
+pub fn emission_trace_text(shape: &'static Shape, ir_decoder: &dyn Decoder) -> String {
+    let pipeline_opts = PipelineOptions::from_env();
+    emission_trace_text_with_options(shape, ir_decoder, &pipeline_opts)
+}
+
 // r[impl compiler.opts.api]
 pub fn regalloc_edit_count_with_options(
     shape: &'static Shape,
@@ -919,6 +1039,18 @@ pub fn regalloc_edit_count_with_options(
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed while counting edits: {err}"));
     alloc.functions.iter().map(|f| f.edits.len()).sum()
+}
+
+// r[impl compiler.opts.api]
+pub fn emission_trace_text_with_options(
+    shape: &'static Shape,
+    ir_decoder: &dyn Decoder,
+    pipeline_opts: &PipelineOptions,
+) -> String {
+    let decoder = compile_decoder_with_options(shape, ir_decoder, pipeline_opts);
+    decoder
+        .emission_trace_text()
+        .unwrap_or_else(|err| panic!("failed to format emission trace: {err:?}"))
 }
 
 /// Same as [`regalloc_edits_text`], but with explicit pipeline options.
@@ -1115,8 +1247,17 @@ pub fn compile_cfg_mir_decoder(
     cfg_program: &crate::regalloc_engine::cfg_mir::Program,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
+    compile_cfg_mir_decoder_with_registry(cfg_program, None, trusted_utf8_input)
+}
+
+pub(crate) fn compile_cfg_mir_decoder_with_registry(
+    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+    registry: Option<&crate::ir::IntrinsicRegistry>,
+    trusted_utf8_input: bool,
+) -> CompiledDecoder {
     compile_cfg_mir_decoder_with_options(
         cfg_program,
+        registry,
         trusted_utf8_input,
         PipelineOptions::from_env(),
     )
@@ -1151,6 +1292,14 @@ fn compile_linear_ir_decoder_with_options(
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+    let root_shape = ir.ops.iter().find_map(|op| match op {
+        crate::linearize::LinearOp::FuncStart {
+            lambda_id, shape, ..
+        } if lambda_id.index() == 0 => Some(*shape),
+        _ => None,
+    });
+    let registry = root_shape.map(symbol_registry_for_shape);
+    let listing = build_cfg_mir_listing(&cfg_program, registry.as_ref());
     let root_display_name = ir
         .ops
         .iter()
@@ -1183,8 +1332,7 @@ fn compile_linear_ir_decoder_with_options(
         size: buf.len().saturating_sub(entry),
     };
     let registration = if jit_debug {
-        let (listing, _line_by_derived_index) = build_cfg_mir_listing(&cfg_program);
-        let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing);
+        let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1208,6 +1356,7 @@ fn compile_linear_ir_decoder_with_options(
 
     CompiledDecoder {
         buf,
+        cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
         trusted_utf8_input,
@@ -1217,6 +1366,7 @@ fn compile_linear_ir_decoder_with_options(
 
 fn compile_cfg_mir_decoder_with_options(
     cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+    registry: Option<&crate::ir::IntrinsicRegistry>,
     trusted_utf8_input: bool,
     pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
@@ -1249,6 +1399,7 @@ fn compile_cfg_mir_decoder_with_options(
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+    let listing = build_cfg_mir_listing(cfg_program, registry);
 
     let root_display_name = "kajit::decode::cfg_mir_text".to_string();
     let root_mangled_name = crate::jit_debug::rust_v0_mangle(&["kajit", "decode", "cfg_mir_text"]);
@@ -1258,8 +1409,7 @@ fn compile_cfg_mir_decoder_with_options(
         size: buf.len().saturating_sub(entry),
     };
     let registration = if jit_debug {
-        let (listing, _line_by_derived_index) = build_cfg_mir_listing(cfg_program);
-        let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing);
+        let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1283,6 +1433,7 @@ fn compile_cfg_mir_decoder_with_options(
 
     CompiledDecoder {
         buf,
+        cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
         trusted_utf8_input,
@@ -1293,6 +1444,41 @@ fn compile_cfg_mir_decoder_with_options(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use facet::Facet;
+
+    #[derive(Facet)]
+    struct Wrapper<T> {
+        inner: T,
+    }
+
+    #[derive(Facet)]
+    struct ConstWrapper<const N: usize> {
+        inner: [u8; N],
+    }
+
+    #[test]
+    fn instantiated_shape_symbol_key_distinguishes_generic_instantiations() {
+        let u32_key = instantiated_shape_symbol_key(<Wrapper<u32>>::SHAPE);
+        let string_key = instantiated_shape_symbol_key(<Wrapper<String>>::SHAPE);
+
+        assert_ne!(u32_key, string_key);
+        assert!(u32_key.starts_with('d'));
+        assert!(u32_key.contains("__t_0_d"));
+        assert_eq!(
+            <Wrapper<u32>>::SHAPE.decl_id,
+            <Wrapper<String>>::SHAPE.decl_id
+        );
+    }
+
+    #[test]
+    fn instantiated_shape_symbol_key_includes_const_params() {
+        let n4_key = instantiated_shape_symbol_key(<ConstWrapper<4>>::SHAPE);
+        let n8_key = instantiated_shape_symbol_key(<ConstWrapper<8>>::SHAPE);
+
+        assert_ne!(n4_key, n8_key);
+        assert!(n4_key.contains("__c_0_u4"));
+        assert!(n8_key.contains("__c_0_u8"));
+    }
 
     #[test]
     fn builds_dwarf_sections_from_source_map_lines() {

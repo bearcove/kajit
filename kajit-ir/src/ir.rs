@@ -214,9 +214,10 @@ impl fmt::Display for IntrinsicFn {
 /// Bidirectional mapping between string names and [`IntrinsicFn`] values.
 ///
 /// Used by the text-format display and parser to print/resolve intrinsic names
-/// instead of raw hex addresses.
+/// and named constants instead of raw hex addresses.
 pub struct IntrinsicRegistry {
-    entries: Vec<(&'static str, IntrinsicFn)>,
+    entries: Vec<(String, IntrinsicFn)>,
+    const_entries: Vec<(String, u64)>,
 }
 
 impl IntrinsicRegistry {
@@ -225,35 +226,85 @@ impl IntrinsicRegistry {
         let entries = Vec::new();
         // no default intrinsic registry in kajit-ir
 
-        Self { entries }
+        Self {
+            entries,
+            const_entries: Vec::new(),
+        }
     }
 
     /// Build an empty registry (for tests that don't use real intrinsics).
     pub fn empty() -> Self {
         Self {
             entries: Vec::new(),
+            const_entries: Vec::new(),
         }
     }
 
     /// Register a custom intrinsic (e.g. test-only functions).
-    pub fn register(&mut self, name: &'static str, func: IntrinsicFn) {
+    pub fn register(&mut self, name: impl Into<String>, func: IntrinsicFn) {
+        let name = name.into();
+        if self
+            .entries
+            .iter()
+            .any(|(existing_name, existing_func)| existing_name == &name && *existing_func == func)
+        {
+            return;
+        }
         self.entries.push((name, func));
     }
 
+    /// Register a named constant (e.g. pointer-valued shape-specific metadata).
+    pub fn register_const(&mut self, name: impl Into<String>, value: u64) {
+        let name = name.into();
+        if self
+            .const_entries
+            .iter()
+            .any(|(existing_name, existing_value)| {
+                existing_name == &name && *existing_value == value
+            })
+        {
+            return;
+        }
+        self.const_entries.push((name, value));
+    }
+
     /// Look up the name for an intrinsic function pointer.
-    pub fn name_of(&self, func: IntrinsicFn) -> Option<&'static str> {
+    pub fn name_of(&self, func: IntrinsicFn) -> Option<&str> {
         self.entries
             .iter()
             .find(|(_, f)| *f == func)
-            .map(|(name, _)| *name)
+            .map(|(name, _)| name.as_str())
     }
 
     /// Look up the function pointer for a name.
     pub fn func_by_name(&self, name: &str) -> Option<IntrinsicFn> {
         self.entries
             .iter()
-            .find(|(n, _)| *n == name)
+            .find(|(n, _)| n == name)
             .map(|(_, f)| *f)
+    }
+
+    /// Look up the name for a named constant.
+    pub fn const_name_of(&self, value: u64) -> Option<&str> {
+        self.const_entries
+            .iter()
+            .find(|(_, existing_value)| *existing_value == value)
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Look up the value for a named constant.
+    pub fn const_by_name(&self, name: &str) -> Option<u64> {
+        self.const_entries
+            .iter()
+            .find(|(existing_name, _)| existing_name == name)
+            .map(|(_, value)| *value)
+    }
+
+    /// Iterate over named constants in insertion order.
+    pub fn const_entries(&self) -> impl Iterator<Item = (&str, u64)> + '_ {
+        self.const_entries
+            .iter()
+            .map(|(name, value)| (name.as_str(), *value))
     }
 }
 
@@ -1940,7 +1991,11 @@ impl IrFunc {
             IrOp::SlotAddr { slot } => write!(f, "SlotAddr({})", slot.index()),
             IrOp::WriteToSlot { slot } => write!(f, "WriteToSlot({})", slot.index()),
             IrOp::ReadFromSlot { slot } => write!(f, "ReadFromSlot({})", slot.index()),
-            IrOp::Const { value } => write!(f, "Const({value:#x})"),
+            IrOp::Const { value } => {
+                write!(f, "Const(")?;
+                Self::fmt_const(f, *value, registry)?;
+                write!(f, ")")
+            }
             IrOp::Add => write!(f, "Add"),
             IrOp::Sub => write!(f, "Sub"),
             IrOp::And => write!(f, "And"),
@@ -1980,6 +2035,19 @@ impl IrFunc {
             return write!(f, "@{name}");
         }
         write!(f, "{func}")
+    }
+
+    fn fmt_const(
+        f: &mut fmt::Formatter<'_>,
+        value: u64,
+        registry: Option<&IntrinsicRegistry>,
+    ) -> fmt::Result {
+        if let Some(reg) = registry
+            && let Some(name) = reg.const_name_of(value)
+        {
+            return write!(f, "@{name}");
+        }
+        write!(f, "{value:#x}")
     }
 
     fn fmt_source(&self, f: &mut fmt::Formatter<'_>, source: &PortSource) -> fmt::Result {

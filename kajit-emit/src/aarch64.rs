@@ -356,6 +356,10 @@ impl Emitter {
         self.current_location = loc;
     }
 
+    pub fn current_source_location(&self) -> SourceLocation {
+        self.current_location
+    }
+
     fn maybe_record_source_map(&mut self) {
         if Some(self.current_location) != self.last_recorded_location {
             self.source_map.push(SourceMapEntry {

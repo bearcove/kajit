@@ -486,6 +486,36 @@ impl Program {
             registry: Some(registry),
         }
     }
+
+    pub fn debug_line_listing_with_registry(
+        &self,
+        registry: Option<&IntrinsicRegistry>,
+    ) -> Vec<String> {
+        let mut lines = Vec::new();
+        for func in &self.funcs {
+            let lambda = func.lambda_id.index();
+            for block in &func.blocks {
+                let block_id = block.id.0;
+                for inst_id in &block.insts {
+                    let inst = func
+                        .inst(*inst_id)
+                        .expect("block instruction should exist for debug listing");
+                    let op_id = OpId::Inst(*inst_id);
+                    let mut line = format!("f{lambda} b{block_id} op={op_id:?} :: ");
+                    fmt_cfg_inst_to_string(&mut line, inst, registry);
+                    lines.push(line);
+                }
+                let term = func
+                    .term(block.term)
+                    .expect("block terminator should exist for debug listing");
+                let op_id = OpId::Term(block.term);
+                let mut line = format!("f{lambda} b{block_id} op={op_id:?} :: ");
+                fmt_terminator_to_string(&mut line, term);
+                lines.push(line);
+            }
+        }
+        lines
+    }
 }
 
 fn fmt_cfg_function(
@@ -636,7 +666,11 @@ fn fmt_cfg_op_name(
     registry: Option<&IntrinsicRegistry>,
 ) -> fmt::Result {
     match op {
-        LinearOp::Const { value, .. } => write!(f, "const({value:#x})"),
+        LinearOp::Const { value, .. } => {
+            write!(f, "const(")?;
+            fmt_const(f, *value, registry)?;
+            write!(f, ")")
+        }
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::Copy { .. } => write!(f, "copy"),
@@ -728,6 +762,35 @@ fn fmt_cfg_inst(
     Ok(())
 }
 
+fn fmt_cfg_inst_to_string(out: &mut String, inst: &Inst, registry: Option<&IntrinsicRegistry>) {
+    use std::fmt::Write as _;
+    write!(out, "{}", InstDisplay { inst, registry }).expect("writing to String should not fail");
+}
+
+fn fmt_terminator_to_string(out: &mut String, term: &Terminator) {
+    use std::fmt::Write as _;
+    write!(out, "{}", TerminatorDisplay(term)).expect("writing to String should not fail");
+}
+
+struct InstDisplay<'a> {
+    inst: &'a Inst,
+    registry: Option<&'a IntrinsicRegistry>,
+}
+
+impl fmt::Display for InstDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt_cfg_inst(f, self.inst, self.registry)
+    }
+}
+
+struct TerminatorDisplay<'a>(&'a Terminator);
+
+impl fmt::Display for TerminatorDisplay<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt_terminator(f, self.0)
+    }
+}
+
 fn fmt_intrinsic(
     f: &mut fmt::Formatter<'_>,
     func: IntrinsicFn,
@@ -739,6 +802,19 @@ fn fmt_intrinsic(
         return write!(f, "@{name}");
     }
     write!(f, "{func}")
+}
+
+fn fmt_const(
+    f: &mut fmt::Formatter<'_>,
+    value: u64,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
+    if let Some(registry) = registry
+        && let Some(name) = registry.const_name_of(value)
+    {
+        return write!(f, "@{name}");
+    }
+    write!(f, "{value:#x}")
 }
 
 fn fmt_terminator(f: &mut fmt::Formatter<'_>, term: &Terminator) -> fmt::Result {

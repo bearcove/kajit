@@ -1,0 +1,77 @@
+---
+source: kajit/tests/text_compile_run_regression.rs
+assertion_line: 127
+expression: trace
+---
+00000000 line=1 col=0 bytes=ffc301d1fd7b00a9f35301a9f55b02a9f76303a9f96b04a9fd030091f50300aaf60301aad30240f9d40640f9d30200f9e00315aae10316aa13000094d30240f9c91240b929010035 :: f0 b0 op=Inst(InstId(0)) :: call_lambda(@1) !gpr,simd
+00000048 line=2 col=0 bytes=d30200f9f96b44a9f76343a9f55b42a9f35341a9fd7b40a9ffc30191c0035fd6f96b44a9f76343a9f55b42a9f35341a9fd7b40a9ffc30191c0035fd6 :: f0 b0 op=Term(TermId(0)) :: return
+00000084 line=3 col=0 bytes=ffc301d1fd7b00a9f35301a9f55b02a9f76303a9f96b04a9fd030091f50300aaf60301aad30240f9d40640f97f0214eb420000540400001429008052c91200b9b7000014 :: f1 b0 op=Inst(InstId(0)) :: bounds_check(1)
+000000c8 line=4 col=0 bytes=7f0214eb420000540400001429008052c91200b9b100001469024039eb0309aa73060091 :: f1 b0 op=Inst(InstId(1)) :: v0:gpr = read_bytes(1)
+000000ec line=5 col=0 bytes=4b0000b4 :: f1 b0 op=Term(TermId(0)) :: branch_if_zero v0 -> e0, fallthrough e1
+000000f0 line=6 col=0 bytes=11000014 :: f1 b1 op=Term(TermId(1)) :: branch e2
+000000f4 line=7 col=0 bytes=<redacted:16> :: f1 b2 op=Inst(InstId(2)) :: v1:gpr = const(@option_init_none.da68d9975f98b5822836dbc798e858089)
+00000104 line=8 col=0 bytes=<redacted:44> :: f1 b2 op=Inst(InstId(3)) :: call_intrinsic(@kajit_option_init_none_ctx, fo=0) v1:gpr !gpr,simd
+00000130 line=9 col=0 bytes=94000014 :: f1 b2 op=Term(TermId(2)) :: branch e3
+00000134 line=10 col=0 bytes=e90315aaec0309aa :: f1 b3 op=Inst(InstId(4)) :: v2:gpr = save_out_ptr
+0000013c line=11 col=0 bytes=e9430191eb0309aa :: f1 b3 op=Inst(InstId(5)) :: v3:gpr = slot_addr(0)
+00000144 line=12 col=0 bytes=7f0214eb420000540400001429008052c91200b992000014 :: f1 b3 op=Inst(InstId(6)) :: bounds_check(1)
+0000015c line=13 col=0 bytes=e90f80d2f90309aa :: f1 b3 op=Inst(InstId(7)) :: v5:gpr = const(0x7f)
+00000164 line=14 col=0 bytes=091080d2fa0309aa :: f1 b3 op=Inst(InstId(8)) :: v7:gpr = const(0x80)
+0000016c line=15 col=0 bytes=090080d2f80309aa :: f1 b3 op=Inst(InstId(9)) :: v9:gpr = const(0x0)
+00000174 line=16 col=0 bytes=090080d2f70309aa :: f1 b3 op=Inst(InstId(10)) :: v41:gpr = const(0x0)
+0000017c line=17 col=0 bytes=090480d2ef0309aa :: f1 b3 op=Inst(InstId(11)) :: v43:gpr = const(0x20)
+00000184 line=18 col=0 bytes=090080d2ee0309aa :: f1 b3 op=Inst(InstId(12)) :: v45:gpr = const(0x0)
+0000018c line=19 col=0 bytes=<redacted:16> :: f1 b3 op=Inst(InstId(13)) :: v47:gpr = const(@option_init_some.da68d9975f98b5822836dbc798e858089)
+0000019c line=20 col=0 bytes=e9030baaf50309aa :: f1 b3 op=Inst(InstId(14)) :: set_out_ptr v3:gpr
+000001a4 line=21 col=0 bytes=7f0214eb420000540400001429008052c91200b97a00001469024039e00309aa73060091 :: f1 b3 op=Inst(InstId(15)) :: v4:gpr = read_bytes(1)
+000001c8 line=22 col=0 bytes=3903008a :: f1 b3 op=Inst(InstId(16)) :: v6:gpr = And v4:gpr, v5:gpr
+000001cc line=23 col=0 bytes=5a03008a :: f1 b3 op=Inst(InstId(17)) :: v8:gpr = And v4:gpr, v7:gpr
+000001d0 line=24 col=0 bytes=5f0318ebf8079f9a :: f1 b3 op=Inst(InstId(18)) :: v10:gpr = CmpNe v8:gpr, v9:gpr
+000001d8 line=25 col=0 bytes=580000b4 :: f1 b3 op=Term(TermId(3)) :: branch_if_zero v10 -> e4, fallthrough e5
+000001dc line=26 col=0 bytes=08000014 :: f1 b4 op=Term(TermId(4)) :: branch e6
+000001e0 line=27 col=0 bytes=890080d2f80309aa :: f1 b5 op=Inst(InstId(19)) :: v11:gpr = const(0x4)
+000001e8 line=28 col=0 bytes=090080d2fa0309aa :: f1 b5 op=Inst(InstId(20)) :: v12:gpr = const(0x0)
+000001f0 line=29 col=0 bytes=f80319aa :: f1 b5 op=Inst(InstId(21)) :: v37:gpr = copy v6:gpr
+000001f4 line=30 col=0 bytes=f9031aaa :: f1 b5 op=Inst(InstId(22)) :: v40:gpr = copy v12:gpr
+000001f8 line=31 col=0 bytes=38000014 :: f1 b5 op=Term(TermId(5)) :: branch e7
+000001fc line=32 col=0 bytes=e90080d2e00309aa :: f1 b6 op=Inst(InstId(23)) :: v13:gpr = const(0x7)
+00000204 line=33 col=0 bytes=890080d2fa0309aa :: f1 b6 op=Inst(InstId(24)) :: v14:gpr = const(0x4)
+0000020c line=34 col=0 bytes=290080d2f80309aa :: f1 b6 op=Inst(InstId(25)) :: v15:gpr = const(0x1)
+00000214 line=35 col=0 bytes=f80319aa :: f1 b6 op=Inst(InstId(26)) :: v50:gpr = copy v6:gpr
+00000218 line=36 col=0 bytes=f90300aa :: f1 b6 op=Inst(InstId(27)) :: v51:gpr = copy v13:gpr
+0000021c line=39 col=0 bytes=7f0214eb420000540400001429008052c91200b95c000014 :: f1 b7 op=Inst(InstId(29)) :: bounds_check(1)
+00000234 line=40 col=0 bytes=e90f80d2e00309aa :: f1 b7 op=Inst(InstId(30)) :: v17:gpr = const(0x7f)
+0000023c line=41 col=0 bytes=e90080d2e30309aa :: f1 b7 op=Inst(InstId(31)) :: v21:gpr = const(0x7)
+00000244 line=42 col=0 bytes=290080d2e10309aa :: f1 b7 op=Inst(InstId(32)) :: v23:gpr = const(0x1)
+0000024c line=43 col=0 bytes=091080d2e20309aa :: f1 b7 op=Inst(InstId(33)) :: v25:gpr = const(0x80)
+00000254 line=44 col=0 bytes=090080d2e50309aa :: f1 b7 op=Inst(InstId(34)) :: v27:gpr = const(0x0)
+0000025c line=45 col=0 bytes=090080d2e80309aa :: f1 b7 op=Inst(InstId(35)) :: v29:gpr = const(0x0)
+00000264 line=46 col=0 bytes=7f0214eb420000540400001429008052c91200b94a00001469024039e40309aa73060091 :: f1 b7 op=Inst(InstId(36)) :: v16:gpr = read_bytes(1)
+00000288 line=47 col=0 bytes=6300198b :: f1 b7 op=Inst(InstId(37)) :: v22:gpr = Add v51:gpr, v21:gpr
+0000028c line=48 col=0 bytes=5a0301cb :: f1 b7 op=Inst(InstId(38)) :: v24:gpr = Sub v52:gpr, v23:gpr
+00000290 line=49 col=0 bytes=e10304aa2100008a :: f1 b7 op=Inst(InstId(39)) :: v18:gpr = And v16:gpr, v17:gpr
+00000298 line=50 col=0 bytes=f10304aa3102028a :: f1 b7 op=Inst(InstId(40)) :: v26:gpr = And v16:gpr, v25:gpr
+000002a0 line=51 col=0 bytes=5f0308ebe0079f9a :: f1 b7 op=Inst(InstId(41)) :: v30:gpr = CmpNe v24:gpr, v29:gpr
+000002a8 line=52 col=0 bytes=e90301aaea0319aa2921ca9af90309aa :: f1 b7 op=Inst(InstId(42)) :: v19:gpr = Shl v18:gpr, v51:gpr
+000002b8 line=53 col=0 bytes=3f0205ebf1079f9a :: f1 b7 op=Inst(InstId(43)) :: v28:gpr = CmpNe v26:gpr, v27:gpr
+000002c0 line=54 col=0 bytes=180319aa :: f1 b7 op=Inst(InstId(44)) :: v20:gpr = Or v50:gpr, v19:gpr
+000002c4 line=55 col=0 bytes=0000118a :: f1 b7 op=Inst(InstId(45)) :: v31:gpr = And v28:gpr, v30:gpr
+000002c8 line=57 col=0 bytes=f90303aa :: f1 b7 op=Inst(InstId(47)) :: v51:gpr = copy v22:gpr
+000002cc line=60 col=0 bytes=e10311aa :: f1 b7 op=Inst(InstId(50)) :: v54:gpr = copy v28:gpr
+000002d0 line=61 col=0 bytes=60faffb5 :: f1 b7 op=Term(TermId(7)) :: branch_if v31 -> e9, fallthrough e10
+000002d4 line=63 col=0 bytes=f90301aa :: f1 b8 op=Inst(InstId(52)) :: v40:gpr = copy v54:gpr
+000002d8 line=65 col=0 bytes=3f0317ebf7079f9a :: f1 b9 op=Inst(InstId(53)) :: v42:gpr = CmpNe v40:gpr, v41:gpr
+000002e0 line=66 col=0 bytes=e90318aaea030faa2925ca9aef0309aa :: f1 b9 op=Inst(InstId(54)) :: v44:gpr = Shr v37:gpr, v43:gpr
+000002f0 line=67 col=0 bytes=d70000b4 :: f1 b9 op=Term(TermId(9)) :: branch_if_zero v42 -> e12, fallthrough e13
+000002f4 line=68 col=0 bytes=02000014 :: f1 b10 op=Term(TermId(10)) :: branch e14
+000002f8 line=69 col=0 bytes=04000014 :: f1 b11 op=Term(TermId(11)) :: branch e15
+000002fc line=70 col=0 bytes=49008052c91200b927000014 :: f1 b12 op=Term(TermId(12)) :: error_exit(InvalidVarint)
+00000308 line=71 col=0 bytes=ff010eebee079f9a :: f1 b13 op=Inst(InstId(55)) :: v46:gpr = CmpNe v44:gpr, v45:gpr
+00000310 line=72 col=0 bytes=ce0000b4 :: f1 b13 op=Term(TermId(13)) :: branch_if_zero v46 -> e16, fallthrough e17
+00000314 line=73 col=0 bytes=02000014 :: f1 b14 op=Term(TermId(14)) :: branch e18
+00000318 line=74 col=0 bytes=04000014 :: f1 b15 op=Term(TermId(15)) :: branch e19
+0000031c line=75 col=0 bytes=89018052c91200b91f000014 :: f1 b16 op=Term(TermId(16)) :: error_exit(NumberOutOfRange)
+00000328 line=76 col=0 bytes=e90318aaa90200b9 :: f1 b17 op=Inst(InstId(56)) :: store([0:W4]) v37:gpr
+00000330 line=77 col=0 bytes=e9030caaf50309aa :: f1 b17 op=Inst(InstId(57)) :: set_out_ptr v2:gpr
+00000338 line=78 col=0 bytes=<redacted:72> :: f1 b17 op=Inst(InstId(58)) :: call_intrinsic(@kajit_option_init_some_ctx, fo=0) v47:gpr, v3:gpr !gpr,simd
+00000380 line=80 col=0 bytes=d30200f9f96b44a9f76343a9f55b42a9f35341a9fd7b40a9ffc30191c0035fd6f96b44a9f76343a9f55b42a9f35341a9fd7b40a9ffc30191c0035fd6 :: f1 b18 op=Term(TermId(18)) :: return
