@@ -477,6 +477,32 @@ fn map_cfg_clobbers(clobbers: cfg_mir::Clobbers) -> crate::RaClobbers {
     }
 }
 
+fn map_ra_operand(op: crate::RaOperand) -> cfg_mir::Operand {
+    cfg_mir::Operand {
+        vreg: op.vreg,
+        kind: match op.kind {
+            RaOperandKind::Use => cfg_mir::OperandKind::Use,
+            RaOperandKind::Def => cfg_mir::OperandKind::Def,
+        },
+        class: match op.class {
+            crate::RegClass::Gpr => cfg_mir::RegClass::Gpr,
+            crate::RegClass::Simd => cfg_mir::RegClass::Simd,
+        },
+        fixed: op.fixed.map(|fixed| match fixed {
+            FixedReg::AbiArg(i) => cfg_mir::FixedReg::AbiArg(i),
+            FixedReg::AbiRet(i) => cfg_mir::FixedReg::AbiRet(i),
+            FixedReg::HwReg(enc) => cfg_mir::FixedReg::HwReg(enc),
+        }),
+    }
+}
+
+fn map_ra_clobbers(clobbers: crate::RaClobbers) -> cfg_mir::Clobbers {
+    cfg_mir::Clobbers {
+        caller_saved_gpr: clobbers.caller_saved_gpr,
+        caller_saved_simd: clobbers.caller_saved_simd,
+    }
+}
+
 fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBlockInfo>>) {
     let mut blocks: Vec<WorkBlock> = func
         .blocks
@@ -2797,6 +2823,303 @@ pub fn simulate_execution_cfg(
     })
 }
 
+pub fn simulate_execution_trace_cfg(
+    allocated: &AllocatedCfgProgram,
+    input: &[u8],
+) -> Result<Vec<ExecutionTraceEntry>, RegallocEngineError> {
+    let func = allocated.cfg_program.funcs.first().ok_or_else(|| {
+        RegallocEngineError::Simulation("CFG MIR program has no functions".to_string())
+    })?;
+    let alloc_func = allocated
+        .functions
+        .iter()
+        .find(|f| f.lambda_id == func.lambda_id)
+        .or_else(|| allocated.functions.first())
+        .ok_or_else(|| {
+            RegallocEngineError::Simulation("allocated cfg program has no functions".to_string())
+        })?;
+    let schedule = func
+        .derive_schedule()
+        .map_err(|err| RegallocEngineError::Simulation(err.to_string()))?;
+
+    let mut block_indices = HashMap::with_capacity(func.blocks.len());
+    for (idx, block) in func.blocks.iter().enumerate() {
+        block_indices.insert(block.id, idx);
+    }
+
+    let mut edits_by_progpoint =
+        HashMap::<(cfg_mir::OpId, u8), Vec<(Allocation, Allocation)>>::new();
+    for (point, edit) in &alloc_func.edits {
+        let Edit::Move { from, to } = edit;
+        let op_id = match point {
+            cfg_mir::ProgPoint::Before(op) | cfg_mir::ProgPoint::After(op) => *op,
+            cfg_mir::ProgPoint::Edge(_) => continue,
+        };
+        edits_by_progpoint
+            .entry((
+                op_id,
+                edit_pos_key(match point {
+                    cfg_mir::ProgPoint::Before(_) => regalloc2::InstPosition::Before,
+                    cfg_mir::ProgPoint::After(_) => regalloc2::InstPosition::After,
+                    cfg_mir::ProgPoint::Edge(_) => regalloc2::InstPosition::Before,
+                }),
+            ))
+            .or_default()
+            .push((*from, *to));
+    }
+
+    let mut edge_edits = HashMap::<(cfg_mir::EdgeId, u8), Vec<(Allocation, Allocation)>>::new();
+    for edge in &alloc_func.edge_edits {
+        edge_edits
+            .entry((edge.edge, edit_pos_key(edge.pos)))
+            .or_default()
+            .push((edge.from, edge.to));
+    }
+
+    let mut regs = HashMap::<PReg, u64>::new();
+    let mut spills = HashMap::<usize, u64>::new();
+    let mut output = vec![0u8; infer_output_size_for_cfg_function(func)];
+    let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
+    let mut cursor = 0usize;
+    let mut trap: Option<crate::InterpreterTrap> = None;
+    let mut returned = false;
+    let mut current = func.entry;
+    let mut next_inst = 0usize;
+    let mut steps = 0usize;
+    let mut trace = Vec::<ExecutionTraceEntry>::new();
+
+    while trap.is_none() && !returned {
+        if steps >= MAX_SIM_STEPS {
+            return Err(RegallocEngineError::Simulation(format!(
+                "cfg simulation exceeded step limit ({MAX_SIM_STEPS})"
+            )));
+        }
+        steps += 1;
+
+        let block_idx = *block_indices.get(&current).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!("unknown cfg block b{}", current.0))
+        })?;
+        let block = &func.blocks[block_idx];
+
+        if next_inst < block.insts.len() {
+            let inst_id = block.insts[next_inst];
+            let inst = &func.insts[inst_id.index()];
+            let op_id = cfg_mir::OpId::Inst(inst_id);
+            if let Some(edits) =
+                edits_by_progpoint.get(&(op_id, edit_pos_key(regalloc2::InstPosition::Before)))
+            {
+                apply_moves(&mut regs, &mut spills, edits);
+            }
+
+            let linear_op_index = *schedule.op_to_index.get(&op_id).ok_or_else(|| {
+                RegallocEngineError::Simulation(format!("schedule missing cfg inst {:?}", op_id))
+            })? as usize;
+            let inst_view = crate::RaInst {
+                linear_op_index,
+                op: inst.op.clone(),
+                operands: inst.operands.iter().copied().map(map_cfg_operand).collect(),
+                clobbers: map_cfg_clobbers(inst.clobbers),
+            };
+            let inst_allocs = alloc_func.op_allocs.get(&op_id).ok_or_else(|| {
+                RegallocEngineError::Simulation(format!(
+                    "missing allocation metadata for cfg op {:?}",
+                    op_id
+                ))
+            })?;
+
+            execute_sim_linear_op(
+                &inst.op,
+                crate::BlockId(block.id.0),
+                &inst_view,
+                inst_allocs,
+                &mut regs,
+                &mut spills,
+                &mut sim,
+                &mut cursor,
+                &mut output,
+                &mut trap,
+            )?;
+
+            if let Some(edits) =
+                edits_by_progpoint.get(&(op_id, edit_pos_key(regalloc2::InstPosition::After)))
+            {
+                apply_moves(&mut regs, &mut spills, edits);
+            }
+
+            next_inst += 1;
+            trace.push(ExecutionTraceEntry {
+                step_index: steps,
+                state: ExecutionState {
+                    physical_registers: regs.clone(),
+                    spillslots: spills.clone(),
+                    position: ExecutionPosition {
+                        block: crate::BlockId(block.id.0),
+                        next_inst_index: next_inst,
+                        at_terminator: next_inst >= block.insts.len(),
+                    },
+                },
+                output: output.clone(),
+                cursor,
+                trap,
+                returned,
+            });
+            continue;
+        }
+
+        let term = func.term(block.term).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!("missing cfg term t{}", block.term.0))
+        })?;
+        let term_op = cfg_mir::OpId::Term(block.term);
+
+        if let Some(edits) =
+            edits_by_progpoint.get(&(term_op, edit_pos_key(regalloc2::InstPosition::Before)))
+        {
+            apply_moves(&mut regs, &mut spills, edits);
+        }
+
+        match term {
+            cfg_mir::Terminator::Return => {
+                returned = true;
+            }
+            cfg_mir::Terminator::ErrorExit { code } => {
+                trap = Some(crate::InterpreterTrap {
+                    code: *code,
+                    offset: cursor as u32,
+                });
+            }
+            cfg_mir::Terminator::Branch { edge } => {
+                if let Some(edits) =
+                    edge_edits.get(&(*edge, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(*edge, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[edge.index()].to;
+                next_inst = 0;
+            }
+            cfg_mir::Terminator::BranchIf {
+                cond,
+                taken,
+                fallthrough,
+            } => {
+                let cond_alloc = find_cfg_operand_alloc_for_kind(
+                    alloc_func,
+                    term_op,
+                    *cond,
+                    RaOperandKind::Use,
+                )?;
+                let cond_value = read_allocation(&regs, &spills, cond_alloc);
+                let chosen = if cond_value != 0 {
+                    *taken
+                } else {
+                    *fallthrough
+                };
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[chosen.index()].to;
+                next_inst = 0;
+            }
+            cfg_mir::Terminator::BranchIfZero {
+                cond,
+                taken,
+                fallthrough,
+            } => {
+                let cond_alloc = find_cfg_operand_alloc_for_kind(
+                    alloc_func,
+                    term_op,
+                    *cond,
+                    RaOperandKind::Use,
+                )?;
+                let cond_value = read_allocation(&regs, &spills, cond_alloc);
+                let chosen = if cond_value == 0 {
+                    *taken
+                } else {
+                    *fallthrough
+                };
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[chosen.index()].to;
+                next_inst = 0;
+            }
+            cfg_mir::Terminator::JumpTable {
+                predicate,
+                targets,
+                default,
+            } => {
+                let pred_alloc = find_cfg_operand_alloc_for_kind(
+                    alloc_func,
+                    term_op,
+                    *predicate,
+                    RaOperandKind::Use,
+                )?;
+                let pred = read_allocation(&regs, &spills, pred_alloc) as usize;
+                let chosen = targets.get(pred).copied().unwrap_or(*default);
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[chosen.index()].to;
+                next_inst = 0;
+            }
+        }
+
+        if let Some(edits) =
+            edits_by_progpoint.get(&(term_op, edit_pos_key(regalloc2::InstPosition::After)))
+        {
+            apply_moves(&mut regs, &mut spills, edits);
+        }
+
+        let current_block_idx = *block_indices.get(&current).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!("unknown cfg block b{}", current.0))
+        })?;
+        let current_block = &func.blocks[current_block_idx];
+        trace.push(ExecutionTraceEntry {
+            step_index: steps,
+            state: ExecutionState {
+                physical_registers: regs.clone(),
+                spillslots: spills.clone(),
+                position: ExecutionPosition {
+                    block: crate::BlockId(current_block.id.0),
+                    next_inst_index: next_inst,
+                    at_terminator: next_inst >= current_block.insts.len(),
+                },
+            },
+            output: output.clone(),
+            cursor,
+            trap,
+            returned,
+        });
+    }
+
+    Ok(trace)
+}
+
 pub fn simulate_execution(
     allocated: &AllocatedProgram,
     input: &[u8],
@@ -3401,31 +3724,24 @@ fn first_differing_field(
     None
 }
 
-pub fn differential_check(allocated: &AllocatedProgram, input: &[u8]) -> DifferentialCheckResult {
-    let ideal = match ideal_trace(&allocated.ra_program, input) {
-        Ok(v) => v,
-        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
-    };
-    let post_trace = match simulate_execution_trace(allocated, input) {
-        Ok(v) => v,
-        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
-    };
+fn differential_state_from_trace_entry(entry: ExecutionTraceEntry) -> DifferentialState {
+    DifferentialState {
+        step_index: entry.step_index,
+        position: entry.state.position,
+        cursor: entry.cursor,
+        output: entry.output,
+        trap: entry.trap,
+        returned: entry.returned,
+        vregs: None,
+        physical_registers: Some(entry.state.physical_registers),
+        spillslots: Some(entry.state.spillslots),
+    }
+}
 
-    let post = post_trace
-        .into_iter()
-        .map(|entry| DifferentialState {
-            step_index: entry.step_index,
-            position: entry.state.position,
-            cursor: entry.cursor,
-            output: entry.output,
-            trap: entry.trap,
-            returned: entry.returned,
-            vregs: None,
-            physical_registers: Some(entry.state.physical_registers),
-            spillslots: Some(entry.state.spillslots),
-        })
-        .collect::<Vec<_>>();
-
+fn compare_differential_states(
+    ideal: Vec<DifferentialState>,
+    post: Vec<DifferentialState>,
+) -> DifferentialCheckResult {
     let shared = ideal.len().min(post.len());
     for i in 0..shared {
         if let Some(field) = first_differing_field(&ideal[i], &post[i]) {
@@ -3524,12 +3840,284 @@ pub fn differential_check(allocated: &AllocatedProgram, input: &[u8]) -> Differe
     }
 }
 
-pub fn differential_check_program(program: RaProgram, input: &[u8]) -> DifferentialCheckResult {
-    let allocated = match allocate_program(&program) {
+fn cfg_edge_id_for_ra_succ(
+    from_block: crate::BlockId,
+    succ_index: usize,
+    expected_to: Option<crate::BlockId>,
+    edge_id_by_from_succ: &HashMap<(u32, usize), cfg_mir::EdgeId>,
+    cfg_edges: &[cfg_mir::Edge],
+) -> Result<cfg_mir::EdgeId, RegallocEngineError> {
+    let edge_id = *edge_id_by_from_succ
+        .get(&(from_block.0, succ_index))
+        .ok_or_else(|| {
+            RegallocEngineError::Simulation(format!(
+                "missing cfg edge for ra block b{} succ {}",
+                from_block.0, succ_index
+            ))
+        })?;
+    if let Some(expected_to) = expected_to {
+        let actual_to = cfg_edges
+            .get(edge_id.index())
+            .ok_or_else(|| {
+                RegallocEngineError::Simulation(format!("cfg edge e{} is out of bounds", edge_id.0))
+            })?
+            .to;
+        let expected_to = cfg_mir::BlockId::new(expected_to.0);
+        if actual_to != expected_to {
+            return Err(RegallocEngineError::Simulation(format!(
+                "cfg edge e{} from ra block b{} succ {} points to b{}, expected b{}",
+                edge_id.0, from_block.0, succ_index, actual_to.0, expected_to.0
+            )));
+        }
+    }
+    Ok(edge_id)
+}
+
+fn map_ra_term_to_cfg(
+    block: &crate::RaBlock,
+    edge_id_by_from_succ: &HashMap<(u32, usize), cfg_mir::EdgeId>,
+    cfg_edges: &[cfg_mir::Edge],
+) -> Result<cfg_mir::Terminator, RegallocEngineError> {
+    match &block.term {
+        crate::RaTerminator::Return => Ok(cfg_mir::Terminator::Return),
+        crate::RaTerminator::ErrorExit { code } => {
+            Ok(cfg_mir::Terminator::ErrorExit { code: *code })
+        }
+        crate::RaTerminator::Branch { target } => Ok(cfg_mir::Terminator::Branch {
+            edge: cfg_edge_id_for_ra_succ(
+                block.id,
+                0,
+                Some(*target),
+                edge_id_by_from_succ,
+                cfg_edges,
+            )?,
+        }),
+        crate::RaTerminator::BranchIf {
+            cond,
+            target,
+            fallthrough,
+        } => Ok(cfg_mir::Terminator::BranchIf {
+            cond: *cond,
+            taken: cfg_edge_id_for_ra_succ(
+                block.id,
+                0,
+                Some(*target),
+                edge_id_by_from_succ,
+                cfg_edges,
+            )?,
+            fallthrough: cfg_edge_id_for_ra_succ(
+                block.id,
+                1,
+                Some(*fallthrough),
+                edge_id_by_from_succ,
+                cfg_edges,
+            )?,
+        }),
+        crate::RaTerminator::BranchIfZero {
+            cond,
+            target,
+            fallthrough,
+        } => Ok(cfg_mir::Terminator::BranchIfZero {
+            cond: *cond,
+            taken: cfg_edge_id_for_ra_succ(
+                block.id,
+                0,
+                Some(*target),
+                edge_id_by_from_succ,
+                cfg_edges,
+            )?,
+            fallthrough: cfg_edge_id_for_ra_succ(
+                block.id,
+                1,
+                Some(*fallthrough),
+                edge_id_by_from_succ,
+                cfg_edges,
+            )?,
+        }),
+        crate::RaTerminator::JumpTable {
+            predicate,
+            targets,
+            default,
+        } => {
+            let mut cfg_targets = Vec::with_capacity(targets.len());
+            for (idx, target) in targets.iter().enumerate() {
+                cfg_targets.push(cfg_edge_id_for_ra_succ(
+                    block.id,
+                    idx,
+                    Some(*target),
+                    edge_id_by_from_succ,
+                    cfg_edges,
+                )?);
+            }
+            let cfg_default = cfg_edge_id_for_ra_succ(
+                block.id,
+                targets.len(),
+                Some(*default),
+                edge_id_by_from_succ,
+                cfg_edges,
+            )?;
+            Ok(cfg_mir::Terminator::JumpTable {
+                predicate: *predicate,
+                targets: cfg_targets,
+                default: cfg_default,
+            })
+        }
+    }
+}
+
+fn lower_ra_program_to_cfg(program: &RaProgram) -> Result<cfg_mir::Program, RegallocEngineError> {
+    let mut funcs = Vec::with_capacity(program.funcs.len());
+
+    for (func_index, ra_func) in program.funcs.iter().enumerate() {
+        let mut edge_id_by_from_succ = HashMap::<(u32, usize), cfg_mir::EdgeId>::new();
+        let mut cfg_edges = Vec::<cfg_mir::Edge>::new();
+        for block in &ra_func.blocks {
+            for (succ_index, succ) in block.succs.iter().enumerate() {
+                let edge_id = cfg_mir::EdgeId::new(cfg_edges.len() as u32);
+                edge_id_by_from_succ.insert((block.id.0, succ_index), edge_id);
+                cfg_edges.push(cfg_mir::Edge {
+                    id: edge_id,
+                    from: cfg_mir::BlockId::new(block.id.0),
+                    to: cfg_mir::BlockId::new(succ.to.0),
+                    args: succ
+                        .args
+                        .iter()
+                        .map(|arg| cfg_mir::EdgeArg {
+                            target: arg.target,
+                            source: arg.source,
+                        })
+                        .collect(),
+                });
+            }
+        }
+
+        let mut preds_by_block = HashMap::<cfg_mir::BlockId, Vec<cfg_mir::EdgeId>>::new();
+        for edge in &cfg_edges {
+            preds_by_block.entry(edge.to).or_default().push(edge.id);
+        }
+
+        let mut cfg_insts = Vec::<cfg_mir::Inst>::new();
+        let mut cfg_terms = Vec::<cfg_mir::Terminator>::new();
+        let mut cfg_blocks = Vec::<cfg_mir::Block>::with_capacity(ra_func.blocks.len());
+
+        for block in &ra_func.blocks {
+            let mut block_insts = Vec::<cfg_mir::InstId>::with_capacity(block.insts.len());
+            for inst in &block.insts {
+                let inst_id = cfg_mir::InstId::new(cfg_insts.len() as u32);
+                cfg_insts.push(cfg_mir::Inst {
+                    id: inst_id,
+                    op: inst.op.clone(),
+                    operands: inst.operands.iter().copied().map(map_ra_operand).collect(),
+                    clobbers: map_ra_clobbers(inst.clobbers),
+                });
+                block_insts.push(inst_id);
+            }
+
+            let succs = (0..block.succs.len())
+                .map(|succ_index| {
+                    cfg_edge_id_for_ra_succ(
+                        block.id,
+                        succ_index,
+                        Some(block.succs[succ_index].to),
+                        &edge_id_by_from_succ,
+                        &cfg_edges,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let term_id = cfg_mir::TermId::new(cfg_terms.len() as u32);
+            let term = map_ra_term_to_cfg(block, &edge_id_by_from_succ, &cfg_edges)?;
+            cfg_terms.push(term);
+
+            let block_id = cfg_mir::BlockId::new(block.id.0);
+            let preds = preds_by_block.remove(&block_id).unwrap_or_default();
+            cfg_blocks.push(cfg_mir::Block {
+                id: block_id,
+                params: block.params.clone(),
+                insts: block_insts,
+                term: term_id,
+                preds,
+                succs,
+            });
+        }
+
+        let cfg_func = cfg_mir::Function {
+            id: cfg_mir::FunctionId::new(func_index as u32),
+            lambda_id: ra_func.lambda_id,
+            entry: cfg_mir::BlockId::new(ra_func.entry.0),
+            data_args: ra_func.data_args.clone(),
+            data_results: ra_func.data_results.clone(),
+            blocks: cfg_blocks,
+            edges: cfg_edges,
+            insts: cfg_insts,
+            terms: cfg_terms,
+        };
+        cfg_func.validate().map_err(|err| {
+            RegallocEngineError::Simulation(format!(
+                "ra->cfg conversion produced invalid function @{}: {err}",
+                ra_func.lambda_id.index()
+            ))
+        })?;
+        funcs.push(cfg_func);
+    }
+
+    Ok(cfg_mir::Program {
+        funcs,
+        vreg_count: program.vreg_count,
+        slot_count: program.slot_count,
+    })
+}
+
+pub fn differential_check(allocated: &AllocatedProgram, input: &[u8]) -> DifferentialCheckResult {
+    let ideal = match ideal_trace(&allocated.ra_program, input) {
         Ok(v) => v,
-        Err(err) => return DifferentialCheckResult::Error(format!("allocation failed: {err}")),
+        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
     };
-    differential_check(&allocated, input)
+    let post_trace = match simulate_execution_trace(allocated, input) {
+        Ok(v) => v,
+        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
+    };
+    let post = post_trace
+        .into_iter()
+        .map(differential_state_from_trace_entry)
+        .collect::<Vec<_>>();
+    compare_differential_states(ideal, post)
+}
+
+pub fn differential_check_cfg(
+    ideal_program: &RaProgram,
+    allocated: &AllocatedCfgProgram,
+    input: &[u8],
+) -> DifferentialCheckResult {
+    let ideal = match ideal_trace(ideal_program, input) {
+        Ok(v) => v,
+        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
+    };
+    let post_trace = match simulate_execution_trace_cfg(allocated, input) {
+        Ok(v) => v,
+        Err(err) => return DifferentialCheckResult::Error(err.to_string()),
+    };
+    let post = post_trace
+        .into_iter()
+        .map(differential_state_from_trace_entry)
+        .collect::<Vec<_>>();
+    compare_differential_states(ideal, post)
+}
+
+pub fn differential_check_program(program: RaProgram, input: &[u8]) -> DifferentialCheckResult {
+    let cfg_program = match lower_ra_program_to_cfg(&program) {
+        Ok(v) => v,
+        Err(err) => {
+            return DifferentialCheckResult::Error(format!("ra->cfg conversion failed: {err}"));
+        }
+    };
+    let allocated = match allocate_cfg_program(&cfg_program) {
+        Ok(v) => v,
+        Err(err) => {
+            return DifferentialCheckResult::Error(format!("cfg allocation failed: {err}"));
+        }
+    };
+    differential_check_cfg(&program, &allocated, input)
 }
 
 #[cfg(test)]
@@ -4234,6 +4822,58 @@ lambda @0 (shape: "u8") {
         assert_eq!(cfg_sim.cursor, ra_sim.cursor);
         assert_eq!(cfg_sim.trap, ra_sim.trap);
         assert_eq!(cfg_sim.returned, ra_sim.returned);
+    }
+
+    #[test]
+    fn cfg_post_regalloc_trace_matches_ra_post_regalloc_trace() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            rb.bounds_check(4);
+            let value = rb.read_bytes(4);
+            rb.write_to_field(value, 0, Width::W4);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+
+        let ra = lower_linear_ir(&lin);
+        let ra_alloc = allocate_program(&ra).expect("ra allocation should succeed");
+
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let cfg_alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
+
+        let input = [0x78_u8, 0x56, 0x34, 0x12];
+        let ra_trace =
+            simulate_execution_trace(&ra_alloc, &input).expect("ra trace simulation should work");
+        let cfg_trace = simulate_execution_trace_cfg(&cfg_alloc, &input)
+            .expect("cfg trace simulation should work");
+
+        assert_eq!(
+            cfg_trace.len(),
+            ra_trace.len(),
+            "cfg and ra traces should execute the same number of steps"
+        );
+
+        for (step, (cfg_step, ra_step)) in cfg_trace.iter().zip(&ra_trace).enumerate() {
+            assert_eq!(
+                cfg_step.step_index, ra_step.step_index,
+                "step_index mismatch at step {step}"
+            );
+            assert_eq!(
+                cfg_step.cursor, ra_step.cursor,
+                "cursor mismatch at step {step}"
+            );
+            assert_eq!(cfg_step.trap, ra_step.trap, "trap mismatch at step {step}");
+            assert_eq!(
+                cfg_step.returned, ra_step.returned,
+                "return flag mismatch at step {step}"
+            );
+            assert_eq!(
+                cfg_step.output, ra_step.output,
+                "output mismatch at step {step}"
+            );
+        }
     }
 
     #[test]
