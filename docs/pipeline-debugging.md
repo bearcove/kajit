@@ -279,6 +279,65 @@ not any one reducer.
   structure without breaking the predicate. Add more reducers instead of
   hand-editing blindly.
 
+### Worked example: failing corpus test -> minimized CFG-MIR
+
+Suppose one exact corpus test is failing and `KAJIT_OPTS='-regalloc'` makes it
+pass. That means the bug is in the post-linearization path and CFG-MIR is the
+right artifact to freeze.
+
+1. Reproduce one exact test:
+
+```bash
+cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
+```
+
+2. Confirm the failure disappears with regalloc disabled:
+
+```bash
+KAJIT_OPTS='-regalloc' \
+cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
+```
+
+3. Dump canonical CFG-MIR for just that case:
+
+```bash
+KAJIT_DUMP_STAGES='cfg' \
+KAJIT_DUMP_FILTER='json::all_scalars' \
+cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
+```
+
+4. Find the dumped seed program:
+
+```bash
+ls target/kajit-stage-dumps/*json__all_scalars*__cfg.txt
+```
+
+5. Take the exact concrete input bytes for the failing reproducer and minimize
+   against those same bytes. The bytes must come from the reproducer itself,
+   not from a guessed or edited input. For corpus-style cases, the most
+   reliable approach is a focused regression test or helper that already has
+   the serialized input in hand.
+
+```bash
+cargo run --manifest-path xtask/Cargo.toml -- \
+  minimize-cfg-mir \
+  target/kajit-stage-dumps/json__all_scalars__<arch>__cfg.txt \
+  <hex-input> \
+  > /tmp/json-all-scalars.min.cfg-mir
+```
+
+6. Use the reduced CFG-MIR as the new debugging artifact:
+   - replay it with `compile_decoder_from_cfg_mir_text(...)`
+   - run the differential harness on it
+   - only then move on to LLDB or disassembly
+
+In practice, the loop is:
+- red test
+- `-regalloc` check
+- dump CFG-MIR
+- minimize with the same concrete input
+- debug the minimized reproducer instead of the original corpus case
+
 ## On-demand pipeline dumps
 
 Generated corpus tests do not enforce IR/CFG-MIR/edit snapshots by default. Dump pipeline artifacts on demand with:
