@@ -101,7 +101,7 @@ impl Lowerer {
 
     pub(super) fn edge_edit_moves(
         &self,
-        linear_op_index: usize,
+        from_block_id: u32,
         succ_index: usize,
     ) -> Vec<(Allocation, Allocation)> {
         let Some(lambda_id) = self
@@ -114,7 +114,7 @@ impl Lowerer {
         let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
             return Vec::new();
         };
-        let key = (linear_op_index, succ_index);
+        let key = (from_block_id, succ_index);
         let mut moves = Vec::new();
         if let Some(before) = by_lambda.before.get(&key) {
             moves.extend(before.iter().copied());
@@ -125,25 +125,21 @@ impl Lowerer {
         moves
     }
 
-    pub(super) fn apply_fallthrough_edge_edits(
-        &mut self,
-        linear_op_index: usize,
-        succ_index: usize,
-    ) {
-        let moves = self.edge_edit_moves(linear_op_index, succ_index);
+    pub(super) fn apply_fallthrough_edge_edits(&mut self, from_block_id: u32, succ_index: usize) {
+        let moves = self.edge_edit_moves(from_block_id, succ_index);
         if moves.is_empty() {
             return;
         }
         emit_parallel_moves(self, &moves);
     }
 
-    pub(super) fn has_edge_edits(&self, linear_op_index: usize, succ_index: usize) -> bool {
-        !self.edge_edit_moves(linear_op_index, succ_index).is_empty()
+    pub(super) fn has_edge_edits(&self, from_block_id: u32, succ_index: usize) -> bool {
+        !self.edge_edit_moves(from_block_id, succ_index).is_empty()
     }
 
     pub(super) fn edge_target_label(
         &mut self,
-        linear_op_index: usize,
+        from_block_id: u32,
         succ_index: usize,
         actual_target: LabelId,
     ) -> LabelId {
@@ -157,18 +153,18 @@ impl Lowerer {
         let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
             return actual_target;
         };
-        let key = (linear_op_index, succ_index);
+        let key = (from_block_id, succ_index);
         let has_edits = by_lambda.before.contains_key(&key) || by_lambda.after.contains_key(&key);
         if !has_edits {
             return actual_target;
         }
 
-        let cache_key = (lambda_id, linear_op_index, succ_index);
+        let cache_key = (lambda_id, from_block_id, succ_index);
         if let Some(label) = self.edge_trampoline_labels.get(&cache_key).copied() {
             return label;
         }
 
-        let moves = self.edge_edit_moves(linear_op_index, succ_index);
+        let moves = self.edge_edit_moves(from_block_id, succ_index);
 
         let label = self.ectx.new_label();
         self.edge_trampoline_labels.insert(cache_key, label);
