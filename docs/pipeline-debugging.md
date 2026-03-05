@@ -43,8 +43,8 @@ semantic divergence.
 
 - RA interpreter vs post-regalloc simulation (allocator/edit correctness):
   - `kajit_mir::regalloc_engine::differential_check_program`
-- RA interpreter vs JIT machine code (backend/codegen correctness):
-  - `kajit::differential_check_program_vs_jit`
+- CFG simulation vs JIT machine code (backend/codegen correctness):
+  - `kajit::differential_check_linear_ir_vs_jit`
 
 Fast sanity commands:
 
@@ -56,12 +56,13 @@ cargo nextest run -p kajit-mir -E 'test(regalloc_engine::tests::differential_)'
 cargo nextest run -p kajit -E 'test(differential_harness_)'
 ```
 
-For a failing corpus case, build an RA program for the same shape/input and run
+For a failing corpus case, build Linear IR for the same shape/input and run
 both harnesses in a focused test:
 
-1. `kajit::debug_ra_program(shape, decoder)` to get RA-MIR.
-2. `kajit_mir::regalloc_engine::differential_check_program(ra.clone(), input)`
-3. `kajit::differential_check_program_vs_jit(&ra, input)`
+1. `let linear = kajit::debug_linear_ir(shape, decoder)`
+2. `kajit::differential_check_linear_ir_vs_jit(&linear, input)`
+3. (optional RA-side adapter check) lower the same `linear` to RA-MIR and run:
+   `kajit_mir::regalloc_engine::differential_check_program(ra.clone(), input)`
 
 These report the first divergent `step_index` and field (`position`, `cursor`,
 `trap`, `returned`, or `output`) so you can target one exact transition.

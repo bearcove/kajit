@@ -1320,21 +1320,6 @@ pub(crate) fn run_configured_default_passes_with_observer<F>(
     }
 }
 
-// r[impl compiler.opts.regalloc]
-fn maybe_disable_regalloc_edits(
-    alloc: &mut crate::regalloc_engine::AllocatedProgram,
-    pipeline_opts: &PipelineOptions,
-) {
-    if pipeline_opts.resolve_regalloc(true) {
-        return;
-    }
-
-    for func in &mut alloc.functions {
-        func.edits.clear();
-        func.edge_edits.clear();
-    }
-}
-
 fn maybe_disable_regalloc_edits_cfg(
     alloc: &mut crate::regalloc_engine::AllocatedCfgProgram,
     pipeline_opts: &PipelineOptions,
@@ -1346,31 +1331,6 @@ fn maybe_disable_regalloc_edits_cfg(
     for func in &mut alloc.functions {
         func.edits.clear();
         func.edge_edits.clear();
-    }
-}
-
-fn no_regalloc_alloc_for_program(
-    ra_mir: &crate::regalloc_mir::RaProgram,
-) -> crate::regalloc_engine::AllocatedProgram {
-    let functions = ra_mir
-        .funcs
-        .iter()
-        .map(|func| crate::regalloc_engine::AllocatedFunction {
-            lambda_id: func.lambda_id,
-            num_spillslots: 0,
-            edits: Vec::new(),
-            inst_allocs: Vec::new(),
-            inst_operands: Vec::new(),
-            inst_linear_op_indices: Vec::new(),
-            term_inst_indices_by_block: vec![None; func.blocks.len()],
-            edge_edits: Vec::new(),
-            return_result_allocs: Vec::new(),
-        })
-        .collect();
-
-    crate::regalloc_engine::AllocatedProgram {
-        ra_program: ra_mir.clone(),
-        functions,
     }
 }
 
@@ -1499,13 +1459,6 @@ fn compile_linear_ir_decoder_with_options(
         trusted_utf8_input,
         _jit_registration: Some(registration),
     }
-}
-
-/// Compile a deserializer directly from an RaProgram (no LinearIr needed).
-///
-/// This is the backend for the RA-MIR text test workflow.
-pub fn compile_ra_program_decoder(_program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
-    panic!("strict cfg backend path: compiling from RaProgram is disabled")
 }
 
 #[cfg(test)]

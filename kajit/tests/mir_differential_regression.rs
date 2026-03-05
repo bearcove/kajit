@@ -1,13 +1,13 @@
 #![cfg(target_arch = "x86_64")]
 
+use facet::Facet;
 use kajit_ir::ErrorCode;
-use kajit_lir::LinearOp;
-use kajit_mir::RaProgram;
+use kajit_lir::{LinearIr, LinearOp};
 
 const POSTCARD_U32_V0_X86_64_SNAPSHOT: &str =
-    include_str!("snapshots/corpus__generated_ra_mir_postcard_scalar_u32__v0_x86_64.snap");
+    include_str!("snapshots/corpus__generated_rvsdg_postcard_scalar_u32__v0_x86_64.snap");
 const POSTCARD_U16_V0_X86_64_SNAPSHOT: &str =
-    include_str!("snapshots/corpus__generated_ra_mir_postcard_scalar_u16__v0_x86_64.snap");
+    include_str!("snapshots/corpus__generated_rvsdg_postcard_scalar_u16__v0_x86_64.snap");
 
 fn snapshot_body(snapshot: &'static str) -> &'static str {
     let snapshot = snapshot
@@ -19,13 +19,11 @@ fn snapshot_body(snapshot: &'static str) -> &'static str {
     body.trim()
 }
 
-fn infer_output_size(program: &RaProgram) -> usize {
-    program
-        .funcs
+fn infer_output_size(linear: &LinearIr) -> usize {
+    linear
+        .ops
         .iter()
-        .flat_map(|func| func.blocks.iter())
-        .flat_map(|block| block.insts.iter())
-        .filter_map(|inst| match &inst.op {
+        .filter_map(|op| match op {
             LinearOp::WriteToField { offset, width, .. }
             | LinearOp::ReadFromField { offset, width, .. } => {
                 Some(*offset as usize + width.bytes() as usize)
@@ -93,28 +91,34 @@ fn format_outcome(outcome: &NormalizedOutcome) -> String {
 }
 
 struct DifferentialHarness {
-    mir_text: &'static str,
-    program: RaProgram,
+    ir_text: &'static str,
     output_size: usize,
+    allocated: kajit::regalloc_engine::AllocatedCfgProgram,
     decoder: kajit::compiler::CompiledDecoder,
 }
 
 impl DifferentialHarness {
-    fn from_snapshot(snapshot: &'static str) -> Self {
-        let mir_text = snapshot_body(snapshot);
-        let program = kajit_mir_text::parse_ra_mir(mir_text).expect("fixture should parse");
-        let output_size = infer_output_size(&program);
-        let decoder = kajit::compile_decoder_from_ra_mir_text(mir_text);
+    fn from_snapshot(snapshot: &'static str, shape: &'static facet::Shape) -> Self {
+        let ir_text = snapshot_body(snapshot);
+        let registry = kajit::ir::IntrinsicRegistry::new();
+        let mut ir_func = kajit::ir_parse::parse_ir(ir_text, shape, &registry)
+            .expect("RVSDG snapshot should parse");
+        let linear = kajit::linearize::linearize(&mut ir_func);
+        let output_size = infer_output_size(&linear);
+        let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+        let allocated = kajit::regalloc_engine::allocate_cfg_program(&cfg_program)
+            .expect("regalloc2 should allocate cfg_mir");
+        let decoder = kajit::compile_decoder_linear_ir(&linear, false);
         Self {
-            mir_text,
-            program,
+            ir_text,
             output_size,
+            allocated,
             decoder,
         }
     }
 
-    fn run_interpreter(&self, input: &[u8]) -> NormalizedOutcome {
-        match kajit_mir::execute_program(&self.program, input) {
+    fn run_simulator(&self, input: &[u8]) -> NormalizedOutcome {
+        match kajit::regalloc_engine::simulate_execution_cfg(&self.allocated, input) {
             Ok(outcome) => match outcome.trap {
                 Some(trap) => NormalizedOutcome::Failure {
                     code: trap.code,
@@ -155,7 +159,7 @@ impl DifferentialHarness {
     }
 
     fn compare(&self, input: &[u8]) -> (NormalizedOutcome, NormalizedOutcome) {
-        (self.run_interpreter(input), self.run_jit(input))
+        (self.run_simulator(input), self.run_jit(input))
     }
 
     fn mismatch_report(
@@ -165,33 +169,33 @@ impl DifferentialHarness {
         jit: &NormalizedOutcome,
     ) -> String {
         format!(
-            "interpreter-vs-jit mismatch\ninput={}\ninterpreter={}\njit={}\nra_mir:\n{}\n",
+            "simulator-vs-jit mismatch\ninput={}\nsimulator={}\njit={}\nrvsdg:\n{}\n",
             format_bytes(input),
             format_outcome(interpreter),
             format_outcome(jit),
-            self.mir_text
+            self.ir_text
         )
     }
 
-    /// Returns a deterministic mismatch report when interpreter and JIT diverge.
+    /// Returns a deterministic mismatch report when simulator and JIT diverge.
     fn mismatch_report_for_input(&self, input: &[u8]) -> Option<String> {
-        let (interpreter, jit) = self.compare(input);
-        if interpreter == jit {
+        let (simulator, jit) = self.compare(input);
+        if simulator == jit {
             None
         } else {
-            Some(self.mismatch_report(input, &interpreter, &jit))
+            Some(self.mismatch_report(input, &simulator, &jit))
         }
     }
 
     fn assert_match(&self, input: &[u8]) -> NormalizedOutcome {
-        let (interpreter, jit) = self.compare(input);
+        let (simulator, jit) = self.compare(input);
         assert_eq!(
-            interpreter,
+            simulator,
             jit,
             "{}",
-            self.mismatch_report(input, &interpreter, &jit)
+            self.mismatch_report(input, &simulator, &jit)
         );
-        interpreter
+        simulator
     }
 }
 
@@ -227,7 +231,8 @@ fn expect_success_u16(outcome: &NormalizedOutcome) -> u16 {
 
 #[test]
 fn postcard_u32_interpreter_vs_jit_varint_cases() {
-    let harness = DifferentialHarness::from_snapshot(POSTCARD_U32_V0_X86_64_SNAPSHOT);
+    let harness =
+        DifferentialHarness::from_snapshot(POSTCARD_U32_V0_X86_64_SNAPSHOT, <u32 as Facet>::SHAPE);
     let cases: [(&[u8], u32); 5] = [
         (&[0x2a], 42),
         (&[0x00], 0),
@@ -244,18 +249,20 @@ fn postcard_u32_interpreter_vs_jit_varint_cases() {
 
 #[test]
 fn postcard_u32_interpreter_vs_jit_detects_invalid_varint_offset_mismatch() {
-    let harness = DifferentialHarness::from_snapshot(POSTCARD_U32_V0_X86_64_SNAPSHOT);
+    let harness =
+        DifferentialHarness::from_snapshot(POSTCARD_U32_V0_X86_64_SNAPSHOT, <u32 as Facet>::SHAPE);
     let report = harness
         .mismatch_report_for_input(&[0x80, 0x80, 0x80, 0x80, 0x80])
-        .expect("malformed varint should currently diverge between interpreter and JIT");
+        .expect("malformed varint should currently diverge between simulator and JIT");
     assert!(report.contains("code=invalid varint encoding"));
-    assert!(report.contains("interpreter=failure code=invalid varint encoding offset=5"));
+    assert!(report.contains("simulator=failure code=invalid varint encoding offset=5"));
     assert!(report.contains("jit=failure code=invalid varint encoding offset=0"));
 }
 
 #[test]
 fn postcard_u16_interpreter_vs_jit_varint_cases() {
-    let harness = DifferentialHarness::from_snapshot(POSTCARD_U16_V0_X86_64_SNAPSHOT);
+    let harness =
+        DifferentialHarness::from_snapshot(POSTCARD_U16_V0_X86_64_SNAPSHOT, <u16 as Facet>::SHAPE);
     let cases: [(&[u8], u16); 5] = [
         (&[0x00], 0),
         (&[0x7f], 127),
@@ -272,7 +279,8 @@ fn postcard_u16_interpreter_vs_jit_varint_cases() {
 
 #[test]
 fn postcard_u16_interpreter_vs_jit_deterministic_mismatch_predicate() {
-    let harness = DifferentialHarness::from_snapshot(POSTCARD_U16_V0_X86_64_SNAPSHOT);
+    let harness =
+        DifferentialHarness::from_snapshot(POSTCARD_U16_V0_X86_64_SNAPSHOT, <u16 as Facet>::SHAPE);
     assert!(
         harness.mismatch_report_for_input(&[0x81, 0x01]).is_none(),
         "u16=129 repro should not diverge"

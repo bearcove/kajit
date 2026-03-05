@@ -90,7 +90,7 @@ pub fn compile_decoder_linear_ir(
 
 /// Compile a deserializer from IR text (RVSDG representation).
 ///
-/// Parses the IR text, runs the full pipeline (IR → passes → LIR → RA-MIR →
+/// Parses the IR text, runs the full pipeline (IR → passes → LIR → CFG-MIR →
 /// regalloc → codegen), and returns an executable decoder.
 ///
 /// This is intended for regression tests and bug minimization: paste a failing
@@ -107,25 +107,6 @@ pub fn compile_decoder_from_ir_text(
     }
     let linear = linearize::linearize(&mut func);
     compiler::compile_linear_ir_decoder(&linear, false)
-}
-
-/// Compile a deserializer from an already-constructed RaProgram.
-///
-/// Runs regalloc2 + codegen, skipping IR/LIR entirely.
-pub fn compile_decoder_from_ra_program(_program: &regalloc_mir::RaProgram) -> CompiledDecoder {
-    panic!("strict cfg backend path: compiling from RaProgram is disabled")
-}
-
-/// Compile a deserializer from RA-MIR text.
-///
-/// Parses the RA-MIR text, runs regalloc2 + codegen, and returns an
-/// executable decoder. Skips the IR → LIR pipeline entirely.
-///
-/// This is intended for regression tests and bug minimization: paste a
-/// failing RA-MIR snapshot, edit it down to a minimal reproducer, and re-run.
-pub fn compile_decoder_from_ra_mir_text(mir_text: &str) -> CompiledDecoder {
-    let _ = mir_text;
-    panic!("strict cfg backend path: compiling from RA-MIR text is disabled")
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + RA-MIR dumps.
@@ -175,13 +156,23 @@ pub fn debug_ra_program(
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
 ///
 /// Intended for snapshot tests and debugging.
+pub fn debug_linear_ir(
+    shape: &'static facet::Shape,
+    ir_decoder: &dyn format::Decoder,
+) -> linearize::LinearIr {
+    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    compiler::run_default_passes_from_env(&mut func);
+    linearize::linearize(&mut func)
+}
+
+/// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
+///
+/// Intended for snapshot tests and debugging.
 pub fn debug_linear_ir_text(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
 ) -> String {
-    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
-    compiler::run_default_passes_from_env(&mut func);
-    let linear = linearize::linearize(&mut func);
+    let linear = debug_linear_ir(shape, ir_decoder);
     scrub_volatile_intrinsic_addrs(&format!("{linear}"))
 }
 
@@ -419,32 +410,29 @@ impl DifferentialReport {
 
 #[derive(Debug)]
 pub enum DifferentialHarnessError {
-    Interpreter(kajit_mir::InterpreterError),
+    Simulation(kajit_mir::RegallocEngineError),
 }
 
 impl core::fmt::Display for DifferentialHarnessError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Interpreter(err) => write!(f, "interpreter execution failed: {err}"),
+            Self::Simulation(err) => write!(f, "cfg simulation failed: {err}"),
         }
     }
 }
 
 impl std::error::Error for DifferentialHarnessError {}
 
-impl From<kajit_mir::InterpreterError> for DifferentialHarnessError {
-    fn from(value: kajit_mir::InterpreterError) -> Self {
-        Self::Interpreter(value)
+impl From<kajit_mir::RegallocEngineError> for DifferentialHarnessError {
+    fn from(value: kajit_mir::RegallocEngineError) -> Self {
+        Self::Simulation(value)
     }
 }
 
-pub fn infer_ra_program_output_size(program: &regalloc_mir::RaProgram) -> usize {
-    program
-        .funcs
+pub fn infer_linear_ir_output_size(ir: &linearize::LinearIr) -> usize {
+    ir.ops
         .iter()
-        .flat_map(|func| func.blocks.iter())
-        .flat_map(|block| block.insts.iter())
-        .filter_map(|inst| match &inst.op {
+        .filter_map(|op| match op {
             linearize::LinearOp::WriteToField { offset, width, .. }
             | linearize::LinearOp::ReadFromField { offset, width, .. } => {
                 Some(*offset as usize + width.bytes() as usize)
@@ -455,8 +443,8 @@ pub fn infer_ra_program_output_size(program: &regalloc_mir::RaProgram) -> usize 
         .unwrap_or(0)
 }
 
-fn normalize_interpreter_outcome(
-    outcome: kajit_mir::InterpreterOutcome,
+fn normalize_simulation_outcome(
+    outcome: kajit_mir::ExecutionResult,
     output_size: usize,
 ) -> DifferentialOutcome {
     match outcome.trap {
@@ -543,22 +531,24 @@ fn compare_differential_outcomes(
     }
 }
 
-pub fn differential_check_program_vs_jit(
-    program: &regalloc_mir::RaProgram,
+pub fn differential_check_linear_ir_vs_jit(
+    ir: &linearize::LinearIr,
     input: &[u8],
 ) -> Result<DifferentialReport, DifferentialHarnessError> {
-    let output_size = infer_ra_program_output_size(program);
-    differential_check_program_vs_jit_with_output_size(program, input, output_size)
+    let output_size = infer_linear_ir_output_size(ir);
+    differential_check_linear_ir_vs_jit_with_output_size(ir, input, output_size)
 }
 
-pub fn differential_check_program_vs_jit_with_output_size(
-    program: &regalloc_mir::RaProgram,
+pub fn differential_check_linear_ir_vs_jit_with_output_size(
+    ir: &linearize::LinearIr,
     input: &[u8],
     output_size: usize,
 ) -> Result<DifferentialReport, DifferentialHarnessError> {
-    let interpreter = kajit_mir::execute_program(program, input)?;
-    let interpreter = normalize_interpreter_outcome(interpreter, output_size);
-    let decoder = compile_decoder_from_ra_program(program);
+    let cfg_program = regalloc_engine::cfg_mir::lower_linear_ir(ir);
+    let alloc = regalloc_engine::allocate_cfg_program(&cfg_program)?;
+    let simulation = regalloc_engine::simulate_execution_cfg(&alloc, input)?;
+    let interpreter = normalize_simulation_outcome(simulation, output_size);
+    let decoder = compile_decoder_linear_ir(ir, false);
     let jit = normalize_jit_outcome(deserialize_raw(&decoder, input, output_size), output_size);
     let mismatch = compare_differential_outcomes(&interpreter, &jit);
     Ok(DifferentialReport {
@@ -571,143 +561,31 @@ pub fn differential_check_program_vs_jit_with_output_size(
 #[cfg(test)]
 mod differential_tests {
     use super::*;
+    use facet::Facet;
 
-    fn tiny_const_write_program() -> regalloc_mir::RaProgram {
-        let v0 = ir::VReg::new(0);
-        regalloc_mir::RaProgram {
-            funcs: vec![regalloc_mir::RaFunction {
-                lambda_id: ir::LambdaId::new(0),
-                entry: regalloc_mir::BlockId(0),
-                data_args: Vec::new(),
-                data_results: Vec::new(),
-                blocks: vec![regalloc_mir::RaBlock {
-                    id: regalloc_mir::BlockId(0),
-                    label: None,
-                    params: Vec::new(),
-                    insts: vec![
-                        regalloc_mir::RaInst {
-                            linear_op_index: 0,
-                            op: linearize::LinearOp::Const {
-                                dst: v0,
-                                value: 0x4433_2211,
-                            },
-                            operands: vec![regalloc_mir::RaOperand {
-                                vreg: v0,
-                                kind: regalloc_mir::OperandKind::Def,
-                                class: regalloc_mir::RegClass::Gpr,
-                                fixed: None,
-                            }],
-                            clobbers: regalloc_mir::RaClobbers::default(),
-                        },
-                        regalloc_mir::RaInst {
-                            linear_op_index: 1,
-                            op: linearize::LinearOp::WriteToField {
-                                src: v0,
-                                offset: 0,
-                                width: ir::Width::W4,
-                            },
-                            operands: vec![regalloc_mir::RaOperand {
-                                vreg: v0,
-                                kind: regalloc_mir::OperandKind::Use,
-                                class: regalloc_mir::RegClass::Gpr,
-                                fixed: None,
-                            }],
-                            clobbers: regalloc_mir::RaClobbers::default(),
-                        },
-                    ],
-                    term_linear_op_index: 2,
-                    term: regalloc_mir::RaTerminator::Return,
-                    preds: Vec::new(),
-                    succs: Vec::new(),
-                }],
-            }],
-            vreg_count: 1,
-            slot_count: 0,
-        }
-    }
+    const POSTCARD_U32_V0_RVSDG_SNAPSHOT: &str = include_str!(
+        "../tests/snapshots/corpus__generated_rvsdg_postcard_scalar_u32__v0_x86_64.snap"
+    );
 
-    fn tiny_out_ptr_roundtrip_program() -> regalloc_mir::RaProgram {
-        let v0 = ir::VReg::new(0);
-        let v1 = ir::VReg::new(1);
-        regalloc_mir::RaProgram {
-            funcs: vec![regalloc_mir::RaFunction {
-                lambda_id: ir::LambdaId::new(0),
-                entry: regalloc_mir::BlockId(0),
-                data_args: Vec::new(),
-                data_results: Vec::new(),
-                blocks: vec![regalloc_mir::RaBlock {
-                    id: regalloc_mir::BlockId(0),
-                    label: None,
-                    params: Vec::new(),
-                    insts: vec![
-                        regalloc_mir::RaInst {
-                            linear_op_index: 0,
-                            op: linearize::LinearOp::SaveOutPtr { dst: v1 },
-                            operands: vec![regalloc_mir::RaOperand {
-                                vreg: v1,
-                                kind: regalloc_mir::OperandKind::Def,
-                                class: regalloc_mir::RegClass::Gpr,
-                                fixed: None,
-                            }],
-                            clobbers: regalloc_mir::RaClobbers::default(),
-                        },
-                        regalloc_mir::RaInst {
-                            linear_op_index: 1,
-                            op: linearize::LinearOp::SetOutPtr { src: v1 },
-                            operands: vec![regalloc_mir::RaOperand {
-                                vreg: v1,
-                                kind: regalloc_mir::OperandKind::Use,
-                                class: regalloc_mir::RegClass::Gpr,
-                                fixed: None,
-                            }],
-                            clobbers: regalloc_mir::RaClobbers::default(),
-                        },
-                        regalloc_mir::RaInst {
-                            linear_op_index: 2,
-                            op: linearize::LinearOp::Const {
-                                dst: v0,
-                                value: 0x4433_2211,
-                            },
-                            operands: vec![regalloc_mir::RaOperand {
-                                vreg: v0,
-                                kind: regalloc_mir::OperandKind::Def,
-                                class: regalloc_mir::RegClass::Gpr,
-                                fixed: None,
-                            }],
-                            clobbers: regalloc_mir::RaClobbers::default(),
-                        },
-                        regalloc_mir::RaInst {
-                            linear_op_index: 3,
-                            op: linearize::LinearOp::WriteToField {
-                                src: v0,
-                                offset: 0,
-                                width: ir::Width::W4,
-                            },
-                            operands: vec![regalloc_mir::RaOperand {
-                                vreg: v0,
-                                kind: regalloc_mir::OperandKind::Use,
-                                class: regalloc_mir::RegClass::Gpr,
-                                fixed: None,
-                            }],
-                            clobbers: regalloc_mir::RaClobbers::default(),
-                        },
-                    ],
-                    term_linear_op_index: 4,
-                    term: regalloc_mir::RaTerminator::Return,
-                    preds: Vec::new(),
-                    succs: Vec::new(),
-                }],
-            }],
-            vreg_count: 2,
-            slot_count: 0,
-        }
+    fn snapshot_body(snapshot: &'static str) -> &'static str {
+        let snapshot = snapshot
+            .strip_prefix("---\n")
+            .expect("insta snapshot should start with frontmatter");
+        let (_, body) = snapshot
+            .split_once("\n---\n")
+            .expect("insta snapshot frontmatter should end with separator");
+        body.trim()
     }
 
     #[test]
-    fn differential_harness_matches_tiny_ra_program() {
-        let program = tiny_const_write_program();
+    fn differential_harness_matches_postcard_u32_linear_ir_snapshot() {
+        let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
+        let registry = ir::IntrinsicRegistry::new();
+        let mut ir_func =
+            ir_parse::parse_ir(ir_text, <u32 as Facet>::SHAPE, &registry).expect("valid RVSDG");
+        let linear = linearize::linearize(&mut ir_func);
         let report =
-            differential_check_program_vs_jit(&program, &[]).expect("harness should execute");
+            differential_check_linear_ir_vs_jit(&linear, &[0x2a]).expect("harness should execute");
         assert!(
             report.is_match(),
             "unexpected mismatch: {:?}",
@@ -716,7 +594,7 @@ mod differential_tests {
         assert_eq!(
             report.interpreter,
             DifferentialOutcome::Success {
-                output: vec![0x11, 0x22, 0x33, 0x44]
+                output: vec![0x2a, 0x00, 0x00, 0x00]
             }
         );
     }
@@ -737,24 +615,6 @@ mod differential_tests {
                 interpreter: 2,
                 jit: 9,
             })
-        );
-    }
-
-    #[test]
-    fn differential_harness_supports_out_ptr_roundtrip_ops() {
-        let program = tiny_out_ptr_roundtrip_program();
-        let report =
-            differential_check_program_vs_jit(&program, &[]).expect("harness should execute");
-        assert!(
-            report.is_match(),
-            "unexpected mismatch: {:?}",
-            report.mismatch
-        );
-        assert_eq!(
-            report.interpreter,
-            DifferentialOutcome::Success {
-                output: vec![0x11, 0x22, 0x33, 0x44]
-            }
         );
     }
 }

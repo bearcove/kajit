@@ -55,33 +55,3 @@ pub fn compile_linear_ir_with_alloc_and_mode(
         crate::backends::aarch64::compile(cfg_program, alloc, apply_regalloc_edits)
     }
 }
-
-/// Compile directly from an RaProgram (no LinearIr needed).
-///
-/// This is the entry point for the RA-MIR text test workflow: parse RA-MIR
-/// text into an RaProgram, then run regalloc2 + codegen without needing a
-/// LinearIr.
-pub fn compile_ra_program(
-    _ra_mir: &crate::regalloc_mir::RaProgram,
-    _alloc: &crate::regalloc_engine::AllocatedProgram,
-) -> LinearBackendResult {
-    compile_ra_program_with_mode(_ra_mir, _alloc, true)
-}
-
-pub fn compile_ra_program_with_mode(
-    _ra_mir: &crate::regalloc_mir::RaProgram,
-    _alloc: &crate::regalloc_engine::AllocatedProgram,
-    apply_regalloc_edits: bool,
-) -> LinearBackendResult {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let _ = apply_regalloc_edits;
-        panic!("x86_64 strict backend path not wired yet")
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        let _ = apply_regalloc_edits;
-        panic!("compile_ra_program is disabled on strict CFG backend path")
-    }
-}
