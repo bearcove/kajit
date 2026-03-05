@@ -150,8 +150,8 @@ The script resolves the concrete test binary via `cargo nextest list`, then laun
 ### How it works
 
 When `KAJIT_DEBUG=1`:
-1. The compiler generates a CFG-MIR listing file at `/tmp/kajit-debug/<type>.cfg-mir` (one line per CFG-MIR instruction)
-2. Both backends call `set_source_location()` before each instruction, recording the linear op index as the DWARF line number
+1. The compiler generates a CFG-MIR listing file at `/tmp/kajit-debug/<type>.cfg-mir` (one line per CFG-MIR op, including `f/b/op` IDs and derived `idx`)
+2. Both backends call `set_source_location()` before each instruction, recording canonical CFG-MIR op order (`OpId`-based listing lines) as DWARF line numbers
 3. A minimal DWARF v4 compilation unit is built (`.debug_info` referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`)
 4. The JIT ELF registered via the GDB JIT interface contains `.text`, `.symtab`, `.debug_line`, `.debug_abbrev`, and `.debug_info`
 5. LLDB (with JIT loader enabled) parses the ELF, loads the line table, and maps code offsets to `.cfg-mir` listing lines
