@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::cfg_mir;
+use crate::{
+    DifferentialCheckResult, DifferentialDivergence, allocate_cfg_program, differential_check_cfg,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramSize {
@@ -78,6 +81,15 @@ pub enum MinimizeError<E> {
     Predicate(E),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DifferentialInterestingness {
+    pub field: String,
+    pub ideal_trap: Option<crate::InterpreterTrap>,
+    pub post_trap: Option<crate::InterpreterTrap>,
+    pub ideal_returned: bool,
+    pub post_returned: bool,
+}
+
 #[derive(Debug, Clone)]
 struct Candidate {
     strategy: &'static str,
@@ -147,6 +159,48 @@ where
             steps,
         },
     ))
+}
+
+pub fn differential_interestingness(
+    program: &cfg_mir::Program,
+    input: &[u8],
+) -> Result<Option<DifferentialInterestingness>, String> {
+    let allocated = allocate_cfg_program(program).map_err(|err| err.to_string())?;
+    match differential_check_cfg(program, &allocated, input) {
+        DifferentialCheckResult::Match { .. } => Ok(None),
+        DifferentialCheckResult::Diverged(divergence) => Ok(Some(
+            DifferentialInterestingness::from_divergence(&divergence),
+        )),
+        DifferentialCheckResult::Error(err) => Err(err),
+    }
+}
+
+pub fn minimize_cfg_program_for_differential(
+    program: &cfg_mir::Program,
+    input: &[u8],
+) -> Result<(cfg_mir::Program, MinimizeStats, DifferentialInterestingness), MinimizeError<String>> {
+    let Some(target) =
+        differential_interestingness(program, input).map_err(MinimizeError::Predicate)?
+    else {
+        return Err(MinimizeError::NotInteresting);
+    };
+
+    let (reduced, stats) = minimize_cfg_program(program, |candidate| {
+        Ok::<_, String>(differential_interestingness(candidate, input)? == Some(target.clone()))
+    })?;
+    Ok((reduced, stats, target))
+}
+
+impl DifferentialInterestingness {
+    fn from_divergence(divergence: &DifferentialDivergence) -> Self {
+        Self {
+            field: divergence.field.clone(),
+            ideal_trap: divergence.ideal.trap,
+            post_trap: divergence.post_regalloc.trap,
+            ideal_returned: divergence.ideal.returned,
+            post_returned: divergence.post_regalloc.returned,
+        }
+    }
 }
 
 fn generate_candidates(program: &cfg_mir::Program) -> Vec<Candidate> {
@@ -861,5 +915,16 @@ mod tests {
         assert_eq!(ProgramSize::of(&reduced), ProgramSize::of(&program));
         assert_eq!(stats.accepted, 0);
         assert_eq!(stats.attempts, 1);
+    }
+
+    #[test]
+    fn differential_helper_reports_non_divergent_program_as_uninteresting() {
+        let program = dead_block_program();
+        let interestingness =
+            differential_interestingness(&program, &[]).expect("differential helper should run");
+        assert_eq!(interestingness, None);
+
+        let result = minimize_cfg_program_for_differential(&program, &[]);
+        assert!(matches!(result, Err(MinimizeError::NotInteresting)));
     }
 }
