@@ -2374,11 +2374,27 @@ pub(crate) fn render_test_file() -> String {
 
         #types
 
+        const PRINT_INPUT_HEX_ENV: &str = "KAJIT_PRINT_INPUT_HEX";
+
+        fn maybe_print_case_input(input: &[u8]) {
+            if std::env::var_os(PRINT_INPUT_HEX_ENV).is_none() {
+                return;
+            }
+
+            let mut hex = String::with_capacity(input.len() * 2);
+            for byte in input {
+                use core::fmt::Write as _;
+                write!(&mut hex, "{byte:02x}").expect("writing to String should not fail");
+            }
+            println!("KAJIT_CASE_INPUT_HEX={hex}");
+        }
+
         fn assert_json_case<T>(value: T)
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
         {
             let encoded = serde_json::to_string(&value).unwrap();
+            maybe_print_case_input(encoded.as_bytes());
             let expected: T = serde_json::from_str(&encoded).unwrap();
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let case = runtime_case_name();
@@ -2395,6 +2411,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
         {
             let encoded = ::postcard::to_allocvec(&value).unwrap();
+            maybe_print_case_input(&encoded);
             let expected: T = ::postcard::from_bytes(&encoded).unwrap();
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let case = runtime_case_name();
@@ -2410,6 +2427,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
         {
+            maybe_print_case_input(input);
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let got: T = kajit::deserialize(&decoder, input).unwrap();
             assert_eq!(got, expected);
@@ -2419,6 +2437,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
+            maybe_print_case_input(input);
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let out = kajit::deserialize::<T>(&decoder, input);
             assert!(out.is_err(), "expected json decode failure");
@@ -2428,6 +2447,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
+            maybe_print_case_input(input);
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
             let out = kajit::deserialize::<T>(&decoder, input);
             let err = match out {
@@ -2441,6 +2461,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
         {
+            maybe_print_case_input(input);
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let got: T = kajit::from_str(&decoder, input).unwrap();
@@ -2452,6 +2473,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
+            maybe_print_case_input(input);
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let out = kajit::from_str::<T>(&decoder, input);
@@ -2462,6 +2484,7 @@ pub(crate) fn render_test_file() -> String {
         where
             for<'input> T: Facet<'input>,
         {
+            maybe_print_case_input(input);
             let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let out = kajit::from_str::<T>(&decoder, input);
