@@ -73,7 +73,7 @@ where
 
 #[test]
 #[cfg(target_arch = "aarch64")]
-fn theta_hoist_smallest_known_struct_repro_is_three_fields() {
+fn theta_hoist_minimized_repros_remain_fixed() {
     // Keep this input aligned with `Boundaries` style values from corpus.
     let two_fields = br#"{"u8_max":255,"i32_min":-2147483648}"#;
     let three_fields = br#"{"u8_max":255,"i16_min":-32768,"i32_min":-2147483648}"#;
@@ -86,15 +86,15 @@ fn theta_hoist_smallest_known_struct_repro_is_three_fields() {
         "2-field case should not repro; if it does, update minimization"
     );
     assert!(
-        miscompiles_with_theta_hoist::<ThreeFields>(three_fields),
-        "expected 3-field case to repro theta-hoist miscompile"
+        !miscompiles_with_theta_hoist::<ThreeFields>(three_fields),
+        "3-field case should stay fixed; theta-hoist must match baseline"
     );
     assert!(
         !miscompiles_with_theta_hoist::<FourFields>(four_fields),
         "4-field variant currently does not repro; keep as guard for minimization assumptions"
     );
     assert!(
-        miscompiles_with_theta_hoist::<SixFields>(six_fields),
-        "expected 6-field boundaries case to repro theta-hoist miscompile"
+        !miscompiles_with_theta_hoist::<SixFields>(six_fields),
+        "6-field boundaries case should stay fixed; theta-hoist must match baseline"
     );
 }
