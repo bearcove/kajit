@@ -9,7 +9,7 @@ use std::fmt;
 use std::ops::Range;
 
 use kajit_ir::{ErrorCode, LambdaId, VReg};
-use kajit_lir::LinearOp;
+use kajit_lir::{LabelId, LinearIr, LinearOp};
 
 macro_rules! define_id {
     ($name:ident) => {
@@ -447,9 +447,663 @@ impl Program {
     }
 }
 
+#[derive(Debug, Clone)]
+enum TempTermLabel {
+    Return,
+    ErrorExit(ErrorCode),
+    Branch(LabelId),
+    BranchIf {
+        cond: VReg,
+        target: LabelId,
+    },
+    BranchIfZero {
+        cond: VReg,
+        target: LabelId,
+    },
+    JumpTable {
+        predicate: VReg,
+        labels: Vec<LabelId>,
+        default: LabelId,
+    },
+    Fallthrough(usize),
+}
+
+#[derive(Debug, Clone)]
+enum TempTermBlock {
+    Return,
+    ErrorExit(ErrorCode),
+    Branch {
+        target: BlockId,
+    },
+    BranchIf {
+        cond: VReg,
+        target: BlockId,
+        fallthrough: BlockId,
+    },
+    BranchIfZero {
+        cond: VReg,
+        target: BlockId,
+        fallthrough: BlockId,
+    },
+    JumpTable {
+        predicate: VReg,
+        targets: Vec<BlockId>,
+        default: BlockId,
+    },
+}
+
+impl TempTermBlock {
+    fn uses(&self) -> Vec<VReg> {
+        match self {
+            Self::BranchIf { cond, .. } | Self::BranchIfZero { cond, .. } => vec![*cond],
+            Self::JumpTable { predicate, .. } => vec![*predicate],
+            Self::Return | Self::ErrorExit(_) | Self::Branch { .. } => Vec::new(),
+        }
+    }
+
+    fn successors(&self) -> Vec<BlockId> {
+        match self {
+            Self::Return | Self::ErrorExit(_) => Vec::new(),
+            Self::Branch { target, .. } => vec![*target],
+            Self::BranchIf {
+                target,
+                fallthrough,
+                ..
+            }
+            | Self::BranchIfZero {
+                target,
+                fallthrough,
+                ..
+            } => vec![*target, *fallthrough],
+            Self::JumpTable {
+                targets, default, ..
+            } => {
+                let mut out = targets.clone();
+                out.push(*default);
+                out
+            }
+        }
+    }
+}
+
+fn is_terminator(op: &LinearOp) -> bool {
+    matches!(
+        op,
+        LinearOp::Branch(_)
+            | LinearOp::BranchIf { .. }
+            | LinearOp::BranchIfZero { .. }
+            | LinearOp::JumpTable { .. }
+            | LinearOp::ErrorExit { .. }
+    )
+}
+
+fn push_use(out: &mut Vec<Operand>, v: VReg, fixed: Option<FixedReg>) {
+    out.push(Operand {
+        vreg: v,
+        kind: OperandKind::Use,
+        class: RegClass::Gpr,
+        fixed,
+    });
+}
+
+fn push_def(out: &mut Vec<Operand>, v: VReg, fixed: Option<FixedReg>) {
+    out.push(Operand {
+        vreg: v,
+        kind: OperandKind::Def,
+        class: RegClass::Gpr,
+        fixed,
+    });
+}
+
+fn lower_inst(id: InstId, op: LinearOp) -> Inst {
+    let mut operands = Vec::new();
+    let mut clobbers = Clobbers::default();
+
+    match &op {
+        LinearOp::Const { dst, .. }
+        | LinearOp::ReadBytes { dst, .. }
+        | LinearOp::PeekByte { dst }
+        | LinearOp::SaveCursor { dst }
+        | LinearOp::ReadFromField { dst, .. }
+        | LinearOp::SaveOutPtr { dst }
+        | LinearOp::SlotAddr { dst, .. }
+        | LinearOp::ReadFromSlot { dst, .. } => {
+            push_def(&mut operands, *dst, None);
+        }
+        LinearOp::BinOp {
+            dst, lhs, rhs, op, ..
+        } => {
+            push_use(&mut operands, *lhs, None);
+            let rhs_fixed = {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    match op {
+                        kajit_lir::BinOpKind::Shr | kajit_lir::BinOpKind::Shl => {
+                            Some(FixedReg::HwReg(1))
+                        }
+                        _ => None,
+                    }
+                }
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    let _ = op;
+                    None
+                }
+            };
+            push_use(&mut operands, *rhs, rhs_fixed);
+            push_def(&mut operands, *dst, None);
+        }
+        LinearOp::UnaryOp { dst, src, .. } | LinearOp::Copy { dst, src } => {
+            push_use(&mut operands, *src, None);
+            push_def(&mut operands, *dst, None);
+        }
+        LinearOp::AdvanceCursorBy { src }
+        | LinearOp::RestoreCursor { src }
+        | LinearOp::WriteToField { src, .. }
+        | LinearOp::SetOutPtr { src }
+        | LinearOp::WriteToSlot { src, .. } => {
+            push_use(&mut operands, *src, None);
+        }
+        LinearOp::CallIntrinsic { args, dst, .. } => {
+            for &arg in args {
+                push_use(&mut operands, arg, None);
+            }
+            if let Some(dst) = dst {
+                push_def(&mut operands, *dst, None);
+            }
+            clobbers = Clobbers {
+                caller_saved_gpr: true,
+                caller_saved_simd: true,
+            };
+        }
+        LinearOp::CallPure { args, dst, .. } => {
+            for &arg in args {
+                push_use(&mut operands, arg, None);
+            }
+            push_def(&mut operands, *dst, None);
+            clobbers = Clobbers {
+                caller_saved_gpr: true,
+                caller_saved_simd: true,
+            };
+        }
+        LinearOp::CallLambda { args, results, .. } => {
+            for (i, &arg) in args.iter().enumerate() {
+                push_use(&mut operands, arg, Some(FixedReg::AbiArg((i + 2) as u8)));
+            }
+            for (i, &r) in results.iter().enumerate() {
+                push_def(&mut operands, r, Some(FixedReg::AbiRet(i as u8)));
+            }
+            clobbers = Clobbers {
+                caller_saved_gpr: true,
+                caller_saved_simd: true,
+            };
+        }
+        LinearOp::SimdStringScan { pos, kind } => {
+            push_def(&mut operands, *pos, None);
+            push_def(&mut operands, *kind, None);
+        }
+        LinearOp::BoundsCheck { .. }
+        | LinearOp::AdvanceCursor { .. }
+        | LinearOp::SimdWhitespaceSkip => {}
+        LinearOp::Label(_)
+        | LinearOp::Branch(_)
+        | LinearOp::BranchIf { .. }
+        | LinearOp::BranchIfZero { .. }
+        | LinearOp::JumpTable { .. }
+        | LinearOp::ErrorExit { .. }
+        | LinearOp::FuncStart { .. }
+        | LinearOp::FuncEnd => {
+            panic!("unexpected non-inst op in cfg_mir::lower_inst: {op:?}");
+        }
+    }
+
+    Inst {
+        id,
+        op,
+        operands,
+        clobbers,
+    }
+}
+
+fn resolve_term_labels(
+    term: &TempTermLabel,
+    labels: &HashMap<LabelId, BlockId>,
+    next: Option<BlockId>,
+) -> TempTermBlock {
+    match term {
+        TempTermLabel::Return => TempTermBlock::Return,
+        TempTermLabel::ErrorExit(code) => TempTermBlock::ErrorExit(*code),
+        TempTermLabel::Branch(label) => TempTermBlock::Branch {
+            target: *labels
+                .get(label)
+                .unwrap_or_else(|| panic!("unknown label target: {label:?}")),
+        },
+        TempTermLabel::BranchIf { cond, target } => TempTermBlock::BranchIf {
+            cond: *cond,
+            target: *labels
+                .get(target)
+                .unwrap_or_else(|| panic!("unknown label target: {target:?}")),
+            fallthrough: next.expect("BranchIf must have fallthrough block"),
+        },
+        TempTermLabel::BranchIfZero { cond, target } => TempTermBlock::BranchIfZero {
+            cond: *cond,
+            target: *labels
+                .get(target)
+                .unwrap_or_else(|| panic!("unknown label target: {target:?}")),
+            fallthrough: next.expect("BranchIfZero must have fallthrough block"),
+        },
+        TempTermLabel::JumpTable {
+            predicate,
+            labels: targets,
+            default,
+        } => TempTermBlock::JumpTable {
+            predicate: *predicate,
+            targets: targets
+                .iter()
+                .map(|label| {
+                    *labels
+                        .get(label)
+                        .unwrap_or_else(|| panic!("unknown jump-table label: {label:?}"))
+                })
+                .collect(),
+            default: *labels
+                .get(default)
+                .unwrap_or_else(|| panic!("unknown jump-table default: {default:?}")),
+        },
+        TempTermLabel::Fallthrough(next_idx) => TempTermBlock::Branch {
+            target: BlockId(*next_idx as u32),
+        },
+    }
+}
+
+fn collect_use_def(
+    block: &Block,
+    insts: &[Inst],
+    term: &TempTermBlock,
+    use_set: &mut [bool],
+    def_set: &mut [bool],
+) {
+    for inst_id in &block.insts {
+        let inst = &insts[inst_id.index()];
+        for operand in &inst.operands {
+            match operand.kind {
+                OperandKind::Use => {
+                    if !def_set[operand.vreg.index()] {
+                        use_set[operand.vreg.index()] = true;
+                    }
+                }
+                OperandKind::Def => {
+                    def_set[operand.vreg.index()] = true;
+                }
+            }
+        }
+    }
+    for vreg in term.uses() {
+        if !def_set[vreg.index()] {
+            use_set[vreg.index()] = true;
+        }
+    }
+}
+
+fn lower_function(
+    function_id: FunctionId,
+    lambda_id: LambdaId,
+    data_args: Vec<VReg>,
+    data_results: Vec<VReg>,
+    ops: &[LinearOp],
+    vreg_count: u32,
+) -> Function {
+    if ops.is_empty() {
+        return Function {
+            id: function_id,
+            lambda_id,
+            entry: BlockId(0),
+            data_args,
+            data_results,
+            blocks: vec![Block {
+                id: BlockId(0),
+                params: Vec::new(),
+                insts: Vec::new(),
+                term: TermId(0),
+                preds: Vec::new(),
+                succs: Vec::new(),
+            }],
+            edges: Vec::new(),
+            insts: Vec::new(),
+            terms: vec![Terminator::Return],
+        };
+    }
+
+    let mut leaders = vec![0usize];
+    for (idx, op) in ops.iter().enumerate() {
+        if idx != 0 && matches!(op, LinearOp::Label(_)) {
+            leaders.push(idx);
+        }
+        if is_terminator(op) && idx + 1 < ops.len() {
+            leaders.push(idx + 1);
+        }
+    }
+    leaders.sort_unstable();
+    leaders.dedup();
+
+    let mut labels = HashMap::<LabelId, BlockId>::new();
+    let mut blocks = Vec::<Block>::new();
+    let mut insts = Vec::<Inst>::new();
+    let mut label_terms = Vec::<TempTermLabel>::new();
+
+    for bi in 0..leaders.len() {
+        let start = leaders[bi];
+        let end = if bi + 1 < leaders.len() {
+            leaders[bi + 1]
+        } else {
+            ops.len()
+        };
+
+        let mut cursor = start;
+        if matches!(ops[cursor], LinearOp::Label(_))
+            && let LinearOp::Label(label) = ops[cursor]
+        {
+            labels.insert(label, BlockId(bi as u32));
+            cursor += 1;
+        }
+
+        let mut block_inst_ids = Vec::<InstId>::new();
+        let mut term = None::<TempTermLabel>;
+
+        while cursor < end {
+            match ops[cursor].clone() {
+                LinearOp::Branch(target) => {
+                    term = Some(TempTermLabel::Branch(target));
+                    cursor += 1;
+                    break;
+                }
+                LinearOp::BranchIf { cond, target } => {
+                    term = Some(TempTermLabel::BranchIf { cond, target });
+                    cursor += 1;
+                    break;
+                }
+                LinearOp::BranchIfZero { cond, target } => {
+                    term = Some(TempTermLabel::BranchIfZero { cond, target });
+                    cursor += 1;
+                    break;
+                }
+                LinearOp::JumpTable {
+                    predicate,
+                    labels,
+                    default,
+                } => {
+                    term = Some(TempTermLabel::JumpTable {
+                        predicate,
+                        labels,
+                        default,
+                    });
+                    cursor += 1;
+                    break;
+                }
+                LinearOp::ErrorExit { code } => {
+                    term = Some(TempTermLabel::ErrorExit(code));
+                    cursor += 1;
+                    break;
+                }
+                LinearOp::Label(_) | LinearOp::FuncStart { .. } | LinearOp::FuncEnd => {
+                    panic!(
+                        "unexpected structural op in function body: {:?}",
+                        ops[cursor]
+                    );
+                }
+                other => {
+                    let inst_id = InstId(insts.len() as u32);
+                    insts.push(lower_inst(inst_id, other));
+                    block_inst_ids.push(inst_id);
+                    cursor += 1;
+                }
+            }
+        }
+
+        assert!(
+            cursor == end,
+            "non-terminator ops after terminator in block {bi}"
+        );
+
+        if term.is_none() {
+            if bi + 1 < leaders.len() {
+                term = Some(TempTermLabel::Fallthrough(bi + 1));
+            } else {
+                term = Some(TempTermLabel::Return);
+            }
+        }
+
+        blocks.push(Block {
+            id: BlockId(bi as u32),
+            params: Vec::new(),
+            insts: block_inst_ids,
+            term: TermId(bi as u32),
+            preds: Vec::new(),
+            succs: Vec::new(),
+        });
+        label_terms.push(term.expect("term must be set"));
+    }
+
+    let mut block_terms = Vec::<TempTermBlock>::new();
+    for (bi, label_term) in label_terms.iter().enumerate() {
+        let next = if bi + 1 < blocks.len() {
+            Some(BlockId((bi + 1) as u32))
+        } else {
+            None
+        };
+        block_terms.push(resolve_term_labels(label_term, &labels, next));
+    }
+
+    let mut use_sets = vec![vec![false; vreg_count as usize]; blocks.len()];
+    let mut def_sets = vec![vec![false; vreg_count as usize]; blocks.len()];
+    for (idx, block) in blocks.iter().enumerate() {
+        collect_use_def(
+            block,
+            &insts,
+            &block_terms[idx],
+            &mut use_sets[idx],
+            &mut def_sets[idx],
+        );
+    }
+
+    if let Some(entry_defs) = def_sets.first_mut() {
+        for &arg in &data_args {
+            entry_defs[arg.index()] = true;
+        }
+    }
+
+    let mut live_in = vec![vec![false; vreg_count as usize]; blocks.len()];
+    let mut live_out = vec![vec![false; vreg_count as usize]; blocks.len()];
+    loop {
+        let mut changed = false;
+        for bi in (0..blocks.len()).rev() {
+            let mut out = vec![false; vreg_count as usize];
+            for succ in block_terms[bi].successors() {
+                for (idx, live) in live_in[succ.index()].iter().enumerate() {
+                    out[idx] |= *live;
+                }
+            }
+
+            let mut inn = use_sets[bi].clone();
+            for idx in 0..inn.len() {
+                inn[idx] |= out[idx] && !def_sets[bi][idx];
+            }
+
+            if out != live_out[bi] || inn != live_in[bi] {
+                live_out[bi] = out;
+                live_in[bi] = inn;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for bi in 0..blocks.len() {
+        if bi == 0 {
+            blocks[bi].params.clear();
+            continue;
+        }
+        blocks[bi].params = live_in[bi]
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, live)| live.then_some(VReg::new(idx as u32)))
+            .collect();
+    }
+
+    let mut edges = Vec::<Edge>::new();
+    for from in 0..blocks.len() {
+        for to in block_terms[from].successors() {
+            let edge_id = EdgeId(edges.len() as u32);
+            let args = blocks[to.index()]
+                .params
+                .iter()
+                .copied()
+                .map(|target| EdgeArg {
+                    target,
+                    source: target,
+                })
+                .collect();
+            edges.push(Edge {
+                id: edge_id,
+                from: BlockId(from as u32),
+                to,
+                args,
+            });
+            blocks[from].succs.push(edge_id);
+            blocks[to.index()].preds.push(edge_id);
+        }
+    }
+
+    let mut terms = Vec::<Terminator>::with_capacity(block_terms.len());
+    for (bi, term) in block_terms.iter().enumerate() {
+        let succ_edges = blocks[bi].succs.clone();
+        let lowered = match term {
+            TempTermBlock::Return => Terminator::Return,
+            TempTermBlock::ErrorExit(code) => Terminator::ErrorExit { code: *code },
+            TempTermBlock::Branch { .. } => Terminator::Branch {
+                edge: *succ_edges
+                    .first()
+                    .expect("branch block should have one successor edge"),
+            },
+            TempTermBlock::BranchIf { cond, .. } => {
+                assert_eq!(
+                    succ_edges.len(),
+                    2,
+                    "branch-if block must have two successor edges"
+                );
+                Terminator::BranchIf {
+                    cond: *cond,
+                    taken: succ_edges[0],
+                    fallthrough: succ_edges[1],
+                }
+            }
+            TempTermBlock::BranchIfZero { cond, .. } => {
+                assert_eq!(
+                    succ_edges.len(),
+                    2,
+                    "branch-if-zero block must have two successor edges"
+                );
+                Terminator::BranchIfZero {
+                    cond: *cond,
+                    taken: succ_edges[0],
+                    fallthrough: succ_edges[1],
+                }
+            }
+            TempTermBlock::JumpTable {
+                predicate, targets, ..
+            } => {
+                assert_eq!(
+                    succ_edges.len(),
+                    targets.len() + 1,
+                    "jump-table block must have target edges plus default edge"
+                );
+                let split_at = targets.len();
+                Terminator::JumpTable {
+                    predicate: *predicate,
+                    targets: succ_edges[..split_at].to_vec(),
+                    default: succ_edges[split_at],
+                }
+            }
+        };
+        terms.push(lowered);
+    }
+
+    Function {
+        id: function_id,
+        lambda_id,
+        entry: BlockId(0),
+        data_args,
+        data_results,
+        blocks,
+        edges,
+        insts,
+        terms,
+    }
+}
+
+/// Lower linearized IR into the canonical CFG MIR model.
+pub fn lower_linear_ir(ir: &LinearIr) -> Program {
+    let mut funcs = Vec::<Function>::new();
+    let mut cursor = 0usize;
+    while cursor < ir.ops.len() {
+        let (lambda_id, data_args, data_results) = match &ir.ops[cursor] {
+            LinearOp::FuncStart {
+                lambda_id,
+                data_args,
+                data_results,
+                ..
+            } => (*lambda_id, data_args.clone(), data_results.clone()),
+            other => panic!("expected FuncStart at op {cursor}, got {other:?}"),
+        };
+
+        let mut depth = 1usize;
+        let mut end = cursor + 1;
+        while end < ir.ops.len() {
+            match &ir.ops[end] {
+                LinearOp::FuncStart { .. } => depth += 1,
+                LinearOp::FuncEnd => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            end += 1;
+        }
+        assert!(
+            end < ir.ops.len(),
+            "missing FuncEnd for lambda {:?}",
+            lambda_id
+        );
+
+        let body = &ir.ops[cursor + 1..end];
+        let function_id = FunctionId(funcs.len() as u32);
+        funcs.push(lower_function(
+            function_id,
+            lambda_id,
+            data_args,
+            data_results,
+            body,
+            ir.vreg_count,
+        ));
+        cursor = end + 1;
+    }
+
+    Program {
+        funcs,
+        vreg_count: ir.vreg_count,
+        slot_count: ir.slot_count,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kajit_ir::{IrBuilder, Width};
+    use kajit_lir::linearize;
 
     fn v(index: u32) -> VReg {
         VReg::new(index)
@@ -524,5 +1178,65 @@ mod tests {
             err.to_string().contains("entry block"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn lower_linear_ir_produces_valid_cfg_program() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            rb.bounds_check(4);
+            let value = rb.read_bytes(4);
+            rb.write_to_field(value, 0, Width::W4);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let linear = linearize(&mut func);
+        let program = lower_linear_ir(&linear);
+        program
+            .validate()
+            .expect("lowered cfg program should validate");
+        assert_eq!(program.funcs.len(), 1);
+        assert!(!program.funcs[0].blocks.is_empty());
+    }
+
+    #[test]
+    fn lower_linear_ir_models_gamma_join_block_params() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            let pred = rb.const_val(0);
+            let out = rb.gamma(pred, &[], 2, |branch_idx, bb| {
+                let val = if branch_idx == 0 {
+                    bb.const_val(7)
+                } else {
+                    bb.const_val(9)
+                };
+                bb.set_results(&[val]);
+            });
+            rb.write_to_field(out[0], 0, Width::W4);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let linear = linearize(&mut func);
+        let program = lower_linear_ir(&linear);
+        let root = &program.funcs[0];
+
+        let merge = root
+            .blocks
+            .iter()
+            .find(|block| block.preds.len() >= 2 && !block.params.is_empty())
+            .expect("expected merge block with parameters");
+
+        for pred_edge in &merge.preds {
+            let edge = root
+                .edge(*pred_edge)
+                .expect("pred edge should exist in function");
+            assert_eq!(
+                edge.args.len(),
+                merge.params.len(),
+                "edge args should match merge params"
+            );
+        }
     }
 }
