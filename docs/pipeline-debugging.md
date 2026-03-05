@@ -67,6 +67,17 @@ both harnesses in a focused test:
 These report the first divergent `step_index` and field (`position`, `cursor`,
 `trap`, `returned`, or `output`) so you can target one exact transition.
 
+## CFG-MIR text format
+
+Canonical CFG-MIR now supports a round-trippable text format.
+
+- Print canonical text from `kajit_mir::cfg_mir::Program`:
+  - `let text = format!("{cfg_program}");`
+- Parse it back:
+  - `let cfg_program = kajit_mir_text::parse_cfg_mir(&text)?;`
+
+The parser is strict and validates function/block/edge/inst/term IDs and CFG invariants.
+
 ## On-demand pipeline dumps
 
 Generated corpus tests do not enforce IR/RA-MIR/edit snapshots by default. Dump pipeline artifacts on demand with:

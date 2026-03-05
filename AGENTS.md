@@ -86,6 +86,14 @@ Dump files are named `<format>__<case>__<arch>__<stage>.txt`.
 
 Use `opts` stage to see RVSDG snapshots between each optimization pass.
 
+### CFG-MIR text format
+
+Canonical CFG-MIR now has a round-trippable text format.
+
+- Render canonical text: `format!("{}", cfg_program)` where `cfg_program: kajit_mir::cfg_mir::Program`
+- Parse canonical text: `kajit_mir_text::parse_cfg_mir(&text)`
+- Round-trip reference: `kajit-mir-text/src/cfg_mir_parse.rs` tests (`round_trip_cfg_mir_text`)
+
 ### LLDB debugging of JIT code
 
 Debug JIT-compiled code with source-level stepping through RA-MIR listings:
