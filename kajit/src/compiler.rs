@@ -1107,6 +1107,21 @@ pub fn compile_linear_ir_decoder(
     compile_linear_ir_decoder_with_options(ir, trusted_utf8_input, PipelineOptions::from_env())
 }
 
+/// Compile a deserializer directly from CFG-MIR.
+///
+/// This is primarily intended for regression tests and minimization workflows
+/// where a failing CFG-MIR program is edited by hand and recompiled quickly.
+pub fn compile_cfg_mir_decoder(
+    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+    trusted_utf8_input: bool,
+) -> CompiledDecoder {
+    compile_cfg_mir_decoder_with_options(
+        cfg_program,
+        trusted_utf8_input,
+        PipelineOptions::from_env(),
+    )
+}
+
 fn compile_linear_ir_decoder_with_options(
     ir: &crate::linearize::LinearIr,
     trusted_utf8_input: bool,
@@ -1169,6 +1184,81 @@ fn compile_linear_ir_decoder_with_options(
     };
     let registration = if jit_debug {
         let (listing, _line_by_derived_index) = build_cfg_mir_listing(&cfg_program);
+        let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing);
+        let dwarf = listing_path.as_deref().and_then(|path| {
+            build_dwarf_from_source_map(
+                buf.code_ptr(),
+                buf.len(),
+                source_map.as_ref(),
+                path,
+                &root_display_name,
+                &[],
+                jit_dwarf_target_arch(),
+            )
+        });
+        crate::jit_debug::register_jit_code_with_dwarf(
+            buf.code_ptr(),
+            buf.len(),
+            &[symbol],
+            dwarf.as_ref(),
+        )
+    } else {
+        crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
+    };
+
+    CompiledDecoder {
+        buf,
+        entry,
+        func,
+        trusted_utf8_input,
+        _jit_registration: Some(registration),
+    }
+}
+
+fn compile_cfg_mir_decoder_with_options(
+    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+    trusted_utf8_input: bool,
+    pipeline_opts: PipelineOptions,
+) -> CompiledDecoder {
+    let jit_debug = jit_debug_enabled();
+    let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
+
+    let regalloc_alloc = if apply_regalloc_edits {
+        let mut alloc = crate::regalloc_engine::allocate_cfg_program(cfg_program)
+            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+        maybe_disable_regalloc_edits_cfg(&mut alloc, &pipeline_opts);
+        alloc
+    } else {
+        no_regalloc_alloc_for_cfg_program(cfg_program)
+    };
+
+    let shim_linear = crate::linearize::LinearIr {
+        ops: Vec::new(),
+        label_count: 0,
+        vreg_count: cfg_program.vreg_count,
+        slot_count: cfg_program.slot_count,
+    };
+    let (buf, entry, source_map) = {
+        let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
+            &shim_linear,
+            cfg_program,
+            &regalloc_alloc,
+            apply_regalloc_edits,
+        );
+        materialize_backend_result(result)
+    };
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
+        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+
+    let root_display_name = "kajit::decode::cfg_mir_text".to_string();
+    let root_mangled_name = crate::jit_debug::rust_v0_mangle(&["kajit", "decode", "cfg_mir_text"]);
+    let symbol = crate::jit_debug::JitSymbolEntry {
+        name: root_mangled_name,
+        offset: entry,
+        size: buf.len().saturating_sub(entry),
+    };
+    let registration = if jit_debug {
+        let (listing, _line_by_derived_index) = build_cfg_mir_listing(cfg_program);
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing);
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
