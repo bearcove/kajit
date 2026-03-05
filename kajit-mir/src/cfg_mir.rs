@@ -447,6 +447,284 @@ impl Program {
     }
 }
 
+impl fmt::Display for Program {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "cfg_program vregs={} slots={} {{",
+            self.vreg_count, self.slot_count
+        )?;
+        for func in &self.funcs {
+            fmt_cfg_function(f, func)?;
+        }
+        writeln!(f, "}}")
+    }
+}
+
+fn fmt_cfg_function(f: &mut fmt::Formatter<'_>, func: &Function) -> fmt::Result {
+    writeln!(
+        f,
+        "  cfg_func @{} f{} entry=b{} {{",
+        func.lambda_id.index(),
+        func.id.0,
+        func.entry.0
+    )?;
+    writeln!(
+        f,
+        "    data_args: {}",
+        fmt_vreg_list_bracketed(&func.data_args)
+    )?;
+    writeln!(
+        f,
+        "    data_results: {}",
+        fmt_vreg_list_bracketed(&func.data_results)
+    )?;
+
+    for block in &func.blocks {
+        writeln!(
+            f,
+            "    block b{} params={} insts={} term=t{} preds={} succs={}",
+            block.id.0,
+            fmt_vreg_list_bracketed(&block.params),
+            fmt_inst_id_list_bracketed(&block.insts),
+            block.term.0,
+            fmt_edge_id_list_bracketed(&block.preds),
+            fmt_edge_id_list_bracketed(&block.succs)
+        )?;
+    }
+
+    for inst in &func.insts {
+        write!(f, "    inst i{}: ", inst.id.0)?;
+        fmt_cfg_inst(f, inst)?;
+        writeln!(f)?;
+    }
+
+    for (idx, term) in func.terms.iter().enumerate() {
+        write!(f, "    term t{}: ", idx)?;
+        fmt_terminator(f, term)?;
+        writeln!(f)?;
+    }
+
+    for edge in &func.edges {
+        writeln!(
+            f,
+            "    edge e{}: b{} -> b{} {}",
+            edge.id.0,
+            edge.from.0,
+            edge.to.0,
+            fmt_edge_arg_list_bracketed(&edge.args)
+        )?;
+    }
+
+    writeln!(f, "  }}")
+}
+
+fn fmt_vreg_list_bracketed(vregs: &[VReg]) -> String {
+    let mut out = String::from("[");
+    for (idx, vreg) in vregs.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push('v');
+        out.push_str(&vreg.index().to_string());
+    }
+    out.push(']');
+    out
+}
+
+fn fmt_inst_id_list_bracketed(insts: &[InstId]) -> String {
+    let mut out = String::from("[");
+    for (idx, inst) in insts.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push('i');
+        out.push_str(&inst.0.to_string());
+    }
+    out.push(']');
+    out
+}
+
+fn fmt_edge_id_list_bracketed(edges: &[EdgeId]) -> String {
+    let mut out = String::from("[");
+    for (idx, edge) in edges.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        out.push('e');
+        out.push_str(&edge.0.to_string());
+    }
+    out.push(']');
+    out
+}
+
+fn fmt_edge_arg_list_bracketed(args: &[EdgeArg]) -> String {
+    let mut out = String::from("[");
+    for (idx, arg) in args.iter().enumerate() {
+        if idx > 0 {
+            out.push_str(", ");
+        }
+        if arg.target == arg.source {
+            out.push('v');
+            out.push_str(&arg.source.index().to_string());
+        } else {
+            out.push('v');
+            out.push_str(&arg.target.index().to_string());
+            out.push_str("=>");
+            out.push('v');
+            out.push_str(&arg.source.index().to_string());
+        }
+    }
+    out.push(']');
+    out
+}
+
+fn fmt_cfg_operand(f: &mut fmt::Formatter<'_>, operand: &Operand) -> fmt::Result {
+    write!(f, "v{}", operand.vreg.index())?;
+    write!(
+        f,
+        ":{}",
+        match operand.class {
+            RegClass::Gpr => "gpr",
+            RegClass::Simd => "simd",
+        }
+    )?;
+    if let Some(fixed) = operand.fixed {
+        match fixed {
+            FixedReg::AbiArg(i) => write!(f, "/arg{i}")?,
+            FixedReg::AbiRet(i) => write!(f, "/ret{i}")?,
+            FixedReg::HwReg(enc) => write!(f, "/hw{enc}")?,
+        }
+    }
+    Ok(())
+}
+
+fn fmt_cfg_op_name(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
+    match op {
+        LinearOp::Const { value, .. } => write!(f, "const({value:#x})"),
+        LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
+        LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
+        LinearOp::Copy { .. } => write!(f, "copy"),
+        LinearOp::BoundsCheck { count } => write!(f, "bounds_check({count})"),
+        LinearOp::ReadBytes { count, .. } => write!(f, "read_bytes({count})"),
+        LinearOp::PeekByte { .. } => write!(f, "peek_byte"),
+        LinearOp::AdvanceCursor { count } => write!(f, "advance({count})"),
+        LinearOp::AdvanceCursorBy { .. } => write!(f, "advance_by"),
+        LinearOp::SaveCursor { .. } => write!(f, "save_cursor"),
+        LinearOp::RestoreCursor { .. } => write!(f, "restore_cursor"),
+        LinearOp::WriteToField { offset, width, .. } => write!(f, "store([{offset}:{width}])"),
+        LinearOp::ReadFromField { offset, width, .. } => write!(f, "load([{offset}:{width}])"),
+        LinearOp::SaveOutPtr { .. } => write!(f, "save_out_ptr"),
+        LinearOp::SetOutPtr { .. } => write!(f, "set_out_ptr"),
+        LinearOp::SlotAddr { slot, .. } => write!(f, "slot_addr({})", slot.index()),
+        LinearOp::WriteToSlot { slot, .. } => write!(f, "write_slot({})", slot.index()),
+        LinearOp::ReadFromSlot { slot, .. } => write!(f, "read_slot({})", slot.index()),
+        LinearOp::CallIntrinsic {
+            func, field_offset, ..
+        } => write!(f, "call_intrinsic({func}, fo={field_offset})"),
+        LinearOp::CallPure { func, .. } => write!(f, "call_pure({func})"),
+        LinearOp::CallLambda { target, .. } => write!(f, "call_lambda(@{})", target.index()),
+        LinearOp::SimdStringScan { .. } => write!(f, "simd_string_scan"),
+        LinearOp::SimdWhitespaceSkip => write!(f, "simd_ws_skip"),
+        LinearOp::ErrorExit { code } => write!(f, "error_exit({code:?})"),
+        other => write!(f, "<?op:{other:?}>"),
+    }
+}
+
+fn fmt_cfg_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
+    let defs: Vec<_> = inst
+        .operands
+        .iter()
+        .filter(|op| op.kind == OperandKind::Def)
+        .collect();
+    let uses: Vec<_> = inst
+        .operands
+        .iter()
+        .filter(|op| op.kind == OperandKind::Use)
+        .collect();
+
+    if !defs.is_empty() {
+        for (idx, op) in defs.iter().enumerate() {
+            if idx > 0 {
+                write!(f, ", ")?;
+            }
+            fmt_cfg_operand(f, op)?;
+        }
+        write!(f, " = ")?;
+    }
+
+    fmt_cfg_op_name(f, &inst.op)?;
+
+    if !uses.is_empty() {
+        write!(f, " ")?;
+        for (idx, op) in uses.iter().enumerate() {
+            if idx > 0 {
+                write!(f, ", ")?;
+            }
+            fmt_cfg_operand(f, op)?;
+        }
+    }
+
+    if inst.clobbers.caller_saved_gpr || inst.clobbers.caller_saved_simd {
+        write!(f, " !")?;
+        if inst.clobbers.caller_saved_gpr {
+            write!(f, "gpr")?;
+        }
+        if inst.clobbers.caller_saved_simd {
+            if inst.clobbers.caller_saved_gpr {
+                write!(f, ",")?;
+            }
+            write!(f, "simd")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn fmt_terminator(f: &mut fmt::Formatter<'_>, term: &Terminator) -> fmt::Result {
+    match term {
+        Terminator::Return => write!(f, "return"),
+        Terminator::ErrorExit { code } => write!(f, "error_exit({code:?})"),
+        Terminator::Branch { edge } => write!(f, "branch e{}", edge.0),
+        Terminator::BranchIf {
+            cond,
+            taken,
+            fallthrough,
+        } => write!(
+            f,
+            "branch_if v{} -> e{}, fallthrough e{}",
+            cond.index(),
+            taken.0,
+            fallthrough.0
+        ),
+        Terminator::BranchIfZero {
+            cond,
+            taken,
+            fallthrough,
+        } => write!(
+            f,
+            "branch_if_zero v{} -> e{}, fallthrough e{}",
+            cond.index(),
+            taken.0,
+            fallthrough.0
+        ),
+        Terminator::JumpTable {
+            predicate,
+            targets,
+            default,
+        } => {
+            write!(f, "jump_table v{} [", predicate.index())?;
+            for (idx, edge) in targets.iter().enumerate() {
+                if idx > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "e{}", edge.0)?;
+            }
+            write!(f, "], default e{}", default.0)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum TempTermLabel {
     Return,
