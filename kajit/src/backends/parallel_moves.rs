@@ -7,7 +7,10 @@ pub(crate) trait MoveEmitter {
     fn restore_move_tmp_to_dst(&mut self, tmp_index: usize, to: Allocation);
 }
 
-pub(crate) fn emit_parallel_moves<E: MoveEmitter>(emitter: &mut E, moves: &[(Allocation, Allocation)]) {
+pub(crate) fn emit_parallel_moves<E: MoveEmitter>(
+    emitter: &mut E,
+    moves: &[(Allocation, Allocation)],
+) {
     let filtered: Vec<(Allocation, Allocation)> = moves
         .iter()
         .copied()
