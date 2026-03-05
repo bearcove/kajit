@@ -31,7 +31,7 @@ Full reference: `docs/pipeline-debugging.md`
 For regalloc/backend failures, run differential harnesses before dumps/LLDB.
 
 - Ideal interpreter vs post-regalloc CFG simulation:
-  - `kajit_mir::regalloc_engine::differential_check_program`
+  - `kajit_mir::regalloc_engine::differential_check_cfg`
 - CFG simulation vs JIT machine code:
   - `kajit::differential_check_linear_ir_vs_jit`
 

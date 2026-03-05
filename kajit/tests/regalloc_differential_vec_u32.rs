@@ -27,8 +27,9 @@ fn postcard_vec_u32_v0_regalloc_differential_runs() {
         lambda_ids.contains(&1),
         "expected lambda id @1 in CFG program; ids={lambda_ids:?}"
     );
-    let ra_program = kajit_mir::lower_linear_ir(&linear);
-    let report = kajit::regalloc_engine::differential_check_program(ra_program, &input);
+    let allocated =
+        kajit::regalloc_engine::allocate_cfg_program(&cfg_program).expect("allocate cfg program");
+    let report = kajit::regalloc_engine::differential_check_cfg(&cfg_program, &allocated, &input);
     match report {
         kajit::regalloc_engine::DifferentialCheckResult::Match { .. }
         | kajit::regalloc_engine::DifferentialCheckResult::Diverged(_) => {}
