@@ -82,3 +82,37 @@ Set `KAJIT_DEBUG=1` to enable DWARF emission (the helper script does this automa
 Full reference: `docs/pipeline-debugging.md` § "LLDB debugging of JIT code"
 
 **Key architecture detail:** Both backends (`aarch64/mod.rs`, `x86_64/mod.rs`) call `set_source_location()` in their instruction emission loops, mapping each linear op index to a DWARF line number. The DWARF sections are built in `jit_dwarf.rs` and attached to the in-memory ELF in `jit_debug.rs`. LLDB requires all three DWARF sections (`.debug_info` with a CU referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`) — `.debug_line` alone is silently ignored.
+
+## Multi-agent workflow (bud)
+
+Large tasks are delegated to a buddy agent via `bud assign`. The captain (lead agent) stays in conversation with the user, reviews work, commits, and steers.
+
+### Principles
+
+- **Small scope per assignment.** One issue at a time. Don't assign 3 issues in one task.
+- **Plan before code.** Tell the buddy to read the code and send a plan (`bud update`) before implementing. Review the plan before giving the go-ahead.
+- **Frequent check-ins.** Ask for `bud update` after each milestone. Review diffs before committing.
+- **Captain commits.** The buddy writes code; the captain reviews, runs tests, commits, and pushes. Never let the buddy push directly.
+- **No fallbacks.** If the buddy adds a "fallback" or "workaround" path, stop them. Find the real bug.
+- **Watch the diff.** Before committing, always check `git diff --stat`. If the file count or line count is unexpectedly large, investigate before committing. A differential harness shouldn't touch 21 files.
+- **Separate concerns.** If `cargo fmt` touches unrelated files, commit it separately from functional changes.
+
+### Commands
+
+```bash
+cat <<'EOF' | bud assign --title "short-title" --issue 42
+Task description here.
+EOF
+
+cat <<'EOF' | bud assign --keep    # follow-up task, keeps buddy context
+EOF
+
+bud list                           # check in-flight tasks
+bud spy <id>                       # peek at buddy's pane
+cat <<'EOF' | bud steer <id>       # mid-task course correction
+EOF
+```
+
+### Staleness alerts
+
+If a buddy pane is unchanged for 2 minutes, bud sends a staleness alert to the captain. When this happens, spy on them and steer — they may have "finished" without running `bud respond`.
