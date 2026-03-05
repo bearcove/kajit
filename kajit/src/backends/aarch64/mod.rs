@@ -88,6 +88,34 @@ pub fn compile(
 }
 
 impl Lowerer {
+    fn max_edge_move_count(program: &RaProgram, alloc: &AllocatedProgram, no_edit_mode: bool) -> u32 {
+        if no_edit_mode {
+            return program
+                .funcs
+                .iter()
+                .flat_map(|func| func.blocks.iter())
+                .flat_map(|block| block.succs.iter())
+                .map(|edge| edge.args.len())
+                .max()
+                .unwrap_or(0) as u32;
+        }
+
+        let mut max_moves = 0usize;
+        for func in &alloc.functions {
+            let mut by_edge = BTreeMap::<(usize, usize), usize>::new();
+            for edge in &func.edge_edits {
+                *by_edge
+                    .entry((edge.from_linear_op_index, edge.succ_index))
+                    .or_default() += 1;
+            }
+            if let Some(local_max) = by_edge.values().copied().max() {
+                max_moves = max_moves.max(local_max);
+            }
+        }
+
+        max_moves as u32
+    }
+
     pub(super) fn new_label_id(&mut self) -> LabelId {
         self.ectx.new_label()
     }
@@ -155,18 +183,7 @@ impl Lowerer {
         } else {
             max_spillslots
         };
-        let max_edge_args = if no_edit_mode {
-            program
-                .funcs
-                .iter()
-                .flat_map(|func| func.blocks.iter())
-                .flat_map(|block| block.succs.iter())
-                .map(|edge| edge.args.len())
-                .max()
-                .unwrap_or(0) as u32
-        } else {
-            0
-        };
+        let max_edge_args = Self::max_edge_move_count(program, alloc, no_edit_mode);
         let extra_saved_pairs = Self::regalloc_extra_saved_pairs(alloc);
         let slot_base = BASE_FRAME + extra_saved_pairs * 16;
         let slot_bytes = program.slot_count * 8;
@@ -418,14 +435,16 @@ impl Lowerer {
             return;
         }
         self.flush_all_vregs();
-        if !self.no_edit_mode() {
-            for &(from, to) in moves {
-                self.emit_edit_move(from, to);
-            }
+        let filtered_moves: Vec<(Allocation, Allocation)> = moves
+            .iter()
+            .copied()
+            .filter(|(from, to)| *from != *to && !from.is_none() && !to.is_none())
+            .collect();
+        if filtered_moves.is_empty() {
             return;
         }
 
-        for (i, (from, _)) in moves.iter().enumerate() {
+        for (i, (from, _)) in filtered_moves.iter().enumerate() {
             self.emit_load_x9_from_allocation(*from);
             let tmp_off = self.no_edit_edge_tmp_base + (i as u32) * 8;
             self.ectx.emit.emit_word(
@@ -433,7 +452,7 @@ impl Lowerer {
                     .expect("str"),
             );
         }
-        for (i, (_, to)) in moves.iter().enumerate() {
+        for (i, (_, to)) in filtered_moves.iter().enumerate() {
             let tmp_off = self.no_edit_edge_tmp_base + (i as u32) * 8;
             self.ectx.emit.emit_word(
                 aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, tmp_off)

@@ -94,7 +94,10 @@ impl Lowerer {
             return;
         }
 
-        self.emit_edge_moves(&edits);
+        self.flush_all_vregs();
+        for (from, to) in edits {
+            self.emit_edit_move(from, to);
+        }
     }
 
     pub(super) fn resolve_forwarded_block(&self, lambda_id: u32, block_id: BlockId) -> BlockId {
