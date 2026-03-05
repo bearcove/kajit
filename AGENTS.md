@@ -32,8 +32,8 @@ For regalloc/backend failures, run differential harnesses before dumps/LLDB.
 
 - RA interpreter vs post-regalloc simulation:
   - `kajit_mir::regalloc_engine::differential_check_program`
-- RA interpreter vs JIT machine code:
-  - `kajit::differential_check_program_vs_jit`
+- CFG simulation vs JIT machine code:
+  - `kajit::differential_check_linear_ir_vs_jit`
 
 Quick checks:
 
