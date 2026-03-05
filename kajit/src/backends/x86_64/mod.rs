@@ -2,7 +2,7 @@
 
 use kajit_emit::x64::{self, LabelId, Mem};
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use crate::arch::{BASE_FRAME, EmitCtx};
 use crate::ir::Width;
@@ -61,6 +61,7 @@ pub(crate) struct Lowerer {
     pub(crate) edge_trampoline_labels: BTreeMap<(u32, usize, usize), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
+    pub(crate) parallel_move_tmp_base: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -81,6 +82,40 @@ pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendRe
 }
 
 impl Lowerer {
+    fn max_parallel_move_count(alloc: &AllocatedProgram) -> u32 {
+        let mut max_moves = 0usize;
+        for func in &alloc.functions {
+            let mut by_progpoint = BTreeMap::<(usize, u8), usize>::new();
+            let mut by_edge = BTreeMap::<(usize, usize), usize>::new();
+            for (prog_point, edit) in &func.edits {
+                let Edit::Move { from, to } = edit;
+                let Some(_) = Self::normalize_edit_move(*from, *to) else {
+                    continue;
+                };
+                let pos = match prog_point.pos() {
+                    InstPosition::Before => 0u8,
+                    InstPosition::After => 1u8,
+                };
+                *by_progpoint.entry((prog_point.inst().index(), pos)).or_default() += 1;
+            }
+            for edge in &func.edge_edits {
+                let Some(_) = Self::normalize_edit_move(edge.from, edge.to) else {
+                    continue;
+                };
+                *by_edge
+                    .entry((edge.from_linear_op_index, edge.succ_index))
+                    .or_default() += 1;
+            }
+            if let Some(local_max) = by_progpoint.values().copied().max() {
+                max_moves = max_moves.max(local_max);
+            }
+            if let Some(local_max) = by_edge.values().copied().max() {
+                max_moves = max_moves.max(local_max);
+            }
+        }
+        max_moves as u32
+    }
+
     fn normalize_edit_move(from: Allocation, to: Allocation) -> Option<(Allocation, Allocation)> {
         if from == to || from.is_none() || to.is_none() {
             return None;
@@ -93,7 +128,9 @@ impl Lowerer {
         let slot_bytes = program.slot_count * 8;
         let spill_base = slot_base + slot_bytes;
         let spill_bytes = max_spillslots as u32 * 8;
-        let extra_stack = slot_bytes + spill_bytes + 8;
+        let parallel_move_tmp_base = spill_base + spill_bytes;
+        let parallel_move_tmp_bytes = Self::max_parallel_move_count(alloc) * 8;
+        let extra_stack = slot_bytes + spill_bytes + parallel_move_tmp_bytes + 8;
 
         let mut ectx = EmitCtx::new(extra_stack);
 
@@ -136,11 +173,6 @@ impl Lowerer {
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
             let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
             let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
-            let edge_move_set: HashSet<(Allocation, Allocation)> = func
-                .edge_edits
-                .iter()
-                .filter_map(|edge_edit| Self::normalize_edit_move(edge_edit.from, edge_edit.to))
-                .collect();
             let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
             let mut prev_linear = None;
             for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
@@ -187,9 +219,6 @@ impl Lowerer {
                             .push((from, to));
                     }
                     (InstPosition::Before, None) => {
-                        if edge_move_set.contains(&(from, to)) {
-                            continue;
-                        }
                         if let Some(linear_op_index) =
                             next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
                         {
@@ -208,9 +237,6 @@ impl Lowerer {
                         }
                     }
                     (InstPosition::After, None) => {
-                        if edge_move_set.contains(&(from, to)) {
-                            continue;
-                        }
                         if let Some(linear_op_index) =
                             prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
                         {
@@ -277,6 +303,7 @@ impl Lowerer {
             edge_trampoline_labels: BTreeMap::new(),
             edge_trampolines: Vec::new(),
             current_inst_allocs: None,
+            parallel_move_tmp_base,
         }
     }
 

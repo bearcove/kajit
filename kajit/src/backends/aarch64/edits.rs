@@ -1,6 +1,7 @@
 //! Regalloc edit infrastructure: edit moves, edge trampolines, block resolution.
 
 use super::*;
+use crate::backends::parallel_moves::{emit_parallel_moves, MoveEmitter};
 use kajit_emit::aarch64::{self, Reg};
 
 impl Lowerer {
@@ -93,11 +94,7 @@ impl Lowerer {
         if edits.is_empty() {
             return;
         }
-
-        self.flush_all_vregs();
-        for (from, to) in edits {
-            self.emit_edit_move(from, to);
-        }
+        emit_parallel_moves(self, &edits);
     }
 
     pub(super) fn resolve_forwarded_block(&self, lambda_id: u32, block_id: BlockId) -> BlockId {
@@ -126,7 +123,7 @@ impl Lowerer {
         if moves.is_empty() {
             return;
         }
-        self.emit_edge_moves(&moves);
+        emit_parallel_moves(self, &moves);
     }
 
     pub(super) fn has_edge_edits(&self, linear_op_index: usize, succ_index: usize) -> bool {
@@ -176,8 +173,34 @@ impl Lowerer {
         let trampolines = std::mem::take(&mut self.edge_trampolines);
         for trampoline in trampolines {
             self.ectx.bind_label(trampoline.label);
-            self.emit_edge_moves(&trampoline.moves);
+            emit_parallel_moves(self, &trampoline.moves);
             self.ectx.emit_branch(trampoline.target);
         }
+    }
+}
+
+impl MoveEmitter for Lowerer {
+    fn flush_all_vregs(&mut self) {
+        Lowerer::flush_all_vregs(self);
+    }
+
+    fn emit_move(&mut self, from: Allocation, to: Allocation) {
+        self.emit_edit_move(from, to);
+    }
+
+    fn save_move_src_to_tmp(&mut self, tmp_index: usize, from: Allocation) {
+        self.emit_load_x9_from_allocation(from);
+        let tmp_off = self.no_edit_edge_tmp_base + (tmp_index as u32) * 8;
+        self.ectx.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, tmp_off).expect("str"),
+        );
+    }
+
+    fn restore_move_tmp_to_dst(&mut self, tmp_index: usize, to: Allocation) {
+        let tmp_off = self.no_edit_edge_tmp_base + (tmp_index as u32) * 8;
+        self.ectx.emit.emit_word(
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, tmp_off).expect("ldr"),
+        );
+        let _ = self.emit_store_x9_to_allocation(to);
     }
 }
