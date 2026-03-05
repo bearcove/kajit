@@ -306,12 +306,40 @@ impl Lowerer {
                     .expect("cmpne");
             }
             BinOpKind::Shr => {
+                let rhs_alloc = self.current_alloc(1);
+                if let Some(reg) = rhs_alloc.as_reg() {
+                    let enc = reg.hw_enc() as u8;
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_r64(1, enc, buf))
+                        .expect("mov");
+                } else if let Some(slot) = rhs_alloc.as_stack() {
+                    let off = self.spill_off(slot) as i32;
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_m(1, Mem { base: 4, disp: off }, buf))
+                        .expect("mov");
+                }
                 self.ectx
                     .emit
                     .emit_with(|buf| x64::encode_shr_r64_cl(10, buf))
                     .expect("shr");
             }
             BinOpKind::Shl => {
+                let rhs_alloc = self.current_alloc(1);
+                if let Some(reg) = rhs_alloc.as_reg() {
+                    let enc = reg.hw_enc() as u8;
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_r64(1, enc, buf))
+                        .expect("mov");
+                } else if let Some(slot) = rhs_alloc.as_stack() {
+                    let off = self.spill_off(slot) as i32;
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_m(1, Mem { base: 4, disp: off }, buf))
+                        .expect("mov");
+                }
                 self.ectx
                     .emit
                     .emit_with(|buf| x64::encode_shl_r64_cl(10, buf))
