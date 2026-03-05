@@ -1,10 +1,10 @@
 # Strict IR/Data Model (Ideal End State)
 
-## Current Toolchain (Today, aarch64)
+## Current Toolchain (Today, strict branch)
 
 Pipeline stages and representation names:
 
-`RVSDG => LIR => RA-MIR => AP => Emission => Runtime`
+`RVSDG => LIR => CFG-MIR => Typed AP => Emission => Runtime`
 
 1. RVSDG
 - Type: `IrFunc`
@@ -15,32 +15,38 @@ Pipeline stages and representation names:
 - Type: `LinearIr`
 - Built by: `linearize(...)`
 
-3. RA-MIR
-- Type: `RaProgram`
-- Built by: `lower_linear_ir(&LinearIr)`
-- Shape: CFG blocks with params, explicit terminator, successor edges/args
+3. CFG-MIR
+- Type: `cfg_mir::Program`
+- Built by: `cfg_mir::lower_linear_ir(&LinearIr)`
+- Shape: explicit CFG with typed `BlockId` / `EdgeId` / `OpId`
 
 4. AP (Allocated Program)
-- Type: `AllocatedProgram`
+- Type: `AllocatedCfgProgram`
 - Built by:
-  - `allocate_program(&RaProgram)` when `+regalloc`
+  - `allocate_cfg_program(&cfg_mir::Program)` when `+regalloc`
   - synthetic no-regalloc allocation when `-regalloc`
-- Carries operand allocations + progpoint edits + edge edits
+- Carries operand allocations + progpoint edits + edge edits keyed by typed IDs
 
 5. Emission
 - Type: `LinearBackendResult` (contains finalized aarch64 code buffer + entry + source map)
-- Built by: `backends::aarch64::compile(&RaProgram, &AllocatedProgram, apply_regalloc_edits)`
+- Built by:
+  - `backends::aarch64::compile(&cfg_mir::Program, &AllocatedCfgProgram, apply_regalloc_edits)`
+  - `backends::x86_64::compile(&cfg_mir::Program, &AllocatedCfgProgram)`
 
 6. Runtime
 - Type: `CompiledDecoder`
 - Built by: compiler wrapper that converts emission into callable function pointer and optional JIT debug registration
+
+Notes:
+- `compile_linear_ir_decoder` now goes through CFG-MIR + typed regalloc artifacts.
+- RA-program compile entrypoints are intentionally disabled on this branch (strict cutover).
 
 ## Where Canonical CFG MIR Fits
 
 It sits immediately after `LinearIr` and replaces the current RA-MIR-as-identity
 layer for all post-linearization stages.
 
-### Before (today)
+### Before (legacy)
 
 ```text
 [RVSDG: IrFunc]
