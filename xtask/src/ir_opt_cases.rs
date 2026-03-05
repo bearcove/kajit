@@ -53,7 +53,7 @@ lambda @0 (shape: "u8") {
         args: [arg0, arg1, %cs, %os]
         n3 = Add [arg0, arg1] -> [v2]
         n4 = Sub [arg0, arg1] -> [v3]
-        results: [v3, v3, arg1, %cs:arg, %os:arg]
+        results: [v2, v3, arg1, %cs:arg, %os:arg]
       }
     } -> [v4, v5, %cs, %os]
     n5 = WriteToField(offset=0, W1) [v4, %os:n2] -> [%os]
