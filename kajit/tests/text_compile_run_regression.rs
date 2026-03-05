@@ -16,7 +16,7 @@ fn snapshot_body(snapshot: &'static str) -> &'static str {
 #[test]
 fn compile_and_run_from_ir_text_snapshot_u32() {
     let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
-    let registry = kajit::ir::IntrinsicRegistry::new();
+    let registry = kajit::known_intrinsic_registry();
     let decoder =
         kajit::compile_decoder_from_ir_text(ir_text, <u32 as Facet>::SHAPE, &registry, false);
     let out: u32 = kajit::deserialize(&decoder, &[0x2a]).expect("decode should succeed");
@@ -24,20 +24,22 @@ fn compile_and_run_from_ir_text_snapshot_u32() {
 }
 
 #[test]
-fn compile_and_run_from_cfg_mir_text_u32() {
-    let linear = kajit::debug_linear_ir(<u32 as Facet>::SHAPE, &kajit::postcard::KajitPostcard);
-    let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
-    let cfg_text = format!("{cfg_program}");
+fn compile_and_run_from_cfg_mir_text_with_named_intrinsics_u32() {
+    let cfg_text = kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, &kajit::json::KajitJson);
+    assert!(
+        cfg_text.contains("@kajit_json_read_u32"),
+        "expected named intrinsic in CFG-MIR text, got:\n{cfg_text}"
+    );
 
     let decoder = kajit::compile_decoder_from_cfg_mir_text(&cfg_text, false);
-    let out: u32 = kajit::deserialize(&decoder, &[0x2a]).expect("decode should succeed");
+    let out: u32 = kajit::deserialize(&decoder, b"42").expect("decode should succeed");
     assert_eq!(out, 42);
 }
 
 #[test]
 fn deserialize_from_ir_text_helper_u32() {
     let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
-    let registry = kajit::ir::IntrinsicRegistry::new();
+    let registry = kajit::known_intrinsic_registry();
     let out: u32 = kajit::deserialize_from_ir_text(
         ir_text,
         <u32 as Facet>::SHAPE,
@@ -51,9 +53,8 @@ fn deserialize_from_ir_text_helper_u32() {
 
 #[test]
 fn deserialize_from_cfg_mir_text_helper_u32() {
-    let linear = kajit::debug_linear_ir(<u32 as Facet>::SHAPE, &kajit::postcard::KajitPostcard);
-    let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
-    let cfg_text = format!("{cfg_program}");
+    let cfg_text =
+        kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, &kajit::postcard::KajitPostcard);
 
     let out: u32 = kajit::deserialize_from_cfg_mir_text(&cfg_text, &[0xac, 0x02])
         .expect("decode should succeed");

@@ -4,7 +4,7 @@
 
 use chumsky::prelude::*;
 
-use kajit_ir::{ErrorCode, IntrinsicFn, LambdaId, SlotId, VReg, Width};
+use kajit_ir::{ErrorCode, IntrinsicFn, IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_mir::cfg_mir::{
     Block, BlockId, Clobbers, Edge, EdgeArg, EdgeId, FixedReg, Function, FunctionId, Inst, InstId,
@@ -45,6 +45,27 @@ fn usize_p<'src>() -> impl Parser<'src, &'src str, usize, Extra<'src>> + Clone {
         .map(|s: &str| usize::from_str_radix(s, 16).unwrap());
     let dec = text::int::<_, Extra<'_>>(10).map(|s: &str| s.parse::<usize>().unwrap());
     hex.or(dec)
+}
+
+fn ident<'src>() -> impl Parser<'src, &'src str, String, Extra<'src>> + Clone {
+    any()
+        .filter(|c: &char| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.'))
+        .repeated()
+        .at_least(1)
+        .collect::<String>()
+}
+
+#[derive(Debug, Clone)]
+enum IntrinsicRef {
+    Named(String),
+    Address(usize),
+}
+
+fn intrinsic_ref<'src>() -> impl Parser<'src, &'src str, IntrinsicRef, Extra<'src>> + Clone {
+    just("@")
+        .ignore_then(ident())
+        .map(IntrinsicRef::Named)
+        .or(usize_p().map(IntrinsicRef::Address))
 }
 
 fn width<'src>() -> impl Parser<'src, &'src str, Width, Extra<'src>> + Clone {
@@ -158,8 +179,8 @@ enum AstOp {
     SlotAddr(u32),
     WriteSlot(u32),
     ReadSlot(u32),
-    CallIntrinsic(usize, u32),
-    CallPure(usize),
+    CallIntrinsic(IntrinsicRef, u32),
+    CallPure(IntrinsicRef),
     CallLambda(u32),
     SimdStringScan,
     SimdWsSkip,
@@ -209,7 +230,7 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .then_ignore(just(")"))
             .map(AstOp::ReadSlot),
         just("call_intrinsic(")
-            .ignore_then(usize_p())
+            .ignore_then(intrinsic_ref())
             .then_ignore(just(",").then(ws()).then(just("fo=")))
             .then(uint32())
             .then_ignore(just(")"))
@@ -218,7 +239,7 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
 
     let parameterized2 = choice((
         just("call_pure(")
-            .ignore_then(usize_p())
+            .ignore_then(intrinsic_ref())
             .then_ignore(just(")"))
             .map(AstOp::CallPure),
         just("call_lambda(@")
@@ -596,6 +617,13 @@ impl std::fmt::Display for ParseError {
 impl std::error::Error for ParseError {}
 
 pub fn parse_cfg_mir(input: &str) -> Result<Program, ParseError> {
+    parse_cfg_mir_with_registry(input, &IntrinsicRegistry::empty())
+}
+
+pub fn parse_cfg_mir_with_registry(
+    input: &str,
+    registry: &IntrinsicRegistry,
+) -> Result<Program, ParseError> {
     let stripped = strip_comments(input);
     let parsed = cfg_program().padded_by(ws()).parse(stripped.as_str());
     let ast = parsed.into_result().map_err(|errs| {
@@ -604,7 +632,7 @@ pub fn parse_cfg_mir(input: &str) -> Result<Program, ParseError> {
             message: msgs.join("\n"),
         }
     })?;
-    resolve_program(ast)
+    resolve_program(ast, registry)
 }
 
 fn strip_comments(input: &str) -> String {
@@ -620,11 +648,11 @@ fn strip_comments(input: &str) -> String {
     out
 }
 
-fn resolve_program(ast: AstProgram) -> Result<Program, ParseError> {
+fn resolve_program(ast: AstProgram, registry: &IntrinsicRegistry) -> Result<Program, ParseError> {
     let funcs = ast
         .funcs
         .into_iter()
-        .map(resolve_function)
+        .map(|func| resolve_function(func, registry))
         .collect::<Result<Vec<_>, _>>()?;
     let program = Program {
         funcs,
@@ -637,7 +665,7 @@ fn resolve_program(ast: AstProgram) -> Result<Program, ParseError> {
     Ok(program)
 }
 
-fn resolve_function(ast: AstFunc) -> Result<Function, ParseError> {
+fn resolve_function(ast: AstFunc, registry: &IntrinsicRegistry) -> Result<Function, ParseError> {
     let mut data_args: Option<Vec<VReg>> = None;
     let mut data_results: Option<Vec<VReg>> = None;
     let mut blocks = Vec::<AstBlock>::new();
@@ -725,7 +753,7 @@ fn resolve_function(ast: AstFunc) -> Result<Function, ParseError> {
 
     let insts = insts
         .into_iter()
-        .map(resolve_inst)
+        .map(|inst| resolve_inst(inst, registry))
         .collect::<Result<Vec<_>, _>>()?;
     let terms = terms.into_iter().map(|t| t.term).collect::<Vec<_>>();
     let edges = edges
@@ -755,7 +783,7 @@ fn resolve_function(ast: AstFunc) -> Result<Function, ParseError> {
     Ok(function)
 }
 
-fn resolve_inst(ast: AstInst) -> Result<Inst, ParseError> {
+fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, ParseError> {
     let mut operands = Vec::<Operand>::new();
     for (vreg, class, fixed) in &ast.body.uses {
         operands.push(Operand {
@@ -887,13 +915,13 @@ fn resolve_inst(ast: AstInst) -> Result<Inst, ParseError> {
             slot: SlotId::new(*slot),
         },
         AstOp::CallIntrinsic(func, field_offset) => LinearOp::CallIntrinsic {
-            func: IntrinsicFn(*func),
+            func: resolve_intrinsic(func, registry)?,
             args: ast.body.uses.iter().map(|(v, _, _)| *v).collect(),
             dst,
             field_offset: *field_offset,
         },
         AstOp::CallPure(func) => LinearOp::CallPure {
-            func: IntrinsicFn(*func),
+            func: resolve_intrinsic(func, registry)?,
             args: ast.body.uses.iter().map(|(v, _, _)| *v).collect(),
             dst: dst.ok_or_else(|| ParseError {
                 message: format!("inst i{} call_pure missing dst", ast.id.0),
@@ -927,10 +955,22 @@ fn resolve_inst(ast: AstInst) -> Result<Inst, ParseError> {
     })
 }
 
+fn resolve_intrinsic(
+    reference: &IntrinsicRef,
+    registry: &IntrinsicRegistry,
+) -> Result<IntrinsicFn, ParseError> {
+    match reference {
+        IntrinsicRef::Named(name) => registry.func_by_name(name).ok_or_else(|| ParseError {
+            message: format!("unknown intrinsic: @{name}"),
+        }),
+        IntrinsicRef::Address(addr) => Ok(IntrinsicFn(*addr)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IrBuilder, Width};
+    use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, Width};
     use kajit_lir::linearize;
 
     fn test_shape() -> &'static facet::Shape {
@@ -973,6 +1013,43 @@ cfg_program vregs=1 slots=0 {
         let text1 = format!("{cfg}");
         let cfg2 = parse_cfg_mir(&text1).expect("round-trip parse should succeed");
         let text2 = format!("{cfg2}");
+        assert_eq!(
+            text1, text2,
+            "cfg round trip mismatch:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
+    }
+
+    #[test]
+    fn round_trip_cfg_mir_text_with_named_intrinsics() {
+        unsafe extern "C" fn test_intrinsic(_ctx: *mut core::ffi::c_void, _out: *mut u8) {}
+
+        let mut registry = IntrinsicRegistry::empty();
+        registry.register(
+            "test_intrinsic",
+            IntrinsicFn(test_intrinsic as *const () as usize),
+        );
+
+        let mut builder = IrBuilder::new(test_shape());
+        {
+            let mut rb = builder.root_region();
+            let func = registry
+                .func_by_name("test_intrinsic")
+                .expect("registered intrinsic should resolve");
+            rb.call_intrinsic(func, &[], 0, false);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let linear = linearize(&mut func);
+        let cfg = kajit_mir::cfg_mir::lower_linear_ir(&linear);
+
+        let text1 = format!("{}", cfg.display_with_registry(&registry));
+        assert!(
+            text1.contains("@test_intrinsic"),
+            "display should use intrinsic names, got:\n{text1}"
+        );
+        let cfg2 = parse_cfg_mir_with_registry(&text1, &registry)
+            .expect("round-trip parse should succeed");
+        let text2 = format!("{}", cfg2.display_with_registry(&registry));
         assert_eq!(
             text1, text2,
             "cfg round trip mismatch:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"

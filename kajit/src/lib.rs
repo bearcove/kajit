@@ -109,14 +109,16 @@ pub fn compile_decoder_from_ir_text(
 
 /// Compile a deserializer from canonical CFG-MIR text.
 ///
-/// Parses the CFG-MIR text, runs regalloc (unless `KAJIT_OPTS='-regalloc'`),
-/// and returns an executable decoder.
+/// Parses the CFG-MIR text with Kajit's built-in intrinsic registry, runs
+/// regalloc (unless `KAJIT_OPTS='-regalloc'`), and returns an executable
+/// decoder.
 pub fn compile_decoder_from_cfg_mir_text(
     cfg_mir_text: &str,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
-    let cfg_program =
-        kajit_mir_text::parse_cfg_mir(cfg_mir_text).expect("CFG-MIR text should parse");
+    let registry = known_intrinsic_registry();
+    let cfg_program = kajit_mir_text::parse_cfg_mir_with_registry(cfg_mir_text, &registry)
+        .expect("CFG-MIR text should parse");
     compiler::compile_cfg_mir_decoder(&cfg_program, trusted_utf8_input)
 }
 
@@ -150,9 +152,10 @@ pub fn debug_ir_and_cfg_mir_text(
 ) -> (String, String) {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
-    let ir_text = scrub_volatile_intrinsic_addrs(&format!("{func}"));
+    let registry = known_intrinsic_registry();
+    let ir_text = scrub_volatile_const_addrs(&format!("{}", func.display_with_registry(&registry)));
     let cfg = debug_cfg_mir(shape, ir_decoder);
-    let cfg_text = scrub_volatile_intrinsic_addrs(&format!("{cfg}"));
+    let cfg_text = scrub_volatile_const_addrs(&format!("{}", cfg.display_with_registry(&registry)));
     (ir_text, cfg_text)
 }
 
@@ -164,7 +167,8 @@ pub fn debug_cfg_mir_text(
     ir_decoder: &dyn format::Decoder,
 ) -> String {
     let cfg = debug_cfg_mir(shape, ir_decoder);
-    scrub_volatile_intrinsic_addrs(&format!("{cfg}"))
+    let registry = known_intrinsic_registry();
+    scrub_volatile_const_addrs(&format!("{}", cfg.display_with_registry(&registry)))
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return the CFG-MIR program.
@@ -201,7 +205,8 @@ pub fn debug_linear_ir_text(
     ir_decoder: &dyn format::Decoder,
 ) -> String {
     let linear = debug_linear_ir(shape, ir_decoder);
-    scrub_volatile_intrinsic_addrs(&format!("{linear}"))
+    let registry = known_intrinsic_registry();
+    scrub_volatile_const_addrs(&format!("{}", linear.display_with_registry(&registry)))
 }
 
 /// Build decoder IR and return textual RVSDG checkpoints before/after each enabled optimization pass.
@@ -222,9 +227,10 @@ pub fn debug_ir_opt_timeline_text_with_options(
     pipeline_opts: &PipelineOptions,
 ) -> Vec<(String, String)> {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    let registry = known_intrinsic_registry();
     let mut checkpoints = vec![(
         "initial".to_string(),
-        scrub_volatile_intrinsic_addrs(&format!("{func}")),
+        scrub_volatile_const_addrs(&format!("{}", func.display_with_registry(&registry))),
     )];
 
     compiler::run_configured_default_passes_with_observer(
@@ -233,7 +239,7 @@ pub fn debug_ir_opt_timeline_text_with_options(
         |pass, func| {
             checkpoints.push((
                 pass.to_string(),
-                scrub_volatile_intrinsic_addrs(&format!("{func}")),
+                scrub_volatile_const_addrs(&format!("{}", func.display_with_registry(&registry))),
             ));
         },
     );
@@ -241,19 +247,23 @@ pub fn debug_ir_opt_timeline_text_with_options(
     checkpoints
 }
 
-fn scrub_volatile_intrinsic_addrs(text: &str) -> String {
-    // Display dumps include intrinsic function pointer addresses which are process-local and
-    // unstable across runs. Replace only those pointer fields to keep snapshots deterministic.
-    let text = scrub_hex_after_prefix(text, "CallIntrinsic(0x");
-    let text = scrub_hex_after_prefix(&text, "call_intrinsic(0x");
-    let text = scrub_hex_after_prefix(&text, "CallPure(0x");
-    let text = scrub_hex_after_prefix(&text, "call_pure(0x");
-    let text = scrub_hex_after_prefix_with_min_len(&text, "Const(0x", 9);
-    scrub_hex_after_prefix_with_min_len(&text, "const(0x", 9)
+/// Build a registry containing all built-in postcard and JSON intrinsics.
+pub fn known_intrinsic_registry() -> ir::IntrinsicRegistry {
+    let mut registry = ir::IntrinsicRegistry::empty();
+    for (name, func) in intrinsics::known_intrinsics() {
+        registry.register(name, func);
+    }
+    for (name, func) in json_intrinsics::known_intrinsics() {
+        registry.register(name, func);
+    }
+    registry
 }
 
-fn scrub_hex_after_prefix(input: &str, prefix: &str) -> String {
-    scrub_hex_after_prefix_with_min_len(input, prefix, 1)
+fn scrub_volatile_const_addrs(text: &str) -> String {
+    // Pointer-valued const operands are still process-local and not yet
+    // symbolically rendered. Scrub only those constant payloads.
+    let text = scrub_hex_after_prefix_with_min_len(&text, "Const(0x", 9);
+    scrub_hex_after_prefix_with_min_len(&text, "const(0x", 9)
 }
 
 fn scrub_hex_after_prefix_with_min_len(input: &str, prefix: &str, min_hex_len: usize) -> String {

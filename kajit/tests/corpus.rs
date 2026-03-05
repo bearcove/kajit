@@ -359,6 +359,7 @@ struct BTreeConfigMap {
 #[allow(dead_code)]
 type Pair = (u32, String);
 const PRINT_INPUT_HEX_ENV: &str = "KAJIT_PRINT_INPUT_HEX";
+const PRINT_CFG_MIR_ENV: &str = "KAJIT_PRINT_CFG_MIR";
 fn maybe_print_case_input(input: &[u8]) {
     if std::env::var_os(PRINT_INPUT_HEX_ENV).is_none() {
         return;
@@ -370,6 +371,18 @@ fn maybe_print_case_input(input: &[u8]) {
     }
     println!("KAJIT_CASE_INPUT_HEX={hex}");
 }
+fn maybe_print_case_cfg_mir<T, D>(decoder: &D)
+where
+    for<'input> T: Facet<'input>,
+    D: kajit::format::Decoder,
+{
+    if std::env::var_os(PRINT_CFG_MIR_ENV).is_none() {
+        return;
+    }
+    println!("KAJIT_CASE_CFG_MIR_BEGIN");
+    println!("{}", kajit::debug_cfg_mir_text(T::SHAPE, decoder));
+    println!("KAJIT_CASE_CFG_MIR_END");
+}
 fn assert_json_case<T>(value: T)
 where
     for<'input> T: Facet<'input>
@@ -380,6 +393,7 @@ where
 {
     let encoded = serde_json::to_string(&value).unwrap();
     maybe_print_case_input(encoded.as_bytes());
+    maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
     let expected: T = serde_json::from_str(&encoded).unwrap();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let case = runtime_case_name();
@@ -400,6 +414,7 @@ where
 {
     let encoded = ::postcard::to_allocvec(&value).unwrap();
     maybe_print_case_input(&encoded);
+    maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
     let expected: T = ::postcard::from_bytes(&encoded).unwrap();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let case = runtime_case_name();
@@ -415,6 +430,7 @@ where
     for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
 {
     maybe_print_case_input(input);
+    maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let got: T = kajit::deserialize(&decoder, input).unwrap();
     assert_eq!(got, expected);
@@ -424,6 +440,7 @@ where
     for<'input> T: Facet<'input>,
 {
     maybe_print_case_input(input);
+    maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     assert!(out.is_err(), "expected json decode failure");
@@ -433,6 +450,7 @@ where
     for<'input> T: Facet<'input>,
 {
     maybe_print_case_input(input);
+    maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     let err = match out {
@@ -446,6 +464,7 @@ where
     for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
 {
     maybe_print_case_input(input);
+    maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -458,6 +477,7 @@ where
     for<'input> T: Facet<'input>,
 {
     maybe_print_case_input(input);
+    maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -469,6 +489,7 @@ where
     for<'input> T: Facet<'input>,
 {
     maybe_print_case_input(input);
+    maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
