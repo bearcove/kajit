@@ -655,15 +655,12 @@ impl AdapterFunction {
                 if is_self_loop || is_edge_of_self_loop {
                     eprintln!(
                         "adapter block[{block_index}] inst_range={:?} preds={:?} succs={:?}",
-                        block.inst_range,
-                        block.preds,
-                        block.succs
+                        block.inst_range, block.preds, block.succs
                     );
                     let params: Vec<usize> = block.params.iter().map(|v| v.vreg()).collect();
                     eprintln!("  params(vreg idx): {:?}", params);
                     for (succ_i, succ_args) in block.succ_args.iter().enumerate() {
-                        let succ_arg_ids: Vec<usize> =
-                            succ_args.iter().map(|v| v.vreg()).collect();
+                        let succ_arg_ids: Vec<usize> = succ_args.iter().map(|v| v.vreg()).collect();
                         eprintln!("  succ_args[{succ_i}] (vreg idx): {:?}", succ_arg_ids);
                     }
                 }
@@ -2885,7 +2882,6 @@ lambda @0 (shape: "u8") {
             }],
         };
         verify_static_edge_edits(&bad).expect("duplicate destination writes are allowed");
-
     }
 
     fn synthetic_edge_fixture() -> AllocatedProgram {
