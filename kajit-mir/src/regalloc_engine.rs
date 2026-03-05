@@ -842,12 +842,156 @@ fn verify_allocation_is_valid(
     )))
 }
 
-fn verify_function_static_edge_edits(func: &AllocatedFunction) -> Result<(), RegallocEngineError> {
+fn build_inst_index_by_linear(func: &AllocatedFunction) -> HashMap<usize, usize> {
+    let mut inst_index_by_linear = HashMap::<usize, usize>::new();
+    for (inst_idx, maybe_linear) in func.inst_linear_op_indices.iter().enumerate() {
+        if let Some(linear) = maybe_linear {
+            inst_index_by_linear
+                .entry(*linear)
+                .and_modify(|existing| {
+                    if inst_idx > *existing {
+                        *existing = inst_idx;
+                    }
+                })
+                .or_insert(inst_idx);
+        }
+    }
+    inst_index_by_linear
+}
+
+fn find_alloc_for_vreg_in_inst(
+    func: &AllocatedFunction,
+    inst_idx: usize,
+    vreg: kajit_ir::VReg,
+    preferred_kind: Option<RaOperandKind>,
+) -> Option<Allocation> {
+    let operands = func.inst_operands.get(inst_idx)?;
+    let allocs = func.inst_allocs.get(inst_idx)?;
+    for ((operand_vreg, operand_kind), alloc) in operands.iter().zip(allocs.iter().copied()) {
+        if *operand_vreg != vreg {
+            continue;
+        }
+        if preferred_kind.is_none_or(|k| *operand_kind == k) {
+            return Some(alloc);
+        }
+    }
+    None
+}
+
+fn infer_block_param_entry_alloc(
+    ra_func: &RaFunction,
+    func: &AllocatedFunction,
+    inst_index_by_linear: &HashMap<usize, usize>,
+    block: &crate::RaBlock,
+    param: kajit_ir::VReg,
+) -> Option<Allocation> {
+    for inst in &block.insts {
+        let inst_idx = *inst_index_by_linear.get(&inst.linear_op_index)?;
+        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
+        {
+            return Some(a);
+        }
+        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Def))
+        {
+            return Some(a);
+        }
+    }
+    if let Some(term_linear) = block.term_linear_op_index {
+        let inst_idx = *inst_index_by_linear.get(&term_linear)?;
+        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
+        {
+            return Some(a);
+        }
+    }
+    let _ = ra_func;
+    None
+}
+
+fn infer_vreg_alloc_at_block_end(
+    func: &AllocatedFunction,
+    inst_index_by_linear: &HashMap<usize, usize>,
+    block: &crate::RaBlock,
+    vreg: kajit_ir::VReg,
+) -> Option<Allocation> {
+    if let Some(term_linear) = block.term_linear_op_index
+        && let Some(&inst_idx) = inst_index_by_linear.get(&term_linear)
+        && let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Use))
+    {
+        return Some(a);
+    }
+
+    for inst in block.insts.iter().rev() {
+        let Some(&inst_idx) = inst_index_by_linear.get(&inst.linear_op_index) else {
+            continue;
+        };
+        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Use))
+        {
+            return Some(a);
+        }
+        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Def))
+        {
+            return Some(a);
+        }
+    }
+    None
+}
+
+#[derive(Clone)]
+struct ExpectedEdgeTransfer {
+    source_vreg: kajit_ir::VReg,
+    target_vreg: kajit_ir::VReg,
+    source_alloc: Option<Allocation>,
+    target_alloc: Option<Allocation>,
+}
+
+fn expected_transfers_for_edge(
+    ra_func: &RaFunction,
+    func: &AllocatedFunction,
+    inst_index_by_linear: &HashMap<usize, usize>,
+    from_linear_op_index: usize,
+    succ_index: usize,
+) -> Vec<ExpectedEdgeTransfer> {
+    let mut out = Vec::new();
+    let Some(pred_block) = ra_func
+        .blocks
+        .iter()
+        .find(|b| b.term_linear_op_index == Some(from_linear_op_index))
+    else {
+        return out;
+    };
+    let Some(edge) = pred_block.succs.get(succ_index) else {
+        return out;
+    };
+    let Some(succ_block) = ra_func.blocks.iter().find(|b| b.id == edge.to) else {
+        return out;
+    };
+
+    for arg in &edge.args {
+        let source_alloc =
+            infer_vreg_alloc_at_block_end(func, inst_index_by_linear, pred_block, arg.source);
+        let target_alloc =
+            infer_block_param_entry_alloc(ra_func, func, inst_index_by_linear, succ_block, arg.target);
+        out.push(ExpectedEdgeTransfer {
+            source_vreg: arg.source,
+            target_vreg: arg.target,
+            source_alloc,
+            target_alloc,
+        });
+    }
+
+    out
+}
+
+fn verify_function_static_edge_edits(
+    ra_func: Option<&RaFunction>,
+    func: &AllocatedFunction,
+) -> Result<(), RegallocEngineError> {
     let scratch_regs: HashSet<PReg> = machine_env()
         .scratch_by_class
         .into_iter()
         .flatten()
         .collect();
+    let inst_index_by_linear = ra_func.map(|_| build_inst_index_by_linear(func));
 
     let mut by_edge = BTreeMap::<(usize, usize), Vec<&EdgeEdit>>::new();
     for edge in &func.edge_edits {
@@ -862,6 +1006,11 @@ fn verify_function_static_edge_edits(func: &AllocatedFunction) -> Result<(), Reg
             "lambda @{} edge (lin={from_linear_op_index}, succ={succ_index})",
             func.lambda_id.index()
         );
+        let expected = if let (Some(ra_func), Some(inst_index_by_linear)) = (ra_func, inst_index_by_linear.as_ref()) {
+            expected_transfers_for_edge(ra_func, func, inst_index_by_linear, from_linear_op_index, succ_index)
+        } else {
+            Vec::new()
+        };
 
         let mut destinations = HashSet::<Allocation>::new();
         for edit in &edits {
@@ -872,6 +1021,27 @@ fn verify_function_static_edge_edits(func: &AllocatedFunction) -> Result<(), Reg
                 return Err(RegallocEngineError::StaticVerifier(format!(
                     "{edge_label}: multiple edits write to the same destination {:#?}",
                     edit.to
+                )));
+            }
+        }
+
+        // Coverage check: all inferred target allocations for block params must be written by
+        // at least one edge edit unless source and target are already in place.
+        let actual_targets: HashSet<Allocation> = edits.iter().map(|e| e.to).collect();
+        for transfer in &expected {
+            let (Some(source_alloc), Some(target_alloc)) = (transfer.source_alloc, transfer.target_alloc)
+            else {
+                continue;
+            };
+            if source_alloc == target_alloc {
+                continue;
+            }
+            if !actual_targets.contains(&target_alloc) {
+                return Err(RegallocEngineError::StaticVerifier(format!(
+                    "{edge_label}: missing edge edit to cover block param v{} from v{} (expected target {:?})",
+                    transfer.target_vreg.index(),
+                    transfer.source_vreg.index(),
+                    target_alloc
                 )));
             }
         }
@@ -917,7 +1087,12 @@ fn verify_function_static_edge_edits(func: &AllocatedFunction) -> Result<(), Reg
 
 pub fn verify_static_edge_edits(program: &AllocatedProgram) -> Result<(), RegallocEngineError> {
     for func in &program.functions {
-        verify_function_static_edge_edits(func)?;
+        let ra_func = program
+            .ra_program
+            .funcs
+            .iter()
+            .find(|candidate| candidate.lambda_id == func.lambda_id);
+        verify_function_static_edge_edits(ra_func, func)?;
     }
     Ok(())
 }
