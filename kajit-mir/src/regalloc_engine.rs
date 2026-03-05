@@ -51,7 +51,26 @@ pub struct AllocatedProgram {
 #[derive(Debug, Clone)]
 pub struct AllocatedCfgProgram {
     pub cfg_program: cfg_mir::Program,
-    pub functions: Vec<AllocatedFunction>,
+    pub functions: Vec<AllocatedCfgFunction>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CfgEdgeEdit {
+    pub edge: cfg_mir::EdgeId,
+    pub pos: regalloc2::InstPosition,
+    pub from: Allocation,
+    pub to: Allocation,
+}
+
+#[derive(Debug, Clone)]
+pub struct AllocatedCfgFunction {
+    pub lambda_id: LambdaId,
+    pub num_spillslots: usize,
+    pub edits: Vec<(cfg_mir::ProgPoint, Edit)>,
+    pub op_allocs: HashMap<cfg_mir::OpId, Vec<Allocation>>,
+    pub op_operands: HashMap<cfg_mir::OpId, Vec<(kajit_ir::VReg, RaOperandKind)>>,
+    pub edge_edits: Vec<CfgEdgeEdit>,
+    pub return_result_allocs: Vec<Allocation>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,9 +152,11 @@ enum BlockTermKind {
 #[derive(Debug, Clone)]
 struct WorkBlock {
     raw_insts: Vec<crate::RaInst>,
+    raw_inst_op_ids: Vec<Option<cfg_mir::OpId>>,
     term_kind: BlockTermKind,
     term_returns_data_results: bool,
     term_linear_op_index: usize,
+    term_op_id: Option<cfg_mir::OpId>,
     term_uses: Vec<kajit_ir::VReg>,
     succs: Vec<usize>,
     preds: Vec<usize>,
@@ -159,6 +180,7 @@ fn align_succ_arg_sources_to_target(
 struct EdgeBlockInfo {
     from_linear_op_index: usize,
     succ_index: usize,
+    cfg_edge_id: Option<cfg_mir::EdgeId>,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +188,7 @@ struct AdapterFunction {
     blocks: Vec<AdapterBlock>,
     insts: Vec<AdapterInst>,
     inst_linear_op_indices: Vec<Option<usize>>,
+    inst_op_ids: Vec<Option<cfg_mir::OpId>>,
     inst_edge_infos: Vec<Option<EdgeBlockInfo>>,
     num_vregs: usize,
     empty_vregs: Vec<VReg>,
@@ -468,9 +491,11 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
                 matches!(b.term, crate::regalloc_mir::RaTerminator::Return);
             WorkBlock {
                 raw_insts: b.insts.clone(),
+                raw_inst_op_ids: vec![None; b.insts.len()],
                 term_kind,
                 term_returns_data_results,
                 term_linear_op_index: b.term_linear_op_index,
+                term_op_id: None,
                 term_uses: lower_term_uses(&b.term),
                 succs: b.succs.iter().map(|s| s.to.0 as usize).collect(),
                 preds: b.preds.iter().map(|p| p.0 as usize).collect(),
@@ -504,9 +529,11 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
             let edge_succ_args = to_params.clone();
             let edge_block = WorkBlock {
                 raw_insts: Vec::new(),
+                raw_inst_op_ids: Vec::new(),
                 term_kind: BlockTermKind::BranchLike,
                 term_returns_data_results: false,
                 term_linear_op_index: from_linear_op_index,
+                term_op_id: None,
                 term_uses: Vec::new(),
                 succs: vec![to],
                 preds: vec![from],
@@ -518,6 +545,7 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
             edge_infos.push(Some(EdgeBlockInfo {
                 from_linear_op_index,
                 succ_index: succ_idx,
+                cfg_edge_id: None,
             }));
 
             blocks[from].succs[succ_idx] = edge_id;
@@ -554,11 +582,13 @@ fn split_critical_edges_cfg(
                 _ => BlockTermKind::BranchLike,
             };
             let term_returns_data_results = matches!(term, cfg_mir::Terminator::Return);
+            let mut raw_inst_op_ids = Vec::with_capacity(b.insts.len());
             let raw_insts = b
                 .insts
                 .iter()
                 .map(|inst_id| {
                     let inst = &func.insts[inst_id.index()];
+                    raw_inst_op_ids.push(Some(OpId::Inst(*inst_id)));
                     let linear_op_index = schedule
                         .op_to_index
                         .get(&OpId::Inst(*inst_id))
@@ -581,9 +611,11 @@ fn split_critical_edges_cfg(
                 as usize;
             WorkBlock {
                 raw_insts,
+                raw_inst_op_ids,
                 term_kind,
                 term_returns_data_results,
                 term_linear_op_index,
+                term_op_id: Some(OpId::Term(b.term)),
                 term_uses: lower_term_uses_cfg(term),
                 succs: b
                     .succs
@@ -632,12 +664,15 @@ fn split_critical_edges_cfg(
 
             let to_params = blocks[to].params.clone();
             let from_linear_op_index = blocks[from].term_linear_op_index;
+            let cfg_edge_id = func.blocks[from].succs[succ_idx];
             let edge_succ_args = to_params.clone();
             let edge_block = WorkBlock {
                 raw_insts: Vec::new(),
+                raw_inst_op_ids: Vec::new(),
                 term_kind: BlockTermKind::BranchLike,
                 term_returns_data_results: false,
                 term_linear_op_index: from_linear_op_index,
+                term_op_id: None,
                 term_uses: Vec::new(),
                 succs: vec![to],
                 preds: vec![from],
@@ -649,6 +684,7 @@ fn split_critical_edges_cfg(
             edge_infos.push(Some(EdgeBlockInfo {
                 from_linear_op_index,
                 succ_index: succ_idx,
+                cfg_edge_id: Some(cfg_edge_id),
             }));
 
             blocks[from].succs[succ_idx] = edge_id;
@@ -677,6 +713,7 @@ impl AdapterFunction {
         let trace_self_loop = std::env::var_os("KAJIT_TRACE_SELF_LOOP").is_some();
         let mut adapter_insts = Vec::<AdapterInst>::new();
         let mut inst_linear_op_indices = Vec::<Option<usize>>::new();
+        let mut inst_op_ids = Vec::<Option<cfg_mir::OpId>>::new();
         let mut inst_edge_infos = Vec::<Option<EdgeBlockInfo>>::new();
         let mut adapter_blocks = Vec::<AdapterBlock>::new();
 
@@ -715,11 +752,12 @@ impl AdapterFunction {
                         ret_value_operand_count: 0,
                     });
                     inst_linear_op_indices.push(Some(entry_linear_op_index));
+                    inst_op_ids.push(None);
                     inst_edge_infos.push(None);
                 }
             }
 
-            for inst in &b.raw_insts {
+            for (inst_i, inst) in b.raw_insts.iter().enumerate() {
                 let operands: Vec<Operand> =
                     inst.operands.iter().copied().map(lower_operand).collect();
                 let operand_vregs: Vec<(kajit_ir::VReg, RaOperandKind)> =
@@ -748,6 +786,7 @@ impl AdapterFunction {
                     ret_value_operand_count: 0,
                 });
                 inst_linear_op_indices.push(Some(inst.linear_op_index));
+                inst_op_ids.push(b.raw_inst_op_ids.get(inst_i).and_then(|id| *id));
                 inst_edge_infos.push(None);
             }
 
@@ -800,6 +839,7 @@ impl AdapterFunction {
                 ret_value_operand_count,
             });
             inst_linear_op_indices.push(Some(b.term_linear_op_index));
+            inst_op_ids.push(b.term_op_id);
             inst_edge_infos.push(edge_infos[block_index]);
 
             let end = Inst::new(adapter_insts.len());
@@ -842,6 +882,7 @@ impl AdapterFunction {
             blocks: adapter_blocks,
             insts: adapter_insts,
             inst_linear_op_indices,
+            inst_op_ids,
             inst_edge_infos,
             num_vregs,
             empty_vregs: Vec::new(),
@@ -1045,7 +1086,7 @@ fn allocate_cfg_function(
     vreg_count: usize,
     env: &MachineEnv,
     options: &RegallocOptions,
-) -> Result<AllocatedFunction, RegallocEngineError> {
+) -> Result<AllocatedCfgFunction, RegallocEngineError> {
     let adapter = AdapterFunction::from_cfg(func, vreg_count)?;
     let out = regalloc2::run(&adapter, env, options)?;
 
@@ -1058,12 +1099,88 @@ fn allocate_cfg_function(
             .map_err(|errs| RegallocEngineError::Checker(format!("{errs:?}")))?;
     }
 
-    Ok(materialize_output(
-        &out,
-        &adapter,
-        func.lambda_id,
-        func.blocks.len(),
-    ))
+    Ok(materialize_cfg_output(&out, &adapter, func.lambda_id))
+}
+
+fn materialize_cfg_output(
+    out: &Output,
+    adapter: &AdapterFunction,
+    lambda_id: LambdaId,
+) -> AllocatedCfgFunction {
+    let mut return_result_allocs = Vec::<Allocation>::new();
+    let mut op_allocs = HashMap::<cfg_mir::OpId, Vec<Allocation>>::new();
+    let mut op_operands = HashMap::<cfg_mir::OpId, Vec<(kajit_ir::VReg, RaOperandKind)>>::new();
+
+    for i in 0..adapter.insts.len() {
+        let Some(op_id) = adapter.inst_op_ids.get(i).and_then(|op| *op) else {
+            continue;
+        };
+        let allocs = out.inst_allocs(Inst::new(i)).to_vec();
+        op_allocs.insert(op_id, allocs.clone());
+        op_operands.insert(op_id, adapter.insts[i].operand_vregs.clone());
+
+        let inst = &adapter.insts[i];
+        if inst.ret_value_operand_count == 0 {
+            continue;
+        }
+        let start = inst.ret_value_operand_start;
+        let end = start + inst.ret_value_operand_count;
+        assert!(
+            end <= allocs.len(),
+            "missing return alloc operands for lambda {:?}: expected range {start}..{end}, got {}",
+            lambda_id,
+            allocs.len()
+        );
+        let candidate = allocs[start..end].to_vec();
+        if return_result_allocs.is_empty() {
+            return_result_allocs = candidate;
+        } else if return_result_allocs != candidate {
+            panic!(
+                "inconsistent return allocs for lambda {:?}: {:?} vs {:?}",
+                lambda_id, return_result_allocs, candidate
+            );
+        }
+    }
+
+    let mut edits = Vec::<(cfg_mir::ProgPoint, Edit)>::new();
+    let mut edge_edits = Vec::<CfgEdgeEdit>::new();
+    for (prog_point, edit) in &out.edits {
+        let inst_index = prog_point.inst().index();
+        let Some(edge_info) = adapter
+            .inst_edge_infos
+            .get(inst_index)
+            .and_then(|info| *info)
+        else {
+            if let Some(op_id) = adapter.inst_op_ids.get(inst_index).and_then(|op| *op) {
+                let point = match prog_point.pos() {
+                    regalloc2::InstPosition::Before => cfg_mir::ProgPoint::Before(op_id),
+                    regalloc2::InstPosition::After => cfg_mir::ProgPoint::After(op_id),
+                };
+                edits.push((point, edit.clone()));
+            }
+            continue;
+        };
+
+        if let Some(edge_id) = edge_info.cfg_edge_id {
+            let Edit::Move { from, to } = edit;
+            edge_edits.push(CfgEdgeEdit {
+                edge: edge_id,
+                pos: prog_point.pos(),
+                from: *from,
+                to: *to,
+            });
+        }
+    }
+
+    AllocatedCfgFunction {
+        lambda_id,
+        num_spillslots: out.num_spillslots,
+        edits,
+        op_allocs,
+        op_operands,
+        edge_edits,
+        return_result_allocs,
+    }
 }
 
 fn verify_allocation_is_valid(
@@ -2862,8 +2979,12 @@ mod tests {
 
         assert_eq!(alloc.functions.len(), cfg.funcs.len());
         assert!(
-            alloc.functions.iter().all(|f| !f.inst_allocs.is_empty()),
-            "expected instruction allocation vectors for cfg_mir functions"
+            alloc.functions.iter().all(|f| !f.op_allocs.is_empty()),
+            "expected op allocation maps for cfg_mir functions"
+        );
+        assert!(
+            alloc.functions.iter().all(|f| !f.op_operands.is_empty()),
+            "expected op operand maps for cfg_mir functions"
         );
     }
 
@@ -2901,6 +3022,40 @@ mod tests {
             allocate_cfg_program(&cfg).expect("regalloc2 should allocate cfg_mir gamma/theta");
 
         assert_eq!(alloc.functions.len(), 1);
+        assert!(!alloc.functions[0].op_allocs.is_empty());
+    }
+
+    #[test]
+    fn cfg_mir_typed_edits_reference_valid_program_ids() {
+        let mut func = build_stress_ir();
+        let lin = linearize(&mut func);
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate cfg_mir");
+
+        for (func_alloc, cfg_func) in alloc.functions.iter().zip(cfg.funcs.iter()) {
+            for (point, _) in &func_alloc.edits {
+                let op_id = match point {
+                    crate::cfg_mir::ProgPoint::Before(op)
+                    | crate::cfg_mir::ProgPoint::After(op) => *op,
+                    crate::cfg_mir::ProgPoint::Edge(_) => {
+                        panic!("point edits must not use edge program points")
+                    }
+                };
+                assert!(
+                    func_alloc.op_allocs.contains_key(&op_id),
+                    "typed edit references op_id not present in op_allocs: {:?}",
+                    op_id
+                );
+            }
+
+            for edge_edit in &func_alloc.edge_edits {
+                assert!(
+                    cfg_func.edges.get(edge_edit.edge.index()).is_some(),
+                    "typed edge edit references missing edge: e{}",
+                    edge_edit.edge.0
+                );
+            }
+        }
     }
 
     // r[verify ir.regalloc.engine]
