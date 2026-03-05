@@ -107,6 +107,40 @@ pub fn compile_decoder_from_ir_text(
     compiler::compile_linear_ir_decoder(&linear, false)
 }
 
+/// Compile a deserializer from canonical CFG-MIR text.
+///
+/// Parses the CFG-MIR text, runs regalloc (unless `KAJIT_OPTS='-regalloc'`),
+/// and returns an executable decoder.
+pub fn compile_decoder_from_cfg_mir_text(
+    cfg_mir_text: &str,
+    trusted_utf8_input: bool,
+) -> CompiledDecoder {
+    let cfg_program =
+        kajit_mir_text::parse_cfg_mir(cfg_mir_text).expect("CFG-MIR text should parse");
+    compiler::compile_cfg_mir_decoder(&cfg_program, trusted_utf8_input)
+}
+
+/// Compile from IR text and immediately deserialize one input.
+pub fn deserialize_from_ir_text<'input, T: facet::Facet<'input>>(
+    ir_text: &str,
+    shape: &'static facet::Shape,
+    registry: &ir::IntrinsicRegistry,
+    with_passes: bool,
+    input: &'input [u8],
+) -> Result<T, DeserError> {
+    let decoder = compile_decoder_from_ir_text(ir_text, shape, registry, with_passes);
+    deserialize(&decoder, input)
+}
+
+/// Compile from CFG-MIR text and immediately deserialize one input.
+pub fn deserialize_from_cfg_mir_text<'input, T: facet::Facet<'input>>(
+    cfg_mir_text: &str,
+    input: &'input [u8],
+) -> Result<T, DeserError> {
+    let decoder = compile_decoder_from_cfg_mir_text(cfg_mir_text, false);
+    deserialize(&decoder, input)
+}
+
 /// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + CFG-MIR dumps.
 ///
 /// Intended for snapshot tests and debugging.

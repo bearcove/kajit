@@ -80,6 +80,60 @@ Canonical CFG-MIR now supports a round-trippable text format.
 
 The parser is strict and validates function/block/edge/inst/term IDs and CFG invariants.
 
+## Minimizing a codegen bug from text
+
+Use text entrypoints to reproduce and shrink failures without rebuilding from a
+Rust type each time.
+
+### Workflow A: RVSDG IR text -> compile -> run
+
+```rust
+let registry = kajit::ir::IntrinsicRegistry::new();
+let decoder = kajit::compile_decoder_from_ir_text(
+    ir_text,
+    shape,
+    &registry,
+    /* with_passes */ false,
+);
+let value: T = kajit::deserialize(&decoder, input)?;
+```
+
+One-shot helper:
+
+```rust
+let value: T = kajit::deserialize_from_ir_text(
+    ir_text,
+    shape,
+    &registry,
+    false,
+    input,
+)?;
+```
+
+### Workflow B: CFG-MIR text -> compile -> run
+
+```rust
+let decoder = kajit::compile_decoder_from_cfg_mir_text(
+    cfg_mir_text,
+    /* trusted_utf8_input */ false,
+);
+let value: T = kajit::deserialize(&decoder, input)?;
+```
+
+One-shot helper:
+
+```rust
+let value: T = kajit::deserialize_from_cfg_mir_text(cfg_mir_text, input)?;
+```
+
+### Minimization loop
+
+1. Start from a failing IR/CFG text snapshot in a regression test.
+2. Confirm it reproduces.
+3. Delete blocks/ops aggressively and re-run after each edit.
+4. Keep the smallest text that still fails.
+5. Use differential harness or LLDB only on that minimized reproducer.
+
 ## On-demand pipeline dumps
 
 Generated corpus tests do not enforce IR/CFG-MIR/edit snapshots by default. Dump pipeline artifacts on demand with:
