@@ -220,24 +220,34 @@ fn bracketed_list<'src, T: 'src>(
 
 /// Parse an intrinsic function reference: `@name` or hex `0xABC`.
 fn intrinsic_ref<'src>() -> impl Parser<'src, &'src str, IntrinsicRef, Extra<'src>> + Clone {
-    let named = just("@").ignore_then(
-        any()
-            .filter(|c: &char| c.is_alphanumeric() || *c == '_')
-            .repeated()
-            .at_least(1)
-            .to_slice()
-            .map(|s: &str| IntrinsicRef::Named(s.to_string())),
-    );
+    let named = just("@")
+        .ignore_then(symbol_name())
+        .map(IntrinsicRef::Named);
     let hex = just("0x")
         .ignore_then(text::int::<_, Extra<'_>>(16))
         .map(|s: &str| IntrinsicRef::Address(usize::from_str_radix(s, 16).unwrap()));
     named.or(hex)
 }
 
+fn symbol_name<'src>() -> impl Parser<'src, &'src str, String, Extra<'src>> + Clone {
+    any()
+        .filter(|c: &char| c.is_ascii_alphanumeric() || matches!(c, '_' | ':' | '.'))
+        .repeated()
+        .at_least(1)
+        .to_slice()
+        .map(str::to_owned)
+}
+
 #[derive(Debug, Clone)]
 enum IntrinsicRef {
     Named(String),
     Address(usize),
+}
+
+#[derive(Debug, Clone)]
+enum ConstRef {
+    Named(String),
+    Value(u64),
 }
 
 /// Parse an IrOp (the operation name with parameters).
@@ -317,9 +327,14 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
 
     let arith_ops = choice((
         just("Const(")
-            .ignore_then(uint64())
+            .ignore_then(
+                just("@")
+                    .ignore_then(symbol_name())
+                    .map(ConstRef::Named)
+                    .or(uint64().map(ConstRef::Value)),
+            )
             .then_ignore(just(")"))
-            .map(|v| AstOp::Resolved(IrOp::Const { value: v })),
+            .map(AstOp::Const),
         just("CmpNe").to(AstOp::Resolved(IrOp::CmpNe)),
         just("Add").to(AstOp::Resolved(IrOp::Add)),
         just("Sub").to(AstOp::Resolved(IrOp::Sub)),
@@ -367,6 +382,7 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
 #[derive(Debug, Clone)]
 enum AstOp {
     Resolved(IrOp),
+    Const(ConstRef),
     CallIntrinsic {
         func: IntrinsicRef,
         field_offset: u32,
@@ -1172,6 +1188,9 @@ fn resolve_output(o: &AstOutput, max_vreg: &mut u32) -> OutputPort {
 fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseError> {
     match op {
         AstOp::Resolved(ir_op) => Ok(ir_op.clone()),
+        AstOp::Const(value) => Ok(IrOp::Const {
+            value: resolve_const(value, registry)?,
+        }),
         AstOp::CallIntrinsic { func, field_offset } => {
             let intrinsic = resolve_intrinsic(func, registry)?;
             // Count args from the inputs (they'll be resolved separately).
@@ -1204,6 +1223,15 @@ fn resolve_intrinsic(
             message: format!("unknown intrinsic: @{name}"),
         }),
         IntrinsicRef::Address(addr) => Ok(IntrinsicFn(*addr)),
+    }
+}
+
+fn resolve_const(value: &ConstRef, registry: &IntrinsicRegistry) -> Result<u64, ParseError> {
+    match value {
+        ConstRef::Named(name) => registry.const_by_name(name).ok_or_else(|| ParseError {
+            message: format!("unknown const: @{name}"),
+        }),
+        ConstRef::Value(value) => Ok(*value),
     }
 }
 
@@ -1506,7 +1534,10 @@ lambda @0 (shape: "u8") {
         unsafe extern "C" fn test_intrinsic(_ctx: *mut core::ffi::c_void) {}
 
         let mut registry = IntrinsicRegistry::new();
-        registry.register("kajit_read_bool", IntrinsicFn(test_intrinsic as usize));
+        registry.register(
+            "kajit_read_bool",
+            IntrinsicFn(test_intrinsic as *const () as usize),
+        );
 
         let mut builder = IrBuilder::new(test_shape());
         {

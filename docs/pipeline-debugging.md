@@ -131,9 +131,9 @@ Canonical CFG-MIR now supports a round-trippable text format.
 The parser is strict and validates function/block/edge/inst/term IDs and CFG invariants.
 
 Public `kajit` helpers such as `debug_cfg_mir_text(...)` and
-`compile_decoder_from_cfg_mir_text(...)` already use the built-in intrinsic
-registry. Their text shows `@kajit_*` names instead of raw function addresses.
-Only pointer-valued `const(...)` payloads are still scrubbed to `0x<ptr>`.
+`deserialize_from_cfg_mir_text::<T>(...)` use a shape-derived symbol registry.
+Their text shows stable symbolic names such as `@kajit_*`,
+`@json_key_ptr.*`, and `@option_init_*` instead of process-local addresses.
 
 ### How to get seed CFG-MIR text
 
@@ -181,8 +181,10 @@ let value: T = kajit::deserialize_from_ir_text(
 ### Workflow B: CFG-MIR text -> compile -> run
 
 ```rust
+let registry = kajit::symbol_registry_for_shape(T::SHAPE);
 let decoder = kajit::compile_decoder_from_cfg_mir_text(
     cfg_mir_text,
+    &registry,
     /* trusted_utf8_input */ false,
 );
 let value: T = kajit::deserialize(&decoder, input)?;
@@ -237,6 +239,14 @@ The command:
 - runs predicate-preserving minimization with the regalloc differential oracle
 - prints a reduction summary and preserved divergence signature to `stderr`
 - writes the reduced CFG-MIR program to `stdout`
+
+`--corpus-test` is the shape-aware mode:
+- `xtask` invokes the exact generated corpus test binary
+- that binary rebuilds the symbol registry from `T::SHAPE`
+- shape-derived imports such as `@option_init_*` resolve locally in the right binary
+
+Raw-hex mode parses inside the `xtask` process itself. Use it only when the
+CFG-MIR text does not require shape-derived callable imports.
 
 Typical shell usage:
 
@@ -376,7 +386,7 @@ cargo run -q --manifest-path xtask/Cargo.toml -- \
 ```
 
 7. Use the reduced CFG-MIR as the new debugging artifact:
-   - replay it with `compile_decoder_from_cfg_mir_text(...)`
+   - replay it with `compile_decoder_from_cfg_mir_text(..., &registry, ...)`
    - run the differential harness on it
    - only then move on to LLDB or disassembly
 
@@ -391,7 +401,7 @@ In practice, the loop is:
 
 Generated corpus tests do not enforce IR/CFG-MIR/edit snapshots by default. Dump pipeline artifacts on demand with:
 
-- `KAJIT_DUMP_STAGES` — comma-separated stage list: `ir`, `linear`, `cfg`, `edits`, `opts`, or `all`
+- `KAJIT_DUMP_STAGES` — comma-separated stage list: `ir`, `linear`, `cfg`, `edits`, `emit`, `opts`, or `all`
 - `KAJIT_DUMP_FILTER` — optional comma-separated substring filters matched against `"<format>::<case>"` (e.g. `json::all_scalars`)
 - `KAJIT_DUMP_DIR` — output directory (default: `target/kajit-stage-dumps`)
 - `KAJIT_ASSERT_CODEGEN_SNAPSHOTS=1` — opt back into legacy snapshot assertions
@@ -404,7 +414,7 @@ Example:
 
 ```bash
 KAJIT_OPTS='+all_opts,+regalloc,-pass.theta_loop_invariant_hoist' \
-KAJIT_DUMP_STAGES='ir,linear,cfg,edits' \
+KAJIT_DUMP_STAGES='ir,linear,cfg,edits,emit' \
 KAJIT_DUMP_FILTER='json::all_scalars' \
 cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
 ```
@@ -421,7 +431,7 @@ On Apple Silicon, run x86_64 tests via Rosetta:
 
 ```bash
 KAJIT_OPTS='-regalloc' \
-KAJIT_DUMP_STAGES='ir,linear,cfg,edits' \
+KAJIT_DUMP_STAGES='ir,linear,cfg,edits,emit' \
 KAJIT_DUMP_FILTER='postcard::scalar_u16_v1' \
 cargo nextest run -p kajit --target x86_64-apple-darwin \
   --test corpus -E 'test(=postcard::scalar_u16_v1)'
@@ -438,6 +448,18 @@ Each dump file is named `<format>__<case>__<arch>__<stage>.txt`, e.g. `postcard_
 **`cfg.txt`** — CFG-MIR (regalloc input). Vregs are `vN`; hardware-pinned operands appear as `vN/hwM` where `hwM` is the physical register index (arch-specific: on x86_64, hw0=rax, hw1=rcx, hw2=rdx, ...).
 
 **`edits.txt`** — Regalloc output edits. Each line is a move inserted on a block edge: `pN -> pM` (reg-to-reg), `pN -> stackM` (spill), or `stackM -> pN` (reload). Physical register indices match `cfg.txt`. The file may also contain just a count if there are many edits.
+
+**`emit.txt`** — Deterministic machine-emission trace. Each line is one contiguous emitted byte range with:
+- machine-code offset
+- raw bytes
+- source-map line/column
+- the CFG-MIR op/terminator that caused emission
+
+Pointer-bearing immediates for symbolic imports/constants are redacted as
+`<redacted:N>` so traces stay stable across runs even when ASLR changes actual
+host addresses.
+
+Use this when `cfg.txt` and `edits.txt` still leave ambiguity about backend lowering, branch materialization, or edge trampolines. It is higher-level and more stable than disassembly, but more concrete than CFG-MIR or `AllocatedProgram`.
 
 **`opts.txt`** — RVSDG snapshots between each optimization pass, labeled by pass name.
 

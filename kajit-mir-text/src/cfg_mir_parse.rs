@@ -39,6 +39,12 @@ fn uint64<'src>() -> impl Parser<'src, &'src str, u64, Extra<'src>> + Clone {
     hex.or(dec)
 }
 
+#[derive(Debug, Clone)]
+enum ConstRef {
+    Named(String),
+    Value(u64),
+}
+
 fn usize_p<'src>() -> impl Parser<'src, &'src str, usize, Extra<'src>> + Clone {
     let hex = just("0x")
         .ignore_then(text::int::<_, Extra<'_>>(16))
@@ -161,7 +167,7 @@ struct AstInstBody {
 
 #[derive(Debug, Clone)]
 enum AstOp {
-    Const(u64),
+    Const(ConstRef),
     BinOp(BinOpKind),
     UnaryOp(UnaryOpKind),
     Copy,
@@ -190,7 +196,12 @@ enum AstOp {
 fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
     let parameterized = choice((
         just("const(")
-            .ignore_then(uint64())
+            .ignore_then(
+                just("@")
+                    .ignore_then(ident())
+                    .map(ConstRef::Named)
+                    .or(uint64().map(ConstRef::Value)),
+            )
             .then_ignore(just(")"))
             .map(AstOp::Const),
         just("bounds_check(")
@@ -810,7 +821,7 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
             dst: dst.ok_or_else(|| ParseError {
                 message: format!("inst i{} const missing dst", ast.id.0),
             })?,
-            value: *value,
+            value: resolve_const(value, registry)?,
         },
         AstOp::BinOp(kind) => {
             if ast.body.uses.len() < 2 {
@@ -964,6 +975,15 @@ fn resolve_intrinsic(
             message: format!("unknown intrinsic: @{name}"),
         }),
         IntrinsicRef::Address(addr) => Ok(IntrinsicFn(*addr)),
+    }
+}
+
+fn resolve_const(value: &ConstRef, registry: &IntrinsicRegistry) -> Result<u64, ParseError> {
+    match value {
+        ConstRef::Named(name) => registry.const_by_name(name).ok_or_else(|| ParseError {
+            message: format!("unknown const: @{name}"),
+        }),
+        ConstRef::Value(value) => Ok(*value),
     }
 }
 

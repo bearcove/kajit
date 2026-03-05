@@ -360,6 +360,7 @@ struct BTreeConfigMap {
 type Pair = (u32, String);
 const PRINT_INPUT_HEX_ENV: &str = "KAJIT_PRINT_INPUT_HEX";
 const PRINT_CFG_MIR_ENV: &str = "KAJIT_PRINT_CFG_MIR";
+const MINIMIZE_CFG_MIR_ENV: &str = "KAJIT_MINIMIZE_CFG_MIR";
 fn maybe_print_case_input(input: &[u8]) {
     if std::env::var_os(PRINT_INPUT_HEX_ENV).is_none() {
         return;
@@ -383,6 +384,70 @@ where
     println!("{}", kajit::debug_cfg_mir_text(T::SHAPE, decoder));
     println!("KAJIT_CASE_CFG_MIR_END");
 }
+fn maybe_minimize_case_cfg_mir<T>(input: &[u8]) -> bool
+where
+    for<'input> T: Facet<'input>,
+{
+    let Some(path) = std::env::var_os(MINIMIZE_CFG_MIR_ENV) else {
+        return false;
+    };
+    let path = std::path::PathBuf::from(path);
+    let cfg_mir_text = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+        eprintln!("failed to read {}: {err}", path.display());
+        std::process::exit(1);
+    });
+    let registry = kajit::symbol_registry_for_shape(T::SHAPE);
+    let program = kajit_mir_text::parse_cfg_mir_with_registry(&cfg_mir_text, &registry)
+        .unwrap_or_else(|err| {
+            eprintln!("failed to parse CFG-MIR from {}: {err}", path.display());
+            std::process::exit(1);
+        });
+    let input_label = {
+        let mut hex = String::with_capacity(input.len() * 2);
+        for byte in input {
+            use core::fmt::Write as _;
+            write!(&mut hex, "{byte:02x}").expect("writing to String should not fail");
+        }
+        hex
+    };
+    let (reduced, stats, interestingness) =
+        kajit_mir::minimize_cfg_program_for_differential(&program, input).unwrap_or_else(|err| {
+            match err {
+                kajit_mir::MinimizeError::NotInteresting => {
+                    eprintln!(
+                        "seed program is not differentially interesting for input {input_label}"
+                    );
+                }
+                kajit_mir::MinimizeError::Predicate(message) => {
+                    eprintln!("differential minimization failed: {message}");
+                }
+            }
+            std::process::exit(1);
+        });
+    eprintln!(
+        "reduced CFG-MIR for input {input_label}: blocks {} -> {}, insts {} -> {}, edges {} -> {}, accepted {} / {}",
+        stats.initial_size.blocks,
+        stats.final_size.blocks,
+        stats.initial_size.insts,
+        stats.final_size.insts,
+        stats.initial_size.edges,
+        stats.final_size.edges,
+        stats.accepted,
+        stats.attempts
+    );
+    eprintln!(
+        "preserved differential signature: field={}, ideal_trap={:?}, post_trap={:?}, ideal_returned={}, post_returned={}",
+        interestingness.field,
+        interestingness.ideal_trap,
+        interestingness.post_trap,
+        interestingness.ideal_returned,
+        interestingness.post_returned
+    );
+    println!("KAJIT_CASE_MINIMIZED_CFG_MIR_BEGIN");
+    println!("{reduced}");
+    println!("KAJIT_CASE_MINIMIZED_CFG_MIR_END");
+    true
+}
 fn assert_json_case<T>(value: T)
 where
     for<'input> T: Facet<'input>
@@ -394,6 +459,9 @@ where
     let encoded = serde_json::to_string(&value).unwrap();
     maybe_print_case_input(encoded.as_bytes());
     maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+    if maybe_minimize_case_cfg_mir::<T>(encoded.as_bytes()) {
+        return;
+    }
     let expected: T = serde_json::from_str(&encoded).unwrap();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let case = runtime_case_name();
@@ -415,6 +483,9 @@ where
     let encoded = ::postcard::to_allocvec(&value).unwrap();
     maybe_print_case_input(&encoded);
     maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+    if maybe_minimize_case_cfg_mir::<T>(&encoded) {
+        return;
+    }
     let expected: T = ::postcard::from_bytes(&encoded).unwrap();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let case = runtime_case_name();
@@ -431,6 +502,9 @@ where
 {
     maybe_print_case_input(input);
     maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+    if maybe_minimize_case_cfg_mir::<T>(input) {
+        return;
+    }
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let got: T = kajit::deserialize(&decoder, input).unwrap();
     assert_eq!(got, expected);
@@ -441,6 +515,9 @@ where
 {
     maybe_print_case_input(input);
     maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+    if maybe_minimize_case_cfg_mir::<T>(input) {
+        return;
+    }
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     assert!(out.is_err(), "expected json decode failure");
@@ -451,6 +528,9 @@ where
 {
     maybe_print_case_input(input);
     maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+    if maybe_minimize_case_cfg_mir::<T>(input) {
+        return;
+    }
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     let err = match out {
@@ -465,6 +545,9 @@ where
 {
     maybe_print_case_input(input);
     maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+    if maybe_minimize_case_cfg_mir::<T>(input) {
+        return;
+    }
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -478,6 +561,9 @@ where
 {
     maybe_print_case_input(input);
     maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+    if maybe_minimize_case_cfg_mir::<T>(input) {
+        return;
+    }
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -490,6 +576,9 @@ where
 {
     maybe_print_case_input(input);
     maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+    if maybe_minimize_case_cfg_mir::<T>(input) {
+        return;
+    }
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -540,6 +629,7 @@ struct CodegenArtifacts {
     cfg_text: String,
     edits: usize,
     edits_text: String,
+    emission_text: String,
     opt_timeline: Vec<(String, String)>,
 }
 fn codegen_artifacts<T, F>(decoder: &F) -> CodegenArtifacts
@@ -552,6 +642,7 @@ where
     let linear_text = kajit::debug_linear_ir_text(shape, decoder);
     let edits = kajit::regalloc_edit_count(shape, decoder);
     let edits_text = kajit::regalloc_edits_text(shape, decoder);
+    let emission_text = kajit::emission_trace_text(shape, decoder);
     let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, decoder);
     CodegenArtifacts {
         ir_text,
@@ -559,6 +650,7 @@ where
         cfg_text,
         edits,
         edits_text,
+        emission_text,
         opt_timeline,
     }
 }
@@ -650,6 +742,9 @@ fn maybe_dump_codegen_artifacts(format_label: &str, case: &str, artifacts: &Code
     }
     if should_dump_stage("edits") {
         dump_stage(format_label, case, "edits", &artifacts.edits_text);
+    }
+    if should_dump_stage("emit") {
+        dump_stage(format_label, case, "emit", &artifacts.emission_text);
     }
     if should_dump_stage("opts") {
         for (index, (pass_name, ir_text)) in artifacts.opt_timeline.iter().enumerate() {

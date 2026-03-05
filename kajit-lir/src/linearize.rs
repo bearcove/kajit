@@ -1373,7 +1373,8 @@ fn fmt_op(
     match op {
         LinearOp::Const { dst, value } => {
             fmt_vreg(f, *dst)?;
-            write!(f, " = const {value}")
+            write!(f, " = const ")?;
+            fmt_const(f, *value, registry)
         }
         LinearOp::BinOp { op, dst, lhs, rhs } => {
             fmt_vreg(f, *dst)?;
@@ -1552,6 +1553,19 @@ fn fmt_intrinsic(
         return write!(f, "@{name}");
     }
     write!(f, "{func}")
+}
+
+fn fmt_const(
+    f: &mut fmt::Formatter<'_>,
+    value: u64,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
+    if let Some(registry) = registry
+        && let Some(name) = registry.const_name_of(value)
+    {
+        return write!(f, "@{name}");
+    }
+    write!(f, "{value}")
 }
 
 impl fmt::Debug for LinearIr {
