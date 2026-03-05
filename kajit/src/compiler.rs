@@ -1228,13 +1228,8 @@ fn format_allocated_regalloc_edits(alloc: &crate::regalloc_engine::AllocatedProg
             let _ = std::fmt::Write::write_fmt(
                 &mut out,
                 format_args!(
-                    "    - edge from=b{} (lin={}) succ={} pos={:?} move {:?} -> {:?}\n",
-                    edge.from_block_id.0,
-                    edge.from_linear_op_index,
-                    edge.succ_index,
-                    edge.pos,
-                    edge.from,
-                    edge.to
+                    "    - edge from=b{} succ={} pos={:?} move {:?} -> {:?}\n",
+                    edge.from_block_id.0, edge.succ_index, edge.pos, edge.from, edge.to
                 ),
             );
         }

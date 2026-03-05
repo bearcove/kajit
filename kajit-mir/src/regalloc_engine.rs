@@ -20,7 +20,6 @@ use kajit_ir::LambdaId;
 #[derive(Debug, Clone)]
 pub struct EdgeEdit {
     pub from_block_id: crate::BlockId,
-    pub from_linear_op_index: usize,
     pub succ_index: usize,
     pub pos: regalloc2::InstPosition,
     pub from: Allocation,
@@ -180,7 +179,6 @@ fn align_succ_arg_sources_to_target(
 #[derive(Debug, Clone, Copy)]
 struct EdgeBlockInfo {
     from_block_id: crate::BlockId,
-    from_linear_op_index: usize,
     succ_index: usize,
     cfg_edge_id: Option<cfg_mir::EdgeId>,
 }
@@ -551,7 +549,6 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
             blocks.push(edge_block);
             edge_infos.push(Some(EdgeBlockInfo {
                 from_block_id,
-                from_linear_op_index,
                 succ_index: succ_idx,
                 cfg_edge_id: None,
             }));
@@ -696,7 +693,6 @@ fn split_critical_edges_cfg(
             blocks.push(edge_block);
             edge_infos.push(Some(EdgeBlockInfo {
                 from_block_id,
-                from_linear_op_index,
                 succ_index: succ_idx,
                 cfg_edge_id: Some(cfg_edge_id),
             }));
@@ -1044,7 +1040,6 @@ fn materialize_output(
         let Edit::Move { from, to } = edit;
         edge_edits.push(EdgeEdit {
             from_block_id: edge_info.from_block_id,
-            from_linear_op_index: edge_info.from_linear_op_index,
             succ_index: edge_info.succ_index,
             pos: prog_point.pos(),
             from: *from,
@@ -3529,7 +3524,6 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn static_edge_edit_verifier_accepts_duplicate_dest() {
-        let edge_key_linear = 42usize;
         let edge_key_succ = 0usize;
         let edge_key_from_block = crate::BlockId(7);
         let bad = AllocatedProgram {
@@ -3549,7 +3543,6 @@ lambda @0 (shape: "u8") {
                 edge_edits: vec![
                     EdgeEdit {
                         from_block_id: edge_key_from_block,
-                        from_linear_op_index: edge_key_linear,
                         succ_index: edge_key_succ,
                         pos: regalloc2::InstPosition::After,
                         from: Allocation::reg(preg_int(0)),
@@ -3557,7 +3550,6 @@ lambda @0 (shape: "u8") {
                     },
                     EdgeEdit {
                         from_block_id: edge_key_from_block,
-                        from_linear_op_index: edge_key_linear,
                         succ_index: edge_key_succ,
                         pos: regalloc2::InstPosition::After,
                         from: Allocation::reg(preg_int(2)),
@@ -3649,7 +3641,6 @@ lambda @0 (shape: "u8") {
                 term_inst_indices_by_block: vec![Some(0), None],
                 edge_edits: vec![EdgeEdit {
                     from_block_id: from_block,
-                    from_linear_op_index: from_linear,
                     succ_index: 0,
                     pos: regalloc2::InstPosition::After,
                     from: Allocation::reg(preg_int(0)),
