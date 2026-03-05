@@ -232,33 +232,68 @@ fn linear_pc_ranges(
 
 fn collect_named_field_vregs(
     ir: &crate::linearize::LinearIr,
-    root_shape: &'static Shape,
+    _root_shape: &'static Shape,
 ) -> HashMap<crate::ir::VReg, String> {
-    let mut field_by_offset = HashMap::<u32, String>::new();
-    let (fields, _) = collect_fields(root_shape);
-    for field in fields {
-        field_by_offset.insert(field.offset as u32, field.name.to_string());
+    let trace = std::env::var("KAJIT_DEBUG_DWARF_TRACE")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
+    fn field_map_for_shape(shape: &'static Shape) -> Option<HashMap<u32, String>> {
+        let Type::User(UserType::Struct(_)) = &shape.ty else {
+            return None;
+        };
+        let (fields, _) = collect_fields(shape);
+        let mut by_offset = HashMap::<u32, String>::new();
+        for field in fields {
+            by_offset.insert(field.offset as u32, field.name.to_string());
+        }
+        Some(by_offset)
     }
 
     let mut named = HashMap::<crate::ir::VReg, String>::new();
-    let mut current_lambda = Vec::<crate::ir::LambdaId>::new();
+    let mut current_lambda_shapes = Vec::<(&'static Shape, Option<HashMap<u32, String>>)>::new();
+    let mut write_to_field_total = 0usize;
+    let mut write_to_field_mapped = 0usize;
     for op in &ir.ops {
         match op {
-            crate::linearize::LinearOp::FuncStart { lambda_id, .. } => {
-                current_lambda.push(*lambda_id);
+            crate::linearize::LinearOp::FuncStart { shape, .. } => {
+                current_lambda_shapes.push((*shape, field_map_for_shape(*shape)));
             }
             crate::linearize::LinearOp::FuncEnd => {
-                let _ = current_lambda.pop();
+                let _ = current_lambda_shapes.pop();
             }
             crate::linearize::LinearOp::WriteToField { src, offset, .. } => {
-                if current_lambda.last().is_some_and(|id| id.index() == 0)
-                    && let Some(name) = field_by_offset.get(offset)
+                write_to_field_total += 1;
+                if let Some((shape, field_map)) = current_lambda_shapes.last() {
+                    if trace && write_to_field_total <= 8 {
+                        let mapped_name = field_map.as_ref().and_then(|m| m.get(offset));
+                        eprintln!(
+                            "[kajit-dwarf] WriteToField: shape={} offset={} src=v{} mapped={}",
+                            shape.type_identifier,
+                            offset,
+                            src.index(),
+                            mapped_name.is_some()
+                        );
+                    }
+                }
+                if let Some((shape, Some(field_map))) = current_lambda_shapes.last()
+                    && let Some(name) = field_map.get(offset)
                 {
-                    named.entry(*src).or_insert_with(|| format!("root.{name}"));
+                    write_to_field_mapped += 1;
+                    named
+                        .entry(*src)
+                        .or_insert_with(|| format!("{}.{}", shape.type_identifier, name));
                 }
             }
             _ => {}
         }
+    }
+    if trace {
+        eprintln!(
+            "[kajit-dwarf] collect_named_field_vregs: total WriteToField ops={}, mapped WriteToField ops={}, mapped names={}",
+            write_to_field_total,
+            write_to_field_mapped,
+            named.len()
+        );
     }
     named
 }
@@ -336,7 +371,16 @@ fn build_dwarf_variables_from_regalloc(
     root_shape: &'static Shape,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
 ) -> Vec<crate::jit_dwarf::DwarfVariable> {
+    let trace = std::env::var("KAJIT_DEBUG_DWARF_TRACE")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
     let named_vregs = collect_named_field_vregs(ir, root_shape);
+    if trace {
+        eprintln!(
+            "[kajit-dwarf] named field vregs discovered: {}",
+            named_vregs.len()
+        );
+    }
     if named_vregs.is_empty() {
         return Vec::new();
     }
@@ -418,6 +462,18 @@ fn build_dwarf_variables_from_regalloc(
         })
         .collect::<Vec<_>>();
     vars.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if trace {
+        eprintln!("[kajit-dwarf] variables emitted: {}", vars.len());
+        for var in vars.iter().take(8) {
+            eprintln!(
+                "[kajit-dwarf] var {} ranges={} first={:?}",
+                var.name,
+                var.locations.len(),
+                var.locations.first().map(|r| (r.start, r.end))
+            );
+        }
+    }
     vars
 }
 

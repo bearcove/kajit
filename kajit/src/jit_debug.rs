@@ -172,6 +172,7 @@ pub fn register_jit_code_with_dwarf(
     dwarf: Option<&crate::jit_dwarf::JitDwarfSections>,
 ) -> JitRegistration {
     let elf = build_elf(buf_base as u64, buf_len, symbols, dwarf);
+    maybe_dump_jit_elf(&elf, symbols);
 
     let entry = Box::into_raw(Box::new(JitCodeEntry {
         next: std::ptr::null_mut(),
@@ -197,6 +198,33 @@ pub fn register_jit_code_with_dwarf(
     write_perf_map(buf_base, symbols);
 
     JitRegistration { entry, _elf: elf }
+}
+
+fn maybe_dump_jit_elf(elf: &[u8], symbols: &[JitSymbolEntry]) {
+    let Ok(dir) = std::env::var("KAJIT_DEBUG_DUMP_ELF_DIR") else {
+        return;
+    };
+    let path = std::path::Path::new(&dir);
+    if std::fs::create_dir_all(path).is_err() {
+        return;
+    }
+    let stem = symbols
+        .first()
+        .map(|s| {
+            s.name
+                .chars()
+                .map(|ch| {
+                    if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                        ch
+                    } else {
+                        '_'
+                    }
+                })
+                .collect::<String>()
+        })
+        .unwrap_or_else(|| "jit".to_string());
+    let filename = format!("{stem}__pid{}__{}.elf", std::process::id(), elf.len());
+    let _ = std::fs::write(path.join(filename), elf);
 }
 
 // ---------------------------------------------------------------------------
