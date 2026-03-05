@@ -2061,6 +2061,7 @@ fn error_code_from_u32(code: u32) -> ErrorCode {
 struct SimulatorRuntime {
     input_base: *const u8,
     input_len: usize,
+    out_ptr: *mut u8,
     slots: Vec<u64>,
     slot_mem: Vec<u8>,
     ctx: RuntimeDeserContext,
@@ -2071,10 +2072,42 @@ impl SimulatorRuntime {
         Self {
             input_base: input.as_ptr(),
             input_len: input.len(),
+            out_ptr: core::ptr::null_mut(),
             slots: vec![0; slot_count],
             slot_mem: vec![0; slot_count.saturating_mul(SLOT_ADDR_STRIDE)],
             ctx: RuntimeDeserContext::new(input),
         }
+    }
+
+    fn init_out_ptr(&mut self, output: &mut Vec<u8>) {
+        self.out_ptr = output.as_mut_ptr();
+    }
+
+    fn out_ptr_in_output(&self, output: &[u8]) -> Option<usize> {
+        let base = output.as_ptr() as usize;
+        let end = base + output.len();
+        let ptr = self.out_ptr as usize;
+        if ptr >= base && ptr <= end {
+            Some(ptr - base)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_output_range_for_out_ptr(
+        &mut self,
+        output: &mut Vec<u8>,
+        offset: usize,
+        width: usize,
+    ) {
+        let Some(ptr_offset) = self.out_ptr_in_output(output) else {
+            return;
+        };
+        let needed = ptr_offset.saturating_add(offset).saturating_add(width);
+        if output.len() < needed {
+            output.resize(needed, 0);
+        }
+        self.out_ptr = unsafe { output.as_mut_ptr().add(ptr_offset) };
     }
 
     fn ensure_slot(&mut self, slot: usize) {
@@ -2405,25 +2438,35 @@ fn execute_sim_linear_op(
             let value = read_allocation(regs, spills, src_alloc);
             let width_bytes = width.bytes() as usize;
             let base = *offset as usize;
-            if output.len() < base + width_bytes {
-                output.resize(base + width_bytes, 0);
-            }
-            for i in 0..width_bytes {
-                output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
+            sim.ensure_output_range_for_out_ptr(output, base, width_bytes);
+            unsafe {
+                let dst = sim.out_ptr.add(base);
+                for i in 0..width_bytes {
+                    *dst.add(i) = ((value >> (i * 8)) & 0xff) as u8;
+                }
             }
         }
         LinearOp::ReadFromField { dst, offset, width } => {
             let width_bytes = width.bytes() as usize;
             let base = *offset as usize;
-            if output.len() < base + width_bytes {
-                output.resize(base + width_bytes, 0);
-            }
+            sim.ensure_output_range_for_out_ptr(output, base, width_bytes);
             let mut value = 0u64;
-            for i in 0..width_bytes {
-                value |= (output[base + i] as u64) << (i * 8);
+            unsafe {
+                let src = sim.out_ptr.add(base);
+                for i in 0..width_bytes {
+                    value |= (*src.add(i) as u64) << (i * 8);
+                }
             }
             let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
             write_allocation(regs, spills, dst_alloc, value);
+        }
+        LinearOp::SaveOutPtr { dst } => {
+            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            write_allocation(regs, spills, dst_alloc, sim.out_ptr as u64);
+        }
+        LinearOp::SetOutPtr { src } => {
+            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            sim.out_ptr = read_allocation(regs, spills, src_alloc) as *mut u8;
         }
         LinearOp::SlotAddr { dst, slot } => {
             let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
@@ -2457,10 +2500,8 @@ fn execute_sim_linear_op(
             }
             let out_ptr = if dst.is_none() {
                 let offset = *field_offset as usize;
-                if output.len() < offset + 64 {
-                    output.resize(offset + 64, 0);
-                }
-                Some(unsafe { output.as_mut_ptr().add(offset) })
+                sim.ensure_output_range_for_out_ptr(output, offset, 64);
+                Some(unsafe { sim.out_ptr.add(offset) })
             } else {
                 None
             };
@@ -2602,6 +2643,7 @@ pub fn simulate_execution_cfg(
     let mut spills = HashMap::<usize, u64>::new();
     let mut output = vec![0u8; infer_output_size_for_cfg_function(func)];
     let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
+    sim.init_out_ptr(&mut output);
     let mut cursor = 0usize;
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut returned = false;
@@ -2880,6 +2922,7 @@ pub fn simulate_execution_trace_cfg(
     let mut spills = HashMap::<usize, u64>::new();
     let mut output = vec![0u8; infer_output_size_for_cfg_function(func)];
     let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
+    sim.init_out_ptr(&mut output);
     let mut cursor = 0usize;
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut returned = false;
@@ -3178,6 +3221,7 @@ pub fn simulate_execution(
     let mut spills = HashMap::<usize, u64>::new();
     let mut output = vec![0u8; infer_output_size_for_function(func)];
     let mut sim = SimulatorRuntime::new(input, allocated.ra_program.slot_count as usize);
+    sim.init_out_ptr(&mut output);
     let mut cursor = 0usize;
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut returned = false;
@@ -3444,6 +3488,7 @@ pub fn simulate_execution_trace(
     let mut spills = HashMap::<usize, u64>::new();
     let mut output = vec![0u8; infer_output_size_for_function(func)];
     let mut sim = SimulatorRuntime::new(input, allocated.ra_program.slot_count as usize);
+    sim.init_out_ptr(&mut output);
     let mut cursor = 0usize;
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut returned = false;

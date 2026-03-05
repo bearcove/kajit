@@ -107,6 +107,7 @@ struct InterpreterState<'a> {
     input_base: *const u8,
     cursor: usize,
     output: Vec<u8>,
+    out_ptr: *mut u8,
     vregs: Vec<u64>,
     slots: Vec<u64>,
     slot_mem: Vec<u8>,
@@ -117,12 +118,15 @@ struct InterpreterState<'a> {
 impl<'a> InterpreterState<'a> {
     fn new(input: &'a [u8], vreg_count: usize, slot_count: usize, output_size: usize) -> Self {
         let input_base = input.as_ptr();
+        let mut output = vec![0u8; output_size];
+        let out_ptr = output.as_mut_ptr();
         let slot_mem = vec![0u8; slot_count.saturating_mul(SLOT_ADDR_STRIDE)];
         Self {
             input,
             input_base,
             cursor: 0,
-            output: vec![0u8; output_size],
+            output,
+            out_ptr,
             vregs: vec![0u64; vreg_count],
             slots: vec![0u64; slot_count],
             slot_mem,
@@ -146,6 +150,28 @@ impl<'a> InterpreterState<'a> {
         if self.output.len() < len {
             self.output.resize(len, 0);
         }
+    }
+
+    fn out_ptr_in_output(&self) -> Option<usize> {
+        let base = self.output.as_ptr() as usize;
+        let end = base + self.output.len();
+        let ptr = self.out_ptr as usize;
+        if ptr >= base && ptr <= end {
+            Some(ptr - base)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_output_range_for_out_ptr(&mut self, offset: usize, width_bytes: usize) {
+        let Some(ptr_offset) = self.out_ptr_in_output() else {
+            return;
+        };
+        let needed = ptr_offset
+            .saturating_add(offset)
+            .saturating_add(width_bytes);
+        self.ensure_output_len(needed);
+        self.out_ptr = unsafe { self.output.as_mut_ptr().add(ptr_offset) };
     }
 
     fn trap(&mut self, code: ErrorCode) {
@@ -299,9 +325,12 @@ pub fn execute_function_with_trace(
                     let value = state.read_vreg(src.index());
                     let width_bytes = width.bytes() as usize;
                     let base = *offset as usize;
-                    state.ensure_output_len(base + width_bytes);
-                    for i in 0..width_bytes {
-                        state.output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
+                    state.ensure_output_range_for_out_ptr(base, width_bytes);
+                    unsafe {
+                        let dst = state.out_ptr.add(base);
+                        for i in 0..width_bytes {
+                            *dst.add(i) = ((value >> (i * 8)) & 0xff) as u8;
+                        }
                     }
                 }
                 LinearOp::ErrorExit { code } => {
@@ -311,12 +340,21 @@ pub fn execute_function_with_trace(
                 LinearOp::ReadFromField { dst, offset, width } => {
                     let width_bytes = width.bytes() as usize;
                     let base = *offset as usize;
-                    state.ensure_output_len(base + width_bytes);
+                    state.ensure_output_range_for_out_ptr(base, width_bytes);
                     let mut value = 0u64;
-                    for i in 0..width_bytes {
-                        value |= (state.output[base + i] as u64) << (i * 8);
+                    unsafe {
+                        let src = state.out_ptr.add(base);
+                        for i in 0..width_bytes {
+                            value |= (*src.add(i) as u64) << (i * 8);
+                        }
                     }
                     state.write_vreg(dst.index(), value);
+                }
+                LinearOp::SaveOutPtr { dst } => {
+                    state.write_vreg(dst.index(), state.out_ptr as u64);
+                }
+                LinearOp::SetOutPtr { src } => {
+                    state.out_ptr = state.read_vreg(src.index()) as *mut u8;
                 }
                 LinearOp::SlotAddr { dst, slot } => {
                     let addr = state.slot_addr_value(slot.index());
@@ -342,8 +380,8 @@ pub fn execute_function_with_trace(
                         args.iter().map(|v| state.read_vreg(v.index())).collect();
                     let out_ptr = if dst.is_none() {
                         let offset = *field_offset as usize;
-                        state.ensure_output_len(offset + 64);
-                        Some(unsafe { state.output.as_mut_ptr().add(offset) })
+                        state.ensure_output_range_for_out_ptr(offset, 64);
+                        Some(unsafe { state.out_ptr.add(offset) })
                     } else {
                         None
                     };
