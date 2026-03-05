@@ -2,7 +2,7 @@
 //!
 //! This module adapts `regalloc_mir::RaProgram` to `regalloc2::Function`.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
 use kajit_ir::ErrorCode;
@@ -879,7 +879,6 @@ fn find_alloc_for_vreg_in_inst(
 }
 
 fn infer_block_param_entry_alloc(
-    ra_func: &RaFunction,
     func: &AllocatedFunction,
     inst_index_by_linear: &HashMap<usize, usize>,
     block: &crate::RaBlock,
@@ -903,7 +902,6 @@ fn infer_block_param_entry_alloc(
             return Some(a);
         }
     }
-    let _ = ra_func;
     None
 }
 
@@ -918,20 +916,6 @@ fn infer_vreg_alloc_at_block_end(
         && let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Use))
     {
         return Some(a);
-    }
-
-    for inst in block.insts.iter().rev() {
-        let Some(&inst_idx) = inst_index_by_linear.get(&inst.linear_op_index) else {
-            continue;
-        };
-        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Use))
-        {
-            return Some(a);
-        }
-        if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Def))
-        {
-            return Some(a);
-        }
     }
     None
 }
@@ -970,7 +954,7 @@ fn expected_transfers_for_edge(
         let source_alloc =
             infer_vreg_alloc_at_block_end(func, inst_index_by_linear, pred_block, arg.source);
         let target_alloc =
-            infer_block_param_entry_alloc(ra_func, func, inst_index_by_linear, succ_block, arg.target);
+            infer_block_param_entry_alloc(func, inst_index_by_linear, succ_block, arg.target);
         out.push(ExpectedEdgeTransfer {
             source_vreg: arg.source,
             target_vreg: arg.target,
@@ -1001,7 +985,24 @@ fn verify_function_static_edge_edits(
             .push(edge);
     }
 
-    for ((from_linear_op_index, succ_index), edits) in by_edge {
+    let mut edge_keys = BTreeSet::<(usize, usize)>::new();
+    edge_keys.extend(by_edge.keys().copied());
+    if let Some(ra_func) = ra_func {
+        for block in &ra_func.blocks {
+            let Some(term_linear) = block.term_linear_op_index else {
+                continue;
+            };
+            for succ_index in 0..block.succs.len() {
+                edge_keys.insert((term_linear, succ_index));
+            }
+        }
+    }
+
+    for (from_linear_op_index, succ_index) in edge_keys {
+        let edits = by_edge
+            .get(&(from_linear_op_index, succ_index))
+            .cloned()
+            .unwrap_or_default();
         let edge_label = format!(
             "lambda @{} edge (lin={from_linear_op_index}, succ={succ_index})",
             func.lambda_id.index()
@@ -1028,20 +1029,82 @@ fn verify_function_static_edge_edits(
         // Coverage check: all inferred target allocations for block params must be written by
         // at least one edge edit unless source and target are already in place.
         let actual_targets: HashSet<Allocation> = edits.iter().map(|e| e.to).collect();
+        let mut tracked_transfers = Vec::<(usize, Allocation, Allocation)>::new();
+        let mut expected_complete = true;
         for transfer in &expected {
             let (Some(source_alloc), Some(target_alloc)) = (transfer.source_alloc, transfer.target_alloc)
             else {
+                expected_complete = false;
                 continue;
             };
             if source_alloc == target_alloc {
                 continue;
             }
+            tracked_transfers.push((tracked_transfers.len(), source_alloc, target_alloc));
             if !actual_targets.contains(&target_alloc) {
                 return Err(RegallocEngineError::StaticVerifier(format!(
                     "{edge_label}: missing edge edit to cover block param v{} from v{} (expected target {:?})",
                     transfer.target_vreg.index(),
                     transfer.source_vreg.index(),
                     target_alloc
+                )));
+            }
+        }
+
+        // Source/target correctness: symbolically execute edge moves and ensure each
+        // expected transfer source value arrives at the expected target allocation.
+        if !tracked_transfers.is_empty() {
+            let mut symbols = HashMap::<Allocation, HashSet<usize>>::new();
+            for (transfer_id, source_alloc, _) in &tracked_transfers {
+                symbols
+                    .entry(*source_alloc)
+                    .or_default()
+                    .insert(*transfer_id);
+            }
+
+            // Preserve emitted edit ordering, applying Before moves then After moves.
+            let mut suspicious_extra = None;
+            for edit in edits
+                .iter()
+                .copied()
+                .filter(|e| e.pos == regalloc2::InstPosition::Before)
+                .chain(
+                    edits
+                        .iter()
+                        .copied()
+                        .filter(|e| e.pos == regalloc2::InstPosition::After),
+                )
+            {
+                let moved = symbols.get(&edit.from).cloned().unwrap_or_default();
+                if moved.is_empty()
+                    && expected_complete
+                    && edit
+                        .to
+                        .as_reg()
+                        .is_none_or(|reg| !scratch_regs.contains(&reg))
+                {
+                    suspicious_extra = Some((edit.from, edit.to));
+                }
+                if !moved.is_empty() {
+                    symbols.insert(edit.to, moved);
+                }
+            }
+
+            for (transfer_id, source_alloc, target_alloc) in &tracked_transfers {
+                let delivered = symbols
+                    .get(target_alloc)
+                    .is_some_and(|set| set.contains(transfer_id));
+                if !delivered {
+                    return Err(RegallocEngineError::StaticVerifier(format!(
+                        "{edge_label}: edge edits do not deliver source {:?} to expected target {:?}",
+                        source_alloc, target_alloc
+                    )));
+                }
+            }
+            if let Some((from, to)) = suspicious_extra {
+                return Err(RegallocEngineError::StaticVerifier(format!(
+                    "{edge_label}: suspicious extra edge edit {:?} -> {:?} (not connected to any expected block-param transfer)",
+                    from, to
                 )));
             }
         }
@@ -2852,6 +2915,140 @@ lambda @0 (shape: "u8") {
         let msg = err.to_string();
         assert!(
             msg.contains("possible clobber of still-live source"),
+            "unexpected verifier error: {msg}"
+        );
+    }
+
+    fn synthetic_edge_fixture() -> AllocatedProgram {
+        let source_vreg = kajit_ir::VReg::new(10);
+        let target_vreg = kajit_ir::VReg::new(11);
+        let from_linear = 100usize;
+        let succ_linear = 200usize;
+
+        let ra_func = crate::RaFunction {
+            lambda_id: LambdaId::new(0),
+            entry: crate::BlockId(0),
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![
+                crate::RaBlock {
+                    id: crate::BlockId(0),
+                    label: None,
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term_linear_op_index: Some(from_linear),
+                    term: crate::RaTerminator::Branch {
+                        target: crate::BlockId(1),
+                    },
+                    preds: Vec::new(),
+                    succs: vec![crate::RaEdge {
+                        to: crate::BlockId(1),
+                        args: vec![crate::RaEdgeArg {
+                            target: target_vreg,
+                            source: source_vreg,
+                        }],
+                    }],
+                },
+                crate::RaBlock {
+                    id: crate::BlockId(1),
+                    label: None,
+                    params: vec![target_vreg],
+                    insts: vec![crate::RaInst {
+                        linear_op_index: succ_linear,
+                        op: LinearOp::Const {
+                            dst: kajit_ir::VReg::new(12),
+                            value: 1,
+                        },
+                        operands: vec![crate::RaOperand {
+                            vreg: target_vreg,
+                            kind: crate::OperandKind::Use,
+                            class: crate::RegClass::Gpr,
+                            fixed: None,
+                        }],
+                        clobbers: crate::RaClobbers::default(),
+                    }],
+                    term_linear_op_index: None,
+                    term: crate::RaTerminator::Return,
+                    preds: vec![crate::BlockId(0)],
+                    succs: Vec::new(),
+                },
+            ],
+        };
+
+        AllocatedProgram {
+            ra_program: RaProgram {
+                funcs: vec![ra_func],
+                vreg_count: 32,
+                slot_count: 0,
+            },
+            functions: vec![AllocatedFunction {
+                lambda_id: LambdaId::new(0),
+                num_spillslots: 0,
+                edits: Vec::new(),
+                inst_allocs: vec![
+                    vec![Allocation::reg(preg_int(0))],
+                    vec![Allocation::reg(preg_int(1))],
+                ],
+                inst_operands: vec![
+                    vec![(source_vreg, crate::OperandKind::Use)],
+                    vec![(target_vreg, crate::OperandKind::Use)],
+                ],
+                inst_linear_op_indices: vec![Some(from_linear), Some(succ_linear)],
+                term_inst_indices_by_block: vec![Some(0), None],
+                edge_edits: vec![EdgeEdit {
+                    from_linear_op_index: from_linear,
+                    succ_index: 0,
+                    pos: regalloc2::InstPosition::After,
+                    from: Allocation::reg(preg_int(0)),
+                    to: Allocation::reg(preg_int(1)),
+                }],
+                return_result_allocs: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn static_edge_edit_verifier_accepts_expected_edge_edit_set() {
+        let alloc = synthetic_edge_fixture();
+        verify_static_edge_edits(&alloc).expect("expected edge edit set should pass");
+    }
+
+    #[test]
+    fn static_edge_edit_verifier_rejects_missing_required_edge_edit() {
+        let mut alloc = synthetic_edge_fixture();
+        let alloc_func = alloc
+            .functions
+            .first_mut()
+            .expect("allocated program should have one function");
+        alloc_func.edge_edits.clear();
+
+        let err = verify_static_edge_edits(&alloc).expect_err("missing edge edit must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing edge edit to cover block param"),
+            "unexpected verifier error: {msg}"
+        );
+    }
+
+    #[test]
+    fn static_edge_edit_verifier_rejects_wrong_source_target_edit() {
+        let mut alloc = synthetic_edge_fixture();
+        let alloc_func = alloc
+            .functions
+            .first_mut()
+            .expect("allocated program should have one function");
+
+        let edit = alloc_func
+            .edge_edits
+            .first_mut()
+            .expect("first edge edit should exist");
+        edit.from = Allocation::reg(preg_int(2));
+
+        let err =
+            verify_static_edge_edits(&alloc).expect_err("wrong edge edit mapping must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("do not deliver source"),
             "unexpected verifier error: {msg}"
         );
     }
