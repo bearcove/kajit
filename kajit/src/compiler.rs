@@ -1160,14 +1160,14 @@ pub fn regalloc_edit_count_with_options(
     ir_decoder: &dyn Decoder,
     pipeline_opts: &PipelineOptions,
 ) -> usize {
+    if !pipeline_opts.resolve_regalloc(true) {
+        return 0;
+    }
     let mut func = build_decoder_ir(shape, ir_decoder);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     let alloc = crate::regalloc_engine::allocate_linear_ir(&linear)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed while counting edits: {err}"));
-    if !pipeline_opts.resolve_regalloc(true) {
-        return 0;
-    }
     alloc.functions.iter().map(|f| f.edits.len()).sum()
 }
 
@@ -1181,9 +1181,15 @@ pub fn regalloc_edits_text_with_options(
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     let ra_mir = crate::regalloc_mir::lower_linear_ir(&linear);
-    let mut alloc = crate::regalloc_engine::allocate_program(&ra_mir)
-        .unwrap_or_else(|err| panic!("regalloc2 allocation failed while formatting edits: {err}"));
-    maybe_disable_regalloc_edits(&mut alloc, pipeline_opts);
+    let alloc = if pipeline_opts.resolve_regalloc(true) {
+        let mut alloc = crate::regalloc_engine::allocate_program(&ra_mir).unwrap_or_else(|err| {
+            panic!("regalloc2 allocation failed while formatting edits: {err}")
+        });
+        maybe_disable_regalloc_edits(&mut alloc, pipeline_opts);
+        alloc
+    } else {
+        no_regalloc_alloc_for_program(&ra_mir)
+    };
     format_allocated_regalloc_edits(&alloc)
 }
 
@@ -1318,6 +1324,31 @@ fn maybe_disable_regalloc_edits(
     }
 }
 
+fn no_regalloc_alloc_for_program(
+    ra_mir: &crate::regalloc_mir::RaProgram,
+) -> crate::regalloc_engine::AllocatedProgram {
+    let functions = ra_mir
+        .funcs
+        .iter()
+        .map(|func| crate::regalloc_engine::AllocatedFunction {
+            lambda_id: func.lambda_id,
+            num_spillslots: 0,
+            edits: Vec::new(),
+            inst_allocs: Vec::new(),
+            inst_operands: Vec::new(),
+            inst_linear_op_indices: Vec::new(),
+            term_inst_indices_by_block: vec![None; func.blocks.len()],
+            edge_edits: Vec::new(),
+            return_result_allocs: Vec::new(),
+        })
+        .collect();
+
+    crate::regalloc_engine::AllocatedProgram {
+        ra_program: ra_mir.clone(),
+        functions,
+    }
+}
+
 /// Compile a deserializer from already-linearized IR.
 ///
 /// This is the first backend-adapter entrypoint used by the IR migration.
@@ -1339,11 +1370,16 @@ fn compile_linear_ir_decoder_with_options(
     // r[impl ir.regalloc.ra-mir]
     // Build allocator-oriented CFG IR before machine emission.
     let ra_mir = crate::regalloc_mir::lower_linear_ir(ir);
-    // r[impl ir.regalloc.engine]
-    // Run regalloc2 over RA-MIR and thread allocation artifacts into emission.
-    let mut regalloc_alloc = crate::regalloc_engine::allocate_program(&ra_mir)
-        .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-    maybe_disable_regalloc_edits(&mut regalloc_alloc, &pipeline_opts);
+    let regalloc_alloc = if apply_regalloc_edits {
+        // r[impl ir.regalloc.engine]
+        // Run regalloc2 over RA-MIR and thread allocation artifacts into emission.
+        let mut alloc = crate::regalloc_engine::allocate_program(&ra_mir)
+            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+        maybe_disable_regalloc_edits(&mut alloc, &pipeline_opts);
+        alloc
+    } else {
+        no_regalloc_alloc_for_program(&ra_mir)
+    };
 
     let (buf, entry, source_map) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
@@ -1449,9 +1485,14 @@ pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> C
     let pipeline_opts = PipelineOptions::from_env();
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
-    let mut alloc = crate::regalloc_engine::allocate_program(program)
-        .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-    maybe_disable_regalloc_edits(&mut alloc, &pipeline_opts);
+    let alloc = if apply_regalloc_edits {
+        let mut alloc = crate::regalloc_engine::allocate_program(program)
+            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+        maybe_disable_regalloc_edits(&mut alloc, &pipeline_opts);
+        alloc
+    } else {
+        no_regalloc_alloc_for_program(program)
+    };
 
     let (buf, entry, source_map) = {
         let result =

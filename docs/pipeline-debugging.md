@@ -8,7 +8,8 @@ Syntax: comma-separated tokens. `+name` enables, `-name` disables, bare `name` i
 
 Options:
 - `all_opts` — default RVSDG optimization passes before linearization
-- `regalloc` — regalloc edit application during backend emission
+- `regalloc` — regalloc allocation + edit application during backend emission
+  - disabled (`-regalloc`): skip regalloc entirely and use canonical `vreg -> stackslot` lowering
 
 Per-pass options:
 - `pass.bounds_check_coalescing`
@@ -22,7 +23,7 @@ Examples:
 # disable all optimization passes
 KAJIT_OPTS='-all_opts' cargo nextest run -p kajit <test_filter>
 
-# disable regalloc edit application
+# disable regalloc entirely (canonical vreg->stack lowering)
 KAJIT_OPTS='-regalloc' cargo nextest run -p kajit <test_filter>
 
 # disable a single pass

@@ -137,7 +137,7 @@ impl PipelineOptions {
         out.push_str("  examples: -all_opts, +regalloc, -pass.inline_apply\n\n");
         out.push_str("Top-level options:\n");
         out.push_str("  all_opts  : enable/disable pre-linearization default passes\n");
-        out.push_str("  regalloc  : enable/disable regalloc edit application\n\n");
+        out.push_str("  regalloc  : enable/disable regalloc allocation+edits (disabled = canonical vreg->stack lowering)\n\n");
         out.push_str("Per-pass options:\n");
         for pass in crate::ir_passes::default_pass_registry() {
             out.push_str(&format!("  pass.{}  : {}\n", pass.name, pass.description));
