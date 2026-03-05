@@ -2508,7 +2508,7 @@ pub(crate) fn render_test_file() -> String {
         struct CodegenArtifacts {
             ir_text: String,
             linear_text: String,
-            ra_text: String,
+            cfg_text: String,
             edits: usize,
             edits_text: String,
             opt_timeline: Vec<(String, String)>,
@@ -2520,7 +2520,7 @@ pub(crate) fn render_test_file() -> String {
             F: kajit::format::Decoder,
         {
             let shape = T::SHAPE;
-            let (ir_text, ra_text) = kajit::debug_ir_and_ra_mir_text(shape, decoder);
+            let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, decoder);
             let linear_text = kajit::debug_linear_ir_text(shape, decoder);
             let edits = kajit::regalloc_edit_count(shape, decoder);
             let edits_text = kajit::regalloc_edits_text(shape, decoder);
@@ -2528,7 +2528,7 @@ pub(crate) fn render_test_file() -> String {
             CodegenArtifacts {
                 ir_text,
                 linear_text,
-                ra_text,
+                cfg_text,
                 edits,
                 edits_text,
                 opt_timeline,
@@ -2626,8 +2626,8 @@ pub(crate) fn render_test_file() -> String {
             if should_dump_stage("linear") {
                 dump_stage(format_label, case, "linear", &artifacts.linear_text);
             }
-            if should_dump_stage("ra") {
-                dump_stage(format_label, case, "ra", &artifacts.ra_text);
+            if should_dump_stage("cfg") {
+                dump_stage(format_label, case, "cfg", &artifacts.cfg_text);
             }
             if should_dump_stage("edits") {
                 dump_stage(format_label, case, "edits", &artifacts.edits_text);
@@ -2686,12 +2686,12 @@ pub(crate) fn render_test_file() -> String {
                     "expected loop form (`theta`) or outlined loop body (`apply`) in IR"
                 );
                 assert!(
-                    artifacts.ra_text.contains("branch_if"),
-                    "expected loop backedge in RA-MIR"
+                    artifacts.cfg_text.contains("branch_if"),
+                    "expected loop backedge in CFG-MIR"
                 );
                 assert!(
-                    artifacts.ra_text.contains("call_intrinsic"),
-                    "expected intrinsic-heavy vec decode path in RA-MIR"
+                    artifacts.cfg_text.contains("call_intrinsic"),
+                    "expected intrinsic-heavy vec decode path in CFG-MIR"
                 );
                 assert!(
                     artifacts.edits <= 128,

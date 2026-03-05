@@ -5,7 +5,6 @@ use facet::{
     Def, EnumRepr, KnownPointer, OptionDef, PointerDef, ScalarType, Shape, StructKind, Type,
     UserType,
 };
-use regalloc2::RegClass;
 
 use crate::arch::EmitCtx;
 use crate::format::{
@@ -200,11 +199,11 @@ fn build_cfg_mir_listing(
     (listing, line_by_source_op)
 }
 
-fn write_ra_mir_listing_file(type_name: &str, listing: &str) -> Option<PathBuf> {
+fn write_cfg_mir_listing_file(type_name: &str, listing: &str) -> Option<PathBuf> {
     let stem = sanitize_debug_file_stem(type_name);
     let dir = Path::new("/tmp/kajit-debug");
     std::fs::create_dir_all(dir).ok()?;
-    let path = dir.join(format!("{stem}.ra-mir"));
+    let path = dir.join(format!("{stem}.cfg-mir"));
     std::fs::write(&path, listing).ok()?;
     Some(path)
 }
@@ -217,274 +216,6 @@ fn jit_dwarf_target_arch() -> crate::jit_dwarf::DwarfTargetArch {
     } else {
         panic!("unsupported target architecture for DWARF generation")
     }
-}
-
-fn linear_pc_ranges(
-    source_map: &kajit_emit::SourceMap,
-    code_len: usize,
-) -> HashMap<usize, Vec<(u64, u64)>> {
-    let mut out = HashMap::<usize, Vec<(u64, u64)>>::new();
-    for (i, entry) in source_map.iter().enumerate() {
-        if entry.location.line == 0 {
-            continue;
-        }
-        let start = entry.offset as u64;
-        let end = source_map
-            .get(i + 1)
-            .map_or(code_len as u64, |next| next.offset as u64);
-        if end <= start {
-            continue;
-        }
-        let linear_op_index = (entry.location.line - 1) as usize;
-        out.entry(linear_op_index).or_default().push((start, end));
-    }
-    out
-}
-
-fn collect_named_field_vregs(
-    ir: &crate::linearize::LinearIr,
-    _root_shape: &'static Shape,
-) -> HashMap<crate::ir::VReg, String> {
-    let trace = std::env::var("KAJIT_DEBUG_DWARF_TRACE")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
-    fn field_map_for_shape(shape: &'static Shape) -> Option<HashMap<u32, String>> {
-        let Type::User(UserType::Struct(_)) = &shape.ty else {
-            return None;
-        };
-        let (fields, _) = collect_fields(shape);
-        let mut by_offset = HashMap::<u32, String>::new();
-        for field in fields {
-            by_offset.insert(field.offset as u32, field.name.to_string());
-        }
-        Some(by_offset)
-    }
-
-    let mut named = HashMap::<crate::ir::VReg, String>::new();
-    let mut current_lambda_shapes = Vec::<(&'static Shape, Option<HashMap<u32, String>>)>::new();
-    let mut write_to_field_total = 0usize;
-    let mut write_to_field_mapped = 0usize;
-    for op in &ir.ops {
-        match op {
-            crate::linearize::LinearOp::FuncStart { shape, .. } => {
-                current_lambda_shapes.push((*shape, field_map_for_shape(*shape)));
-            }
-            crate::linearize::LinearOp::FuncEnd => {
-                let _ = current_lambda_shapes.pop();
-            }
-            crate::linearize::LinearOp::WriteToField { src, offset, .. } => {
-                write_to_field_total += 1;
-                if let Some((shape, field_map)) = current_lambda_shapes.last() {
-                    if trace && write_to_field_total <= 8 {
-                        let mapped_name = field_map.as_ref().and_then(|m| m.get(offset));
-                        eprintln!(
-                            "[kajit-dwarf] WriteToField: shape={} offset={} src=v{} mapped={}",
-                            shape.type_identifier,
-                            offset,
-                            src.index(),
-                            mapped_name.is_some()
-                        );
-                    }
-                }
-                if let Some((shape, Some(field_map))) = current_lambda_shapes.last()
-                    && let Some(name) = field_map.get(offset)
-                {
-                    write_to_field_mapped += 1;
-                    named
-                        .entry(*src)
-                        .or_insert_with(|| format!("{}.{}", shape.type_identifier, name));
-                }
-            }
-            _ => {}
-        }
-    }
-    if trace {
-        eprintln!(
-            "[kajit-dwarf] collect_named_field_vregs: total WriteToField ops={}, mapped WriteToField ops={}, mapped names={}",
-            write_to_field_total,
-            write_to_field_mapped,
-            named.len()
-        );
-    }
-    named
-}
-
-fn aarch64_extra_saved_pairs(alloc: &crate::regalloc_engine::AllocatedProgram) -> u32 {
-    let mut max_pair = None::<u32>;
-    let mut observe = |a: regalloc2::Allocation| {
-        let Some(reg) = a.as_reg() else {
-            return;
-        };
-        if reg.class() != RegClass::Int {
-            return;
-        }
-        let pair = match reg.hw_enc() as u8 {
-            23 | 24 => Some(0),
-            25 | 26 => Some(1),
-            27 | 28 => Some(2),
-            _ => None,
-        };
-        if let Some(pair) = pair {
-            max_pair = Some(max_pair.map_or(pair, |cur| cur.max(pair)));
-        }
-    };
-
-    for func in &alloc.functions {
-        for inst_allocs in &func.inst_allocs {
-            for &a in inst_allocs {
-                observe(a);
-            }
-        }
-        for (_, edit) in &func.edits {
-            let regalloc2::Edit::Move { from, to } = edit;
-            observe(*from);
-            observe(*to);
-        }
-        for edge in &func.edge_edits {
-            observe(edge.from);
-            observe(edge.to);
-        }
-        for &a in &func.return_result_allocs {
-            observe(a);
-        }
-    }
-
-    max_pair.map_or(0, |p| p + 1)
-}
-
-fn spill_fbreg_offset(
-    target_arch: crate::jit_dwarf::DwarfTargetArch,
-    program: &crate::regalloc_mir::RaProgram,
-    alloc: &crate::regalloc_engine::AllocatedProgram,
-    spillslot_index: usize,
-) -> i64 {
-    let slot_count_bytes = (program.slot_count as i64) * 8;
-    let spill_bytes = (spillslot_index as i64) * 8;
-    match target_arch {
-        crate::jit_dwarf::DwarfTargetArch::X86_64 => {
-            let slot_base = crate::arch::BASE_FRAME as i64;
-            slot_base + slot_count_bytes + spill_bytes
-        }
-        crate::jit_dwarf::DwarfTargetArch::Aarch64 => {
-            let extra_saved_pairs = aarch64_extra_saved_pairs(alloc) as i64;
-            let slot_base = crate::arch::BASE_FRAME as i64 + extra_saved_pairs * 16;
-            slot_base + slot_count_bytes + spill_bytes
-        }
-    }
-}
-
-fn build_dwarf_variables_from_regalloc(
-    ir: &crate::linearize::LinearIr,
-    ra_mir: &crate::regalloc_mir::RaProgram,
-    alloc: &crate::regalloc_engine::AllocatedProgram,
-    source_map: &kajit_emit::SourceMap,
-    code_len: usize,
-    root_shape: &'static Shape,
-    target_arch: crate::jit_dwarf::DwarfTargetArch,
-) -> Vec<crate::jit_dwarf::DwarfVariable> {
-    let trace = std::env::var("KAJIT_DEBUG_DWARF_TRACE")
-        .map(|v| matches!(v.as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
-    let named_vregs = collect_named_field_vregs(ir, root_shape);
-    if trace {
-        eprintln!(
-            "[kajit-dwarf] named field vregs discovered: {}",
-            named_vregs.len()
-        );
-    }
-    if named_vregs.is_empty() {
-        return Vec::new();
-    }
-
-    let ranges_by_linear_op = linear_pc_ranges(source_map, code_len);
-    let mut ranges_by_name = HashMap::<String, Vec<crate::jit_dwarf::DwarfLocationRange>>::new();
-
-    for func in &alloc.functions {
-        for inst_idx in 0..func.inst_allocs.len() {
-            let Some(Some(linear_op_index)) = func.inst_linear_op_indices.get(inst_idx) else {
-                continue;
-            };
-            let Some(pc_ranges) = ranges_by_linear_op.get(linear_op_index) else {
-                continue;
-            };
-            let Some(operand_specs) = func.inst_operands.get(inst_idx) else {
-                continue;
-            };
-            let Some(operand_allocs) = func.inst_allocs.get(inst_idx) else {
-                continue;
-            };
-            if operand_specs.len() != operand_allocs.len() {
-                continue;
-            }
-
-            for ((vreg, _kind), location_alloc) in operand_specs.iter().zip(operand_allocs.iter()) {
-                let Some(name) = named_vregs.get(vreg) else {
-                    continue;
-                };
-                let expr = if let Some(reg) = location_alloc.as_reg() {
-                    let Some(dwarf_reg) = crate::jit_dwarf::dwarf_register_from_hw_encoding(
-                        target_arch,
-                        reg.hw_enc() as u8,
-                    ) else {
-                        continue;
-                    };
-                    crate::jit_dwarf::expr_reg(dwarf_reg)
-                } else if let Some(slot) = location_alloc.as_stack() {
-                    let off = spill_fbreg_offset(target_arch, ra_mir, alloc, slot.index());
-                    crate::jit_dwarf::expr_fbreg(off)
-                } else {
-                    continue;
-                };
-                for (start, end) in pc_ranges {
-                    ranges_by_name.entry(name.clone()).or_default().push(
-                        crate::jit_dwarf::DwarfLocationRange {
-                            start: *start,
-                            end: *end,
-                            expression: expr.clone(),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    let mut vars = ranges_by_name
-        .into_iter()
-        .map(|(name, mut ranges)| {
-            ranges.sort_by_key(|r| (r.start, r.end));
-            let mut merged = Vec::<crate::jit_dwarf::DwarfLocationRange>::new();
-            for r in ranges {
-                if let Some(last) = merged.last_mut()
-                    && last.end == r.start
-                    && last.expression == r.expression
-                {
-                    last.end = r.end;
-                    continue;
-                }
-                if r.end > r.start {
-                    merged.push(r);
-                }
-            }
-            crate::jit_dwarf::DwarfVariable {
-                name,
-                locations: merged,
-            }
-        })
-        .collect::<Vec<_>>();
-    vars.sort_by(|a, b| a.name.cmp(&b.name));
-
-    if trace {
-        eprintln!("[kajit-dwarf] variables emitted: {}", vars.len());
-        for var in vars.iter().take(8) {
-            eprintln!(
-                "[kajit-dwarf] var {} ranges={} first={:?}",
-                var.name,
-                var.locations.len(),
-                var.locations.first().map(|r| (r.start, r.end))
-            );
-        }
-    }
-    vars
 }
 
 fn build_dwarf_from_source_map(
@@ -1429,7 +1160,7 @@ fn compile_linear_ir_decoder_with_options(
     };
     let registration = if jit_debug {
         let (listing, line_by_source_op) = build_cfg_mir_listing(&cfg_program);
-        let listing_path = write_ra_mir_listing_file(&root_display_name, &listing);
+        let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing);
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1492,7 +1223,7 @@ mod tests {
 
         let listing_path = std::env::temp_dir()
             .join(format!("kajit-debug-test-{}", std::process::id()))
-            .join("sample.ra-mir");
+            .join("sample.cfg-mir");
         std::fs::create_dir_all(listing_path.parent().expect("temp listing dir")).unwrap();
         std::fs::write(&listing_path, "inst0\ninst1\n").unwrap();
 

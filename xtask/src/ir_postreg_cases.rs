@@ -152,16 +152,16 @@ pub(crate) fn render_ir_postreg_test_file() -> String {
             quote! {
                 #[test]
                 fn #snap() {
-                    let (linear, ra, edits) = postreg_artifacts(#ir);
+                    let (linear, cfg, edits) = postreg_artifacts(#ir);
                     insta::assert_snapshot!(concat!("generated_ir_postreg_linear_", #name), linear);
-                    insta::assert_snapshot!(concat!("generated_ir_postreg_ra_", #name), ra);
+                    insta::assert_snapshot!(concat!("generated_ir_postreg_cfg_", #name), cfg);
                     insta::assert_snapshot!(concat!("generated_ir_postreg_edits_", #name), format!("{edits}"));
                 }
             },
             quote! {
                 #[test]
                 fn #asserts() {
-                    let (linear, _ra, edits) = postreg_artifacts(#ir);
+                    let (linear, _cfg, edits) = postreg_artifacts(#ir);
                     assert!(edits <= #max_edits, "expected edit budget <= {}, got {edits}", #max_edits);
                     #(#must_contain)*
                 }
@@ -201,12 +201,12 @@ pub(crate) fn render_ir_postreg_test_file() -> String {
             kajit::ir_passes::run_default_passes(&mut func);
             let linear = kajit::linearize::linearize(&mut func);
             let linear_text = format!("{linear}");
-            let ra = kajit::regalloc_mir::lower_linear_ir(&linear);
-            let ra_text = format!("{ra}");
-            let alloc = kajit::regalloc_engine::allocate_program(&ra)
+            let cfg = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+            let cfg_text = format!("{cfg}");
+            let alloc = kajit::regalloc_engine::allocate_cfg_program(&cfg)
                 .expect("regalloc should allocate post-reg corpus case");
             let edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
-            (linear_text, ra_text, edits)
+            (linear_text, cfg_text, edits)
         }
 
         #(#tests)*

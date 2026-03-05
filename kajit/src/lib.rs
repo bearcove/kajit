@@ -24,8 +24,6 @@ pub mod postcard;
 mod pow10tab;
 pub mod recipe;
 pub mod regalloc_engine;
-pub mod regalloc_mir;
-pub mod regalloc_mir_parse;
 pub mod solver;
 
 use compiler::CompiledDecoder;
@@ -109,48 +107,44 @@ pub fn compile_decoder_from_ir_text(
     compiler::compile_linear_ir_decoder(&linear, false)
 }
 
-/// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + RA-MIR dumps.
+/// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + CFG-MIR dumps.
 ///
 /// Intended for snapshot tests and debugging.
-pub fn debug_ir_and_ra_mir_text(
+pub fn debug_ir_and_cfg_mir_text(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
 ) -> (String, String) {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     let ir_text = scrub_volatile_intrinsic_addrs(&format!("{func}"));
-    let linear = linearize::linearize(&mut func);
-    let ra = regalloc_mir::lower_linear_ir(&linear);
-    let ra_text = scrub_volatile_intrinsic_addrs(&format!("{ra}"));
-    (ir_text, ra_text)
+    let cfg = debug_cfg_mir(shape, ir_decoder);
+    let cfg_text = scrub_volatile_intrinsic_addrs(&format!("{cfg}"));
+    (ir_text, cfg_text)
 }
 
-/// Build decoder IR (after default pre-regalloc passes) and return a human-readable RA-MIR dump.
+/// Build decoder IR (after default pre-regalloc passes) and return a canonical CFG-MIR dump.
 ///
 /// This renderer is intended for interactive debugging and LLM-assisted analysis.
-pub fn debug_ra_mir_human_text(
+pub fn debug_cfg_mir_text(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
 ) -> String {
-    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
-    compiler::run_default_passes_from_env(&mut func);
-    let linear = linearize::linearize(&mut func);
-    let ra = regalloc_mir::lower_linear_ir(&linear);
-    scrub_volatile_intrinsic_addrs(&format!("{}", ra.human()))
+    let cfg = debug_cfg_mir(shape, ir_decoder);
+    scrub_volatile_intrinsic_addrs(&format!("{cfg}"))
 }
 
-/// Build decoder IR (after default pre-regalloc passes) and return the RA-MIR program.
+/// Build decoder IR (after default pre-regalloc passes) and return the CFG-MIR program.
 ///
 /// This preserves real intrinsic function pointers and is intended for
 /// in-process debugging tools (e.g. differential checking).
-pub fn debug_ra_program(
+pub fn debug_cfg_mir(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
-) -> regalloc_mir::RaProgram {
+) -> regalloc_engine::cfg_mir::Program {
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
-    regalloc_mir::lower_linear_ir(&linear)
+    regalloc_engine::cfg_mir::lower_linear_ir(&linear)
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.

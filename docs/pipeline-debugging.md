@@ -41,7 +41,7 @@ KAJIT_OPTS=help cargo nextest run -p kajit <test_filter>
 Before stage dumps or LLDB, run the differential harness to find the first
 semantic divergence.
 
-- RA interpreter vs post-regalloc simulation (allocator/edit correctness):
+- Ideal interpreter vs post-regalloc CFG simulation (allocator/edit correctness):
   - `kajit_mir::regalloc_engine::differential_check_program`
 - CFG simulation vs JIT machine code (backend/codegen correctness):
   - `kajit::differential_check_linear_ir_vs_jit`
@@ -61,8 +61,10 @@ both harnesses in a focused test:
 
 1. `let linear = kajit::debug_linear_ir(shape, decoder)`
 2. `kajit::differential_check_linear_ir_vs_jit(&linear, input)`
-3. (optional RA-side adapter check) lower the same `linear` to RA-MIR and run:
-   `kajit_mir::regalloc_engine::differential_check_program(ra.clone(), input)`
+3. (optional CFG simulation check)
+   - `let cfg = kajit_mir::cfg_mir::lower_linear_ir(&linear);`
+   - `let alloc = kajit_mir::regalloc_engine::allocate_cfg_program(&cfg)?;`
+   - `kajit_mir::regalloc_engine::simulate_execution_cfg(&alloc, input)?`
 
 These report the first divergent `step_index` and field (`position`, `cursor`,
 `trap`, `returned`, or `output`) so you can target one exact transition.
@@ -80,9 +82,9 @@ The parser is strict and validates function/block/edge/inst/term IDs and CFG inv
 
 ## On-demand pipeline dumps
 
-Generated corpus tests do not enforce IR/RA-MIR/edit snapshots by default. Dump pipeline artifacts on demand with:
+Generated corpus tests do not enforce IR/CFG-MIR/edit snapshots by default. Dump pipeline artifacts on demand with:
 
-- `KAJIT_DUMP_STAGES` — comma-separated stage list: `ir`, `linear`, `ra`, `edits`, `opts`, or `all`
+- `KAJIT_DUMP_STAGES` — comma-separated stage list: `ir`, `linear`, `cfg`, `edits`, `opts`, or `all`
 - `KAJIT_DUMP_FILTER` — optional comma-separated substring filters matched against `"<format>::<case>"` (e.g. `json::all_scalars`)
 - `KAJIT_DUMP_DIR` — output directory (default: `target/kajit-stage-dumps`)
 - `KAJIT_ASSERT_CODEGEN_SNAPSHOTS=1` — opt back into legacy snapshot assertions
@@ -91,7 +93,7 @@ Example:
 
 ```bash
 KAJIT_OPTS='+all_opts,+regalloc,-pass.theta_loop_invariant_hoist' \
-KAJIT_DUMP_STAGES='ir,linear,ra,edits' \
+KAJIT_DUMP_STAGES='ir,linear,cfg,edits' \
 KAJIT_DUMP_FILTER='json::all_scalars' \
 cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
 ```
@@ -108,7 +110,7 @@ On Apple Silicon, run x86_64 tests via Rosetta:
 
 ```bash
 KAJIT_OPTS='-regalloc' \
-KAJIT_DUMP_STAGES='ir,linear,ra,edits' \
+KAJIT_DUMP_STAGES='ir,linear,cfg,edits' \
 KAJIT_DUMP_FILTER='postcard::scalar_u16_v1' \
 cargo nextest run -p kajit --target x86_64-apple-darwin \
   --test corpus -E 'test(=postcard::scalar_u16_v1)'
@@ -116,15 +118,15 @@ cargo nextest run -p kajit --target x86_64-apple-darwin \
 
 ## Reading dump files
 
-Each dump file is named `<format>__<case>__<arch>__<stage>.txt`, e.g. `postcard__scalar_u64__v3__x86_64__ra.txt`.
+Each dump file is named `<format>__<case>__<arch>__<stage>.txt`, e.g. `postcard__scalar_u64__v3__x86_64__cfg.txt`.
 
 **`ir.txt`** — RVSDG IR after optimization passes. Nodes are `nN = Op [inputs] -> [outputs]`. Region arguments are `argN`.
 
 **`linear.txt`** — LinearIr after linearization and register allocation lowering. Instructions are numbered; `lin=N` indices in other dumps refer to these.
 
-**`ra.txt`** — RA-MIR (regalloc input). Vregs are `vN`; hardware-pinned operands appear as `vN/hwM` where `hwM` is the physical register index (arch-specific: on x86_64, hw0=rax, hw1=rcx, hw2=rdx, ...).
+**`cfg.txt`** — CFG-MIR (regalloc input). Vregs are `vN`; hardware-pinned operands appear as `vN/hwM` where `hwM` is the physical register index (arch-specific: on x86_64, hw0=rax, hw1=rcx, hw2=rdx, ...).
 
-**`edits.txt`** — Regalloc output edits. Each line is a move inserted on a block edge: `pN -> pM` (reg-to-reg), `pN -> stackM` (spill), or `stackM -> pN` (reload). Physical register indices match `ra.txt`. The file may also contain just a count if there are many edits.
+**`edits.txt`** — Regalloc output edits. Each line is a move inserted on a block edge: `pN -> pM` (reg-to-reg), `pN -> stackM` (spill), or `stackM -> pN` (reload). Physical register indices match `cfg.txt`. The file may also contain just a count if there are many edits.
 
 **`opts.txt`** — RVSDG snapshots between each optimization pass, labeled by pass name.
 
@@ -148,11 +150,11 @@ The script resolves the concrete test binary via `cargo nextest list`, then laun
 ### How it works
 
 When `KAJIT_DEBUG=1`:
-1. The compiler generates an RA-MIR listing file at `/tmp/kajit-debug/<type>.ra-mir` (one line per RA-MIR instruction)
+1. The compiler generates a CFG-MIR listing file at `/tmp/kajit-debug/<type>.cfg-mir` (one line per CFG-MIR instruction)
 2. Both backends call `set_source_location()` before each instruction, recording the linear op index as the DWARF line number
 3. A minimal DWARF v4 compilation unit is built (`.debug_info` referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`)
 4. The JIT ELF registered via the GDB JIT interface contains `.text`, `.symtab`, `.debug_line`, `.debug_abbrev`, and `.debug_info`
-5. LLDB (with JIT loader enabled) parses the ELF, loads the line table, and maps code offsets to `.ra-mir` listing lines
+5. LLDB (with JIT loader enabled) parses the ELF, loads the line table, and maps code offsets to `.cfg-mir` listing lines
 
 ### LLDB commands for JIT code
 
@@ -171,8 +173,8 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 # Check which sections the JIT ELF contains
 (lldb) image dump sections JIT(0x...)
 
-# Dump the line table (use the .ra-mir filename, not the full path)
-(lldb) image dump line-table kajit__decode__Bools.ra-mir
+# Dump the line table (use the .cfg-mir filename, not the full path)
+(lldb) image dump line-table kajit__decode__Bools.cfg-mir
 
 # Set a breakpoint on JIT code by regex name (-r, not -n)
 (lldb) breakpoint set -r 'kajit::decode::Bools'
@@ -180,7 +182,7 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 # Or by address (get address from image lookup -rn)
 (lldb) breakpoint set -a <address>
 
-# Once stopped in JIT code, source-level stepping uses the .ra-mir listing
+# Once stopped in JIT code, source-level stepping uses the .cfg-mir listing
 (lldb) source info
 (lldb) step
 ```
@@ -193,7 +195,7 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 | `kajit/src/jit_debug.rs` | GDB JIT interface: builds in-memory ELF, registers with debugger, writes perf map |
 | `kajit/src/compiler.rs` | Glue: `build_dwarf_from_source_map()` converts backend source maps to DWARF |
 | `scripts/lldb-test.sh` | Standalone LLDB launcher for one exact test |
-| `/tmp/kajit-debug/*.ra-mir` | Generated listing files (one per JIT-compiled type) |
+| `/tmp/kajit-debug/*.cfg-mir` | Generated listing files (one per JIT-compiled type) |
 | `/tmp/perf-<pid>.map` | perf sampling map (always written, even without `KAJIT_DEBUG`) |
 
 ### Known limitations
