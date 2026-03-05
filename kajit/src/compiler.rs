@@ -1415,7 +1415,7 @@ fn compile_linear_ir_decoder_with_options(
         no_regalloc_alloc_for_cfg_program(&cfg_program)
     };
 
-    let (buf, entry, source_map) = {
+    let (buf, entry, _source_map) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
             ir,
             &cfg_program,
@@ -1426,7 +1426,7 @@ fn compile_linear_ir_decoder_with_options(
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
-    let root_display_name = ir
+    let _root_display_name = ir
         .ops
         .iter()
         .find_map(|op| match op {
@@ -1475,68 +1475,8 @@ fn compile_linear_ir_decoder_with_options(
 /// Compile a deserializer directly from an RaProgram (no LinearIr needed).
 ///
 /// This is the backend for the RA-MIR text test workflow.
-pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
-    let jit_debug = jit_debug_enabled();
-    let pipeline_opts = PipelineOptions::from_env();
-    let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
-
-    let alloc = if apply_regalloc_edits {
-        let mut alloc = crate::regalloc_engine::allocate_program(program)
-            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-        maybe_disable_regalloc_edits(&mut alloc, &pipeline_opts);
-        alloc
-    } else {
-        no_regalloc_alloc_for_program(program)
-    };
-
-    let (buf, entry, source_map) = {
-        let result =
-            crate::ir_backend::compile_ra_program_with_mode(program, &alloc, apply_regalloc_edits);
-        materialize_backend_result(result)
-    };
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
-    let root_display_name = "kajit::decode::<ra-mir-text>";
-    let root_mangled_name = crate::jit_debug::rust_v0_mangle(&["kajit", "decode", "ra_mir_text"]);
-    let symbol = crate::jit_debug::JitSymbolEntry {
-        name: root_mangled_name,
-        offset: entry,
-        size: buf.len().saturating_sub(entry),
-    };
-    let registration = if jit_debug {
-        let (listing, line_by_linear_op) = build_ra_mir_listing(program);
-        let listing_path = write_ra_mir_listing_file(root_display_name, &listing);
-        let target_arch = jit_dwarf_target_arch();
-        let dwarf_variables = Vec::new();
-        let dwarf = listing_path.as_deref().and_then(|path| {
-            build_dwarf_from_source_map(
-                buf.code_ptr(),
-                buf.len(),
-                source_map.as_ref(),
-                path,
-                &line_by_linear_op,
-                root_display_name,
-                &dwarf_variables,
-                target_arch,
-            )
-        });
-        crate::jit_debug::register_jit_code_with_dwarf(
-            buf.code_ptr(),
-            buf.len(),
-            &[symbol],
-            dwarf.as_ref(),
-        )
-    } else {
-        crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
-    };
-
-    CompiledDecoder {
-        buf,
-        entry,
-        func,
-        trusted_utf8_input: false,
-        _jit_registration: Some(registration),
-    }
+pub fn compile_ra_program_decoder(_program: &crate::regalloc_mir::RaProgram) -> CompiledDecoder {
+    panic!("strict cfg backend path: compiling from RaProgram is disabled")
 }
 
 #[cfg(test)]
