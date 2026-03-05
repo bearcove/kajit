@@ -86,6 +86,36 @@ pub fn compile(
     Lowerer::new(program, max_spillslots, alloc, apply_regalloc_edits).run(program)
 }
 
+fn build_debug_line_maps(
+    program: &cfg_mir::Program,
+) -> (BTreeMap<(u32, cfg_mir::OpId), u32>, BTreeMap<u32, u32>) {
+    let mut line_by_lambda_op = BTreeMap::<(u32, cfg_mir::OpId), u32>::new();
+    let mut first_line_by_lambda = BTreeMap::<u32, u32>::new();
+    let mut next_line = 1u32;
+    for func in &program.funcs {
+        let lambda_id = func.lambda_id.index() as u32;
+        let mut first_line = None::<u32>;
+        for block in &func.blocks {
+            for inst_id in &block.insts {
+                let op_id = cfg_mir::OpId::Inst(*inst_id);
+                line_by_lambda_op.insert((lambda_id, op_id), next_line);
+                if first_line.is_none() {
+                    first_line = Some(next_line);
+                }
+                next_line += 1;
+            }
+            let term_op = cfg_mir::OpId::Term(block.term);
+            line_by_lambda_op.insert((lambda_id, term_op), next_line);
+            if first_line.is_none() {
+                first_line = Some(next_line);
+            }
+            next_line += 1;
+        }
+        first_line_by_lambda.insert(lambda_id, first_line.unwrap_or(1));
+    }
+    (line_by_lambda_op, first_line_by_lambda)
+}
+
 impl Lowerer {
     fn max_edge_move_count(
         program: &cfg_mir::Program,
@@ -721,19 +751,16 @@ impl Lowerer {
     }
 
     fn run(mut self, program: &cfg_mir::Program) -> LinearBackendResult {
-        let mut source_line_base = 0u32;
+        let (line_by_lambda_op, first_line_by_lambda) = build_debug_line_maps(program);
         for func in &program.funcs {
             let lambda_id = func.lambda_id.index() as u32;
-            let schedule = func
-                .derive_schedule()
-                .expect("cfg_mir function should have a valid schedule");
 
             self.flush_all_vregs();
             let label = self.lambda_labels[func.lambda_id.index()];
             self.ectx.bind_label(label);
             self.ectx.set_source_location(kajit_emit::SourceLocation {
                 file: 1,
-                line: 1,
+                line: first_line_by_lambda.get(&lambda_id).copied().unwrap_or(1),
                 column: 0,
             });
             let (entry_offset, error_exit) = self.ectx.begin_func();
@@ -757,14 +784,13 @@ impl Lowerer {
                     let inst = func
                         .inst(*inst_id)
                         .expect("block instruction should exist in function");
-                    let source_index = schedule
-                        .op_to_index
-                        .get(&op_id)
+                    let line = line_by_lambda_op
+                        .get(&(lambda_id, op_id))
                         .copied()
-                        .expect("instruction op should exist in derived schedule");
+                        .expect("instruction op should exist in debug line map");
                     self.ectx.set_source_location(kajit_emit::SourceLocation {
                         file: 1,
-                        line: source_line_base + source_index + 1,
+                        line,
                         column: 0,
                     });
                     self.current_op_id = Some(op_id);
@@ -785,14 +811,13 @@ impl Lowerer {
                 }
 
                 let term_op = cfg_mir::OpId::Term(block.term);
-                let source_index = schedule
-                    .op_to_index
-                    .get(&term_op)
+                let line = line_by_lambda_op
+                    .get(&(lambda_id, term_op))
                     .copied()
-                    .expect("terminator op should exist in derived schedule");
+                    .expect("terminator op should exist in debug line map");
                 self.ectx.set_source_location(kajit_emit::SourceLocation {
                     file: 1,
-                    line: source_line_base + source_index + 1,
+                    line,
                     column: 0,
                 });
                 let next_block = func.blocks.get(block_index + 1);
@@ -806,7 +831,6 @@ impl Lowerer {
                 .expect("FuncEnd without active function");
             self.emit_load_lambda_results_to_ret_regs(func_ctx.lambda_id, &func_ctx.data_results);
             self.ectx.end_func(func_ctx.error_exit);
-            source_line_base += schedule.op_order.len() as u32;
         }
 
         self.emit_edge_trampolines();

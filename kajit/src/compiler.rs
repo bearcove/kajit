@@ -169,26 +169,40 @@ fn build_cfg_mir_listing(
     program: &crate::regalloc_engine::cfg_mir::Program,
 ) -> (String, HashMap<usize, u32>) {
     let mut lines = Vec::new();
-    let mut line_by_source_op = HashMap::<usize, u32>::new();
-    let mut next_source_op = 0usize;
+    let mut line_by_derived_index = HashMap::<usize, u32>::new();
+    let mut next_derived_index = 0usize;
     let mut next_line = 1u32;
     for func in &program.funcs {
+        let lambda = func.lambda_id.index();
         for block in &func.blocks {
+            let block_id = block.id.0;
             for inst_id in &block.insts {
                 let inst = func
                     .inst(*inst_id)
                     .expect("block instruction should exist for debug listing");
-                lines.push(format!("{:?}", inst.op));
-                line_by_source_op.entry(next_source_op).or_insert(next_line);
-                next_source_op += 1;
+                let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
+                lines.push(format!(
+                    "f{lambda} b{block_id} op={op_id:?} idx={next_derived_index} :: {:?}",
+                    inst.op
+                ));
+                line_by_derived_index
+                    .entry(next_derived_index)
+                    .or_insert(next_line);
+                next_derived_index += 1;
                 next_line += 1;
             }
             let term = func
                 .term(block.term)
                 .expect("block terminator should exist for debug listing");
-            lines.push(format_cfg_terminator(term));
-            line_by_source_op.entry(next_source_op).or_insert(next_line);
-            next_source_op += 1;
+            let op_id = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
+            lines.push(format!(
+                "f{lambda} b{block_id} op={op_id:?} idx={next_derived_index} :: {}",
+                format_cfg_terminator(term)
+            ));
+            line_by_derived_index
+                .entry(next_derived_index)
+                .or_insert(next_line);
+            next_derived_index += 1;
             next_line += 1;
         }
     }
@@ -196,7 +210,7 @@ fn build_cfg_mir_listing(
     if !listing.is_empty() {
         listing.push('\n');
     }
-    (listing, line_by_source_op)
+    (listing, line_by_derived_index)
 }
 
 fn write_cfg_mir_listing_file(type_name: &str, listing: &str) -> Option<PathBuf> {
@@ -223,7 +237,6 @@ fn build_dwarf_from_source_map(
     code_len: usize,
     source_map: Option<&kajit_emit::SourceMap>,
     listing_path: &Path,
-    line_by_linear_op: &HashMap<usize, u32>,
     subprogram_name: &str,
     variables: &[crate::jit_dwarf::DwarfVariable],
     target_arch: crate::jit_dwarf::DwarfTargetArch,
@@ -234,11 +247,7 @@ fn build_dwarf_from_source_map(
         if entry.location.line == 0 {
             continue;
         }
-        let linear_op_index = (entry.location.line - 1) as usize;
-        let Some(&listing_line) = line_by_linear_op.get(&linear_op_index) else {
-            continue;
-        };
-        dwarf_map.push((entry.offset, listing_line.saturating_sub(1)));
+        dwarf_map.push((entry.offset, entry.location.line.saturating_sub(1)));
     }
 
     let file_name = listing_path.file_name()?.to_str()?;
@@ -1159,7 +1168,7 @@ fn compile_linear_ir_decoder_with_options(
         size: buf.len().saturating_sub(entry),
     };
     let registration = if jit_debug {
-        let (listing, line_by_source_op) = build_cfg_mir_listing(&cfg_program);
+        let (listing, _line_by_derived_index) = build_cfg_mir_listing(&cfg_program);
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing);
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
@@ -1167,7 +1176,6 @@ fn compile_linear_ir_decoder_with_options(
                 buf.len(),
                 source_map.as_ref(),
                 path,
-                &line_by_source_op,
                 &root_display_name,
                 &[],
                 jit_dwarf_target_arch(),
@@ -1198,10 +1206,6 @@ mod tests {
 
     #[test]
     fn builds_dwarf_sections_from_source_map_lines() {
-        let mut line_by_linear_op = HashMap::new();
-        line_by_linear_op.insert(0usize, 1u32);
-        line_by_linear_op.insert(3usize, 2u32);
-
         let source_map = vec![
             kajit_emit::SourceMapEntry {
                 offset: 0,
@@ -1215,7 +1219,7 @@ mod tests {
                 offset: 8,
                 location: kajit_emit::SourceLocation {
                     file: 0,
-                    line: 4,
+                    line: 2,
                     column: 1,
                 },
             },
@@ -1232,7 +1236,6 @@ mod tests {
             32,
             Some(&source_map),
             &listing_path,
-            &line_by_linear_op,
             "kajit::decode::test",
             &[],
             jit_dwarf_target_arch(),

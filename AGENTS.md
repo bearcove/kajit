@@ -109,7 +109,7 @@ Set `KAJIT_DEBUG=1` to enable DWARF emission (the helper script does this automa
 
 Full reference: `docs/pipeline-debugging.md` § "LLDB debugging of JIT code"
 
-**Key architecture detail:** Both backends (`aarch64/mod.rs`, `x86_64/mod.rs`) call `set_source_location()` in their instruction emission loops, mapping each linear op index to a DWARF line number. The DWARF sections are built in `jit_dwarf.rs` and attached to the in-memory ELF in `jit_debug.rs`. LLDB requires all three DWARF sections (`.debug_info` with a CU referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`) — `.debug_line` alone is silently ignored.
+**Key architecture detail:** Both backends (`aarch64/mod.rs`, `x86_64/mod.rs`) call `set_source_location()` in their instruction emission loops, mapping each emitted CFG-MIR op (`OpId`) to a DWARF line number in the generated `.cfg-mir` listing. The DWARF sections are built in `jit_dwarf.rs` and attached to the in-memory ELF in `jit_debug.rs`. LLDB requires all three DWARF sections (`.debug_info` with a CU referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`) — `.debug_line` alone is silently ignored.
 
 ## Multi-agent workflow (bud)
 
