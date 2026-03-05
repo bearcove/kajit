@@ -45,8 +45,8 @@ pub fn compile_linear_ir_with_alloc_and_mode(
 
     #[cfg(target_arch = "x86_64")]
     {
-        let _ = (ir, max_spillslots, apply_regalloc_edits); // x64 backend reads from ra_mir directly
-        panic!("x86_64 strict backend path not wired yet")
+        let _ = (ir, max_spillslots, apply_regalloc_edits);
+        crate::backends::x86_64::compile(cfg_program, alloc)
     }
 
     #[cfg(target_arch = "aarch64")]

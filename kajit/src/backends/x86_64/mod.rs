@@ -9,8 +9,7 @@ use crate::ir::Width;
 use crate::ir_backend::LinearBackendResult;
 use crate::linearize::{BinOpKind, LinearOp, UnaryOpKind};
 use crate::recipe::{Op, Recipe};
-use crate::regalloc_engine::AllocatedProgram;
-use crate::regalloc_mir::{BlockId, RaBlock, RaFunction, RaProgram, RaTerminator};
+use crate::regalloc_engine::{AllocatedCfgProgram, cfg_mir};
 
 mod alloc;
 mod calls;
@@ -25,14 +24,14 @@ pub(crate) struct FunctionCtx {
 
 #[derive(Default)]
 pub(crate) struct LambdaEditMap {
-    pub(crate) before: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
-    pub(crate) after: BTreeMap<usize, Vec<(Allocation, Allocation)>>,
+    pub(crate) before: BTreeMap<cfg_mir::OpId, Vec<(Allocation, Allocation)>>,
+    pub(crate) after: BTreeMap<cfg_mir::OpId, Vec<(Allocation, Allocation)>>,
 }
 
 #[derive(Default)]
 pub(crate) struct LambdaEdgeEditMap {
-    pub(crate) before: BTreeMap<(u32, usize), Vec<(Allocation, Allocation)>>,
-    pub(crate) after: BTreeMap<(u32, usize), Vec<(Allocation, Allocation)>>,
+    pub(crate) before: BTreeMap<cfg_mir::EdgeId, Vec<(Allocation, Allocation)>>,
+    pub(crate) after: BTreeMap<cfg_mir::EdgeId, Vec<(Allocation, Allocation)>>,
 }
 
 pub(crate) struct EdgeTrampoline {
@@ -56,9 +55,9 @@ pub(crate) struct Lowerer {
     /// Forward-branch blocks: blocks with no instructions whose terminator is a
     /// plain Branch. Maps (lambda_id, block_id) → target block_id.
     pub(crate) forward_branch_blocks: BTreeMap<(u32, u32), u32>,
-    pub(crate) allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
+    pub(crate) allocs_by_lambda: BTreeMap<u32, BTreeMap<cfg_mir::OpId, Vec<Allocation>>>,
     pub(crate) return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
-    pub(crate) edge_trampoline_labels: BTreeMap<(u32, u32, usize), LabelId>,
+    pub(crate) edge_trampoline_labels: BTreeMap<(u32, cfg_mir::EdgeId), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
     pub(crate) parallel_move_tmp_base: u32,
@@ -70,7 +69,7 @@ pub(crate) enum IntrinsicArg {
     OutField(u32),
 }
 
-pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendResult {
+pub fn compile(program: &cfg_mir::Program, alloc: &AllocatedCfgProgram) -> LinearBackendResult {
     let max_spillslots = alloc
         .functions
         .iter()
@@ -82,31 +81,28 @@ pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendRe
 }
 
 impl Lowerer {
-    fn max_parallel_move_count(alloc: &AllocatedProgram) -> u32 {
+    fn max_parallel_move_count(alloc: &AllocatedCfgProgram) -> u32 {
         let mut max_moves = 0usize;
         for func in &alloc.functions {
-            let mut by_progpoint = BTreeMap::<(usize, u8), usize>::new();
-            let mut by_edge = BTreeMap::<(u32, usize), usize>::new();
+            let mut by_progpoint = BTreeMap::<(cfg_mir::OpId, u8), usize>::new();
+            let mut by_edge = BTreeMap::<cfg_mir::EdgeId, usize>::new();
             for (prog_point, edit) in &func.edits {
                 let Edit::Move { from, to } = edit;
                 let Some(_) = Self::normalize_edit_move(*from, *to) else {
                     continue;
                 };
-                let pos = match prog_point.pos() {
-                    InstPosition::Before => 0u8,
-                    InstPosition::After => 1u8,
+                let (op_id, pos) = match prog_point {
+                    cfg_mir::ProgPoint::Before(op) => (*op, 0u8),
+                    cfg_mir::ProgPoint::After(op) => (*op, 1u8),
+                    cfg_mir::ProgPoint::Edge(_) => continue,
                 };
-                *by_progpoint
-                    .entry((prog_point.inst().index(), pos))
-                    .or_default() += 1;
+                *by_progpoint.entry((op_id, pos)).or_default() += 1;
             }
             for edge in &func.edge_edits {
                 let Some(_) = Self::normalize_edit_move(edge.from, edge.to) else {
                     continue;
                 };
-                *by_edge
-                    .entry((edge.from_block_id.0, edge.succ_index))
-                    .or_default() += 1;
+                *by_edge.entry(edge.edge).or_default() += 1;
             }
             if let Some(local_max) = by_progpoint.values().copied().max() {
                 max_moves = max_moves.max(local_max);
@@ -125,7 +121,7 @@ impl Lowerer {
         Some((from, to))
     }
 
-    fn new(program: &RaProgram, max_spillslots: usize, alloc: &AllocatedProgram) -> Self {
+    fn new(program: &cfg_mir::Program, max_spillslots: usize, alloc: &AllocatedCfgProgram) -> Self {
         let slot_base = BASE_FRAME;
         let slot_bytes = program.slot_count * 8;
         let spill_base = slot_base + slot_bytes;
@@ -140,11 +136,9 @@ impl Lowerer {
         let mut lambda_max = 0usize;
         for func in &program.funcs {
             lambda_max = lambda_max.max(func.lambda_id.index());
-            for block in &func.blocks {
-                for inst in &block.insts {
-                    if let LinearOp::CallLambda { target, .. } = &inst.op {
-                        lambda_max = lambda_max.max(target.index());
-                    }
+            for inst in &func.insts {
+                if let LinearOp::CallLambda { target, .. } = &inst.op {
+                    lambda_max = lambda_max.max(target.index());
                 }
             }
             for block in &func.blocks {
@@ -158,155 +152,57 @@ impl Lowerer {
         for func in &program.funcs {
             let lid = func.lambda_id.index() as u32;
             for block in &func.blocks {
-                if block.insts.is_empty() {
-                    if let RaTerminator::Branch { target } = &block.term {
-                        forward_branch_blocks.insert((lid, block.id.0), target.0);
-                    }
+                if block.insts.is_empty()
+                    && let Some(cfg_mir::Terminator::Branch { edge }) = func.term(block.term)
+                {
+                    let target = func.edge(*edge).expect("branch edge should exist").to;
+                    forward_branch_blocks.insert((lid, block.id.0), target.0);
                 }
             }
         }
 
         let mut edits_by_lambda = BTreeMap::<u32, LambdaEditMap>::new();
         let mut edge_edits_by_lambda = BTreeMap::<u32, LambdaEdgeEditMap>::new();
-        let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<Allocation>>>::new();
+        let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<cfg_mir::OpId, Vec<Allocation>>>::new();
         let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
         for func in &alloc.functions {
             let lambda_id = func.lambda_id.index() as u32;
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
             let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
             let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
-            let term_inst_indices: std::collections::HashSet<usize> = func
-                .term_inst_indices_by_block
-                .iter()
-                .flatten()
-                .copied()
-                .collect();
-            let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
-            let mut prev_linear = None;
-            for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
-                prev_linear_by_inst[idx] = prev_linear;
-                if maybe_linear.is_some() {
-                    prev_linear = maybe_linear;
-                }
-            }
-            let mut next_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
-            let mut next_linear = None;
-            for idx in (0..func.inst_linear_op_indices.len()).rev() {
-                next_linear_by_inst[idx] = next_linear;
-                if func.inst_linear_op_indices[idx].is_some() {
-                    next_linear = func.inst_linear_op_indices[idx];
-                }
-            }
-            let mut prepend_before = BTreeMap::<usize, Vec<(Allocation, Allocation)>>::new();
             return_result_allocs_by_lambda
                 .entry(lambda_id)
                 .or_insert_with(|| func.return_result_allocs.clone());
             for (prog_point, edit) in &func.edits {
-                let inst_index = prog_point.inst().index();
                 let Edit::Move { from, to } = edit;
                 let Some((from, to)) = Self::normalize_edit_move(*from, *to) else {
                     continue;
                 };
-                let mapped_linear = func
-                    .inst_linear_op_indices
-                    .get(inst_index)
-                    .and_then(|lin| *lin);
-                match (prog_point.pos(), mapped_linear) {
-                    (InstPosition::Before, Some(linear_op_index)) => {
-                        lambda_entry
-                            .before
-                            .entry(linear_op_index)
-                            .or_default()
-                            .push((from, to));
+                match prog_point {
+                    cfg_mir::ProgPoint::Before(op) => {
+                        lambda_entry.before.entry(*op).or_default().push((from, to));
                     }
-                    (InstPosition::After, Some(linear_op_index)) => {
-                        lambda_entry
-                            .after
-                            .entry(linear_op_index)
-                            .or_default()
-                            .push((from, to));
+                    cfg_mir::ProgPoint::After(op) => {
+                        lambda_entry.after.entry(*op).or_default().push((from, to));
                     }
-                    (InstPosition::Before, None) => {
-                        if let Some(linear_op_index) =
-                            next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
-                        {
-                            prepend_before
-                                .entry(linear_op_index)
-                                .or_default()
-                                .push((from, to));
-                        } else if let Some(linear_op_index) =
-                            prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
-                        {
-                            lambda_entry
-                                .after
-                                .entry(linear_op_index)
-                                .or_default()
-                                .push((from, to));
-                        }
-                    }
-                    (InstPosition::After, None) => {
-                        if let Some(linear_op_index) =
-                            prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
-                        {
-                            lambda_entry
-                                .after
-                                .entry(linear_op_index)
-                                .or_default()
-                                .push((from, to));
-                        } else if let Some(linear_op_index) =
-                            next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
-                        {
-                            prepend_before
-                                .entry(linear_op_index)
-                                .or_default()
-                                .push((from, to));
-                        }
+                    cfg_mir::ProgPoint::Edge(_) => {
+                        // materialized in edge_edits below.
                     }
                 }
-            }
-            for (linear_op_index, mut moved) in prepend_before {
-                if let Some(existing) = lambda_entry.before.remove(&linear_op_index) {
-                    moved.extend(existing);
-                }
-                lambda_entry.before.insert(linear_op_index, moved);
             }
             for edge_edit in &func.edge_edits {
                 let Some((from, to)) = Self::normalize_edit_move(edge_edit.from, edge_edit.to)
                 else {
                     continue;
                 };
-                let key = (edge_edit.from_block_id.0, edge_edit.succ_index);
                 let bucket = match edge_edit.pos {
                     InstPosition::Before => &mut lambda_edge_entry.before,
                     InstPosition::After => &mut lambda_edge_entry.after,
                 };
-                bucket.entry(key).or_default().push((from, to));
+                bucket.entry(edge_edit.edge).or_default().push((from, to));
             }
-            for (inst_index, maybe_linear_op_index) in
-                func.inst_linear_op_indices.iter().copied().enumerate()
-            {
-                let Some(linear_op_index) = maybe_linear_op_index else {
-                    continue;
-                };
-                let Some(inst_allocs) = func.inst_allocs.get(inst_index) else {
-                    continue;
-                };
-                let is_term_inst = term_inst_indices.contains(&inst_index);
-                match allocs_entry.entry(linear_op_index) {
-                    std::collections::btree_map::Entry::Vacant(slot) => {
-                        slot.insert(inst_allocs.clone());
-                    }
-                    std::collections::btree_map::Entry::Occupied(mut slot) => {
-                        if !is_term_inst {
-                            if inst_allocs.is_empty() && !slot.get().is_empty() {
-                                continue;
-                            }
-                            slot.insert(inst_allocs.clone());
-                        } else if slot.get().len() < inst_allocs.len() {
-                            slot.insert(inst_allocs.clone());
-                        }
-                    }
-                }
+            for (op_id, inst_allocs) in &func.op_allocs {
+                allocs_entry.insert(*op_id, inst_allocs.clone());
             }
         }
         Self {
@@ -334,7 +230,7 @@ impl Lowerer {
         self.slot_base + (s.index() as u32) * 8
     }
 
-    pub(super) fn block_label(&self, lambda_id: u32, block_id: BlockId) -> LabelId {
+    pub(super) fn block_label(&self, lambda_id: u32, block_id: cfg_mir::BlockId) -> LabelId {
         self.block_labels[&(lambda_id, block_id.0)]
     }
 
@@ -507,32 +403,38 @@ impl Lowerer {
 
     fn emit_terminator(
         &mut self,
-        func: &RaFunction,
-        block: &RaBlock,
-        next_block: Option<&RaBlock>,
+        func: &cfg_mir::Function,
+        block: &cfg_mir::Block,
+        next_block: Option<&cfg_mir::Block>,
+        term_op: cfg_mir::OpId,
     ) {
         let lambda_id = func.lambda_id.index() as u32;
-        let linear_op_index = block.term_linear_op_index;
-        let from_block_id = block.id.0;
+        let term = func
+            .term(block.term)
+            .expect("block terminator should exist in function");
 
         self.current_inst_allocs = self
             .allocs_by_lambda
             .get(&lambda_id)
-            .and_then(|by_lambda| by_lambda.get(&linear_op_index))
+            .and_then(|by_lambda| by_lambda.get(&term_op))
             .cloned();
-        self.apply_regalloc_edits(linear_op_index, InstPosition::Before);
+        self.apply_regalloc_edits(term_op, InstPosition::Before);
 
-        match &block.term {
-            RaTerminator::Return => {}
-            RaTerminator::ErrorExit { code } => {
+        match term {
+            cfg_mir::Terminator::Return => {}
+            cfg_mir::Terminator::ErrorExit { code } => {
                 self.flush_all_vregs();
                 self.ectx.emit_error(*code);
             }
-            RaTerminator::Branch { target } => {
-                let resolved = self.resolve_forwarded_block(lambda_id, *target);
+            cfg_mir::Terminator::Branch { edge } => {
+                let target = func
+                    .edge(*edge)
+                    .expect("branch edge should exist in function")
+                    .to;
+                let resolved = self.resolve_forwarded_block(lambda_id, target);
                 let target_label =
-                    self.edge_target_label(from_block_id, 0, self.block_label(lambda_id, resolved));
-                let is_redundant_fallthrough = if self.has_edge_edits(from_block_id, 0) {
+                    self.edge_target_label(*edge, self.block_label(lambda_id, resolved));
+                let is_redundant_fallthrough = if self.has_edge_edits(*edge) {
                     false
                 } else if let Some(next) = next_block {
                     let resolved_next = self.resolve_forwarded_block(lambda_id, next.id);
@@ -544,58 +446,73 @@ impl Lowerer {
                     self.ectx.emit_branch(target_label);
                 }
             }
-            RaTerminator::BranchIf {
+            cfg_mir::Terminator::BranchIf {
                 cond,
-                target,
-                fallthrough: _,
+                taken,
+                fallthrough,
             } => {
-                let resolved = self.resolve_forwarded_block(lambda_id, *target);
+                let target = func
+                    .edge(*taken)
+                    .expect("taken edge should exist in function")
+                    .to;
+                let resolved = self.resolve_forwarded_block(lambda_id, target);
                 let taken_target =
-                    self.edge_target_label(from_block_id, 0, self.block_label(lambda_id, resolved));
+                    self.edge_target_label(*taken, self.block_label(lambda_id, resolved));
                 if let Some(cond_const) = self.const_of(*cond) {
                     if cond_const != 0 {
                         self.ectx.emit_branch(taken_target);
                     } else {
-                        self.apply_fallthrough_edge_edits(from_block_id, 1);
+                        self.apply_fallthrough_edge_edits(*fallthrough);
                     }
                 } else {
                     self.emit_branch_if(*cond, taken_target, false);
-                    self.apply_fallthrough_edge_edits(from_block_id, 1);
+                    self.apply_fallthrough_edge_edits(*fallthrough);
                 }
             }
-            RaTerminator::BranchIfZero {
+            cfg_mir::Terminator::BranchIfZero {
                 cond,
-                target,
-                fallthrough: _,
+                taken,
+                fallthrough,
             } => {
-                let resolved = self.resolve_forwarded_block(lambda_id, *target);
+                let target = func
+                    .edge(*taken)
+                    .expect("taken edge should exist in function")
+                    .to;
+                let resolved = self.resolve_forwarded_block(lambda_id, target);
                 let taken_target =
-                    self.edge_target_label(from_block_id, 0, self.block_label(lambda_id, resolved));
+                    self.edge_target_label(*taken, self.block_label(lambda_id, resolved));
                 if let Some(cond_const) = self.const_of(*cond) {
                     if cond_const == 0 {
                         self.ectx.emit_branch(taken_target);
                     } else {
-                        self.apply_fallthrough_edge_edits(from_block_id, 1);
+                        self.apply_fallthrough_edge_edits(*fallthrough);
                     }
                 } else {
                     self.emit_branch_if(*cond, taken_target, true);
-                    self.apply_fallthrough_edge_edits(from_block_id, 1);
+                    self.apply_fallthrough_edge_edits(*fallthrough);
                 }
             }
-            RaTerminator::JumpTable { predicate, .. } => {
-                self.emit_jump_table(lambda_id, *predicate, &block.term, from_block_id);
+            cfg_mir::Terminator::JumpTable {
+                predicate,
+                targets,
+                default,
+            } => {
+                self.emit_jump_table(lambda_id, *predicate, targets, *default, func);
             }
         }
 
-        self.apply_regalloc_edits(linear_op_index, InstPosition::After);
+        self.apply_regalloc_edits(term_op, InstPosition::After);
         self.current_inst_allocs = None;
     }
 
     // r[impl ir.backends.post-regalloc.branch-test]
     // r[impl ir.backends.post-regalloc.shuffle]
-    fn run(mut self, program: &RaProgram) -> LinearBackendResult {
+    fn run(mut self, program: &cfg_mir::Program) -> LinearBackendResult {
         for func in &program.funcs {
             let lambda_id = func.lambda_id.index() as u32;
+            let schedule = func
+                .derive_schedule()
+                .expect("cfg_mir function should have a valid schedule");
 
             self.flush_all_vregs();
             let label = self.lambda_labels[func.lambda_id.index()];
@@ -621,26 +538,45 @@ impl Lowerer {
                 let block_label = self.block_label(lambda_id, block.id);
                 self.ectx.bind_label(block_label);
 
-                for inst in &block.insts {
-                    let lin_idx = inst.linear_op_index;
+                for inst_id in &block.insts {
+                    let op_id = cfg_mir::OpId::Inst(*inst_id);
+                    let inst = func
+                        .inst(*inst_id)
+                        .expect("block instruction should exist in function");
+                    let source_index = schedule
+                        .op_to_index
+                        .get(&op_id)
+                        .copied()
+                        .expect("instruction op should exist in derived schedule");
                     self.ectx.set_source_location(kajit_emit::SourceLocation {
                         file: 1,
-                        line: (lin_idx + 1) as u32,
+                        line: source_index + 1,
                         column: 0,
                     });
                     self.current_inst_allocs = self
                         .allocs_by_lambda
                         .get(&lambda_id)
-                        .and_then(|by_lambda| by_lambda.get(&lin_idx))
+                        .and_then(|by_lambda| by_lambda.get(&op_id))
                         .cloned();
-                    self.apply_regalloc_edits(lin_idx, InstPosition::Before);
+                    self.apply_regalloc_edits(op_id, InstPosition::Before);
                     self.emit_inst(&inst.op);
-                    self.apply_regalloc_edits(lin_idx, InstPosition::After);
+                    self.apply_regalloc_edits(op_id, InstPosition::After);
                     self.current_inst_allocs = None;
                 }
 
+                let term_op = cfg_mir::OpId::Term(block.term);
+                let source_index = schedule
+                    .op_to_index
+                    .get(&term_op)
+                    .copied()
+                    .expect("terminator op should exist in derived schedule");
+                self.ectx.set_source_location(kajit_emit::SourceLocation {
+                    file: 1,
+                    line: source_index + 1,
+                    column: 0,
+                });
                 let next_block = func.blocks.get(block_index + 1);
-                self.emit_terminator(func, block, next_block);
+                self.emit_terminator(func, block, next_block, term_op);
             }
 
             self.flush_all_vregs();
