@@ -127,7 +127,7 @@ struct WorkBlock {
     raw_insts: Vec<crate::RaInst>,
     term_kind: BlockTermKind,
     term_returns_data_results: bool,
-    term_linear_op_index: Option<usize>,
+    term_linear_op_index: usize,
     term_uses: Vec<kajit_ir::VReg>,
     succs: Vec<usize>,
     preds: Vec<usize>,
@@ -455,9 +455,7 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
             }
 
             let to_params = blocks[to].params.clone();
-            let from_linear_op_index = blocks[from]
-                .term_linear_op_index
-                .expect("critical-edge source must map to a linear op index");
+            let from_linear_op_index = blocks[from].term_linear_op_index;
             let edge_succ_args = to_params
                 .iter()
                 .copied()
@@ -470,7 +468,7 @@ fn split_critical_edges(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<EdgeBl
                 raw_insts: Vec::new(),
                 term_kind: BlockTermKind::BranchLike,
                 term_returns_data_results: false,
-                term_linear_op_index: None,
+                term_linear_op_index: from_linear_op_index,
                 term_uses: Vec::new(),
                 succs: vec![to],
                 preds: vec![from],
@@ -516,7 +514,7 @@ impl AdapterFunction {
                     .raw_insts
                     .first()
                     .map(|inst| inst.linear_op_index)
-                    .or(b.term_linear_op_index);
+                    .unwrap_or(b.term_linear_op_index);
                 let mut entry_operands = Vec::new();
                 for (arg_idx, &arg) in func.data_args.iter().enumerate() {
                     let fixed = fixed_preg(FixedReg::AbiArg((arg_idx + 2) as u8))
@@ -543,7 +541,7 @@ impl AdapterFunction {
                         ret_value_operand_start: 0,
                         ret_value_operand_count: 0,
                     });
-                    inst_linear_op_indices.push(entry_linear_op_index);
+                    inst_linear_op_indices.push(Some(entry_linear_op_index));
                     inst_edge_infos.push(None);
                 }
             }
@@ -628,7 +626,7 @@ impl AdapterFunction {
                 ret_value_operand_start,
                 ret_value_operand_count,
             });
-            inst_linear_op_indices.push(b.term_linear_op_index);
+            inst_linear_op_indices.push(Some(b.term_linear_op_index));
             inst_edge_infos.push(edge_infos[block_index]);
 
             let end = Inst::new(adapter_insts.len());
@@ -925,13 +923,10 @@ fn infer_block_param_entry_alloc(
             return Some(a);
         }
     }
-    if let Some(term_linear) = block.term_linear_op_index {
-        let inst_idx = *inst_index_by_linear.get(&term_linear)?;
-        if let Some(a) =
-            find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use))
-        {
-            return Some(a);
-        }
+    let term_linear = block.term_linear_op_index;
+    let inst_idx = *inst_index_by_linear.get(&term_linear)?;
+    if let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, param, Some(RaOperandKind::Use)) {
+        return Some(a);
     }
     None
 }
@@ -942,8 +937,8 @@ fn infer_vreg_alloc_at_block_end(
     block: &crate::RaBlock,
     vreg: kajit_ir::VReg,
 ) -> Option<Allocation> {
-    if let Some(term_linear) = block.term_linear_op_index
-        && let Some(&inst_idx) = inst_index_by_linear.get(&term_linear)
+    let term_linear = block.term_linear_op_index;
+    if let Some(&inst_idx) = inst_index_by_linear.get(&term_linear)
         && let Some(a) = find_alloc_for_vreg_in_inst(func, inst_idx, vreg, Some(RaOperandKind::Use))
     {
         return Some(a);
@@ -970,7 +965,7 @@ fn expected_transfers_for_edge(
     let Some(pred_block) = ra_func
         .blocks
         .iter()
-        .find(|b| b.term_linear_op_index == Some(from_linear_op_index))
+        .find(|b| b.term_linear_op_index == from_linear_op_index)
     else {
         return out;
     };
@@ -1020,9 +1015,7 @@ fn verify_function_static_edge_edits(
     edge_keys.extend(by_edge.keys().copied());
     if let Some(ra_func) = ra_func {
         for block in &ra_func.blocks {
-            let Some(term_linear) = block.term_linear_op_index else {
-                continue;
-            };
+            let term_linear = block.term_linear_op_index;
             for succ_index in 0..block.succs.len() {
                 edge_keys.insert((term_linear, succ_index));
             }
@@ -1997,15 +1990,13 @@ pub fn simulate_execution(
             }
             crate::RaTerminator::Branch { target } => {
                 let succ_index = find_succ_index(block, *target)?;
-                if let Some(term_linear) = term_linear
-                    && let Some(edits) =
-                        edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
-                if let Some(term_linear) = term_linear
-                    && let Some(edits) =
-                        edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
@@ -2020,12 +2011,6 @@ pub fn simulate_execution(
                 let term_inst_idx = term_inst_idx.ok_or_else(|| {
                     RegallocEngineError::Simulation(format!(
                         "missing term inst index for b{} branch_if",
-                        block.id.0
-                    ))
-                })?;
-                let term_linear = term_linear.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term linear index for b{} branch_if",
                         block.id.0
                     ))
                 })?;
@@ -2063,12 +2048,6 @@ pub fn simulate_execution(
                 let term_inst_idx = term_inst_idx.ok_or_else(|| {
                     RegallocEngineError::Simulation(format!(
                         "missing term inst index for b{} branch_if_zero",
-                        block.id.0
-                    ))
-                })?;
-                let term_linear = term_linear.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term linear index for b{} branch_if_zero",
                         block.id.0
                     ))
                 })?;
@@ -2287,15 +2266,13 @@ pub fn simulate_execution_trace(
             }
             crate::RaTerminator::Branch { target } => {
                 let succ_index = find_succ_index(block, *target)?;
-                if let Some(term_linear) = term_linear
-                    && let Some(edits) =
-                        edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
-                if let Some(term_linear) = term_linear
-                    && let Some(edits) =
-                        edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                if let Some(edits) =
+                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
@@ -2310,12 +2287,6 @@ pub fn simulate_execution_trace(
                 let term_inst_idx = term_inst_idx.ok_or_else(|| {
                     RegallocEngineError::Simulation(format!(
                         "missing term inst index for b{} branch_if",
-                        block.id.0
-                    ))
-                })?;
-                let term_linear = term_linear.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term linear index for b{} branch_if",
                         block.id.0
                     ))
                 })?;
@@ -2353,12 +2324,6 @@ pub fn simulate_execution_trace(
                 let term_inst_idx = term_inst_idx.ok_or_else(|| {
                     RegallocEngineError::Simulation(format!(
                         "missing term inst index for b{} branch_if_zero",
-                        block.id.0
-                    ))
-                })?;
-                let term_linear = term_linear.ok_or_else(|| {
-                    RegallocEngineError::Simulation(format!(
-                        "missing term linear index for b{} branch_if_zero",
                         block.id.0
                     ))
                 })?;
@@ -2901,7 +2866,7 @@ lambda @0 (shape: "u8") {
                     label: None,
                     params: Vec::new(),
                     insts: Vec::new(),
-                    term_linear_op_index: Some(from_linear),
+                    term_linear_op_index: from_linear,
                     term: crate::RaTerminator::Branch {
                         target: crate::BlockId(1),
                     },
@@ -2932,7 +2897,7 @@ lambda @0 (shape: "u8") {
                         }],
                         clobbers: crate::RaClobbers::default(),
                     }],
-                    term_linear_op_index: None,
+                    term_linear_op_index: succ_linear,
                     term: crate::RaTerminator::Return,
                     preds: vec![crate::BlockId(0)],
                     succs: Vec::new(),

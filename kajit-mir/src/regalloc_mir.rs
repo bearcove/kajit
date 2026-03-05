@@ -136,7 +136,7 @@ pub struct RaBlock {
     pub label: Option<LabelId>,
     pub params: Vec<VReg>,
     pub insts: Vec<RaInst>,
-    pub term_linear_op_index: Option<usize>,
+    pub term_linear_op_index: usize,
     pub term: RaTerminator,
     pub preds: Vec<BlockId>,
     pub succs: Vec<RaEdge>,
@@ -828,7 +828,7 @@ fn lower_function(
                 label: None,
                 params: Vec::new(),
                 insts: Vec::new(),
-                term_linear_op_index: None,
+                term_linear_op_index: 0,
                 term: RaTerminator::Return,
                 preds: Vec::new(),
                 succs: Vec::new(),
@@ -885,25 +885,25 @@ fn lower_function(
 
         let mut insts = Vec::new();
         let mut term: Option<TempTerm> = None;
-        let mut term_linear_op_index = None;
+        let mut term_linear_op_index = usize::MAX;
         while cursor < end {
             let op = ops[cursor].clone();
             match op {
                 LinearOp::Branch(target) => {
                     term = Some(TempTerm::Branch(target));
-                    term_linear_op_index = Some(cursor);
+                    term_linear_op_index = cursor;
                     cursor += 1;
                     break;
                 }
                 LinearOp::BranchIf { cond, target } => {
                     term = Some(TempTerm::BranchIf { cond, target });
-                    term_linear_op_index = Some(cursor);
+                    term_linear_op_index = cursor;
                     cursor += 1;
                     break;
                 }
                 LinearOp::BranchIfZero { cond, target } => {
                     term = Some(TempTerm::BranchIfZero { cond, target });
-                    term_linear_op_index = Some(cursor);
+                    term_linear_op_index = cursor;
                     cursor += 1;
                     break;
                 }
@@ -917,13 +917,13 @@ fn lower_function(
                         labels,
                         default,
                     });
-                    term_linear_op_index = Some(cursor);
+                    term_linear_op_index = cursor;
                     cursor += 1;
                     break;
                 }
                 LinearOp::ErrorExit { code } => {
                     term = Some(TempTerm::ErrorExit(code));
-                    term_linear_op_index = Some(cursor);
+                    term_linear_op_index = cursor;
                     cursor += 1;
                     break;
                 }
@@ -942,12 +942,21 @@ fn lower_function(
         );
 
         if term.is_none() {
+            term_linear_op_index = insts
+                .last()
+                .map(|inst| inst.linear_op_index)
+                .unwrap_or_else(|| cursor.saturating_sub(1));
             if bi + 1 < leaders.len() {
                 term = Some(TempTerm::Fallthrough(bi + 1));
             } else {
                 term = Some(TempTerm::Return);
             }
         }
+        assert_ne!(
+            term_linear_op_index,
+            usize::MAX,
+            "block {bi} missing term linear op index"
+        );
 
         blocks.push(RaBlock {
             id: BlockId(bi as u32),
@@ -1115,7 +1124,11 @@ fn resolve_term(
 
 // r[impl ir.passes.pre-regalloc.coalescing]
 fn coalesce_uncond_branch_tail_copies(block: &mut RaBlock) {
-    if block.term_linear_op_index.is_none() {
+    let is_likely_synthetic_fallthrough = block
+        .insts
+        .last()
+        .is_none_or(|last| block.term_linear_op_index <= last.linear_op_index);
+    if is_likely_synthetic_fallthrough {
         // Skip synthetic fallthrough edges; keep this optimization on explicit
         // branch ops only where edge/value intent is unambiguous.
         return;

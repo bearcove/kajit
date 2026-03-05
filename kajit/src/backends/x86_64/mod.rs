@@ -96,7 +96,9 @@ impl Lowerer {
                     InstPosition::Before => 0u8,
                     InstPosition::After => 1u8,
                 };
-                *by_progpoint.entry((prog_point.inst().index(), pos)).or_default() += 1;
+                *by_progpoint
+                    .entry((prog_point.inst().index(), pos))
+                    .or_default() += 1;
             }
             for edge in &func.edge_edits {
                 let Some(_) = Self::normalize_edit_move(edge.from, edge.to) else {
@@ -491,14 +493,12 @@ impl Lowerer {
         let lambda_id = func.lambda_id.index() as u32;
         let linear_op_index = block.term_linear_op_index;
 
-        if let Some(lin_idx) = linear_op_index {
-            self.current_inst_allocs = self
-                .allocs_by_lambda
-                .get(&lambda_id)
-                .and_then(|by_lambda| by_lambda.get(&lin_idx))
-                .cloned();
-            self.apply_regalloc_edits(lin_idx, InstPosition::Before);
-        }
+        self.current_inst_allocs = self
+            .allocs_by_lambda
+            .get(&lambda_id)
+            .and_then(|by_lambda| by_lambda.get(&linear_op_index))
+            .cloned();
+        self.apply_regalloc_edits(linear_op_index, InstPosition::Before);
 
         match &block.term {
             RaTerminator::Return => {}
@@ -507,22 +507,14 @@ impl Lowerer {
                 self.ectx.emit_error(*code);
             }
             RaTerminator::Branch { target } => {
-                let lin_idx = linear_op_index;
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
-                let target_label = if let Some(lin_idx) = lin_idx {
-                    self.edge_target_label(lin_idx, 0, self.block_label(lambda_id, resolved))
-                } else {
-                    self.block_label(lambda_id, resolved)
-                };
-                let is_redundant_fallthrough = if let Some(lin_idx) = lin_idx {
-                    if self.has_edge_edits(lin_idx, 0) {
-                        false
-                    } else if let Some(next) = next_block {
-                        let resolved_next = self.resolve_forwarded_block(lambda_id, next.id);
-                        resolved == resolved_next
-                    } else {
-                        false
-                    }
+                let target_label = self.edge_target_label(
+                    linear_op_index,
+                    0,
+                    self.block_label(lambda_id, resolved),
+                );
+                let is_redundant_fallthrough = if self.has_edge_edits(linear_op_index, 0) {
+                    false
                 } else if let Some(next) = next_block {
                     let resolved_next = self.resolve_forwarded_block(lambda_id, next.id);
                     resolved == resolved_next
@@ -538,19 +530,21 @@ impl Lowerer {
                 target,
                 fallthrough: _,
             } => {
-                let lin_idx = linear_op_index.expect("BranchIf should have linear op index");
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
-                let taken_target =
-                    self.edge_target_label(lin_idx, 0, self.block_label(lambda_id, resolved));
+                let taken_target = self.edge_target_label(
+                    linear_op_index,
+                    0,
+                    self.block_label(lambda_id, resolved),
+                );
                 if let Some(cond_const) = self.const_of(*cond) {
                     if cond_const != 0 {
                         self.ectx.emit_branch(taken_target);
                     } else {
-                        self.apply_fallthrough_edge_edits(lin_idx, 1);
+                        self.apply_fallthrough_edge_edits(linear_op_index, 1);
                     }
                 } else {
                     self.emit_branch_if(*cond, taken_target, false);
-                    self.apply_fallthrough_edge_edits(lin_idx, 1);
+                    self.apply_fallthrough_edge_edits(linear_op_index, 1);
                 }
             }
             RaTerminator::BranchIfZero {
@@ -558,30 +552,29 @@ impl Lowerer {
                 target,
                 fallthrough: _,
             } => {
-                let lin_idx = linear_op_index.expect("BranchIfZero should have linear op index");
                 let resolved = self.resolve_forwarded_block(lambda_id, *target);
-                let taken_target =
-                    self.edge_target_label(lin_idx, 0, self.block_label(lambda_id, resolved));
+                let taken_target = self.edge_target_label(
+                    linear_op_index,
+                    0,
+                    self.block_label(lambda_id, resolved),
+                );
                 if let Some(cond_const) = self.const_of(*cond) {
                     if cond_const == 0 {
                         self.ectx.emit_branch(taken_target);
                     } else {
-                        self.apply_fallthrough_edge_edits(lin_idx, 1);
+                        self.apply_fallthrough_edge_edits(linear_op_index, 1);
                     }
                 } else {
                     self.emit_branch_if(*cond, taken_target, true);
-                    self.apply_fallthrough_edge_edits(lin_idx, 1);
+                    self.apply_fallthrough_edge_edits(linear_op_index, 1);
                 }
             }
             RaTerminator::JumpTable { predicate, .. } => {
-                let lin_idx = linear_op_index.expect("JumpTable should have linear op index");
-                self.emit_jump_table(lambda_id, *predicate, &block.term, lin_idx);
+                self.emit_jump_table(lambda_id, *predicate, &block.term, linear_op_index);
             }
         }
 
-        if let Some(lin_idx) = linear_op_index {
-            self.apply_regalloc_edits(lin_idx, InstPosition::After);
-        }
+        self.apply_regalloc_edits(linear_op_index, InstPosition::After);
         self.current_inst_allocs = None;
     }
 
