@@ -106,10 +106,10 @@ impl Lowerer {
 
         let mut max_moves = 0usize;
         for func in &alloc.functions {
-            let mut by_edge = BTreeMap::<(usize, usize), usize>::new();
+            let mut by_edge = BTreeMap::<(u32, usize), usize>::new();
             for edge in &func.edge_edits {
                 *by_edge
-                    .entry((edge.from_linear_op_index, edge.succ_index))
+                    .entry((edge.from_block_id.0, edge.succ_index))
                     .or_default() += 1;
             }
             if let Some(local_max) = by_edge.values().copied().max() {
@@ -311,14 +311,11 @@ impl Lowerer {
         let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
         let mut edge_args_by_lambda =
             BTreeMap::<u32, BTreeMap<(u32, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>>::new();
-        let mut block_id_by_term_linear_by_lambda = BTreeMap::<u32, BTreeMap<usize, u32>>::new();
         for func in &program.funcs {
             let lambda_id = func.lambda_id.index() as u32;
             let mut by_edge = BTreeMap::new();
-            let mut by_term_linear = BTreeMap::new();
             for block in &func.blocks {
                 let from_block_id = block.id.0;
-                by_term_linear.insert(block.term_linear_op_index, from_block_id);
                 for (succ_index, edge) in block.succs.iter().enumerate() {
                     let moves = edge
                         .args
@@ -329,7 +326,6 @@ impl Lowerer {
                 }
             }
             edge_args_by_lambda.insert(lambda_id, by_edge);
-            block_id_by_term_linear_by_lambda.insert(lambda_id, by_term_linear);
         }
 
         for func in &alloc.functions {
@@ -431,14 +427,7 @@ impl Lowerer {
                 else {
                     continue;
                 };
-                let Some(from_block_id) = block_id_by_term_linear_by_lambda
-                    .get(&lambda_id)
-                    .and_then(|by_linear| by_linear.get(&edge_edit.from_linear_op_index))
-                    .copied()
-                else {
-                    continue;
-                };
-                let key = (from_block_id, edge_edit.succ_index);
+                let key = (edge_edit.from_block_id.0, edge_edit.succ_index);
                 let bucket = match edge_edit.pos {
                     InstPosition::Before => &mut lambda_edge_entry.before,
                     InstPosition::After => &mut lambda_edge_entry.after,
