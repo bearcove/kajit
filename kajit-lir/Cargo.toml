@@ -3,6 +3,11 @@ name = "kajit-lir"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
 [dependencies]
 kajit-ir = { path = "../kajit-ir" }
 facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
