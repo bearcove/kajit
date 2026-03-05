@@ -1311,15 +1311,11 @@ fn expected_transfers_for_edge(
     ra_func: &RaFunction,
     func: &AllocatedFunction,
     inst_index_by_linear: &HashMap<usize, usize>,
-    from_linear_op_index: usize,
+    from_block_id: crate::BlockId,
     succ_index: usize,
 ) -> Vec<ExpectedEdgeTransfer> {
     let mut out = Vec::new();
-    let Some(pred_block) = ra_func
-        .blocks
-        .iter()
-        .find(|b| b.term_linear_op_index == from_linear_op_index)
-    else {
+    let Some(pred_block) = ra_func.blocks.iter().find(|b| b.id == from_block_id) else {
         return out;
     };
     let Some(edge) = pred_block.succs.get(succ_index) else {
@@ -1356,32 +1352,31 @@ fn verify_function_static_edge_edits(
         .collect();
     let inst_index_by_linear = ra_func.map(|_| build_inst_index_by_linear(func));
 
-    let mut by_edge = BTreeMap::<(usize, usize), Vec<&EdgeEdit>>::new();
+    let mut by_edge = BTreeMap::<(u32, usize), Vec<&EdgeEdit>>::new();
     for edge in &func.edge_edits {
         by_edge
-            .entry((edge.from_linear_op_index, edge.succ_index))
+            .entry((edge.from_block_id.0, edge.succ_index))
             .or_default()
             .push(edge);
     }
 
-    let mut edge_keys = BTreeSet::<(usize, usize)>::new();
+    let mut edge_keys = BTreeSet::<(u32, usize)>::new();
     edge_keys.extend(by_edge.keys().copied());
     if let Some(ra_func) = ra_func {
         for block in &ra_func.blocks {
-            let term_linear = block.term_linear_op_index;
             for succ_index in 0..block.succs.len() {
-                edge_keys.insert((term_linear, succ_index));
+                edge_keys.insert((block.id.0, succ_index));
             }
         }
     }
 
-    for (from_linear_op_index, succ_index) in edge_keys {
+    for (from_block_id, succ_index) in edge_keys {
         let edits = by_edge
-            .get(&(from_linear_op_index, succ_index))
+            .get(&(from_block_id, succ_index))
             .cloned()
             .unwrap_or_default();
         let edge_label = format!(
-            "lambda @{} edge (lin={from_linear_op_index}, succ={succ_index})",
+            "lambda @{} edge (from=b{from_block_id}, succ={succ_index})",
             func.lambda_id.index()
         );
         let expected = if let (Some(ra_func), Some(inst_index_by_linear)) =
@@ -1391,7 +1386,7 @@ fn verify_function_static_edge_edits(
                 ra_func,
                 func,
                 inst_index_by_linear,
-                from_linear_op_index,
+                crate::BlockId(from_block_id),
                 succ_index,
             )
         } else {
@@ -2523,10 +2518,10 @@ pub fn simulate_execution(
     }
 
     let mut edge_edits =
-        BTreeMap::<(usize, usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
+        BTreeMap::<(u32, usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
     for edge in &alloc_func.edge_edits {
         edge_edits
-            .entry((edge.from_linear_op_index, edge.succ_index, edge.pos))
+            .entry((edge.from_block_id.0, edge.succ_index, edge.pos))
             .or_default()
             .push((edge.from, edge.to));
     }
@@ -2619,13 +2614,14 @@ pub fn simulate_execution(
             }
             crate::RaTerminator::Branch { target } => {
                 let succ_index = find_succ_index(block, *target)?;
+                let from_block_id = block.id.0;
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
@@ -2656,13 +2652,14 @@ pub fn simulate_execution(
                     *fallthrough
                 };
                 let succ_index = find_succ_index(block, next_block)?;
+                let from_block_id = block.id.0;
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
@@ -2693,13 +2690,14 @@ pub fn simulate_execution(
                     *fallthrough
                 };
                 let succ_index = find_succ_index(block, next_block)?;
+                let from_block_id = block.id.0;
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
@@ -2786,10 +2784,10 @@ pub fn simulate_execution_trace(
     }
 
     let mut edge_edits =
-        BTreeMap::<(usize, usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
+        BTreeMap::<(u32, usize, regalloc2::InstPosition), Vec<(Allocation, Allocation)>>::new();
     for edge in &alloc_func.edge_edits {
         edge_edits
-            .entry((edge.from_linear_op_index, edge.succ_index, edge.pos))
+            .entry((edge.from_block_id.0, edge.succ_index, edge.pos))
             .or_default()
             .push((edge.from, edge.to));
     }
@@ -2895,13 +2893,14 @@ pub fn simulate_execution_trace(
             }
             crate::RaTerminator::Branch { target } => {
                 let succ_index = find_succ_index(block, *target)?;
+                let from_block_id = block.id.0;
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
@@ -2932,13 +2931,14 @@ pub fn simulate_execution_trace(
                     *fallthrough
                 };
                 let succ_index = find_succ_index(block, next_block)?;
+                let from_block_id = block.id.0;
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
@@ -2969,13 +2969,14 @@ pub fn simulate_execution_trace(
                     *fallthrough
                 };
                 let succ_index = find_succ_index(block, next_block)?;
+                let from_block_id = block.id.0;
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::Before))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::Before))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
                 if let Some(edits) =
-                    edge_edits.get(&(term_linear, succ_index, regalloc2::InstPosition::After))
+                    edge_edits.get(&(from_block_id, succ_index, regalloc2::InstPosition::After))
                 {
                     apply_moves(&mut regs, &mut spills, edits);
                 }
