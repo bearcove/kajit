@@ -28,6 +28,15 @@ pub fn compile_linear_ir_with_alloc(
     ra_mir: &RaProgram,
     alloc: &AllocatedProgram,
 ) -> LinearBackendResult {
+    compile_linear_ir_with_alloc_and_mode(ir, ra_mir, alloc, true)
+}
+
+pub fn compile_linear_ir_with_alloc_and_mode(
+    ir: &LinearIr,
+    ra_mir: &RaProgram,
+    alloc: &AllocatedProgram,
+    apply_regalloc_edits: bool,
+) -> LinearBackendResult {
     let max_spillslots = alloc
         .functions
         .iter()
@@ -37,14 +46,14 @@ pub fn compile_linear_ir_with_alloc(
 
     #[cfg(target_arch = "x86_64")]
     {
-        let _ = (ir, max_spillslots); // x64 backend reads from ra_mir directly
+        let _ = (ir, max_spillslots, apply_regalloc_edits); // x64 backend reads from ra_mir directly
         crate::backends::x86_64::compile(ra_mir, alloc)
     }
 
     #[cfg(target_arch = "aarch64")]
     {
         let _ = (ir, max_spillslots); // aarch64 backend reads from ra_mir directly
-        crate::backends::aarch64::compile(ra_mir, alloc)
+        crate::backends::aarch64::compile(ra_mir, alloc, apply_regalloc_edits)
     }
 }
 
@@ -54,13 +63,22 @@ pub fn compile_linear_ir_with_alloc(
 /// text into an RaProgram, then run regalloc2 + codegen without needing a
 /// LinearIr.
 pub fn compile_ra_program(ra_mir: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendResult {
+    compile_ra_program_with_mode(ra_mir, alloc, true)
+}
+
+pub fn compile_ra_program_with_mode(
+    ra_mir: &RaProgram,
+    alloc: &AllocatedProgram,
+    apply_regalloc_edits: bool,
+) -> LinearBackendResult {
     #[cfg(target_arch = "x86_64")]
     {
+        let _ = apply_regalloc_edits;
         crate::backends::x86_64::compile(ra_mir, alloc)
     }
 
     #[cfg(target_arch = "aarch64")]
     {
-        crate::backends::aarch64::compile(ra_mir, alloc)
+        crate::backends::aarch64::compile(ra_mir, alloc, apply_regalloc_edits)
     }
 }

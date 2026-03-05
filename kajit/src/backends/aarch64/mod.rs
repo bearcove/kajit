@@ -1,7 +1,7 @@
 #![allow(clippy::useless_conversion)]
 
 use kajit_emit::aarch64::{self, LabelId, Reg};
-use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
+use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass, SpillSlot};
 use std::collections::BTreeMap;
 
 use crate::arch::{BASE_FRAME, EmitCtx};
@@ -10,7 +10,7 @@ use crate::ir_backend::LinearBackendResult;
 use crate::linearize::{BinOpKind, LinearOp, UnaryOpKind};
 use crate::recipe::{Op, Recipe};
 use crate::regalloc_engine::AllocatedProgram;
-use crate::regalloc_mir::{BlockId, RaBlock, RaFunction, RaProgram, RaTerminator};
+use crate::regalloc_mir::{BlockId, RaBlock, RaFunction, RaOperand, RaProgram, RaTerminator};
 
 mod alloc;
 mod calls;
@@ -58,6 +58,10 @@ pub(crate) struct Lowerer {
     pub(crate) edge_trampoline_labels: BTreeMap<(u32, usize, usize), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
+    pub(crate) apply_regalloc_edits: bool,
+    pub(crate) no_edit_edge_tmp_base: u32,
+    pub(crate) edge_args_by_lambda:
+        BTreeMap<u32, BTreeMap<(usize, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -68,7 +72,11 @@ pub(crate) enum IntrinsicArg {
 
 // r[impl ir.backends.post-regalloc.branch-test]
 // r[impl ir.backends.post-regalloc.shuffle]
-pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendResult {
+pub fn compile(
+    program: &RaProgram,
+    alloc: &AllocatedProgram,
+    apply_regalloc_edits: bool,
+) -> LinearBackendResult {
     let max_spillslots = alloc
         .functions
         .iter()
@@ -76,7 +84,7 @@ pub fn compile(program: &RaProgram, alloc: &AllocatedProgram) -> LinearBackendRe
         .max()
         .unwrap_or(0);
 
-    Lowerer::new(program, max_spillslots, alloc).run(program)
+    Lowerer::new(program, max_spillslots, alloc, apply_regalloc_edits).run(program)
 }
 
 impl Lowerer {
@@ -135,13 +143,38 @@ impl Lowerer {
         max_pair.map_or(0, |p| p + 1)
     }
 
-    fn new(program: &RaProgram, max_spillslots: usize, alloc: &AllocatedProgram) -> Self {
+    fn new(
+        program: &RaProgram,
+        max_spillslots: usize,
+        alloc: &AllocatedProgram,
+        apply_regalloc_edits: bool,
+    ) -> Self {
+        let no_edit_mode = !apply_regalloc_edits;
+        let required_spillslots = if no_edit_mode {
+            max_spillslots.max(program.vreg_count as usize)
+        } else {
+            max_spillslots
+        };
+        let max_edge_args = if no_edit_mode {
+            program
+                .funcs
+                .iter()
+                .flat_map(|func| func.blocks.iter())
+                .flat_map(|block| block.succs.iter())
+                .map(|edge| edge.args.len())
+                .max()
+                .unwrap_or(0) as u32
+        } else {
+            0
+        };
         let extra_saved_pairs = Self::regalloc_extra_saved_pairs(alloc);
         let slot_base = BASE_FRAME + extra_saved_pairs * 16;
         let slot_bytes = program.slot_count * 8;
         let spill_base = slot_base + slot_bytes;
-        let spill_bytes = max_spillslots as u32 * 8;
-        let extra_stack = slot_bytes + spill_bytes + 8;
+        let spill_bytes = required_spillslots as u32 * 8;
+        let no_edit_edge_tmp_base = spill_base + spill_bytes;
+        let edge_tmp_bytes = max_edge_args * 8;
+        let extra_stack = slot_bytes + spill_bytes + edge_tmp_bytes + 8;
 
         let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs);
 
@@ -179,6 +212,29 @@ impl Lowerer {
         let mut edge_edits_by_lambda = BTreeMap::<u32, LambdaEdgeEditMap>::new();
         let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<Allocation>>>::new();
         let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
+        let mut edge_args_by_lambda = BTreeMap::<
+            u32,
+            BTreeMap<(usize, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>,
+        >::new();
+        for func in &program.funcs {
+            let lambda_id = func.lambda_id.index() as u32;
+            let mut by_edge = BTreeMap::new();
+            for block in &func.blocks {
+                let Some(linear_op_index) = block.term_linear_op_index else {
+                    continue;
+                };
+                for (succ_index, edge) in block.succs.iter().enumerate() {
+                    let moves = edge
+                        .args
+                        .iter()
+                        .map(|arg| (arg.source, arg.target))
+                        .collect();
+                    by_edge.insert((linear_op_index, succ_index), moves);
+                }
+            }
+            edge_args_by_lambda.insert(lambda_id, by_edge);
+        }
+
         for func in &alloc.functions {
             let lambda_id = func.lambda_id.index() as u32;
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
@@ -244,6 +300,9 @@ impl Lowerer {
             edge_trampoline_labels: BTreeMap::new(),
             edge_trampolines: Vec::new(),
             current_inst_allocs: None,
+            apply_regalloc_edits,
+            no_edit_edge_tmp_base,
+            edge_args_by_lambda,
         }
     }
 
@@ -279,6 +338,109 @@ impl Lowerer {
             .unwrap_or_else(|| {
                 panic!("missing regalloc allocation for operand index {operand_index}")
             })
+    }
+
+    pub(super) fn no_edit_mode(&self) -> bool {
+        !self.apply_regalloc_edits
+    }
+
+    pub(super) fn canonical_alloc_for_vreg(&self, v: crate::ir::VReg) -> Allocation {
+        Allocation::stack(SpillSlot::new(v.index()))
+    }
+
+    pub(super) fn canonical_allocs_for_operands(&self, operands: &[RaOperand]) -> Vec<Allocation> {
+        operands
+            .iter()
+            .map(|operand| self.canonical_alloc_for_vreg(operand.vreg))
+            .collect()
+    }
+
+    fn canonical_allocs_for_terminator(&self, term: &RaTerminator) -> Vec<Allocation> {
+        match term {
+            RaTerminator::BranchIf { cond, .. } | RaTerminator::BranchIfZero { cond, .. } => {
+                vec![self.canonical_alloc_for_vreg(*cond)]
+            }
+            RaTerminator::JumpTable { predicate, .. } => {
+                vec![self.canonical_alloc_for_vreg(*predicate)]
+            }
+            RaTerminator::Return | RaTerminator::ErrorExit { .. } | RaTerminator::Branch { .. } => {
+                Vec::new()
+            }
+        }
+    }
+
+    fn edge_edit_moves(
+        &self,
+        linear_op_index: usize,
+        succ_index: usize,
+    ) -> Vec<(Allocation, Allocation)> {
+        let Some(lambda_id) = self
+            .current_func
+            .as_ref()
+            .map(|f| f.lambda_id.index() as u32)
+        else {
+            return Vec::new();
+        };
+
+        if self.no_edit_mode() {
+            let Some(by_edge) = self.edge_args_by_lambda.get(&lambda_id) else {
+                return Vec::new();
+            };
+            let Some(edge_args) = by_edge.get(&(linear_op_index, succ_index)) else {
+                return Vec::new();
+            };
+            return edge_args
+                .iter()
+                .filter_map(|(source, target)| {
+                    let from = self.canonical_alloc_for_vreg(*source);
+                    let to = self.canonical_alloc_for_vreg(*target);
+                    (from != to).then_some((from, to))
+                })
+                .collect();
+        }
+
+        let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
+            return Vec::new();
+        };
+        let key = (linear_op_index, succ_index);
+        let mut moves = Vec::new();
+        if let Some(before) = by_lambda.before.get(&key) {
+            moves.extend(before.iter().copied());
+        }
+        if let Some(after) = by_lambda.after.get(&key) {
+            moves.extend(after.iter().copied());
+        }
+        moves
+    }
+
+    fn emit_edge_moves(&mut self, moves: &[(Allocation, Allocation)]) {
+        if moves.is_empty() {
+            return;
+        }
+        self.flush_all_vregs();
+        if !self.no_edit_mode() {
+            for &(from, to) in moves {
+                self.emit_edit_move(from, to);
+            }
+            return;
+        }
+
+        for (i, (from, _)) in moves.iter().enumerate() {
+            self.emit_load_x9_from_allocation(*from);
+            let tmp_off = self.no_edit_edge_tmp_base + (i as u32) * 8;
+            self.ectx.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, tmp_off)
+                    .expect("str"),
+            );
+        }
+        for (i, (_, to)) in moves.iter().enumerate() {
+            let tmp_off = self.no_edit_edge_tmp_base + (i as u32) * 8;
+            self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, tmp_off)
+                    .expect("ldr"),
+            );
+            let _ = self.emit_store_x9_to_allocation(*to);
+        }
     }
 
     pub(super) fn const_of(&self, v: crate::ir::VReg) -> Option<u64> {
@@ -429,12 +591,17 @@ impl Lowerer {
         let linear_op_index = block.term_linear_op_index;
 
         if let Some(lin_idx) = linear_op_index {
-            self.current_inst_allocs = self
-                .allocs_by_lambda
-                .get(&lambda_id)
-                .and_then(|by_lambda| by_lambda.get(&lin_idx))
-                .cloned();
-            self.apply_regalloc_edits(lin_idx, InstPosition::Before);
+            self.current_inst_allocs = if self.no_edit_mode() {
+                Some(self.canonical_allocs_for_terminator(&block.term))
+            } else {
+                self.allocs_by_lambda
+                    .get(&lambda_id)
+                    .and_then(|by_lambda| by_lambda.get(&lin_idx))
+                    .cloned()
+            };
+            if self.apply_regalloc_edits {
+                self.apply_regalloc_edits(lin_idx, InstPosition::Before);
+            }
         }
 
         match &block.term {
@@ -514,7 +681,9 @@ impl Lowerer {
         }
 
         if let Some(lin_idx) = linear_op_index {
-            self.apply_regalloc_edits(lin_idx, InstPosition::After);
+            if self.apply_regalloc_edits {
+                self.apply_regalloc_edits(lin_idx, InstPosition::After);
+            }
         }
         self.current_inst_allocs = None;
     }
@@ -559,9 +728,17 @@ impl Lowerer {
                         .get(&lambda_id)
                         .and_then(|by_lambda| by_lambda.get(&lin_idx))
                         .cloned();
-                    self.apply_regalloc_edits(lin_idx, InstPosition::Before);
+                    if self.no_edit_mode() {
+                        self.current_inst_allocs =
+                            Some(self.canonical_allocs_for_operands(&inst.operands));
+                    }
+                    if self.apply_regalloc_edits {
+                        self.apply_regalloc_edits(lin_idx, InstPosition::Before);
+                    }
                     self.emit_inst(&inst.op);
-                    self.apply_regalloc_edits(lin_idx, InstPosition::After);
+                    if self.apply_regalloc_edits {
+                        self.apply_regalloc_edits(lin_idx, InstPosition::After);
+                    }
                     self.current_inst_allocs = None;
                 }
 

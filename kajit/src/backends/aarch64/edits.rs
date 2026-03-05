@@ -94,10 +94,7 @@ impl Lowerer {
             return;
         }
 
-        self.flush_all_vregs();
-        for (from, to) in edits {
-            self.emit_edit_move(from, to);
-        }
+        self.emit_edge_moves(&edits);
     }
 
     pub(super) fn resolve_forwarded_block(&self, lambda_id: u32, block_id: BlockId) -> BlockId {
@@ -117,32 +114,6 @@ impl Lowerer {
         resolved
     }
 
-    pub(super) fn edge_edit_moves(
-        &self,
-        linear_op_index: usize,
-        succ_index: usize,
-    ) -> Vec<(Allocation, Allocation)> {
-        let Some(lambda_id) = self
-            .current_func
-            .as_ref()
-            .map(|f| f.lambda_id.index() as u32)
-        else {
-            return Vec::new();
-        };
-        let Some(by_lambda) = self.edge_edits_by_lambda.get(&lambda_id) else {
-            return Vec::new();
-        };
-        let key = (linear_op_index, succ_index);
-        let mut moves = Vec::new();
-        if let Some(before) = by_lambda.before.get(&key) {
-            moves.extend(before.iter().copied());
-        }
-        if let Some(after) = by_lambda.after.get(&key) {
-            moves.extend(after.iter().copied());
-        }
-        moves
-    }
-
     pub(super) fn apply_fallthrough_edge_edits(
         &mut self,
         linear_op_index: usize,
@@ -152,10 +123,7 @@ impl Lowerer {
         if moves.is_empty() {
             return;
         }
-        self.flush_all_vregs();
-        for (from, to) in moves {
-            self.emit_edit_move(from, to);
-        }
+        self.emit_edge_moves(&moves);
     }
 
     pub(super) fn has_edge_edits(&self, linear_op_index: usize, succ_index: usize) -> bool {
@@ -205,12 +173,7 @@ impl Lowerer {
         let trampolines = std::mem::take(&mut self.edge_trampolines);
         for trampoline in trampolines {
             self.ectx.bind_label(trampoline.label);
-            if !trampoline.moves.is_empty() {
-                self.flush_all_vregs();
-                for (from, to) in trampoline.moves {
-                    self.emit_edit_move(from, to);
-                }
-            }
+            self.emit_edge_moves(&trampoline.moves);
             self.ectx.emit_branch(trampoline.target);
         }
     }
