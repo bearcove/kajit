@@ -1,5 +1,38 @@
 # Pipeline debugging
 
+## Choosing the artifact
+
+Use the latest representation that still reproduces the bug.
+
+- RVSDG IR text: use when the bug disappears after re-lowering or you need to
+  change high-level control/dataflow before linearization.
+- CFG-MIR text: use for regalloc, backend, JIT, and codegen bugs. This is the
+  preferred artifact for differential checking, minimization, and LLDB.
+- Stage dumps: use when you still need to discover where the bad transform is
+  introduced.
+- LLDB: use after differential checking has narrowed the problem to one exact
+  transition and you need machine-code inspection.
+
+As a rule: do not start from LLDB if a differential oracle can already tell you
+which field diverged first.
+
+## Debugging decision tree
+
+1. Reproduce the failure with one exact test and one exact input.
+2. Run with `KAJIT_OPTS='-regalloc'`.
+   - If the failure disappears, the bug is in CFG-MIR allocation/edit handling
+     or backend use of allocated locations.
+   - If it remains, the bug is earlier in the pipeline or in canonical
+     stackslot lowering.
+3. Run the differential harness.
+   - Allocator/simulation mismatch: investigate CFG-MIR, allocation, edits, and
+     post-allocation execution.
+   - CFG/JIT mismatch: investigate backend emission or runtime/JIT plumbing.
+4. Dump stages only after you know which phase is suspect.
+5. Freeze the reproducer as CFG-MIR text.
+6. Minimize that CFG-MIR program against the same concrete input.
+7. Use LLDB or disassembly on the minimized reproducer if needed.
+
 ## Bisecting with `KAJIT_OPTS`
 
 Selectively disable parts of the compile pipeline at runtime without rebuilding.
@@ -69,6 +102,20 @@ both harnesses in a focused test:
 These report the first divergent `step_index` and field (`position`, `cursor`,
 `trap`, `returned`, or `output`) so you can target one exact transition.
 
+### What the differential result means
+
+The harness is not only answering "did this fail?". It gives a stable
+interestingness predicate for minimization and debugging.
+
+A useful divergence signature is:
+- divergent field
+- ideal trap vs post-allocation/post-JIT trap
+- whether either side returned
+- first divergent step index
+
+When minimizing, preserve the same divergence class. Do not accept a smaller
+program that merely fails in some unrelated way.
+
 ## CFG-MIR text format
 
 Canonical CFG-MIR now supports a round-trippable text format.
@@ -79,6 +126,19 @@ Canonical CFG-MIR now supports a round-trippable text format.
   - `let cfg_program = kajit_mir_text::parse_cfg_mir(&text)?;`
 
 The parser is strict and validates function/block/edge/inst/term IDs and CFG invariants.
+
+### How to get seed CFG-MIR text
+
+Use one of these sources:
+
+- Programmatic dump from a shape/decoder pair:
+  - `kajit::debug_cfg_mir_text(shape, decoder)`
+- Paired RVSDG + CFG-MIR dump for a test fixture:
+  - `kajit::debug_ir_and_cfg_mir_text(shape, decoder)`
+- On-demand corpus dump via `KAJIT_DUMP_STAGES='cfg'`
+
+Prefer canonical CFG-MIR text over ad-hoc handwritten snippets once you are
+investigating a real bug. It is easier to round-trip, minimize, and replay.
 
 ## Minimizing a codegen bug from text
 
@@ -126,6 +186,18 @@ One-shot helper:
 let value: T = kajit::deserialize_from_cfg_mir_text(cfg_mir_text, input)?;
 ```
 
+### When to choose RVSDG vs CFG-MIR text
+
+- Choose RVSDG text when you are debugging an optimization or lowering bug and
+  need the pipeline to re-run.
+- Choose CFG-MIR text when you already have a post-linearization reproducer and
+  want the fastest loop for regalloc/backend debugging.
+
+If the bug only exists after a specific lowering decision, freezing the case as
+CFG-MIR avoids reintroducing unrelated churn from earlier stages.
+
+### Differential minimizer CLI
+
 For differential minimization from a saved CFG-MIR file:
 
 ```bash
@@ -135,17 +207,77 @@ cargo run --manifest-path xtask/Cargo.toml -- \
   8080808080
 ```
 
-This parses the CFG-MIR text, runs the predicate-preserving minimizer with the
-regalloc differential oracle for the provided input bytes, prints a short
-summary to stderr, and writes the reduced CFG-MIR program to stdout.
+Accepted input formats:
 
-### Minimization loop
+```text
+8080808080
+0x8080808080
+[0x80, 0x80, 0x80, 0x80, 0x80]
+```
 
-1. Start from a failing IR/CFG text snapshot in a regression test.
-2. Confirm it reproduces.
-3. Delete blocks/ops aggressively and re-run after each edit.
-4. Keep the smallest text that still fails.
-5. Use differential harness or LLDB only on that minimized reproducer.
+The command:
+- parses the CFG-MIR text
+- runs predicate-preserving minimization with the regalloc differential oracle
+- prints a reduction summary and preserved divergence signature to `stderr`
+- writes the reduced CFG-MIR program to `stdout`
+
+Typical shell usage:
+
+```bash
+cargo run --manifest-path xtask/Cargo.toml -- \
+  minimize-cfg-mir failing.cfg-mir 8080808080 \
+  > minimized.cfg-mir
+```
+
+### What minimization preserves
+
+This is not semantics-preserving optimization. It is
+predicate-preserving reduction.
+
+The minimizer is allowed to change the program's behavior as long as the chosen
+oracle still says the reduced program is interesting. For the built-in CLI, the
+oracle is:
+
+- allocate CFG-MIR
+- run `differential_check_cfg`
+- require the same divergence signature to remain
+
+That means the reduced program may decode a different value, execute fewer
+blocks, or trap earlier, as long as it still preserves the same differential
+mismatch class being investigated.
+
+### What minimization does today
+
+The current reducer set operates on valid CFG-MIR and keeps only accepted
+reductions. It includes:
+
+- unreachable block deletion
+- unused block-parameter and edge-argument removal
+- narrow trampoline collapse
+
+This is expected to grow over time. The important property is the oracle loop,
+not any one reducer.
+
+### End-to-end reduction workflow
+
+1. Reproduce the failing test with one fixed input.
+2. Dump or print canonical CFG-MIR text.
+3. Confirm the CFG-MIR text still reproduces with
+   `compile_decoder_from_cfg_mir_text` or `deserialize_from_cfg_mir_text`.
+4. Run `xtask minimize-cfg-mir` on that exact input.
+5. Save the reduced text.
+6. Re-run the differential harness, dumps, or LLDB on the reduced program.
+7. Only after the reduced repro is stable, start patching codegen/regalloc.
+
+### Common minimizer outcomes
+
+- `seed program is not differentially interesting`: the chosen input does not
+  reproduce a regalloc differential mismatch for that CFG-MIR program.
+- `failed to parse CFG-MIR`: the seed text is not canonical or violates CFG-MIR
+  invariants.
+- Reduced output is still large: the current reducers could not delete more
+  structure without breaking the predicate. Add more reducers instead of
+  hand-editing blindly.
 
 ## On-demand pipeline dumps
 

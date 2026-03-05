@@ -228,11 +228,11 @@ Tests can inspect emitted code using yaxpeax-arm (aarch64) and yaxpeax-x86
 - `disasm_jit(deser)` — disassemble a `CompiledDeser`'s code buffer
 - `disasm_native(fn_ptr, max_bytes)` — disassemble any function pointer
 
-Use `cargo test --release disasm_... -- --nocapture` for optimized output.
-This enables side-by-side comparison of kajit's JIT output vs LLVM-optimized
-serde codegen.
+Use `cargo nextest run --release disasm_ --no-capture` for optimized
+output. This enables side-by-side comparison of kajit's JIT output vs
+LLVM-optimized serde codegen.
 
-For LLDB/JIT debugging workflows, see `docs/pipeline-debugging.md` § "LLDB debugging of JIT code".
+For CFG-MIR text workflows, differential checking, minimization, and LLDB/JIT debugging, see `docs/pipeline-debugging.md`.
 
 ## Milestones
 
