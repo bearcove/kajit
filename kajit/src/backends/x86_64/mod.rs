@@ -2,7 +2,7 @@
 
 use kajit_emit::x64::{self, LabelId, Mem};
 use regalloc2::{Allocation, Edit, InstPosition, PReg, RegClass};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::arch::{BASE_FRAME, EmitCtx};
 use crate::ir::Width;
@@ -136,24 +136,105 @@ impl Lowerer {
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
             let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
             let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
+            let edge_move_set: HashSet<(Allocation, Allocation)> = func
+                .edge_edits
+                .iter()
+                .filter_map(|edge_edit| Self::normalize_edit_move(edge_edit.from, edge_edit.to))
+                .collect();
+            let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
+            let mut prev_linear = None;
+            for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
+                prev_linear_by_inst[idx] = prev_linear;
+                if maybe_linear.is_some() {
+                    prev_linear = maybe_linear;
+                }
+            }
+            let mut next_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
+            let mut next_linear = None;
+            for idx in (0..func.inst_linear_op_indices.len()).rev() {
+                next_linear_by_inst[idx] = next_linear;
+                if func.inst_linear_op_indices[idx].is_some() {
+                    next_linear = func.inst_linear_op_indices[idx];
+                }
+            }
+            let mut prepend_before = BTreeMap::<usize, Vec<(Allocation, Allocation)>>::new();
             return_result_allocs_by_lambda
                 .entry(lambda_id)
                 .or_insert_with(|| func.return_result_allocs.clone());
             for (prog_point, edit) in &func.edits {
-                let Some(Some(linear_op_index)) =
-                    func.inst_linear_op_indices.get(prog_point.inst().index())
-                else {
-                    continue;
-                };
+                let inst_index = prog_point.inst().index();
                 let Edit::Move { from, to } = edit;
                 let Some((from, to)) = Self::normalize_edit_move(*from, *to) else {
                     continue;
                 };
-                let bucket = match prog_point.pos() {
-                    InstPosition::Before => &mut lambda_entry.before,
-                    InstPosition::After => &mut lambda_entry.after,
-                };
-                bucket.entry(*linear_op_index).or_default().push((from, to));
+                let mapped_linear = func
+                    .inst_linear_op_indices
+                    .get(inst_index)
+                    .and_then(|lin| *lin);
+                match (prog_point.pos(), mapped_linear) {
+                    (InstPosition::Before, Some(linear_op_index)) => {
+                        lambda_entry
+                            .before
+                            .entry(linear_op_index)
+                            .or_default()
+                            .push((from, to));
+                    }
+                    (InstPosition::After, Some(linear_op_index)) => {
+                        lambda_entry
+                            .after
+                            .entry(linear_op_index)
+                            .or_default()
+                            .push((from, to));
+                    }
+                    (InstPosition::Before, None) => {
+                        if edge_move_set.contains(&(from, to)) {
+                            continue;
+                        }
+                        if let Some(linear_op_index) =
+                            next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            prepend_before
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        } else if let Some(linear_op_index) =
+                            prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            lambda_entry
+                                .after
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        }
+                    }
+                    (InstPosition::After, None) => {
+                        if edge_move_set.contains(&(from, to)) {
+                            continue;
+                        }
+                        if let Some(linear_op_index) =
+                            prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            lambda_entry
+                                .after
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        } else if let Some(linear_op_index) =
+                            next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            prepend_before
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        }
+                    }
+                }
+            }
+            for (linear_op_index, mut moved) in prepend_before {
+                if let Some(existing) = lambda_entry.before.remove(&linear_op_index) {
+                    moved.extend(existing);
+                }
+                lambda_entry.before.insert(linear_op_index, moved);
             }
             for edge_edit in &func.edge_edits {
                 let Some((from, to)) = Self::normalize_edit_move(edge_edit.from, edge_edit.to)
