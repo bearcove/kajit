@@ -307,27 +307,40 @@ impl Lowerer {
                             .push((from, to));
                     }
                     (InstPosition::Before, None) => {
-                        let Some(linear_op_index) =
+                        if let Some(linear_op_index) =
                             next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
-                        else {
-                            continue;
-                        };
-                        prepend_before
-                            .entry(linear_op_index)
-                            .or_default()
-                            .push((from, to));
+                        {
+                            prepend_before
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        } else if let Some(linear_op_index) =
+                            prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            lambda_entry
+                                .after
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        }
                     }
                     (InstPosition::After, None) => {
-                        let Some(linear_op_index) =
+                        if let Some(linear_op_index) =
                             prev_linear_by_inst.get(inst_index).and_then(|lin| *lin)
-                        else {
-                            continue;
-                        };
-                        lambda_entry
-                            .after
-                            .entry(linear_op_index)
-                            .or_default()
-                            .push((from, to));
+                        {
+                            lambda_entry
+                                .after
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        } else if let Some(linear_op_index) =
+                            next_linear_by_inst.get(inst_index).and_then(|lin| *lin)
+                        {
+                            prepend_before
+                                .entry(linear_op_index)
+                                .or_default()
+                                .push((from, to));
+                        }
                     }
                 }
             }
