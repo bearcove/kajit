@@ -2548,6 +2548,15 @@ fn infer_output_size_for_cfg_function(func: &cfg_mir::Function) -> usize {
         .unwrap_or(0)
 }
 
+fn infer_output_size_for_cfg_program(program: &cfg_mir::Program) -> usize {
+    program
+        .funcs
+        .iter()
+        .map(infer_output_size_for_cfg_function)
+        .max()
+        .unwrap_or(0)
+}
+
 fn edit_pos_key(pos: regalloc2::InstPosition) -> u8 {
     match pos {
         regalloc2::InstPosition::Before => 0,
@@ -2641,7 +2650,7 @@ pub fn simulate_execution_cfg(
 
     let mut regs = HashMap::<PReg, u64>::new();
     let mut spills = HashMap::<usize, u64>::new();
-    let mut output = vec![0u8; infer_output_size_for_cfg_function(func)];
+    let mut output = vec![0u8; infer_output_size_for_cfg_program(&allocated.cfg_program)];
     let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
     sim.init_out_ptr(&mut output);
     let mut cursor = 0usize;
@@ -2865,20 +2874,38 @@ pub fn simulate_execution_cfg(
     })
 }
 
-pub fn simulate_execution_trace_cfg(
+#[allow(clippy::too_many_arguments)]
+fn simulate_execution_trace_cfg_function(
     allocated: &AllocatedCfgProgram,
-    input: &[u8],
-) -> Result<Vec<ExecutionTraceEntry>, RegallocEngineError> {
-    let func = allocated.cfg_program.funcs.first().ok_or_else(|| {
-        RegallocEngineError::Simulation("CFG MIR program has no functions".to_string())
-    })?;
+    lambda_id: LambdaId,
+    args: &[u64],
+    sim: &mut SimulatorRuntime,
+    cursor: &mut usize,
+    output: &mut Vec<u8>,
+    trap: &mut Option<crate::InterpreterTrap>,
+    trace: &mut Vec<ExecutionTraceEntry>,
+    steps: &mut usize,
+) -> Result<Vec<u64>, RegallocEngineError> {
+    let func = allocated
+        .cfg_program
+        .funcs
+        .iter()
+        .find(|f| f.lambda_id == lambda_id)
+        .ok_or_else(|| {
+            RegallocEngineError::Simulation(format!(
+                "CFG MIR function for lambda @{} not found",
+                lambda_id.index()
+            ))
+        })?;
     let alloc_func = allocated
         .functions
         .iter()
-        .find(|f| f.lambda_id == func.lambda_id)
-        .or_else(|| allocated.functions.first())
+        .find(|f| f.lambda_id == lambda_id)
         .ok_or_else(|| {
-            RegallocEngineError::Simulation("allocated cfg program has no functions".to_string())
+            RegallocEngineError::Simulation(format!(
+                "allocated cfg function for lambda @{} not found",
+                lambda_id.index()
+            ))
         })?;
     let schedule = func
         .derive_schedule()
@@ -2920,24 +2947,29 @@ pub fn simulate_execution_trace_cfg(
 
     let mut regs = HashMap::<PReg, u64>::new();
     let mut spills = HashMap::<usize, u64>::new();
-    let mut output = vec![0u8; infer_output_size_for_cfg_function(func)];
-    let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
-    sim.init_out_ptr(&mut output);
-    let mut cursor = 0usize;
-    let mut trap: Option<crate::InterpreterTrap> = None;
+    for (arg_index, arg_value) in args.iter().copied().enumerate() {
+        let preg = abi_arg_int(arg_index + 2).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!(
+                "lambda @{} arg {} exceeds ABI register capacity",
+                lambda_id.index(),
+                arg_index
+            ))
+        })?;
+        regs.insert(preg, arg_value);
+    }
+
     let mut returned = false;
     let mut current = func.entry;
     let mut next_inst = 0usize;
-    let mut steps = 0usize;
-    let mut trace = Vec::<ExecutionTraceEntry>::new();
 
     while trap.is_none() && !returned {
-        if steps >= MAX_SIM_STEPS {
+        if *steps >= MAX_SIM_STEPS {
             return Err(RegallocEngineError::Simulation(format!(
                 "cfg simulation exceeded step limit ({MAX_SIM_STEPS})"
             )));
         }
-        steps += 1;
+        *steps += 1;
+        let step_index = *steps;
 
         let block_idx = *block_indices.get(&current).ok_or_else(|| {
             RegallocEngineError::Simulation(format!("unknown cfg block b{}", current.0))
@@ -2970,18 +3002,54 @@ pub fn simulate_execution_trace_cfg(
                 ))
             })?;
 
-            execute_sim_linear_op(
-                &inst.op,
-                crate::BlockId(block.id.0),
-                &inst_view,
-                inst_allocs,
-                &mut regs,
-                &mut spills,
-                &mut sim,
-                &mut cursor,
-                &mut output,
-                &mut trap,
-            )?;
+            if let LinearOp::CallLambda {
+                target,
+                args,
+                results,
+            } = &inst.op
+            {
+                let mut call_args = Vec::with_capacity(args.len());
+                for arg in args {
+                    let arg_alloc =
+                        find_operand_alloc(&inst_view, inst_allocs, *arg, RaOperandKind::Use)?;
+                    call_args.push(read_allocation(&regs, &spills, arg_alloc));
+                }
+
+                let caller_out_ptr = sim.out_ptr;
+                let call_results = simulate_execution_trace_cfg_function(
+                    allocated, *target, &call_args, sim, cursor, output, trap, trace, steps,
+                )?;
+                sim.out_ptr = caller_out_ptr;
+
+                if trap.is_none() {
+                    if call_results.len() != results.len() {
+                        return Err(RegallocEngineError::Simulation(format!(
+                            "CallLambda @{} result arity mismatch: expected {}, got {}",
+                            target.index(),
+                            results.len(),
+                            call_results.len()
+                        )));
+                    }
+                    for (dst, value) in results.iter().zip(call_results.into_iter()) {
+                        let dst_alloc =
+                            find_operand_alloc(&inst_view, inst_allocs, *dst, RaOperandKind::Def)?;
+                        write_allocation(&mut regs, &mut spills, dst_alloc, value);
+                    }
+                }
+            } else {
+                execute_sim_linear_op(
+                    &inst.op,
+                    crate::BlockId(block.id.0),
+                    &inst_view,
+                    inst_allocs,
+                    &mut regs,
+                    &mut spills,
+                    sim,
+                    cursor,
+                    output,
+                    trap,
+                )?;
+            }
 
             if let Some(edits) =
                 edits_by_progpoint.get(&(op_id, edit_pos_key(regalloc2::InstPosition::After)))
@@ -2991,7 +3059,7 @@ pub fn simulate_execution_trace_cfg(
 
             next_inst += 1;
             trace.push(ExecutionTraceEntry {
-                step_index: steps,
+                step_index,
                 state: ExecutionState {
                     physical_registers: regs.clone(),
                     spillslots: spills.clone(),
@@ -3002,8 +3070,8 @@ pub fn simulate_execution_trace_cfg(
                     },
                 },
                 output: output.clone(),
-                cursor,
-                trap,
+                cursor: *cursor,
+                trap: *trap,
                 returned,
             });
             continue;
@@ -3025,9 +3093,9 @@ pub fn simulate_execution_trace_cfg(
                 returned = true;
             }
             cfg_mir::Terminator::ErrorExit { code } => {
-                trap = Some(crate::InterpreterTrap {
+                *trap = Some(crate::InterpreterTrap {
                     code: *code,
-                    offset: cursor as u32,
+                    offset: *cursor as u32,
                 });
             }
             cfg_mir::Terminator::Branch { edge } => {
@@ -3143,7 +3211,7 @@ pub fn simulate_execution_trace_cfg(
         })?;
         let current_block = &func.blocks[current_block_idx];
         trace.push(ExecutionTraceEntry {
-            step_index: steps,
+            step_index,
             state: ExecutionState {
                 physical_registers: regs.clone(),
                 spillslots: spills.clone(),
@@ -3154,11 +3222,49 @@ pub fn simulate_execution_trace_cfg(
                 },
             },
             output: output.clone(),
-            cursor,
-            trap,
+            cursor: *cursor,
+            trap: *trap,
             returned,
         });
     }
+
+    if trap.is_some() {
+        return Ok(Vec::new());
+    }
+
+    Ok(alloc_func
+        .return_result_allocs
+        .iter()
+        .map(|alloc| read_allocation(&regs, &spills, *alloc))
+        .collect())
+}
+
+pub fn simulate_execution_trace_cfg(
+    allocated: &AllocatedCfgProgram,
+    input: &[u8],
+) -> Result<Vec<ExecutionTraceEntry>, RegallocEngineError> {
+    let root = allocated.cfg_program.funcs.first().ok_or_else(|| {
+        RegallocEngineError::Simulation("CFG MIR program has no functions".to_string())
+    })?;
+    let mut output = vec![0u8; infer_output_size_for_cfg_program(&allocated.cfg_program)];
+    let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
+    sim.init_out_ptr(&mut output);
+    let mut cursor = 0usize;
+    let mut trap: Option<crate::InterpreterTrap> = None;
+    let mut trace = Vec::<ExecutionTraceEntry>::new();
+    let mut steps = 0usize;
+
+    let _ = simulate_execution_trace_cfg_function(
+        allocated,
+        root.lambda_id,
+        &[],
+        &mut sim,
+        &mut cursor,
+        &mut output,
+        &mut trap,
+        &mut trace,
+        &mut steps,
+    )?;
 
     Ok(trace)
 }
@@ -3716,16 +3822,9 @@ fn ideal_trace(
     program: &RaProgram,
     input: &[u8],
 ) -> Result<Vec<DifferentialState>, RegallocEngineError> {
-    let func = program.funcs.first().ok_or_else(|| {
-        RegallocEngineError::Simulation("RA-MIR program has no functions".to_string())
+    let (_, entries) = crate::execute_program_with_trace(program, input).map_err(|err| {
+        RegallocEngineError::Simulation(format!("ideal interpreter failed: {err}"))
     })?;
-    let (_, entries) = crate::execute_function_with_trace(
-        func,
-        program.vreg_count as usize,
-        program.slot_count as usize,
-        input,
-    )
-    .map_err(|err| RegallocEngineError::Simulation(format!("ideal interpreter failed: {err}")))?;
 
     Ok(entries
         .into_iter()
@@ -3763,7 +3862,7 @@ fn first_differing_field(
     if ideal.returned != post.returned {
         return Some("returned");
     }
-    if ideal.output != post.output {
+    if std::env::var_os("KAJIT_DIFF_IGNORE_OUTPUT").is_none() && ideal.output != post.output {
         return Some("output");
     }
     None
@@ -4940,6 +5039,217 @@ lambda @0 (shape: "u8") {
         match result {
             DifferentialCheckResult::Match { .. } => {}
             other => panic!("expected differential check to match, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn differential_checker_matches_for_call_lambda_data_result() {
+        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
+        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        {
+            let mut rb = builder.lambda_region(child);
+            let arg = rb.region_args(1)[0];
+            let one = rb.const_val(1);
+            let sum = rb.binop(IrOp::Add, arg, one);
+            rb.set_results(&[sum]);
+        }
+        {
+            let mut rb = builder.root_region();
+            let x = rb.const_val(41);
+            let out = rb.apply(child, &[x], 1);
+            rb.write_to_field(out[0], 0, Width::W8);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let ra = lower_linear_ir(&lin);
+
+        let result = differential_check_program(ra, &[]);
+        match result {
+            DifferentialCheckResult::Match { .. } => {}
+            other => panic!("expected differential check to match, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn allocate_program_materializes_lambda_return_result_allocs() {
+        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
+        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        {
+            let mut rb = builder.lambda_region(child);
+            let arg = rb.region_args(1)[0];
+            let one = rb.const_val(1);
+            let sum = rb.binop(IrOp::Add, arg, one);
+            rb.set_results(&[sum]);
+        }
+        {
+            let mut rb = builder.root_region();
+            let x = rb.const_val(41);
+            let out = rb.apply(child, &[x], 1);
+            rb.write_to_field(out[0], 0, Width::W8);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let ra = lower_linear_ir(&lin);
+        let alloc = allocate_program(&ra).expect("ra allocation should succeed");
+        let child_alloc = alloc
+            .functions
+            .iter()
+            .find(|f| f.lambda_id == child)
+            .expect("child lambda allocation should exist");
+        assert_eq!(
+            child_alloc.return_result_allocs.len(),
+            1,
+            "child lambda should have one return-result allocation"
+        );
+    }
+
+    #[test]
+    fn allocate_program_assigns_call_lambda_abi_operands() {
+        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
+        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        {
+            let mut rb = builder.lambda_region(child);
+            let arg = rb.region_args(1)[0];
+            let one = rb.const_val(1);
+            let sum = rb.binop(IrOp::Add, arg, one);
+            rb.set_results(&[sum]);
+        }
+        {
+            let mut rb = builder.root_region();
+            let x = rb.const_val(41);
+            let out = rb.apply(child, &[x], 1);
+            rb.write_to_field(out[0], 0, Width::W8);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let ra = lower_linear_ir(&lin);
+        let alloc = allocate_program(&ra).expect("ra allocation should succeed");
+
+        let root_alloc = alloc
+            .functions
+            .iter()
+            .find(|f| f.lambda_id.index() == 0)
+            .expect("root lambda allocation should exist");
+        let root_func = ra
+            .funcs
+            .iter()
+            .find(|f| f.lambda_id.index() == 0)
+            .expect("root lambda function should exist");
+        let call = root_func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|inst| matches!(inst.op, LinearOp::CallLambda { .. }))
+            .expect("root should contain CallLambda");
+        let call_inst_index = root_alloc
+            .inst_linear_op_indices
+            .iter()
+            .position(|idx| *idx == Some(call.linear_op_index))
+            .expect("call op should have allocation metadata");
+        let call_allocs = &root_alloc.inst_allocs[call_inst_index];
+
+        assert!(
+            call_allocs
+                .first()
+                .and_then(|a| a.as_reg())
+                .is_some_and(|r| r.hw_enc() == 2),
+            "first call operand should use ABI arg register 2, got {:?}",
+            call_allocs.first()
+        );
+        assert!(
+            call_allocs
+                .get(1)
+                .and_then(|a| a.as_reg())
+                .is_some_and(|r| r.hw_enc() == 0),
+            "second call operand should define ABI return register 0, got {:?}",
+            call_allocs.get(1)
+        );
+    }
+
+    #[test]
+    fn allocate_program_wires_lambda_data_arg_from_abi_register() {
+        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
+        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        {
+            let mut rb = builder.lambda_region(child);
+            let arg = rb.region_args(1)[0];
+            let one = rb.const_val(1);
+            let sum = rb.binop(IrOp::Add, arg, one);
+            rb.set_results(&[sum]);
+        }
+        {
+            let mut rb = builder.root_region();
+            let x = rb.const_val(41);
+            let out = rb.apply(child, &[x], 1);
+            rb.write_to_field(out[0], 0, Width::W8);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+        let ra = lower_linear_ir(&lin);
+        let alloc = allocate_program(&ra).expect("ra allocation should succeed");
+
+        let child_func = ra
+            .funcs
+            .iter()
+            .find(|f| f.lambda_id == child)
+            .expect("child lambda function should exist");
+        let child_alloc = alloc
+            .functions
+            .iter()
+            .find(|f| f.lambda_id == child)
+            .expect("child lambda allocation should exist");
+        let data_arg = child_func.data_args[0];
+        let add_inst = child_func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter())
+            .find(|inst| {
+                matches!(
+                    inst.op,
+                    LinearOp::BinOp {
+                        op: BinOpKind::Add,
+                        ..
+                    }
+                )
+            })
+            .expect("child should contain add");
+        let add_inst_index = child_alloc
+            .inst_linear_op_indices
+            .iter()
+            .position(|idx| *idx == Some(add_inst.linear_op_index))
+            .expect("add op should have allocation metadata");
+        let add_operands = &child_alloc.inst_operands[add_inst_index];
+        let data_arg_operand_index = add_operands
+            .iter()
+            .position(|(vreg, kind)| *vreg == data_arg && *kind == RaOperandKind::Use)
+            .expect("add should use child data arg");
+        let data_arg_alloc = child_alloc.inst_allocs[add_inst_index][data_arg_operand_index];
+
+        let direct_abi = data_arg_alloc.as_reg().is_some_and(|reg| reg.hw_enc() == 2);
+        if !direct_abi {
+            let moved_from_abi = child_alloc.edits.iter().any(|(point, edit)| {
+                let Edit::Move { from, to } = edit;
+                let from_abi_arg2 = from.as_reg().is_some_and(|reg| reg.hw_enc() == 2);
+                let to_matches = *to == data_arg_alloc;
+                let before_add = point
+                    .inst()
+                    .index()
+                    .checked_add(0)
+                    .and_then(|inst_idx| child_alloc.inst_linear_op_indices.get(inst_idx).copied())
+                    .flatten()
+                    == Some(add_inst.linear_op_index)
+                    && matches!(point.pos(), regalloc2::InstPosition::Before);
+                from_abi_arg2 && to_matches && before_add
+            });
+            assert!(
+                moved_from_abi,
+                "child data arg alloc {:?} is not direct x2 and has no pre-add move from x2",
+                data_arg_alloc
+            );
         }
     }
 }

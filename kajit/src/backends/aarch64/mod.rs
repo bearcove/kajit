@@ -41,6 +41,13 @@ pub(crate) struct EdgeTrampoline {
     pub(crate) moves: Vec<(Allocation, Allocation)>,
 }
 
+#[derive(Clone)]
+pub(crate) struct AllocEntry {
+    pub(crate) signature: Vec<(usize, u8)>,
+    pub(crate) allocs: Vec<Allocation>,
+    pub(crate) is_term: bool,
+}
+
 pub(crate) struct Lowerer {
     pub(crate) ectx: EmitCtx,
     pub(crate) block_labels: BTreeMap<(u32, u32), LabelId>,
@@ -53,11 +60,12 @@ pub(crate) struct Lowerer {
     pub(crate) edits_by_lambda: BTreeMap<u32, LambdaEditMap>,
     pub(crate) edge_edits_by_lambda: BTreeMap<u32, LambdaEdgeEditMap>,
     pub(crate) forward_branch_blocks: BTreeMap<(u32, u32), u32>,
-    pub(crate) allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<Allocation>>>,
+    pub(crate) allocs_by_lambda: BTreeMap<u32, BTreeMap<usize, Vec<AllocEntry>>>,
     pub(crate) return_result_allocs_by_lambda: BTreeMap<u32, Vec<Allocation>>,
     pub(crate) edge_trampoline_labels: BTreeMap<(u32, u32, usize), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
+    pub(crate) current_linear_op_index: Option<usize>,
     pub(crate) apply_regalloc_edits: bool,
     pub(crate) no_edit_edge_tmp_base: u32,
     pub(crate) edge_args_by_lambda:
@@ -307,7 +315,7 @@ impl Lowerer {
 
         let mut edits_by_lambda = BTreeMap::<u32, LambdaEditMap>::new();
         let mut edge_edits_by_lambda = BTreeMap::<u32, LambdaEdgeEditMap>::new();
-        let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<Allocation>>>::new();
+        let mut allocs_by_lambda = BTreeMap::<u32, BTreeMap<usize, Vec<AllocEntry>>>::new();
         let mut return_result_allocs_by_lambda = BTreeMap::<u32, Vec<Allocation>>::new();
         let mut edge_args_by_lambda =
             BTreeMap::<u32, BTreeMap<(u32, usize), Vec<(crate::ir::VReg, crate::ir::VReg)>>>::new();
@@ -333,6 +341,12 @@ impl Lowerer {
             let lambda_entry = edits_by_lambda.entry(lambda_id).or_default();
             let lambda_edge_entry = edge_edits_by_lambda.entry(lambda_id).or_default();
             let allocs_entry = allocs_by_lambda.entry(lambda_id).or_default();
+            let term_inst_indices: std::collections::HashSet<usize> = func
+                .term_inst_indices_by_block
+                .iter()
+                .flatten()
+                .copied()
+                .collect();
             let mut prev_linear_by_inst = vec![None; func.inst_linear_op_indices.len()];
             let mut prev_linear = None;
             for (idx, maybe_linear) in func.inst_linear_op_indices.iter().copied().enumerate() {
@@ -443,15 +457,25 @@ impl Lowerer {
                 let Some(inst_allocs) = func.inst_allocs.get(inst_index) else {
                     continue;
                 };
-                match allocs_entry.entry(linear_op_index) {
-                    std::collections::btree_map::Entry::Vacant(slot) => {
-                        slot.insert(inst_allocs.clone());
+                let is_term_inst = term_inst_indices.contains(&inst_index);
+                let signature = func
+                    .inst_operands
+                    .get(inst_index)
+                    .map_or_else(Vec::new, |ops| Self::signature_from_inst_operands(ops));
+                let entries = allocs_entry.entry(linear_op_index).or_default();
+                if let Some(existing) = entries
+                    .iter_mut()
+                    .find(|entry| entry.is_term == is_term_inst && entry.signature == signature)
+                {
+                    if !inst_allocs.is_empty() || existing.allocs.is_empty() {
+                        existing.allocs = inst_allocs.clone();
                     }
-                    std::collections::btree_map::Entry::Occupied(mut slot) => {
-                        if slot.get().is_empty() && !inst_allocs.is_empty() {
-                            slot.insert(inst_allocs.clone());
-                        }
-                    }
+                } else {
+                    entries.push(AllocEntry {
+                        signature,
+                        allocs: inst_allocs.clone(),
+                        is_term: is_term_inst,
+                    });
                 }
             }
         }
@@ -472,6 +496,7 @@ impl Lowerer {
             edge_trampoline_labels: BTreeMap::new(),
             edge_trampolines: Vec::new(),
             current_inst_allocs: None,
+            current_linear_op_index: None,
             apply_regalloc_edits,
             no_edit_edge_tmp_base,
             edge_args_by_lambda,
@@ -508,7 +533,16 @@ impl Lowerer {
             .as_ref()
             .and_then(|allocs| allocs.get(operand_index).copied())
             .unwrap_or_else(|| {
-                panic!("missing regalloc allocation for operand index {operand_index}")
+                let lambda = self.current_func.as_ref().map(|f| f.lambda_id.index());
+                let linear = self.current_linear_op_index;
+                let alloc_len = self
+                    .current_inst_allocs
+                    .as_ref()
+                    .map(|allocs| allocs.len())
+                    .unwrap_or(0);
+                panic!(
+                    "missing regalloc allocation for operand index {operand_index} (lambda={lambda:?}, linear_op={linear:?}, alloc_len={alloc_len})"
+                )
             })
     }
 
@@ -539,6 +573,87 @@ impl Lowerer {
                 Vec::new()
             }
         }
+    }
+
+    fn kind_tag(kind: crate::regalloc_mir::OperandKind) -> u8 {
+        match kind {
+            crate::regalloc_mir::OperandKind::Use => 0,
+            crate::regalloc_mir::OperandKind::Def => 1,
+        }
+    }
+
+    fn signature_from_ra_operands(operands: &[RaOperand]) -> Vec<(usize, u8)> {
+        operands
+            .iter()
+            .map(|operand| (operand.vreg.index(), Self::kind_tag(operand.kind)))
+            .collect()
+    }
+
+    fn signature_from_inst_operands(
+        operands: &[(crate::ir::VReg, crate::regalloc_mir::OperandKind)],
+    ) -> Vec<(usize, u8)> {
+        operands
+            .iter()
+            .map(|(vreg, kind)| (vreg.index(), Self::kind_tag(*kind)))
+            .collect()
+    }
+
+    fn signature_for_terminator(term: &RaTerminator) -> Vec<(usize, u8)> {
+        match term {
+            RaTerminator::BranchIf { cond, .. } | RaTerminator::BranchIfZero { cond, .. } => {
+                vec![(
+                    cond.index(),
+                    Self::kind_tag(crate::regalloc_mir::OperandKind::Use),
+                )]
+            }
+            RaTerminator::JumpTable { predicate, .. } => {
+                vec![(
+                    predicate.index(),
+                    Self::kind_tag(crate::regalloc_mir::OperandKind::Use),
+                )]
+            }
+            RaTerminator::Return | RaTerminator::ErrorExit { .. } | RaTerminator::Branch { .. } => {
+                Vec::new()
+            }
+        }
+    }
+
+    fn allocs_for_inst(
+        &self,
+        lambda_id: u32,
+        linear_op_index: usize,
+        operands: &[RaOperand],
+    ) -> Option<Vec<Allocation>> {
+        let signature = Self::signature_from_ra_operands(operands);
+        self.allocs_by_lambda
+            .get(&lambda_id)
+            .and_then(|by_lambda| by_lambda.get(&linear_op_index))
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| !entry.is_term && entry.signature == signature)
+                    .or_else(|| entries.iter().find(|entry| entry.signature == signature))
+            })
+            .map(|entry| entry.allocs.clone())
+    }
+
+    fn allocs_for_terminator(
+        &self,
+        lambda_id: u32,
+        linear_op_index: usize,
+        term: &RaTerminator,
+    ) -> Option<Vec<Allocation>> {
+        let signature = Self::signature_for_terminator(term);
+        self.allocs_by_lambda
+            .get(&lambda_id)
+            .and_then(|by_lambda| by_lambda.get(&linear_op_index))
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.is_term && entry.signature == signature)
+                    .or_else(|| entries.iter().find(|entry| entry.signature == signature))
+            })
+            .map(|entry| entry.allocs.clone())
     }
 
     fn edge_edit_moves(
@@ -732,14 +847,12 @@ impl Lowerer {
         let lambda_id = func.lambda_id.index() as u32;
         let linear_op_index = block.term_linear_op_index;
         let from_block_id = block.id.0;
+        self.current_linear_op_index = Some(linear_op_index);
 
         self.current_inst_allocs = if self.no_edit_mode() {
             Some(self.canonical_allocs_for_terminator(&block.term))
         } else {
-            self.allocs_by_lambda
-                .get(&lambda_id)
-                .and_then(|by_lambda| by_lambda.get(&linear_op_index))
-                .cloned()
+            self.allocs_for_terminator(lambda_id, linear_op_index, &block.term)
         };
         if self.apply_regalloc_edits {
             self.apply_regalloc_edits(linear_op_index, InstPosition::Before);
@@ -814,6 +927,7 @@ impl Lowerer {
             self.apply_regalloc_edits(linear_op_index, InstPosition::After);
         }
         self.current_inst_allocs = None;
+        self.current_linear_op_index = None;
     }
 
     fn run(mut self, program: &RaProgram) -> LinearBackendResult {
@@ -851,11 +965,9 @@ impl Lowerer {
                         line: (lin_idx + 1) as u32,
                         column: 0,
                     });
-                    self.current_inst_allocs = self
-                        .allocs_by_lambda
-                        .get(&lambda_id)
-                        .and_then(|by_lambda| by_lambda.get(&lin_idx))
-                        .cloned();
+                    self.current_linear_op_index = Some(lin_idx);
+                    self.current_inst_allocs =
+                        self.allocs_for_inst(lambda_id, lin_idx, &inst.operands);
                     if self.no_edit_mode() {
                         self.current_inst_allocs =
                             Some(self.canonical_allocs_for_operands(&inst.operands));
@@ -868,6 +980,7 @@ impl Lowerer {
                         self.apply_regalloc_edits(lin_idx, InstPosition::After);
                     }
                     self.current_inst_allocs = None;
+                    self.current_linear_op_index = None;
                 }
 
                 let next_block = func.blocks.get(block_index + 1);
