@@ -1,3 +1,5 @@
+pub mod cfg_mir;
+
 mod debugger;
 mod interpreter;
 mod regalloc_engine;

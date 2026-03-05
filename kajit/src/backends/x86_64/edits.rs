@@ -1,5 +1,5 @@
 use super::*;
-use crate::backends::parallel_moves::{emit_parallel_moves, MoveEmitter};
+use crate::backends::parallel_moves::{MoveEmitter, emit_parallel_moves};
 use kajit_emit::x64::{self, LabelId, Mem};
 
 impl Lowerer {
@@ -204,7 +204,16 @@ impl MoveEmitter for Lowerer {
         let tmp_off = self.parallel_move_tmp_base + (tmp_index as u32) * 8;
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: tmp_off as i32 }, 10, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: tmp_off as i32,
+                    },
+                    10,
+                    buf,
+                )
+            })
             .expect("mov");
     }
 
@@ -212,7 +221,16 @@ impl MoveEmitter for Lowerer {
         let tmp_off = self.parallel_move_tmp_base + (tmp_index as u32) * 8;
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 4, disp: tmp_off as i32 }, buf))
+            .emit_with(|buf| {
+                x64::encode_mov_r64_m(
+                    10,
+                    Mem {
+                        base: 4,
+                        disp: tmp_off as i32,
+                    },
+                    buf,
+                )
+            })
             .expect("mov");
         self.emit_store_r10_to_allocation(to);
     }

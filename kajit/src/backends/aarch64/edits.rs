@@ -1,7 +1,7 @@
 //! Regalloc edit infrastructure: edit moves, edge trampolines, block resolution.
 
 use super::*;
-use crate::backends::parallel_moves::{emit_parallel_moves, MoveEmitter};
+use crate::backends::parallel_moves::{MoveEmitter, emit_parallel_moves};
 use kajit_emit::aarch64::{self, Reg};
 
 impl Lowerer {
