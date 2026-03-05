@@ -601,13 +601,126 @@ fn remap_terminator(
 
 #[cfg(test)]
 mod tests {
-    use kajit_ir::{ErrorCode, LambdaId, VReg};
+    use facet::Facet;
+    use kajit_ir::{ErrorCode, IntrinsicRegistry, LambdaId, VReg};
+    use kajit_ir_text::parse_ir;
     use kajit_lir::LinearOp;
+    use regalloc2::{Allocation, PReg, RegClass};
 
     use super::*;
 
+    const POSTCARD_U32_V0_RVSDG_SNAPSHOT: &str = include_str!(
+        "../../kajit/tests/snapshots/corpus__generated_rvsdg_postcard_scalar_u32__v0_x86_64.snap"
+    );
+
     fn vreg(index: u32) -> VReg {
         VReg::new(index)
+    }
+
+    fn snapshot_body(snapshot: &'static str) -> &'static str {
+        let snapshot = snapshot
+            .strip_prefix("---\n")
+            .expect("insta snapshot should start with frontmatter");
+        let (_, body) = snapshot
+            .split_once("\n---\n")
+            .expect("insta snapshot frontmatter should end with separator");
+        body.trim()
+    }
+
+    fn postcard_u32_cfg_program() -> cfg_mir::Program {
+        let registry = IntrinsicRegistry::new();
+        let mut ir_func = parse_ir(
+            snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT),
+            <u32 as Facet>::SHAPE,
+            &registry,
+        )
+        .expect("RVSDG snapshot should parse");
+        let linear = kajit_lir::linearize(&mut ir_func);
+        cfg_mir::lower_linear_ir(&linear)
+    }
+
+    fn add_noise_to_real_cfg(program: &cfg_mir::Program) -> cfg_mir::Program {
+        let mut out = program.clone();
+        let func = out
+            .funcs
+            .first_mut()
+            .expect("real cfg program should have a root function");
+        let dead_entry_block_id = cfg_mir::BlockId::new(func.blocks.len() as u32);
+        let dead_exit_block_id = cfg_mir::BlockId::new(func.blocks.len() as u32 + 1);
+        let dead_entry_term_id = cfg_mir::TermId::new(func.terms.len() as u32);
+        let dead_exit_term_id = cfg_mir::TermId::new(func.terms.len() as u32 + 1);
+        let dead_edge_id = cfg_mir::EdgeId::new(func.edges.len() as u32);
+        func.blocks.push(cfg_mir::Block {
+            id: dead_entry_block_id,
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: dead_entry_term_id,
+            preds: Vec::new(),
+            succs: vec![dead_edge_id],
+        });
+        func.blocks.push(cfg_mir::Block {
+            id: dead_exit_block_id,
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: dead_exit_term_id,
+            preds: vec![dead_edge_id],
+            succs: Vec::new(),
+        });
+        func.terms
+            .push(cfg_mir::Terminator::Branch { edge: dead_edge_id });
+        func.terms.push(cfg_mir::Terminator::Return);
+        func.edges.push(cfg_mir::Edge {
+            id: dead_edge_id,
+            from: dead_entry_block_id,
+            to: dead_exit_block_id,
+            args: Vec::new(),
+        });
+
+        out.validate().expect("noisy real cfg should validate");
+        out
+    }
+
+    fn corrupted_writeback_interestingness(
+        program: &cfg_mir::Program,
+        input: &[u8],
+    ) -> Result<Option<DifferentialInterestingness>, String> {
+        let mut allocated = allocate_cfg_program(program).map_err(|err| err.to_string())?;
+        let func = allocated
+            .cfg_program
+            .funcs
+            .first()
+            .ok_or_else(|| "cfg program has no functions".to_owned())?;
+        let write_inst = func
+            .insts
+            .iter()
+            .find(|inst| matches!(inst.op, LinearOp::WriteToField { .. }))
+            .ok_or_else(|| "root function has no WriteToField inst".to_owned())?;
+        let alloc_func = allocated
+            .functions
+            .iter_mut()
+            .find(|f| f.lambda_id == func.lambda_id)
+            .ok_or_else(|| "allocated cfg program missing root allocation".to_owned())?;
+        let operands = alloc_func
+            .op_operands
+            .get(&cfg_mir::OpId::Inst(write_inst.id))
+            .ok_or_else(|| "missing operand metadata for WriteToField".to_owned())?;
+        let source_index = operands
+            .iter()
+            .position(|(_, kind)| *kind == cfg_mir::OperandKind::Use)
+            .ok_or_else(|| "WriteToField has no use operand".to_owned())?;
+        let allocs = alloc_func
+            .op_allocs
+            .get_mut(&cfg_mir::OpId::Inst(write_inst.id))
+            .ok_or_else(|| "missing allocation metadata for WriteToField".to_owned())?;
+        allocs[source_index] = Allocation::reg(PReg::new(31, RegClass::Int));
+
+        match differential_check_cfg(program, &allocated, input) {
+            DifferentialCheckResult::Match { .. } => Ok(None),
+            DifferentialCheckResult::Diverged(divergence) => Ok(Some(
+                DifferentialInterestingness::from_divergence(&divergence),
+            )),
+            DifferentialCheckResult::Error(err) => Err(err),
+        }
     }
 
     fn dead_block_program() -> cfg_mir::Program {
@@ -926,5 +1039,39 @@ mod tests {
 
         let result = minimize_cfg_program_for_differential(&program, &[]);
         assert!(matches!(result, Err(MinimizeError::NotInteresting)));
+    }
+
+    #[test]
+    fn minimizer_shrinks_noisy_real_cfg_while_preserving_differential_signature() {
+        let base = postcard_u32_cfg_program();
+        let noisy = add_noise_to_real_cfg(&base);
+        let input = [0x2a];
+
+        let target = corrupted_writeback_interestingness(&noisy, &input)
+            .expect("corrupted differential oracle should execute")
+            .expect("corrupted allocation should induce a divergence");
+
+        let noisy_size = ProgramSize::of(&noisy);
+        let (reduced, stats) = minimize_cfg_program(&noisy, |candidate| {
+            Ok::<_, String>(
+                corrupted_writeback_interestingness(candidate, &input)? == Some(target.clone()),
+            )
+        })
+        .expect("noisy real cfg should remain interesting under corruption oracle");
+
+        reduced
+            .validate()
+            .expect("reduced real cfg should validate");
+        assert!(ProgramSize::of(&reduced).is_smaller_than(noisy_size));
+        assert_eq!(
+            corrupted_writeback_interestingness(&reduced, &input)
+                .expect("reduced corruption oracle should execute"),
+            Some(target)
+        );
+        assert!(
+            stats.accepted >= 2,
+            "expected multiple accepted reductions on noisy real cfg, got {:?}",
+            stats
+        );
     }
 }
