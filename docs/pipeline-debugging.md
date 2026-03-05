@@ -201,7 +201,7 @@ CFG-MIR avoids reintroducing unrelated churn from earlier stages.
 For differential minimization from a saved CFG-MIR file:
 
 ```bash
-cargo run --manifest-path xtask/Cargo.toml -- \
+cargo run -q --manifest-path xtask/Cargo.toml -- \
   minimize-cfg-mir \
   path/to/failing.cfg-mir \
   8080808080
@@ -224,10 +224,29 @@ The command:
 Typical shell usage:
 
 ```bash
-cargo run --manifest-path xtask/Cargo.toml -- \
+cargo run -q --manifest-path xtask/Cargo.toml -- \
   minimize-cfg-mir failing.cfg-mir 8080808080 \
   > minimized.cfg-mir
 ```
+
+To print the exact input bytes used by one generated corpus test:
+
+```bash
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  corpus-input \
+  postcard::vec_u32_v0
+```
+
+This prints only the input bytes as lowercase hex, for example:
+
+```text
+03010203
+```
+
+Use exact corpus test names such as:
+- `postcard::vec_u32_v0`
+- `json::all_scalars`
+- `json_input::reversed_key_order`
 
 ### What minimization preserves
 
@@ -312,14 +331,17 @@ cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
 ls target/kajit-stage-dumps/*json__all_scalars*__cfg.txt
 ```
 
-5. Take the exact concrete input bytes for the failing reproducer and minimize
-   against those same bytes. The bytes must come from the reproducer itself,
-   not from a guessed or edited input. For corpus-style cases, the most
-   reliable approach is a focused regression test or helper that already has
-   the serialized input in hand.
+5. Print the exact concrete input bytes for that reproducer. The bytes must
+   come from the reproducer itself, not from a guessed or edited input.
 
 ```bash
-cargo run --manifest-path xtask/Cargo.toml -- \
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  corpus-input \
+  json::all_scalars
+```
+
+```bash
+cargo run -q --manifest-path xtask/Cargo.toml -- \
   minimize-cfg-mir \
   target/kajit-stage-dumps/json__all_scalars__<arch>__cfg.txt \
   <hex-input> \

@@ -103,6 +103,7 @@ impl CaseBuilder {
     }
 }
 
+#[allow(dead_code)]
 struct IrOptCase {
     name: &'static str,
     ir: &'static str,
@@ -111,6 +112,7 @@ struct IrOptCase {
     input: &'static [u8],
 }
 
+#[allow(dead_code)]
 struct IrPostRegCase {
     name: &'static str,
     ir: &'static str,
@@ -120,11 +122,13 @@ struct IrPostRegCase {
     expected: u8,
 }
 
+#[allow(dead_code)]
 struct BehaviorVector {
     input: &'static [u8],
     expected: u8,
 }
 
+#[allow(dead_code)]
 struct IrBehaviorCase {
     name: &'static str,
     ir: &'static str,
@@ -142,10 +146,11 @@ fn main() {
         Some("gen") => {
             generate_synthetic();
         }
+        Some("corpus-input") => print_corpus_input(&command_args),
         Some("minimize-cfg-mir") => minimize_cfg_mir(&command_args),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|minimize-cfg-mir>"
+                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|corpus-input|minimize-cfg-mir>"
             );
             std::process::exit(2);
         }
@@ -209,6 +214,92 @@ fn minimize_cfg_mir(args: &[String]) {
     println!("{reduced}");
 }
 
+fn print_corpus_input(args: &[String]) {
+    let [test_name] = args else {
+        eprintln!(
+            "usage: cargo run --manifest-path xtask/Cargo.toml -- corpus-input <exact-corpus-test-name>"
+        );
+        std::process::exit(2);
+    };
+
+    let filter = format!("test(={test_name})");
+    let root = workspace_root();
+
+    let list_output = Command::new("cargo")
+        .args([
+            "nextest", "list", "-p", "kajit", "--test", "corpus", "-E", &filter,
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap_or_else(|err| {
+            eprintln!("failed to run cargo nextest list: {err}");
+            std::process::exit(1);
+        });
+    if !list_output.status.success() {
+        let stderr = String::from_utf8_lossy(&list_output.stderr);
+        eprintln!("cargo nextest list failed:\n{stderr}");
+        std::process::exit(list_output.status.code().unwrap_or(1));
+    }
+    let listed = String::from_utf8_lossy(&list_output.stdout);
+    let matches = listed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        eprintln!(
+            "expected exactly one corpus test for `{test_name}`, got {}",
+            matches.len()
+        );
+        if !matches.is_empty() {
+            eprintln!("matches:");
+            for line in matches {
+                eprintln!("  {line}");
+            }
+        }
+        std::process::exit(1);
+    }
+
+    let run_output = Command::new("cargo")
+        .args([
+            "nextest",
+            "run",
+            "-p",
+            "kajit",
+            "--test",
+            "corpus",
+            "--no-capture",
+            "-E",
+            &filter,
+        ])
+        .env("KAJIT_PRINT_INPUT_HEX", "1")
+        .current_dir(&root)
+        .output()
+        .unwrap_or_else(|err| {
+            eprintln!("failed to run cargo nextest run: {err}");
+            std::process::exit(1);
+        });
+
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    let stderr = String::from_utf8_lossy(&run_output.stderr);
+    let Some(hex) = extract_case_input_hex(&stdout).or_else(|| extract_case_input_hex(&stderr))
+    else {
+        if !run_output.status.success() {
+            eprintln!("cargo nextest run failed before emitting case input for `{test_name}`");
+        } else {
+            eprintln!("case input line was not found for `{test_name}`");
+        }
+        if !stdout.trim().is_empty() {
+            eprintln!("stdout:\n{stdout}");
+        }
+        if !stderr.trim().is_empty() {
+            eprintln!("stderr:\n{stderr}");
+        }
+        std::process::exit(run_output.status.code().unwrap_or(1).max(1));
+    };
+
+    println!("{hex}");
+}
+
 fn parse_hex_bytes(input: &str) -> Result<Vec<u8>, String> {
     let separators = ['[', ']', ',', ' ', '\t', '\n', '\r'];
     let has_separators = input.chars().any(|ch| separators.contains(&ch));
@@ -269,9 +360,17 @@ fn decode_hex_nybble(ch: char) -> Result<u8, String> {
     }
 }
 
+fn extract_case_input_hex(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("KAJIT_CASE_INPUT_HEX=")
+            .map(str::to_owned)
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_hex_bytes;
+    use super::{extract_case_input_hex, parse_hex_bytes};
 
     #[test]
     fn parse_hex_bytes_accepts_compact_hex() {
@@ -283,6 +382,14 @@ mod tests {
         assert_eq!(
             parse_hex_bytes("[0x80, 0x80, 0x01]").unwrap(),
             vec![0x80, 0x80, 0x01]
+        );
+    }
+
+    #[test]
+    fn extract_case_input_hex_finds_structured_line() {
+        assert_eq!(
+            extract_case_input_hex("noise\nKAJIT_CASE_INPUT_HEX=2a00ff\nmore noise"),
+            Some("2a00ff".to_owned())
         );
     }
 }
