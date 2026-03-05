@@ -66,7 +66,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     12,
                     buf,
@@ -85,7 +85,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -93,7 +93,7 @@ impl EmitCtx {
                     10,
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     buf,
                 )?;
@@ -115,7 +115,7 @@ impl EmitCtx {
                     10,
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     buf,
                 )?;
@@ -132,7 +132,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_PTR,
+                        disp: ENC_OUTPUT_PTR as i32,
                     },
                     12,
                     buf,
@@ -150,7 +150,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_PTR,
+                        disp: ENC_OUTPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -158,7 +158,7 @@ impl EmitCtx {
                     13,
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_END,
+                        disp: ENC_OUTPUT_END as i32,
                     },
                     buf,
                 )?;
@@ -166,7 +166,7 @@ impl EmitCtx {
                     10,
                     Mem {
                         base: 15,
-                        disp: ENC_ERROR_CODE,
+                        disp: ENC_ERROR_CODE as i32,
                     },
                     buf,
                 )?;
@@ -247,7 +247,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -255,7 +255,7 @@ impl EmitCtx {
                     13,
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_END,
+                        disp: CTX_INPUT_END as i32,
                     },
                     buf,
                 )
@@ -278,7 +278,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -286,7 +286,7 @@ impl EmitCtx {
                     13,
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_END,
+                        disp: CTX_INPUT_END as i32,
                     },
                     buf,
                 )
@@ -309,7 +309,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     12,
                     buf,
@@ -331,7 +331,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     12,
                     buf,
@@ -659,7 +659,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -797,10 +797,11 @@ impl EmitCtx {
         self.emit.emit_je_label(ok_label).expect("je");
         self.emit
             .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -1041,7 +1042,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -1098,7 +1099,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -1174,15 +1175,15 @@ impl EmitCtx {
         self.emit.bind_label(not_quote).expect("bind not_quote");
         self.emit
             .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
-                    error_code as u32,
+                    10,
                     buf,
-                )?;
-                Ok(())
+                )
             })
             .expect("write quote error");
         self.emit.emit_jmp_label(error_exit).expect("error");
@@ -1216,7 +1217,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     11,
                     buf,
@@ -1645,7 +1646,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -1653,7 +1654,7 @@ impl EmitCtx {
                     11,
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     buf,
                 )?;
@@ -1688,7 +1689,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -1717,12 +1718,13 @@ impl EmitCtx {
 
         self.emit
             .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
-                    error_code as u32,
+                    10,
                     buf,
                 )
             })
@@ -1908,12 +1910,13 @@ impl EmitCtx {
         let error_code = code as i32;
         self.emit
             .emit_with(|buf| {
+                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
-                    error_code as u32,
+                    10,
                     buf,
                 )
             })
@@ -1994,7 +1997,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -2296,7 +2299,7 @@ impl EmitCtx {
                     10,
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     buf,
                 )?;
@@ -2604,7 +2607,7 @@ impl EmitCtx {
                     10,
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     buf,
                 )?;
@@ -2774,7 +2777,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: CTX_INPUT_PTR,
+                        disp: CTX_INPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -2782,7 +2785,7 @@ impl EmitCtx {
                     10,
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     buf,
                 )?;
@@ -2826,7 +2829,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -3337,8 +3340,9 @@ impl EmitCtx {
                 Op::BoundsCheck { count } => {
                     if *count == 1 {
                         self.emit
-                            .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))?;
-                        self.emit.emit_jae_label(eof_label);
+                            .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))
+                            .expect("bounds check count=1");
+                        self.emit.emit_jae_label(eof_label).expect("bounds check eof");
                     } else {
                         let count = *count as i32;
                         self.emit
@@ -3348,7 +3352,7 @@ impl EmitCtx {
                                 x64::encode_cmp_r64_imm32(10, count as u32, buf)
                             })
                             .expect("bounds check");
-                        self.emit.emit_jb_label(eof_label);
+                        self.emit.emit_jbe_label(eof_label).expect("bounds check eof");
                     }
                 }
                 Op::LoadByte { dst } => match dst {
@@ -3405,7 +3409,16 @@ impl EmitCtx {
                             .expect("store to out w2"),
                         (Slot::A, Width::W4) => self
                             .emit
-                            .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 10, buf))
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r32(
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    10,
+                                    buf,
+                                )
+                            })
                             .expect("store to out w4"),
                         (Slot::A, Width::W8) => self
                             .emit
@@ -3430,7 +3443,16 @@ impl EmitCtx {
                             .expect("store to out w2"),
                         (Slot::B, Width::W4) => self
                             .emit
-                            .emit_with(|buf| x64::encode_mov_m_r32(14, offset, 11, buf))
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r32(
+                                    Mem {
+                                        base: 14,
+                                        disp: offset,
+                                    },
+                                    11,
+                                    buf,
+                                )
+                            })
                             .expect("store to out w4"),
                         (Slot::B, Width::W8) => self
                             .emit
@@ -3469,7 +3491,16 @@ impl EmitCtx {
                     match (src, width) {
                         (Slot::A, Width::W4) => self
                             .emit
-                            .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 10, buf))
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r32(
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    10,
+                                    buf,
+                                )
+                            })
                             .expect("store stack a w4"),
                         (Slot::A, Width::W8) => self
                             .emit
@@ -3486,7 +3517,16 @@ impl EmitCtx {
                             .expect("store stack a w8"),
                         (Slot::B, Width::W4) => self
                             .emit
-                            .emit_with(|buf| x64::encode_mov_m_r32(4, sp_offset, 11, buf))
+                            .emit_with(|buf| {
+                                x64::encode_mov_m_r32(
+                                    Mem {
+                                        base: 4,
+                                        disp: sp_offset,
+                                    },
+                                    11,
+                                    buf,
+                                )
+                            })
                             .expect("store stack b w4"),
                         (Slot::B, Width::W8) => self
                             .emit
@@ -3627,20 +3667,20 @@ impl EmitCtx {
                     }
                     self.emit
                         .emit_ja_label(invalid_label)
-                        .expect("validate max branch")?;
+                        .expect("validate max branch");
                     self.emit
                         .emit_jmp_label(ok_label)
-                        .expect("validate max ok jump")?;
+                        .expect("validate max ok jump");
                     self.emit
                         .bind_label(invalid_label)
-                        .expect("bind invalid label")?;
+                        .expect("bind invalid label");
                     self.emit
                         .emit_with(|buf| {
                             x64::encode_mov_r32_imm32(9, error_code as u32, buf)?;
                             x64::encode_mov_m_r32(
                                 Mem {
                                     base: 15,
-                                    disp: CTX_ERROR_CODE,
+                                    disp: CTX_ERROR_CODE as i32,
                                 },
                                 9,
                                 buf,
@@ -3649,8 +3689,8 @@ impl EmitCtx {
                         .expect("write error code");
                     self.emit
                         .emit_jmp_label(error_exit)
-                        .expect("validate error_exit")?;
-                    self.emit.bind_label(ok_label).expect("bind ok label")?;
+                        .expect("validate error_exit");
+                    self.emit.bind_label(ok_label).expect("bind ok label");
                 }
                 Op::TestBit7Branch { slot, target } => {
                     let label = labels[*target];
@@ -3874,7 +3914,7 @@ impl EmitCtx {
                                 11,
                                 Mem {
                                     base: 15,
-                                    disp: CTX_ERROR_CODE,
+                                    disp: CTX_ERROR_CODE as i32,
                                 },
                                 buf,
                             )?;
@@ -4282,7 +4322,7 @@ impl EmitCtx {
                     self.emit
                         .emit_with(|buf| x64::encode_cmp_r64_imm32(9, 0x80, buf))
                         .expect("varint cmp");
-                    self.emit.emit_jb_label(done_label).expect("varint done");
+                    self.emit.emit_jbe_label(done_label).expect("varint done");
                     self.emit
                         .emit_with(|buf| {
                             x64::encode_mov_r64_imm64(0, 0x80, buf)?;
@@ -4317,7 +4357,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r32(
                     Mem {
                         base: 15,
-                        disp: CTX_ERROR_CODE,
+                        disp: CTX_ERROR_CODE as i32,
                     },
                     10,
                     buf,
@@ -4367,7 +4407,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_PTR,
+                        disp: ENC_OUTPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -4375,7 +4415,7 @@ impl EmitCtx {
                     13,
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_END,
+                        disp: ENC_OUTPUT_END as i32,
                     },
                     buf,
                 )
@@ -4397,7 +4437,7 @@ impl EmitCtx {
                     12,
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_PTR,
+                        disp: ENC_OUTPUT_PTR as i32,
                     },
                     buf,
                 )?;
@@ -4405,7 +4445,7 @@ impl EmitCtx {
                     13,
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_END,
+                        disp: ENC_OUTPUT_END as i32,
                     },
                     buf,
                 )
@@ -4428,7 +4468,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_PTR,
+                        disp: ENC_OUTPUT_PTR as i32,
                     },
                     12,
                     buf,
@@ -4462,7 +4502,7 @@ impl EmitCtx {
                 x64::encode_mov_m_r64(
                     Mem {
                         base: 15,
-                        disp: ENC_OUTPUT_PTR,
+                        disp: ENC_OUTPUT_PTR as i32,
                     },
                     12,
                     buf,
@@ -4728,14 +4768,7 @@ impl EmitCtx {
                 self.emit
                     .emit_with(|buf| {
                         x64::encode_mov_r32_imm32(10, val as u32, buf)?;
-                        x64::encode_mov_m_r16(
-                            Mem {
-                                base: 12,
-                                disp: offset as i32,
-                            },
-                            10,
-                            buf,
-                        )
+                        x64::encode_mov_m_r16(12, offset as i32, 10, buf)
                     })
                     .expect("write static 2");
                 offset += 2;
