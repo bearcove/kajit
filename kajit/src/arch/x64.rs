@@ -3346,7 +3346,9 @@ impl EmitCtx {
                         self.emit
                             .emit_with(|buf| x64::encode_cmp_r64_r64(12, 13, buf))
                             .expect("bounds check count=1");
-                        self.emit.emit_jae_label(eof_label).expect("bounds check eof");
+                        self.emit
+                            .emit_jae_label(eof_label)
+                            .expect("bounds check eof");
                     } else {
                         let count = *count as i32;
                         self.emit
@@ -3356,7 +3358,9 @@ impl EmitCtx {
                                 x64::encode_cmp_r64_imm32(10, count as u32, buf)
                             })
                             .expect("bounds check");
-                        self.emit.emit_jbe_label(eof_label).expect("bounds check eof");
+                        self.emit
+                            .emit_jbe_label(eof_label)
+                            .expect("bounds check eof");
                     }
                 }
                 Op::LoadByte { dst } => match dst {
