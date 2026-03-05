@@ -1235,18 +1235,27 @@ fn lower_inst(linear_op_index: usize, op: LinearOp) -> RaInst {
             dst,
             lhs,
             rhs,
-            op: _,
+            op,
             ..
         } => {
             push_use(&mut operands, *lhs, None);
             // On x86_64, variable shifts require the count in cl (rcx hw_enc=1).
-            #[cfg(target_arch = "x86_64")]
-            let rhs_fixed = match op {
-                kajit_lir::BinOpKind::Shr | kajit_lir::BinOpKind::Shl => Some(FixedReg::HwReg(1)),
-                _ => None,
+            let rhs_fixed = {
+                #[cfg(target_arch = "x86_64")]
+                {
+                    match op {
+                        kajit_lir::BinOpKind::Shr | kajit_lir::BinOpKind::Shl => {
+                            Some(FixedReg::HwReg(1))
+                        }
+                        _ => None,
+                    }
+                }
+                #[cfg(not(target_arch = "x86_64"))]
+                {
+                    let _ = op;
+                    None
+                }
             };
-            #[cfg(not(target_arch = "x86_64"))]
-            let rhs_fixed = None;
             push_use(&mut operands, *rhs, rhs_fixed);
             push_def(&mut operands, *dst, None);
         }
