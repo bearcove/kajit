@@ -20,14 +20,8 @@ const MAP_JIT: i32 = 0x0800;
 type MmapProt = i32;
 
 unsafe extern "C" {
-    fn mmap(
-        addr: *mut u8,
-        len: usize,
-        prot: MmapProt,
-        flags: i32,
-        fd: i32,
-        offset: i64,
-    ) -> *mut u8;
+    fn mmap(addr: *mut u8, len: usize, prot: MmapProt, flags: i32, fd: i32, offset: i64)
+    -> *mut u8;
     fn munmap(addr: *mut u8, len: usize) -> i32;
 }
 
@@ -316,66 +310,39 @@ impl Emitter {
         }
     }
 
-    pub fn emit_je_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_je_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Eq)
     }
 
-    pub fn emit_jz_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jz_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_je_label(label)
     }
 
-    pub fn emit_jnz_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jnz_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Ne)
     }
 
-    pub fn emit_jne_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jne_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Ne)
     }
 
-    pub fn emit_jge_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jge_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Ge)
     }
 
-    pub fn emit_jl_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jl_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Lt)
     }
 
-    pub fn emit_jbe_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jbe_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Lo)
     }
 
-    pub fn emit_jae_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jae_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Hs)
     }
 
-    pub fn emit_ja_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_ja_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.emit_jcc_label(label, Condition::Hi)
     }
 
@@ -395,10 +362,7 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_jmp_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_jmp_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
         let start = self.current_offset();
         self.emit_with(|buf| encode_jmp_rel32(buf, 0))?;
@@ -410,10 +374,7 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_call_label(
-        &mut self,
-        label: LabelId,
-    ) -> Result<(), EmitError> {
+    pub fn emit_call_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
         let start = self.current_offset();
         self.emit_with(|buf| encode_call_rel32(buf, 0))?;
@@ -628,7 +589,12 @@ pub fn encode_movdqa_xmm_xmm(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), 
     )
 }
 
-pub fn encode_movdqu_xmm_m(dst_xmm: u8, base: u8, disp: i32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+pub fn encode_movdqu_xmm_m(
+    dst_xmm: u8,
+    base: u8,
+    disp: i32,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
     emit_op_rm(
         buf,
         Some(0x66),
@@ -640,7 +606,12 @@ pub fn encode_movdqu_xmm_m(dst_xmm: u8, base: u8, disp: i32, buf: &mut Vec<u8>) 
     )
 }
 
-pub fn encode_movdqu_m_xmm(base: u8, disp: i32, src_xmm: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+pub fn encode_movdqu_m_xmm(
+    base: u8,
+    disp: i32,
+    src_xmm: u8,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
     emit_op_rm(
         buf,
         Some(0x66),
@@ -688,7 +659,12 @@ pub fn encode_pmovmskb_r32_xmm(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<()
     )
 }
 
-pub fn encode_mov_m_r8(dst_base: u8, dst_disp: i32, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+pub fn encode_mov_m_r8(
+    dst_base: u8,
+    dst_disp: i32,
+    src: u8,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
     emit_op_rm(
         buf,
         None,
@@ -703,7 +679,12 @@ pub fn encode_mov_m_r8(dst_base: u8, dst_disp: i32, src: u8, buf: &mut Vec<u8>) 
     )
 }
 
-pub fn encode_mov_r8_m(dst: u8, src_base: u8, src_disp: i32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+pub fn encode_mov_r8_m(
+    dst: u8,
+    src_base: u8,
+    src_disp: i32,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
     emit_op_rm(
         buf,
         None,
@@ -770,19 +751,16 @@ pub fn encode_movzx_r64_rm8(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result<
     emit_op_rm(buf, None, &[0x0F, 0xB6], true, dst, src, true)
 }
 
-pub fn encode_movzx_r64_rm16(dst: u8, base: u8, disp: i32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
-    encode_movzx_r64_rm16_op(
-        dst,
-        Operand::Mem(Mem { base, disp }),
-        buf,
-    )
-}
-
-pub fn encode_movzx_r64_rm16_op(
+pub fn encode_movzx_r64_rm16(
     dst: u8,
-    src: Operand,
+    base: u8,
+    disp: i32,
     buf: &mut Vec<u8>,
 ) -> Result<(), EmitError> {
+    encode_movzx_r64_rm16_op(dst, Operand::Mem(Mem { base, disp }), buf)
+}
+
+pub fn encode_movzx_r64_rm16_op(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x0F, 0xB7], true, dst, src, false)
 }
 
@@ -795,14 +773,35 @@ pub fn encode_movsx_r64_rm16(dst: u8, src: Operand, buf: &mut Vec<u8>) -> Result
 }
 
 pub fn encode_tzcnt_r32_r32(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
-    emit_op_rm(buf, Some(0xF3), &[0x0F, 0xBC], false, dst, Operand::Reg(src), false)
+    emit_op_rm(
+        buf,
+        Some(0xF3),
+        &[0x0F, 0xBC],
+        false,
+        dst,
+        Operand::Reg(src),
+        false,
+    )
 }
 
 pub fn encode_imul_r64_r64(dst: u8, src: u8, buf: &mut Vec<u8>) -> Result<(), EmitError> {
-    emit_op_rm(buf, None, &[0x0F, 0xAF], true, src, Operand::Reg(dst), false)
+    emit_op_rm(
+        buf,
+        None,
+        &[0x0F, 0xAF],
+        true,
+        src,
+        Operand::Reg(dst),
+        false,
+    )
 }
 
-pub fn encode_imul_r64_r64_imm32(dst: u8, src: u8, imm: u32, buf: &mut Vec<u8>) -> Result<(), EmitError> {
+pub fn encode_imul_r64_r64_imm32(
+    dst: u8,
+    src: u8,
+    imm: u32,
+    buf: &mut Vec<u8>,
+) -> Result<(), EmitError> {
     emit_op_rm(buf, None, &[0x69], true, src, Operand::Reg(dst), false)?;
     buf.extend_from_slice(&imm.to_le_bytes());
     Ok(())
@@ -1065,7 +1064,10 @@ mod tests {
 
         buf.clear();
         encode_mov_r64_imm64(3, 0x1122_3344_5566_7788, &mut buf).unwrap();
-        assert_eq!(buf, [0x48, 0xbb, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
+        assert_eq!(
+            buf,
+            [0x48, 0xbb, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11]
+        );
 
         buf.clear();
         encode_mov_m_r64(Mem { base: 4, disp: 0 }, 10, &mut buf).unwrap();

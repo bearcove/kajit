@@ -398,10 +398,7 @@ impl Lowerer {
             }
         }
 
-        self.ectx
-            .emit
-            .emit_call_label(label)
-            .expect("call label");
+        self.ectx.emit.emit_call_label(label).expect("call label");
         self.ectx
             .emit
             .emit_with(|buf| {

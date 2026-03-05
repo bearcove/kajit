@@ -115,12 +115,7 @@ struct InterpreterState<'a> {
 }
 
 impl<'a> InterpreterState<'a> {
-    fn new(
-        input: &'a [u8],
-        vreg_count: usize,
-        slot_count: usize,
-        output_size: usize,
-    ) -> Self {
+    fn new(input: &'a [u8], vreg_count: usize, slot_count: usize, output_size: usize) -> Self {
         let input_base = input.as_ptr();
         let slot_mem = vec![0u8; slot_count.saturating_mul(SLOT_ADDR_STRIDE)];
         Self {
@@ -185,7 +180,12 @@ pub fn execute_program(
     input: &[u8],
 ) -> Result<InterpreterOutcome, InterpreterError> {
     let func = program.funcs.first().ok_or(InterpreterError::NoFunctions)?;
-    execute_function(func, program.vreg_count as usize, program.slot_count as usize, input)
+    execute_function(
+        func,
+        program.vreg_count as usize,
+        program.slot_count as usize,
+        input,
+    )
 }
 
 /// Execute a single RA-MIR function.
@@ -338,7 +338,8 @@ pub fn execute_function_with_trace(
                     dst,
                     field_offset,
                 } => {
-                    let args_values: Vec<u64> = args.iter().map(|v| state.read_vreg(v.index())).collect();
+                    let args_values: Vec<u64> =
+                        args.iter().map(|v| state.read_vreg(v.index())).collect();
                     let out_ptr = if dst.is_none() {
                         let offset = *field_offset as usize;
                         state.ensure_output_len(offset + 64);
@@ -355,7 +356,8 @@ pub fn execute_function_with_trace(
                     }
                 }
                 LinearOp::CallPure { func, args, dst } => {
-                    let args_values: Vec<u64> = args.iter().map(|v| state.read_vreg(v.index())).collect();
+                    let args_values: Vec<u64> =
+                        args.iter().map(|v| state.read_vreg(v.index())).collect();
                     let ret = run_call_pure(func.0, &args_values);
                     state.write_vreg(dst.index(), ret);
                 }
@@ -621,8 +623,14 @@ fn run_call_intrinsic(
                 f(ctx_ptr, args[0], args[1], args[2], args[3])
             }
             (None, 5) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, u64, u64) -> u64 =
-                    core::mem::transmute(func);
+                let f: unsafe extern "C" fn(
+                    *mut RuntimeDeserContext,
+                    u64,
+                    u64,
+                    u64,
+                    u64,
+                    u64,
+                ) -> u64 = core::mem::transmute(func);
                 f(ctx_ptr, args[0], args[1], args[2], args[3], args[4])
             }
             (Some(out), 0) => {

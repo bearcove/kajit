@@ -322,8 +322,7 @@ impl Lowerer {
             }
             LinearOp::SaveCursor { dst } => {
                 self.ectx.emit.emit_word(
-                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X19)
-                        .expect("mov"),
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X19).expect("mov"),
                 );
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, None);
@@ -331,8 +330,7 @@ impl Lowerer {
             LinearOp::RestoreCursor { src } => {
                 self.emit_load_use_x9(*src, 0);
                 self.ectx.emit.emit_word(
-                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X19, Reg::X9)
-                        .expect("mov"),
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X19, Reg::X9).expect("mov"),
                 );
             }
 

@@ -85,7 +85,10 @@ pub fn decode_source_map_le(bytes: &[u8]) -> Result<SourceMap, SourceMapError> {
     Ok(out)
 }
 
-pub fn build_trace(code: &[u8], source_map: &[SourceMapEntry]) -> Result<Vec<TraceEntry>, TraceError> {
+pub fn build_trace(
+    code: &[u8],
+    source_map: &[SourceMapEntry],
+) -> Result<Vec<TraceEntry>, TraceError> {
     validate_source_map(source_map)?;
     let mut out = Vec::with_capacity(source_map.len());
     for (index, entry) in source_map.iter().copied().enumerate() {
@@ -126,11 +129,7 @@ pub fn format_trace_entries(entries: &[TraceEntry]) -> String {
                 .collect::<String>();
             format!(
                 "{:08x} file={} line={} col={} bytes={}",
-                entry.offset,
-                entry.location.file,
-                entry.location.line,
-                entry.location.column,
-                hex
+                entry.offset, entry.location.file, entry.location.line, entry.location.column, hex
             )
         })
         .collect::<Vec<_>>()

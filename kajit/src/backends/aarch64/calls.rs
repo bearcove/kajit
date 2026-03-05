@@ -10,90 +10,76 @@ impl Lowerer {
                 self.emit_set_abi_arg_from_allocation(abi_arg, operand_index)
             }
             IntrinsicArg::OutField(offset) => match abi_arg {
-                1 => self
-                    .ectx
-                    .emit
-                    .emit_word(
-                        aarch64::encode_add_imm(
-                            aarch64::Width::X64,
-                            Reg::X1,
-                            Reg::X21,
-                            offset as u16,
-                            false,
-                        )
-                        .expect("add")),
-                2 => self
-                    .ectx
-                    .emit
-                    .emit_word(
-                        aarch64::encode_add_imm(
-                            aarch64::Width::X64,
-                            Reg::X2,
-                            Reg::X21,
-                            offset as u16,
-                            false,
-                        )
-                        .expect("add")),
-                3 => self
-                    .ectx
-                    .emit
-                    .emit_word(
-                        aarch64::encode_add_imm(
-                            aarch64::Width::X64,
-                            Reg::X3,
-                            Reg::X21,
-                            offset as u16,
-                            false,
-                        )
-                        .expect("add")),
-                4 => self
-                    .ectx
-                    .emit
-                    .emit_word(
-                        aarch64::encode_add_imm(
-                            aarch64::Width::X64,
-                            Reg::X4,
-                            Reg::X21,
-                            offset as u16,
-                            false,
-                        )
-                        .expect("add")),
-                5 => self
-                    .ectx
-                    .emit
-                    .emit_word(
-                        aarch64::encode_add_imm(
-                            aarch64::Width::X64,
-                            Reg::X5,
-                            Reg::X21,
-                            offset as u16,
-                            false,
-                        )
-                        .expect("add")),
-                6 => self
-                    .ectx
-                    .emit
-                    .emit_word(
-                        aarch64::encode_add_imm(
-                            aarch64::Width::X64,
-                            Reg::X6,
-                            Reg::X21,
-                            offset as u16,
-                            false,
-                        )
-                        .expect("add")),
-                7 => self
-                    .ectx
-                    .emit
-                    .emit_word(
-                        aarch64::encode_add_imm(
-                            aarch64::Width::X64,
-                            Reg::X7,
-                            Reg::X21,
-                            offset as u16,
-                            false,
-                        )
-                        .expect("add")),
+                1 => self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(
+                        aarch64::Width::X64,
+                        Reg::X1,
+                        Reg::X21,
+                        offset as u16,
+                        false,
+                    )
+                    .expect("add"),
+                ),
+                2 => self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(
+                        aarch64::Width::X64,
+                        Reg::X2,
+                        Reg::X21,
+                        offset as u16,
+                        false,
+                    )
+                    .expect("add"),
+                ),
+                3 => self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(
+                        aarch64::Width::X64,
+                        Reg::X3,
+                        Reg::X21,
+                        offset as u16,
+                        false,
+                    )
+                    .expect("add"),
+                ),
+                4 => self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(
+                        aarch64::Width::X64,
+                        Reg::X4,
+                        Reg::X21,
+                        offset as u16,
+                        false,
+                    )
+                    .expect("add"),
+                ),
+                5 => self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(
+                        aarch64::Width::X64,
+                        Reg::X5,
+                        Reg::X21,
+                        offset as u16,
+                        false,
+                    )
+                    .expect("add"),
+                ),
+                6 => self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(
+                        aarch64::Width::X64,
+                        Reg::X6,
+                        Reg::X21,
+                        offset as u16,
+                        false,
+                    )
+                    .expect("add"),
+                ),
+                7 => self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(
+                        aarch64::Width::X64,
+                        Reg::X7,
+                        Reg::X21,
+                        offset as u16,
+                        false,
+                    )
+                    .expect("add"),
+                ),
                 _ => unreachable!("unsupported intrinsic ABI arg register x{abi_arg}"),
             },
         }
@@ -143,9 +129,9 @@ impl Lowerer {
         let p1 = ((ptr >> 16) & 0xFFFF) as u32;
         let p2 = ((ptr >> 32) & 0xFFFF) as u32;
         let p3 = ((ptr >> 48) & 0xFFFF) as u32;
-        self.ectx
-            .emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X16, p0 as u16, 0).expect("movz"));
+        self.ectx.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X16, p0 as u16, 0).expect("movz"),
+        );
         if p1 != 0 {
             self.ectx.emit.emit_word(
                 aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p1 as u16, 16).expect("movk"),
@@ -245,9 +231,9 @@ impl Lowerer {
         let p1 = ((ptr >> 16) & 0xFFFF) as u32;
         let p2 = ((ptr >> 32) & 0xFFFF) as u32;
         let p3 = ((ptr >> 48) & 0xFFFF) as u32;
-        self.ectx
-            .emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, Reg::X16, p0 as u16, 0).expect("movz"));
+        self.ectx.emit.emit_word(
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X16, p0 as u16, 0).expect("movz"),
+        );
         if p1 != 0 {
             self.ectx.emit.emit_word(
                 aarch64::encode_movk(aarch64::Width::X64, Reg::X16, p1 as u16, 16).expect("movk"),

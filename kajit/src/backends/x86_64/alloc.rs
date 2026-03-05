@@ -137,7 +137,14 @@ impl Lowerer {
                 self.ectx
                     .emit
                     .emit_with(|buf| {
-                        x64::encode_lea_r64_m(10, Mem { base: 14, disp: off }, buf)?;
+                        x64::encode_lea_r64_m(
+                            10,
+                            Mem {
+                                base: 14,
+                                disp: off,
+                            },
+                            buf,
+                        )?;
                         x64::encode_push_r64(10, buf)
                     })
                     .expect("outfield");

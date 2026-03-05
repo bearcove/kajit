@@ -162,9 +162,7 @@ fn format_ra_terminator(term: &crate::regalloc_mir::RaTerminator) -> String {
     }
 }
 
-fn build_ra_mir_listing(
-    program: &crate::regalloc_mir::RaProgram,
-) -> (String, HashMap<usize, u32>) {
+fn build_ra_mir_listing(program: &crate::regalloc_mir::RaProgram) -> (String, HashMap<usize, u32>) {
     let mut lines = Vec::new();
     let mut line_by_linear_op = HashMap::<usize, u32>::new();
     let mut next_line = 1u32;
@@ -172,12 +170,16 @@ fn build_ra_mir_listing(
         for block in &func.blocks {
             for inst in &block.insts {
                 lines.push(format!("{:?}", inst.op));
-                line_by_linear_op.entry(inst.linear_op_index).or_insert(next_line);
+                line_by_linear_op
+                    .entry(inst.linear_op_index)
+                    .or_insert(next_line);
                 next_line += 1;
             }
             if let Some(linear_op_index) = block.term_linear_op_index {
                 lines.push(format_ra_terminator(&block.term));
-                line_by_linear_op.entry(linear_op_index).or_insert(next_line);
+                line_by_linear_op
+                    .entry(linear_op_index)
+                    .or_insert(next_line);
                 next_line += 1;
             }
         }
@@ -406,8 +408,7 @@ fn build_dwarf_variables_from_regalloc(
                 continue;
             }
 
-            for ((vreg, _kind), location_alloc) in operand_specs.iter().zip(operand_allocs.iter())
-            {
+            for ((vreg, _kind), location_alloc) in operand_specs.iter().zip(operand_allocs.iter()) {
                 let Some(name) = named_vregs.get(vreg) else {
                     continue;
                 };
@@ -1344,13 +1345,11 @@ fn compile_linear_ir_decoder_with_options(
     maybe_disable_regalloc_edits(&mut regalloc_alloc, &pipeline_opts);
 
     let (buf, entry, source_map) = {
-        let result =
-            crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
+        let result = crate::ir_backend::compile_linear_ir_with_alloc(ir, &ra_mir, &regalloc_alloc);
         materialize_backend_result(result)
     };
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
-        core::mem::transmute(buf.code_ptr().add(entry))
-    };
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
+        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
     let root_display_name = ir
         .ops
         .iter()
@@ -1450,9 +1449,8 @@ pub fn compile_ra_program_decoder(program: &crate::regalloc_mir::RaProgram) -> C
         let result = crate::ir_backend::compile_ra_program(program, &alloc);
         materialize_backend_result(result)
     };
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) = unsafe {
-        core::mem::transmute(buf.code_ptr().add(entry))
-    };
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
+        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
     let root_display_name = "kajit::decode::<ra-mir-text>";
     let root_mangled_name = crate::jit_debug::rust_v0_mangle(&["kajit", "decode", "ra_mir_text"]);
     let symbol = crate::jit_debug::JitSymbolEntry {

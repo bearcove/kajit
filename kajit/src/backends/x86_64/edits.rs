@@ -35,8 +35,22 @@ impl Lowerer {
                 self.ectx
                     .emit
                     .emit_with(|buf| {
-                        x64::encode_mov_r64_m(10, Mem { base: 4, disp: from_off }, buf)?;
-                        x64::encode_mov_m_r64(Mem { base: 4, disp: to_off }, 10, buf)
+                        x64::encode_mov_r64_m(
+                            10,
+                            Mem {
+                                base: 4,
+                                disp: from_off,
+                            },
+                            buf,
+                        )?;
+                        x64::encode_mov_m_r64(
+                            Mem {
+                                base: 4,
+                                disp: to_off,
+                            },
+                            10,
+                            buf,
+                        )
                     })
                     .expect("mov");
             }
