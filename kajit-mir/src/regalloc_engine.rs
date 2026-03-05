@@ -10,8 +10,7 @@ use regalloc2::{
     OperandPos, Output, PReg, PRegSet, RegAllocError, RegClass, RegallocOptions, VReg,
 };
 
-use crate::cfg_mir::{self, OpId};
-use crate::{FixedReg, OperandKind as RaOperandKind};
+use crate::cfg_mir::{self, FixedReg, OpId, OperandKind as RaOperandKind};
 use kajit_ir::LambdaId;
 
 /// Materialized allocation result for a full canonical CFG MIR program.
@@ -42,7 +41,7 @@ pub struct AllocatedCfgFunction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionPosition {
-    pub block: crate::BlockId,
+    pub block: cfg_mir::BlockId,
     pub next_inst_index: usize,
     pub at_terminator: bool,
 }
@@ -117,8 +116,14 @@ enum BlockTermKind {
 }
 
 #[derive(Debug, Clone)]
+struct WorkInst {
+    operands: Vec<cfg_mir::Operand>,
+    clobbers: cfg_mir::Clobbers,
+}
+
+#[derive(Debug, Clone)]
 struct WorkBlock {
-    raw_insts: Vec<crate::RaInst>,
+    raw_insts: Vec<WorkInst>,
     raw_inst_op_ids: Vec<Option<cfg_mir::OpId>>,
     term_kind: BlockTermKind,
     term_returns_data_results: bool,
@@ -133,7 +138,7 @@ struct WorkBlock {
 
 fn align_succ_arg_sources_to_target(
     target_params: &[kajit_ir::VReg],
-    args: &[crate::RaEdgeArg],
+    args: &[cfg_mir::EdgeArg],
 ) -> Vec<kajit_ir::VReg> {
     let source_by_target: HashMap<_, _> = args.iter().map(|arg| (arg.target, arg.source)).collect();
 
@@ -372,10 +377,10 @@ fn machine_env() -> MachineEnv {
     }
 }
 
-fn lower_operand(op: crate::regalloc_mir::RaOperand) -> Operand {
+fn lower_operand(op: cfg_mir::Operand) -> Operand {
     let class = match op.class {
-        crate::regalloc_mir::RegClass::Gpr => RegClass::Int,
-        crate::regalloc_mir::RegClass::Simd => RegClass::Vector,
+        cfg_mir::RegClass::Gpr => RegClass::Int,
+        cfg_mir::RegClass::Simd => RegClass::Vector,
     };
     let vreg = VReg::new(op.vreg.index(), class);
     let constraint = match op.fixed.and_then(fixed_preg) {
@@ -401,32 +406,6 @@ fn lower_term_uses_cfg(term: &cfg_mir::Terminator) -> Vec<kajit_ir::VReg> {
         cfg_mir::Terminator::Return
         | cfg_mir::Terminator::ErrorExit { .. }
         | cfg_mir::Terminator::Branch { .. } => Vec::new(),
-    }
-}
-
-fn map_cfg_operand(op: cfg_mir::Operand) -> crate::RaOperand {
-    crate::RaOperand {
-        vreg: op.vreg,
-        kind: match op.kind {
-            cfg_mir::OperandKind::Use => RaOperandKind::Use,
-            cfg_mir::OperandKind::Def => RaOperandKind::Def,
-        },
-        class: match op.class {
-            cfg_mir::RegClass::Gpr => crate::RegClass::Gpr,
-            cfg_mir::RegClass::Simd => crate::RegClass::Simd,
-        },
-        fixed: op.fixed.map(|fixed| match fixed {
-            cfg_mir::FixedReg::AbiArg(i) => FixedReg::AbiArg(i),
-            cfg_mir::FixedReg::AbiRet(i) => FixedReg::AbiRet(i),
-            cfg_mir::FixedReg::HwReg(enc) => FixedReg::HwReg(enc),
-        }),
-    }
-}
-
-fn map_cfg_clobbers(clobbers: cfg_mir::Clobbers) -> crate::RaClobbers {
-    crate::RaClobbers {
-        caller_saved_gpr: clobbers.caller_saved_gpr,
-        caller_saved_simd: clobbers.caller_saved_simd,
     }
 }
 
@@ -456,17 +435,14 @@ fn split_critical_edges_cfg(
                 .map(|inst_id| {
                     let inst = &func.insts[inst_id.index()];
                     raw_inst_op_ids.push(Some(OpId::Inst(*inst_id)));
-                    let linear_op_index = schedule
+                    let _ = schedule
                         .op_to_index
                         .get(&OpId::Inst(*inst_id))
                         .copied()
-                        .expect("schedule should include every instruction")
-                        as usize;
-                    crate::RaInst {
-                        linear_op_index,
-                        op: inst.op.clone(),
-                        operands: inst.operands.iter().copied().map(map_cfg_operand).collect(),
-                        clobbers: map_cfg_clobbers(inst.clobbers),
+                        .expect("schedule should include every instruction");
+                    WorkInst {
+                        operands: inst.operands.clone(),
+                        clobbers: inst.clobbers,
                     }
                 })
                 .collect();
@@ -500,18 +476,9 @@ fn split_critical_edges_cfg(
                     .iter()
                     .map(|edge_id| {
                         let edge = &func.edges[edge_id.index()];
-                        let aligned_args: Vec<crate::RaEdgeArg> = edge
-                            .args
-                            .iter()
-                            .copied()
-                            .map(|arg| crate::RaEdgeArg {
-                                source: arg.source,
-                                target: arg.target,
-                            })
-                            .collect();
                         align_succ_arg_sources_to_target(
                             &func.blocks[edge.to.index()].params,
-                            &aligned_args,
+                            &edge.args,
                         )
                     })
                     .collect(),
@@ -1628,12 +1595,13 @@ fn run_call_pure(func: usize, args: &[u64]) -> u64 {
 }
 
 fn find_operand_alloc(
-    inst: &crate::RaInst,
+    operands: &[cfg_mir::Operand],
     inst_allocs: &[Allocation],
     vreg: kajit_ir::VReg,
     kind: RaOperandKind,
+    linear_op_index: usize,
 ) -> Result<Allocation, RegallocEngineError> {
-    for (op, alloc) in inst.operands.iter().zip(inst_allocs.iter().copied()) {
+    for (op, alloc) in operands.iter().zip(inst_allocs.iter().copied()) {
         if op.vreg == vreg && op.kind == kind {
             return Ok(alloc);
         }
@@ -1642,15 +1610,16 @@ fn find_operand_alloc(
         "missing allocation for {:?} operand v{} in linear op {}",
         kind,
         vreg.index(),
-        inst.linear_op_index
+        linear_op_index
     )))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn execute_sim_linear_op(
     op: &LinearOp,
-    block_id: crate::BlockId,
-    inst: &crate::RaInst,
+    block_id: cfg_mir::BlockId,
+    inst_operands: &[cfg_mir::Operand],
+    linear_op_index: usize,
     inst_allocs: &[Allocation],
     regs: &mut HashMap<PReg, u64>,
     spills: &mut HashMap<usize, u64>,
@@ -1661,26 +1630,74 @@ fn execute_sim_linear_op(
 ) -> Result<(), RegallocEngineError> {
     match op {
         LinearOp::Const { dst, value } => {
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             write_allocation(regs, spills, dst_alloc, *value);
         }
         LinearOp::Copy { dst, src } => {
-            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             let value = read_allocation(regs, spills, src_alloc);
             write_allocation(regs, spills, dst_alloc, value);
         }
         LinearOp::BinOp { op, dst, lhs, rhs } => {
-            let lhs_alloc = find_operand_alloc(inst, inst_allocs, *lhs, RaOperandKind::Use)?;
-            let rhs_alloc = find_operand_alloc(inst, inst_allocs, *rhs, RaOperandKind::Use)?;
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let lhs_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *lhs,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
+            let rhs_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *rhs,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             let lhs_val = read_allocation(regs, spills, lhs_alloc);
             let rhs_val = read_allocation(regs, spills, rhs_alloc);
             write_allocation(regs, spills, dst_alloc, exec_binop(*op, lhs_val, rhs_val));
         }
         LinearOp::UnaryOp { op, dst, src } => {
-            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             let src_val = read_allocation(regs, spills, src_alloc);
             write_allocation(regs, spills, dst_alloc, exec_unaryop(*op, src_val));
         }
@@ -1700,7 +1717,13 @@ fn execute_sim_linear_op(
                     value |= (input[*cursor + i] as u64) << (i * 8);
                 }
                 *cursor += count;
-                let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                let dst_alloc = find_operand_alloc(
+                    inst_operands,
+                    inst_allocs,
+                    *dst,
+                    RaOperandKind::Def,
+                    linear_op_index,
+                )?;
                 write_allocation(regs, spills, dst_alloc, value);
             }
         }
@@ -1709,7 +1732,13 @@ fn execute_sim_linear_op(
                 set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
             } else {
                 let input = unsafe { std::slice::from_raw_parts(sim.input_base, sim.input_len) };
-                let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                let dst_alloc = find_operand_alloc(
+                    inst_operands,
+                    inst_allocs,
+                    *dst,
+                    RaOperandKind::Def,
+                    linear_op_index,
+                )?;
                 write_allocation(regs, spills, dst_alloc, input[*cursor] as u64);
             }
         }
@@ -1722,7 +1751,13 @@ fn execute_sim_linear_op(
             }
         }
         LinearOp::AdvanceCursorBy { src } => {
-            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
             let count = read_allocation(regs, spills, src_alloc) as usize;
             if *cursor + count > sim.input_len {
                 set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
@@ -1731,11 +1766,23 @@ fn execute_sim_linear_op(
             }
         }
         LinearOp::SaveCursor { dst } => {
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             write_allocation(regs, spills, dst_alloc, *cursor as u64);
         }
         LinearOp::RestoreCursor { src } => {
-            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
             let next = read_allocation(regs, spills, src_alloc) as usize;
             if next > sim.input_len {
                 set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
@@ -1744,7 +1791,13 @@ fn execute_sim_linear_op(
             }
         }
         LinearOp::WriteToField { src, offset, width } => {
-            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
             let value = read_allocation(regs, spills, src_alloc);
             let width_bytes = width.bytes() as usize;
             let base = *offset as usize;
@@ -1767,24 +1820,54 @@ fn execute_sim_linear_op(
                     value |= (*src.add(i) as u64) << (i * 8);
                 }
             }
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             write_allocation(regs, spills, dst_alloc, value);
         }
         LinearOp::SaveOutPtr { dst } => {
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             write_allocation(regs, spills, dst_alloc, sim.out_ptr as u64);
         }
         LinearOp::SetOutPtr { src } => {
-            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
             sim.out_ptr = read_allocation(regs, spills, src_alloc) as *mut u8;
         }
         LinearOp::SlotAddr { dst, slot } => {
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             let addr = sim.slot_addr_value(slot.index());
             write_allocation(regs, spills, dst_alloc, addr);
         }
         LinearOp::WriteToSlot { slot, src } => {
-            let src_alloc = find_operand_alloc(inst, inst_allocs, *src, RaOperandKind::Use)?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
             let value = read_allocation(regs, spills, src_alloc);
             let slot = slot.index();
             sim.ensure_slot(slot);
@@ -1794,7 +1877,13 @@ fn execute_sim_linear_op(
             let slot = slot.index();
             sim.ensure_slot(slot);
             let value = sim.slots[slot];
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             write_allocation(regs, spills, dst_alloc, value);
         }
         LinearOp::CallIntrinsic {
@@ -1805,7 +1894,13 @@ fn execute_sim_linear_op(
         } => {
             let mut args_values = Vec::with_capacity(args.len());
             for arg in args {
-                let arg_alloc = find_operand_alloc(inst, inst_allocs, *arg, RaOperandKind::Use)?;
+                let arg_alloc = find_operand_alloc(
+                    inst_operands,
+                    inst_allocs,
+                    *arg,
+                    RaOperandKind::Use,
+                    linear_op_index,
+                )?;
                 args_values.push(read_allocation(regs, spills, arg_alloc));
             }
             let out_ptr = if dst.is_none() {
@@ -1817,18 +1912,36 @@ fn execute_sim_linear_op(
             };
             let ret = run_call_intrinsic(sim, cursor, trap, func.0, &args_values, out_ptr);
             if let Some(dst) = dst {
-                let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+                let dst_alloc = find_operand_alloc(
+                    inst_operands,
+                    inst_allocs,
+                    *dst,
+                    RaOperandKind::Def,
+                    linear_op_index,
+                )?;
                 write_allocation(regs, spills, dst_alloc, ret);
             }
         }
         LinearOp::CallPure { func, args, dst } => {
             let mut args_values = Vec::with_capacity(args.len());
             for arg in args {
-                let arg_alloc = find_operand_alloc(inst, inst_allocs, *arg, RaOperandKind::Use)?;
+                let arg_alloc = find_operand_alloc(
+                    inst_operands,
+                    inst_allocs,
+                    *arg,
+                    RaOperandKind::Use,
+                    linear_op_index,
+                )?;
                 args_values.push(read_allocation(regs, spills, arg_alloc));
             }
             let ret = run_call_pure(func.0, &args_values);
-            let dst_alloc = find_operand_alloc(inst, inst_allocs, *dst, RaOperandKind::Def)?;
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
             write_allocation(regs, spills, dst_alloc, ret);
         }
         LinearOp::ErrorExit { code } => {
@@ -1996,12 +2109,6 @@ pub fn simulate_execution_cfg(
             let linear_op_index = *schedule.op_to_index.get(&op_id).ok_or_else(|| {
                 RegallocEngineError::Simulation(format!("schedule missing cfg inst {:?}", op_id))
             })? as usize;
-            let inst_view = crate::RaInst {
-                linear_op_index,
-                op: inst.op.clone(),
-                operands: inst.operands.iter().copied().map(map_cfg_operand).collect(),
-                clobbers: map_cfg_clobbers(inst.clobbers),
-            };
             let inst_allocs = alloc_func.op_allocs.get(&op_id).ok_or_else(|| {
                 RegallocEngineError::Simulation(format!(
                     "missing allocation metadata for cfg op {:?}",
@@ -2011,8 +2118,9 @@ pub fn simulate_execution_cfg(
 
             execute_sim_linear_op(
                 &inst.op,
-                crate::BlockId(block.id.0),
-                &inst_view,
+                cfg_mir::BlockId(block.id.0),
+                &inst.operands,
+                linear_op_index,
                 inst_allocs,
                 &mut regs,
                 &mut spills,
@@ -2172,7 +2280,7 @@ pub fn simulate_execution_cfg(
             physical_registers: regs,
             spillslots: spills,
             position: ExecutionPosition {
-                block: crate::BlockId(current_block.id.0),
+                block: cfg_mir::BlockId(current_block.id.0),
                 next_inst_index: next_inst,
                 at_terminator: next_inst >= current_block.insts.len(),
             },
@@ -2299,12 +2407,6 @@ fn simulate_execution_trace_cfg_function(
             let linear_op_index = *schedule.op_to_index.get(&op_id).ok_or_else(|| {
                 RegallocEngineError::Simulation(format!("schedule missing cfg inst {:?}", op_id))
             })? as usize;
-            let inst_view = crate::RaInst {
-                linear_op_index,
-                op: inst.op.clone(),
-                operands: inst.operands.iter().copied().map(map_cfg_operand).collect(),
-                clobbers: map_cfg_clobbers(inst.clobbers),
-            };
             let inst_allocs = alloc_func.op_allocs.get(&op_id).ok_or_else(|| {
                 RegallocEngineError::Simulation(format!(
                     "missing allocation metadata for cfg op {:?}",
@@ -2320,8 +2422,13 @@ fn simulate_execution_trace_cfg_function(
             {
                 let mut call_args = Vec::with_capacity(args.len());
                 for arg in args {
-                    let arg_alloc =
-                        find_operand_alloc(&inst_view, inst_allocs, *arg, RaOperandKind::Use)?;
+                    let arg_alloc = find_operand_alloc(
+                        &inst.operands,
+                        inst_allocs,
+                        *arg,
+                        RaOperandKind::Use,
+                        linear_op_index,
+                    )?;
                     call_args.push(read_allocation(&regs, &spills, arg_alloc));
                 }
 
@@ -2341,16 +2448,22 @@ fn simulate_execution_trace_cfg_function(
                         )));
                     }
                     for (dst, value) in results.iter().zip(call_results.into_iter()) {
-                        let dst_alloc =
-                            find_operand_alloc(&inst_view, inst_allocs, *dst, RaOperandKind::Def)?;
+                        let dst_alloc = find_operand_alloc(
+                            &inst.operands,
+                            inst_allocs,
+                            *dst,
+                            RaOperandKind::Def,
+                            linear_op_index,
+                        )?;
                         write_allocation(&mut regs, &mut spills, dst_alloc, value);
                     }
                 }
             } else {
                 execute_sim_linear_op(
                     &inst.op,
-                    crate::BlockId(block.id.0),
-                    &inst_view,
+                    cfg_mir::BlockId(block.id.0),
+                    &inst.operands,
+                    linear_op_index,
                     inst_allocs,
                     &mut regs,
                     &mut spills,
@@ -2374,7 +2487,7 @@ fn simulate_execution_trace_cfg_function(
                     physical_registers: regs.clone(),
                     spillslots: spills.clone(),
                     position: ExecutionPosition {
-                        block: crate::BlockId(block.id.0),
+                        block: cfg_mir::BlockId(block.id.0),
                         next_inst_index: next_inst,
                         at_terminator: next_inst >= block.insts.len(),
                     },
@@ -2526,7 +2639,7 @@ fn simulate_execution_trace_cfg_function(
                 physical_registers: regs.clone(),
                 spillslots: spills.clone(),
                 position: ExecutionPosition {
-                    block: crate::BlockId(current_block.id.0),
+                    block: cfg_mir::BlockId(current_block.id.0),
                     next_inst_index: next_inst,
                     at_terminator: next_inst >= current_block.insts.len(),
                 },
@@ -2592,7 +2705,7 @@ fn ideal_trace(
         .map(|entry| DifferentialState {
             step_index: entry.step_index,
             position: ExecutionPosition {
-                block: crate::BlockId(entry.block.0),
+                block: cfg_mir::BlockId(entry.block.0),
                 next_inst_index: entry.next_inst_index,
                 at_terminator: entry.at_terminator,
             },
@@ -2663,7 +2776,7 @@ fn compare_differential_states(
         let ideal_final = ideal.last().cloned().unwrap_or(DifferentialState {
             step_index: 0,
             position: ExecutionPosition {
-                block: crate::BlockId(0),
+                block: cfg_mir::BlockId(0),
                 next_inst_index: 0,
                 at_terminator: true,
             },
@@ -2678,7 +2791,7 @@ fn compare_differential_states(
         let post_final = post.last().cloned().unwrap_or(DifferentialState {
             step_index: 0,
             position: ExecutionPosition {
-                block: crate::BlockId(0),
+                block: cfg_mir::BlockId(0),
                 next_inst_index: 0,
                 at_terminator: true,
             },
@@ -2701,7 +2814,7 @@ fn compare_differential_states(
     let ideal_final = ideal.last().cloned().unwrap_or(DifferentialState {
         step_index: 0,
         position: ExecutionPosition {
-            block: crate::BlockId(0),
+            block: cfg_mir::BlockId(0),
             next_inst_index: 0,
             at_terminator: true,
         },
@@ -2716,7 +2829,7 @@ fn compare_differential_states(
     let post_final = post.last().cloned().unwrap_or(DifferentialState {
         step_index: 0,
         position: ExecutionPosition {
-            block: crate::BlockId(0),
+            block: cfg_mir::BlockId(0),
             next_inst_index: 0,
             at_terminator: true,
         },
@@ -3144,14 +3257,14 @@ lambda @0 (shape: "u8") {
 
         let mut op_allocs = HashMap::<crate::cfg_mir::OpId, Vec<Allocation>>::new();
         let mut op_operands =
-            HashMap::<crate::cfg_mir::OpId, Vec<(kajit_ir::VReg, crate::OperandKind)>>::new();
+            HashMap::<crate::cfg_mir::OpId, Vec<(kajit_ir::VReg, RaOperandKind)>>::new();
         op_allocs.insert(
             crate::cfg_mir::OpId::Term(term_branch),
             vec![Allocation::reg(preg_int(0))],
         );
         op_operands.insert(
             crate::cfg_mir::OpId::Term(term_branch),
-            vec![(source_vreg, crate::OperandKind::Use)],
+            vec![(source_vreg, RaOperandKind::Use)],
         );
         op_allocs.insert(
             crate::cfg_mir::OpId::Inst(inst_id),
@@ -3159,7 +3272,7 @@ lambda @0 (shape: "u8") {
         );
         op_operands.insert(
             crate::cfg_mir::OpId::Inst(inst_id),
-            vec![(target_vreg, crate::OperandKind::Use)],
+            vec![(target_vreg, RaOperandKind::Use)],
         );
 
         AllocatedCfgProgram {
