@@ -641,7 +641,8 @@ impl Lowerer {
             }
             BinOpKind::And => {
                 if let Some(c) = rhs_const
-                    && let Ok(word) = aarch64::encode_and_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c)
+                    && let Ok(word) =
+                        aarch64::encode_and_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c)
                 {
                     self.ectx.emit.emit_word(word);
                 } else {
