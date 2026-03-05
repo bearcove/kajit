@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::ops::Range;
 
-use kajit_ir::{ErrorCode, LambdaId, VReg};
+use kajit_ir::{ErrorCode, IntrinsicFn, IntrinsicRegistry, LambdaId, VReg};
 use kajit_lir::{LabelId, LinearIr, LinearOp};
 
 macro_rules! define_id {
@@ -447,21 +447,52 @@ impl Program {
     }
 }
 
+pub struct ProgramDisplay<'a> {
+    program: &'a Program,
+    registry: Option<&'a IntrinsicRegistry>,
+}
+
 impl fmt::Display for Program {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let display = ProgramDisplay {
+            program: self,
+            registry: None,
+        };
+        fmt::Display::fmt(&display, f)
+    }
+}
+
+impl<'a> fmt::Display for ProgramDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
             "cfg_program vregs={} slots={} {{",
-            self.vreg_count, self.slot_count
+            self.program.vreg_count, self.program.slot_count
         )?;
-        for func in &self.funcs {
-            fmt_cfg_function(f, func)?;
+        for func in &self.program.funcs {
+            fmt_cfg_function(f, func, self.registry)?;
         }
         writeln!(f, "}}")
     }
 }
 
-fn fmt_cfg_function(f: &mut fmt::Formatter<'_>, func: &Function) -> fmt::Result {
+impl Program {
+    pub fn display_with_registry<'a>(
+        &'a self,
+        registry: &'a IntrinsicRegistry,
+    ) -> ProgramDisplay<'a> {
+        ProgramDisplay {
+            program: self,
+            registry: Some(registry),
+        }
+    }
+}
+
+fn fmt_cfg_function(
+    f: &mut fmt::Formatter<'_>,
+    func: &Function,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
     writeln!(
         f,
         "  cfg_func @{} f{} entry=b{} {{",
@@ -495,7 +526,7 @@ fn fmt_cfg_function(f: &mut fmt::Formatter<'_>, func: &Function) -> fmt::Result 
 
     for inst in &func.insts {
         write!(f, "    inst i{}: ", inst.id.0)?;
-        fmt_cfg_inst(f, inst)?;
+        fmt_cfg_inst(f, inst, registry)?;
         writeln!(f)?;
     }
 
@@ -599,7 +630,11 @@ fn fmt_cfg_operand(f: &mut fmt::Formatter<'_>, operand: &Operand) -> fmt::Result
     Ok(())
 }
 
-fn fmt_cfg_op_name(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
+fn fmt_cfg_op_name(
+    f: &mut fmt::Formatter<'_>,
+    op: &LinearOp,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
     match op {
         LinearOp::Const { value, .. } => write!(f, "const({value:#x})"),
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
@@ -621,8 +656,16 @@ fn fmt_cfg_op_name(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
         LinearOp::ReadFromSlot { slot, .. } => write!(f, "read_slot({})", slot.index()),
         LinearOp::CallIntrinsic {
             func, field_offset, ..
-        } => write!(f, "call_intrinsic({func}, fo={field_offset})"),
-        LinearOp::CallPure { func, .. } => write!(f, "call_pure({func})"),
+        } => {
+            write!(f, "call_intrinsic(")?;
+            fmt_intrinsic(f, *func, registry)?;
+            write!(f, ", fo={field_offset})")
+        }
+        LinearOp::CallPure { func, .. } => {
+            write!(f, "call_pure(")?;
+            fmt_intrinsic(f, *func, registry)?;
+            write!(f, ")")
+        }
         LinearOp::CallLambda { target, .. } => write!(f, "call_lambda(@{})", target.index()),
         LinearOp::SimdStringScan { .. } => write!(f, "simd_string_scan"),
         LinearOp::SimdWhitespaceSkip => write!(f, "simd_ws_skip"),
@@ -631,7 +674,11 @@ fn fmt_cfg_op_name(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
     }
 }
 
-fn fmt_cfg_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
+fn fmt_cfg_inst(
+    f: &mut fmt::Formatter<'_>,
+    inst: &Inst,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
     let defs: Vec<_> = inst
         .operands
         .iter()
@@ -653,7 +700,7 @@ fn fmt_cfg_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
         write!(f, " = ")?;
     }
 
-    fmt_cfg_op_name(f, &inst.op)?;
+    fmt_cfg_op_name(f, &inst.op, registry)?;
 
     if !uses.is_empty() {
         write!(f, " ")?;
@@ -679,6 +726,19 @@ fn fmt_cfg_inst(f: &mut fmt::Formatter<'_>, inst: &Inst) -> fmt::Result {
     }
 
     Ok(())
+}
+
+fn fmt_intrinsic(
+    f: &mut fmt::Formatter<'_>,
+    func: IntrinsicFn,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
+    if let Some(registry) = registry
+        && let Some(name) = registry.name_of(func)
+    {
+        return write!(f, "@{name}");
+    }
+    write!(f, "{func}")
 }
 
 fn fmt_terminator(f: &mut fmt::Formatter<'_>, term: &Terminator) -> fmt::Result {

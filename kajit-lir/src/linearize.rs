@@ -9,8 +9,8 @@ use std::fmt;
 
 use kajit_ir::ErrorCode;
 use kajit_ir::{
-    Id, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, PortKind, PortSource, RegionId, SlotId,
-    VReg, Width,
+    Id, IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, PortKind, PortSource,
+    RegionId, SlotId, VReg, Width,
 };
 
 // ─── Label ID ────────────────────────────────────────────────────────────────
@@ -1304,7 +1304,22 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
 
 impl fmt::Display for LinearIr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for op in &self.ops {
+        let display = LinearIrDisplay {
+            linear: self,
+            registry: None,
+        };
+        fmt::Display::fmt(&display, f)
+    }
+}
+
+pub struct LinearIrDisplay<'a> {
+    linear: &'a LinearIr,
+    registry: Option<&'a IntrinsicRegistry>,
+}
+
+impl<'a> fmt::Display for LinearIrDisplay<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for op in &self.linear.ops {
             // Labels get no indentation, everything else gets 2 spaces.
             match op {
                 LinearOp::Label(label) => {
@@ -1325,7 +1340,7 @@ impl fmt::Display for LinearIr {
                 }
                 _ => {
                     write!(f, "  ")?;
-                    fmt_op(f, op)?;
+                    fmt_op(f, op, self.registry)?;
                     writeln!(f)?;
                 }
             }
@@ -1334,11 +1349,27 @@ impl fmt::Display for LinearIr {
     }
 }
 
+impl LinearIr {
+    pub fn display_with_registry<'a>(
+        &'a self,
+        registry: &'a IntrinsicRegistry,
+    ) -> LinearIrDisplay<'a> {
+        LinearIrDisplay {
+            linear: self,
+            registry: Some(registry),
+        }
+    }
+}
+
 fn fmt_vreg(f: &mut fmt::Formatter<'_>, v: VReg) -> fmt::Result {
     write!(f, "v{}", v.index())
 }
 
-fn fmt_op(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
+fn fmt_op(
+    f: &mut fmt::Formatter<'_>,
+    op: &LinearOp,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
     match op {
         LinearOp::Const { dst, value } => {
             fmt_vreg(f, *dst)?;
@@ -1421,7 +1452,9 @@ fn fmt_op(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
                 fmt_vreg(f, *d)?;
                 write!(f, " = ")?;
             }
-            write!(f, "call_intrinsic {func}(")?;
+            write!(f, "call_intrinsic ")?;
+            fmt_intrinsic(f, *func, registry)?;
+            write!(f, "(")?;
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     write!(f, ", ")?;
@@ -1432,7 +1465,9 @@ fn fmt_op(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
         }
         LinearOp::CallPure { func, args, dst } => {
             fmt_vreg(f, *dst)?;
-            write!(f, " = call_pure {func}(")?;
+            write!(f, " = call_pure ")?;
+            fmt_intrinsic(f, *func, registry)?;
+            write!(f, "(")?;
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     write!(f, ", ")?;
@@ -1504,6 +1539,19 @@ fn fmt_op(f: &mut fmt::Formatter<'_>, op: &LinearOp) -> fmt::Result {
             unreachable!("handled in Display for LinearIr")
         }
     }
+}
+
+fn fmt_intrinsic(
+    f: &mut fmt::Formatter<'_>,
+    func: IntrinsicFn,
+    registry: Option<&IntrinsicRegistry>,
+) -> fmt::Result {
+    if let Some(registry) = registry
+        && let Some(name) = registry.name_of(func)
+    {
+        return write!(f, "@{name}");
+    }
+    write!(f, "{func}")
 }
 
 impl fmt::Debug for LinearIr {

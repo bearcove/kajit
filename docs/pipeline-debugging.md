@@ -120,12 +120,20 @@ program that merely fails in some unrelated way.
 
 Canonical CFG-MIR now supports a round-trippable text format.
 
-- Print canonical text from `kajit_mir::cfg_mir::Program`:
+- Raw CFG-MIR text from `kajit_mir::cfg_mir::Program`:
   - `let text = format!("{cfg_program}");`
-- Parse it back:
   - `let cfg_program = kajit_mir_text::parse_cfg_mir(&text)?;`
+- Named-intrinsic CFG-MIR text:
+  - `let registry = kajit::known_intrinsic_registry();`
+  - `let text = format!("{}", cfg_program.display_with_registry(&registry));`
+  - `let cfg_program = kajit_mir_text::parse_cfg_mir_with_registry(&text, &registry)?;`
 
 The parser is strict and validates function/block/edge/inst/term IDs and CFG invariants.
+
+Public `kajit` helpers such as `debug_cfg_mir_text(...)` and
+`compile_decoder_from_cfg_mir_text(...)` already use the built-in intrinsic
+registry. Their text shows `@kajit_*` names instead of raw function addresses.
+Only pointer-valued `const(...)` payloads are still scrubbed to `0x<ptr>`.
 
 ### How to get seed CFG-MIR text
 
@@ -148,7 +156,7 @@ Rust type each time.
 ### Workflow A: RVSDG IR text -> compile -> run
 
 ```rust
-let registry = kajit::ir::IntrinsicRegistry::new();
+let registry = kajit::known_intrinsic_registry();
 let decoder = kajit::compile_decoder_from_ir_text(
     ir_text,
     shape,
@@ -204,6 +212,15 @@ For differential minimization from a saved CFG-MIR file:
 cargo run -q --manifest-path xtask/Cargo.toml -- \
   minimize-cfg-mir \
   path/to/failing.cfg-mir \
+  --corpus-test postcard::vec_u32_v0
+```
+
+Or with raw hex:
+
+```bash
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  minimize-cfg-mir \
+  path/to/failing.cfg-mir \
   8080808080
 ```
 
@@ -225,7 +242,7 @@ Typical shell usage:
 
 ```bash
 cargo run -q --manifest-path xtask/Cargo.toml -- \
-  minimize-cfg-mir failing.cfg-mir 8080808080 \
+  minimize-cfg-mir failing.cfg-mir --corpus-test postcard::vec_u32_v0 \
   > minimized.cfg-mir
 ```
 
@@ -348,7 +365,17 @@ cargo run -q --manifest-path xtask/Cargo.toml -- \
   > /tmp/json-all-scalars.min.cfg-mir
 ```
 
-6. Use the reduced CFG-MIR as the new debugging artifact:
+6. Minimize directly against the corpus test name:
+
+```bash
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  minimize-cfg-mir \
+  target/kajit-stage-dumps/json__all_scalars__<arch>__cfg.txt \
+  --corpus-test json::all_scalars \
+  > /tmp/json-all-scalars.min.cfg-mir
+```
+
+7. Use the reduced CFG-MIR as the new debugging artifact:
    - replay it with `compile_decoder_from_cfg_mir_text(...)`
    - run the differential harness on it
    - only then move on to LLDB or disassembly
@@ -357,7 +384,7 @@ In practice, the loop is:
 - red test
 - `-regalloc` check
 - dump CFG-MIR
-- minimize with the same concrete input
+- minimize against the same corpus test or exact concrete input
 - debug the minimized reproducer instead of the original corpus case
 
 ## On-demand pipeline dumps

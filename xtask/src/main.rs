@@ -146,11 +146,12 @@ fn main() {
         Some("gen") => {
             generate_synthetic();
         }
+        Some("corpus-cfg-mir") => print_corpus_cfg_mir(&command_args),
         Some("corpus-input") => print_corpus_input(&command_args),
         Some("minimize-cfg-mir") => minimize_cfg_mir(&command_args),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|corpus-input|minimize-cfg-mir>"
+                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|corpus-cfg-mir|corpus-input|minimize-cfg-mir>"
             );
             std::process::exit(2);
         }
@@ -158,31 +159,29 @@ fn main() {
 }
 
 fn minimize_cfg_mir(args: &[String]) {
-    let [path, input_hex] = args else {
+    let Some((path, input, input_label)) = parse_minimize_cfg_mir_args(args) else {
         eprintln!(
-            "usage: cargo run --manifest-path xtask/Cargo.toml -- minimize-cfg-mir <cfg-mir-path> <hex-input>"
+            "usage: cargo run --manifest-path xtask/Cargo.toml -- minimize-cfg-mir <cfg-mir-path> <hex-input>\n       cargo run --manifest-path xtask/Cargo.toml -- minimize-cfg-mir <cfg-mir-path> --corpus-test <exact-corpus-test-name>"
         );
         std::process::exit(2);
     };
 
-    let input = parse_hex_bytes(input_hex).unwrap_or_else(|err| {
-        eprintln!("invalid hex input `{input_hex}`: {err}");
-        std::process::exit(2);
-    });
     let text = fs::read_to_string(path).unwrap_or_else(|err| {
         eprintln!("failed to read {}: {err}", path);
         std::process::exit(1);
     });
-    let program = kajit_mir_text::parse_cfg_mir(&text).unwrap_or_else(|err| {
-        eprintln!("failed to parse CFG-MIR from {}: {err}", path);
-        std::process::exit(1);
-    });
+    let registry = kajit::known_intrinsic_registry();
+    let program =
+        kajit_mir_text::parse_cfg_mir_with_registry(&text, &registry).unwrap_or_else(|err| {
+            eprintln!("failed to parse CFG-MIR from {}: {err}", path);
+            std::process::exit(1);
+        });
     let (reduced, stats, interestingness) =
         kajit_mir::minimize_cfg_program_for_differential(&program, &input).unwrap_or_else(|err| {
             match err {
                 kajit_mir::MinimizeError::NotInteresting => {
                     eprintln!(
-                        "seed program is not differentially interesting for input {input_hex}"
+                        "seed program is not differentially interesting for input {input_label}"
                     );
                 }
                 kajit_mir::MinimizeError::Predicate(message) => {
@@ -193,7 +192,7 @@ fn minimize_cfg_mir(args: &[String]) {
         });
 
     eprintln!(
-        "reduced CFG-MIR for input {input_hex}: blocks {} -> {}, insts {} -> {}, edges {} -> {}, accepted {} / {}",
+        "reduced CFG-MIR for input {input_label}: blocks {} -> {}, insts {} -> {}, edges {} -> {}, accepted {} / {}",
         stats.initial_size.blocks,
         stats.final_size.blocks,
         stats.initial_size.insts,
@@ -222,6 +221,61 @@ fn print_corpus_input(args: &[String]) {
         std::process::exit(2);
     };
 
+    let hex = fetch_corpus_input_hex(test_name).unwrap_or_else(|err| {
+        eprintln!("{err}");
+        std::process::exit(1);
+    });
+
+    println!("{hex}");
+}
+
+fn print_corpus_cfg_mir(args: &[String]) {
+    let [test_name] = args else {
+        eprintln!(
+            "usage: cargo run --manifest-path xtask/Cargo.toml -- corpus-cfg-mir <exact-corpus-test-name>"
+        );
+        std::process::exit(2);
+    };
+
+    let cfg_mir = fetch_corpus_cfg_mir_text(test_name).unwrap_or_else(|err| {
+        eprintln!("{err}");
+        std::process::exit(1);
+    });
+
+    print!("{cfg_mir}");
+}
+
+fn parse_minimize_cfg_mir_args(args: &[String]) -> Option<(&str, Vec<u8>, String)> {
+    match args {
+        [path, input_hex] => {
+            let input = parse_hex_bytes(input_hex).unwrap_or_else(|err| {
+                eprintln!("invalid hex input `{input_hex}`: {err}");
+                std::process::exit(2);
+            });
+            Some((path.as_str(), input, input_hex.clone()))
+        }
+        [path, flag, test_name] if flag == "--corpus-test" => {
+            let input_hex = fetch_corpus_input_hex(test_name).unwrap_or_else(|err| {
+                eprintln!("{err}");
+                std::process::exit(1);
+            });
+            let input = parse_hex_bytes(&input_hex).unwrap_or_else(|err| {
+                eprintln!(
+                    "internal error: failed to parse extracted corpus input `{input_hex}`: {err}"
+                );
+                std::process::exit(1);
+            });
+            Some((
+                path.as_str(),
+                input,
+                format!("corpus test {test_name} ({input_hex})"),
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn fetch_corpus_input_hex(test_name: &str) -> Result<String, String> {
     let filter = format!("test(={test_name})");
     let root = workspace_root();
 
@@ -231,14 +285,10 @@ fn print_corpus_input(args: &[String]) {
         ])
         .current_dir(&root)
         .output()
-        .unwrap_or_else(|err| {
-            eprintln!("failed to run cargo nextest list: {err}");
-            std::process::exit(1);
-        });
+        .map_err(|err| format!("failed to run cargo nextest list: {err}"))?;
     if !list_output.status.success() {
         let stderr = String::from_utf8_lossy(&list_output.stderr);
-        eprintln!("cargo nextest list failed:\n{stderr}");
-        std::process::exit(list_output.status.code().unwrap_or(1));
+        return Err(format!("cargo nextest list failed:\n{stderr}"));
     }
     let listed = String::from_utf8_lossy(&list_output.stdout);
     let matches = listed
@@ -246,17 +296,18 @@ fn print_corpus_input(args: &[String]) {
         .filter(|line| !line.trim().is_empty())
         .collect::<Vec<_>>();
     if matches.len() != 1 {
-        eprintln!(
+        let mut message = format!(
             "expected exactly one corpus test for `{test_name}`, got {}",
             matches.len()
         );
         if !matches.is_empty() {
-            eprintln!("matches:");
+            message.push_str("\nmatches:");
             for line in matches {
-                eprintln!("  {line}");
+                message.push_str("\n  ");
+                message.push_str(line);
             }
         }
-        std::process::exit(1);
+        return Err(message);
     }
 
     let run_output = Command::new("cargo")
@@ -274,30 +325,104 @@ fn print_corpus_input(args: &[String]) {
         .env("KAJIT_PRINT_INPUT_HEX", "1")
         .current_dir(&root)
         .output()
-        .unwrap_or_else(|err| {
-            eprintln!("failed to run cargo nextest run: {err}");
-            std::process::exit(1);
-        });
+        .map_err(|err| format!("failed to run cargo nextest run: {err}"))?;
 
     let stdout = String::from_utf8_lossy(&run_output.stdout);
     let stderr = String::from_utf8_lossy(&run_output.stderr);
     let Some(hex) = extract_case_input_hex(&stdout).or_else(|| extract_case_input_hex(&stderr))
     else {
-        if !run_output.status.success() {
-            eprintln!("cargo nextest run failed before emitting case input for `{test_name}`");
+        let mut message = if !run_output.status.success() {
+            format!("cargo nextest run failed before emitting case input for `{test_name}`")
         } else {
-            eprintln!("case input line was not found for `{test_name}`");
-        }
+            format!("case input line was not found for `{test_name}`")
+        };
         if !stdout.trim().is_empty() {
-            eprintln!("stdout:\n{stdout}");
+            message.push_str("\nstdout:\n");
+            message.push_str(&stdout);
         }
         if !stderr.trim().is_empty() {
-            eprintln!("stderr:\n{stderr}");
+            message.push_str("\nstderr:\n");
+            message.push_str(&stderr);
         }
-        std::process::exit(run_output.status.code().unwrap_or(1).max(1));
+        return Err(message);
     };
 
-    println!("{hex}");
+    Ok(hex)
+}
+
+fn fetch_corpus_cfg_mir_text(test_name: &str) -> Result<String, String> {
+    let filter = format!("test(={test_name})");
+    let root = workspace_root();
+
+    let list_output = Command::new("cargo")
+        .args([
+            "nextest", "list", "-p", "kajit", "--test", "corpus", "-E", &filter,
+        ])
+        .current_dir(&root)
+        .output()
+        .map_err(|err| format!("failed to run cargo nextest list: {err}"))?;
+    if !list_output.status.success() {
+        let stderr = String::from_utf8_lossy(&list_output.stderr);
+        return Err(format!("cargo nextest list failed:\n{stderr}"));
+    }
+    let listed = String::from_utf8_lossy(&list_output.stdout);
+    let matches = listed
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        let mut message = format!(
+            "expected exactly one corpus test for `{test_name}`, got {}",
+            matches.len()
+        );
+        if !matches.is_empty() {
+            message.push_str("\nmatches:");
+            for line in matches {
+                message.push_str("\n  ");
+                message.push_str(line);
+            }
+        }
+        return Err(message);
+    }
+
+    let run_output = Command::new("cargo")
+        .args([
+            "nextest",
+            "run",
+            "-p",
+            "kajit",
+            "--test",
+            "corpus",
+            "--no-capture",
+            "-E",
+            &filter,
+        ])
+        .env("KAJIT_PRINT_CFG_MIR", "1")
+        .current_dir(&root)
+        .output()
+        .map_err(|err| format!("failed to run cargo nextest run: {err}"))?;
+
+    let stdout = String::from_utf8_lossy(&run_output.stdout);
+    let stderr = String::from_utf8_lossy(&run_output.stderr);
+    let Some(cfg_mir) = extract_case_cfg_mir(&stdout).or_else(|| extract_case_cfg_mir(&stderr))
+    else {
+        let mut message = if !run_output.status.success() {
+            format!("cargo nextest run failed before emitting CFG-MIR for `{test_name}`")
+        } else {
+            format!("CFG-MIR block was not found for `{test_name}`")
+        };
+        if !stdout.trim().is_empty() {
+            message.push_str("\nstdout:\n");
+            message.push_str(&stdout);
+        }
+        if !stderr.trim().is_empty() {
+            message.push_str("\nstderr:\n");
+            message.push_str(&stderr);
+        }
+        return Err(message);
+    };
+
+    Ok(cfg_mir)
 }
 
 fn parse_hex_bytes(input: &str) -> Result<Vec<u8>, String> {
@@ -368,9 +493,20 @@ fn extract_case_input_hex(output: &str) -> Option<String> {
     })
 }
 
+fn extract_case_cfg_mir(output: &str) -> Option<String> {
+    let begin = "KAJIT_CASE_CFG_MIR_BEGIN";
+    let end = "KAJIT_CASE_CFG_MIR_END";
+    let start = output.find(begin)?;
+    let rest = &output[start + begin.len()..];
+    let end_index = rest.find(end)?;
+    Some(rest[..end_index].trim_matches('\n').to_owned() + "\n")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{extract_case_input_hex, parse_hex_bytes};
+    use super::{
+        extract_case_cfg_mir, extract_case_input_hex, parse_hex_bytes, parse_minimize_cfg_mir_args,
+    };
 
     #[test]
     fn parse_hex_bytes_accepts_compact_hex() {
@@ -391,6 +527,25 @@ mod tests {
             extract_case_input_hex("noise\nKAJIT_CASE_INPUT_HEX=2a00ff\nmore noise"),
             Some("2a00ff".to_owned())
         );
+    }
+
+    #[test]
+    fn extract_case_cfg_mir_finds_marker_block() {
+        assert_eq!(
+            extract_case_cfg_mir(
+                "noise\nKAJIT_CASE_CFG_MIR_BEGIN\nfunc @0 {}\nKAJIT_CASE_CFG_MIR_END\nmore"
+            ),
+            Some("func @0 {}\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_minimize_cfg_mir_args_accepts_raw_hex() {
+        let args = vec!["seed.cfg".to_owned(), "2a00ff".to_owned()];
+        let (path, input, label) = parse_minimize_cfg_mir_args(&args).expect("args should parse");
+        assert_eq!(path, "seed.cfg");
+        assert_eq!(input, vec![0x2a, 0x00, 0xff]);
+        assert_eq!(label, "2a00ff");
     }
 }
 
