@@ -3819,7 +3819,7 @@ pub fn simulate_execution_trace(
 }
 
 fn ideal_trace(
-    program: &RaProgram,
+    program: &cfg_mir::Program,
     input: &[u8],
 ) -> Result<Vec<DifferentialState>, RegallocEngineError> {
     let (_, entries) = crate::execute_program_with_trace(program, input).map_err(|err| {
@@ -3831,7 +3831,7 @@ fn ideal_trace(
         .map(|entry| DifferentialState {
             step_index: entry.step_index,
             position: ExecutionPosition {
-                block: entry.block,
+                block: crate::BlockId(entry.block.0),
                 next_inst_index: entry.next_inst_index,
                 at_terminator: entry.at_terminator,
             },
@@ -4213,7 +4213,13 @@ fn lower_ra_program_to_cfg(program: &RaProgram) -> Result<cfg_mir::Program, Rega
 }
 
 pub fn differential_check(allocated: &AllocatedProgram, input: &[u8]) -> DifferentialCheckResult {
-    let ideal = match ideal_trace(&allocated.ra_program, input) {
+    let cfg_program = match lower_ra_program_to_cfg(&allocated.ra_program) {
+        Ok(v) => v,
+        Err(err) => {
+            return DifferentialCheckResult::Error(format!("ra->cfg conversion failed: {err}"));
+        }
+    };
+    let ideal = match ideal_trace(&cfg_program, input) {
         Ok(v) => v,
         Err(err) => return DifferentialCheckResult::Error(err.to_string()),
     };
@@ -4229,7 +4235,7 @@ pub fn differential_check(allocated: &AllocatedProgram, input: &[u8]) -> Differe
 }
 
 pub fn differential_check_cfg(
-    ideal_program: &RaProgram,
+    ideal_program: &cfg_mir::Program,
     allocated: &AllocatedCfgProgram,
     input: &[u8],
 ) -> DifferentialCheckResult {
@@ -4261,7 +4267,7 @@ pub fn differential_check_program(program: RaProgram, input: &[u8]) -> Different
             return DifferentialCheckResult::Error(format!("cfg allocation failed: {err}"));
         }
     };
-    differential_check_cfg(&program, &allocated, input)
+    differential_check_cfg(&cfg_program, &allocated, input)
 }
 
 #[cfg(test)]
@@ -4924,10 +4930,11 @@ lambda @0 (shape: "u8") {
         let lin = linearize(&mut func);
         let ra = lower_linear_ir(&lin);
         let alloc = allocate_program(&ra).expect("allocation should succeed");
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
 
         let input = [0x78_u8, 0x56, 0x34, 0x12];
         let sim = simulate_execution(&alloc, &input).expect("simulation should succeed");
-        let interp = crate::execute_program(&ra, &input).expect("interpreter should succeed");
+        let interp = crate::execute_program(&cfg, &input).expect("interpreter should succeed");
 
         assert_eq!(sim.output, interp.output);
         assert_eq!(sim.cursor, interp.cursor);

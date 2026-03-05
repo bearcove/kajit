@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use kajit_ir::ErrorCode;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 
-use crate::{BlockId, RaFunction, RaProgram, RaTerminator};
+use crate::cfg_mir;
 
 const MAX_EXEC_STEPS: usize = 1_000_000;
 
@@ -24,7 +24,7 @@ pub struct InterpreterOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpreterTraceEntry {
     pub step_index: usize,
-    pub block: BlockId,
+    pub block: cfg_mir::BlockId,
     pub next_inst_index: usize,
     pub at_terminator: bool,
     pub cursor: usize,
@@ -41,24 +41,33 @@ pub enum InterpreterError {
         lambda: usize,
     },
     UnknownBlock {
-        block: BlockId,
+        block: cfg_mir::BlockId,
+    },
+    UnknownEdge {
+        edge: cfg_mir::EdgeId,
+    },
+    UnknownInst {
+        inst: cfg_mir::InstId,
+    },
+    UnknownTerm {
+        term: cfg_mir::TermId,
     },
     MissingEdge {
-        from: BlockId,
-        to: BlockId,
+        from: cfg_mir::BlockId,
+        to: cfg_mir::BlockId,
     },
     EdgeArgArityMismatch {
-        from: BlockId,
-        to: BlockId,
+        from: cfg_mir::BlockId,
+        to: cfg_mir::BlockId,
         expected: usize,
         got: usize,
     },
     UnsupportedOp {
-        block: BlockId,
+        block: cfg_mir::BlockId,
         op: String,
     },
     UnsupportedTerminator {
-        block: BlockId,
+        block: cfg_mir::BlockId,
         term: String,
     },
     StepLimitExceeded {
@@ -69,9 +78,12 @@ pub enum InterpreterError {
 impl std::fmt::Display for InterpreterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoFunctions => write!(f, "RA-MIR program has no functions"),
+            Self::NoFunctions => write!(f, "CFG-MIR program has no functions"),
             Self::UnknownLambda { lambda } => write!(f, "unknown lambda @{lambda}"),
             Self::UnknownBlock { block } => write!(f, "unknown block b{}", block.0),
+            Self::UnknownEdge { edge } => write!(f, "unknown edge e{}", edge.0),
+            Self::UnknownInst { inst } => write!(f, "unknown inst i{}", inst.0),
+            Self::UnknownTerm { term } => write!(f, "unknown term t{}", term.0),
             Self::MissingEdge { from, to } => {
                 write!(f, "missing CFG edge b{} -> b{}", from.0, to.0)
             }
@@ -88,17 +100,17 @@ impl std::fmt::Display for InterpreterError {
             Self::UnsupportedOp { block, op } => {
                 write!(
                     f,
-                    "unsupported RA-MIR op in block b{} for interpreter MVP: {}",
+                    "unsupported CFG-MIR op in block b{} for interpreter MVP: {}",
                     block.0, op
                 )
             }
             Self::UnsupportedTerminator { block, term } => write!(
                 f,
-                "unsupported RA-MIR terminator in block b{} for interpreter MVP: {}",
+                "unsupported CFG-MIR terminator in block b{} for interpreter MVP: {}",
                 block.0, term
             ),
             Self::StepLimitExceeded { limit } => {
-                write!(f, "RA-MIR interpreter exceeded step limit ({limit})")
+                write!(f, "CFG-MIR interpreter exceeded step limit ({limit})")
             }
         }
     }
@@ -204,17 +216,17 @@ impl<'a> InterpreterState<'a> {
     }
 }
 
-/// Execute the first function in an RA-MIR program.
+/// Execute the first function in a CFG-MIR program.
 pub fn execute_program(
-    program: &RaProgram,
+    program: &cfg_mir::Program,
     input: &[u8],
 ) -> Result<InterpreterOutcome, InterpreterError> {
     execute_program_with_trace(program, input).map(|(outcome, _)| outcome)
 }
 
-/// Execute a single RA-MIR function.
+/// Execute a single CFG-MIR function.
 pub fn execute_function(
-    func: &RaFunction,
+    func: &cfg_mir::Function,
     vreg_count: usize,
     slot_count: usize,
     input: &[u8],
@@ -223,7 +235,7 @@ pub fn execute_function(
 }
 
 pub fn execute_program_with_trace(
-    program: &RaProgram,
+    program: &cfg_mir::Program,
     input: &[u8],
 ) -> Result<(InterpreterOutcome, Vec<InterpreterTraceEntry>), InterpreterError> {
     if program.funcs.is_empty() {
@@ -260,12 +272,12 @@ pub fn execute_program_with_trace(
 }
 
 pub fn execute_function_with_trace(
-    func: &RaFunction,
+    func: &cfg_mir::Function,
     vreg_count: usize,
     slot_count: usize,
     input: &[u8],
 ) -> Result<(InterpreterOutcome, Vec<InterpreterTraceEntry>), InterpreterError> {
-    let program = RaProgram {
+    let program = cfg_mir::Program {
         funcs: vec![func.clone()],
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
@@ -274,7 +286,7 @@ pub fn execute_function_with_trace(
 }
 
 fn execute_function_inner(
-    program: &RaProgram,
+    program: &cfg_mir::Program,
     lambda_indices: &HashMap<usize, usize>,
     func_index: usize,
     state: &mut InterpreterState<'_>,
@@ -302,7 +314,10 @@ fn execute_function_inner(
             .ok_or(InterpreterError::UnknownBlock { block: current })?;
         let block = &func.blocks[block_idx];
 
-        for (inst_index, inst) in block.insts.iter().enumerate() {
+        for (inst_index, inst_id) in block.insts.iter().copied().enumerate() {
+            let inst = func
+                .inst(inst_id)
+                .ok_or(InterpreterError::UnknownInst { inst: inst_id })?;
             match &inst.op {
                 LinearOp::Const { dst, value } => state.write_vreg(dst.index(), *value),
                 LinearOp::Copy { dst, src } => {
@@ -545,8 +560,11 @@ fn execute_function_inner(
             return Ok(Vec::new());
         }
 
-        match &block.term {
-            RaTerminator::Return => {
+        let term = func
+            .term(block.term)
+            .ok_or(InterpreterError::UnknownTerm { term: block.term })?;
+        match term {
+            cfg_mir::Terminator::Return => {
                 trace.push(InterpreterTraceEntry {
                     step_index,
                     block: block.id,
@@ -565,7 +583,7 @@ fn execute_function_inner(
                     .collect::<Vec<_>>();
                 return Ok(data_results);
             }
-            RaTerminator::ErrorExit { code } => {
+            cfg_mir::Terminator::ErrorExit { code } => {
                 state.trap(*code);
                 trace.push(InterpreterTraceEntry {
                     step_index,
@@ -580,15 +598,15 @@ fn execute_function_inner(
                 });
                 return Ok(Vec::new());
             }
-            RaTerminator::Branch { target } => {
-                apply_edge_args(func, &block_indices, state, block.id, *target)?;
+            cfg_mir::Terminator::Branch { edge } => {
+                let target = apply_edge(func, &block_indices, state, *edge)?;
                 let target_block_idx = *block_indices
-                    .get(target)
-                    .ok_or(InterpreterError::UnknownBlock { block: *target })?;
+                    .get(&target)
+                    .ok_or(InterpreterError::UnknownBlock { block: target })?;
                 let at_terminator = 0 >= func.blocks[target_block_idx].insts.len();
                 trace.push(InterpreterTraceEntry {
                     step_index,
-                    block: *target,
+                    block: target,
                     next_inst_index: 0,
                     at_terminator,
                     cursor: state.cursor,
@@ -597,16 +615,16 @@ fn execute_function_inner(
                     trap: state.trap,
                     returned: false,
                 });
-                current = *target;
+                current = target;
             }
-            RaTerminator::BranchIf {
+            cfg_mir::Terminator::BranchIf {
                 cond,
-                target,
+                taken,
                 fallthrough,
             } => {
                 let branch = state.read_vreg(cond.index()) != 0;
-                let next = if branch { *target } else { *fallthrough };
-                apply_edge_args(func, &block_indices, state, block.id, next)?;
+                let edge = if branch { *taken } else { *fallthrough };
+                let next = apply_edge(func, &block_indices, state, edge)?;
                 let target_block_idx = *block_indices
                     .get(&next)
                     .ok_or(InterpreterError::UnknownBlock { block: next })?;
@@ -624,14 +642,14 @@ fn execute_function_inner(
                 });
                 current = next;
             }
-            RaTerminator::BranchIfZero {
+            cfg_mir::Terminator::BranchIfZero {
                 cond,
-                target,
+                taken,
                 fallthrough,
             } => {
                 let branch = state.read_vreg(cond.index()) == 0;
-                let next = if branch { *target } else { *fallthrough };
-                apply_edge_args(func, &block_indices, state, block.id, next)?;
+                let edge = if branch { *taken } else { *fallthrough };
+                let next = apply_edge(func, &block_indices, state, edge)?;
                 let target_block_idx = *block_indices
                     .get(&next)
                     .ok_or(InterpreterError::UnknownBlock { block: next })?;
@@ -856,7 +874,7 @@ fn run_call_pure(func: usize, args: &[u64]) -> u64 {
     }
 }
 
-fn build_block_index(func: &RaFunction) -> HashMap<BlockId, usize> {
+fn build_block_index(func: &cfg_mir::Function) -> HashMap<cfg_mir::BlockId, usize> {
     let mut out = HashMap::with_capacity(func.blocks.len());
     for (idx, block) in func.blocks.iter().enumerate() {
         out.insert(block.id, idx);
@@ -864,7 +882,7 @@ fn build_block_index(func: &RaFunction) -> HashMap<BlockId, usize> {
     out
 }
 
-fn infer_program_output_size(program: &RaProgram) -> usize {
+fn infer_program_output_size(program: &cfg_mir::Program) -> usize {
     program
         .funcs
         .iter()
@@ -873,15 +891,18 @@ fn infer_program_output_size(program: &RaProgram) -> usize {
         .unwrap_or(0)
 }
 
-fn infer_output_size(func: &RaFunction) -> usize {
+fn infer_output_size(func: &cfg_mir::Function) -> usize {
     func.blocks
         .iter()
         .flat_map(|block| block.insts.iter())
-        .filter_map(|inst| match &inst.op {
-            LinearOp::WriteToField { offset, width, .. } => {
-                Some(*offset as usize + width.bytes() as usize)
+        .filter_map(|inst_id| {
+            let inst = func.inst(*inst_id)?;
+            match &inst.op {
+                LinearOp::WriteToField { offset, width, .. } => {
+                    Some(*offset as usize + width.bytes() as usize)
+                }
+                _ => None,
             }
-            _ => None,
         })
         .max()
         .unwrap_or(0)
@@ -932,28 +953,21 @@ fn exec_unaryop(op: UnaryOpKind, src: u64) -> u64 {
     }
 }
 
-fn apply_edge_args(
-    func: &RaFunction,
-    block_indices: &HashMap<BlockId, usize>,
+fn apply_edge(
+    func: &cfg_mir::Function,
+    block_indices: &HashMap<cfg_mir::BlockId, usize>,
     state: &mut InterpreterState<'_>,
-    from: BlockId,
-    to: BlockId,
-) -> Result<(), InterpreterError> {
-    let from_idx = *block_indices
-        .get(&from)
-        .ok_or(InterpreterError::UnknownBlock { block: from })?;
+    edge_id: cfg_mir::EdgeId,
+) -> Result<cfg_mir::BlockId, InterpreterError> {
+    let edge = func
+        .edge(edge_id)
+        .ok_or(InterpreterError::UnknownEdge { edge: edge_id })?;
+    let from = edge.from;
+    let to = edge.to;
     let to_idx = *block_indices
         .get(&to)
         .ok_or(InterpreterError::UnknownBlock { block: to })?;
-
-    let from_block = &func.blocks[from_idx];
     let to_block = &func.blocks[to_idx];
-
-    let edge = from_block
-        .succs
-        .iter()
-        .find(|edge| edge.to == to)
-        .ok_or(InterpreterError::MissingEdge { from, to })?;
 
     if edge.args.len() != to_block.params.len() {
         return Err(InterpreterError::EdgeArgArityMismatch {
@@ -969,5 +983,5 @@ fn apply_edge_args(
         state.write_vreg(arg.target.index(), value);
     }
 
-    Ok(())
+    Ok(to)
 }
