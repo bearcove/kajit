@@ -1496,6 +1496,246 @@ pub fn verify_static_edge_edits(program: &AllocatedProgram) -> Result<(), Regall
     Ok(())
 }
 
+fn find_cfg_alloc_for_vreg_in_op(
+    func: &AllocatedCfgFunction,
+    op_id: cfg_mir::OpId,
+    vreg: kajit_ir::VReg,
+    preferred_kind: Option<RaOperandKind>,
+) -> Option<Allocation> {
+    let operands = func.op_operands.get(&op_id)?;
+    let allocs = func.op_allocs.get(&op_id)?;
+    for ((operand_vreg, operand_kind), alloc) in operands.iter().zip(allocs.iter().copied()) {
+        if *operand_vreg != vreg {
+            continue;
+        }
+        if preferred_kind.is_none_or(|k| *operand_kind == k) {
+            return Some(alloc);
+        }
+    }
+    None
+}
+
+fn infer_cfg_block_param_entry_alloc(
+    cfg_func: &cfg_mir::Function,
+    func: &AllocatedCfgFunction,
+    block: &cfg_mir::Block,
+    param: kajit_ir::VReg,
+) -> Option<Allocation> {
+    for inst_id in &block.insts {
+        let op_id = cfg_mir::OpId::Inst(*inst_id);
+        if let Some(a) = find_cfg_alloc_for_vreg_in_op(func, op_id, param, Some(RaOperandKind::Use))
+        {
+            return Some(a);
+        }
+        if let Some(a) = find_cfg_alloc_for_vreg_in_op(func, op_id, param, Some(RaOperandKind::Def))
+        {
+            return Some(a);
+        }
+    }
+    let term_op = cfg_mir::OpId::Term(block.term);
+    if cfg_func.term(block.term).is_some() {
+        if let Some(a) =
+            find_cfg_alloc_for_vreg_in_op(func, term_op, param, Some(RaOperandKind::Use))
+        {
+            return Some(a);
+        }
+    }
+    None
+}
+
+fn infer_cfg_vreg_alloc_at_block_end(
+    cfg_func: &cfg_mir::Function,
+    func: &AllocatedCfgFunction,
+    block: &cfg_mir::Block,
+    vreg: kajit_ir::VReg,
+) -> Option<Allocation> {
+    let term_op = cfg_mir::OpId::Term(block.term);
+    if cfg_func.term(block.term).is_some()
+        && let Some(a) =
+            find_cfg_alloc_for_vreg_in_op(func, term_op, vreg, Some(RaOperandKind::Use))
+    {
+        return Some(a);
+    }
+    None
+}
+
+#[derive(Clone)]
+struct CfgExpectedEdgeTransfer {
+    source_vreg: kajit_ir::VReg,
+    target_vreg: kajit_ir::VReg,
+    source_alloc: Option<Allocation>,
+    target_alloc: Option<Allocation>,
+}
+
+fn cfg_expected_transfers_for_edge(
+    cfg_func: &cfg_mir::Function,
+    func: &AllocatedCfgFunction,
+    edge_id: cfg_mir::EdgeId,
+) -> Vec<CfgExpectedEdgeTransfer> {
+    let mut out = Vec::new();
+    let Some(edge) = cfg_func.edge(edge_id) else {
+        return out;
+    };
+    let Some(pred_block) = cfg_func.block(edge.from) else {
+        return out;
+    };
+    let Some(succ_block) = cfg_func.block(edge.to) else {
+        return out;
+    };
+
+    for arg in &edge.args {
+        let source_alloc =
+            infer_cfg_vreg_alloc_at_block_end(cfg_func, func, pred_block, arg.source);
+        let target_alloc =
+            infer_cfg_block_param_entry_alloc(cfg_func, func, succ_block, arg.target);
+        out.push(CfgExpectedEdgeTransfer {
+            source_vreg: arg.source,
+            target_vreg: arg.target,
+            source_alloc,
+            target_alloc,
+        });
+    }
+
+    out
+}
+
+fn verify_function_static_edge_edits_cfg(
+    cfg_func: Option<&cfg_mir::Function>,
+    func: &AllocatedCfgFunction,
+) -> Result<(), RegallocEngineError> {
+    let scratch_regs: HashSet<PReg> = machine_env()
+        .scratch_by_class
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let mut by_edge = BTreeMap::<cfg_mir::EdgeId, Vec<&CfgEdgeEdit>>::new();
+    for edge in &func.edge_edits {
+        by_edge.entry(edge.edge).or_default().push(edge);
+    }
+
+    let mut edge_ids = BTreeSet::<cfg_mir::EdgeId>::new();
+    edge_ids.extend(by_edge.keys().copied());
+    if let Some(cfg_func) = cfg_func {
+        for edge in &cfg_func.edges {
+            edge_ids.insert(edge.id);
+        }
+    }
+
+    for edge_id in edge_ids {
+        let edits = by_edge.get(&edge_id).cloned().unwrap_or_default();
+        let edge_label = format!("lambda @{} edge e{}", func.lambda_id.index(), edge_id.0);
+        let expected = if let Some(cfg_func) = cfg_func {
+            cfg_expected_transfers_for_edge(cfg_func, func, edge_id)
+        } else {
+            Vec::new()
+        };
+
+        let mut last_write_by_destination = HashMap::<Allocation, (Allocation, Allocation)>::new();
+        for edit in &edits {
+            verify_allocation_is_valid(edit.from, func.num_spillslots, "source", &edge_label)?;
+            verify_allocation_is_valid(edit.to, func.num_spillslots, "target", &edge_label)?;
+            last_write_by_destination.insert(edit.to, (edit.from, edit.to));
+        }
+
+        let actual_targets: HashSet<Allocation> =
+            last_write_by_destination.keys().copied().collect();
+        let mut tracked_transfers = Vec::<(usize, Allocation, Allocation)>::new();
+        let mut expected_complete = true;
+        for transfer in &expected {
+            let (Some(source_alloc), Some(target_alloc)) =
+                (transfer.source_alloc, transfer.target_alloc)
+            else {
+                expected_complete = false;
+                continue;
+            };
+            if source_alloc == target_alloc {
+                continue;
+            }
+            tracked_transfers.push((tracked_transfers.len(), source_alloc, target_alloc));
+            if !actual_targets.contains(&target_alloc) {
+                return Err(RegallocEngineError::StaticVerifier(format!(
+                    "{edge_label}: missing edge edit to cover block param v{} from v{} (expected target {:?})",
+                    transfer.target_vreg.index(),
+                    transfer.source_vreg.index(),
+                    target_alloc
+                )));
+            }
+        }
+
+        if !tracked_transfers.is_empty() {
+            let mut symbols = HashMap::<Allocation, HashSet<usize>>::new();
+            for (transfer_id, source_alloc, _) in &tracked_transfers {
+                symbols
+                    .entry(*source_alloc)
+                    .or_default()
+                    .insert(*transfer_id);
+            }
+
+            let mut suspicious_extra = None;
+            for edit in edits
+                .iter()
+                .copied()
+                .filter(|e| e.pos == regalloc2::InstPosition::Before)
+                .chain(
+                    edits
+                        .iter()
+                        .copied()
+                        .filter(|e| e.pos == regalloc2::InstPosition::After),
+                )
+            {
+                let moved = symbols.get(&edit.from).cloned().unwrap_or_default();
+                if moved.is_empty()
+                    && expected_complete
+                    && edit
+                        .to
+                        .as_reg()
+                        .is_none_or(|reg| !scratch_regs.contains(&reg))
+                {
+                    suspicious_extra = Some((edit.from, edit.to));
+                }
+                if !moved.is_empty() {
+                    symbols.insert(edit.to, moved);
+                }
+            }
+
+            for (transfer_id, source_alloc, target_alloc) in &tracked_transfers {
+                let delivered = symbols
+                    .get(target_alloc)
+                    .is_some_and(|set| set.contains(transfer_id));
+                if !delivered {
+                    return Err(RegallocEngineError::StaticVerifier(format!(
+                        "{edge_label}: edge edits do not deliver source {:?} to expected target {:?}",
+                        source_alloc, target_alloc
+                    )));
+                }
+            }
+            if let Some((from, to)) = suspicious_extra {
+                return Err(RegallocEngineError::StaticVerifier(format!(
+                    "{edge_label}: suspicious extra edge edit {:?} -> {:?} (not connected to any expected block-param transfer)",
+                    from, to
+                )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn verify_static_edge_edits_cfg(
+    program: &AllocatedCfgProgram,
+) -> Result<(), RegallocEngineError> {
+    for func in &program.functions {
+        let cfg_func = program
+            .cfg_program
+            .funcs
+            .iter()
+            .find(|candidate| candidate.lambda_id == func.lambda_id);
+        verify_function_static_edge_edits_cfg(cfg_func, func)?;
+    }
+    Ok(())
+}
+
 // r[impl ir.regalloc.engine]
 pub fn allocate_program(program: &RaProgram) -> Result<AllocatedProgram, RegallocEngineError> {
     let env = machine_env();
@@ -1550,10 +1790,15 @@ pub fn allocate_cfg_program(
         )?);
     }
 
-    Ok(AllocatedCfgProgram {
+    let allocated = AllocatedCfgProgram {
         cfg_program: program.clone(),
         functions,
-    })
+    };
+
+    #[cfg(debug_assertions)]
+    verify_static_edge_edits_cfg(&allocated)?;
+
+    Ok(allocated)
 }
 
 /// Run regalloc2 on linear IR by first lowering to RA-MIR.
@@ -3432,6 +3677,158 @@ lambda @0 (shape: "u8") {
         edit.from = Allocation::reg(preg_int(2));
 
         let err = verify_static_edge_edits(&alloc).expect_err("wrong edge edit mapping must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("do not deliver source"),
+            "unexpected verifier error: {msg}"
+        );
+    }
+
+    fn synthetic_cfg_edge_fixture() -> AllocatedCfgProgram {
+        let source_vreg = kajit_ir::VReg::new(10);
+        let target_vreg = kajit_ir::VReg::new(11);
+        let aux_vreg = kajit_ir::VReg::new(12);
+        let inst_id = crate::cfg_mir::InstId::new(0);
+        let term_branch = crate::cfg_mir::TermId::new(0);
+        let term_ret = crate::cfg_mir::TermId::new(1);
+        let edge_id = crate::cfg_mir::EdgeId::new(0);
+
+        let cfg_func = crate::cfg_mir::Function {
+            id: crate::cfg_mir::FunctionId::new(0),
+            lambda_id: LambdaId::new(0),
+            entry: crate::cfg_mir::BlockId::new(0),
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![
+                crate::cfg_mir::Block {
+                    id: crate::cfg_mir::BlockId::new(0),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: term_branch,
+                    preds: Vec::new(),
+                    succs: vec![edge_id],
+                },
+                crate::cfg_mir::Block {
+                    id: crate::cfg_mir::BlockId::new(1),
+                    params: vec![target_vreg],
+                    insts: vec![inst_id],
+                    term: term_ret,
+                    preds: vec![edge_id],
+                    succs: Vec::new(),
+                },
+            ],
+            edges: vec![crate::cfg_mir::Edge {
+                id: edge_id,
+                from: crate::cfg_mir::BlockId::new(0),
+                to: crate::cfg_mir::BlockId::new(1),
+                args: vec![crate::cfg_mir::EdgeArg {
+                    target: target_vreg,
+                    source: source_vreg,
+                }],
+            }],
+            insts: vec![crate::cfg_mir::Inst {
+                id: inst_id,
+                op: LinearOp::Const {
+                    dst: aux_vreg,
+                    value: 1,
+                },
+                operands: vec![crate::cfg_mir::Operand {
+                    vreg: target_vreg,
+                    kind: crate::cfg_mir::OperandKind::Use,
+                    class: crate::cfg_mir::RegClass::Gpr,
+                    fixed: None,
+                }],
+                clobbers: crate::cfg_mir::Clobbers::default(),
+            }],
+            terms: vec![
+                crate::cfg_mir::Terminator::Branch { edge: edge_id },
+                crate::cfg_mir::Terminator::Return,
+            ],
+        };
+
+        let mut op_allocs = HashMap::<crate::cfg_mir::OpId, Vec<Allocation>>::new();
+        let mut op_operands =
+            HashMap::<crate::cfg_mir::OpId, Vec<(kajit_ir::VReg, crate::OperandKind)>>::new();
+        op_allocs.insert(
+            crate::cfg_mir::OpId::Term(term_branch),
+            vec![Allocation::reg(preg_int(0))],
+        );
+        op_operands.insert(
+            crate::cfg_mir::OpId::Term(term_branch),
+            vec![(source_vreg, crate::OperandKind::Use)],
+        );
+        op_allocs.insert(
+            crate::cfg_mir::OpId::Inst(inst_id),
+            vec![Allocation::reg(preg_int(1))],
+        );
+        op_operands.insert(
+            crate::cfg_mir::OpId::Inst(inst_id),
+            vec![(target_vreg, crate::OperandKind::Use)],
+        );
+
+        AllocatedCfgProgram {
+            cfg_program: crate::cfg_mir::Program {
+                funcs: vec![cfg_func],
+                vreg_count: 32,
+                slot_count: 0,
+            },
+            functions: vec![AllocatedCfgFunction {
+                lambda_id: LambdaId::new(0),
+                num_spillslots: 0,
+                edits: Vec::new(),
+                op_allocs,
+                op_operands,
+                edge_edits: vec![CfgEdgeEdit {
+                    edge: edge_id,
+                    pos: regalloc2::InstPosition::After,
+                    from: Allocation::reg(preg_int(0)),
+                    to: Allocation::reg(preg_int(1)),
+                }],
+                return_result_allocs: Vec::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn cfg_static_edge_edit_verifier_accepts_expected_edge_edit_set() {
+        let alloc = synthetic_cfg_edge_fixture();
+        verify_static_edge_edits_cfg(&alloc).expect("expected cfg edge edit set should pass");
+    }
+
+    #[test]
+    fn cfg_static_edge_edit_verifier_rejects_missing_required_edge_edit() {
+        let mut alloc = synthetic_cfg_edge_fixture();
+        let alloc_func = alloc
+            .functions
+            .first_mut()
+            .expect("allocated cfg program should have one function");
+        alloc_func.edge_edits.clear();
+
+        let err =
+            verify_static_edge_edits_cfg(&alloc).expect_err("missing cfg edge edit must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing edge edit to cover block param"),
+            "unexpected verifier error: {msg}"
+        );
+    }
+
+    #[test]
+    fn cfg_static_edge_edit_verifier_rejects_wrong_source_target_edit() {
+        let mut alloc = synthetic_cfg_edge_fixture();
+        let alloc_func = alloc
+            .functions
+            .first_mut()
+            .expect("allocated cfg program should have one function");
+
+        let edit = alloc_func
+            .edge_edits
+            .first_mut()
+            .expect("first cfg edge edit should exist");
+        edit.from = Allocation::reg(preg_int(2));
+
+        let err = verify_static_edge_edits_cfg(&alloc)
+            .expect_err("wrong cfg edge edit mapping must fail");
         let msg = err.to_string();
         assert!(
             msg.contains("do not deliver source"),
