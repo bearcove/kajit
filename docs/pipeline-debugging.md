@@ -89,6 +89,10 @@ Generated corpus tests do not enforce IR/CFG-MIR/edit snapshots by default. Dump
 - `KAJIT_DUMP_DIR` — output directory (default: `target/kajit-stage-dumps`)
 - `KAJIT_ASSERT_CODEGEN_SNAPSHOTS=1` — opt back into legacy snapshot assertions
 
+`KAJIT_DUMP_DIR` accepts absolute or relative paths. Relative paths are resolved
+from the test process working directory (often the crate directory), so use an
+absolute path if you want dumps in a specific workspace location.
+
 Example:
 
 ```bash

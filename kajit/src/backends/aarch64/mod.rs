@@ -180,6 +180,22 @@ impl Lowerer {
         max_moves as u32
     }
 
+    fn max_call_move_count(program: &cfg_mir::Program) -> u32 {
+        let mut max_moves = 0usize;
+        for func in &program.funcs {
+            for inst in &func.insts {
+                let args_len = match &inst.op {
+                    LinearOp::CallIntrinsic { args, .. } => args.len(),
+                    LinearOp::CallPure { args, .. } => args.len(),
+                    LinearOp::CallLambda { args, .. } => args.len(),
+                    _ => 0,
+                };
+                max_moves = max_moves.max(args_len);
+            }
+        }
+        max_moves as u32
+    }
+
     pub(super) fn new_label_id(&mut self) -> LabelId {
         self.ectx.new_label()
     }
@@ -249,7 +265,8 @@ impl Lowerer {
         };
         let max_edge_args = Self::max_edge_move_count(program, alloc, no_edit_mode);
         let max_progpoint_moves = Self::max_progpoint_move_count(alloc);
-        let max_parallel_moves = max_edge_args.max(max_progpoint_moves);
+        let max_call_moves = Self::max_call_move_count(program);
+        let max_parallel_moves = max_edge_args.max(max_progpoint_moves).max(max_call_moves);
         let extra_saved_pairs = Self::regalloc_extra_saved_pairs(alloc);
         let slot_base = BASE_FRAME + extra_saved_pairs * 16;
         let slot_bytes = program.slot_count * 8;

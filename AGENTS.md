@@ -82,6 +82,10 @@ Dump pipeline artifacts with environment variables:
 - `KAJIT_DUMP_FILTER` — substring match on `<format>::<case>` (e.g. `postcard::scalar_u64_v3`)
 - `KAJIT_DUMP_DIR` — output directory (default: `target/kajit-stage-dumps`)
 
+`KAJIT_DUMP_DIR` accepts absolute or relative paths. Relative paths are resolved
+from the test process working directory (often the crate directory), so use an
+absolute path if you want dumps in a specific workspace location.
+
 Dump files are named `<format>__<case>__<arch>__<stage>.txt`.
 
 Use `opts` stage to see RVSDG snapshots between each optimization pass.
