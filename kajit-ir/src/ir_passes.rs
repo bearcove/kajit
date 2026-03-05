@@ -368,7 +368,6 @@ fn hoist_theta_loop_invariants_for_node(
     let body_nodes = func.regions[body_region].nodes.clone();
     let body_node_set: HashSet<NodeId> = body_nodes.iter().copied().collect();
     let mut hoistable_set = HashSet::new();
-    let mut hoistable_nodes = Vec::new();
 
     for node_id in body_nodes.iter().copied() {
         let NodeKind::Simple(op) = &func.nodes[node_id].kind else {
@@ -381,13 +380,46 @@ fn hoist_theta_loop_invariants_for_node(
             source_is_theta_invariant(inp.source, body_region, &body_node_set, &hoistable_set)
         }) {
             hoistable_set.insert(node_id);
-            hoistable_nodes.push(node_id);
         }
     }
 
-    if hoistable_nodes.is_empty() {
+    if hoistable_set.is_empty() {
         return false;
     }
+
+    loop {
+        let mut removed_any = false;
+        let current = hoistable_set.clone();
+        for node_id in current.iter().copied() {
+            let inputs_invariant = func.nodes[node_id].inputs.iter().all(|inp| {
+                source_is_theta_invariant(inp.source, body_region, &body_node_set, &hoistable_set)
+            });
+            let uses_compatible = theta_hoist_uses_stay_within_body_subset(
+                func,
+                use_lists,
+                body_region,
+                node_id,
+                &hoistable_set,
+            );
+            if !inputs_invariant || !uses_compatible {
+                hoistable_set.remove(&node_id);
+                removed_any = true;
+            }
+        }
+        if !removed_any {
+            break;
+        }
+    }
+
+    if hoistable_set.is_empty() {
+        return false;
+    }
+
+    let hoistable_nodes: Vec<NodeId> = body_nodes
+        .iter()
+        .copied()
+        .filter(|nid| hoistable_set.contains(nid))
+        .collect();
 
     let Some(theta_pos) = func.regions[parent_region]
         .nodes
@@ -486,6 +518,31 @@ fn source_is_theta_invariant(
         }
         PortSource::RegionArg(arg) => arg.region != body_region,
     }
+}
+
+fn theta_hoist_uses_stay_within_body_subset(
+    func: &IrFunc,
+    use_lists: &UseLists,
+    body_region: RegionId,
+    node_id: NodeId,
+    hoistable_set: &HashSet<NodeId>,
+) -> bool {
+    let output_len = func.nodes[node_id].outputs.len();
+    (0..output_len).all(|out_idx| {
+        let out = OutputRef {
+            node: node_id,
+            index: out_idx as u16,
+        };
+        let Some(use_sites) = use_lists.by_output.get(&out) else {
+            return true;
+        };
+        use_sites.iter().all(|use_site| match *use_site {
+            UseSite::NodeInput { node, .. } => {
+                func.nodes[node].region != body_region || hoistable_set.contains(&node)
+            }
+            UseSite::RegionResult { region, .. } => region != body_region,
+        })
+    })
 }
 
 fn is_hoistable_theta_setup_op(op: &IrOp) -> bool {
@@ -1359,6 +1416,65 @@ mod tests {
             "expected fewer invariant setup tree nodes in theta body after pass (before={}, after={})",
             invariant_tree_nodes_before,
             invariant_tree_nodes_after
+        );
+    }
+
+    #[test]
+    fn theta_hoist_keeps_partially_used_consts_inside_body() {
+        let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            let init_acc = rb.const_val(0);
+            let init_shift = rb.const_val(7);
+            let one = rb.const_val(1);
+            let mask = rb.const_val(0x7f);
+            let _ = rb.theta(&[init_acc, init_shift, one], |bb| {
+                let args = bb.region_args(3);
+                let acc = args[0];
+                let shift = args[1];
+                let one = args[2];
+                let value = bb.const_val(3);
+                let masked = bb.binop(IrOp::And, value, mask);
+                let shifted = bb.binop(IrOp::Shl, masked, shift);
+                let next_acc = bb.binop(IrOp::Or, acc, shifted);
+                let next_shift = bb.binop(IrOp::Add, shift, one);
+                bb.set_results(&[next_acc, next_acc, next_shift, one]);
+            });
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let root = func.root_body();
+        let theta = func.regions[root]
+            .nodes
+            .iter()
+            .copied()
+            .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
+            .expect("expected theta node");
+        let body = match &func.nodes[theta].kind {
+            NodeKind::Theta { body } => *body,
+            _ => unreachable!("expected theta node"),
+        };
+
+        let body_consts_before = func.regions[body]
+            .nodes
+            .iter()
+            .filter(|&&nid| matches!(func.nodes[nid].kind, NodeKind::Simple(IrOp::Const { .. })))
+            .count();
+        assert!(
+            body_consts_before >= 1,
+            "fixture should include theta-body constants before pass"
+        );
+
+        hoist_theta_loop_invariant_setup_pass(&mut func);
+
+        let body_consts_after = func.regions[body]
+            .nodes
+            .iter()
+            .filter(|&&nid| matches!(func.nodes[nid].kind, NodeKind::Simple(IrOp::Const { .. })))
+            .count();
+        assert!(
+            body_consts_after >= 1,
+            "constants that feed non-hoistable body ops must not be hoisted out of theta"
         );
     }
 }
