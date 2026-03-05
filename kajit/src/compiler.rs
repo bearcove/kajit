@@ -117,43 +117,47 @@ fn sanitize_debug_file_stem(name: &str) -> String {
     }
 }
 
-fn format_ra_terminator(term: &crate::regalloc_mir::RaTerminator) -> String {
+fn format_cfg_terminator(term: &crate::regalloc_engine::cfg_mir::Terminator) -> String {
     match term {
-        crate::regalloc_mir::RaTerminator::Return => "return".to_string(),
-        crate::regalloc_mir::RaTerminator::ErrorExit { code } => format!("error_exit {code:?}"),
-        crate::regalloc_mir::RaTerminator::Branch { target } => format!("branch b{}", target.0),
-        crate::regalloc_mir::RaTerminator::BranchIf {
+        crate::regalloc_engine::cfg_mir::Terminator::Return => "return".to_string(),
+        crate::regalloc_engine::cfg_mir::Terminator::ErrorExit { code } => {
+            format!("error_exit {code:?}")
+        }
+        crate::regalloc_engine::cfg_mir::Terminator::Branch { edge } => {
+            format!("branch e{}", edge.0)
+        }
+        crate::regalloc_engine::cfg_mir::Terminator::BranchIf {
             cond,
-            target,
+            taken,
             fallthrough,
         } => format!(
-            "branch_if v{} -> b{} else b{}",
+            "branch_if v{} -> e{} else e{}",
             cond.index(),
-            target.0,
+            taken.0,
             fallthrough.0
         ),
-        crate::regalloc_mir::RaTerminator::BranchIfZero {
+        crate::regalloc_engine::cfg_mir::Terminator::BranchIfZero {
             cond,
-            target,
+            taken,
             fallthrough,
         } => format!(
-            "branch_if_zero v{} -> b{} else b{}",
+            "branch_if_zero v{} -> e{} else e{}",
             cond.index(),
-            target.0,
+            taken.0,
             fallthrough.0
         ),
-        crate::regalloc_mir::RaTerminator::JumpTable {
+        crate::regalloc_engine::cfg_mir::Terminator::JumpTable {
             predicate,
             targets,
             default,
         } => {
             let targets = targets
                 .iter()
-                .map(|target| format!("b{}", target.0))
+                .map(|target| format!("e{}", target.0))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
-                "jump_table v{} [{}] default b{}",
+                "jump_table v{} [{}] default e{}",
                 predicate.index(),
                 targets,
                 default.0
@@ -162,24 +166,30 @@ fn format_ra_terminator(term: &crate::regalloc_mir::RaTerminator) -> String {
     }
 }
 
-fn build_ra_mir_listing(program: &crate::regalloc_mir::RaProgram) -> (String, HashMap<usize, u32>) {
+fn build_cfg_mir_listing(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+) -> (String, HashMap<usize, u32>) {
     let mut lines = Vec::new();
-    let mut line_by_linear_op = HashMap::<usize, u32>::new();
+    let mut line_by_source_op = HashMap::<usize, u32>::new();
+    let mut next_source_op = 0usize;
     let mut next_line = 1u32;
     for func in &program.funcs {
         for block in &func.blocks {
-            for inst in &block.insts {
+            for inst_id in &block.insts {
+                let inst = func
+                    .inst(*inst_id)
+                    .expect("block instruction should exist for debug listing");
                 lines.push(format!("{:?}", inst.op));
-                line_by_linear_op
-                    .entry(inst.linear_op_index)
-                    .or_insert(next_line);
+                line_by_source_op.entry(next_source_op).or_insert(next_line);
+                next_source_op += 1;
                 next_line += 1;
             }
-            let linear_op_index = block.term_linear_op_index;
-            lines.push(format_ra_terminator(&block.term));
-            line_by_linear_op
-                .entry(linear_op_index)
-                .or_insert(next_line);
+            let term = func
+                .term(block.term)
+                .expect("block terminator should exist for debug listing");
+            lines.push(format_cfg_terminator(term));
+            line_by_source_op.entry(next_source_op).or_insert(next_line);
+            next_source_op += 1;
             next_line += 1;
         }
     }
@@ -187,7 +197,7 @@ fn build_ra_mir_listing(program: &crate::regalloc_mir::RaProgram) -> (String, Ha
     if !listing.is_empty() {
         listing.push('\n');
     }
-    (listing, line_by_linear_op)
+    (listing, line_by_source_op)
 }
 
 fn write_ra_mir_listing_file(type_name: &str, listing: &str) -> Option<PathBuf> {
@@ -1415,7 +1425,7 @@ fn compile_linear_ir_decoder_with_options(
         no_regalloc_alloc_for_cfg_program(&cfg_program)
     };
 
-    let (buf, entry, _source_map) = {
+    let (buf, entry, source_map) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
             ir,
             &cfg_program,
@@ -1426,7 +1436,7 @@ fn compile_linear_ir_decoder_with_options(
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
-    let _root_display_name = ir
+    let root_display_name = ir
         .ops
         .iter()
         .find_map(|op| match op {
@@ -1458,7 +1468,26 @@ fn compile_linear_ir_decoder_with_options(
         size: buf.len().saturating_sub(entry),
     };
     let registration = if jit_debug {
-        crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
+        let (listing, line_by_source_op) = build_cfg_mir_listing(&cfg_program);
+        let listing_path = write_ra_mir_listing_file(&root_display_name, &listing);
+        let dwarf = listing_path.as_deref().and_then(|path| {
+            build_dwarf_from_source_map(
+                buf.code_ptr(),
+                buf.len(),
+                source_map.as_ref(),
+                path,
+                &line_by_source_op,
+                &root_display_name,
+                &[],
+                jit_dwarf_target_arch(),
+            )
+        });
+        crate::jit_debug::register_jit_code_with_dwarf(
+            buf.code_ptr(),
+            buf.len(),
+            &[symbol],
+            dwarf.as_ref(),
+        )
     } else {
         crate::jit_debug::register_jit_code(buf.code_ptr(), buf.len(), &[symbol])
     };

@@ -508,6 +508,7 @@ impl Lowerer {
     // r[impl ir.backends.post-regalloc.branch-test]
     // r[impl ir.backends.post-regalloc.shuffle]
     fn run(mut self, program: &cfg_mir::Program) -> LinearBackendResult {
+        let mut source_line_base = 0u32;
         for func in &program.funcs {
             let lambda_id = func.lambda_id.index() as u32;
             let schedule = func
@@ -550,7 +551,7 @@ impl Lowerer {
                         .expect("instruction op should exist in derived schedule");
                     self.ectx.set_source_location(kajit_emit::SourceLocation {
                         file: 1,
-                        line: source_index + 1,
+                        line: source_line_base + source_index + 1,
                         column: 0,
                     });
                     self.current_inst_allocs = self
@@ -572,7 +573,7 @@ impl Lowerer {
                     .expect("terminator op should exist in derived schedule");
                 self.ectx.set_source_location(kajit_emit::SourceLocation {
                     file: 1,
-                    line: source_index + 1,
+                    line: source_line_base + source_index + 1,
                     column: 0,
                 });
                 let next_block = func.blocks.get(block_index + 1);
@@ -586,6 +587,7 @@ impl Lowerer {
                 .expect("FuncEnd without active function");
             self.emit_load_lambda_results_to_ret_regs(func_ctx.lambda_id, &func_ctx.data_results);
             self.ectx.end_func(func_ctx.error_exit);
+            source_line_base += schedule.op_order.len() as u32;
         }
 
         self.emit_edge_trampolines();
