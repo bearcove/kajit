@@ -1816,6 +1816,8 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "kajit-mir",
+ "kajit-mir-text",
  "prettyplease",
  "proc-macro2",
  "quote",

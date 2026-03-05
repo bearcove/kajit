@@ -135,17 +135,155 @@ fn main() {
     let mut args = std::env::args();
     let _bin = args.next();
     let command = args.next();
-    let _command_args: Vec<String> = args.collect();
+    let command_args: Vec<String> = args.collect();
 
     match command.as_deref() {
         Some("install") => install(),
         Some("gen") => {
             generate_synthetic();
         }
+        Some("minimize-cfg-mir") => minimize_cfg_mir(&command_args),
         _ => {
-            eprintln!("usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen>");
+            eprintln!(
+                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|minimize-cfg-mir>"
+            );
             std::process::exit(2);
         }
+    }
+}
+
+fn minimize_cfg_mir(args: &[String]) {
+    let [path, input_hex] = args else {
+        eprintln!(
+            "usage: cargo run --manifest-path xtask/Cargo.toml -- minimize-cfg-mir <cfg-mir-path> <hex-input>"
+        );
+        std::process::exit(2);
+    };
+
+    let input = parse_hex_bytes(input_hex).unwrap_or_else(|err| {
+        eprintln!("invalid hex input `{input_hex}`: {err}");
+        std::process::exit(2);
+    });
+    let text = fs::read_to_string(path).unwrap_or_else(|err| {
+        eprintln!("failed to read {}: {err}", path);
+        std::process::exit(1);
+    });
+    let program = kajit_mir_text::parse_cfg_mir(&text).unwrap_or_else(|err| {
+        eprintln!("failed to parse CFG-MIR from {}: {err}", path);
+        std::process::exit(1);
+    });
+    let (reduced, stats, interestingness) =
+        kajit_mir::minimize_cfg_program_for_differential(&program, &input).unwrap_or_else(|err| {
+            match err {
+                kajit_mir::MinimizeError::NotInteresting => {
+                    eprintln!(
+                        "seed program is not differentially interesting for input {input_hex}"
+                    );
+                }
+                kajit_mir::MinimizeError::Predicate(message) => {
+                    eprintln!("differential minimization failed: {message}");
+                }
+            }
+            std::process::exit(1);
+        });
+
+    eprintln!(
+        "reduced CFG-MIR for input {input_hex}: blocks {} -> {}, insts {} -> {}, edges {} -> {}, accepted {} / {}",
+        stats.initial_size.blocks,
+        stats.final_size.blocks,
+        stats.initial_size.insts,
+        stats.final_size.insts,
+        stats.initial_size.edges,
+        stats.final_size.edges,
+        stats.accepted,
+        stats.attempts
+    );
+    eprintln!(
+        "preserved differential signature: field={}, ideal_trap={:?}, post_trap={:?}, ideal_returned={}, post_returned={}",
+        interestingness.field,
+        interestingness.ideal_trap,
+        interestingness.post_trap,
+        interestingness.ideal_returned,
+        interestingness.post_returned
+    );
+    println!("{reduced}");
+}
+
+fn parse_hex_bytes(input: &str) -> Result<Vec<u8>, String> {
+    let separators = ['[', ']', ',', ' ', '\t', '\n', '\r'];
+    let has_separators = input.chars().any(|ch| separators.contains(&ch));
+
+    if has_separators {
+        let mut out = Vec::new();
+        for raw in input.split(|ch| separators.contains(&ch)) {
+            let token = raw.trim();
+            if token.is_empty() {
+                continue;
+            }
+            let token = token
+                .strip_prefix("0x")
+                .or_else(|| token.strip_prefix("0X"))
+                .unwrap_or(token);
+            if token.len() != 2 {
+                return Err(format!(
+                    "expected byte token with exactly 2 hex digits, got `{raw}`"
+                ));
+            }
+            let hi = decode_hex_nybble(token.as_bytes()[0] as char)?;
+            let lo = decode_hex_nybble(token.as_bytes()[1] as char)?;
+            out.push((hi << 4) | lo);
+        }
+        return Ok(out);
+    }
+
+    let normalized = input
+        .strip_prefix("0x")
+        .or_else(|| input.strip_prefix("0X"))
+        .unwrap_or(input)
+        .replace('_', "");
+    if normalized.is_empty() {
+        return Ok(Vec::new());
+    }
+    if normalized.len() % 2 != 0 {
+        return Err("expected an even number of hex digits".to_owned());
+    }
+
+    let mut out = Vec::with_capacity(normalized.len() / 2);
+    let bytes = normalized.as_bytes();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        let hi = decode_hex_nybble(bytes[index] as char)?;
+        let lo = decode_hex_nybble(bytes[index + 1] as char)?;
+        out.push((hi << 4) | lo);
+        index += 2;
+    }
+    Ok(out)
+}
+
+fn decode_hex_nybble(ch: char) -> Result<u8, String> {
+    match ch {
+        '0'..='9' => Ok((ch as u8) - b'0'),
+        'a'..='f' => Ok((ch as u8) - b'a' + 10),
+        'A'..='F' => Ok((ch as u8) - b'A' + 10),
+        _ => Err(format!("invalid hex digit `{ch}`")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hex_bytes;
+
+    #[test]
+    fn parse_hex_bytes_accepts_compact_hex() {
+        assert_eq!(parse_hex_bytes("808001").unwrap(), vec![0x80, 0x80, 0x01]);
+    }
+
+    #[test]
+    fn parse_hex_bytes_accepts_byte_list() {
+        assert_eq!(
+            parse_hex_bytes("[0x80, 0x80, 0x01]").unwrap(),
+            vec![0x80, 0x80, 0x01]
+        );
     }
 }
 
