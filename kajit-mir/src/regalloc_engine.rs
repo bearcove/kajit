@@ -2467,6 +2467,336 @@ fn execute_sim_linear_op(
     Ok(())
 }
 
+fn infer_output_size_for_cfg_function(func: &cfg_mir::Function) -> usize {
+    func.insts
+        .iter()
+        .filter_map(|inst| match &inst.op {
+            LinearOp::WriteToField { offset, width, .. }
+            | LinearOp::ReadFromField { offset, width, .. } => {
+                Some(*offset as usize + width.bytes() as usize)
+            }
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+fn edit_pos_key(pos: regalloc2::InstPosition) -> u8 {
+    match pos {
+        regalloc2::InstPosition::Before => 0,
+        regalloc2::InstPosition::After => 1,
+    }
+}
+
+fn find_cfg_operand_alloc_for_kind(
+    alloc_func: &AllocatedCfgFunction,
+    op_id: cfg_mir::OpId,
+    vreg: kajit_ir::VReg,
+    kind: RaOperandKind,
+) -> Result<Allocation, RegallocEngineError> {
+    let Some(operands) = alloc_func.op_operands.get(&op_id) else {
+        return Err(RegallocEngineError::Simulation(format!(
+            "missing operand metadata for cfg op {:?}",
+            op_id
+        )));
+    };
+    let Some(allocs) = alloc_func.op_allocs.get(&op_id) else {
+        return Err(RegallocEngineError::Simulation(format!(
+            "missing allocation metadata for cfg op {:?}",
+            op_id
+        )));
+    };
+    for ((operand_vreg, operand_kind), alloc) in operands.iter().zip(allocs.iter().copied()) {
+        if *operand_vreg == vreg && *operand_kind == kind {
+            return Ok(alloc);
+        }
+    }
+    Err(RegallocEngineError::Simulation(format!(
+        "missing allocation for {:?} operand v{} in cfg op {:?}",
+        kind,
+        vreg.index(),
+        op_id
+    )))
+}
+
+pub fn simulate_execution_cfg(
+    allocated: &AllocatedCfgProgram,
+    input: &[u8],
+) -> Result<ExecutionResult, RegallocEngineError> {
+    let func = allocated.cfg_program.funcs.first().ok_or_else(|| {
+        RegallocEngineError::Simulation("CFG MIR program has no functions".to_string())
+    })?;
+    let alloc_func = allocated
+        .functions
+        .iter()
+        .find(|f| f.lambda_id == func.lambda_id)
+        .or_else(|| allocated.functions.first())
+        .ok_or_else(|| {
+            RegallocEngineError::Simulation("allocated cfg program has no functions".to_string())
+        })?;
+    let schedule = func
+        .derive_schedule()
+        .map_err(|err| RegallocEngineError::Simulation(err.to_string()))?;
+
+    let mut block_indices = HashMap::with_capacity(func.blocks.len());
+    for (idx, block) in func.blocks.iter().enumerate() {
+        block_indices.insert(block.id, idx);
+    }
+
+    let mut edits_by_progpoint =
+        HashMap::<(cfg_mir::OpId, u8), Vec<(Allocation, Allocation)>>::new();
+    for (point, edit) in &alloc_func.edits {
+        let Edit::Move { from, to } = edit;
+        let op_id = match point {
+            cfg_mir::ProgPoint::Before(op) | cfg_mir::ProgPoint::After(op) => *op,
+            cfg_mir::ProgPoint::Edge(_) => continue,
+        };
+        edits_by_progpoint
+            .entry((
+                op_id,
+                edit_pos_key(match point {
+                    cfg_mir::ProgPoint::Before(_) => regalloc2::InstPosition::Before,
+                    cfg_mir::ProgPoint::After(_) => regalloc2::InstPosition::After,
+                    cfg_mir::ProgPoint::Edge(_) => regalloc2::InstPosition::Before,
+                }),
+            ))
+            .or_default()
+            .push((*from, *to));
+    }
+
+    let mut edge_edits = HashMap::<(cfg_mir::EdgeId, u8), Vec<(Allocation, Allocation)>>::new();
+    for edge in &alloc_func.edge_edits {
+        edge_edits
+            .entry((edge.edge, edit_pos_key(edge.pos)))
+            .or_default()
+            .push((edge.from, edge.to));
+    }
+
+    let mut regs = HashMap::<PReg, u64>::new();
+    let mut spills = HashMap::<usize, u64>::new();
+    let mut output = vec![0u8; infer_output_size_for_cfg_function(func)];
+    let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
+    let mut cursor = 0usize;
+    let mut trap: Option<crate::InterpreterTrap> = None;
+    let mut returned = false;
+    let mut current = func.entry;
+    let mut next_inst = 0usize;
+    let mut steps = 0usize;
+
+    while trap.is_none() && !returned {
+        if steps >= MAX_SIM_STEPS {
+            return Err(RegallocEngineError::Simulation(format!(
+                "cfg simulation exceeded step limit ({MAX_SIM_STEPS})"
+            )));
+        }
+        steps += 1;
+
+        let block_idx = *block_indices.get(&current).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!("unknown cfg block b{}", current.0))
+        })?;
+        let block = &func.blocks[block_idx];
+
+        if next_inst < block.insts.len() {
+            let inst_id = block.insts[next_inst];
+            let inst = &func.insts[inst_id.index()];
+            let op_id = cfg_mir::OpId::Inst(inst_id);
+            if let Some(edits) =
+                edits_by_progpoint.get(&(op_id, edit_pos_key(regalloc2::InstPosition::Before)))
+            {
+                apply_moves(&mut regs, &mut spills, edits);
+            }
+
+            let linear_op_index = *schedule.op_to_index.get(&op_id).ok_or_else(|| {
+                RegallocEngineError::Simulation(format!("schedule missing cfg inst {:?}", op_id))
+            })? as usize;
+            let inst_view = crate::RaInst {
+                linear_op_index,
+                op: inst.op.clone(),
+                operands: inst.operands.iter().copied().map(map_cfg_operand).collect(),
+                clobbers: map_cfg_clobbers(inst.clobbers),
+            };
+            let inst_allocs = alloc_func.op_allocs.get(&op_id).ok_or_else(|| {
+                RegallocEngineError::Simulation(format!(
+                    "missing allocation metadata for cfg op {:?}",
+                    op_id
+                ))
+            })?;
+
+            execute_sim_linear_op(
+                &inst.op,
+                crate::BlockId(block.id.0),
+                &inst_view,
+                inst_allocs,
+                &mut regs,
+                &mut spills,
+                &mut sim,
+                &mut cursor,
+                &mut output,
+                &mut trap,
+            )?;
+
+            if let Some(edits) =
+                edits_by_progpoint.get(&(op_id, edit_pos_key(regalloc2::InstPosition::After)))
+            {
+                apply_moves(&mut regs, &mut spills, edits);
+            }
+
+            next_inst += 1;
+            continue;
+        }
+
+        let term = func.term(block.term).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!("missing cfg term t{}", block.term.0))
+        })?;
+        let term_op = cfg_mir::OpId::Term(block.term);
+
+        if let Some(edits) =
+            edits_by_progpoint.get(&(term_op, edit_pos_key(regalloc2::InstPosition::Before)))
+        {
+            apply_moves(&mut regs, &mut spills, edits);
+        }
+
+        match term {
+            cfg_mir::Terminator::Return => {
+                returned = true;
+            }
+            cfg_mir::Terminator::ErrorExit { code } => {
+                trap = Some(crate::InterpreterTrap {
+                    code: *code,
+                    offset: cursor as u32,
+                });
+            }
+            cfg_mir::Terminator::Branch { edge } => {
+                if let Some(edits) =
+                    edge_edits.get(&(*edge, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(*edge, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[edge.index()].to;
+                next_inst = 0;
+            }
+            cfg_mir::Terminator::BranchIf {
+                cond,
+                taken,
+                fallthrough,
+            } => {
+                let cond_alloc = find_cfg_operand_alloc_for_kind(
+                    alloc_func,
+                    term_op,
+                    *cond,
+                    RaOperandKind::Use,
+                )?;
+                let cond_value = read_allocation(&regs, &spills, cond_alloc);
+                let chosen = if cond_value != 0 {
+                    *taken
+                } else {
+                    *fallthrough
+                };
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[chosen.index()].to;
+                next_inst = 0;
+            }
+            cfg_mir::Terminator::BranchIfZero {
+                cond,
+                taken,
+                fallthrough,
+            } => {
+                let cond_alloc = find_cfg_operand_alloc_for_kind(
+                    alloc_func,
+                    term_op,
+                    *cond,
+                    RaOperandKind::Use,
+                )?;
+                let cond_value = read_allocation(&regs, &spills, cond_alloc);
+                let chosen = if cond_value == 0 {
+                    *taken
+                } else {
+                    *fallthrough
+                };
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[chosen.index()].to;
+                next_inst = 0;
+            }
+            cfg_mir::Terminator::JumpTable {
+                predicate,
+                targets,
+                default,
+            } => {
+                let pred_alloc = find_cfg_operand_alloc_for_kind(
+                    alloc_func,
+                    term_op,
+                    *predicate,
+                    RaOperandKind::Use,
+                )?;
+                let pred = read_allocation(&regs, &spills, pred_alloc) as usize;
+                let chosen = targets.get(pred).copied().unwrap_or(*default);
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::Before)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                if let Some(edits) =
+                    edge_edits.get(&(chosen, edit_pos_key(regalloc2::InstPosition::After)))
+                {
+                    apply_moves(&mut regs, &mut spills, edits);
+                }
+                current = func.edges[chosen.index()].to;
+                next_inst = 0;
+            }
+        }
+
+        if let Some(edits) =
+            edits_by_progpoint.get(&(term_op, edit_pos_key(regalloc2::InstPosition::After)))
+        {
+            apply_moves(&mut regs, &mut spills, edits);
+        }
+    }
+
+    let current_block_idx = *block_indices.get(&current).ok_or_else(|| {
+        RegallocEngineError::Simulation(format!("unknown final cfg block b{}", current.0))
+    })?;
+    let current_block = &func.blocks[current_block_idx];
+
+    Ok(ExecutionResult {
+        state: ExecutionState {
+            physical_registers: regs,
+            spillslots: spills,
+            position: ExecutionPosition {
+                block: crate::BlockId(current_block.id.0),
+                next_inst_index: next_inst,
+                at_terminator: next_inst >= current_block.insts.len(),
+            },
+        },
+        output,
+        cursor,
+        trap,
+        returned,
+    })
+}
+
 pub fn simulate_execution(
     allocated: &AllocatedProgram,
     input: &[u8],
@@ -3874,6 +4204,36 @@ lambda @0 (shape: "u8") {
             sim.returned,
             "expected simulator to finish with a return terminator"
         );
+    }
+
+    #[test]
+    fn cfg_post_regalloc_simulation_matches_ra_post_regalloc() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            rb.bounds_check(4);
+            let value = rb.read_bytes(4);
+            rb.write_to_field(value, 0, Width::W4);
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let lin = linearize(&mut func);
+
+        let ra = lower_linear_ir(&lin);
+        let ra_alloc = allocate_program(&ra).expect("ra allocation should succeed");
+
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let cfg_alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
+
+        let input = [0x78_u8, 0x56, 0x34, 0x12];
+        let ra_sim = simulate_execution(&ra_alloc, &input).expect("ra simulation should succeed");
+        let cfg_sim =
+            simulate_execution_cfg(&cfg_alloc, &input).expect("cfg simulation should succeed");
+
+        assert_eq!(cfg_sim.output, ra_sim.output);
+        assert_eq!(cfg_sim.cursor, ra_sim.cursor);
+        assert_eq!(cfg_sim.trap, ra_sim.trap);
+        assert_eq!(cfg_sim.returned, ra_sim.returned);
     }
 
     #[test]
