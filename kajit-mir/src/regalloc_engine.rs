@@ -19,6 +19,7 @@ use kajit_ir::LambdaId;
 /// Materialized allocation result for one function.
 #[derive(Debug, Clone)]
 pub struct EdgeEdit {
+    pub from_block_id: crate::BlockId,
     pub from_linear_op_index: usize,
     pub succ_index: usize,
     pub pos: regalloc2::InstPosition,
@@ -178,6 +179,7 @@ fn align_succ_arg_sources_to_target(
 
 #[derive(Debug, Clone, Copy)]
 struct EdgeBlockInfo {
+    from_block_id: crate::BlockId,
     from_linear_op_index: usize,
     succ_index: usize,
     cfg_edge_id: Option<cfg_mir::EdgeId>,
@@ -526,6 +528,11 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
 
             let to_params = blocks[to].params.clone();
             let from_linear_op_index = blocks[from].term_linear_op_index;
+            let from_block_id = if from < func.blocks.len() {
+                crate::BlockId(func.blocks[from].id.0)
+            } else {
+                crate::BlockId(from as u32)
+            };
             let edge_succ_args = to_params.clone();
             let edge_block = WorkBlock {
                 raw_insts: Vec::new(),
@@ -543,6 +550,7 @@ fn split_critical_edges_ra(func: &RaFunction) -> (Vec<WorkBlock>, Vec<Option<Edg
             let edge_id = blocks.len();
             blocks.push(edge_block);
             edge_infos.push(Some(EdgeBlockInfo {
+                from_block_id,
                 from_linear_op_index,
                 succ_index: succ_idx,
                 cfg_edge_id: None,
@@ -664,6 +672,11 @@ fn split_critical_edges_cfg(
 
             let to_params = blocks[to].params.clone();
             let from_linear_op_index = blocks[from].term_linear_op_index;
+            let from_block_id = if from < func.blocks.len() {
+                crate::BlockId(func.blocks[from].id.0)
+            } else {
+                crate::BlockId(from as u32)
+            };
             let cfg_edge_id = func.blocks[from].succs[succ_idx];
             let edge_succ_args = to_params.clone();
             let edge_block = WorkBlock {
@@ -682,6 +695,7 @@ fn split_critical_edges_cfg(
             let edge_id = blocks.len();
             blocks.push(edge_block);
             edge_infos.push(Some(EdgeBlockInfo {
+                from_block_id,
                 from_linear_op_index,
                 succ_index: succ_idx,
                 cfg_edge_id: Some(cfg_edge_id),
@@ -1029,6 +1043,7 @@ fn materialize_output(
         };
         let Edit::Move { from, to } = edit;
         edge_edits.push(EdgeEdit {
+            from_block_id: edge_info.from_block_id,
             from_linear_op_index: edge_info.from_linear_op_index,
             succ_index: edge_info.succ_index,
             pos: prog_point.pos(),
@@ -3515,6 +3530,7 @@ lambda @0 (shape: "u8") {
     fn static_edge_edit_verifier_accepts_duplicate_dest() {
         let edge_key_linear = 42usize;
         let edge_key_succ = 0usize;
+        let edge_key_from_block = crate::BlockId(7);
         let bad = AllocatedProgram {
             ra_program: RaProgram {
                 funcs: Vec::new(),
@@ -3531,6 +3547,7 @@ lambda @0 (shape: "u8") {
                 term_inst_indices_by_block: Vec::new(),
                 edge_edits: vec![
                     EdgeEdit {
+                        from_block_id: edge_key_from_block,
                         from_linear_op_index: edge_key_linear,
                         succ_index: edge_key_succ,
                         pos: regalloc2::InstPosition::After,
@@ -3538,6 +3555,7 @@ lambda @0 (shape: "u8") {
                         to: Allocation::reg(preg_int(1)),
                     },
                     EdgeEdit {
+                        from_block_id: edge_key_from_block,
                         from_linear_op_index: edge_key_linear,
                         succ_index: edge_key_succ,
                         pos: regalloc2::InstPosition::After,
@@ -3554,6 +3572,7 @@ lambda @0 (shape: "u8") {
     fn synthetic_edge_fixture() -> AllocatedProgram {
         let source_vreg = kajit_ir::VReg::new(10);
         let target_vreg = kajit_ir::VReg::new(11);
+        let from_block = crate::BlockId(0);
         let from_linear = 100usize;
         let succ_linear = 200usize;
 
@@ -3628,6 +3647,7 @@ lambda @0 (shape: "u8") {
                 inst_linear_op_indices: vec![Some(from_linear), Some(succ_linear)],
                 term_inst_indices_by_block: vec![Some(0), None],
                 edge_edits: vec![EdgeEdit {
+                    from_block_id: from_block,
                     from_linear_op_index: from_linear,
                     succ_index: 0,
                     pos: regalloc2::InstPosition::After,
