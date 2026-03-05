@@ -1,6 +1,6 @@
 # kajit
 
-Kajit is a JIT deserializer for Rust that generates native machine code at startup from facet type reflection. It walks a type's `Shape` through a multi-stage pipeline: IR (RVSDG with explicit data/side-effect tokens), optimization passes, linearization to `LinearIr`, register allocation via regalloc2, and codegen to aarch64 or x86_64.
+Kajit is a JIT deserializer for Rust that generates native machine code at startup from facet type reflection. It walks a type's `Shape` through a multi-stage pipeline: IR (RVSDG with explicit data/side-effect tokens), optimization passes, linearization to `LinearIr`, lowering to canonical `CFG-MIR`, register allocation via regalloc2, and codegen to aarch64 or x86_64.
 
 ## Architecture
 

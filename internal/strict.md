@@ -106,6 +106,11 @@ layer for all post-linearization stages.
 This is the "go straight to goal" plan. Each milestone is expected to break the build
 until the full sequence lands.
 
+Progress (strict-main-cleanup branch):
+- Completed: 1 through 8 (canonical CFG-MIR introduced, regalloc + simulator + differential + debugger ported, legacy RA-MIR plumbing removed from production API/code paths).
+- In progress: 9 (debug/dump naming and ergonomics cleanup).
+- Pending: 10 (full end-to-end stabilization matrix).
+
 1. Introduce canonical post-linearization IR
 - Add `CfgMir` types (`Function/Block/Edge/Inst/Term`) with typed IDs (`OpId`, `EdgeId`, ...).
 - Terminator is required and explicit in every block.

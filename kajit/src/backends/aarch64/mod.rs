@@ -605,7 +605,7 @@ impl Lowerer {
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. } => {
-                panic!("structural op {op:?} should not appear as RaInst");
+                panic!("structural op {op:?} should not appear as a CFG-MIR instruction");
             }
         }
     }

@@ -478,26 +478,26 @@ Backends must use CFG-aware whole-function register allocation for hot-path
 code generation. Register location decisions must remain valid across control
 flow edges and joins without relying on blanket boundary flushes.
 
-r[ir.regalloc.ra-mir]
+r[ir.regalloc.cfg-mir]
 Before machine emission, linearized IR is lowered to an allocator-oriented
-machine IR (RA-MIR) with explicit basic blocks and instruction order.
+machine IR (CFG-MIR) with explicit basic blocks and instruction order.
 
-r[ir.regalloc.ra-mir.operands]
-Each RA-MIR instruction declares virtual-register uses/defs, register class
+r[ir.regalloc.cfg-mir.operands]
+Each CFG-MIR instruction declares virtual-register uses/defs, register class
 requirements (at minimum GPR vs SIMD), and any fixed-register constraints.
 
-r[ir.regalloc.ra-mir.block-params]
+r[ir.regalloc.cfg-mir.block-params]
 Control-flow merges are represented with block parameters and branch
 arguments, so loop-carried and join-carried values are explicit allocator
 inputs rather than implicit stack state.
 
-r[ir.regalloc.ra-mir.calls]
+r[ir.regalloc.cfg-mir.calls]
 Call instructions declare ABI constraints: fixed argument/return registers
 and clobbered registers. Values live across calls must be placed in locations
 that satisfy these clobber rules.
 
 r[ir.regalloc.engine]
-The register allocation engine consumes RA-MIR and returns final locations
+The register allocation engine consumes CFG-MIR and returns final locations
 plus edit operations (moves, spills, reloads) required to satisfy constraints.
 
 r[ir.regalloc.edits]
