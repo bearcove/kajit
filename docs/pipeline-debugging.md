@@ -36,6 +36,36 @@ Show built-in help:
 KAJIT_OPTS=help cargo nextest run -p kajit <test_filter>
 ```
 
+## Differential harness (use first for regalloc/backend bugs)
+
+Before stage dumps or LLDB, run the differential harness to find the first
+semantic divergence.
+
+- RA interpreter vs post-regalloc simulation (allocator/edit correctness):
+  - `kajit_mir::regalloc_engine::differential_check_program`
+- RA interpreter vs JIT machine code (backend/codegen correctness):
+  - `kajit::differential_check_program_vs_jit`
+
+Fast sanity commands:
+
+```bash
+# allocator/simulation differential harness tests
+cargo nextest run -p kajit-mir -E 'test(regalloc_engine::tests::differential_)'
+
+# JIT differential harness tests
+cargo nextest run -p kajit -E 'test(differential_harness_)'
+```
+
+For a failing corpus case, build an RA program for the same shape/input and run
+both harnesses in a focused test:
+
+1. `kajit::debug_ra_program(shape, decoder)` to get RA-MIR.
+2. `kajit_mir::regalloc_engine::differential_check_program(ra.clone(), input)`
+3. `kajit::differential_check_program_vs_jit(&ra, input)`
+
+These report the first divergent `step_index` and field (`position`, `cursor`,
+`trap`, `returned`, or `output`) so you can target one exact transition.
+
 ## On-demand pipeline dumps
 
 Generated corpus tests do not enforce IR/RA-MIR/edit snapshots by default. Dump pipeline artifacts on demand with:

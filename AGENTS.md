@@ -26,6 +26,25 @@ Always run tests after making code changes. Run at least the tests directly cove
 
 Full reference: `docs/pipeline-debugging.md`
 
+### Differential Harness (first step)
+
+For regalloc/backend failures, run differential harnesses before dumps/LLDB.
+
+- RA interpreter vs post-regalloc simulation:
+  - `kajit_mir::regalloc_engine::differential_check_program`
+- RA interpreter vs JIT machine code:
+  - `kajit::differential_check_program_vs_jit`
+
+Quick checks:
+
+```bash
+cargo nextest run -p kajit-mir -E 'test(regalloc_engine::tests::differential_)'
+cargo nextest run -p kajit -E 'test(differential_harness_)'
+```
+
+Use the first divergent `step_index`/field to narrow to one specific IR/RA op,
+then proceed with `KAJIT_OPTS` bisect and stage dumps.
+
 ### Bisecting with `KAJIT_OPTS`
 
 Disable parts of the pipeline at runtime to isolate bugs. Syntax: comma-separated `+name` / `-name` tokens.
