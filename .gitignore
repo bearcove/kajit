@@ -1,5 +1,6 @@
 /target
 xtask/target/
+kajit/target/
 xtask/Cargo.lock
 .claude
 callgrind.out.*
