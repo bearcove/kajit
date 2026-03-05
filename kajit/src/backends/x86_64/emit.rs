@@ -78,16 +78,7 @@ impl Lowerer {
             Width::W2 => self
                 .ectx
                 .emit
-                .emit_with(|buf| {
-                    x64::encode_mov_m_r16(
-                        Mem {
-                            base: 14,
-                            disp: off,
-                        },
-                        10,
-                        buf,
-                    )
-                })
+                .emit_with(|buf| x64::encode_mov_m_r16(14, off, 10, buf))
                 .expect("mov"),
             Width::W4 => self
                 .ectx
