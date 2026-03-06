@@ -562,6 +562,8 @@ If the selected test is one of the generated corpus cases, the wrapper also:
 3. Imports `scripts/kajit_lldb_side_by_side.py`
 
 That helper gives you LLDB commands keyed by the same CFG-MIR line numbers as DWARF:
+- `kajit-bytes [count]` — read bytes at `input_ptr` as hex plus printable ASCII
+- `kajit-text [count]` — read bytes at `input_ptr` as printable text
 - `kajit-break [regex]` — set a breakpoint on registered JIT decode code
 - `kajit-here` — print interpreter reference for the current JIT source line
 - `kajit-list` — list available reference lines, or dump one explicit line
@@ -622,6 +624,10 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 
 # Show interpreter-side expectations for the current JIT line
 (lldb) kajit-here
+
+# Show current bytes/text at the input cursor
+(lldb) kajit-bytes
+(lldb) kajit-text
 
 # Step once, then print the matching interpreter reference
 (lldb) kajit-step
