@@ -165,15 +165,22 @@ pub struct LambdaMarker;
 /// A lambda identifier for cross-referencing between IrFuncs.
 pub type LambdaId = Id<LambdaMarker>;
 
-/// Marker type for named RVSDG state domains.
-pub struct StateDomainMarker;
+/// A named RVSDG state domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateDomain {
+    pub name: String,
+}
 /// A state-domain identifier used for generic state tokens.
-pub type StateDomainId = Id<StateDomainMarker>;
+pub type StateDomainId = Id<StateDomain>;
 
 /// The built-in cursor state domain.
 pub const CURSOR_STATE_DOMAIN: StateDomainId = StateDomainId::new(0);
 /// The built-in output state domain.
 pub const OUTPUT_STATE_DOMAIN: StateDomainId = StateDomainId::new(1);
+/// The built-in cursor state domain name.
+pub const CURSOR_STATE_DOMAIN_NAME: &str = "cursor";
+/// The built-in output state domain name.
+pub const OUTPUT_STATE_DOMAIN_NAME: &str = "output";
 
 /// A debug scope identifier carried through the RVSDG pipeline.
 pub type DebugScopeId = Id<DebugScope>;
@@ -827,6 +834,8 @@ pub struct IrFunc {
     pub nodes: Arena<Node>,
     /// All regions.
     pub regions: Arena<Region>,
+    /// Named state domains used by state ports and effects.
+    pub state_domains: Arena<StateDomain>,
     /// The root lambda node.
     pub root: NodeId,
     /// Next VReg to allocate.
@@ -844,6 +853,33 @@ pub struct IrFunc {
 }
 
 impl IrFunc {
+    pub fn builtin_state_domains() -> Arena<StateDomain> {
+        let mut domains = Arena::new();
+        let cursor = domains.push(StateDomain {
+            name: CURSOR_STATE_DOMAIN_NAME.to_owned(),
+        });
+        let output = domains.push(StateDomain {
+            name: OUTPUT_STATE_DOMAIN_NAME.to_owned(),
+        });
+        debug_assert_eq!(cursor, CURSOR_STATE_DOMAIN);
+        debug_assert_eq!(output, OUTPUT_STATE_DOMAIN);
+        domains
+    }
+
+    pub fn add_state_domain(&mut self, name: impl Into<String>) -> StateDomainId {
+        self.state_domains.push(StateDomain { name: name.into() })
+    }
+
+    pub fn has_state_domain(&self, id: StateDomainId) -> bool {
+        id.index() < self.state_domains.len()
+    }
+
+    pub fn state_domain_name(&self, id: StateDomainId) -> Option<&str> {
+        self.state_domains
+            .iter()
+            .find_map(|(domain_id, domain)| (domain_id == id).then_some(domain.name.as_str()))
+    }
+
     /// Allocate a fresh virtual register.
     pub fn fresh_vreg(&mut self) -> VReg {
         let id = VReg::new(self.vreg_count);
@@ -923,6 +959,7 @@ impl IrBuilder {
         let mut func = IrFunc {
             nodes: Arena::new(),
             regions: Arena::new(),
+            state_domains: IrFunc::builtin_state_domains(),
             root: NodeId::new(0), // placeholder, set below
             vreg_count: 0,
             slot_count: 0,
@@ -2037,6 +2074,7 @@ pub struct IrFuncDisplay<'a> {
 
 impl<'a> fmt::Display for IrFuncDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.func.fmt_state_domains(f)?;
         self.func.fmt_debug_scopes(f)?;
         self.func.fmt_node(f, self.func.root, 0, self.registry)
     }
@@ -2390,6 +2428,15 @@ impl IrFunc {
             PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => write!(f, "%os"),
             PortKind::State(domain) => write!(f, "%s{}", domain.index()),
         }
+    }
+
+    fn fmt_state_domains(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "state_domains {{")?;
+        for (domain_id, domain) in self.state_domains.iter() {
+            writeln!(f, "  d{} = {}", domain_id.index(), domain.name)?;
+        }
+        writeln!(f, "}}")?;
+        Ok(())
     }
 
     fn fmt_debug_scopes(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
