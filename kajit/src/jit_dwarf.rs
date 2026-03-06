@@ -30,9 +30,15 @@ pub struct DwarfLocationRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DwarfVariableLocation {
+    Expr(Vec<u8>),
+    List(Vec<DwarfLocationRange>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DwarfVariable {
     pub name: String,
-    pub locations: Vec<DwarfLocationRange>,
+    pub location: DwarfVariableLocation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,8 +245,21 @@ pub fn build_debug_abbrev_section() -> Vec<u8> {
     out.push(0);
     out.push(0);
 
-    // Abbrev 4: variable.
+    // Abbrev 4: variable with inline exprloc.
     push_uleb128(&mut out, 4);
+    out.push(DW_TAG_VARIABLE);
+    out.push(DW_CHILDREN_NO);
+    out.push(DW_AT_NAME);
+    out.push(DW_FORM_STRING);
+    out.push(DW_AT_LOCATION);
+    out.push(DW_FORM_EXPRLOC);
+    out.push(DW_AT_TYPE);
+    out.push(DW_FORM_REF4);
+    out.push(0);
+    out.push(0);
+
+    // Abbrev 5: variable with .debug_loc location list.
+    push_uleb128(&mut out, 5);
     out.push(DW_TAG_VARIABLE);
     out.push(DW_CHILDREN_NO);
     out.push(DW_AT_NAME);
@@ -266,12 +285,6 @@ pub fn build_debug_info_section(
     variables: &[DwarfVariable],
     variable_loc_offsets: &[u32],
 ) -> Vec<u8> {
-    assert_eq!(
-        variables.len(),
-        variable_loc_offsets.len(),
-        "each variable must have a matching .debug_loc offset"
-    );
-
     let mut die = Vec::new();
     // Compile unit DIE (abbrev 1).
     push_uleb128(&mut die, 1);
@@ -299,12 +312,27 @@ pub fn build_debug_info_section(
     die.extend_from_slice(frame_base_expr);
 
     // Variable DIEs (abbrev 3) as children of subprogram.
-    for (variable, loc_offset) in variables.iter().zip(variable_loc_offsets.iter().copied()) {
-        push_uleb128(&mut die, 4);
-        die.extend_from_slice(variable.name.as_bytes());
-        die.push(0);
-        die.extend_from_slice(&loc_offset.to_le_bytes()); // DW_AT_location -> .debug_loc offset
-        die.extend_from_slice(&base_type_die_offset.to_le_bytes()); // DW_AT_type -> u64
+    let mut next_loc_offset = 0usize;
+    for variable in variables {
+        match &variable.location {
+            DwarfVariableLocation::Expr(expr) => {
+                push_uleb128(&mut die, 4);
+                die.extend_from_slice(variable.name.as_bytes());
+                die.push(0);
+                push_uleb128(&mut die, expr.len() as u64);
+                die.extend_from_slice(expr);
+                die.extend_from_slice(&base_type_die_offset.to_le_bytes());
+            }
+            DwarfVariableLocation::List(_ranges) => {
+                let loc_offset = variable_loc_offsets[next_loc_offset];
+                next_loc_offset += 1;
+                push_uleb128(&mut die, 5);
+                die.extend_from_slice(variable.name.as_bytes());
+                die.push(0);
+                die.extend_from_slice(&loc_offset.to_le_bytes());
+                die.extend_from_slice(&base_type_die_offset.to_le_bytes());
+            }
+        }
     }
 
     // End of subprogram children, then end of CU children.
@@ -323,21 +351,23 @@ pub fn build_debug_info_section(
 
 pub fn build_debug_loc_section(variables: &[DwarfVariable]) -> (Vec<u8>, Vec<u32>) {
     let mut section = Vec::<u8>::new();
-    let mut offsets = Vec::<u32>::with_capacity(variables.len());
+    let mut offsets = Vec::<u32>::new();
     for variable in variables {
-        offsets.push(section.len() as u32);
-        for loc in &variable.locations {
-            if loc.end <= loc.start {
-                continue;
+        if let DwarfVariableLocation::List(locations) = &variable.location {
+            offsets.push(section.len() as u32);
+            for loc in locations {
+                if loc.end <= loc.start {
+                    continue;
+                }
+                section.extend_from_slice(&loc.start.to_le_bytes());
+                section.extend_from_slice(&loc.end.to_le_bytes());
+                section.extend_from_slice(&(loc.expression.len() as u16).to_le_bytes());
+                section.extend_from_slice(&loc.expression);
             }
-            section.extend_from_slice(&loc.start.to_le_bytes());
-            section.extend_from_slice(&loc.end.to_le_bytes());
-            section.extend_from_slice(&(loc.expression.len() as u16).to_le_bytes());
-            section.extend_from_slice(&loc.expression);
+            // End-of-list marker for one variable.
+            section.extend_from_slice(&0u64.to_le_bytes());
+            section.extend_from_slice(&0u64.to_le_bytes());
         }
-        // End-of-list marker for one variable.
-        section.extend_from_slice(&0u64.to_le_bytes());
-        section.extend_from_slice(&0u64.to_le_bytes());
     }
     (section, offsets)
 }
@@ -700,7 +730,7 @@ mod tests {
     fn debug_info_contains_cu_subprogram_and_variables() {
         let variables = vec![DwarfVariable {
             name: "my_struct.count".to_string(),
-            locations: vec![],
+            location: DwarfVariableLocation::Expr(expr_reg(0)),
         }];
         let info = build_debug_info_section(
             0x1234,
@@ -762,8 +792,9 @@ mod tests {
         let end = info[i..].iter().position(|b| *b == 0).unwrap();
         assert_eq!(&info[i..i + end], b"my_struct.count");
         i += end + 1;
-        assert_eq!(u32::from_le_bytes(info[i..i + 4].try_into().unwrap()), 0);
-        i += 4;
+        assert_eq!(parse_uleb(&info, &mut i), 1);
+        assert_eq!(info[i], DW_OP_REG0);
+        i += 1;
         assert_eq!(
             u32::from_le_bytes(info[i..i + 4].try_into().unwrap()),
             base_type_offset
@@ -779,7 +810,7 @@ mod tests {
         let vars = vec![
             DwarfVariable {
                 name: "a".to_string(),
-                locations: vec![
+                location: DwarfVariableLocation::List(vec![
                     DwarfLocationRange {
                         start: 0x10,
                         end: 0x20,
@@ -790,18 +821,17 @@ mod tests {
                         end: 0x40,
                         expression: expr_fbreg(-24),
                     },
-                ],
+                ]),
             },
             DwarfVariable {
                 name: "b".to_string(),
-                locations: vec![],
+                location: DwarfVariableLocation::Expr(expr_reg(0)),
             },
         ];
 
         let (loc, offsets) = build_debug_loc_section(&vars);
-        assert_eq!(offsets.len(), 2);
+        assert_eq!(offsets.len(), 1);
         assert_eq!(offsets[0], 0);
-        assert!(offsets[1] > offsets[0]);
         assert!(!loc.is_empty());
 
         let first_start = u64::from_le_bytes(loc[0..8].try_into().unwrap());
@@ -838,18 +868,36 @@ mod tests {
             "kajit::decode::Bools",
             &[DwarfVariable {
                 name: "flag".to_string(),
-                locations: vec![DwarfLocationRange {
-                    start: 0x1000,
-                    end: 0x1004,
-                    expression: expr_reg(0),
-                }],
+                location: DwarfVariableLocation::Expr(expr_reg(0)),
             }],
         )
         .unwrap();
         assert!(!sections.debug_line.is_empty());
         assert!(!sections.debug_abbrev.is_empty());
         assert!(!sections.debug_info.is_empty());
-        assert!(!sections.debug_loc.is_empty());
         assert!(!sections.is_empty());
+    }
+
+    #[test]
+    fn build_jit_dwarf_sections_uses_debug_loc_for_ranged_variables() {
+        let sections = build_jit_dwarf_sections_with_variables(
+            DwarfTargetArch::X86_64,
+            0x1000,
+            8,
+            &[(0, 0)],
+            "decoder.ra",
+            Some("jit"),
+            "kajit::decode::Bools",
+            &[DwarfVariable {
+                name: "flag".to_string(),
+                location: DwarfVariableLocation::List(vec![DwarfLocationRange {
+                    start: 0x1000,
+                    end: 0x1004,
+                    expression: expr_reg(0),
+                }]),
+            }],
+        )
+        .unwrap();
+        assert!(!sections.debug_loc.is_empty());
     }
 }
