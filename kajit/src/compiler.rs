@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use facet::{
@@ -303,6 +303,253 @@ fn deser_dwarf_variables(
         location: crate::jit_dwarf::DwarfVariableLocation::Expr(expr),
     })
     .collect()
+}
+
+fn cfg_dwarf_line_by_op(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+) -> BTreeMap<(u32, crate::regalloc_engine::cfg_mir::OpId), u32> {
+    let mut line_by_lambda_op =
+        BTreeMap::<(u32, crate::regalloc_engine::cfg_mir::OpId), u32>::new();
+    let mut next_line = 1u32;
+    for func in &program.funcs {
+        let lambda_id = func.lambda_id.index() as u32;
+        for block in &func.blocks {
+            for inst_id in &block.insts {
+                line_by_lambda_op.insert(
+                    (
+                        lambda_id,
+                        crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id),
+                    ),
+                    next_line,
+                );
+                next_line += 1;
+            }
+            line_by_lambda_op.insert(
+                (
+                    lambda_id,
+                    crate::regalloc_engine::cfg_mir::OpId::Term(block.term),
+                ),
+                next_line,
+            );
+            next_line += 1;
+        }
+    }
+    line_by_lambda_op
+}
+
+fn line_ranges_from_source_map(
+    code_ptr: *const u8,
+    code_len: usize,
+    source_map: &kajit_emit::SourceMap,
+) -> BTreeMap<u32, Vec<(u64, u64)>> {
+    let mut by_line = BTreeMap::<u32, Vec<(u64, u64)>>::new();
+    for (index, entry) in source_map.iter().enumerate() {
+        let line = entry.location.line;
+        if line == 0 {
+            continue;
+        }
+        let start = code_ptr as u64 + entry.offset as u64;
+        let end_offset = source_map
+            .get(index + 1)
+            .map(|next| next.offset as usize)
+            .unwrap_or(code_len);
+        let end = code_ptr as u64 + end_offset as u64;
+        if end > start {
+            by_line.entry(line).or_default().push((start, end));
+        }
+    }
+    by_line
+}
+
+#[cfg(target_arch = "aarch64")]
+fn aarch64_regalloc_extra_saved_pairs(alloc: &crate::regalloc_engine::AllocatedCfgProgram) -> u32 {
+    let mut max_pair = None::<u32>;
+    let mut observe = |allocation: regalloc2::Allocation| {
+        let Some(reg) = allocation.as_reg() else {
+            return;
+        };
+        if reg.class() != regalloc2::RegClass::Int {
+            return;
+        }
+        let pair = match reg.hw_enc() as u8 {
+            23 | 24 => Some(0),
+            25 | 26 => Some(1),
+            27 | 28 => Some(2),
+            _ => None,
+        };
+        if let Some(pair) = pair {
+            max_pair = Some(max_pair.map_or(pair, |cur| cur.max(pair)));
+        }
+    };
+
+    for func in &alloc.functions {
+        for inst_allocs in func.op_allocs.values() {
+            for &allocation in inst_allocs {
+                observe(allocation);
+            }
+        }
+        for (_, edit) in &func.edits {
+            let regalloc2::Edit::Move { from, to } = edit;
+            observe(*from);
+            observe(*to);
+        }
+        for edge in &func.edge_edits {
+            observe(edge.from);
+            observe(edge.to);
+        }
+        for &allocation in &func.return_result_allocs {
+            observe(allocation);
+        }
+    }
+
+    max_pair.map_or(0, |pair| pair + 1)
+}
+
+fn dwarf_expr_for_cfg_allocation(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    allocation: regalloc2::Allocation,
+    target_arch: crate::jit_dwarf::DwarfTargetArch,
+    apply_regalloc_edits: bool,
+) -> Option<Vec<u8>> {
+    if let Some(reg) = allocation.as_reg() {
+        if reg.class() != regalloc2::RegClass::Int {
+            return None;
+        }
+        let dwarf_reg =
+            crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, reg.hw_enc() as u8)?;
+        return Some(crate::jit_dwarf::expr_reg(dwarf_reg));
+    }
+
+    let slot = allocation.as_stack()?;
+    #[cfg(target_arch = "x86_64")]
+    {
+        let slot_base = crate::arch::BASE_FRAME;
+        let spill_base = slot_base + program.slot_count * 8;
+        let offset = spill_base + (slot.index() as u32) * 8;
+        return Some(crate::jit_dwarf::expr_fbreg(offset as i64));
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        let extra_saved_pairs = aarch64_regalloc_extra_saved_pairs(alloc);
+        let slot_base = crate::arch::BASE_FRAME + extra_saved_pairs * 16;
+        let spill_base = slot_base + program.slot_count * 8;
+        let _ = apply_regalloc_edits;
+        let offset = spill_base + (slot.index() as u32) * 8;
+        return Some(crate::jit_dwarf::expr_fbreg(offset as i64));
+    }
+
+    #[allow(unreachable_code)]
+    None
+}
+
+fn cfg_value_dwarf_variables(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    source_map: Option<&kajit_emit::SourceMap>,
+    code_ptr: *const u8,
+    code_len: usize,
+    target_arch: crate::jit_dwarf::DwarfTargetArch,
+    apply_regalloc_edits: bool,
+) -> Vec<crate::jit_dwarf::DwarfVariable> {
+    let Some(source_map) = source_map else {
+        return Vec::new();
+    };
+    let line_ranges = line_ranges_from_source_map(code_ptr, code_len, source_map);
+    let line_by_op = cfg_dwarf_line_by_op(program);
+    let alloc_func_by_lambda = alloc
+        .functions
+        .iter()
+        .map(|func| (func.lambda_id, func))
+        .collect::<HashMap<_, _>>();
+    let mut ranges_by_vreg =
+        BTreeMap::<crate::ir::VReg, Vec<crate::jit_dwarf::DwarfLocationRange>>::new();
+
+    for func in &program.funcs {
+        let Some(alloc_func) = alloc_func_by_lambda.get(&func.lambda_id) else {
+            continue;
+        };
+        let lambda_key = func.lambda_id.index() as u32;
+        for inst in &func.insts {
+            let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst.id);
+            let Some(line) = line_by_op.get(&(lambda_key, op_id)).copied() else {
+                continue;
+            };
+            let Some(op_ranges) = line_ranges.get(&line) else {
+                continue;
+            };
+            let Some(operand_pairs) = alloc_func.op_operands.get(&op_id) else {
+                continue;
+            };
+            let Some(operand_allocs) = alloc_func.op_allocs.get(&op_id) else {
+                continue;
+            };
+
+            for ((vreg, operand_kind), allocation) in
+                operand_pairs.iter().zip(operand_allocs.iter().copied())
+            {
+                if *operand_kind != crate::regalloc_engine::cfg_mir::OperandKind::Def {
+                    continue;
+                }
+                let Some(expr) = dwarf_expr_for_cfg_allocation(
+                    program,
+                    alloc,
+                    allocation,
+                    target_arch,
+                    apply_regalloc_edits,
+                ) else {
+                    continue;
+                };
+                let dest = ranges_by_vreg.entry(*vreg).or_default();
+                for (start, end) in op_ranges {
+                    dest.push(crate::jit_dwarf::DwarfLocationRange {
+                        start: *start,
+                        end: *end,
+                        expression: expr.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    ranges_by_vreg
+        .into_iter()
+        .map(
+            |(vreg, mut locations): (
+                crate::ir::VReg,
+                Vec<crate::jit_dwarf::DwarfLocationRange>,
+            )| {
+                locations.sort_by_key(|loc| (loc.start, loc.end));
+                crate::jit_dwarf::DwarfVariable {
+                    name: format!("v{}", vreg.index()),
+                    location: crate::jit_dwarf::DwarfVariableLocation::List(locations),
+                }
+            },
+        )
+        .collect()
+}
+
+fn cfg_mir_dwarf_variables(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    source_map: Option<&kajit_emit::SourceMap>,
+    code_ptr: *const u8,
+    code_len: usize,
+    target_arch: crate::jit_dwarf::DwarfTargetArch,
+    apply_regalloc_edits: bool,
+) -> Vec<crate::jit_dwarf::DwarfVariable> {
+    let mut variables = deser_dwarf_variables(target_arch);
+    variables.extend(cfg_value_dwarf_variables(
+        program,
+        alloc,
+        source_map,
+        code_ptr,
+        code_len,
+        target_arch,
+        apply_regalloc_edits,
+    ));
+    variables
 }
 
 // r[impl compiler.walk]
@@ -1396,7 +1643,15 @@ fn compile_linear_ir_decoder_with_options(
     };
     let registration = if jit_debug {
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
-        let dwarf_variables = deser_dwarf_variables(jit_dwarf_target_arch());
+        let dwarf_variables = cfg_mir_dwarf_variables(
+            &cfg_program,
+            &regalloc_alloc,
+            source_map.as_ref(),
+            buf.code_ptr(),
+            buf.len(),
+            jit_dwarf_target_arch(),
+            apply_regalloc_edits,
+        );
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1474,7 +1729,15 @@ fn compile_cfg_mir_decoder_with_options(
     };
     let registration = if jit_debug {
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
-        let dwarf_variables = deser_dwarf_variables(jit_dwarf_target_arch());
+        let dwarf_variables = cfg_mir_dwarf_variables(
+            cfg_program,
+            &regalloc_alloc,
+            source_map.as_ref(),
+            buf.code_ptr(),
+            buf.len(),
+            jit_dwarf_target_arch(),
+            apply_regalloc_edits,
+        );
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1608,6 +1871,110 @@ mod tests {
                 crate::jit_dwarf::DwarfVariableLocation::List(_) => {
                     panic!("deserializer runtime-state vars should use inline exprloc")
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn cfg_value_dwarf_variables_cover_def_vregs() {
+        let v0 = crate::ir::VReg::new(0);
+        let inst_id = crate::regalloc_engine::cfg_mir::InstId::new(0);
+        let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
+        let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
+        let func = crate::regalloc_engine::cfg_mir::Function {
+            id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+            lambda_id: crate::ir::LambdaId::new(0),
+            entry: block_id,
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+                id: block_id,
+                params: Vec::new(),
+                insts: vec![inst_id],
+                term: term_id,
+                preds: Vec::new(),
+                succs: Vec::new(),
+            }],
+            edges: Vec::new(),
+            insts: vec![crate::regalloc_engine::cfg_mir::Inst {
+                id: inst_id,
+                op: crate::linearize::LinearOp::Const { dst: v0, value: 7 },
+                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                    vreg: v0,
+                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
+                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                    fixed: None,
+                }],
+                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+            }],
+            terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        };
+        let program = crate::regalloc_engine::cfg_mir::Program {
+            funcs: vec![func],
+            vreg_count: 1,
+            slot_count: 0,
+        };
+        let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id);
+        #[cfg(target_arch = "aarch64")]
+        let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
+        #[cfg(target_arch = "x86_64")]
+        let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+        let alloc = crate::regalloc_engine::AllocatedCfgProgram {
+            cfg_program: program.clone(),
+            functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
+                lambda_id: crate::ir::LambdaId::new(0),
+                num_spillslots: 0,
+                edits: Vec::new(),
+                op_allocs: std::collections::HashMap::from([(
+                    op_id,
+                    vec![regalloc2::Allocation::reg(reg)],
+                )]),
+                op_operands: std::collections::HashMap::from([(
+                    op_id,
+                    vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
+                )]),
+                edge_edits: Vec::new(),
+                return_result_allocs: Vec::new(),
+            }],
+        };
+        let source_map = vec![kajit_emit::SourceMapEntry {
+            offset: 0,
+            location: kajit_emit::SourceLocation {
+                file: 0,
+                line: 1,
+                column: 0,
+            },
+        }];
+
+        let vars = cfg_value_dwarf_variables(
+            &program,
+            &alloc,
+            Some(&source_map),
+            0x1000 as *const u8,
+            4,
+            jit_dwarf_target_arch(),
+            true,
+        );
+
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "v0");
+        match &vars[0].location {
+            crate::jit_dwarf::DwarfVariableLocation::List(locations) => {
+                assert_eq!(locations.len(), 1);
+                assert_eq!(locations[0].start, 0x1000);
+                assert_eq!(locations[0].end, 0x1004);
+                let dwarf_reg = crate::jit_dwarf::dwarf_register_from_hw_encoding(
+                    jit_dwarf_target_arch(),
+                    reg.hw_enc() as u8,
+                )
+                .unwrap();
+                assert_eq!(
+                    locations[0].expression,
+                    crate::jit_dwarf::expr_reg(dwarf_reg)
+                );
+            }
+            crate::jit_dwarf::DwarfVariableLocation::Expr(_) => {
+                panic!("cfg def vregs should use ranged locations")
             }
         }
     }
