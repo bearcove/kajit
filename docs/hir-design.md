@@ -71,15 +71,41 @@ The design direction is:
 
 - the structural part of RVSDG remains shared: regions, state edges, gamma,
   theta, apply, and the existing structural optimization passes
-- the op vocabulary below HIR must generalize beyond deserialization
+- the primary generalization is in state domains, not in replacing every op
 - domain-specific ops may still exist, but only within a broader shared model
 
-The likely end state is a combination of:
+The current gap is narrower than "rewrite RVSDG from scratch." Arithmetic,
+constants, calls, slots, gamma/theta structure, and most structural passes are
+already generic enough to survive into a shared middle layer.
 
-- a common base vocabulary for generic loads, stores, calls, arithmetic, field
-  access, and control-relevant operations
-- optional domain-specific dialect ops where a frontend has useful higher-level
-  operations that should survive into RVSDG temporarily
+The main thing that is too specialized today is the hardcoded state-domain
+model:
+
+- cursor state is baked in as a distinguished domain
+- output state is baked in as a distinguished domain
+- cursor-specific ops and SIMD helpers are treated as universal rather than as
+  one domain's operations
+
+The intended direction for #209 is:
+
+- replace hardcoded cursor/output state with named state domains
+- make `cursor` and `output` simply the first two state-domain instances
+- keep a shared base vocabulary for calls, arithmetic, slots, control-relevant
+  ops, and layout-resolved field access
+- let truly domain-specific operations survive as dialect/domain ops where that
+  is useful
+
+For #209, the recommended structural representation is:
+
+- `PortKind::State(StateDomainId)` instead of separate `StateCursor` and
+  `StateOutput` variants
+- `StateDomainId` is an index or interned ID, with `cursor` and `output` as the
+  first concrete instances
+- the coarse RVSDG effect model generalizes in the same direction, for example
+  from `Effect::Cursor` / `Effect::Output` to `Effect::Domain(StateDomainId)`
+
+That keeps the structural optimizer shared while avoiding a false choice between
+"one tiny common denominator IR" and "two unrelated IRs."
 
 Shared optimization passes should continue to operate primarily on structural
 properties and coarse effect information. Domain-specific ops that are opaque to
@@ -269,6 +295,27 @@ barrier by default.
 RVSDG remains the place where effects become explicit state edges and where
 independence can be refined more aggressively.
 
+Today, RVSDG's effect model is still specialized:
+
+- `pure`
+- `cursor`
+- `output`
+- `barrier`
+
+HIR's effect classes are intentionally more general than that current enum.
+The initial lowering contract is:
+
+- HIR `pure` -> RVSDG `Pure`
+- HIR `mutates` -> a concrete RVSDG state domain such as `cursor`, `output`, or
+  a later generalized named domain
+- HIR `barrier` -> RVSDG `Barrier`
+- HIR `reads` is a refinement the current RVSDG does not model separately yet
+
+That means initial HIR->RVSDG lowering may conservatively map `reads` to the
+same state-domain chain as `mutates` in that domain. This loses optimization
+opportunity, but not correctness. A future generalized RVSDG may distinguish
+read-only and mutating access more precisely.
+
 ### HIR should be memory-safe by default
 
 HIR should default to safe semantics that are stronger than C and less
@@ -341,8 +388,18 @@ The exact safety mechanism for handles is still open. Plausible options are:
 - a combination of compile-time ownership with runtime validation at selected
   boundaries
 
-This is a real design cliff for graph-shaped programs and should be prototyped
-early rather than hand-waved away.
+For the first Vixen rule-language frontend specifically, this problem may be
+less immediate than it is in the general case. Vixen's planned value model is
+primarily:
+
+- owned typed values
+- scoped variable bindings
+- host callbacks that accumulate `RulePlan` output externally
+
+That means the first rule-language frontend may not need first-class shared
+arena references in user code right away. Even so, the general HIR design must
+leave room for typed handles or arena-backed references when a future frontend
+or host integration genuinely needs them.
 
 ### Unsafe escape hatches should be explicit
 
@@ -400,8 +457,10 @@ the backends. The expected changes are:
 - debug provenance definitions move up so that HIR is the source of truth
 - RVSDG, LIR, and CFG-MIR carry references to that provenance rather than
   inventing the first user-facing meaning themselves
-- the current frontend lowering APIs stop targeting RVSDG directly and target
-  HIR (or an HIR builder) instead
+- new frontends such as Vixen target HIR from the start
+- existing direct-to-RVSDG frontends may continue lowering that way during the
+  transition, then retarget through HIR once the shared layer is stable enough
+  to justify the migration
 
 ### CFG-MIR owns
 
@@ -544,11 +603,33 @@ HIR should be frontend-neutral.
 
 That means:
 
-- the deserializer frontend lowers into HIR
-- the rule-language frontend lowers into the same HIR
+- the long-term shared semantic target is HIR
+- new frontends such as the Vixen rule language should lower into HIR from the
+  start
+- existing frontends may temporarily keep direct RVSDG lowering during the
+  migration period
 
 The frontends do not need to share a single concrete surface language. They do
 need to share the same semantic lowering target.
+
+That does not mean every frontend exposes the full HIR surface directly.
+
+For example:
+
+- the Vixen rule language is intentionally a constrained build-rule language
+  with limited looping and other deliberate surface restrictions
+- the deserializer frontend and the underlying Kajit HIR are broader and should
+  not inherit those restrictions
+
+HIR is the shared semantic target, not the user-visible promise that every
+frontend supports every HIR construct.
+
+Frontend-specific checked IRs may still exist above shared HIR.
+
+For example, Vixen may keep a frontend-specific checked layer such as
+`TypedExpr` for parsing, name resolution, and type checking. That checked
+frontend IR is not the shared HIR. It lowers into shared HIR, which is the
+contract eventually shared by the interpreter and Kajit lowering.
 
 This keeps:
 
@@ -613,14 +694,18 @@ primitives.
 
 These are intentionally left open for follow-up implementation work:
 
-- whether RVSDG should expose one generalized base op vocabulary, a dialect
-  model, or a hybrid of the two
+- how named state domains should be declared, interned, and surfaced to
+  lowering once `PortKind::State(StateDomainId)` exists
 - whether HIR needs a dedicated type system crate or can reuse existing shape
   metadata directly for the first prototype
+- what the HIR story should be for dynamically typed rule-language values during
+  the transition from today's Vixen runtime to a typed frontend
 - what the exact safe memory model should be for inferred borrowing, handles,
   and arena-backed values
 - how much expression nesting should be preserved before introducing explicit
   temporaries during lowering
+- what the concrete lowering contract should be for host callbacks such as
+  `emit.node(...)` and `env.*(...)` in the first HIR consumer
 - whether source-view selection should be a compile-time option, runtime debug
   option, or both
 
@@ -642,6 +727,7 @@ The design decisions in this document are:
   source feature.
 - HIR owns semantic names, scopes, spans, comments, and debug identities.
 - RVSDG remains the optimization boundary.
-- RVSDG must generalize beyond the current deserializer-specific op vocabulary.
+- RVSDG must generalize beyond the current deserializer-specific state-domain
+  model, with cursor/output becoming named domains rather than hardcoded ones.
 - CFG-MIR remains the backend/debug-codegen boundary.
 - HIR should become the default debugger source view once implemented.
