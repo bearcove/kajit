@@ -366,6 +366,7 @@ const DEBUG_CFG_MIR_COMMAND_ENV: &str = "KAJIT_DEBUG_CFG_MIR_COMMAND";
 const DEBUG_CFG_MIR_VREG_ENV: &str = "KAJIT_DEBUG_CFG_MIR_VREG";
 const DEBUG_CFG_MIR_BLOCK_ENV: &str = "KAJIT_DEBUG_CFG_MIR_BLOCK";
 const DEBUG_CFG_MIR_LAMBDA_ENV: &str = "KAJIT_DEBUG_CFG_MIR_LAMBDA";
+const WAIT_FOR_DEBUGGER_ENV: &str = "KAJIT_WAIT_FOR_DEBUGGER";
 fn maybe_print_case_input(input: &[u8]) {
     if std::env::var_os(PRINT_INPUT_HEX_ENV).is_none() {
         return;
@@ -532,6 +533,28 @@ where
     println!("KAJIT_CASE_DEBUG_CFG_MIR_END");
     true
 }
+fn maybe_wait_for_debugger() {
+    if std::env::var_os(WAIT_FOR_DEBUGGER_ENV).is_none() {
+        return;
+    }
+    let pid = std::process::id();
+    let thread = std::thread::current();
+    let test_name = thread.name().unwrap_or("unknown");
+    eprintln!("KAJIT_WAIT_FOR_DEBUGGER pid={pid} test={test_name}");
+    eprintln!("process will stop itself with SIGSTOP before JIT compilation");
+    eprintln!("attach your debugger now, then continue the process");
+    {
+        use std::io::Write as _;
+        let _ = std::io::stderr().flush();
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::raise(libc::SIGSTOP);
+    }
+    #[cfg(not(unix))]
+    panic!("{WAIT_FOR_DEBUGGER_ENV} is only supported on unix targets");
+    eprintln!("debugger/resumer continued pid={pid} test={test_name}");
+}
 fn assert_json_case<T>(value: T)
 where
     for<'input> T: Facet<'input>
@@ -550,6 +573,7 @@ where
         return;
     }
     let expected: T = serde_json::from_str(&encoded).unwrap();
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let case = runtime_case_name();
     if dumps_enabled_for_case("json", &case) {
@@ -577,6 +601,7 @@ where
         return;
     }
     let expected: T = ::postcard::from_bytes(&encoded).unwrap();
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let case = runtime_case_name();
     if dumps_enabled_for_case("postcard", &case) {
@@ -598,6 +623,7 @@ where
     if maybe_minimize_case_cfg_mir::<T>(input) {
         return;
     }
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let got: T = kajit::deserialize(&decoder, input).unwrap();
     assert_eq!(got, expected);
@@ -614,6 +640,7 @@ where
     if maybe_minimize_case_cfg_mir::<T>(input) {
         return;
     }
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     assert!(out.is_err(), "expected json decode failure");
@@ -630,6 +657,7 @@ where
     if maybe_minimize_case_cfg_mir::<T>(input) {
         return;
     }
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let out = kajit::deserialize::<T>(&decoder, input);
     let err = match out {
@@ -650,6 +678,7 @@ where
     if maybe_minimize_case_cfg_mir::<T>(input) {
         return;
     }
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -669,6 +698,7 @@ where
     if maybe_minimize_case_cfg_mir::<T>(input) {
         return;
     }
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -687,6 +717,7 @@ where
     if maybe_minimize_case_cfg_mir::<T>(input) {
         return;
     }
+    maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let input =
         core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
@@ -707,6 +738,7 @@ where
         + Arbitrary
         + 'static,
 {
+    maybe_wait_for_debugger();
     let json_decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
     let postcard_decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {

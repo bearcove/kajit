@@ -539,6 +539,18 @@ Start LLDB for a specific test with the standalone helper:
 scripts/lldb-test.sh json::bool_true_false
 ```
 
+For an attach-from-Xcode workflow instead of launching under LLDB:
+
+```bash
+scripts/xcode-attach-test.sh json::bool_true_false
+```
+
+That helper resolves the exact test binary, launches it with `KAJIT_DEBUG=1`
+and `KAJIT_WAIT_FOR_DEBUGGER=1`, makes the test process stop itself with
+`SIGSTOP` before JIT compilation, and prints:
+- the PID to attach to from Xcode
+- a temporary LLDB setup file to `command source` inside Xcode before continuing
+
 The script resolves the concrete test binary via `cargo nextest list`, then launches LLDB with:
 - Sets `KAJIT_DEBUG=1` (enables DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` emission)
 - Enables the GDB JIT loader (`settings set plugin.jit-loader.gdb.enable on`)
