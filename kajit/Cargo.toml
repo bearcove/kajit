@@ -26,6 +26,7 @@ kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
 kajit-emit = { path = "../kajit-emit" }
+kajit-hir = { path = "../kajit-hir" }
 
 [dev-dependencies]
 libc = "0.2"

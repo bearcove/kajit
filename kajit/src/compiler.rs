@@ -5,6 +5,7 @@ use facet::{
     ConstParamKind, Def, EnumRepr, KnownPointer, OptionDef, PointerDef, ScalarType, Shape,
     StructKind, Type, UserType,
 };
+use kajit_hir as hir;
 
 use crate::arch::EmitCtx;
 use crate::format::{
@@ -2237,6 +2238,437 @@ pub(crate) fn build_decoder_ir(
     builder.finish()
 }
 
+struct PostcardHirLowerer {
+    module: hir::Module,
+    input_region: hir::RegionId,
+    cursor_type: hir::TypeDefId,
+    type_defs_by_shape: HashMap<*const Shape, hir::TypeDefId>,
+    callables_by_name: HashMap<&'static str, hir::CallableId>,
+    next_local: u32,
+    next_stmt: u32,
+}
+
+impl PostcardHirLowerer {
+    fn new() -> Self {
+        let mut module = hir::Module::new();
+        let input_region = module.add_region("input");
+        let cursor_type = module.add_type_def(hir::TypeDef {
+            name: "Cursor".to_owned(),
+            generic_params: vec![hir::GenericParam::Region {
+                name: "r_input".to_owned(),
+            }],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "bytes".to_owned(),
+                        ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    },
+                    hir::FieldDef {
+                        name: "pos".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                ],
+            },
+        });
+
+        Self {
+            module,
+            input_region,
+            cursor_type,
+            type_defs_by_shape: HashMap::new(),
+            callables_by_name: HashMap::new(),
+            next_local: 0,
+            next_stmt: 0,
+        }
+    }
+
+    fn finish(self) -> hir::Module {
+        self.module
+    }
+
+    fn next_local(&mut self) -> hir::LocalId {
+        let id = hir::LocalId::new(self.next_local);
+        self.next_local += 1;
+        id
+    }
+
+    fn next_stmt_id(&mut self) -> hir::StmtId {
+        let id = hir::StmtId::new(self.next_stmt);
+        self.next_stmt += 1;
+        id
+    }
+
+    fn push_init(&mut self, statements: &mut Vec<hir::Stmt>, place: hir::Place, value: hir::Expr) {
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Init { place, value },
+        });
+    }
+
+    fn shape_has_input_borrow(shape: &'static Shape) -> bool {
+        match shape.scalar_type() {
+            Some(ScalarType::Str | ScalarType::CowStr) => return true,
+            Some(_) => return false,
+            None => {}
+        }
+
+        if shape.is_transparent() {
+            let (fields, _) = collect_fields(shape);
+            return fields
+                .iter()
+                .any(|field| Self::shape_has_input_borrow(field.shape));
+        }
+
+        if let Some(opt_def) = get_option_def(shape) {
+            return Self::shape_has_input_borrow(opt_def.t);
+        }
+
+        if let Some(ptr_def) = get_pointer_def(shape) {
+            return ptr_def.pointee.is_some_and(Self::shape_has_input_borrow);
+        }
+
+        match &shape.def {
+            Def::List(list_def) => return Self::shape_has_input_borrow(list_def.t),
+            Def::Map(map_def) => {
+                return Self::shape_has_input_borrow(map_def.k)
+                    || Self::shape_has_input_borrow(map_def.v);
+            }
+            Def::Array(array_def) => return Self::shape_has_input_borrow(array_def.t),
+            _ => {}
+        }
+
+        match &shape.ty {
+            Type::User(UserType::Struct(_)) => {
+                let (fields, _) = collect_fields(shape);
+                fields
+                    .iter()
+                    .any(|field| Self::shape_has_input_borrow(field.shape))
+            }
+            Type::User(UserType::Enum(enum_type)) => collect_variants(enum_type)
+                .iter()
+                .flat_map(|variant| variant.fields.iter())
+                .any(|field| Self::shape_has_input_borrow(field.shape)),
+            _ => false,
+        }
+    }
+
+    fn ensure_type_def(&mut self, shape: &'static Shape) -> hir::TypeDefId {
+        let key = shape as *const Shape;
+        if let Some(existing) = self.type_defs_by_shape.get(&key).copied() {
+            return existing;
+        }
+
+        let generic_params = if Self::shape_has_input_borrow(shape) {
+            vec![hir::GenericParam::Region {
+                name: "r_input".to_owned(),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        let type_def = hir::TypeDef {
+            name: shape.type_identifier.to_owned(),
+            generic_params,
+            kind: hir::TypeDefKind::Struct { fields: Vec::new() },
+        };
+        let type_id = self.module.add_type_def(type_def);
+        self.type_defs_by_shape.insert(key, type_id);
+
+        let kind = if shape.is_transparent() {
+            let (fields, skipped) = collect_fields(shape);
+            assert!(
+                skipped.is_empty(),
+                "postcard HIR prototype does not support transparent defaults"
+            );
+            hir::TypeDefKind::Struct {
+                fields: fields
+                    .into_iter()
+                    .map(|field| hir::FieldDef {
+                        name: field.name.to_owned(),
+                        ty: self.lower_type(field.shape),
+                    })
+                    .collect(),
+            }
+        } else {
+            match &shape.ty {
+                Type::User(UserType::Struct(_)) => {
+                    let (fields, skipped) = collect_fields(shape);
+                    assert!(
+                        skipped.is_empty(),
+                        "postcard HIR prototype does not support skipped/defaulted fields"
+                    );
+                    hir::TypeDefKind::Struct {
+                        fields: fields
+                            .into_iter()
+                            .map(|field| hir::FieldDef {
+                                name: field.name.to_owned(),
+                                ty: self.lower_type(field.shape),
+                            })
+                            .collect(),
+                    }
+                }
+                _ => panic!(
+                    "postcard HIR prototype only supports struct-like composite roots for now: {}",
+                    shape.type_identifier
+                ),
+            }
+        };
+
+        self.module.type_defs[type_id].kind = kind;
+        type_id
+    }
+
+    fn lower_type(&mut self, shape: &'static Shape) -> hir::Type {
+        if is_unit(shape) {
+            return hir::Type::unit();
+        }
+
+        if shape.is_transparent() {
+            let (fields, skipped) = collect_fields(shape);
+            assert!(
+                skipped.is_empty() && fields.len() == 1,
+                "transparent HIR prototype expects one lowered field"
+            );
+            return self.lower_type(fields[0].shape);
+        }
+
+        if let Some(opt_def) = get_option_def(shape) {
+            panic!(
+                "postcard HIR prototype does not support Option yet: {}",
+                opt_def.t.type_identifier
+            );
+        }
+
+        if let Some(st) = shape.scalar_type() {
+            return match st {
+                ScalarType::Unit => hir::Type::unit(),
+                ScalarType::Bool => hir::Type::bool(),
+                ScalarType::U8 => hir::Type::u(8),
+                ScalarType::U16 => hir::Type::u(16),
+                ScalarType::U32 => hir::Type::u(32),
+                ScalarType::U64 => hir::Type::u(64),
+                ScalarType::U128 => hir::Type::u(128),
+                ScalarType::USize => hir::Type::u(64),
+                ScalarType::I8 => hir::Type::i(8),
+                ScalarType::I16 => hir::Type::i(16),
+                ScalarType::I32 => hir::Type::i(32),
+                ScalarType::I64 => hir::Type::i(64),
+                ScalarType::I128 => hir::Type::i(128),
+                ScalarType::ISize => hir::Type::i(64),
+                ScalarType::Str => hir::Type::str(self.input_region),
+                ScalarType::String
+                | ScalarType::CowStr
+                | ScalarType::Char
+                | ScalarType::F32
+                | ScalarType::F64 => {
+                    panic!(
+                        "postcard HIR prototype does not support scalar {st:?} yet for {}",
+                        shape.type_identifier
+                    );
+                }
+                _ => panic!(
+                    "postcard HIR prototype encountered unknown scalar {st:?} for {}",
+                    shape.type_identifier
+                ),
+            };
+        }
+
+        let type_id = self.ensure_type_def(shape);
+        let args = if Self::shape_has_input_borrow(shape) {
+            vec![hir::GenericArg::Region(self.input_region)]
+        } else {
+            Vec::new()
+        };
+        hir::Type::named(type_id, args)
+    }
+
+    fn ensure_postcard_reader(&mut self, scalar_type: ScalarType) -> hir::CallableId {
+        let name = match scalar_type {
+            ScalarType::Bool => "postcard.read_bool",
+            ScalarType::U8 => "postcard.read_u8",
+            ScalarType::U16 => "postcard.read_u16",
+            ScalarType::U32 => "postcard.read_u32",
+            ScalarType::U64 => "postcard.read_u64",
+            ScalarType::U128 => "postcard.read_u128",
+            ScalarType::USize => "postcard.read_usize",
+            ScalarType::I8 => "postcard.read_i8",
+            ScalarType::I16 => "postcard.read_i16",
+            ScalarType::I32 => "postcard.read_i32",
+            ScalarType::I64 => "postcard.read_i64",
+            ScalarType::I128 => "postcard.read_i128",
+            ScalarType::ISize => "postcard.read_isize",
+            ScalarType::Str => "postcard.read_str",
+            other => panic!("unsupported postcard HIR reader for {other:?}"),
+        };
+        if let Some(existing) = self.callables_by_name.get(name).copied() {
+            return existing;
+        }
+
+        let returns = vec![match scalar_type {
+            ScalarType::Str => hir::Type::str(self.input_region),
+            _ => self.lower_type_for_scalar(scalar_type),
+        }];
+        let callable = hir::CallableSpec {
+            kind: hir::CallableKind::Builtin,
+            name: name.to_owned(),
+            signature: hir::CallSignature {
+                params: vec![hir::Type::named(
+                    self.cursor_type,
+                    vec![hir::GenericArg::Region(self.input_region)],
+                )],
+                returns,
+                effect_class: hir::EffectClass::Mutates,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "cursor".to_owned(),
+                    access: hir::DomainAccess::Mutate,
+                }],
+                control: hir::ControlTransfer::MayFail,
+                capabilities: vec!["deser.postcard".to_owned()],
+                safety: hir::CallSafety::SafeCore,
+            },
+            docs: Some(format!(
+                "Read a postcard {:?} value from the input cursor.",
+                scalar_type
+            )),
+        };
+        let callable_id = self.module.add_callable(callable);
+        self.callables_by_name.insert(name, callable_id);
+        callable_id
+    }
+
+    fn lower_type_for_scalar(&self, scalar_type: ScalarType) -> hir::Type {
+        match scalar_type {
+            ScalarType::Bool => hir::Type::bool(),
+            ScalarType::U8 => hir::Type::u(8),
+            ScalarType::U16 => hir::Type::u(16),
+            ScalarType::U32 => hir::Type::u(32),
+            ScalarType::U64 => hir::Type::u(64),
+            ScalarType::U128 => hir::Type::u(128),
+            ScalarType::USize => hir::Type::u(64),
+            ScalarType::I8 => hir::Type::i(8),
+            ScalarType::I16 => hir::Type::i(16),
+            ScalarType::I32 => hir::Type::i(32),
+            ScalarType::I64 => hir::Type::i(64),
+            ScalarType::I128 => hir::Type::i(128),
+            ScalarType::ISize => hir::Type::i(64),
+            other => panic!("unsupported postcard HIR scalar type {other:?}"),
+        }
+    }
+
+    fn lower_shape_into_place(
+        &mut self,
+        statements: &mut Vec<hir::Stmt>,
+        cursor_local: hir::LocalId,
+        place: hir::Place,
+        shape: &'static Shape,
+    ) {
+        if is_unit(shape) {
+            return;
+        }
+
+        if shape.is_transparent() {
+            let (fields, skipped) = collect_fields(shape);
+            assert!(
+                skipped.is_empty() && fields.len() == 1,
+                "transparent HIR prototype expects one lowered field"
+            );
+            self.lower_shape_into_place(statements, cursor_local, place, fields[0].shape);
+            return;
+        }
+
+        if let Some(st) = shape.scalar_type() {
+            let callable = self.ensure_postcard_reader(st);
+            self.push_init(
+                statements,
+                place,
+                hir::Expr::Call(hir::CallExpr {
+                    target: hir::CallTarget::Callable(callable),
+                    args: vec![hir::Expr::Local(cursor_local)],
+                }),
+            );
+            return;
+        }
+
+        match &shape.ty {
+            Type::User(UserType::Struct(_)) => {
+                let (fields, skipped) = collect_fields(shape);
+                assert!(
+                    skipped.is_empty(),
+                    "postcard HIR prototype does not support skipped/defaulted fields"
+                );
+                for field in fields {
+                    let field_place = hir::Place::Field {
+                        base: Box::new(place.clone()),
+                        field: field.name.to_owned(),
+                    };
+                    self.lower_shape_into_place(statements, cursor_local, field_place, field.shape);
+                }
+            }
+            _ => panic!(
+                "postcard HIR prototype does not support shape {} yet",
+                shape.type_identifier
+            ),
+        }
+    }
+}
+
+pub(crate) fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
+    let mut lowerer = PostcardHirLowerer::new();
+    let root_type = lowerer.lower_type(shape);
+    let cursor_local = lowerer.next_local();
+    let out_local = lowerer.next_local();
+    let root_scope = hir::ScopeId::new(0);
+    let mut statements = Vec::new();
+    lowerer.lower_shape_into_place(
+        &mut statements,
+        cursor_local,
+        hir::Place::Local(out_local),
+        shape,
+    );
+    statements.push(hir::Stmt {
+        id: lowerer.next_stmt_id(),
+        kind: hir::StmtKind::Return(None),
+    });
+
+    lowerer.module.add_function(hir::Function {
+        name: format!("decode_{}", shape.type_identifier.replace("::", "_")),
+        region_params: vec![lowerer.input_region],
+        store_params: Vec::new(),
+        params: vec![
+            hir::Parameter {
+                local: cursor_local,
+                name: "cursor".to_owned(),
+                ty: hir::Type::named(
+                    lowerer.cursor_type,
+                    vec![hir::GenericArg::Region(lowerer.input_region)],
+                ),
+                kind: hir::LocalKind::Param,
+            },
+            hir::Parameter {
+                local: out_local,
+                name: "out".to_owned(),
+                ty: hir::Type::place(root_type),
+                kind: hir::LocalKind::Destination,
+            },
+        ],
+        return_type: hir::Type::unit(),
+        scopes: vec![hir::Scope {
+            id: root_scope,
+            parent: None,
+            comment: Some(format!(
+                "Postcard prototype HIR for {}",
+                shape.type_identifier
+            )),
+        }],
+        body: hir::Block {
+            scope: root_scope,
+            statements,
+        },
+    });
+
+    lowerer.finish()
+}
+
 pub(crate) fn run_default_passes_from_env(func: &mut crate::ir::IrFunc) {
     let pipeline_opts = PipelineOptions::from_env();
     run_configured_default_passes(func, &pipeline_opts);
@@ -2553,6 +2985,12 @@ mod tests {
         inner: [u8; N],
     }
 
+    #[derive(Facet)]
+    struct BorrowedHeader<'a> {
+        len: u32,
+        name: &'a str,
+    }
+
     #[test]
     fn instantiated_shape_symbol_key_distinguishes_generic_instantiations() {
         let u32_key = instantiated_shape_symbol_key(<Wrapper<u32>>::SHAPE);
@@ -2575,6 +3013,72 @@ mod tests {
         assert_ne!(n4_key, n8_key);
         assert!(n4_key.contains("__c_0_u4"));
         assert!(n8_key.contains("__c_0_u8"));
+    }
+
+    #[test]
+    fn postcard_hir_models_borrowed_output_structs() {
+        let module = build_postcard_decoder_hir(<BorrowedHeader<'static>>::SHAPE);
+        assert_eq!(module.functions.len(), 1);
+
+        let (_, function) = module.functions.iter().next().unwrap();
+        assert_eq!(function.params.len(), 2);
+        assert_eq!(function.region_params.len(), 1);
+
+        let hir::Type::Place(out_ty) = &function.params[1].ty else {
+            panic!("expected destination Place<T> param");
+        };
+        let hir::Type::Named { def, args } = &**out_ty else {
+            panic!("expected named root output type");
+        };
+        assert_eq!(
+            module.type_defs[*def].name,
+            <BorrowedHeader<'static>>::SHAPE.type_identifier
+        );
+        assert_eq!(
+            args,
+            &vec![hir::GenericArg::Region(function.region_params[0])]
+        );
+
+        let statements = &function.body.statements;
+        assert_eq!(statements.len(), 3);
+
+        let hir::StmtKind::Init { place, value } = &statements[0].kind else {
+            panic!("expected first init statement");
+        };
+        let hir::Place::Field { field, .. } = place else {
+            panic!("expected field place");
+        };
+        assert_eq!(field, "len");
+        let hir::Expr::Call(call) = value else {
+            panic!("expected scalar read call");
+        };
+        let hir::CallTarget::Callable(callable_id) = call.target;
+        assert_eq!(module.callables[callable_id].name, "postcard.read_u32");
+
+        let hir::StmtKind::Init { place, value } = &statements[1].kind else {
+            panic!("expected second init statement");
+        };
+        let hir::Place::Field { field, .. } = place else {
+            panic!("expected field place");
+        };
+        assert_eq!(field, "name");
+        let hir::Expr::Call(call) = value else {
+            panic!("expected borrowed string read call");
+        };
+        let hir::CallTarget::Callable(callable_id) = call.target;
+        let callable = &module.callables[callable_id];
+        assert_eq!(callable.name, "postcard.read_str");
+        assert_eq!(
+            callable.signature.returns,
+            vec![hir::Type::str(function.region_params[0])]
+        );
+        assert_eq!(
+            callable.signature.domain_effects,
+            vec![hir::DomainEffect {
+                domain: "cursor".to_owned(),
+                access: hir::DomainAccess::Mutate,
+            }]
+        );
     }
 
     #[test]

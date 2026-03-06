@@ -206,6 +206,15 @@ pub fn debug_cfg_mir(
     regalloc_engine::cfg_mir::lower_linear_ir(&linear)
 }
 
+/// Build the current prototype postcard HIR for a shape.
+///
+/// This is an inspectable prototype producer path from facet `Shape` into the
+/// new semantic HIR. It currently targets postcard semantics only and supports
+/// a deliberately narrow subset needed to exercise borrowed-output decoding.
+pub fn debug_postcard_hir(shape: &'static facet::Shape) -> kajit_hir::Module {
+    compiler::build_postcard_decoder_hir(shape)
+}
+
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
 ///
 /// Intended for snapshot tests and debugging.
