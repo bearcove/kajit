@@ -9,7 +9,8 @@ use std::fmt;
 use std::ops::Range;
 
 use kajit_ir::{
-    Arena, DebugScope, DebugScopeId, ErrorCode, IntrinsicFn, IntrinsicRegistry, LambdaId, VReg,
+    Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, ErrorCode, IntrinsicFn,
+    IntrinsicRegistry, LambdaId, VReg,
 };
 use kajit_lir::{LabelId, LinearIr, LinearOp};
 
@@ -179,9 +180,12 @@ pub struct Program {
 #[derive(Debug, Clone, Default)]
 pub struct ProgramDebugProvenance {
     pub scopes: Arena<DebugScope>,
+    pub values: Arena<DebugValue>,
     pub root_scope: Option<DebugScopeId>,
     pub op_scopes: HashMap<(LambdaId, OpId), DebugScopeId>,
+    pub op_values: HashMap<(LambdaId, OpId), DebugValueId>,
     pub vreg_scopes: Vec<Option<DebugScopeId>>,
+    pub vreg_values: Vec<Option<DebugValueId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -448,8 +452,16 @@ impl Program {
         self.debug.op_scopes.get(&(lambda_id, op_id)).copied()
     }
 
+    pub fn op_debug_value(&self, lambda_id: LambdaId, op_id: OpId) -> Option<DebugValueId> {
+        self.debug.op_values.get(&(lambda_id, op_id)).copied()
+    }
+
     pub fn vreg_debug_scope(&self, vreg: VReg) -> Option<DebugScopeId> {
         self.debug.vreg_scopes.get(vreg.index()).copied().flatten()
+    }
+
+    pub fn vreg_debug_value(&self, vreg: VReg) -> Option<DebugValueId> {
+        self.debug.vreg_values.get(vreg.index()).copied().flatten()
     }
 
     pub fn validate(&self) -> Result<(), CfgMirError> {
@@ -1185,8 +1197,13 @@ fn lower_function(
     data_results: Vec<VReg>,
     ops: &[LinearOp],
     op_scopes: &[Option<DebugScopeId>],
+    op_values: &[Option<DebugValueId>],
     vreg_count: u32,
-) -> (Function, HashMap<OpId, DebugScopeId>) {
+) -> (
+    Function,
+    HashMap<OpId, DebugScopeId>,
+    HashMap<OpId, DebugValueId>,
+) {
     if ops.is_empty() {
         return (
             Function {
@@ -1208,6 +1225,7 @@ fn lower_function(
                 terms: vec![Terminator::Return],
             },
             HashMap::new(),
+            HashMap::new(),
         );
     }
 
@@ -1228,6 +1246,7 @@ fn lower_function(
     let mut insts = Vec::<Inst>::new();
     let mut label_terms = Vec::<TempTermLabel>::new();
     let mut lowered_scopes = HashMap::<OpId, DebugScopeId>::new();
+    let mut lowered_values = HashMap::<OpId, DebugValueId>::new();
 
     for bi in 0..leaders.len() {
         let start = leaders[bi];
@@ -1250,10 +1269,14 @@ fn lower_function(
 
         while cursor < end {
             let op_scope = op_scopes.get(cursor).copied().flatten();
+            let op_value = op_values.get(cursor).copied().flatten();
             match ops[cursor].clone() {
                 LinearOp::Branch(target) => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
+                    if let Some(debug_value) = op_value {
+                        lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
                     }
                     term = Some(TempTermLabel::Branch(target));
                     cursor += 1;
@@ -1263,6 +1286,9 @@ fn lower_function(
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }
+                    if let Some(debug_value) = op_value {
+                        lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
+                    }
                     term = Some(TempTermLabel::BranchIf { cond, target });
                     cursor += 1;
                     break;
@@ -1270,6 +1296,9 @@ fn lower_function(
                 LinearOp::BranchIfZero { cond, target } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
+                    if let Some(debug_value) = op_value {
+                        lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
                     }
                     term = Some(TempTermLabel::BranchIfZero { cond, target });
                     cursor += 1;
@@ -1283,6 +1312,9 @@ fn lower_function(
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }
+                    if let Some(debug_value) = op_value {
+                        lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
+                    }
                     term = Some(TempTermLabel::JumpTable {
                         predicate,
                         labels,
@@ -1294,6 +1326,9 @@ fn lower_function(
                 LinearOp::ErrorExit { code } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
+                    if let Some(debug_value) = op_value {
+                        lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
                     }
                     term = Some(TempTermLabel::ErrorExit(code));
                     cursor += 1;
@@ -1309,6 +1344,9 @@ fn lower_function(
                     let inst_id = InstId(insts.len() as u32);
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Inst(inst_id), scope);
+                    }
+                    if let Some(debug_value) = op_value {
+                        lowered_values.insert(OpId::Inst(inst_id), debug_value);
                     }
                     insts.push(lower_inst(inst_id, other));
                     block_inst_ids.push(inst_id);
@@ -1500,6 +1538,7 @@ fn lower_function(
             terms,
         },
         lowered_scopes,
+        lowered_values,
     )
 }
 
@@ -1507,6 +1546,7 @@ fn lower_function(
 pub fn lower_linear_ir(ir: &LinearIr) -> Program {
     let mut funcs = Vec::<Function>::new();
     let mut op_scopes = HashMap::<(LambdaId, OpId), DebugScopeId>::new();
+    let mut op_values = HashMap::<(LambdaId, OpId), DebugValueId>::new();
     let mut cursor = 0usize;
     while cursor < ir.ops.len() {
         let (lambda_id, data_args, data_results) = match &ir.ops[cursor] {
@@ -1543,17 +1583,22 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
         let body = &ir.ops[cursor + 1..end];
         let function_id = FunctionId(funcs.len() as u32);
         let body_scopes = &ir.debug.op_scopes[cursor + 1..end];
-        let (function, function_scopes) = lower_function(
+        let body_values = &ir.debug.op_values[cursor + 1..end];
+        let (function, function_scopes, function_values) = lower_function(
             function_id,
             lambda_id,
             data_args,
             data_results,
             body,
             body_scopes,
+            body_values,
             ir.vreg_count,
         );
         for (op_id, scope) in function_scopes {
             op_scopes.insert((lambda_id, op_id), scope);
+        }
+        for (op_id, debug_value) in function_values {
+            op_values.insert((lambda_id, op_id), debug_value);
         }
         funcs.push(function);
         cursor = end + 1;
@@ -1565,9 +1610,12 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
         slot_count: ir.slot_count,
         debug: ProgramDebugProvenance {
             scopes: ir.debug.scopes.clone(),
+            values: ir.debug.values.clone(),
             root_scope: ir.debug.root_scope,
             op_scopes,
+            op_values,
             vreg_scopes: ir.debug.vreg_scopes.clone(),
+            vreg_values: ir.debug.vreg_values.clone(),
         },
     }
 }
