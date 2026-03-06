@@ -562,6 +562,7 @@ If the selected test is one of the generated corpus cases, the wrapper also:
 3. Imports `scripts/kajit_lldb_side_by_side.py`
 
 That helper gives you LLDB commands keyed by the same CFG-MIR line numbers as DWARF:
+- `kajit-break [regex]` — set a breakpoint on registered JIT decode code
 - `kajit-here` — print interpreter reference for the current JIT source line
 - `kajit-list` — list available reference lines, or dump one explicit line
 - `kajit-step` — `thread step-over`, then print interpreter reference for the new line
@@ -596,6 +597,9 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 
 # Find registered decode/encode symbols
 (lldb) image lookup -rn 'kajit::decode::'
+
+# Convenience helper: set a JIT-code breakpoint after registration
+(lldb) kajit-break
 
 # Inspect a JIT address (verbose — shows LineEntry if DWARF is working)
 (lldb) image lookup -va <address>
