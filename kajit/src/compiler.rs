@@ -3447,6 +3447,8 @@ fn compile_cfg_mir_decoder_with_options(
 
 #[cfg(test)]
 mod tests {
+    use kajit_hir_text::parse_hir;
+
     use super::*;
     use facet::Facet;
 
@@ -3652,6 +3654,15 @@ mod tests {
         };
         assert_eq!(variant, "None");
         assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn postcard_hir_text_round_trips() {
+        let module = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
+        let text = module.to_string();
+        let reparsed = parse_hir(&text).expect("postcard HIR text should parse");
+
+        assert_eq!(reparsed, module);
     }
 
     #[test]

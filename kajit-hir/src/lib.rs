@@ -1,6 +1,8 @@
 use std::fmt;
 use std::marker::PhantomData;
 
+mod text;
+
 pub struct Id<T> {
     index: u32,
     _phantom: PhantomData<T>,

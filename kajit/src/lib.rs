@@ -215,6 +215,11 @@ pub fn debug_postcard_hir(shape: &'static facet::Shape) -> kajit_hir::Module {
     compiler::build_postcard_decoder_hir(shape)
 }
 
+/// Build the current prototype postcard HIR and render it in canonical text form.
+pub fn debug_postcard_hir_text(shape: &'static facet::Shape) -> String {
+    debug_postcard_hir(shape).to_string()
+}
+
 /// Build postcard RVSDG by first lowering through the prototype HIR path.
 ///
 /// This currently supports only the narrow postcard subset covered by the

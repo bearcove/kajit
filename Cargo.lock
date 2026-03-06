@@ -595,6 +595,7 @@ dependencies = [
  "itoa",
  "kajit-emit",
  "kajit-hir",
+ "kajit-hir-text",
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
@@ -623,6 +624,14 @@ dependencies = [
 [[package]]
 name = "kajit-hir"
 version = "0.1.0"
+
+[[package]]
+name = "kajit-hir-text"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "kajit-hir",
+]
 
 [[package]]
 name = "kajit-ir"

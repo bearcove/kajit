@@ -29,6 +29,7 @@ kajit-emit = { path = "../kajit-emit" }
 kajit-hir = { path = "../kajit-hir" }
 
 [dev-dependencies]
+kajit-hir-text = { path = "../kajit-hir-text" }
 libc = "0.2"
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
