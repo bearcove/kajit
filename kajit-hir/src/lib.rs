@@ -109,6 +109,7 @@ pub type RegionId = Id<RegionParam>;
 pub type StoreId = Id<StoreParam>;
 pub type TypeDefId = Id<TypeDef>;
 pub type FunctionId = Id<Function>;
+pub type CallableId = Id<CallableSpec>;
 
 pub struct ScopeMarker;
 pub type ScopeId = Id<ScopeMarker>;
@@ -122,6 +123,7 @@ pub struct Module {
     pub regions: Arena<RegionParam>,
     pub stores: Arena<StoreParam>,
     pub type_defs: Arena<TypeDef>,
+    pub callables: Arena<CallableSpec>,
     pub functions: Arena<Function>,
 }
 
@@ -137,6 +139,7 @@ impl Module {
             regions: Arena::new(),
             stores: Arena::new(),
             type_defs: Arena::new(),
+            callables: Arena::new(),
             functions: Arena::new(),
         }
     }
@@ -151,6 +154,16 @@ impl Module {
 
     pub fn add_type_def(&mut self, type_def: TypeDef) -> TypeDefId {
         self.type_defs.push(type_def)
+    }
+
+    pub fn add_callable(&mut self, callable: CallableSpec) -> CallableId {
+        self.callables.push(callable)
+    }
+
+    pub fn callable_named(&self, name: &str) -> Option<CallableId> {
+        self.callables
+            .iter()
+            .find_map(|(id, callable)| (callable.name == name).then_some(id))
     }
 
     pub fn add_function(&mut self, function: Function) -> FunctionId {
@@ -499,15 +512,27 @@ pub struct CallSignature {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallableKind {
+    Builtin,
+    Host,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallableSpec {
+    pub kind: CallableKind,
+    pub name: String,
+    pub signature: CallSignature,
+    pub docs: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallTarget {
-    Builtin(String),
-    Host(String),
+    Callable(CallableId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallExpr {
     pub target: CallTarget,
-    pub signature: CallSignature,
     pub args: Vec<Expr>,
 }
 
@@ -612,29 +637,67 @@ mod tests {
     }
 
     #[test]
-    fn call_signature_tracks_effect_domains_and_control_transfer() {
-        let signature = CallSignature {
-            params: vec![Type::u(64)],
-            returns: vec![Type::bool()],
-            effect_class: EffectClass::Mutates,
-            domain_effects: vec![
-                DomainEffect {
-                    domain: "cursor".to_owned(),
-                    access: DomainAccess::Read,
-                },
-                DomainEffect {
-                    domain: "output".to_owned(),
+    fn resolved_callables_track_effect_domains_and_control_transfer() {
+        let mut module = Module::new();
+        let r_tmp = module.add_region("tmp");
+        let node = module.add_type_def(TypeDef {
+            name: "Node".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "label".to_owned(),
+                    ty: Type::slice(r_tmp, Type::u(8)),
+                }],
+            },
+        });
+
+        let decode_header = module.add_callable(CallableSpec {
+            kind: CallableKind::Builtin,
+            name: "decode.header".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::u(64)],
+                returns: vec![Type::bool()],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![
+                    DomainEffect {
+                        domain: "cursor".to_owned(),
+                        access: DomainAccess::Read,
+                    },
+                    DomainEffect {
+                        domain: "output".to_owned(),
+                        access: DomainAccess::Mutate,
+                    },
+                ],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["decode.header".to_owned()],
+                safety: CallSafety::SafeCore,
+            },
+            docs: Some("Decode a header into the current destination.".to_owned()),
+        });
+
+        let emit_node = module.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "emit.node".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::named(node, Vec::new())],
+                returns: vec![Type::unit()],
+                effect_class: EffectClass::Barrier,
+                domain_effects: vec![DomainEffect {
+                    domain: "plan".to_owned(),
                     access: DomainAccess::Mutate,
-                },
-            ],
-            control: ControlTransfer::MayFail,
-            capabilities: vec!["decode.header".to_owned()],
-            safety: CallSafety::SafeCore,
-        };
+                }],
+                control: ControlTransfer::Returns,
+                capabilities: vec!["emit.graph".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Append a node to the host RulePlan.".to_owned()),
+        });
+
+        assert_eq!(module.callable_named("decode.header"), Some(decode_header));
+        assert_eq!(module.callable_named("emit.node"), Some(emit_node));
 
         let call = Expr::Call(CallExpr {
-            target: CallTarget::Builtin("decode_header".to_owned()),
-            signature: signature.clone(),
+            target: CallTarget::Callable(decode_header),
             args: vec![Expr::Literal(Literal::Integer(4))],
         });
 
@@ -642,10 +705,14 @@ mod tests {
             panic!("expected call expression");
         };
 
-        assert_eq!(call.signature.effect_class, EffectClass::Mutates);
-        assert_eq!(call.signature.control, ControlTransfer::MayFail);
+        let CallTarget::Callable(target) = call.target;
+        let callable = &module.callables[target];
+
+        assert_eq!(callable.kind, CallableKind::Builtin);
+        assert_eq!(callable.signature.effect_class, EffectClass::Mutates);
+        assert_eq!(callable.signature.control, ControlTransfer::MayFail);
         assert_eq!(
-            call.signature.domain_effects,
+            callable.signature.domain_effects,
             vec![
                 DomainEffect {
                     domain: "cursor".to_owned(),
@@ -657,5 +724,29 @@ mod tests {
                 },
             ]
         );
+
+        let host = &module.callables[emit_node];
+        assert_eq!(host.kind, CallableKind::Host);
+        assert_eq!(host.signature.effect_class, EffectClass::Barrier);
+        assert_eq!(host.signature.control, ControlTransfer::Returns);
+    }
+
+    #[test]
+    fn host_callable_can_carry_capability_and_safety_contract() {
+        let signature = CallSignature {
+            params: vec![Type::u(64)],
+            returns: vec![Type::bool()],
+            effect_class: EffectClass::Mutates,
+            domain_effects: vec![DomainEffect {
+                domain: "env".to_owned(),
+                access: DomainAccess::Read,
+            }],
+            control: ControlTransfer::MayFail,
+            capabilities: vec!["env.read".to_owned()],
+            safety: CallSafety::OpaqueHost,
+        };
+
+        assert_eq!(signature.capabilities, vec!["env.read".to_owned()]);
+        assert_eq!(signature.safety, CallSafety::OpaqueHost);
     }
 }
