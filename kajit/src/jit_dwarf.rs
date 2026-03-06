@@ -160,6 +160,7 @@ const DW_OP_REGX: u8 = 0x90;
 const DW_OP_FBREG: u8 = 0x91;
 const DW_OP_BREGX: u8 = 0x92;
 const DW_OP_DEREF_SIZE: u8 = 0x94;
+const DW_OP_STACK_VALUE: u8 = 0x9f;
 
 /// Build DWARF sections for one JIT function.
 ///
@@ -701,6 +702,12 @@ pub fn expr_breg_deref_size(dwarf_reg: u16, offset: i64, size: u8) -> Vec<u8> {
     out
 }
 
+pub fn expr_breg_deref_size_stack_value(dwarf_reg: u16, offset: i64, size: u8) -> Vec<u8> {
+    let mut out = expr_breg_deref_size(dwarf_reg, offset, size);
+    out.push(DW_OP_STACK_VALUE);
+    out
+}
+
 pub fn build_debug_line_section(
     code_address: u64,
     code_size: u64,
@@ -1223,6 +1230,15 @@ mod tests {
         assert_eq!(expr, vec![DW_OP_BREG0 + 7, 0]);
         let expr = expr_breg(35, -8);
         assert_eq!(expr[0], DW_OP_BREGX);
+    }
+
+    #[test]
+    fn expr_breg_deref_size_stack_value_marks_scalar_value() {
+        let expr = expr_breg_deref_size_stack_value(7, 4, 1);
+        assert_eq!(
+            expr,
+            vec![DW_OP_BREG0 + 7, 4, DW_OP_DEREF_SIZE, 1, DW_OP_STACK_VALUE]
+        );
     }
 
     #[test]
