@@ -242,6 +242,83 @@ fn build_dwarf_from_source_map(
     .ok()
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DeserDebugRegisterSet {
+    input_ptr_hw: u8,
+    input_end_hw: u8,
+    out_ptr_hw: u8,
+    ctx_hw: u8,
+}
+
+fn deser_debug_registers(target_arch: crate::jit_dwarf::DwarfTargetArch) -> DeserDebugRegisterSet {
+    match target_arch {
+        crate::jit_dwarf::DwarfTargetArch::X86_64 => DeserDebugRegisterSet {
+            input_ptr_hw: 12,
+            input_end_hw: 13,
+            out_ptr_hw: 14,
+            ctx_hw: 15,
+        },
+        crate::jit_dwarf::DwarfTargetArch::Aarch64 => DeserDebugRegisterSet {
+            input_ptr_hw: 19,
+            input_end_hw: 20,
+            out_ptr_hw: 21,
+            ctx_hw: 22,
+        },
+    }
+}
+
+fn full_code_location_range(
+    code_ptr: *const u8,
+    code_len: usize,
+    expression: Vec<u8>,
+) -> crate::jit_dwarf::DwarfLocationRange {
+    crate::jit_dwarf::DwarfLocationRange {
+        start: code_ptr as u64,
+        end: code_ptr as u64 + code_len as u64,
+        expression,
+    }
+}
+
+fn deser_dwarf_variables(
+    code_ptr: *const u8,
+    code_len: usize,
+    target_arch: crate::jit_dwarf::DwarfTargetArch,
+) -> Vec<crate::jit_dwarf::DwarfVariable> {
+    let regs = deser_debug_registers(target_arch);
+    let input_ptr_reg =
+        crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, regs.input_ptr_hw)
+            .expect("input_ptr register should map to a DWARF register");
+    let input_end_reg =
+        crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, regs.input_end_hw)
+            .expect("input_end register should map to a DWARF register");
+    let out_ptr_reg =
+        crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, regs.out_ptr_hw)
+            .expect("out_ptr register should map to a DWARF register");
+    let ctx_reg = crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, regs.ctx_hw)
+        .expect("ctx register should map to a DWARF register");
+
+    [
+        ("input_ptr", crate::jit_dwarf::expr_reg(input_ptr_reg)),
+        ("input_end", crate::jit_dwarf::expr_reg(input_end_reg)),
+        ("out_ptr", crate::jit_dwarf::expr_reg(out_ptr_reg)),
+        ("ctx", crate::jit_dwarf::expr_reg(ctx_reg)),
+        (
+            "error_code",
+            crate::jit_dwarf::expr_breg(ctx_reg, crate::context::CTX_ERROR_CODE as i64),
+        ),
+        (
+            "error_offset",
+            crate::jit_dwarf::expr_breg(ctx_reg, crate::context::CTX_ERROR_OFFSET as i64),
+        ),
+    ]
+    .into_iter()
+    .map(|(name, expr)| crate::jit_dwarf::DwarfVariable {
+        name: name.to_owned(),
+        locations: vec![full_code_location_range(code_ptr, code_len, expr)],
+    })
+    .collect()
+}
+
 // r[impl compiler.walk]
 // r[impl compiler.recursive]
 // r[impl compiler.recursive.one-func-per-shape]
@@ -1333,6 +1410,8 @@ fn compile_linear_ir_decoder_with_options(
     };
     let registration = if jit_debug {
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
+        let dwarf_variables =
+            deser_dwarf_variables(buf.code_ptr(), buf.len(), jit_dwarf_target_arch());
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1340,7 +1419,7 @@ fn compile_linear_ir_decoder_with_options(
                 source_map.as_ref(),
                 path,
                 &root_display_name,
-                &[],
+                &dwarf_variables,
                 jit_dwarf_target_arch(),
             )
         });
@@ -1410,6 +1489,8 @@ fn compile_cfg_mir_decoder_with_options(
     };
     let registration = if jit_debug {
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
+        let dwarf_variables =
+            deser_dwarf_variables(buf.code_ptr(), buf.len(), jit_dwarf_target_arch());
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1417,7 +1498,7 @@ fn compile_cfg_mir_decoder_with_options(
                 source_map.as_ref(),
                 path,
                 &root_display_name,
-                &[],
+                &dwarf_variables,
                 jit_dwarf_target_arch(),
             )
         });
@@ -1518,5 +1599,28 @@ mod tests {
         )
         .expect("expected dwarf sections");
         assert!(!dwarf.debug_line.is_empty());
+    }
+
+    #[test]
+    fn deser_dwarf_variables_cover_fixed_runtime_state() {
+        let vars = deser_dwarf_variables(0x1000 as *const u8, 0x40, jit_dwarf_target_arch());
+        let names = vars.iter().map(|var| var.name.as_str()).collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "input_ptr",
+                "input_end",
+                "out_ptr",
+                "ctx",
+                "error_code",
+                "error_offset",
+            ]
+        );
+        for var in vars {
+            assert_eq!(var.locations.len(), 1);
+            assert_eq!(var.locations[0].start, 0x1000);
+            assert_eq!(var.locations[0].end, 0x1040);
+            assert!(!var.locations[0].expression.is_empty());
+        }
     }
 }
