@@ -131,6 +131,43 @@ Use this trace when the differential harness tells you "where" the first
 divergence is, but you still need to answer "what actually mutated around that
 step?".
 
+### CFG-MIR debug CLI
+
+For saved CFG-MIR artifacts, `xtask` exposes the interpreter and differential
+workflows directly:
+
+```bash
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  debug-cfg-mir run failing.cfg-mir 808001
+
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  debug-cfg-mir trace failing.cfg-mir 808001
+
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  debug-cfg-mir diff failing.cfg-mir 808001
+
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  debug-cfg-mir why-vreg failing.cfg-mir 808001 --vreg 47
+
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  debug-cfg-mir block failing.cfg-mir 808001 --block 17 --lambda 0
+```
+
+`debug-cfg-mir` supports two replay modes:
+
+- Raw hex input for CFG-MIR that only references built-in named intrinsics.
+- `--corpus-test <exact-test-name>` for CFG-MIR that also contains
+  shape-derived symbols such as option init helpers.
+
+Example:
+
+```bash
+cargo run -q --manifest-path xtask/Cargo.toml -- \
+  debug-cfg-mir diff failing.cfg-mir --corpus-test postcard::option_u32_v0
+```
+
+If local parsing fails on a shape-derived symbol, rerun with `--corpus-test`.
+
 ### What the differential result means
 
 The harness is not only answering "did this fail?". It gives a stable

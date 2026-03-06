@@ -2377,6 +2377,11 @@ pub(crate) fn render_test_file() -> String {
         const PRINT_INPUT_HEX_ENV: &str = "KAJIT_PRINT_INPUT_HEX";
         const PRINT_CFG_MIR_ENV: &str = "KAJIT_PRINT_CFG_MIR";
         const MINIMIZE_CFG_MIR_ENV: &str = "KAJIT_MINIMIZE_CFG_MIR";
+        const DEBUG_CFG_MIR_ENV: &str = "KAJIT_DEBUG_CFG_MIR";
+        const DEBUG_CFG_MIR_COMMAND_ENV: &str = "KAJIT_DEBUG_CFG_MIR_COMMAND";
+        const DEBUG_CFG_MIR_VREG_ENV: &str = "KAJIT_DEBUG_CFG_MIR_VREG";
+        const DEBUG_CFG_MIR_BLOCK_ENV: &str = "KAJIT_DEBUG_CFG_MIR_BLOCK";
+        const DEBUG_CFG_MIR_LAMBDA_ENV: &str = "KAJIT_DEBUG_CFG_MIR_LAMBDA";
 
         fn maybe_print_case_input(input: &[u8]) {
             if std::env::var_os(PRINT_INPUT_HEX_ENV).is_none() {
@@ -2476,6 +2481,85 @@ pub(crate) fn render_test_file() -> String {
             true
         }
 
+        fn debug_cfg_mir_command_from_env() -> Result<kajit_mir::DebugCfgMirCommand, String> {
+            let command = std::env::var(DEBUG_CFG_MIR_COMMAND_ENV)
+                .map_err(|_| format!("missing {DEBUG_CFG_MIR_COMMAND_ENV}"))?;
+            match command.as_str() {
+                "run" => Ok(kajit_mir::DebugCfgMirCommand::Run),
+                "trace" => Ok(kajit_mir::DebugCfgMirCommand::Trace),
+                "diff" => Ok(kajit_mir::DebugCfgMirCommand::Diff),
+                "why-vreg" => {
+                    let raw = std::env::var(DEBUG_CFG_MIR_VREG_ENV)
+                        .map_err(|_| format!("missing {DEBUG_CFG_MIR_VREG_ENV}"))?;
+                    let vreg = raw
+                        .parse::<u32>()
+                        .map_err(|err| format!("invalid {DEBUG_CFG_MIR_VREG_ENV}={raw:?}: {err}"))?;
+                    Ok(kajit_mir::DebugCfgMirCommand::WhyVreg {
+                        vreg: kajit_ir::VReg::new(vreg),
+                    })
+                }
+                "block" => {
+                    let raw_block = std::env::var(DEBUG_CFG_MIR_BLOCK_ENV)
+                        .map_err(|_| format!("missing {DEBUG_CFG_MIR_BLOCK_ENV}"))?;
+                    let block = raw_block
+                        .parse::<u32>()
+                        .map_err(|err| format!("invalid {DEBUG_CFG_MIR_BLOCK_ENV}={raw_block:?}: {err}"))?;
+                    let raw_lambda = std::env::var(DEBUG_CFG_MIR_LAMBDA_ENV)
+                        .map_err(|_| format!("missing {DEBUG_CFG_MIR_LAMBDA_ENV}"))?;
+                    let lambda = raw_lambda
+                        .parse::<u32>()
+                        .map_err(|err| format!("invalid {DEBUG_CFG_MIR_LAMBDA_ENV}={raw_lambda:?}: {err}"))?;
+                    Ok(kajit_mir::DebugCfgMirCommand::Block {
+                        lambda: kajit_ir::LambdaId::new(lambda),
+                        block: kajit_mir::cfg_mir::BlockId(block),
+                    })
+                }
+                other => Err(format!(
+                    "unsupported {DEBUG_CFG_MIR_COMMAND_ENV}={other:?}; expected run, trace, diff, why-vreg, or block"
+                )),
+            }
+        }
+
+        fn maybe_debug_case_cfg_mir<T>(input: &[u8]) -> bool
+        where
+            for<'input> T: Facet<'input>,
+        {
+            let Some(path) = std::env::var_os(DEBUG_CFG_MIR_ENV) else {
+                return false;
+            };
+
+            let path = std::path::PathBuf::from(path);
+            let command = debug_cfg_mir_command_from_env().unwrap_or_else(|err| {
+                eprintln!("failed to build debug CFG-MIR command: {err}");
+                std::process::exit(1);
+            });
+            let cfg_mir_text = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+                eprintln!("failed to read {}: {err}", path.display());
+                std::process::exit(1);
+            });
+            let registry = kajit::symbol_registry_for_shape(T::SHAPE);
+            let program =
+                kajit_mir_text::parse_cfg_mir_with_registry(&cfg_mir_text, &registry).unwrap_or_else(
+                    |err| {
+                        eprintln!("failed to parse CFG-MIR from {}: {err}", path.display());
+                        std::process::exit(1);
+                    },
+                );
+            let output = kajit_mir::run_debug_cfg_mir_command(&program, input, &command)
+                .unwrap_or_else(|err| {
+                    eprintln!("debug CFG-MIR command failed: {err}");
+                    std::process::exit(1);
+                });
+
+            println!("KAJIT_CASE_DEBUG_CFG_MIR_BEGIN");
+            print!("{output}");
+            if !output.ends_with('\n') {
+                println!();
+            }
+            println!("KAJIT_CASE_DEBUG_CFG_MIR_END");
+            true
+        }
+
         fn assert_json_case<T>(value: T)
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -2483,6 +2567,9 @@ pub(crate) fn render_test_file() -> String {
             let encoded = serde_json::to_string(&value).unwrap();
             maybe_print_case_input(encoded.as_bytes());
             maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            if maybe_debug_case_cfg_mir::<T>(encoded.as_bytes()) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(encoded.as_bytes()) {
                 return;
             }
@@ -2504,6 +2591,9 @@ pub(crate) fn render_test_file() -> String {
             let encoded = ::postcard::to_allocvec(&value).unwrap();
             maybe_print_case_input(&encoded);
             maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            if maybe_debug_case_cfg_mir::<T>(&encoded) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(&encoded) {
                 return;
             }
@@ -2524,6 +2614,9 @@ pub(crate) fn render_test_file() -> String {
         {
             maybe_print_case_input(input);
             maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            if maybe_debug_case_cfg_mir::<T>(input) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2538,6 +2631,9 @@ pub(crate) fn render_test_file() -> String {
         {
             maybe_print_case_input(input);
             maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            if maybe_debug_case_cfg_mir::<T>(input) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2552,6 +2648,9 @@ pub(crate) fn render_test_file() -> String {
         {
             maybe_print_case_input(input);
             maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            if maybe_debug_case_cfg_mir::<T>(input) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2570,6 +2669,9 @@ pub(crate) fn render_test_file() -> String {
         {
             maybe_print_case_input(input);
             maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            if maybe_debug_case_cfg_mir::<T>(input) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2586,6 +2688,9 @@ pub(crate) fn render_test_file() -> String {
         {
             maybe_print_case_input(input);
             maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            if maybe_debug_case_cfg_mir::<T>(input) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2601,6 +2706,9 @@ pub(crate) fn render_test_file() -> String {
         {
             maybe_print_case_input(input);
             maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            if maybe_debug_case_cfg_mir::<T>(input) {
+                return;
+            }
             if maybe_minimize_case_cfg_mir::<T>(input) {
                 return;
             }

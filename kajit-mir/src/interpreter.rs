@@ -151,6 +151,10 @@ impl InterpreterExecutionTrace {
             .collect::<Vec<_>>()
             .join("\n")
     }
+
+    pub fn render_event_text(&self, event_index: usize) -> Option<String> {
+        self.events.get(event_index).map(render_interpreter_event)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
