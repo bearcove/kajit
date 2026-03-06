@@ -159,6 +159,7 @@ const DW_OP_BREG0: u8 = 0x70;
 const DW_OP_REGX: u8 = 0x90;
 const DW_OP_FBREG: u8 = 0x91;
 const DW_OP_BREGX: u8 = 0x92;
+const DW_OP_DEREF_SIZE: u8 = 0x94;
 
 /// Build DWARF sections for one JIT function.
 ///
@@ -690,6 +691,13 @@ pub fn expr_breg(dwarf_reg: u16, offset: i64) -> Vec<u8> {
 pub fn expr_fbreg(offset: i64) -> Vec<u8> {
     let mut out = vec![DW_OP_FBREG];
     push_sleb128(&mut out, offset);
+    out
+}
+
+pub fn expr_breg_deref_size(dwarf_reg: u16, offset: i64, size: u8) -> Vec<u8> {
+    let mut out = expr_breg(dwarf_reg, offset);
+    out.push(DW_OP_DEREF_SIZE);
+    out.push(size);
     out
 }
 

@@ -450,6 +450,7 @@ fn hoist_theta_loop_invariants_for_node(
         let new_node = func.nodes.push(Node {
             region: parent_region,
             debug_scope: func.nodes[old_node].debug_scope,
+            debug_value: func.nodes[old_node].debug_value,
             inputs: new_inputs,
             outputs: old_outputs,
             kind: NodeKind::Simple(op.clone()),
@@ -947,6 +948,7 @@ fn clone_region_into(
         let new_node = func.nodes.push(Node {
             region: new_region,
             debug_scope: func.nodes[old_node].debug_scope,
+            debug_value: func.nodes[old_node].debug_value,
             inputs,
             outputs: old_outputs,
             kind,

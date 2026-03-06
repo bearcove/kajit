@@ -728,6 +728,7 @@ fn resolve(
         slot_count: 0,
         lambdas: Vec::new(),
         debug_scopes: Arena::new(),
+        debug_values: Arena::new(),
         root_debug_scope: DebugScopeId::new(0),
     };
 
@@ -776,6 +777,7 @@ fn resolve(
         let node_id = func.nodes.push(Node {
             region: sentinel_region,
             debug_scope,
+            debug_value: None,
             inputs: Vec::new(),
             outputs: Vec::new(),
             kind: NodeKind::Lambda {
@@ -938,15 +940,18 @@ fn resolve_region(
                 RegionArg {
                     kind: PortKind::Data,
                     vreg: None,
+                    debug_value: None,
                 }
             }
             AstRegionArg::Cursor => RegionArg {
                 kind: PortKind::StateCursor,
                 vreg: None,
+                debug_value: None,
             },
             AstRegionArg::Output => RegionArg {
                 kind: PortKind::StateOutput,
                 vreg: None,
+                debug_value: None,
             },
         })
         .collect();
@@ -1061,6 +1066,7 @@ fn resolve_node(
             let node_id = func.nodes.push(Node {
                 region: region_id,
                 debug_scope: node_debug_scope,
+                debug_value: None,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Simple(resolved_op),
@@ -1125,6 +1131,7 @@ fn resolve_node(
             let node_id = func.nodes.push(Node {
                 region: region_id,
                 debug_scope: node_debug_scope,
+                debug_value: None,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Gamma {
@@ -1251,6 +1258,7 @@ fn resolve_node(
             let node_id = func.nodes.push(Node {
                 region: region_id,
                 debug_scope: node_debug_scope,
+                debug_value: None,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Theta { body: body_id },
@@ -1287,6 +1295,7 @@ fn resolve_node(
             let node_id = func.nodes.push(Node {
                 region: region_id,
                 debug_scope: node_debug_scope,
+                debug_value: None,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Apply {
