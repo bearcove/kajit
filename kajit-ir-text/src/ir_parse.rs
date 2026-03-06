@@ -9,9 +9,10 @@ use chumsky::prelude::*;
 
 use kajit_ir::ErrorCode;
 use kajit_ir::{
-    Arena, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry,
-    IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
-    Region, RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, VReg, Width,
+    Arena, CURSOR_STATE_PORT, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn,
+    IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OUTPUT_STATE_PORT,
+    OutputPort, OutputRef, PortKind, PortSource, Region, RegionArg, RegionArgRef, RegionId,
+    RegionResult, SlotId, VReg, Width,
 };
 
 // ─── AST types (first pass) ────────────────────────────────────────────────
@@ -944,12 +945,12 @@ fn resolve_region(
                 }
             }
             AstRegionArg::Cursor => RegionArg {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 vreg: None,
                 debug_value: None,
             },
             AstRegionArg::Output => RegionArg {
-                kind: PortKind::StateOutput,
+                kind: OUTPUT_STATE_PORT,
                 vreg: None,
                 debug_value: None,
             },
@@ -1218,14 +1219,14 @@ fn resolve_node(
             let body_arg_last = body_region.args.len() - 1;
             let body_res_last = body_region.results.len() - 1;
 
-            if resolved_inputs[in_last - 1].kind != PortKind::StateCursor
-                || resolved_inputs[in_last].kind != PortKind::StateOutput
-                || body_region.args[body_arg_last - 1].kind != PortKind::StateCursor
-                || body_region.args[body_arg_last].kind != PortKind::StateOutput
-                || resolved_outputs[out_last - 1].kind != PortKind::StateCursor
-                || resolved_outputs[out_last].kind != PortKind::StateOutput
-                || body_region.results[body_res_last - 1].kind != PortKind::StateCursor
-                || body_region.results[body_res_last].kind != PortKind::StateOutput
+            if resolved_inputs[in_last - 1].kind != CURSOR_STATE_PORT
+                || resolved_inputs[in_last].kind != OUTPUT_STATE_PORT
+                || body_region.args[body_arg_last - 1].kind != CURSOR_STATE_PORT
+                || body_region.args[body_arg_last].kind != OUTPUT_STATE_PORT
+                || resolved_outputs[out_last - 1].kind != CURSOR_STATE_PORT
+                || resolved_outputs[out_last].kind != OUTPUT_STATE_PORT
+                || body_region.results[body_res_last - 1].kind != CURSOR_STATE_PORT
+                || body_region.results[body_res_last].kind != OUTPUT_STATE_PORT
             {
                 return Err(ParseError {
                     message: format!(
@@ -1344,13 +1345,13 @@ fn resolve_source(
             let node_id = node_map[n];
             let node = &func.nodes[node_id];
             for (idx, out) in node.outputs.iter().enumerate() {
-                if out.kind == PortKind::StateCursor {
+                if out.kind == CURSOR_STATE_PORT {
                     return (
                         PortSource::Node(OutputRef {
                             node: node_id,
                             index: idx as u16,
                         }),
-                        PortKind::StateCursor,
+                        CURSOR_STATE_PORT,
                     );
                 }
             }
@@ -1360,13 +1361,13 @@ fn resolve_source(
             let node_id = node_map[n];
             let node = &func.nodes[node_id];
             for (idx, out) in node.outputs.iter().enumerate() {
-                if out.kind == PortKind::StateOutput {
+                if out.kind == OUTPUT_STATE_PORT {
                     return (
                         PortSource::Node(OutputRef {
                             node: node_id,
                             index: idx as u16,
                         }),
-                        PortKind::StateOutput,
+                        OUTPUT_STATE_PORT,
                     );
                 }
             }
@@ -1375,13 +1376,13 @@ fn resolve_source(
         AstSource::CursorArg => {
             let region = &func.regions[region_id];
             for (idx, arg) in region.args.iter().enumerate() {
-                if arg.kind == PortKind::StateCursor {
+                if arg.kind == CURSOR_STATE_PORT {
                     return (
                         PortSource::RegionArg(RegionArgRef {
                             region: region_id,
                             index: idx as u16,
                         }),
-                        PortKind::StateCursor,
+                        CURSOR_STATE_PORT,
                     );
                 }
             }
@@ -1390,13 +1391,13 @@ fn resolve_source(
         AstSource::OutputArg => {
             let region = &func.regions[region_id];
             for (idx, arg) in region.args.iter().enumerate() {
-                if arg.kind == PortKind::StateOutput {
+                if arg.kind == OUTPUT_STATE_PORT {
                     return (
                         PortSource::RegionArg(RegionArgRef {
                             region: region_id,
                             index: idx as u16,
                         }),
-                        PortKind::StateOutput,
+                        OUTPUT_STATE_PORT,
                     );
                 }
             }
@@ -1445,12 +1446,12 @@ fn resolve_output(
             }
         }
         AstOutput::Cursor => OutputPort {
-            kind: PortKind::StateCursor,
+            kind: CURSOR_STATE_PORT,
             vreg: None,
             debug_scope,
         },
         AstOutput::Output => OutputPort {
-            kind: PortKind::StateOutput,
+            kind: OUTPUT_STATE_PORT,
             vreg: None,
             debug_scope,
         },

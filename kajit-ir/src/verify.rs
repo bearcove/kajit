@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource,
-    RegionArgRef, RegionId,
+    CURSOR_STATE_DOMAIN, DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef,
+    PortKind, PortSource, RegionArgRef, RegionId, StateDomainId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -130,7 +130,7 @@ fn debug_scope_exists(func: &IrFunc, scope: DebugScopeId) -> bool {
 }
 
 fn is_state_kind(kind: PortKind) -> bool {
-    matches!(kind, PortKind::StateCursor | PortKind::StateOutput)
+    kind.is_state()
 }
 
 fn in_scope(
@@ -489,40 +489,38 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         }
     }
 
-    let mut cursor_uses: HashMap<StateProducer, StateUsage> = HashMap::new();
-    let mut output_uses: HashMap<StateProducer, StateUsage> = HashMap::new();
+    let mut state_uses: HashMap<StateDomainId, HashMap<StateProducer, StateUsage>> = HashMap::new();
     for &region_id in &region_order {
         let region = &func.regions[region_id];
         for &node_id in &region.nodes {
             let node = &func.nodes[node_id];
             for input in &node.inputs {
                 let producer = state_source(input.source);
-                match input.kind {
-                    PortKind::StateCursor => {
-                        let usage = cursor_uses.entry(producer).or_default();
-                        if matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. })) {
-                            usage.error_exit_sinks += 1;
-                        } else {
-                            usage.chain_uses += 1;
-                        }
+                if let Some(domain) = input.kind.state_domain() {
+                    let usage = state_uses
+                        .entry(domain)
+                        .or_default()
+                        .entry(producer)
+                        .or_default();
+                    if domain == CURSOR_STATE_DOMAIN
+                        && matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. }))
+                    {
+                        usage.error_exit_sinks += 1;
+                    } else {
+                        usage.chain_uses += 1;
                     }
-                    PortKind::StateOutput => {
-                        output_uses.entry(producer).or_default().chain_uses += 1;
-                    }
-                    PortKind::Data => {}
                 }
             }
         }
         for result in &region.results {
             let producer = state_source(result.source);
-            match result.kind {
-                PortKind::StateCursor => {
-                    cursor_uses.entry(producer).or_default().chain_uses += 1;
-                }
-                PortKind::StateOutput => {
-                    output_uses.entry(producer).or_default().chain_uses += 1;
-                }
-                PortKind::Data => {}
+            if let Some(domain) = result.kind.state_domain() {
+                state_uses
+                    .entry(domain)
+                    .or_default()
+                    .entry(producer)
+                    .or_default()
+                    .chain_uses += 1;
             }
         }
     }
@@ -537,17 +535,12 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 region: region_id,
                 index: arg_index as u16,
             });
-            let usage = match arg.kind {
-                PortKind::StateCursor => cursor_uses
-                    .get(&state_source(producer))
-                    .copied()
-                    .unwrap_or_default(),
-                PortKind::StateOutput => output_uses
-                    .get(&state_source(producer))
-                    .copied()
-                    .unwrap_or_default(),
-                PortKind::Data => StateUsage::default(),
-            };
+            let domain = arg.kind.state_domain().unwrap();
+            let usage = state_uses
+                .get(&domain)
+                .and_then(|uses| uses.get(&state_source(producer)))
+                .copied()
+                .unwrap_or_default();
             if usage.chain_uses != 1 {
                 return Err(VerifyError::StateChainViolation {
                     kind: arg.kind,
@@ -555,7 +548,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     uses: usage.chain_uses,
                 });
             }
-            if arg.kind == PortKind::StateCursor && usage.error_exit_sinks > 1 {
+            if domain == CURSOR_STATE_DOMAIN && usage.error_exit_sinks > 1 {
                 return Err(VerifyError::StateErrorExitSinkViolation {
                     producer,
                     sinks: usage.error_exit_sinks,
@@ -573,17 +566,12 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     node: node_id,
                     index: output_index as u16,
                 });
-                let usage = match output.kind {
-                    PortKind::StateCursor => cursor_uses
-                        .get(&state_source(producer))
-                        .copied()
-                        .unwrap_or_default(),
-                    PortKind::StateOutput => output_uses
-                        .get(&state_source(producer))
-                        .copied()
-                        .unwrap_or_default(),
-                    PortKind::Data => StateUsage::default(),
-                };
+                let domain = output.kind.state_domain().unwrap();
+                let usage = state_uses
+                    .get(&domain)
+                    .and_then(|uses| uses.get(&state_source(producer)))
+                    .copied()
+                    .unwrap_or_default();
                 if usage.chain_uses != 1 {
                     return Err(VerifyError::StateChainViolation {
                         kind: output.kind,
@@ -591,7 +579,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         uses: usage.chain_uses,
                     });
                 }
-                if output.kind == PortKind::StateCursor && usage.error_exit_sinks > 1 {
+                if domain == CURSOR_STATE_DOMAIN && usage.error_exit_sinks > 1 {
                     return Err(VerifyError::StateErrorExitSinkViolation {
                         producer,
                         sinks: usage.error_exit_sinks,

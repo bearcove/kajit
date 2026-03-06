@@ -65,7 +65,7 @@ impl<T> fmt::Debug for Id<T> {
 }
 
 impl<T> Id<T> {
-    pub fn new(index: u32) -> Self {
+    pub const fn new(index: u32) -> Self {
         Self {
             index,
             _phantom: PhantomData,
@@ -73,7 +73,7 @@ impl<T> Id<T> {
     }
 
     /// The raw index into the arena.
-    pub fn index(self) -> usize {
+    pub const fn index(self) -> usize {
         self.index as usize
     }
 }
@@ -164,6 +164,16 @@ pub type SlotId = Id<SlotMarker>;
 pub struct LambdaMarker;
 /// A lambda identifier for cross-referencing between IrFuncs.
 pub type LambdaId = Id<LambdaMarker>;
+
+/// Marker type for named RVSDG state domains.
+pub struct StateDomainMarker;
+/// A state-domain identifier used for generic state tokens.
+pub type StateDomainId = Id<StateDomainMarker>;
+
+/// The built-in cursor state domain.
+pub const CURSOR_STATE_DOMAIN: StateDomainId = StateDomainId::new(0);
+/// The built-in output state domain.
+pub const OUTPUT_STATE_DOMAIN: StateDomainId = StateDomainId::new(1);
 
 /// A debug scope identifier carried through the RVSDG pipeline.
 pub type DebugScopeId = Id<DebugScope>;
@@ -361,13 +371,31 @@ impl Default for IntrinsicRegistry {
 pub enum PortKind {
     /// Carries a data value (backed by a VReg at runtime).
     Data,
-    // r[impl ir.edges.state.cursor]
-    /// Carries a cursor state token (orders cursor operations).
-    StateCursor,
-    // r[impl ir.edges.state.output]
-    /// Carries an output state token (orders output writes).
-    StateOutput,
+    /// Carries a named state token (orders operations in that state domain).
+    State(StateDomainId),
 }
+
+impl PortKind {
+    pub const fn state(domain: StateDomainId) -> Self {
+        Self::State(domain)
+    }
+
+    pub const fn state_domain(self) -> Option<StateDomainId> {
+        match self {
+            Self::Data => None,
+            Self::State(domain) => Some(domain),
+        }
+    }
+
+    pub const fn is_state(self) -> bool {
+        matches!(self, Self::State(_))
+    }
+}
+
+/// The built-in cursor state token kind.
+pub const CURSOR_STATE_PORT: PortKind = PortKind::State(CURSOR_STATE_DOMAIN);
+/// The built-in output state token kind.
+pub const OUTPUT_STATE_PORT: PortKind = PortKind::State(OUTPUT_STATE_DOMAIN);
 
 // r[impl ir.edges.data]
 // r[impl ir.edges.state]
@@ -689,13 +717,16 @@ pub enum IrOp {
 pub enum Effect {
     /// No side effects. Data edges only. Can be reordered, CSE'd, DCE'd.
     Pure,
-    /// Reads or modifies cursor state.
-    Cursor,
-    /// Writes to the output struct.
-    Output,
+    /// Reads or mutates a named state domain.
+    Domain(StateDomainId),
     /// May touch any state (full barrier).
     Barrier,
 }
+
+/// The built-in cursor effect kind.
+pub const CURSOR_EFFECT: Effect = Effect::Domain(CURSOR_STATE_DOMAIN);
+/// The built-in output effect kind.
+pub const OUTPUT_EFFECT: Effect = Effect::Domain(OUTPUT_STATE_DOMAIN);
 
 /// Per-op metadata used by optimization passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -734,10 +765,10 @@ impl IrOp {
             | IrOp::CallPure { .. } => (Effect::Pure, None),
 
             // Cursor ops
-            IrOp::ReadBytes { count } => (Effect::Cursor, Some(*count)),
-            IrOp::AdvanceCursor { count } => (Effect::Cursor, Some(*count)),
+            IrOp::ReadBytes { count } => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(*count)),
+            IrOp::AdvanceCursor { count } => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(*count)),
             IrOp::PeekByte | IrOp::SaveCursor | IrOp::BoundsCheck { .. } => {
-                (Effect::Cursor, Some(0))
+                (Effect::Domain(CURSOR_STATE_DOMAIN), Some(0))
             }
             IrOp::AdvanceCursorBy
             | IrOp::RestoreCursor
@@ -745,13 +776,13 @@ impl IrOp {
             | IrOp::ReadFromSlot { .. }
             | IrOp::SimdStringScan
             | IrOp::SimdWhitespaceSkip
-            | IrOp::ErrorExit { .. } => (Effect::Cursor, None),
+            | IrOp::ErrorExit { .. } => (Effect::Domain(CURSOR_STATE_DOMAIN), None),
 
             // Output ops
             IrOp::WriteToField { .. }
             | IrOp::ReadFromField { .. }
             | IrOp::SaveOutPtr
-            | IrOp::SetOutPtr => (Effect::Output, None),
+            | IrOp::SetOutPtr => (Effect::Domain(OUTPUT_STATE_DOMAIN), None),
 
             // Barrier ops
             IrOp::CallIntrinsic { .. } => (Effect::Barrier, None),
@@ -760,7 +791,7 @@ impl IrOp {
         IrOpMetadata {
             effect,
             cursor_advance,
-            has_side_effects: effect != Effect::Pure,
+            has_side_effects: !matches!(effect, Effect::Pure),
         }
     }
 
@@ -914,12 +945,12 @@ impl IrBuilder {
             debug_scope: root_debug_scope,
             args: vec![
                 RegionArg {
-                    kind: PortKind::StateCursor,
+                    kind: PortKind::state(CURSOR_STATE_DOMAIN),
                     vreg: None,
                     debug_value: None,
                 },
                 RegionArg {
-                    kind: PortKind::StateOutput,
+                    kind: PortKind::state(OUTPUT_STATE_DOMAIN),
                     vreg: None,
                     debug_value: None,
                 },
@@ -980,12 +1011,12 @@ impl IrBuilder {
             });
         }
         args.push(RegionArg {
-            kind: PortKind::StateCursor,
+            kind: PortKind::state(CURSOR_STATE_DOMAIN),
             vreg: None,
             debug_value: None,
         });
         args.push(RegionArg {
-            kind: PortKind::StateOutput,
+            kind: PortKind::state(OUTPUT_STATE_DOMAIN),
             vreg: None,
             debug_value: None,
         });
@@ -1144,7 +1175,7 @@ impl<'a> RegionBuilder<'a> {
 
     fn cursor_output(debug_scope: DebugScopeId) -> OutputPort {
         OutputPort {
-            kind: PortKind::StateCursor,
+            kind: PortKind::state(CURSOR_STATE_DOMAIN),
             vreg: None,
             debug_scope,
         }
@@ -1152,7 +1183,7 @@ impl<'a> RegionBuilder<'a> {
 
     fn output_output(debug_scope: DebugScopeId) -> OutputPort {
         OutputPort {
-            kind: PortKind::StateOutput,
+            kind: PortKind::state(OUTPUT_STATE_DOMAIN),
             vreg: None,
             debug_scope,
         }
@@ -1176,7 +1207,7 @@ impl<'a> RegionBuilder<'a> {
 
     /// Add a binary arithmetic op. Returns the data output.
     pub fn binop(&mut self, op: IrOp, lhs: PortSource, rhs: PortSource) -> PortSource {
-        debug_assert_eq!(op.effect(), Effect::Pure);
+        debug_assert!(matches!(op.effect(), Effect::Pure));
         let out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
@@ -1200,7 +1231,7 @@ impl<'a> RegionBuilder<'a> {
 
     /// Add a unary pure op (`ZigzagDecode`, `SignExtend`). Returns the data output.
     pub fn unary(&mut self, op: IrOp, src: PortSource) -> PortSource {
-        debug_assert_eq!(op.effect(), Effect::Pure);
+        debug_assert!(matches!(op.effect(), Effect::Pure));
         let out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
@@ -1226,7 +1257,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 source: self.cursor_state,
             }],
             outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
@@ -1244,7 +1275,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 source: self.cursor_state,
             }],
             outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
@@ -1261,7 +1292,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 source: self.cursor_state,
             }],
             outputs: vec![Self::cursor_output(self.debug_scope)],
@@ -1282,7 +1313,7 @@ impl<'a> RegionBuilder<'a> {
                     source: count,
                 },
                 InputPort {
-                    kind: PortKind::StateCursor,
+                    kind: CURSOR_STATE_PORT,
                     source: self.cursor_state,
                 },
             ],
@@ -1299,7 +1330,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 source: self.cursor_state,
             }],
             outputs: vec![Self::cursor_output(self.debug_scope)],
@@ -1317,7 +1348,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 source: self.cursor_state,
             }],
             outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
@@ -1339,7 +1370,7 @@ impl<'a> RegionBuilder<'a> {
                     source: saved,
                 },
                 InputPort {
-                    kind: PortKind::StateCursor,
+                    kind: CURSOR_STATE_PORT,
                     source: self.cursor_state,
                 },
             ],
@@ -1363,7 +1394,7 @@ impl<'a> RegionBuilder<'a> {
                     source: src,
                 },
                 InputPort {
-                    kind: PortKind::StateOutput,
+                    kind: OUTPUT_STATE_PORT,
                     source: self.output_state,
                 },
             ],
@@ -1381,7 +1412,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateOutput,
+                kind: OUTPUT_STATE_PORT,
                 source: self.output_state,
             }],
             outputs: vec![data_out, Self::output_output(self.debug_scope)],
@@ -1399,7 +1430,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateOutput,
+                kind: OUTPUT_STATE_PORT,
                 source: self.output_state,
             }],
             outputs: vec![data_out, Self::output_output(self.debug_scope)],
@@ -1421,7 +1452,7 @@ impl<'a> RegionBuilder<'a> {
                     source: ptr,
                 },
                 InputPort {
-                    kind: PortKind::StateOutput,
+                    kind: OUTPUT_STATE_PORT,
                     source: self.output_state,
                 },
             ],
@@ -1457,7 +1488,7 @@ impl<'a> RegionBuilder<'a> {
                     source: src,
                 },
                 InputPort {
-                    kind: PortKind::StateCursor,
+                    kind: CURSOR_STATE_PORT,
                     source: self.cursor_state,
                 },
             ],
@@ -1475,7 +1506,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 source: self.cursor_state,
             }],
             outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
@@ -1504,11 +1535,11 @@ impl<'a> RegionBuilder<'a> {
             })
             .collect();
         inputs.push(InputPort {
-            kind: PortKind::StateCursor,
+            kind: CURSOR_STATE_PORT,
             source: self.cursor_state,
         });
         inputs.push(InputPort {
-            kind: PortKind::StateOutput,
+            kind: OUTPUT_STATE_PORT,
             source: self.output_state,
         });
 
@@ -1585,7 +1616,7 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 source: self.cursor_state,
             }],
             outputs: vec![],
@@ -1624,12 +1655,12 @@ impl<'a> RegionBuilder<'a> {
                 });
             }
             args.push(RegionArg {
-                kind: PortKind::StateCursor,
+                kind: CURSOR_STATE_PORT,
                 vreg: None,
                 debug_value: None,
             });
             args.push(RegionArg {
-                kind: PortKind::StateOutput,
+                kind: OUTPUT_STATE_PORT,
                 vreg: None,
                 debug_value: None,
             });
@@ -1697,11 +1728,11 @@ impl<'a> RegionBuilder<'a> {
             });
         }
         inputs.push(InputPort {
-            kind: PortKind::StateCursor,
+            kind: CURSOR_STATE_PORT,
             source: self.cursor_state,
         });
         inputs.push(InputPort {
-            kind: PortKind::StateOutput,
+            kind: OUTPUT_STATE_PORT,
             source: self.output_state,
         });
 
@@ -1772,12 +1803,12 @@ impl<'a> RegionBuilder<'a> {
             });
         }
         args.push(RegionArg {
-            kind: PortKind::StateCursor,
+            kind: CURSOR_STATE_PORT,
             vreg: None,
             debug_value: None,
         });
         args.push(RegionArg {
-            kind: PortKind::StateOutput,
+            kind: OUTPUT_STATE_PORT,
             vreg: None,
             debug_value: None,
         });
@@ -1833,11 +1864,11 @@ impl<'a> RegionBuilder<'a> {
             });
         }
         inputs.push(InputPort {
-            kind: PortKind::StateCursor,
+            kind: CURSOR_STATE_PORT,
             source: self.cursor_state,
         });
         inputs.push(InputPort {
-            kind: PortKind::StateOutput,
+            kind: OUTPUT_STATE_PORT,
             source: self.output_state,
         });
 
@@ -1898,11 +1929,11 @@ impl<'a> RegionBuilder<'a> {
             });
         }
         inputs.push(InputPort {
-            kind: PortKind::StateCursor,
+            kind: CURSOR_STATE_PORT,
             source: self.cursor_state,
         });
         inputs.push(InputPort {
-            kind: PortKind::StateOutput,
+            kind: OUTPUT_STATE_PORT,
             source: self.output_state,
         });
 
@@ -1957,11 +1988,11 @@ impl<'a> RegionBuilder<'a> {
             });
         }
         region.results.push(RegionResult {
-            kind: PortKind::StateCursor,
+            kind: CURSOR_STATE_PORT,
             source: self.cursor_state,
         });
         region.results.push(RegionResult {
-            kind: PortKind::StateOutput,
+            kind: OUTPUT_STATE_PORT,
             source: self.output_state,
         });
     }
@@ -2294,16 +2325,28 @@ impl IrFunc {
                             write!(f, "n{}.{}", oref.node.index(), oref.index)
                         }
                     }
-                    PortKind::StateCursor => write!(f, "%cs:n{}", oref.node.index()),
-                    PortKind::StateOutput => write!(f, "%os:n{}", oref.node.index()),
+                    PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => {
+                        write!(f, "%cs:n{}", oref.node.index())
+                    }
+                    PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => {
+                        write!(f, "%os:n{}", oref.node.index())
+                    }
+                    PortKind::State(domain) => {
+                        write!(f, "%s{}:n{}", domain.index(), oref.node.index())
+                    }
                 }
             }
             PortSource::RegionArg(aref) => {
                 let arg = &self.regions[aref.region].args[aref.index as usize];
                 match arg.kind {
                     PortKind::Data => write!(f, "arg{}", aref.index),
-                    PortKind::StateCursor => write!(f, "%cs:arg"),
-                    PortKind::StateOutput => write!(f, "%os:arg"),
+                    PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => {
+                        write!(f, "%cs:arg")
+                    }
+                    PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => {
+                        write!(f, "%os:arg")
+                    }
+                    PortKind::State(domain) => write!(f, "%s{}:arg", domain.index()),
                 }
             }
         }
@@ -2323,8 +2366,9 @@ impl IrFunc {
                     write!(f, "?")?;
                 }
             }
-            PortKind::StateCursor => write!(f, "%cs")?,
-            PortKind::StateOutput => write!(f, "%os")?,
+            PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => write!(f, "%cs")?,
+            PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => write!(f, "%os")?,
+            PortKind::State(domain) => write!(f, "%s{}", domain.index())?,
         }
 
         if out.debug_scope != default_scope {
@@ -2342,8 +2386,9 @@ impl IrFunc {
     ) -> fmt::Result {
         match arg.kind {
             PortKind::Data => write!(f, "arg{index}"),
-            PortKind::StateCursor => write!(f, "%cs"),
-            PortKind::StateOutput => write!(f, "%os"),
+            PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => write!(f, "%cs"),
+            PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => write!(f, "%os"),
+            PortKind::State(domain) => write!(f, "%s{}", domain.index()),
         }
     }
 
@@ -2476,7 +2521,7 @@ mod tests {
 
         // Verify the read_bytes node's cursor input is the bounds_check output.
         let read_input = &func.nodes[read_node].inputs[0];
-        assert_eq!(read_input.kind, PortKind::StateCursor);
+        assert_eq!(read_input.kind, CURSOR_STATE_PORT);
         assert_eq!(read_input.source, after_check_cs);
 
         // 3 nodes in the root region.
@@ -2497,10 +2542,10 @@ mod tests {
             Effect::Pure
         );
 
-        assert_eq!(IrOp::ReadBytes { count: 1 }.effect(), Effect::Cursor);
-        assert_eq!(IrOp::BoundsCheck { count: 1 }.effect(), Effect::Cursor);
-        assert_eq!(IrOp::SaveCursor.effect(), Effect::Cursor);
-        assert_eq!(IrOp::PeekByte.effect(), Effect::Cursor);
+        assert_eq!(IrOp::ReadBytes { count: 1 }.effect(), CURSOR_EFFECT);
+        assert_eq!(IrOp::BoundsCheck { count: 1 }.effect(), CURSOR_EFFECT);
+        assert_eq!(IrOp::SaveCursor.effect(), CURSOR_EFFECT);
+        assert_eq!(IrOp::PeekByte.effect(), CURSOR_EFFECT);
 
         assert_eq!(
             IrOp::WriteToField {
@@ -2508,7 +2553,7 @@ mod tests {
                 width: Width::W4
             }
             .effect(),
-            Effect::Output
+            OUTPUT_EFFECT
         );
         assert_eq!(
             IrOp::ReadFromField {
@@ -2516,7 +2561,7 @@ mod tests {
                 width: Width::W4
             }
             .effect(),
-            Effect::Output
+            OUTPUT_EFFECT
         );
 
         assert_eq!(
