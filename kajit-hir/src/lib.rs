@@ -314,6 +314,7 @@ pub struct Function {
     pub region_params: Vec<RegionId>,
     pub store_params: Vec<StoreId>,
     pub params: Vec<Parameter>,
+    pub locals: Vec<LocalDecl>,
     pub return_type: Type,
     pub scopes: Vec<Scope>,
     pub body: Block,
@@ -328,6 +329,14 @@ pub struct Scope {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parameter {
+    pub local: LocalId,
+    pub name: String,
+    pub ty: Type,
+    pub kind: LocalKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalDecl {
     pub local: LocalId,
     pub name: String,
     pub ty: Type,
@@ -617,6 +626,7 @@ mod tests {
                     kind: LocalKind::Destination,
                 },
             ],
+            locals: vec![],
             return_type: Type::unit(),
             scopes: vec![Scope {
                 id: ScopeId::new(0),
@@ -634,6 +644,7 @@ mod tests {
 
         assert_eq!(function.region_params, vec![r_input]);
         assert!(matches!(function.params[1].ty, Type::Place(_)));
+        assert!(function.locals.is_empty());
     }
 
     #[test]

@@ -2244,6 +2244,7 @@ struct PostcardHirLowerer {
     cursor_type: hir::TypeDefId,
     type_defs_by_shape: HashMap<*const Shape, hir::TypeDefId>,
     callables_by_name: HashMap<&'static str, hir::CallableId>,
+    locals: Vec<hir::LocalDecl>,
     next_local: u32,
     next_stmt: u32,
 }
@@ -2277,6 +2278,7 @@ impl PostcardHirLowerer {
             cursor_type,
             type_defs_by_shape: HashMap::new(),
             callables_by_name: HashMap::new(),
+            locals: Vec::new(),
             next_local: 0,
             next_stmt: 0,
         }
@@ -2296,6 +2298,22 @@ impl PostcardHirLowerer {
         let id = hir::StmtId::new(self.next_stmt);
         self.next_stmt += 1;
         id
+    }
+
+    fn alloc_local(
+        &mut self,
+        name: impl Into<String>,
+        ty: hir::Type,
+        kind: hir::LocalKind,
+    ) -> hir::LocalId {
+        let local = self.next_local();
+        self.locals.push(hir::LocalDecl {
+            local,
+            name: name.into(),
+            ty,
+            kind,
+        });
+        local
     }
 
     fn push_init(&mut self, statements: &mut Vec<hir::Stmt>, place: hir::Place, value: hir::Expr) {
@@ -2389,6 +2407,22 @@ impl PostcardHirLowerer {
                     })
                     .collect(),
             }
+        } else if let Some(opt_def) = get_option_def(shape) {
+            hir::TypeDefKind::Enum {
+                variants: vec![
+                    hir::VariantDef {
+                        name: "None".to_owned(),
+                        fields: Vec::new(),
+                    },
+                    hir::VariantDef {
+                        name: "Some".to_owned(),
+                        fields: vec![hir::FieldDef {
+                            name: "value".to_owned(),
+                            ty: self.lower_type(opt_def.t),
+                        }],
+                    },
+                ],
+            }
         } else {
             match &shape.ty {
                 Type::User(UserType::Struct(_)) => {
@@ -2433,10 +2467,13 @@ impl PostcardHirLowerer {
         }
 
         if let Some(opt_def) = get_option_def(shape) {
-            panic!(
-                "postcard HIR prototype does not support Option yet: {}",
-                opt_def.t.type_identifier
-            );
+            let type_id = self.ensure_type_def(shape);
+            let args = if Self::shape_has_input_borrow(opt_def.t) {
+                vec![hir::GenericArg::Region(self.input_region)]
+            } else {
+                Vec::new()
+            };
+            return hir::Type::named(type_id, args);
         }
 
         if let Some(st) = shape.scalar_type() {
@@ -2536,6 +2573,36 @@ impl PostcardHirLowerer {
         callable_id
     }
 
+    fn ensure_postcard_option_tag_reader(&mut self) -> hir::CallableId {
+        const NAME: &str = "postcard.read_option_tag";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+
+        let callable_id = self.module.add_callable(hir::CallableSpec {
+            kind: hir::CallableKind::Builtin,
+            name: NAME.to_owned(),
+            signature: hir::CallSignature {
+                params: vec![hir::Type::named(
+                    self.cursor_type,
+                    vec![hir::GenericArg::Region(self.input_region)],
+                )],
+                returns: vec![hir::Type::bool()],
+                effect_class: hir::EffectClass::Mutates,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "cursor".to_owned(),
+                    access: hir::DomainAccess::Mutate,
+                }],
+                control: hir::ControlTransfer::MayFail,
+                capabilities: vec!["deser.postcard".to_owned()],
+                safety: hir::CallSafety::SafeCore,
+            },
+            docs: Some("Read and validate a postcard Option tag.".to_owned()),
+        });
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
     fn lower_type_for_scalar(&self, scalar_type: ScalarType) -> hir::Type {
         match scalar_type {
             ScalarType::Bool => hir::Type::bool(),
@@ -2573,6 +2640,87 @@ impl PostcardHirLowerer {
                 "transparent HIR prototype expects one lowered field"
             );
             self.lower_shape_into_place(statements, cursor_local, place, fields[0].shape);
+            return;
+        }
+
+        if let Some(opt_def) = get_option_def(shape) {
+            let option_def = self.ensure_type_def(shape);
+            let tag_local = self.alloc_local(
+                format!("option_is_some_{}", self.locals.len()),
+                hir::Type::bool(),
+                hir::LocalKind::Temp,
+            );
+            let tag_reader = self.ensure_postcard_option_tag_reader();
+            self.push_init(
+                statements,
+                hir::Place::Local(tag_local),
+                hir::Expr::Call(hir::CallExpr {
+                    target: hir::CallTarget::Callable(tag_reader),
+                    args: vec![hir::Expr::Local(cursor_local)],
+                }),
+            );
+
+            let mut then_block = hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: Vec::new(),
+            };
+
+            if is_unit(opt_def.t) {
+                self.push_init(
+                    &mut then_block.statements,
+                    place.clone(),
+                    hir::Expr::Variant {
+                        def: option_def,
+                        variant: "Some".to_owned(),
+                        fields: vec![("value".to_owned(), hir::Expr::Literal(hir::Literal::Unit))],
+                    },
+                );
+            } else {
+                let payload_ty = self.lower_type(opt_def.t);
+                let payload_local = self.alloc_local(
+                    format!("option_value_{}", self.locals.len()),
+                    payload_ty,
+                    hir::LocalKind::Temp,
+                );
+                self.lower_shape_into_place(
+                    &mut then_block.statements,
+                    cursor_local,
+                    hir::Place::Local(payload_local),
+                    opt_def.t,
+                );
+                self.push_init(
+                    &mut then_block.statements,
+                    place.clone(),
+                    hir::Expr::Variant {
+                        def: option_def,
+                        variant: "Some".to_owned(),
+                        fields: vec![("value".to_owned(), hir::Expr::Local(payload_local))],
+                    },
+                );
+            }
+
+            let mut else_block = hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: Vec::new(),
+            };
+            self.push_init(
+                &mut else_block.statements,
+                place,
+                hir::Expr::Variant {
+                    def: option_def,
+                    variant: "None".to_owned(),
+                    fields: Vec::new(),
+                },
+            );
+
+            statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::If {
+                    condition: hir::Expr::Local(tag_local),
+                    then_block,
+                    else_block: Some(else_block),
+                },
+            });
             return;
         }
 
@@ -2629,6 +2777,7 @@ pub(crate) fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
         id: lowerer.next_stmt_id(),
         kind: hir::StmtKind::Return(None),
     });
+    let locals = std::mem::take(&mut lowerer.locals);
 
     lowerer.module.add_function(hir::Function {
         name: format!("decode_{}", shape.type_identifier.replace("::", "_")),
@@ -2651,6 +2800,7 @@ pub(crate) fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
                 kind: hir::LocalKind::Destination,
             },
         ],
+        locals,
         return_type: hir::Type::unit(),
         scopes: vec![hir::Scope {
             id: root_scope,
@@ -2991,6 +3141,11 @@ mod tests {
         name: &'a str,
     }
 
+    #[derive(Facet)]
+    struct MaybeBorrowedName<'a> {
+        name: Option<&'a str>,
+    }
+
     #[test]
     fn instantiated_shape_symbol_key_distinguishes_generic_instantiations() {
         let u32_key = instantiated_shape_symbol_key(<Wrapper<u32>>::SHAPE);
@@ -3079,6 +3234,99 @@ mod tests {
                 access: hir::DomainAccess::Mutate,
             }]
         );
+    }
+
+    #[test]
+    fn postcard_hir_models_option_borrowed_fields() {
+        let module = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
+        let (_, function) = module.functions.iter().next().unwrap();
+
+        assert_eq!(function.locals.len(), 2);
+        assert_eq!(function.body.statements.len(), 3);
+
+        let hir::StmtKind::Init { value, .. } = &function.body.statements[0].kind else {
+            panic!("expected option-tag init");
+        };
+        let hir::Expr::Call(call) = value else {
+            panic!("expected option-tag call");
+        };
+        let hir::CallTarget::Callable(tag_reader) = call.target;
+        let tag_reader = &module.callables[tag_reader];
+        assert_eq!(tag_reader.name, "postcard.read_option_tag");
+        assert_eq!(tag_reader.signature.returns, vec![hir::Type::bool()]);
+
+        let hir::StmtKind::If {
+            condition,
+            then_block,
+            else_block,
+        } = &function.body.statements[1].kind
+        else {
+            panic!("expected option if statement");
+        };
+        let hir::Expr::Local(tag_local) = condition else {
+            panic!("expected local option tag condition");
+        };
+        assert_eq!(function.locals[0].local, *tag_local);
+        assert_eq!(function.locals[0].ty, hir::Type::bool());
+
+        let Some(else_block) = else_block else {
+            panic!("expected explicit option else block");
+        };
+        assert_eq!(then_block.statements.len(), 2);
+        assert_eq!(else_block.statements.len(), 1);
+
+        let hir::StmtKind::Init { value, .. } = &then_block.statements[0].kind else {
+            panic!("expected option payload init");
+        };
+        let hir::Expr::Call(call) = value else {
+            panic!("expected borrowed payload read call");
+        };
+        let hir::CallTarget::Callable(payload_reader) = call.target;
+        assert_eq!(module.callables[payload_reader].name, "postcard.read_str");
+        assert_eq!(
+            function.locals[1].ty,
+            hir::Type::str(function.region_params[0])
+        );
+
+        let hir::StmtKind::Init { value, .. } = &then_block.statements[1].kind else {
+            panic!("expected Some variant init");
+        };
+        let hir::Expr::Variant {
+            def,
+            variant,
+            fields,
+        } = value
+        else {
+            panic!("expected Some variant expression");
+        };
+        assert_eq!(variant, "Some");
+        assert_eq!(fields.len(), 1);
+        let hir::Expr::Local(payload_local) = &fields[0].1 else {
+            panic!("expected Some variant payload local");
+        };
+        assert_eq!(function.locals[1].local, *payload_local);
+
+        let hir::TypeDefKind::Enum { variants } = &module.type_defs[*def].kind else {
+            panic!("expected Option HIR enum type");
+        };
+        assert_eq!(variants[0].name, "None");
+        assert_eq!(variants[1].name, "Some");
+        assert_eq!(
+            variants[1].fields[0].ty,
+            hir::Type::str(function.region_params[0])
+        );
+
+        let hir::StmtKind::Init { value, .. } = &else_block.statements[0].kind else {
+            panic!("expected None variant init");
+        };
+        let hir::Expr::Variant {
+            variant, fields, ..
+        } = value
+        else {
+            panic!("expected None variant expression");
+        };
+        assert_eq!(variant, "None");
+        assert!(fields.is_empty());
     }
 
     #[test]
