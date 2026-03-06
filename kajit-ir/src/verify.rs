@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource, RegionArgRef,
-    RegionId,
+    DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource,
+    RegionArgRef, RegionId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -34,6 +34,9 @@ pub enum VerifyError {
     },
     InvalidNodeReference {
         node: NodeId,
+    },
+    InvalidDebugScope {
+        scope: DebugScopeId,
     },
     RegionParentConflict {
         region: RegionId,
@@ -120,6 +123,10 @@ fn node_exists(func: &IrFunc, node: NodeId) -> bool {
 
 fn region_exists(func: &IrFunc, region: RegionId) -> bool {
     region.index() < func.regions.len()
+}
+
+fn debug_scope_exists(func: &IrFunc, scope: DebugScopeId) -> bool {
+    scope.index() < func.debug_scopes.len()
 }
 
 fn is_state_kind(kind: PortKind) -> bool {
@@ -297,10 +304,28 @@ fn state_source(source: PortSource) -> StateProducer {
 }
 
 pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
+    if !debug_scope_exists(func, func.root_debug_scope) {
+        return Err(VerifyError::InvalidDebugScope {
+            scope: func.root_debug_scope,
+        });
+    }
+    for (_, scope) in func.debug_scopes.iter() {
+        if let Some(parent) = scope.parent
+            && !debug_scope_exists(func, parent)
+        {
+            return Err(VerifyError::InvalidDebugScope { scope: parent });
+        }
+    }
+
     let (region_parents, region_order, node_regions) = collect_reachable(func)?;
 
     for &region_id in &region_order {
         let region = &func.regions[region_id];
+        if !debug_scope_exists(func, region.debug_scope) {
+            return Err(VerifyError::InvalidDebugScope {
+                scope: region.debug_scope,
+            });
+        }
         let mut positions: HashMap<NodeId, usize> = HashMap::with_capacity(region.nodes.len());
         for (idx, &node_id) in region.nodes.iter().enumerate() {
             positions.insert(node_id, idx);
@@ -308,6 +333,18 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
 
         for (node_pos, &node_id) in region.nodes.iter().enumerate() {
             let node = &func.nodes[node_id];
+            if !debug_scope_exists(func, node.debug_scope) {
+                return Err(VerifyError::InvalidDebugScope {
+                    scope: node.debug_scope,
+                });
+            }
+            for output in &node.outputs {
+                if !debug_scope_exists(func, output.debug_scope) {
+                    return Err(VerifyError::InvalidDebugScope {
+                        scope: output.debug_scope,
+                    });
+                }
+            }
             for (input_index, input) in node.inputs.iter().enumerate() {
                 match input.source {
                     PortSource::Node(source) => {

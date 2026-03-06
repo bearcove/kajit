@@ -9,9 +9,9 @@ use chumsky::prelude::*;
 
 use kajit_ir::ErrorCode;
 use kajit_ir::{
-    Arena, InputPort, IntrinsicFn, IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId,
-    NodeKind, OutputPort, OutputRef, PortKind, PortSource, Region, RegionArg, RegionArgRef,
-    RegionId, RegionResult, SlotId, VReg, Width,
+    Arena, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry,
+    IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
+    Region, RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, VReg, Width,
 };
 
 // ─── AST types (first pass) ────────────────────────────────────────────────
@@ -48,39 +48,50 @@ enum AstOutput {
     Unknown,
 }
 
+#[derive(Debug, Clone)]
+struct AstScopedOutput {
+    output: AstOutput,
+    scope: Option<u32>,
+}
+
 /// A parsed node (unresolved).
 #[derive(Debug, Clone)]
 enum AstNode {
     Simple {
         id: u32,
+        scope: Option<u32>,
         op: AstOp,
         inputs: Vec<AstSource>,
-        outputs: Vec<AstOutput>,
+        outputs: Vec<AstScopedOutput>,
     },
     Gamma {
         id: u32,
+        scope: Option<u32>,
         pred: AstSource,
         extra_inputs: Vec<AstSource>,
         branches: Vec<AstRegion>,
-        outputs: Vec<AstOutput>,
+        outputs: Vec<AstScopedOutput>,
     },
     Theta {
         id: u32,
+        scope: Option<u32>,
         inputs: Vec<AstSource>,
         body: AstRegion,
-        outputs: Vec<AstOutput>,
+        outputs: Vec<AstScopedOutput>,
     },
     Apply {
         id: u32,
+        scope: Option<u32>,
         target: u32,
         inputs: Vec<AstSource>,
-        outputs: Vec<AstOutput>,
+        outputs: Vec<AstScopedOutput>,
     },
 }
 
 /// A parsed region (unresolved).
 #[derive(Debug, Clone)]
 struct AstRegion {
+    scope: Option<u32>,
     args: Vec<AstRegionArg>,
     nodes: Vec<AstNode>,
     results: Vec<AstSource>,
@@ -97,9 +108,30 @@ enum AstRegionArg {
 #[derive(Debug, Clone)]
 struct AstLambda {
     id: u32,
+    node_scope: Option<u32>,
     #[allow(dead_code)]
     shape: String,
     body: AstRegion,
+}
+
+#[derive(Debug, Clone)]
+enum AstScopeKind {
+    LambdaBody { lambda_id: u32 },
+    GammaBranch { branch_index: u16 },
+    ThetaBody,
+}
+
+#[derive(Debug, Clone)]
+struct AstScopeDef {
+    id: u32,
+    parent: Option<u32>,
+    kind: AstScopeKind,
+}
+
+#[derive(Debug, Clone)]
+struct AstProgram {
+    scopes: Vec<AstScopeDef>,
+    lambdas: Vec<AstLambda>,
 }
 
 // ─── Parsers ────────────────────────────────────────────────────────────────
@@ -205,6 +237,51 @@ fn output<'src>() -> impl Parser<'src, &'src str, AstOutput, Extra<'src>> + Clon
     let vreg = just("v").ignore_then(uint32()).map(AstOutput::VReg);
 
     choice((cursor, output_state, unknown, vreg))
+}
+
+fn scope_ref<'src>() -> impl Parser<'src, &'src str, u32, Extra<'src>> + Clone {
+    just("@s").ignore_then(uint32())
+}
+
+fn scope_def<'src>() -> impl Parser<'src, &'src str, AstScopeDef, Extra<'src>> + Clone {
+    let lambda_body = just("lambda_body(")
+        .ignore_then(just("@"))
+        .ignore_then(uint32())
+        .then_ignore(just(")"))
+        .map(|lambda_id| AstScopeKind::LambdaBody { lambda_id });
+    let gamma_branch = just("gamma_branch(")
+        .ignore_then(uint16())
+        .then_ignore(just(")"))
+        .map(|branch_index| AstScopeKind::GammaBranch { branch_index });
+    let theta_body = just("theta_body").to(AstScopeKind::ThetaBody);
+
+    just("s")
+        .ignore_then(uint32())
+        .then_ignore(ws().then(just("=")).then(ws()))
+        .then(choice((lambda_body, gamma_branch, theta_body)))
+        .then(
+            ws().ignore_then(just("parent"))
+                .ignore_then(ws())
+                .ignore_then(just("s"))
+                .ignore_then(uint32())
+                .or_not(),
+        )
+        .map(|((id, kind), parent)| AstScopeDef { id, parent, kind })
+}
+
+fn scopes_block<'src>() -> impl Parser<'src, &'src str, Vec<AstScopeDef>, Extra<'src>> + Clone {
+    just("scopes")
+        .padded_by(ws())
+        .ignore_then(just("{"))
+        .ignore_then(ws())
+        .ignore_then(scope_def().padded_by(ws()).repeated().collect::<Vec<_>>())
+        .then_ignore(ws().then(just("}")))
+}
+
+fn scoped_output<'src>() -> impl Parser<'src, &'src str, AstScopedOutput, Extra<'src>> + Clone {
+    output()
+        .then(scope_ref().or_not())
+        .map(|(output, scope)| AstScopedOutput { output, scope })
 }
 
 /// Parse a comma-separated list inside brackets.
@@ -402,20 +479,27 @@ fn region_arg<'src>() -> impl Parser<'src, &'src str, AstRegionArg, Extra<'src>>
 
 fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clone {
     recursive(|region| {
+        let region_header = just("region")
+            .ignore_then(ws())
+            .ignore_then(scope_ref().or_not())
+            .then_ignore(ws().then(just("{")).then(ws()));
+
         let args = just("args:")
             .padded_by(ws())
             .ignore_then(bracketed_list(region_arg()));
 
         let simple_node = just("n")
             .ignore_then(uint32())
+            .then(ws().ignore_then(scope_ref()).or_not())
             .then_ignore(ws().then(just("=")).then(ws()))
             .then(ir_op())
             .then_ignore(ws())
             .then(bracketed_list(source()))
             .then_ignore(ws().then(just("->")).then(ws()))
-            .then(bracketed_list(output()))
-            .map(|(((id, op), inputs), outputs)| AstNode::Simple {
+            .then(bracketed_list(scoped_output()))
+            .map(|((((id, scope), op), inputs), outputs)| AstNode::Simple {
                 id,
+                scope,
                 op,
                 inputs,
                 outputs,
@@ -423,6 +507,7 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
 
         let gamma_node = just("n")
             .ignore_then(uint32())
+            .then(ws().ignore_then(scope_ref()).or_not())
             .then_ignore(
                 ws().then(just("="))
                     .then(ws())
@@ -454,23 +539,17 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
                     .padded_by(ws())
                     .ignore_then(uint32())
                     .then_ignore(just(":").then(ws()))
-                    .ignore_then(
-                        just("region")
-                            .ignore_then(ws())
-                            .ignore_then(just("{"))
-                            .ignore_then(ws())
-                            .ignore_then(region.clone())
-                            .then_ignore(ws().then(just("}")).then(ws())),
-                    )
+                    .ignore_then(region.clone().then_ignore(ws()))
                     .repeated()
                     .at_least(1)
                     .collect::<Vec<_>>(),
             )
             .then_ignore(ws().then(just("}")).then(ws()).then(just("->")).then(ws()))
-            .then(bracketed_list(output()))
+            .then(bracketed_list(scoped_output()))
             .map(
-                |((((id, pred), extra_inputs), branches), outputs)| AstNode::Gamma {
+                |(((((id, scope), pred), extra_inputs), branches), outputs)| AstNode::Gamma {
                     id,
+                    scope,
                     pred,
                     extra_inputs,
                     branches,
@@ -480,6 +559,7 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
 
         let theta_node = just("n")
             .ignore_then(uint32())
+            .then(ws().ignore_then(scope_ref()).or_not())
             .then_ignore(
                 ws().then(just("="))
                     .then(ws())
@@ -488,18 +568,12 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
             )
             .then(bracketed_list(source()))
             .then_ignore(ws().then(just("{")).then(ws()))
-            .then(
-                just("region")
-                    .ignore_then(ws())
-                    .ignore_then(just("{"))
-                    .ignore_then(ws())
-                    .ignore_then(region.clone())
-                    .then_ignore(ws().then(just("}"))),
-            )
+            .then(region.clone())
             .then_ignore(ws().then(just("}")).then(ws()).then(just("->")).then(ws()))
-            .then(bracketed_list(output()))
-            .map(|(((id, inputs), body), outputs)| AstNode::Theta {
+            .then(bracketed_list(scoped_output()))
+            .map(|((((id, scope), inputs), body), outputs)| AstNode::Theta {
                 id,
+                scope,
                 inputs,
                 body,
                 outputs,
@@ -507,6 +581,7 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
 
         let apply_node = just("n")
             .ignore_then(uint32())
+            .then(ws().ignore_then(scope_ref()).or_not())
             .then_ignore(
                 ws().then(just("="))
                     .then(ws())
@@ -518,13 +593,16 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
             .then_ignore(ws())
             .then(bracketed_list(source()))
             .then_ignore(ws().then(just("->")).then(ws()))
-            .then(bracketed_list(output()))
-            .map(|(((id, target), inputs), outputs)| AstNode::Apply {
-                id,
-                target,
-                inputs,
-                outputs,
-            });
+            .then(bracketed_list(scoped_output()))
+            .map(
+                |((((id, scope), target), inputs), outputs)| AstNode::Apply {
+                    id,
+                    scope,
+                    target,
+                    inputs,
+                    outputs,
+                },
+            );
 
         let node = choice((gamma_node, theta_node, apply_node, simple_node));
 
@@ -534,11 +612,15 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
             .padded_by(ws())
             .ignore_then(bracketed_list(source()));
 
-        args.then_ignore(ws())
+        region_header
+            .then(args)
+            .then_ignore(ws())
             .then(nodes)
             .then_ignore(ws())
             .then(results)
-            .map(|((args, nodes), results)| AstRegion {
+            .then_ignore(ws().then(just("}")))
+            .map(|(((scope, args), nodes), results)| AstRegion {
+                scope,
                 args,
                 nodes,
                 results,
@@ -552,6 +634,8 @@ fn lambda<'src>() -> impl Parser<'src, &'src str, AstLambda, Extra<'src>> + Clon
         .ignore_then(just("@"))
         .ignore_then(uint32())
         .then_ignore(ws())
+        .then(scope_ref().or_not())
+        .then_ignore(ws())
         .then(
             just("(shape:")
                 .ignore_then(ws())
@@ -563,28 +647,31 @@ fn lambda<'src>() -> impl Parser<'src, &'src str, AstLambda, Extra<'src>> + Clon
                 .then_ignore(just(")")),
         )
         .then_ignore(ws().then(just("{")).then(ws()))
-        .then(
-            just("region")
-                .ignore_then(ws())
-                .ignore_then(just("{"))
-                .ignore_then(ws())
-                .ignore_then(region())
-                .then_ignore(ws().then(just("}"))),
-        )
+        .then(region())
         .then_ignore(ws().then(just("}")))
-        .map(|((id, shape), body)| AstLambda {
+        .map(|(((id, node_scope), shape), body)| AstLambda {
             id,
+            node_scope,
             shape: shape.to_string(),
             body,
         })
 }
 
-fn program<'src>() -> impl Parser<'src, &'src str, Vec<AstLambda>, Extra<'src>> + Clone {
-    lambda()
+fn program<'src>() -> impl Parser<'src, &'src str, AstProgram, Extra<'src>> + Clone {
+    scopes_block()
         .padded_by(ws())
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>()
+        .or_not()
+        .then(
+            lambda()
+                .padded_by(ws())
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .map(|(scopes, lambdas)| AstProgram {
+            scopes: scopes.unwrap_or_default(),
+            lambdas,
+        })
         .then_ignore(end())
 }
 
@@ -629,7 +716,7 @@ pub fn parse_ir(
 
 /// Resolve AST references into a concrete `IrFunc`.
 fn resolve(
-    lambdas: Vec<AstLambda>,
+    program: AstProgram,
     shape: &'static facet::Shape,
     registry: &IntrinsicRegistry,
 ) -> Result<IrFunc, ParseError> {
@@ -640,7 +727,20 @@ fn resolve(
         vreg_count: 0,
         slot_count: 0,
         lambdas: Vec::new(),
+        debug_scopes: Arena::new(),
+        root_debug_scope: DebugScopeId::new(0),
     };
+
+    if program.scopes.is_empty() {
+        func.root_debug_scope = func.debug_scopes.push(DebugScope {
+            parent: None,
+            kind: DebugScopeKind::LambdaBody {
+                lambda_id: LambdaId::new(0),
+            },
+        });
+    } else {
+        build_explicit_scopes(&mut func, &program.scopes)?;
+    }
 
     // Track max vreg and slot seen, to set counts at the end.
     let mut max_vreg: u32 = 0;
@@ -661,11 +761,21 @@ fn resolve(
     let sentinel_region = RegionId::new(u32::MAX);
     let placeholder_body = RegionId::new(u32::MAX);
     let mut lambda_node_ids = Vec::new();
-    for ast_lambda in &lambdas {
+    for ast_lambda in &program.lambdas {
         let lambda_id = LambdaId::new(ast_lambda.id);
         let lambda_shape = shape; // non-root lambdas also get same shape for now
+        let debug_scope = match ast_lambda.node_scope {
+            Some(scope) => lookup_scope(&func, scope)?,
+            None if program.scopes.is_empty() && lambda_id.index() == 0 => func.root_debug_scope,
+            None if program.scopes.is_empty() => func.debug_scopes.push(DebugScope {
+                parent: Some(func.root_debug_scope),
+                kind: DebugScopeKind::LambdaBody { lambda_id },
+            }),
+            None => find_lambda_body_scope(&func, lambda_id)?,
+        };
         let node_id = func.nodes.push(Node {
             region: sentinel_region,
+            debug_scope,
             inputs: Vec::new(),
             outputs: Vec::new(),
             kind: NodeKind::Lambda {
@@ -674,7 +784,7 @@ fn resolve(
                 lambda_id,
             },
         });
-        lambda_node_ids.push((ast_lambda.id, node_id, lambda_id));
+        lambda_node_ids.push((ast_lambda.id, node_id, lambda_id, debug_scope));
 
         while func.lambdas.len() <= lambda_id.index() {
             func.lambdas.push(NodeId::new(u32::MAX));
@@ -686,11 +796,17 @@ fn resolve(
     }
 
     // Now build the body regions for each lambda and patch the lambda nodes.
-    for (i, ast_lambda) in lambdas.iter().enumerate() {
-        let (_, node_id, lambda_id) = lambda_node_ids[i];
+    for (i, ast_lambda) in program.lambdas.iter().enumerate() {
+        let (_, node_id, lambda_id, debug_scope) = lambda_node_ids[i];
+        let body_scope = match ast_lambda.body.scope {
+            Some(scope) => lookup_scope(&func, scope)?,
+            None if program.scopes.is_empty() => debug_scope,
+            None => find_lambda_body_scope(&func, lambda_id)?,
+        };
 
         let body_region_id = resolve_region(
             &ast_lambda.body,
+            body_scope,
             &mut func,
             &mut node_map,
             &mut max_vreg,
@@ -716,8 +832,96 @@ fn resolve(
     Ok(func)
 }
 
+fn build_explicit_scopes(func: &mut IrFunc, scopes: &[AstScopeDef]) -> Result<(), ParseError> {
+    for scope in scopes {
+        let expected = func.debug_scopes.len() as u32;
+        if scope.id != expected {
+            return Err(ParseError {
+                message: format!(
+                    "debug scope IDs must be dense and in order: expected s{expected}, found s{}",
+                    scope.id
+                ),
+            });
+        }
+
+        let parent = match scope.parent {
+            Some(parent) if parent >= scope.id => {
+                return Err(ParseError {
+                    message: format!("debug scope s{} has invalid parent s{parent}", scope.id),
+                });
+            }
+            Some(parent) => Some(DebugScopeId::new(parent)),
+            None => None,
+        };
+
+        let kind = match scope.kind {
+            AstScopeKind::LambdaBody { lambda_id } => DebugScopeKind::LambdaBody {
+                lambda_id: LambdaId::new(lambda_id),
+            },
+            AstScopeKind::GammaBranch { branch_index } => {
+                DebugScopeKind::GammaBranch { branch_index }
+            }
+            AstScopeKind::ThetaBody => DebugScopeKind::ThetaBody,
+        };
+
+        func.debug_scopes.push(DebugScope { parent, kind });
+    }
+
+    let root_scope = scopes
+        .iter()
+        .find(|scope| matches!(scope.kind, AstScopeKind::LambdaBody { lambda_id: 0 }))
+        .ok_or_else(|| ParseError {
+            message: "explicit scopes must define a lambda_body(@0) root scope".to_string(),
+        })?;
+    func.root_debug_scope = DebugScopeId::new(root_scope.id);
+    Ok(())
+}
+
+fn lookup_scope(func: &IrFunc, scope: u32) -> Result<DebugScopeId, ParseError> {
+    let scope_id = DebugScopeId::new(scope);
+    if scope_id.index() >= func.debug_scopes.len() {
+        return Err(ParseError {
+            message: format!("unknown debug scope reference @s{scope}"),
+        });
+    }
+    Ok(scope_id)
+}
+
+fn find_lambda_body_scope(func: &IrFunc, lambda_id: LambdaId) -> Result<DebugScopeId, ParseError> {
+    func.debug_scopes
+        .iter()
+        .find_map(|(scope_id, scope)| match scope.kind {
+            DebugScopeKind::LambdaBody {
+                lambda_id: scope_lambda_id,
+            } if scope_lambda_id == lambda_id => Some(scope_id),
+            _ => None,
+        })
+        .ok_or_else(|| ParseError {
+            message: format!(
+                "no lambda_body scope found for lambda @{}",
+                lambda_id.index()
+            ),
+        })
+}
+
+fn resolve_child_region_scope(
+    func: &mut IrFunc,
+    explicit_scope: Option<u32>,
+    default_parent: DebugScopeId,
+    default_kind: DebugScopeKind,
+) -> Result<DebugScopeId, ParseError> {
+    match explicit_scope {
+        Some(scope) => lookup_scope(func, scope),
+        None => Ok(func.debug_scopes.push(DebugScope {
+            parent: Some(default_parent),
+            kind: default_kind,
+        })),
+    }
+}
+
 fn resolve_region(
     ast: &AstRegion,
+    debug_scope: DebugScopeId,
     func: &mut IrFunc,
     node_map: &mut HashMap<u32, NodeId>,
     max_vreg: &mut u32,
@@ -748,6 +952,7 @@ fn resolve_region(
         .collect();
 
     let region_id = func.regions.push(Region {
+        debug_scope,
         args,
         results: Vec::new(),
         nodes: Vec::new(),
@@ -786,13 +991,19 @@ fn resolve_node(
     max_slot: &mut u32,
     registry: &IntrinsicRegistry,
 ) -> Result<NodeId, ParseError> {
+    let region_debug_scope = func.regions[region_id].debug_scope;
     match ast {
         AstNode::Simple {
             id,
+            scope,
             op,
             inputs,
             outputs,
         } => {
+            let node_debug_scope = match scope {
+                Some(scope) => lookup_scope(func, *scope)?,
+                None => region_debug_scope,
+            };
             let resolved_op = resolve_op(op, registry)?;
 
             // Track slots.
@@ -815,8 +1026,8 @@ fn resolve_node(
 
             let resolved_outputs: Vec<OutputPort> = outputs
                 .iter()
-                .map(|o| resolve_output(o, max_vreg))
-                .collect();
+                .map(|o| resolve_output(o, max_vreg, node_debug_scope, func))
+                .collect::<Result<_, _>>()?;
 
             // Patch CallIntrinsic/CallPure arg_count and has_result from actual ports.
             let resolved_op = match resolved_op {
@@ -849,6 +1060,7 @@ fn resolve_node(
 
             let node_id = func.nodes.push(Node {
                 region: region_id,
+                debug_scope: node_debug_scope,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Simple(resolved_op),
@@ -860,15 +1072,36 @@ fn resolve_node(
 
         AstNode::Gamma {
             id,
+            scope,
             pred,
             extra_inputs,
             branches,
             outputs,
         } => {
+            let node_debug_scope = match scope {
+                Some(scope) => lookup_scope(func, *scope)?,
+                None => region_debug_scope,
+            };
             // Build sub-regions first.
             let mut region_ids = Vec::new();
-            for branch in branches {
-                let rid = resolve_region(branch, func, node_map, max_vreg, max_slot, registry)?;
+            for (branch_index, branch) in branches.iter().enumerate() {
+                let branch_scope = resolve_child_region_scope(
+                    func,
+                    branch.scope,
+                    node_debug_scope,
+                    DebugScopeKind::GammaBranch {
+                        branch_index: branch_index as u16,
+                    },
+                )?;
+                let rid = resolve_region(
+                    branch,
+                    branch_scope,
+                    func,
+                    node_map,
+                    max_vreg,
+                    max_slot,
+                    registry,
+                )?;
                 region_ids.push(rid);
             }
 
@@ -886,11 +1119,12 @@ fn resolve_node(
 
             let resolved_outputs: Vec<OutputPort> = outputs
                 .iter()
-                .map(|o| resolve_output(o, max_vreg))
-                .collect();
+                .map(|o| resolve_output(o, max_vreg, node_debug_scope, func))
+                .collect::<Result<_, _>>()?;
 
             let node_id = func.nodes.push(Node {
                 region: region_id,
+                debug_scope: node_debug_scope,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Gamma {
@@ -904,11 +1138,24 @@ fn resolve_node(
 
         AstNode::Theta {
             id,
+            scope,
             inputs,
             body,
             outputs,
         } => {
-            let body_id = resolve_region(body, func, node_map, max_vreg, max_slot, registry)?;
+            let node_debug_scope = match scope {
+                Some(scope) => lookup_scope(func, *scope)?,
+                None => region_debug_scope,
+            };
+            let body_scope = resolve_child_region_scope(
+                func,
+                body.scope,
+                node_debug_scope,
+                DebugScopeKind::ThetaBody,
+            )?;
+            let body_id = resolve_region(
+                body, body_scope, func, node_map, max_vreg, max_slot, registry,
+            )?;
 
             let resolved_inputs: Vec<InputPort> = inputs
                 .iter()
@@ -920,8 +1167,8 @@ fn resolve_node(
 
             let resolved_outputs: Vec<OutputPort> = outputs
                 .iter()
-                .map(|o| resolve_output(o, max_vreg))
-                .collect();
+                .map(|o| resolve_output(o, max_vreg, node_debug_scope, func))
+                .collect::<Result<_, _>>()?;
 
             // Theta invariant checks: textual IR must follow builder semantics.
             // inputs: [loop_vars..., %cs, %os]
@@ -1003,6 +1250,7 @@ fn resolve_node(
 
             let node_id = func.nodes.push(Node {
                 region: region_id,
+                debug_scope: node_debug_scope,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Theta { body: body_id },
@@ -1014,10 +1262,15 @@ fn resolve_node(
 
         AstNode::Apply {
             id,
+            scope,
             target,
             inputs,
             outputs,
         } => {
+            let node_debug_scope = match scope {
+                Some(scope) => lookup_scope(func, *scope)?,
+                None => region_debug_scope,
+            };
             let resolved_inputs: Vec<InputPort> = inputs
                 .iter()
                 .map(|s| {
@@ -1028,11 +1281,12 @@ fn resolve_node(
 
             let resolved_outputs: Vec<OutputPort> = outputs
                 .iter()
-                .map(|o| resolve_output(o, max_vreg))
-                .collect();
+                .map(|o| resolve_output(o, max_vreg, node_debug_scope, func))
+                .collect::<Result<_, _>>()?;
 
             let node_id = func.nodes.push(Node {
                 region: region_id,
+                debug_scope: node_debug_scope,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
                 kind: NodeKind::Apply {
@@ -1161,28 +1415,42 @@ fn resolve_source(
     }
 }
 
-fn resolve_output(o: &AstOutput, max_vreg: &mut u32) -> OutputPort {
-    match o {
+fn resolve_output(
+    o: &AstScopedOutput,
+    max_vreg: &mut u32,
+    default_scope: DebugScopeId,
+    func: &IrFunc,
+) -> Result<OutputPort, ParseError> {
+    let debug_scope = match o.scope {
+        Some(scope) => lookup_scope(func, scope)?,
+        None => default_scope,
+    };
+
+    Ok(match &o.output {
         AstOutput::VReg(v) => {
             *max_vreg = (*max_vreg).max(*v);
             OutputPort {
                 kind: PortKind::Data,
                 vreg: Some(VReg::new(*v)),
+                debug_scope,
             }
         }
         AstOutput::Cursor => OutputPort {
             kind: PortKind::StateCursor,
             vreg: None,
+            debug_scope,
         },
         AstOutput::Output => OutputPort {
             kind: PortKind::StateOutput,
             vreg: None,
+            debug_scope,
         },
         AstOutput::Unknown => OutputPort {
             kind: PortKind::Data,
             vreg: None,
+            debug_scope,
         },
-    }
+    })
 }
 
 fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseError> {
@@ -1240,7 +1508,7 @@ fn resolve_const(value: &ConstRef, registry: &IntrinsicRegistry) -> Result<u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IrBuilder, Width};
+    use kajit_ir::{DebugScope, DebugScopeId, DebugScopeKind, IrBuilder, Width};
 
     fn test_shape() -> &'static facet::Shape {
         <u8 as facet::Facet>::SHAPE
@@ -1564,5 +1832,119 @@ lambda @0 (shape: "u8") {
             text1, text2,
             "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
         );
+    }
+
+    #[test]
+    fn parse_and_round_trip_explicit_debug_scopes() {
+        let input = r#"
+scopes {
+  s0 = lambda_body(@0)
+  s1 = theta_body parent s0
+}
+lambda @0 @s0 (shape: "u8") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 @s1 = Const(0x2a) [] -> [v0@s0]
+    results: [v0]
+  }
+}
+"#;
+
+        let registry = IntrinsicRegistry::empty();
+        let func = parse_ir(input, test_shape(), &registry).unwrap();
+
+        let root_body = func.root_body();
+        assert_eq!(func.regions[root_body].debug_scope, DebugScopeId::new(0));
+
+        let node_id = func.regions[root_body].nodes[0];
+        assert_eq!(func.nodes[node_id].debug_scope, DebugScopeId::new(1));
+        assert_eq!(
+            func.nodes[node_id].outputs[0].debug_scope,
+            DebugScopeId::new(0)
+        );
+
+        let text = format!("{}", func.display_with_registry(&registry));
+        assert_eq!(text.trim(), input.trim());
+    }
+
+    #[test]
+    fn round_trip_preserves_scoped_node_and_output_annotations() {
+        let mut builder = IrBuilder::new(test_shape());
+        {
+            let mut rb = builder.root_region();
+            let value = rb.const_val(42);
+            rb.set_results(&[value]);
+        }
+
+        let mut func = builder.finish();
+        let extra_scope = func.debug_scopes.push(DebugScope {
+            parent: Some(func.root_debug_scope),
+            kind: DebugScopeKind::ThetaBody,
+        });
+        let root_body = func.root_body();
+        let node_id = func.regions[root_body].nodes[0];
+        func.nodes[node_id].debug_scope = extra_scope;
+        func.nodes[node_id].outputs[0].debug_scope = func.root_debug_scope;
+
+        let registry = IntrinsicRegistry::empty();
+        let text1 = format!("{}", func.display_with_registry(&registry));
+        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let text2 = format!("{}", func2.display_with_registry(&registry));
+
+        assert_eq!(text1, text2);
+        assert_eq!(
+            func2.nodes[func2.regions[func2.root_body()].nodes[0]].debug_scope,
+            extra_scope
+        );
+        assert_eq!(
+            func2.nodes[func2.regions[func2.root_body()].nodes[0]].outputs[0].debug_scope,
+            func2.root_debug_scope
+        );
+    }
+
+    #[test]
+    fn parse_error_unknown_debug_scope_reference() {
+        let input = r#"
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "u8") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 @s7 = Const(0x2a) [] -> [v0]
+    results: [v0]
+  }
+}
+"#;
+
+        let registry = IntrinsicRegistry::empty();
+        let err = match parse_ir(input, test_shape(), &registry) {
+            Ok(_) => panic!("expected unknown scope reference error"),
+            Err(err) => err,
+        };
+        assert!(err.message.contains("unknown debug scope reference @s7"));
+    }
+
+    #[test]
+    fn parse_error_sparse_debug_scope_ids() {
+        let input = r#"
+scopes {
+  s0 = lambda_body(@0)
+  s2 = theta_body parent s0
+}
+lambda @0 @s0 (shape: "u8") {
+  region @s0 {
+    args: [%cs, %os]
+    results: [%cs:arg, %os:arg]
+  }
+}
+"#;
+
+        let registry = IntrinsicRegistry::empty();
+        let err = match parse_ir(input, test_shape(), &registry) {
+            Ok(_) => panic!("expected sparse scope ID error"),
+            Err(err) => err,
+        };
+        assert!(err.message.contains("expected s1, found s2"));
     }
 }

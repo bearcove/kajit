@@ -3280,6 +3280,7 @@ lambda @0 (shape: "u8") {
                 funcs: vec![cfg_func],
                 vreg_count: 32,
                 slot_count: 0,
+                debug: Default::default(),
             },
             functions: vec![AllocatedCfgFunction {
                 lambda_id: LambdaId::new(0),

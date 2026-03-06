@@ -392,6 +392,19 @@ fn build_elf(
                 data: &dwarf.debug_loc,
             });
         }
+        if !dwarf.debug_ranges.is_empty() {
+            extras.push(ExtraSection {
+                name: ".debug_ranges",
+                sh_type: SHT_PROGBITS,
+                sh_flags: 0,
+                sh_addr: 0,
+                sh_link: 0,
+                sh_info: 0,
+                sh_addralign: 1,
+                sh_entsize: 0,
+                data: &dwarf.debug_ranges,
+            });
+        }
     }
 
     // Build .shstrtab (section name strings)

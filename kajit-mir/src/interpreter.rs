@@ -565,6 +565,7 @@ pub fn execute_function_with_event_trace(
         funcs: vec![func.clone()],
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
+        debug: Default::default(),
     };
     execute_program_with_event_trace(&program, input)
 }
@@ -616,6 +617,7 @@ pub fn execute_function_with_trace(
         funcs: vec![func.clone()],
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
+        debug: Default::default(),
     };
     execute_program_with_trace(&program, input)
 }
@@ -2135,6 +2137,7 @@ mod tests {
             }],
             vreg_count: 1,
             slot_count: 0,
+            debug: Default::default(),
         }
     }
 
@@ -2226,6 +2229,7 @@ mod tests {
             }],
             vreg_count: 2,
             slot_count: 0,
+            debug: Default::default(),
         }
     }
 

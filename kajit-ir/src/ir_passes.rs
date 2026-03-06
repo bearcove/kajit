@@ -449,6 +449,7 @@ fn hoist_theta_loop_invariants_for_node(
 
         let new_node = func.nodes.push(Node {
             region: parent_region,
+            debug_scope: func.nodes[old_node].debug_scope,
             inputs: new_inputs,
             outputs: old_outputs,
             kind: NodeKind::Simple(op.clone()),
@@ -909,6 +910,7 @@ fn clone_region_into(
                 for old_sub in regions {
                     let old_reg = &func.regions[old_sub];
                     let new_sub = func.regions.push(Region {
+                        debug_scope: old_reg.debug_scope,
                         args: old_reg.args.clone(),
                         results: Vec::new(),
                         nodes: Vec::new(),
@@ -923,6 +925,7 @@ fn clone_region_into(
             NodeKind::Theta { body } => {
                 let old_reg = &func.regions[body];
                 let new_body = func.regions.push(Region {
+                    debug_scope: old_reg.debug_scope,
                     args: old_reg.args.clone(),
                     results: Vec::new(),
                     nodes: Vec::new(),
@@ -943,6 +946,7 @@ fn clone_region_into(
 
         let new_node = func.nodes.push(Node {
             region: new_region,
+            debug_scope: func.nodes[old_node].debug_scope,
             inputs,
             outputs: old_outputs,
             kind,
@@ -1476,5 +1480,79 @@ mod tests {
             body_consts_after >= 1,
             "constants that feed non-hoistable body ops must not be hoisted out of theta"
         );
+    }
+
+    #[test]
+    fn theta_hoist_preserves_original_debug_scope_provenance() {
+        let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            let init_count = rb.const_val(3);
+            let one = rb.const_val(1);
+            let _ = rb.theta(&[init_count, one], |bb| {
+                let args = bb.region_args(2);
+                let counter = args[0];
+                let one = args[1];
+                let invariant_setup = bb.const_val(7);
+                let _ = bb.binop(IrOp::Add, invariant_setup, invariant_setup);
+                let next = bb.binop(IrOp::Sub, counter, one);
+                bb.set_results(&[next, next, one]);
+            });
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let root = func.root_body();
+        let root_scope = func.region_debug_scope(root);
+        let theta = func.regions[root]
+            .nodes
+            .iter()
+            .copied()
+            .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
+            .expect("expected theta node");
+        let body = match &func.nodes[theta].kind {
+            NodeKind::Theta { body } => *body,
+            _ => unreachable!("expected theta node"),
+        };
+        let original_const = func.regions[body]
+            .nodes
+            .iter()
+            .copied()
+            .find(|&nid| {
+                matches!(
+                    func.nodes[nid].kind,
+                    NodeKind::Simple(IrOp::Const { value: 7 })
+                )
+            })
+            .expect("expected theta-body const to hoist");
+        let original_scope = func.node_debug_scope(original_const);
+        assert_ne!(
+            original_scope, root_scope,
+            "theta-body nodes should have a distinct body scope"
+        );
+
+        hoist_theta_loop_invariant_setup_pass(&mut func);
+
+        let theta_after = func.regions[root]
+            .nodes
+            .iter()
+            .copied()
+            .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
+            .expect("expected theta node after hoist");
+        let theta_pos = func.regions[root]
+            .nodes
+            .iter()
+            .position(|&nid| nid == theta_after)
+            .expect("theta should remain in root region");
+        let hoisted_const = func.regions[root].nodes[..theta_pos]
+            .iter()
+            .copied()
+            .find(|&nid| {
+                matches!(
+                    func.nodes[nid].kind,
+                    NodeKind::Simple(IrOp::Const { value: 7 })
+                ) && func.node_debug_scope(nid) == original_scope
+            })
+            .expect("expected hoisted const to keep original debug scope provenance");
+        assert_eq!(func.node_debug_scope(hoisted_const), original_scope);
     }
 }

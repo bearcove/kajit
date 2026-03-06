@@ -553,12 +553,18 @@ For scripted variable-availability checks, use:
 scripts/lldb-check-vars.sh json::bool_true_false \
   4:v46:unavailable \
   5:v46:available \
-  5:v47:unlisted
+  5:v46:listed
 ```
 
 This runs LLDB in batch mode, steps to each requested CFG-MIR line in order, and
 fails if a variable does not match the expected `available` / `unavailable` /
 `listed` / `unlisted` state.
+
+For the current scope-visibility regression suite, run:
+
+```bash
+scripts/lldb-scope-regressions.sh
+```
 
 ### How it works
 
@@ -659,6 +665,7 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 | `kajit/src/compiler.rs` | Glue: `build_dwarf_from_source_map()` converts backend source maps to DWARF |
 | `scripts/lldb-test.sh` | Standalone LLDB launcher for one exact test |
 | `scripts/lldb-check-vars.sh` | Batch LLDB checker for per-line variable availability |
+| `scripts/lldb-scope-regressions.sh` | Current LLDB scope-visibility regression suite |
 | `scripts/kajit_lldb_side_by_side.py` | LLDB helper commands that map current DWARF line back to interpreter reference |
 | `/tmp/kajit-debug/*.cfg-mir` | Generated listing files (one per JIT-compiled type) |
 | `/tmp/perf-<pid>.map` | perf sampling map (always written, even without `KAJIT_DEBUG`) |
