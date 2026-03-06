@@ -267,21 +267,7 @@ fn deser_debug_registers(target_arch: crate::jit_dwarf::DwarfTargetArch) -> Dese
     }
 }
 
-fn full_code_location_range(
-    code_ptr: *const u8,
-    code_len: usize,
-    expression: Vec<u8>,
-) -> crate::jit_dwarf::DwarfLocationRange {
-    crate::jit_dwarf::DwarfLocationRange {
-        start: code_ptr as u64,
-        end: code_ptr as u64 + code_len as u64,
-        expression,
-    }
-}
-
 fn deser_dwarf_variables(
-    code_ptr: *const u8,
-    code_len: usize,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
 ) -> Vec<crate::jit_dwarf::DwarfVariable> {
     let regs = deser_debug_registers(target_arch);
@@ -314,7 +300,7 @@ fn deser_dwarf_variables(
     .into_iter()
     .map(|(name, expr)| crate::jit_dwarf::DwarfVariable {
         name: name.to_owned(),
-        locations: vec![full_code_location_range(code_ptr, code_len, expr)],
+        location: crate::jit_dwarf::DwarfVariableLocation::Expr(expr),
     })
     .collect()
 }
@@ -1410,8 +1396,7 @@ fn compile_linear_ir_decoder_with_options(
     };
     let registration = if jit_debug {
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
-        let dwarf_variables =
-            deser_dwarf_variables(buf.code_ptr(), buf.len(), jit_dwarf_target_arch());
+        let dwarf_variables = deser_dwarf_variables(jit_dwarf_target_arch());
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1489,8 +1474,7 @@ fn compile_cfg_mir_decoder_with_options(
     };
     let registration = if jit_debug {
         let listing_path = write_cfg_mir_listing_file(&root_display_name, &listing.text);
-        let dwarf_variables =
-            deser_dwarf_variables(buf.code_ptr(), buf.len(), jit_dwarf_target_arch());
+        let dwarf_variables = deser_dwarf_variables(jit_dwarf_target_arch());
         let dwarf = listing_path.as_deref().and_then(|path| {
             build_dwarf_from_source_map(
                 buf.code_ptr(),
@@ -1603,7 +1587,7 @@ mod tests {
 
     #[test]
     fn deser_dwarf_variables_cover_fixed_runtime_state() {
-        let vars = deser_dwarf_variables(0x1000 as *const u8, 0x40, jit_dwarf_target_arch());
+        let vars = deser_dwarf_variables(jit_dwarf_target_arch());
         let names = vars.iter().map(|var| var.name.as_str()).collect::<Vec<_>>();
         assert_eq!(
             names,
@@ -1617,10 +1601,14 @@ mod tests {
             ]
         );
         for var in vars {
-            assert_eq!(var.locations.len(), 1);
-            assert_eq!(var.locations[0].start, 0x1000);
-            assert_eq!(var.locations[0].end, 0x1040);
-            assert!(!var.locations[0].expression.is_empty());
+            match var.location {
+                crate::jit_dwarf::DwarfVariableLocation::Expr(expr) => {
+                    assert!(!expr.is_empty());
+                }
+                crate::jit_dwarf::DwarfVariableLocation::List(_) => {
+                    panic!("deserializer runtime-state vars should use inline exprloc")
+                }
+            }
         }
     }
 }
