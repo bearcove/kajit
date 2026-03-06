@@ -11,6 +11,11 @@ filter="$1"
 export KAJIT_DEBUG=1
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
+mktemp_portable() {
+  local prefix="$1"
+  mktemp -t "${prefix}.XXXXXX"
+}
+
 json_output="$(cargo nextest list -p kajit -E "test(=$filter)" --message-format json)"
 
 match_json=""
@@ -79,8 +84,13 @@ echo "binary: $binary_path"
 echo "test:   $test_name"
 extra_lldb_args=()
 
-cfg_mir_tmp="$(mktemp /tmp/kajit-lldb-cfg-XXXX.cfg)"
-ref_tmp="$(mktemp /tmp/kajit-lldb-ref-XXXX.txt)"
+cfg_mir_tmp="$(mktemp_portable kajit-lldb-cfg)"
+ref_tmp="$(mktemp_portable kajit-lldb-ref)"
+cleanup() {
+  rm -f "$cfg_mir_tmp" "$ref_tmp"
+}
+trap cleanup EXIT
+
 if cargo run -q --manifest-path "$repo_root/xtask/Cargo.toml" -- corpus-cfg-mir "$filter" >"$cfg_mir_tmp" 2>/dev/null; then
   if cargo run -q --manifest-path "$repo_root/xtask/Cargo.toml" -- \
     debug-cfg-mir lldb-ref "$cfg_mir_tmp" --corpus-test "$filter" >"$ref_tmp" 2>/dev/null; then
@@ -91,11 +101,9 @@ if cargo run -q --manifest-path "$repo_root/xtask/Cargo.toml" -- corpus-cfg-mir 
     echo "side-by-side reference: $ref_tmp"
     echo "LLDB helper commands: kajit-here, kajit-list, kajit-step, kajit-help"
   else
-    rm -f "$ref_tmp"
     echo "note: failed to build side-by-side interpreter reference; continuing with plain LLDB"
   fi
 else
-  rm -f "$cfg_mir_tmp" "$ref_tmp"
   echo "note: no corpus CFG-MIR artifact available for $filter; continuing with plain LLDB"
 fi
 
