@@ -186,6 +186,7 @@ pub struct DebugScope {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebugValueKind {
     Field { offset: u32 },
+    Named,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1110,6 +1111,13 @@ impl<'a> RegionBuilder<'a> {
         self.func.debug_values.push(DebugValue {
             name: name.into(),
             kind: DebugValueKind::Field { offset },
+        })
+    }
+
+    pub fn define_debug_value(&mut self, name: impl Into<String>) -> DebugValueId {
+        self.func.debug_values.push(DebugValue {
+            name: name.into(),
+            kind: DebugValueKind::Named,
         })
     }
 
