@@ -567,6 +567,25 @@ That helper gives you LLDB commands keyed by the same CFG-MIR line numbers as DW
 - `kajit-step` — `thread step-over`, then print interpreter reference for the new line
 - `kajit-help` — summarize the helper commands
 
+Current DWARF variable coverage for deserializers is intentionally small but
+real:
+- `input_ptr`
+- `input_end`
+- `out_ptr`
+- `ctx`
+- `error_code`
+- `error_offset`
+
+These are fixed-runtime-state variables, not reconstructed semantic locals.
+They are useful with:
+
+```text
+(lldb) frame variable input_ptr input_end out_ptr error_code error_offset
+```
+
+Vreg/temporary naming is not wired into DWARF yet. Unnamed CFG-MIR temporaries
+still need debug metadata before they can appear as meaningful LLDB variables.
+
 ### LLDB commands for JIT code
 
 When LLDB stops at `__jit_debug_register_code`, the JIT code has just been registered:
