@@ -471,31 +471,68 @@ fn cfg_value_dwarf_variables(
             continue;
         };
         let lambda_key = func.lambda_id.index() as u32;
-        for inst in &func.insts {
-            let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst.id);
-            let Some(line) = line_by_op.get(&(lambda_key, op_id)).copied() else {
+        for block in &func.blocks {
+            let mut live_locations = BTreeMap::<crate::ir::VReg, regalloc2::Allocation>::new();
+            for inst_id in &block.insts {
+                let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
+                let Some(line) = line_by_op.get(&(lambda_key, op_id)).copied() else {
+                    continue;
+                };
+                let Some(op_ranges) = line_ranges.get(&line) else {
+                    continue;
+                };
+                let mut defs_for_op = Vec::<(crate::ir::VReg, regalloc2::Allocation)>::new();
+                if let (Some(operand_pairs), Some(operand_allocs)) = (
+                    alloc_func.op_operands.get(&op_id),
+                    alloc_func.op_allocs.get(&op_id),
+                ) {
+                    for ((vreg, operand_kind), allocation) in
+                        operand_pairs.iter().zip(operand_allocs.iter().copied())
+                    {
+                        if *operand_kind != crate::regalloc_engine::cfg_mir::OperandKind::Def {
+                            continue;
+                        }
+                        defs_for_op.push((*vreg, allocation));
+                    }
+                }
+
+                for (vreg, allocation) in defs_for_op {
+                    live_locations.insert(vreg, allocation);
+                }
+
+                for (vreg, allocation) in &live_locations {
+                    let Some(expr) = dwarf_expr_for_cfg_allocation(
+                        program,
+                        alloc,
+                        *allocation,
+                        target_arch,
+                        apply_regalloc_edits,
+                    ) else {
+                        continue;
+                    };
+                    let dest = ranges_by_vreg.entry(*vreg).or_default();
+                    for (start, end) in op_ranges {
+                        dest.push(crate::jit_dwarf::DwarfLocationRange {
+                            start: *start,
+                            end: *end,
+                            expression: expr.clone(),
+                        });
+                    }
+                }
+            }
+
+            let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
+            let Some(line) = line_by_op.get(&(lambda_key, term_op)).copied() else {
                 continue;
             };
             let Some(op_ranges) = line_ranges.get(&line) else {
                 continue;
             };
-            let Some(operand_pairs) = alloc_func.op_operands.get(&op_id) else {
-                continue;
-            };
-            let Some(operand_allocs) = alloc_func.op_allocs.get(&op_id) else {
-                continue;
-            };
-
-            for ((vreg, operand_kind), allocation) in
-                operand_pairs.iter().zip(operand_allocs.iter().copied())
-            {
-                if *operand_kind != crate::regalloc_engine::cfg_mir::OperandKind::Def {
-                    continue;
-                }
+            for (vreg, allocation) in &live_locations {
                 let Some(expr) = dwarf_expr_for_cfg_allocation(
                     program,
                     alloc,
-                    allocation,
+                    *allocation,
                     target_arch,
                     apply_regalloc_edits,
                 ) else {
@@ -521,9 +558,20 @@ fn cfg_value_dwarf_variables(
                 Vec<crate::jit_dwarf::DwarfLocationRange>,
             )| {
                 locations.sort_by_key(|loc| (loc.start, loc.end));
+                let mut merged = Vec::<crate::jit_dwarf::DwarfLocationRange>::new();
+                for location in locations {
+                    if let Some(last) = merged.last_mut()
+                        && last.end == location.start
+                        && last.expression == location.expression
+                    {
+                        last.end = location.end;
+                        continue;
+                    }
+                    merged.push(location);
+                }
                 crate::jit_dwarf::DwarfVariable {
                     name: format!("v{}", vreg.index()),
-                    location: crate::jit_dwarf::DwarfVariableLocation::List(locations),
+                    location: crate::jit_dwarf::DwarfVariableLocation::List(merged),
                 }
             },
         )
@@ -1879,6 +1927,7 @@ mod tests {
     fn cfg_value_dwarf_variables_cover_def_vregs() {
         let v0 = crate::ir::VReg::new(0);
         let inst_id = crate::regalloc_engine::cfg_mir::InstId::new(0);
+        let inst_id_2 = crate::regalloc_engine::cfg_mir::InstId::new(1);
         let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
         let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
         let func = crate::regalloc_engine::cfg_mir::Function {
@@ -1890,79 +1939,126 @@ mod tests {
             blocks: vec![crate::regalloc_engine::cfg_mir::Block {
                 id: block_id,
                 params: Vec::new(),
-                insts: vec![inst_id],
+                insts: vec![inst_id, inst_id_2],
                 term: term_id,
                 preds: Vec::new(),
                 succs: Vec::new(),
             }],
             edges: Vec::new(),
-            insts: vec![crate::regalloc_engine::cfg_mir::Inst {
-                id: inst_id,
-                op: crate::linearize::LinearOp::Const { dst: v0, value: 7 },
-                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
-                    vreg: v0,
-                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
-                    fixed: None,
-                }],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
-            }],
+            insts: vec![
+                crate::regalloc_engine::cfg_mir::Inst {
+                    id: inst_id,
+                    op: crate::linearize::LinearOp::Const { dst: v0, value: 7 },
+                    operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                        vreg: v0,
+                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
+                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                },
+                crate::regalloc_engine::cfg_mir::Inst {
+                    id: inst_id_2,
+                    op: crate::linearize::LinearOp::PeekByte {
+                        dst: crate::ir::VReg::new(1),
+                    },
+                    operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                        vreg: crate::ir::VReg::new(1),
+                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
+                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                },
+            ],
             terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
         };
         let program = crate::regalloc_engine::cfg_mir::Program {
             funcs: vec![func],
-            vreg_count: 1,
+            vreg_count: 2,
             slot_count: 0,
         };
         let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id);
+        let op_id_2 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id_2);
         #[cfg(target_arch = "aarch64")]
         let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
         #[cfg(target_arch = "x86_64")]
         let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+        #[cfg(target_arch = "aarch64")]
+        let reg_2 = regalloc2::PReg::new(20, regalloc2::RegClass::Int);
+        #[cfg(target_arch = "x86_64")]
+        let reg_2 = regalloc2::PReg::new(13, regalloc2::RegClass::Int);
         let alloc = crate::regalloc_engine::AllocatedCfgProgram {
             cfg_program: program.clone(),
             functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
                 lambda_id: crate::ir::LambdaId::new(0),
                 num_spillslots: 0,
                 edits: Vec::new(),
-                op_allocs: std::collections::HashMap::from([(
-                    op_id,
-                    vec![regalloc2::Allocation::reg(reg)],
-                )]),
-                op_operands: std::collections::HashMap::from([(
-                    op_id,
-                    vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
-                )]),
+                op_allocs: std::collections::HashMap::from([
+                    (op_id, vec![regalloc2::Allocation::reg(reg)]),
+                    (op_id_2, vec![regalloc2::Allocation::reg(reg_2)]),
+                ]),
+                op_operands: std::collections::HashMap::from([
+                    (
+                        op_id,
+                        vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
+                    ),
+                    (
+                        op_id_2,
+                        vec![(
+                            crate::ir::VReg::new(1),
+                            crate::regalloc_engine::cfg_mir::OperandKind::Def,
+                        )],
+                    ),
+                ]),
                 edge_edits: Vec::new(),
                 return_result_allocs: Vec::new(),
             }],
         };
-        let source_map = vec![kajit_emit::SourceMapEntry {
-            offset: 0,
-            location: kajit_emit::SourceLocation {
-                file: 0,
-                line: 1,
-                column: 0,
+        let source_map = vec![
+            kajit_emit::SourceMapEntry {
+                offset: 0,
+                location: kajit_emit::SourceLocation {
+                    file: 0,
+                    line: 1,
+                    column: 0,
+                },
             },
-        }];
+            kajit_emit::SourceMapEntry {
+                offset: 4,
+                location: kajit_emit::SourceLocation {
+                    file: 0,
+                    line: 2,
+                    column: 0,
+                },
+            },
+            kajit_emit::SourceMapEntry {
+                offset: 8,
+                location: kajit_emit::SourceLocation {
+                    file: 0,
+                    line: 3,
+                    column: 0,
+                },
+            },
+        ];
 
         let vars = cfg_value_dwarf_variables(
             &program,
             &alloc,
             Some(&source_map),
             0x1000 as *const u8,
-            4,
+            12,
             jit_dwarf_target_arch(),
             true,
         );
 
-        assert_eq!(vars.len(), 1);
+        assert_eq!(vars.len(), 2);
         assert_eq!(vars[0].name, "v0");
         match &vars[0].location {
             crate::jit_dwarf::DwarfVariableLocation::List(locations) => {
                 assert_eq!(locations.len(), 1);
                 assert_eq!(locations[0].start, 0x1000);
-                assert_eq!(locations[0].end, 0x1004);
+                assert_eq!(locations[0].end, 0x100c);
                 let dwarf_reg = crate::jit_dwarf::dwarf_register_from_hw_encoding(
                     jit_dwarf_target_arch(),
                     reg.hw_enc() as u8,
