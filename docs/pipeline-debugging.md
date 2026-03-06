@@ -551,6 +551,20 @@ and `KAJIT_WAIT_FOR_DEBUGGER=1`, makes the test process stop itself with
 - the PID to attach to from Xcode
 - a temporary LLDB setup file to `command source` inside Xcode before continuing
 
+For a launch-from-Xcode workflow that avoids attach entirely:
+
+```bash
+scripts/xcode-open-test.sh json::bool_true_false
+```
+
+That helper:
+- resolves the exact nextest test binary
+- generates a tiny throwaway macOS Xcode project whose executable `exec`s that test binary with `KAJIT_DEBUG=1`
+- wires a custom LLDB init file into the generated scheme so Xcode enables the JIT loader, imports the Kajit helper commands, and sets a breakpoint on `__jit_debug_register_code`
+- opens the generated `.xcodeproj` in Xcode
+
+Use `--no-open` if you only want the generated project path printed.
+
 The script resolves the concrete test binary via `cargo nextest list`, then launches LLDB with:
 - Sets `KAJIT_DEBUG=1` (enables DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` emission)
 - Enables the GDB JIT loader (`settings set plugin.jit-loader.gdb.enable on`)
