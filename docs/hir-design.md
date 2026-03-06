@@ -174,6 +174,17 @@ HIR should not require backend-facing details such as:
 - ABI-specific calling convention details
 - CFG block parameters
 
+HIR types also need a real identity of their own. Once borrowed values exist,
+type identity and layout identity diverge:
+
+- `Foo<r_input>` and `Foo<r_tmp>` may have the same concrete layout
+- but they do not have the same borrow or escape semantics
+
+So a bare host `Shape` reference is not sufficient as the whole HIR type
+identity. HIR needs a semantic type layer that can represent region/provenance
+parameters directly. Layout metadata may still be attached separately for
+HIR->RVSDG lowering.
+
 ### HIR should include first-class structs and enums
 
 HIR should treat structs and Rust-style enums as ordinary source-semantic
@@ -231,11 +242,12 @@ Layout resolution — mapping field names to concrete offsets and widths — hap
 at the HIR→RVSDG boundary. HIR stays semantic; RVSDG continues to use concrete
 layout where optimization and effect independence need it.
 
-The exact source of layout metadata is still open. For the first implementation,
-that metadata may come from facet `Shape` references carried alongside HIR
-types, or from a dedicated type/layout table. But the boundary is explicit:
+For the first implementation, HIR should assume a real semantic type layer plus
+a separate layout source. That layout source may still reuse facet `Shape`
+metadata where appropriate, but the contract is:
 
 - HIR names fields and variants semantically
+- HIR type identity is not just host `Shape` identity
 - HIR→RVSDG lowering resolves concrete layout when required
 - RVSDG/LIR/CFG-MIR remain free to reason in terms of offsets and widths
 
@@ -316,27 +328,168 @@ same state-domain chain as `mutates` in that domain. This loses optimization
 opportunity, but not correctness. A future generalized RVSDG may distinguish
 read-only and mutating access more precisely.
 
+### Effect summaries must be domain-aware
+
+The four effect classes are the user-facing lattice. They are not enough on
+their own to drive lowering.
+
+HIR operations and calls also need a domain-aware effect summary that answers:
+
+- which state domains are read
+- which state domains are mutated
+- whether the operation is a barrier across all domains
+
+That summary may live on builtin/intrinsic signatures, typed call metadata, or
+operation definitions. The important contract is that HIR->RVSDG lowering must
+not guess.
+
+Examples:
+
+- `peek_byte(cursor)`:
+  - effect class: `reads`
+  - domains: reads `cursor`
+- `advance_cursor(cursor, n)`:
+  - effect class: `mutates`
+  - domains: mutates `cursor`
+- `init out.name = value`:
+  - effect class: `mutates`
+  - domains: mutates `output`
+- `emit.node(...)`:
+  - effect class: `mutates`
+  - domains: mutates `ruleplan`
+- opaque runtime helper:
+  - effect class: `barrier`
+  - domains: all / unknown
+
 ### HIR should be memory-safe by default
 
-HIR should default to safe semantics that are stronger than C and less
-annotation-heavy than Rust.
+HIR should default to safe semantics that are stronger than C.
+
+The goal is not to invent a post-Rust universal trick. The design should pick a
+clear, ownership-oriented point on the tradeoff frontier and say so honestly.
 
 The current design direction is:
 
 - no garbage collector in the core model
 - no raw pointers as an ordinary source-language concept
 - no explicit lifetime annotations in normal source code
-- ownership and borrowing rules may exist semantically, but should be inferred
-  or otherwise kept compiler-internal where possible
+- ownership and borrowing are real semantic constraints, not optional compiler
+  magic
+- surface languages may elide lifetime syntax where inference is sufficient, but
+  HIR itself must still model provenance/region relationships explicitly
 
 This means the user-facing language should primarily expose:
 
 - plain value types for scalars, structs, and enums
 - owned containers for growable or heap-backed data
 - borrowed views such as slices and strings
+- borrowed structs/enums whose fields may carry input provenance
 - explicit state structs passed through normal locals and parameters
 - typed handles or arena-backed references when shared long-lived objects are
   needed
+
+### Borrowing must be first-class in HIR
+
+Kajit's deserialization model requires more than owned values.
+
+In particular:
+
+- the input is borrowed from the caller
+- some decoded outputs may borrow from that input
+- zero-copy decoding must be representable without lowering the source language
+  to raw pointers
+
+So HIR must be able to express types and functions that are semantically like:
+
+```text
+fn decode<r_input>(input: Slice<r_input, Byte>) -> Foo<r_input>
+```
+
+where `Foo<r_input>` may contain fields such as:
+
+- `Str<r_input>`
+- `Slice<r_input, T>`
+- nested structs/enums carrying the same borrowed provenance
+
+This means the HIR memory model is not "owned values only." It is at least:
+
+- owned values
+- borrowed views tied to an explicit provenance/region
+- unique mutable destinations or places where mutation is required
+- store/arena handles for shared long-lived data
+
+The surface language may hide most lifetime syntax in common cases. The HIR
+cannot. By the time a frontend has lowered into HIR, borrow provenance must be
+represented explicitly enough to drive type checking, lowering, and debugging.
+
+### Borrow/provenance core
+
+The minimum borrow/provenance contract for HIR should be:
+
+- explicit region parameters on function signatures and ADT types
+- explicit borrow-carrying types such as `Slice<r, T>` and `Str<r>`
+- borrowed structs/enums parameterized by those regions
+- explicit places/destinations for mutation and construction
+- a small set of provenance-preserving operations such as:
+  - field or variant projection
+  - subslice/view creation
+  - validated string view creation
+- an escape rule: returned values may mention only regions named in the
+  signature, never unnamed local or temporary regions
+
+The HIR should store regions and places directly. More detailed borrow facts
+may be derived by later checking/lowering passes; they do not need to become a
+separate shared HIR database in v1.
+
+For deserialization specifically, there is one important provenance rule:
+
+- advancing a cursor mutates cursor state only
+- borrowed results derive from the cursor's immutable
+  `bytes: Slice<r_input, Byte>` root, not from the mutable cursor place itself
+
+That keeps immutable input provenance separate from mutable decode state.
+
+### Places and initialization are part of the core model
+
+HIR already needs unique mutable destinations for deserialization and lowering.
+That should be explicit.
+
+A `Place` is a writable or readable storage location such as:
+
+- a local
+- a parameter/destination parameter
+- a field projection
+- an index projection where the type system allows it
+
+The core rules should be:
+
+- `init place = value` is distinct from `assign place = value`
+- reads from an uninitialized or partially initialized place are invalid
+- deserializer-shaped HIR may take explicit destination parameters
+- lowering may map place writes to RVSDG output-state operations
+
+The initial v1 destination contract should be:
+
+- a deserializer-style destination parameter is uninitialized on entry unless
+  the signature says otherwise
+- on normal return, that destination must be fully initialized
+- on failure or abnormal exit, a partially initialized destination must not be
+  exposed to the caller as an initialized value
+- control-flow joins must respect definite initialization before a place can be
+  read or returned
+- `assign` to an already-initialized owning place means replace the old value
+  with defined drop/release behavior; it is not equivalent to `init`
+
+That gives the first implementation a real contract to target:
+
+- `init` is for first construction into uninitialized storage
+- `assign` is for overwriting an existing initialized value
+- success establishes full initialization
+- failure must preserve safety even if construction was only partial
+
+This is not just lowering detail. Kajit already has destination-oriented
+semantics, partial initialization concerns, and caller-provided output storage.
+HIR should name that directly.
 
 ### Raw pointers should be a lowering concern, not a default source feature
 
@@ -346,8 +499,8 @@ casts.
 
 For example:
 
-- a deserializer frontend can model input as a `Cursor { bytes, pos }` or other
-  explicit state struct
+- a deserializer frontend can model input as `Cursor<r_input> { bytes:
+  Slice<r_input, Byte>, pos: usize }` or another explicit borrowed state shape
 - a planner frontend can model shared objects through typed handles or owned
   values
 
@@ -360,14 +513,34 @@ Without a GC and without explicit lifetime syntax, the most promising toolbox
 looks like:
 
 - ownership for heap-backed values
-- compiler-inferred borrowing for short-lived views
+- explicit borrow provenance in HIR, with inferred or elided lifetime syntax in
+  surface code where possible
 - typed slices/strings instead of naked address ranges
+- borrowed structs/enums for zero-copy decode results
 - typed handles for graph-like or planner-owned shared objects
 - arena or region allocation for coarse-grained shared lifetimes where that is
   the right tradeoff
 
 The important design point is that these are generic language/runtime tools,
 not deserializer-specific features.
+
+The split is intentional:
+
+- borrowing/provenance handles caller-owned or input-tied data, which Kajit
+  deserializers need
+- handles/arenas handle shared long-lived data, which planner/build frontends
+  are more likely to need
+
+Those are different problems and should not be forced into one mechanism.
+
+For the initial safe core, handles should also be region-closed:
+
+- `Handle<store, T>` must not silently capture external input-borrow regions
+- crossing that boundary requires an explicit future extension or an unsafe /
+  interop mechanism
+
+That keeps store-owned shared data from becoming a hidden escape hatch for
+caller-tied borrows.
 
 For tree-shaped and linear data, this model is relatively straightforward. For
 graph-shaped data, it becomes much less trivial. The current design should be
@@ -388,8 +561,8 @@ The exact safety mechanism for handles is still open. Plausible options are:
 - a combination of compile-time ownership with runtime validation at selected
   boundaries
 
-For the first Vixen rule-language frontend specifically, this problem may be
-less immediate than it is in the general case. Vixen's planned value model is
+For the first Vixen rule-language frontend specifically, the shared-data side of
+this problem may be less immediate than it is in the general case. Vixen's planned value model is
 primarily:
 
 - owned typed values
@@ -637,33 +810,68 @@ This keeps:
 - optimizer/backend reuse high
 - debugger/source tooling unified below the frontend boundary
 
+### Host callbacks and runtime interop need a typed contract
+
+HIR needs an early typed contract for calls that cross into host/runtime code.
+
+That includes at least:
+
+- parameter and return types
+- control transfer / fallibility metadata
+- effect class
+- domain-aware effect summary
+- capability or policy metadata where applicable
+- whether the call is part of the safe core, an opaque barrier, or an explicit
+  unsafe / interop escape
+
+The fallibility/control-transfer axis should stay orthogonal to the effect
+lattice. The minimum useful categories are:
+
+- returns normally
+- may signal failure
+- does not return
+
+That metadata is needed both for host/runtime calls and for any helper calls
+that participate in destination initialization or cleanup behavior.
+
+This matters immediately for the Vixen side (`emit.*`, `env.*`) and for any
+deserializer helpers that remain library/runtime calls rather than becoming
+primitive HIR operations.
+
 ## Sketch of the intended HIR shape
 
 HIR should print like a boring, readable program, not like SSA or a graph.
 
-Example shape:
+Example shape with borrowed output typing:
 
 ```text
-fn decode_bools(ctx, input, out) {
-  let mut seen_mask = 0
+fn decode_name<r_input>(
+  cursor: Cursor<r_input>,
+  out: Place<Header<r_input>>,
+) {
+  let mut handled = false
 
   loop {
-    skip_ws(ctx, input)
-    if peek_byte(input) == '}' {
+    skip_ws(cursor)
+    if peek_byte(cursor) == '}' {
       break
     }
 
-    let key_ptr, key_len = read_key(ctx, input)
-    expect_colon(ctx, input)
+    let key = read_key(cursor)
+    expect_colon(cursor)
 
-    let mut handled_field = false
+    match key {
+      "name" => {
+        let name_bytes = read_string_slice(cursor)
+        let name = utf8_view(name_bytes)
+        init out.name = name
+        handled = true
+      }
+      _ => {}
+    }
 
-    let is_field_a = key_equals(key_ptr, key_len, "a")
-    if is_field_a && !handled_field {
-      let a = read_bool(ctx, input)
-      write_field(out, .a, a)
-      seen_mask = seen_mask | 0x1
-      handled_field = true
+    if !handled {
+      skip_unknown(cursor)
     }
   }
 }
@@ -675,14 +883,12 @@ If we choose to lower closer to a generic systems language core, the same logic
 may also be expressible in a more explicit style like:
 
 ```text
-let key_ptr = ctx.key_ptr
-let key_len = ctx.key_len
-let is_field_a = key_equals(key_ptr, key_len, "a")
-if is_field_a && !handled_field {
-  let a = parse_bool(ctx)
-  out.a = a
-  seen_mask = seen_mask | 0x1
-  handled_field = true
+let key = read_key(cursor)
+if key == "name" && !handled {
+  let name_bytes = read_string_slice(cursor)
+  let name = utf8_view(name_bytes)
+  init out.name = name
+  handled = true
 }
 ```
 
@@ -696,16 +902,20 @@ These are intentionally left open for follow-up implementation work:
 
 - how named state domains should be declared, interned, and surfaced to
   lowering once `PortKind::State(StateDomainId)` exists
-- whether HIR needs a dedicated type system crate or can reuse existing shape
-  metadata directly for the first prototype
+- whether HIR's semantic type layer and layout metadata should live in one crate
+  or in layered crates
 - what the HIR story should be for dynamically typed rule-language values during
   the transition from today's Vixen runtime to a typed frontend
-- what the exact safe memory model should be for inferred borrowing, handles,
-  and arena-backed values
+- how much lifetime/region syntax a frontend or pretty-printer should elide once
+  HIR already stores provenance explicitly
+- how destination modes should be represented in signatures once the v1
+  entry/success/failure contract is fixed
+- what handle safety strategy to use first: compile-time restrictions, runtime
+  generation checks, or a combination
 - how much expression nesting should be preserved before introducing explicit
   temporaries during lowering
-- what the concrete lowering contract should be for host callbacks such as
-  `emit.node(...)` and `env.*(...)` in the first HIR consumer
+- what concrete signature table to use first for host callbacks and runtime
+  interop in the first HIR consumer
 - whether source-view selection should be a compile-time option, runtime debug
   option, or both
 
@@ -723,8 +933,16 @@ The design decisions in this document are:
 - `match` is first-class in HIR.
 - HIR uses statement sequencing for effects instead of state tokens.
 - HIR operations carry a coarse effect classification for lowering.
-- HIR is memory-safe by default and does not expose raw pointers as a normal
-  source feature.
+- HIR operations and calls also carry domain-aware effect summaries for
+  deterministic lowering into named RVSDG state domains.
+- HIR calls also carry fallibility/control-transfer metadata orthogonal to the
+  effect lattice.
+- HIR is memory-safe by default.
+- Borrowing and provenance are first-class in HIR, including borrowed input and
+  borrowed output types for zero-copy deserialization.
+- Places and definite initialization are part of the HIR contract, including a
+  v1 destination contract for success and failure.
+- HIR does not expose raw pointers as a normal source feature.
 - HIR owns semantic names, scopes, spans, comments, and debug identities.
 - RVSDG remains the optimization boundary.
 - RVSDG must generalize beyond the current deserializer-specific state-domain
