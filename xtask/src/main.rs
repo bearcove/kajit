@@ -173,7 +173,7 @@ struct DebugCfgMirArgs {
 fn debug_cfg_mir(args: &[String]) {
     let Some(parsed) = parse_debug_cfg_mir_args(args) else {
         eprintln!(
-            "usage: cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir <run|trace|diff> <cfg-mir-path> <hex-input>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir <run|trace|diff> <cfg-mir-path> --corpus-test <exact-corpus-test-name>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir why-vreg <cfg-mir-path> <hex-input> --vreg <index>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir why-vreg <cfg-mir-path> --corpus-test <exact-corpus-test-name> --vreg <index>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir block <cfg-mir-path> <hex-input> --block <id> [--lambda <id>]\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir block <cfg-mir-path> --corpus-test <exact-corpus-test-name> --block <id> [--lambda <id>]"
+            "usage: cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir <run|trace|diff|lldb-ref> <cfg-mir-path> <hex-input>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir <run|trace|diff|lldb-ref> <cfg-mir-path> --corpus-test <exact-corpus-test-name>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir why-vreg <cfg-mir-path> <hex-input> --vreg <index>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir why-vreg <cfg-mir-path> --corpus-test <exact-corpus-test-name> --vreg <index>\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir block <cfg-mir-path> <hex-input> --block <id> [--lambda <id>]\n       cargo run --manifest-path xtask/Cargo.toml -- debug-cfg-mir block <cfg-mir-path> --corpus-test <exact-corpus-test-name> --block <id> [--lambda <id>]"
         );
         std::process::exit(2);
     };
@@ -197,6 +197,7 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
         "run" => DebugCfgMirCommand::Run,
         "trace" => DebugCfgMirCommand::Trace,
         "diff" => DebugCfgMirCommand::Diff,
+        "lldb-ref" => DebugCfgMirCommand::LldbRef,
         "why-vreg" => DebugCfgMirCommand::WhyVreg { vreg: VReg::new(0) },
         "block" => DebugCfgMirCommand::Block {
             lambda: LambdaId::new(0),
@@ -252,6 +253,7 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
         DebugCfgMirCommand::Run => DebugCfgMirCommand::Run,
         DebugCfgMirCommand::Trace => DebugCfgMirCommand::Trace,
         DebugCfgMirCommand::Diff => DebugCfgMirCommand::Diff,
+        DebugCfgMirCommand::LldbRef => DebugCfgMirCommand::LldbRef,
         DebugCfgMirCommand::WhyVreg { .. } => DebugCfgMirCommand::WhyVreg {
             vreg: VReg::new(vreg? as u32),
         },
@@ -280,7 +282,12 @@ fn debug_cfg_mir_locally(parsed: &DebugCfgMirArgs) -> Result<String, String> {
             parsed.path
         )
     })?;
-    run_debug_cfg_mir_command(&program, &parsed.input, &parsed.command)
+    kajit_mir::run_debug_cfg_mir_command_with_registry(
+        &program,
+        &parsed.input,
+        &parsed.command,
+        Some(&registry),
+    )
 }
 
 fn debug_cfg_mir_via_corpus_test(
@@ -333,7 +340,10 @@ fn debug_cfg_mir_via_corpus_test(
             command.env("KAJIT_DEBUG_CFG_MIR_BLOCK", block.0.to_string());
             command.env("KAJIT_DEBUG_CFG_MIR_LAMBDA", lambda.index().to_string());
         }
-        DebugCfgMirCommand::Run | DebugCfgMirCommand::Trace | DebugCfgMirCommand::Diff => {}
+        DebugCfgMirCommand::Run
+        | DebugCfgMirCommand::Trace
+        | DebugCfgMirCommand::Diff
+        | DebugCfgMirCommand::LldbRef => {}
     }
 
     let run_output = command
@@ -371,17 +381,10 @@ fn debug_cfg_mir_command_name(command: &DebugCfgMirCommand) -> &'static str {
         DebugCfgMirCommand::Run => "run",
         DebugCfgMirCommand::Trace => "trace",
         DebugCfgMirCommand::Diff => "diff",
+        DebugCfgMirCommand::LldbRef => "lldb-ref",
         DebugCfgMirCommand::WhyVreg { .. } => "why-vreg",
         DebugCfgMirCommand::Block { .. } => "block",
     }
-}
-
-fn run_debug_cfg_mir_command(
-    program: &kajit_mir::cfg_mir::Program,
-    input: &[u8],
-    command: &DebugCfgMirCommand,
-) -> Result<String, String> {
-    kajit_mir::run_debug_cfg_mir_command(program, input, command)
 }
 
 fn minimize_cfg_mir(args: &[String]) {
@@ -953,6 +956,17 @@ mod tests {
                 block: kajit_mir::cfg_mir::BlockId(17)
             }
         );
+    }
+
+    #[test]
+    fn parse_debug_cfg_mir_args_accepts_lldb_ref() {
+        let args = vec![
+            "lldb-ref".to_owned(),
+            "seed.cfg".to_owned(),
+            "2a".to_owned(),
+        ];
+        let parsed = parse_debug_cfg_mir_args(&args).expect("args should parse");
+        assert_eq!(parsed.command, DebugCfgMirCommand::LldbRef);
     }
 
     #[test]

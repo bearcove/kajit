@@ -2488,6 +2488,7 @@ pub(crate) fn render_test_file() -> String {
                 "run" => Ok(kajit_mir::DebugCfgMirCommand::Run),
                 "trace" => Ok(kajit_mir::DebugCfgMirCommand::Trace),
                 "diff" => Ok(kajit_mir::DebugCfgMirCommand::Diff),
+                "lldb-ref" => Ok(kajit_mir::DebugCfgMirCommand::LldbRef),
                 "why-vreg" => {
                     let raw = std::env::var(DEBUG_CFG_MIR_VREG_ENV)
                         .map_err(|_| format!("missing {DEBUG_CFG_MIR_VREG_ENV}"))?;
@@ -2545,7 +2546,12 @@ pub(crate) fn render_test_file() -> String {
                         std::process::exit(1);
                     },
                 );
-            let output = kajit_mir::run_debug_cfg_mir_command(&program, input, &command)
+            let output = kajit_mir::run_debug_cfg_mir_command_with_registry(
+                &program,
+                input,
+                &command,
+                Some(&registry),
+            )
                 .unwrap_or_else(|err| {
                     eprintln!("debug CFG-MIR command failed: {err}");
                     std::process::exit(1);
