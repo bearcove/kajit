@@ -59,6 +59,35 @@ The intent is:
 - RVSDG is the optimization layer.
 - CFG-MIR is the backend/debug-codegen layer.
 
+## RVSDG changes needed
+
+The current RVSDG op vocabulary is deserialization-specific. It is built around
+cursor movement, field writes, slots, and format/runtime intrinsics.
+
+That is acceptable for the current frontend, but it is not a sufficient shared
+optimization boundary for a second frontend such as a rule/build language.
+
+The design direction is:
+
+- the structural part of RVSDG remains shared: regions, state edges, gamma,
+  theta, apply, and the existing structural optimization passes
+- the op vocabulary below HIR must generalize beyond deserialization
+- domain-specific ops may still exist, but only within a broader shared model
+
+The likely end state is a combination of:
+
+- a common base vocabulary for generic loads, stores, calls, arithmetic, field
+  access, and control-relevant operations
+- optional domain-specific dialect ops where a frontend has useful higher-level
+  operations that should survive into RVSDG temporarily
+
+Shared optimization passes should continue to operate primarily on structural
+properties and coarse effect information. Domain-specific ops that are opaque to
+an optimization may still pass through as barriers.
+
+This means "HIR lowers to RVSDG" is not just a new frontend layer. It also
+implies that RVSDG itself must stop being purely deserializer-shaped.
+
 ## Execution model
 
 HIR should not bake deserializer-specific ambient concepts such as "input
@@ -172,6 +201,18 @@ Those cases should use explicit representation/layout annotations, or lower to
 a later IR layer where layout is a first-class concern. They should not define
 the default meaning of structs and enums in HIR.
 
+Layout resolution — mapping field names to concrete offsets and widths — happens
+at the HIR→RVSDG boundary. HIR stays semantic; RVSDG continues to use concrete
+layout where optimization and effect independence need it.
+
+The exact source of layout metadata is still open. For the first implementation,
+that metadata may come from facet `Shape` references carried alongside HIR
+types, or from a dedicated type/layout table. But the boundary is explicit:
+
+- HIR names fields and variants semantically
+- HIR→RVSDG lowering resolves concrete layout when required
+- RVSDG/LIR/CFG-MIR remain free to reason in terms of offsets and widths
+
 ### HIR should keep structured control flow
 
 HIR should preserve source-shaped control flow:
@@ -180,10 +221,15 @@ HIR should preserve source-shaped control flow:
 - `loop`
 - `break`
 - `continue`
-- `match` or structured multi-branch dispatch
+- `match` as a first-class structured multi-branch dispatch
 
 This is the right place to represent human-meaningful control structure. RVSDG
 lowering is where those structures become gamma/theta/apply.
+
+`match` should be first-class in HIR, not desugared to nested `if` before
+RVSDG lowering. A first-class `match` lowers naturally to a flat gamma rather
+than a nest of smaller gammas, and it preserves variant exclusivity
+information that is useful for optimization and debugging.
 
 ### HIR should use explicit operations, not state tokens
 
@@ -202,6 +248,26 @@ Examples of HIR-visible effectful operations:
 Ordering should come from statement sequence and structured regions, not from
 explicit dataflow state edges. Lowering to RVSDG is responsible for making
 effect ordering explicit.
+
+### HIR operations should carry a coarse effect classification
+
+HIR does not need RVSDG's full state-token model, but it does need enough
+effect information for useful lowering.
+
+The minimum useful classification is:
+
+- `pure`: no side effects
+- `reads`: reads external state but does not mutate it
+- `mutates`: updates a known state domain
+- `barrier`: may touch arbitrary state
+
+This classification may come from the operation itself, from callee metadata,
+from argument types, or from a combination of those sources. The important
+constraint is that HIR→RVSDG lowering must not treat every statement as a full
+barrier by default.
+
+RVSDG remains the place where effects become explicit state edges and where
+independence can be refined more aggressively.
 
 ### HIR should be memory-safe by default
 
@@ -256,6 +322,28 @@ looks like:
 The important design point is that these are generic language/runtime tools,
 not deserializer-specific features.
 
+For tree-shaped and linear data, this model is relatively straightforward. For
+graph-shaped data, it becomes much less trivial. The current design should be
+read honestly:
+
+- arena/handle style storage is the primary escape hatch for shared graph-like
+  data
+- that deliberately gives shared references arena granularity rather than
+  per-reference precision
+- this avoids requiring either a garbage collector or explicit lifetime syntax
+- the cost is coarser-grained deallocation and a stricter ownership model for
+  shared objects
+
+The exact safety mechanism for handles is still open. Plausible options are:
+
+- compile-time arena lifetime tracking
+- runtime generation checks
+- a combination of compile-time ownership with runtime validation at selected
+  boundaries
+
+This is a real design cliff for graph-shaped programs and should be prototyped
+early rather than hand-waved away.
+
 ### Unsafe escape hatches should be explicit
 
 There will likely still be a need for explicit low-level escape hatches for:
@@ -303,6 +391,18 @@ provenance, not create the first user-facing meaning.
 - optimization-friendly value dependencies
 - transformations that are awkward in structured AST/HIR form
 
+### What changes below HIR
+
+Introducing HIR should not require a fundamental rewrite of LIR, CFG-MIR, or
+the backends. The expected changes are:
+
+- RVSDG op vocabulary generalizes or gains a dialect mechanism
+- debug provenance definitions move up so that HIR is the source of truth
+- RVSDG, LIR, and CFG-MIR carry references to that provenance rather than
+  inventing the first user-facing meaning themselves
+- the current frontend lowering APIs stop targeting RVSDG directly and target
+  HIR (or an HIR builder) instead
+
 ### CFG-MIR owns
 
 - linearized post-RVSDG control flow
@@ -335,6 +435,14 @@ machine code:
 Only one primary source location will usually be active for a given PC, so the
 compiler must choose one primary view per debug build. Auxiliary views can be
 emitted as side listings or alternate artifacts.
+
+The initial selection mechanism should be simple:
+
+- a compile/debug option selects the primary source view for emitted DWARF
+- non-primary views are still dumped as auxiliary files for inspection
+
+That keeps the first implementation compatible with today's one-primary-view
+JIT debug path.
 
 ### Default choice
 
@@ -394,6 +502,23 @@ Examples of generic placement concepts that may exist later:
 The exact mechanism does not need to be in HIR yet, but the key decision is
 that "keep this live in a register" is not the same thing as "this language has
 input operations."
+
+## Debug provenance transition
+
+Today, debug provenance definitions live effectively at the RVSDG layer and are
+threaded downward through LIR and CFG-MIR.
+
+With HIR in place, the intended ownership becomes:
+
+- HIR owns the definition of semantic scopes, local identities, comments, and
+  statement/source IDs
+- RVSDG/LIR/CFG-MIR carry references or derived projections of that HIR-owned
+  provenance
+- DWARF generation ultimately reports locations for HIR-rooted semantic values,
+  even when those values lower through many intermediate vregs or ops
+
+The exact migration path is still open, but the direction is not: provenance
+stops originating in RVSDG and starts originating in HIR.
 
 ## Comments and human-readable intent
 
@@ -488,12 +613,12 @@ primitives.
 
 These are intentionally left open for follow-up implementation work:
 
+- whether RVSDG should expose one generalized base op vocabulary, a dialect
+  model, or a hybrid of the two
 - whether HIR needs a dedicated type system crate or can reuse existing shape
   metadata directly for the first prototype
 - what the exact safe memory model should be for inferred borrowing, handles,
   and arena-backed values
-- whether `match` should be first-class in HIR or lowered into nested `if`
-  before RVSDG
 - how much expression nesting should be preserved before introducing explicit
   temporaries during lowering
 - whether source-view selection should be a compile-time option, runtime debug
@@ -506,11 +631,17 @@ HIR is the planned semantic layer above RVSDG.
 The design decisions in this document are:
 
 - HIR is typed, but not machine-layout typed.
+- HIR includes first-class structs and Rust-shaped enums.
+- Struct and enum layout is semantic by default; concrete layout resolves at the
+  HIR→RVSDG boundary.
 - HIR keeps structured control flow.
+- `match` is first-class in HIR.
 - HIR uses statement sequencing for effects instead of state tokens.
+- HIR operations carry a coarse effect classification for lowering.
 - HIR is memory-safe by default and does not expose raw pointers as a normal
   source feature.
 - HIR owns semantic names, scopes, spans, comments, and debug identities.
 - RVSDG remains the optimization boundary.
+- RVSDG must generalize beyond the current deserializer-specific op vocabulary.
 - CFG-MIR remains the backend/debug-codegen boundary.
 - HIR should become the default debugger source view once implemented.
