@@ -15,6 +15,9 @@ bash scripts/lldb-check-vars.sh json::bool_true_false \
   24:v20:listed \
   24:v21:listed \
   24:v23:listed \
-  24:v33:listed
+  24:v33:listed \
+  38:a:listed \
+  38:a:unavailable \
+  39:a:available
 
 echo "LLDB scope regressions passed"

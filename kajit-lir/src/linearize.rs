@@ -1232,7 +1232,21 @@ fn resolve_alias(alias: &HashMap<VReg, VReg>, mut v: VReg) -> VReg {
     v
 }
 
-fn optimize_linear_ops(ops: &mut Vec<LinearOp>) {
+fn optimize_linear_ops(
+    ops: &mut Vec<LinearOp>,
+    op_scopes: &mut Vec<Option<DebugScopeId>>,
+    op_values: &mut Vec<Option<DebugValueId>>,
+) {
+    assert_eq!(
+        ops.len(),
+        op_scopes.len(),
+        "linear op scopes must stay aligned with ops",
+    );
+    assert_eq!(
+        ops.len(),
+        op_values.len(),
+        "linear op debug values must stay aligned with ops",
+    );
     let blocks = build_blocks(ops);
     if blocks.is_empty() {
         return;
@@ -1337,10 +1351,22 @@ fn optimize_linear_ops(ops: &mut Vec<LinearOp>) {
     }
 
     let old_ops = std::mem::take(ops);
+    let old_scopes = std::mem::take(op_scopes);
+    let old_values = std::mem::take(op_values);
     *ops = old_ops
         .into_iter()
         .enumerate()
         .filter_map(|(i, op)| (!remove[i]).then_some(op))
+        .collect();
+    *op_scopes = old_scopes
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, scope)| (!remove[i]).then_some(scope))
+        .collect();
+    *op_values = old_values
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, debug_value)| (!remove[i]).then_some(debug_value))
         .collect();
 }
 
@@ -1438,7 +1464,9 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
     }
 
     let mut ops = lin.ops;
-    optimize_linear_ops(&mut ops);
+    let mut op_scopes = lin.op_scopes;
+    let mut op_values = lin.op_values;
+    optimize_linear_ops(&mut ops, &mut op_scopes, &mut op_values);
 
     LinearIr {
         ops,
@@ -1449,8 +1477,8 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
             scopes: func.debug_scopes.clone(),
             values: func.debug_values.clone(),
             root_scope: Some(func.root_debug_scope),
-            op_scopes: lin.op_scopes,
-            op_values: lin.op_values,
+            op_scopes,
+            op_values,
             vreg_scopes: lin.vreg_scopes,
             vreg_values: lin.vreg_values,
         },
@@ -1985,7 +2013,9 @@ mod tests {
             LinearOp::FuncEnd,
         ];
 
-        optimize_linear_ops(&mut ops);
+        let mut op_scopes = vec![None; ops.len()];
+        let mut op_values = vec![None; ops.len()];
+        optimize_linear_ops(&mut ops, &mut op_scopes, &mut op_values);
 
         let copy_count = ops
             .iter()
@@ -2015,12 +2045,55 @@ mod tests {
             LinearOp::FuncEnd,
         ];
 
-        optimize_linear_ops(&mut ops);
+        let mut op_scopes = vec![None; ops.len()];
+        let mut op_values = vec![None; ops.len()];
+        optimize_linear_ops(&mut ops, &mut op_scopes, &mut op_values);
 
         assert!(
             ops.iter()
                 .any(|op| matches!(op, LinearOp::Copy { dst, src } if *dst == v1 && *src == v0)),
             "copy into function result vreg must be preserved"
+        );
+    }
+
+    #[test]
+    fn optimize_linear_ops_keeps_debug_values_aligned_with_rewritten_ops() {
+        let v0 = VReg::new(0);
+        let v1 = VReg::new(1);
+        let v2 = VReg::new(2);
+        let debug_value = DebugValueId::new(0);
+        let mut ops = vec![
+            LinearOp::FuncStart {
+                lambda_id: LambdaId::new(0),
+                shape: <u32 as facet::Facet>::SHAPE,
+                data_args: vec![],
+                data_results: vec![],
+            },
+            LinearOp::Const { dst: v0, value: 7 },
+            LinearOp::Copy { dst: v1, src: v0 },
+            LinearOp::Copy { dst: v2, src: v1 },
+            LinearOp::WriteToField {
+                src: v2,
+                offset: 0,
+                width: Width::W4,
+            },
+            LinearOp::FuncEnd,
+        ];
+        let mut op_scopes = vec![None; ops.len()];
+        let mut op_values = vec![None; ops.len()];
+        op_values[4] = Some(debug_value);
+
+        optimize_linear_ops(&mut ops, &mut op_scopes, &mut op_values);
+
+        assert_eq!(ops.len(), op_values.len(), "debug values must stay aligned");
+        let write_index = ops
+            .iter()
+            .position(|op| matches!(op, LinearOp::WriteToField { .. }))
+            .expect("optimized ops should still contain write");
+        assert_eq!(
+            op_values[write_index],
+            Some(debug_value),
+            "semantic debug value should stay attached to the write op",
         );
     }
 }
