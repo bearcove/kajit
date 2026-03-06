@@ -175,7 +175,7 @@ pub fn build_jit_dwarf_sections_with_variables(
         }
     }
 
-    let (debug_loc, variable_loc_offsets) = build_debug_loc_section(variables);
+    let (debug_loc, variable_loc_offsets) = build_debug_loc_section(variables, code_address);
     let frame_base_expr = expr_breg(frame_base_register(target_arch), 0);
 
     Ok(JitDwarfSections {
@@ -349,7 +349,10 @@ pub fn build_debug_info_section(
     section
 }
 
-pub fn build_debug_loc_section(variables: &[DwarfVariable]) -> (Vec<u8>, Vec<u32>) {
+pub fn build_debug_loc_section(
+    variables: &[DwarfVariable],
+    code_address: u64,
+) -> (Vec<u8>, Vec<u32>) {
     let mut section = Vec::<u8>::new();
     let mut offsets = Vec::<u32>::new();
     for variable in variables {
@@ -359,8 +362,10 @@ pub fn build_debug_loc_section(variables: &[DwarfVariable]) -> (Vec<u8>, Vec<u32
                 if loc.end <= loc.start {
                     continue;
                 }
-                section.extend_from_slice(&loc.start.to_le_bytes());
-                section.extend_from_slice(&loc.end.to_le_bytes());
+                let start = loc.start.saturating_sub(code_address);
+                let end = loc.end.saturating_sub(code_address);
+                section.extend_from_slice(&start.to_le_bytes());
+                section.extend_from_slice(&end.to_le_bytes());
                 section.extend_from_slice(&(loc.expression.len() as u16).to_le_bytes());
                 section.extend_from_slice(&loc.expression);
             }
@@ -829,7 +834,7 @@ mod tests {
             },
         ];
 
-        let (loc, offsets) = build_debug_loc_section(&vars);
+        let (loc, offsets) = build_debug_loc_section(&vars, 0);
         assert_eq!(offsets.len(), 1);
         assert_eq!(offsets[0], 0);
         assert!(!loc.is_empty());
@@ -838,6 +843,25 @@ mod tests {
         let first_end = u64::from_le_bytes(loc[8..16].try_into().unwrap());
         assert_eq!(first_start, 0x10);
         assert_eq!(first_end, 0x20);
+    }
+
+    #[test]
+    fn debug_loc_encodes_ranges_relative_to_cu_low_pc() {
+        let vars = vec![DwarfVariable {
+            name: "a".to_string(),
+            location: DwarfVariableLocation::List(vec![DwarfLocationRange {
+                start: 0x1010,
+                end: 0x1020,
+                expression: expr_reg(10),
+            }]),
+        }];
+
+        let (loc, offsets) = build_debug_loc_section(&vars, 0x1000);
+        assert_eq!(offsets, vec![0]);
+        let start = u64::from_le_bytes(loc[0..8].try_into().unwrap());
+        let end = u64::from_le_bytes(loc[8..16].try_into().unwrap());
+        assert_eq!(start, 0x10);
+        assert_eq!(end, 0x20);
     }
 
     #[test]
