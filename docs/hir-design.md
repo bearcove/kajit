@@ -59,6 +59,42 @@ The intent is:
 - RVSDG is the optimization layer.
 - CFG-MIR is the backend/debug-codegen layer.
 
+## Execution model
+
+HIR should not bake deserializer-specific ambient concepts such as "input
+operations" or a privileged cursor abstraction into the language itself.
+
+Programs should operate on explicit state passed through normal parameters and
+locals.
+
+Examples:
+
+- a deserializer function may take a context struct containing `input_ptr`,
+  `input_end`, output pointers, and error state
+- a rule-evaluation function may take an evaluation context, environment, and
+  host handles
+
+The language stays generic. Different frontends choose different state
+structures.
+
+That means the shared semantic layer should look more like:
+
+- field access
+- local bindings
+- calls
+- structured control flow
+- loads/stores and pointer-aware operations where needed
+
+and less like:
+
+- `peek_byte`
+- `advance_cursor`
+- `read_key`
+
+Those may still exist as frontend library operations or sugar, but they should
+lower to the same generic core semantics instead of being built into the shared
+language model.
+
 ## Core design decisions
 
 ### HIR should be typed
@@ -72,6 +108,7 @@ That means HIR types should describe source-semantic values such as:
 - integers
 - strings / byte slices
 - structs / tuples
+- Rust-shaped enums with payload-bearing variants
 - maps / sequences
 - rule-language values
 
@@ -81,6 +118,59 @@ HIR should not require backend-facing details such as:
 - concrete stack layout
 - ABI-specific calling convention details
 - CFG block parameters
+
+### HIR should include first-class structs and enums
+
+HIR should treat structs and Rust-style enums as ordinary source-semantic
+types, not as something that needs to be reconstructed later from lower-level
+primitives.
+
+That means HIR should support:
+
+- named-field structs
+- tuple-like product types where useful
+- tagged enums with named variants
+- payload-bearing variants
+- pattern matching / variant tests at the structured-control-flow level
+
+This is especially important because Rust-shaped enums are too useful to force
+through a less expressive encoding. They are directly valuable for:
+
+- parser state machines
+- `Option` / `Result`-like flows
+- rule-language values
+- domain-specific planner data
+
+### Struct and enum layout should be semantic by default
+
+HIR should define source-semantic shape, not machine layout.
+
+For structs, the default rules should be:
+
+- field names and declaration order are preserved semantically
+- field access uses names, not byte offsets
+- layout is opaque unless a boundary explicitly requires a layout contract
+
+For enums, the default rules should be:
+
+- variants are named and tagged semantically
+- payloads are variant-local fields
+- discriminant size and payload packing are not fixed at HIR level
+
+This keeps HIR readable and frontend-neutral. It also avoids prematurely
+locking the shared language to one backend ABI or one storage convention.
+
+If exact layout matters, that should be explicit and exceptional.
+
+Examples where explicit layout may matter:
+
+- Rust interop boundaries
+- serialized in-memory planner data that must match a host layout
+- low-level runtime structs shared with handwritten code
+
+Those cases should use explicit representation/layout annotations, or lower to
+a later IR layer where layout is a first-class concern. They should not define
+the default meaning of structs and enums in HIR.
 
 ### HIR should keep structured control flow
 
@@ -102,9 +192,9 @@ not RVSDG-style token threading.
 
 Examples of HIR-visible effectful operations:
 
-- read input
-- advance cursor
-- write field
+- load/store through explicit state or memory
+- update fields on explicit context structs
+- write output fields
 - call intrinsic/runtime helper
 - emit build action
 - report error
@@ -112,6 +202,70 @@ Examples of HIR-visible effectful operations:
 Ordering should come from statement sequence and structured regions, not from
 explicit dataflow state edges. Lowering to RVSDG is responsible for making
 effect ordering explicit.
+
+### HIR should be memory-safe by default
+
+HIR should default to safe semantics that are stronger than C and less
+annotation-heavy than Rust.
+
+The current design direction is:
+
+- no garbage collector in the core model
+- no raw pointers as an ordinary source-language concept
+- no explicit lifetime annotations in normal source code
+- ownership and borrowing rules may exist semantically, but should be inferred
+  or otherwise kept compiler-internal where possible
+
+This means the user-facing language should primarily expose:
+
+- plain value types for scalars, structs, and enums
+- owned containers for growable or heap-backed data
+- borrowed views such as slices and strings
+- explicit state structs passed through normal locals and parameters
+- typed handles or arena-backed references when shared long-lived objects are
+  needed
+
+### Raw pointers should be a lowering concern, not a default source feature
+
+The shared language should not force frontends to reason in terms of
+`ptr + len`, nullability, arbitrary pointer arithmetic, or integer-to-pointer
+casts.
+
+For example:
+
+- a deserializer frontend can model input as a `Cursor { bytes, pos }` or other
+  explicit state struct
+- a planner frontend can model shared objects through typed handles or owned
+  values
+
+If lower layers want to optimize those shapes into raw pointers and reserved
+registers, that is a job for lowering, regalloc, and backend/runtime contracts.
+
+### Practical safety tools
+
+Without a GC and without explicit lifetime syntax, the most promising toolbox
+looks like:
+
+- ownership for heap-backed values
+- compiler-inferred borrowing for short-lived views
+- typed slices/strings instead of naked address ranges
+- typed handles for graph-like or planner-owned shared objects
+- arena or region allocation for coarse-grained shared lifetimes where that is
+  the right tradeoff
+
+The important design point is that these are generic language/runtime tools,
+not deserializer-specific features.
+
+### Unsafe escape hatches should be explicit
+
+There will likely still be a need for explicit low-level escape hatches for:
+
+- runtime interop
+- layout-sensitive host boundaries
+- especially performance-sensitive kernels
+
+But those should be opt-in and visibly unsafe. They should not define the
+baseline semantics of ordinary HIR programs.
 
 ### Debug provenance belongs in HIR first
 
@@ -213,6 +367,34 @@ but the base design should stay simple:
 
 This avoids over-modeling every expression as a debugger entity.
 
+### HIR should not define register residency as domain semantics
+
+The user-visible language should not special-case parser state just to get good
+register allocation.
+
+If we want values such as `input_ptr`, `input_end`, or hot loop locals to stay
+resident in registers, that is a storage/placement concern, not a reason to add
+deserializer-specific primitives to the language.
+
+The design implication is:
+
+- HIR owns semantic state and locals
+- a later lowering layer may attach residency hints or hard placement
+  constraints
+- those hints must remain generic enough to be useful for non-deserializer
+  programs too
+
+Examples of generic placement concepts that may exist later:
+
+- local may be freely placed
+- local is address-taken and must have stable storage
+- local is hot and should prefer register residency
+- function parameter is bound to a reserved runtime register set
+
+The exact mechanism does not need to be in HIR yet, but the key decision is
+that "keep this live in a register" is not the same thing as "this language has
+input operations."
+
 ## Comments and human-readable intent
 
 HIR is the right place for comments or doc strings that explain intent.
@@ -283,12 +465,33 @@ fn decode_bools(ctx, input, out) {
 
 This is the level of readability HIR is meant to preserve.
 
+If we choose to lower closer to a generic systems language core, the same logic
+may also be expressible in a more explicit style like:
+
+```text
+let key_ptr = ctx.key_ptr
+let key_len = ctx.key_len
+let is_field_a = key_equals(key_ptr, key_len, "a")
+if is_field_a && !handled_field {
+  let a = parse_bool(ctx)
+  out.a = a
+  seen_mask = seen_mask | 0x1
+  handled_field = true
+}
+```
+
+The important property is still the same: the program stays source-readable and
+state is explicit, rather than encoded as a set of privileged parser-only
+primitives.
+
 ## Open questions
 
 These are intentionally left open for follow-up implementation work:
 
 - whether HIR needs a dedicated type system crate or can reuse existing shape
   metadata directly for the first prototype
+- what the exact safe memory model should be for inferred borrowing, handles,
+  and arena-backed values
 - whether `match` should be first-class in HIR or lowered into nested `if`
   before RVSDG
 - how much expression nesting should be preserved before introducing explicit
@@ -305,6 +508,8 @@ The design decisions in this document are:
 - HIR is typed, but not machine-layout typed.
 - HIR keeps structured control flow.
 - HIR uses statement sequencing for effects instead of state tokens.
+- HIR is memory-safe by default and does not expose raw pointers as a normal
+  source feature.
 - HIR owns semantic names, scopes, spans, comments, and debug identities.
 - RVSDG remains the optimization boundary.
 - CFG-MIR remains the backend/debug-codegen boundary.
