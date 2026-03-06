@@ -8,7 +8,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::ops::Range;
 
-use kajit_ir::{ErrorCode, IntrinsicFn, IntrinsicRegistry, LambdaId, VReg};
+use kajit_ir::{
+    Arena, DebugScope, DebugScopeId, ErrorCode, IntrinsicFn, IntrinsicRegistry, LambdaId, VReg,
+};
 use kajit_lir::{LabelId, LinearIr, LinearOp};
 
 macro_rules! define_id {
@@ -171,6 +173,15 @@ pub struct Program {
     pub funcs: Vec<Function>,
     pub vreg_count: u32,
     pub slot_count: u32,
+    pub debug: ProgramDebugProvenance,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ProgramDebugProvenance {
+    pub scopes: Arena<DebugScope>,
+    pub root_scope: Option<DebugScopeId>,
+    pub op_scopes: HashMap<(LambdaId, OpId), DebugScopeId>,
+    pub vreg_scopes: Vec<Option<DebugScopeId>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -433,6 +444,14 @@ impl Function {
 }
 
 impl Program {
+    pub fn op_debug_scope(&self, lambda_id: LambdaId, op_id: OpId) -> Option<DebugScopeId> {
+        self.debug.op_scopes.get(&(lambda_id, op_id)).copied()
+    }
+
+    pub fn vreg_debug_scope(&self, vreg: VReg) -> Option<DebugScopeId> {
+        self.debug.vreg_scopes.get(vreg.index()).copied().flatten()
+    }
+
     pub fn validate(&self) -> Result<(), CfgMirError> {
         for (idx, func) in self.funcs.iter().enumerate() {
             if func.id.index() != idx {
@@ -1165,27 +1184,31 @@ fn lower_function(
     data_args: Vec<VReg>,
     data_results: Vec<VReg>,
     ops: &[LinearOp],
+    op_scopes: &[Option<DebugScopeId>],
     vreg_count: u32,
-) -> Function {
+) -> (Function, HashMap<OpId, DebugScopeId>) {
     if ops.is_empty() {
-        return Function {
-            id: function_id,
-            lambda_id,
-            entry: BlockId(0),
-            data_args,
-            data_results,
-            blocks: vec![Block {
-                id: BlockId(0),
-                params: Vec::new(),
+        return (
+            Function {
+                id: function_id,
+                lambda_id,
+                entry: BlockId(0),
+                data_args,
+                data_results,
+                blocks: vec![Block {
+                    id: BlockId(0),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(0),
+                    preds: Vec::new(),
+                    succs: Vec::new(),
+                }],
+                edges: Vec::new(),
                 insts: Vec::new(),
-                term: TermId(0),
-                preds: Vec::new(),
-                succs: Vec::new(),
-            }],
-            edges: Vec::new(),
-            insts: Vec::new(),
-            terms: vec![Terminator::Return],
-        };
+                terms: vec![Terminator::Return],
+            },
+            HashMap::new(),
+        );
     }
 
     let mut leaders = vec![0usize];
@@ -1204,6 +1227,7 @@ fn lower_function(
     let mut blocks = Vec::<Block>::new();
     let mut insts = Vec::<Inst>::new();
     let mut label_terms = Vec::<TempTermLabel>::new();
+    let mut lowered_scopes = HashMap::<OpId, DebugScopeId>::new();
 
     for bi in 0..leaders.len() {
         let start = leaders[bi];
@@ -1225,18 +1249,28 @@ fn lower_function(
         let mut term = None::<TempTermLabel>;
 
         while cursor < end {
+            let op_scope = op_scopes.get(cursor).copied().flatten();
             match ops[cursor].clone() {
                 LinearOp::Branch(target) => {
+                    if let Some(scope) = op_scope {
+                        lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
                     term = Some(TempTermLabel::Branch(target));
                     cursor += 1;
                     break;
                 }
                 LinearOp::BranchIf { cond, target } => {
+                    if let Some(scope) = op_scope {
+                        lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
                     term = Some(TempTermLabel::BranchIf { cond, target });
                     cursor += 1;
                     break;
                 }
                 LinearOp::BranchIfZero { cond, target } => {
+                    if let Some(scope) = op_scope {
+                        lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
                     term = Some(TempTermLabel::BranchIfZero { cond, target });
                     cursor += 1;
                     break;
@@ -1246,6 +1280,9 @@ fn lower_function(
                     labels,
                     default,
                 } => {
+                    if let Some(scope) = op_scope {
+                        lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
                     term = Some(TempTermLabel::JumpTable {
                         predicate,
                         labels,
@@ -1255,6 +1292,9 @@ fn lower_function(
                     break;
                 }
                 LinearOp::ErrorExit { code } => {
+                    if let Some(scope) = op_scope {
+                        lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
+                    }
                     term = Some(TempTermLabel::ErrorExit(code));
                     cursor += 1;
                     break;
@@ -1267,6 +1307,9 @@ fn lower_function(
                 }
                 other => {
                     let inst_id = InstId(insts.len() as u32);
+                    if let Some(scope) = op_scope {
+                        lowered_scopes.insert(OpId::Inst(inst_id), scope);
+                    }
                     insts.push(lower_inst(inst_id, other));
                     block_inst_ids.push(inst_id);
                     cursor += 1;
@@ -1444,22 +1487,26 @@ fn lower_function(
         terms.push(lowered);
     }
 
-    Function {
-        id: function_id,
-        lambda_id,
-        entry: BlockId(0),
-        data_args,
-        data_results,
-        blocks,
-        edges,
-        insts,
-        terms,
-    }
+    (
+        Function {
+            id: function_id,
+            lambda_id,
+            entry: BlockId(0),
+            data_args,
+            data_results,
+            blocks,
+            edges,
+            insts,
+            terms,
+        },
+        lowered_scopes,
+    )
 }
 
 /// Lower linearized IR into the canonical CFG MIR model.
 pub fn lower_linear_ir(ir: &LinearIr) -> Program {
     let mut funcs = Vec::<Function>::new();
+    let mut op_scopes = HashMap::<(LambdaId, OpId), DebugScopeId>::new();
     let mut cursor = 0usize;
     while cursor < ir.ops.len() {
         let (lambda_id, data_args, data_results) = match &ir.ops[cursor] {
@@ -1495,14 +1542,20 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
 
         let body = &ir.ops[cursor + 1..end];
         let function_id = FunctionId(funcs.len() as u32);
-        funcs.push(lower_function(
+        let body_scopes = &ir.debug.op_scopes[cursor + 1..end];
+        let (function, function_scopes) = lower_function(
             function_id,
             lambda_id,
             data_args,
             data_results,
             body,
+            body_scopes,
             ir.vreg_count,
-        ));
+        );
+        for (op_id, scope) in function_scopes {
+            op_scopes.insert((lambda_id, op_id), scope);
+        }
+        funcs.push(function);
         cursor = end + 1;
     }
 
@@ -1510,13 +1563,19 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
         funcs,
         vreg_count: ir.vreg_count,
         slot_count: ir.slot_count,
+        debug: ProgramDebugProvenance {
+            scopes: ir.debug.scopes.clone(),
+            root_scope: ir.debug.root_scope,
+            op_scopes,
+            vreg_scopes: ir.debug.vreg_scopes.clone(),
+        },
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IrBuilder, Width};
+    use kajit_ir::{DebugScope, DebugScopeKind, IrBuilder, PortSource, Width};
     use kajit_lir::linearize;
 
     fn v(index: u32) -> VReg {
@@ -1652,5 +1711,44 @@ mod tests {
                 "edge args should match merge params"
             );
         }
+    }
+
+    #[test]
+    fn lower_linear_ir_preserves_debug_scope_provenance() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let (const_node, output_index, root_scope) = {
+            let mut rb = builder.root_region();
+            let value = rb.const_val(42);
+            rb.set_results(&[value]);
+            let output_ref = match value {
+                PortSource::Node(output_ref) => output_ref,
+                other => panic!("expected node output, got {other:?}"),
+            };
+            (output_ref.node, output_ref.index as usize, rb.debug_scope())
+        };
+
+        let mut func = builder.finish();
+        let value_vreg = func.nodes[const_node].outputs[output_index]
+            .vreg
+            .expect("const output should have vreg");
+        let extra_scope = func.debug_scopes.push(DebugScope {
+            parent: Some(root_scope),
+            kind: DebugScopeKind::ThetaBody,
+        });
+        func.nodes[const_node].debug_scope = extra_scope;
+        func.nodes[const_node].outputs[0].debug_scope = root_scope;
+
+        let linear = linearize(&mut func);
+        let program = lower_linear_ir(&linear);
+        let root = &program.funcs[0];
+        let const_inst = root.insts[0].id;
+
+        assert_eq!(program.debug.root_scope, Some(root_scope));
+        assert_eq!(program.debug.scopes.len(), func.debug_scopes.len());
+        assert_eq!(
+            program.op_debug_scope(root.lambda_id, OpId::Inst(const_inst)),
+            Some(extra_scope)
+        );
+        assert_eq!(program.vreg_debug_scope(value_vreg), Some(root_scope));
     }
 }

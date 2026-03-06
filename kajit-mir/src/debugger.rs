@@ -645,6 +645,7 @@ mod tests {
             }],
             vreg_count: 1,
             slot_count: 0,
+            debug: Default::default(),
         }
     }
 
@@ -671,6 +672,7 @@ mod tests {
             }],
             vreg_count: 0,
             slot_count: 0,
+            debug: Default::default(),
         }
     }
 

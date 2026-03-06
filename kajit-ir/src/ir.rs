@@ -83,6 +83,14 @@ pub struct Arena<T> {
     items: Vec<T>,
 }
 
+impl<T: Clone> Clone for Arena<T> {
+    fn clone(&self) -> Self {
+        Self {
+            items: self.items.clone(),
+        }
+    }
+}
+
 impl<T> Default for Arena<T> {
     fn default() -> Self {
         Self::new()
@@ -156,6 +164,22 @@ pub type SlotId = Id<SlotMarker>;
 pub struct LambdaMarker;
 /// A lambda identifier for cross-referencing between IrFuncs.
 pub type LambdaId = Id<LambdaMarker>;
+
+/// A debug scope identifier carried through the RVSDG pipeline.
+pub type DebugScopeId = Id<DebugScope>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugScopeKind {
+    LambdaBody { lambda_id: LambdaId },
+    GammaBranch { branch_index: u16 },
+    ThetaBody,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DebugScope {
+    pub parent: Option<DebugScopeId>,
+    pub kind: DebugScopeKind,
+}
 
 // ─── Value types ────────────────────────────────────────────────────────────
 
@@ -373,6 +397,8 @@ pub struct OutputPort {
     pub kind: PortKind,
     /// For data outputs, the VReg assigned to this output.
     pub vreg: Option<VReg>,
+    /// Debug-scope provenance for this produced value/token.
+    pub debug_scope: DebugScopeId,
 }
 
 // ─── Region ─────────────────────────────────────────────────────────────────
@@ -396,6 +422,8 @@ pub struct RegionResult {
 /// A region is an ordered set of nodes with input arguments and output results.
 /// Regions nest — a node inside a region may itself contain sub-regions.
 pub struct Region {
+    /// Debug-scope provenance for this structured region body.
+    pub debug_scope: DebugScopeId,
     /// Arguments entering this region (correspond to outer input ports).
     pub args: Vec<RegionArg>,
     /// Results leaving this region (correspond to outer output ports).
@@ -407,6 +435,7 @@ pub struct Region {
 impl fmt::Debug for Region {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Region")
+            .field("debug_scope", &self.debug_scope)
             .field("args", &self.args)
             .field("results", &self.results)
             .field("nodes", &self.nodes)
@@ -420,6 +449,8 @@ impl fmt::Debug for Region {
 pub struct Node {
     /// The containing region.
     pub region: RegionId,
+    /// Debug-scope provenance for this node.
+    pub debug_scope: DebugScopeId,
     /// Input ports.
     pub inputs: Vec<InputPort>,
     /// Output ports.
@@ -432,6 +463,7 @@ impl fmt::Debug for Node {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Node")
             .field("region", &self.region)
+            .field("debug_scope", &self.debug_scope)
             .field("inputs", &self.inputs)
             .field("outputs", &self.outputs)
             .field("kind", &self.kind)
@@ -755,6 +787,10 @@ pub struct IrFunc {
     pub slot_count: u32,
     /// Lambda registry: maps LambdaId to the NodeId of the lambda node.
     pub lambdas: Vec<NodeId>,
+    /// All debug scopes.
+    pub debug_scopes: Arena<DebugScope>,
+    /// Root debug scope for the root lambda body.
+    pub root_debug_scope: DebugScopeId,
 }
 
 impl IrFunc {
@@ -810,6 +846,18 @@ impl IrFunc {
             _ => unreachable!("lambda registry must point to lambda nodes"),
         }
     }
+
+    pub fn region_debug_scope(&self, region: RegionId) -> DebugScopeId {
+        self.regions[region].debug_scope
+    }
+
+    pub fn node_debug_scope(&self, node: NodeId) -> DebugScopeId {
+        self.nodes[node].debug_scope
+    }
+
+    pub fn output_debug_scope(&self, output: OutputRef) -> DebugScopeId {
+        self.nodes[output.node].outputs[output.index as usize].debug_scope
+    }
 }
 
 // ─── Builder API ────────────────────────────────────────────────────────────
@@ -829,11 +877,21 @@ impl IrBuilder {
             vreg_count: 0,
             slot_count: 0,
             lambdas: Vec::new(),
+            debug_scopes: Arena::new(),
+            root_debug_scope: DebugScopeId::new(0), // placeholder, set below
         };
+
+        let lambda_id = LambdaId::new(0);
+        let root_debug_scope = func.debug_scopes.push(DebugScope {
+            parent: None,
+            kind: DebugScopeKind::LambdaBody { lambda_id },
+        });
+        func.root_debug_scope = root_debug_scope;
 
         // Create the root lambda's body region.
         // Standard arguments: cursor state, output state.
         let body = func.regions.push(Region {
+            debug_scope: root_debug_scope,
             args: vec![
                 RegionArg {
                     kind: PortKind::StateCursor,
@@ -849,11 +907,11 @@ impl IrBuilder {
         });
 
         // Pre-allocate lambda ID 0 for the root.
-        let lambda_id = LambdaId::new(0);
         func.lambdas.push(NodeId::new(0)); // placeholder, patched below
 
         let root = func.nodes.push(Node {
             region: ROOT_REGION,
+            debug_scope: root_debug_scope,
             inputs: Vec::new(),
             outputs: Vec::new(),
             kind: NodeKind::Lambda {
@@ -886,6 +944,10 @@ impl IrBuilder {
         data_arg_count: usize,
     ) -> LambdaId {
         let lambda_id = LambdaId::new(self.func.lambdas.len() as u32);
+        let debug_scope = self.func.debug_scopes.push(DebugScope {
+            parent: Some(self.func.root_debug_scope),
+            kind: DebugScopeKind::LambdaBody { lambda_id },
+        });
         let mut args = Vec::with_capacity(data_arg_count + 2);
         for _ in 0..data_arg_count {
             args.push(RegionArg {
@@ -902,12 +964,14 @@ impl IrBuilder {
             vreg: None,
         });
         let body = self.func.regions.push(Region {
+            debug_scope,
             args,
             results: Vec::new(),
             nodes: Vec::new(),
         });
         let node = self.func.nodes.push(Node {
             region: ROOT_REGION,
+            debug_scope,
             inputs: Vec::new(),
             outputs: Vec::new(),
             kind: NodeKind::Lambda {
@@ -923,6 +987,7 @@ impl IrBuilder {
     /// Get a [`RegionBuilder`] for a lambda's body.
     pub fn lambda_region(&mut self, id: LambdaId) -> RegionBuilder<'_> {
         let body = self.func.lambda_body(id);
+        let debug_scope = self.func.regions[body].debug_scope;
         let arg_count = self.func.regions[body].args.len();
         assert!(
             arg_count >= 2,
@@ -942,6 +1007,7 @@ impl IrBuilder {
         RegionBuilder {
             func: &mut self.func,
             region: body,
+            debug_scope,
             cursor_state,
             output_state,
         }
@@ -961,6 +1027,7 @@ impl IrBuilder {
 pub struct RegionBuilder<'a> {
     func: &'a mut IrFunc,
     region: RegionId,
+    debug_scope: DebugScopeId,
     cursor_state: PortSource,
     output_state: PortSource,
 }
@@ -986,6 +1053,10 @@ impl<'a> RegionBuilder<'a> {
         self.func
     }
 
+    pub fn debug_scope(&self) -> DebugScopeId {
+        self.debug_scope
+    }
+
     // ── Internal helpers ────────────────────────────────────────────
 
     fn add_node(&mut self, node: Node) -> NodeId {
@@ -999,20 +1070,23 @@ impl<'a> RegionBuilder<'a> {
         OutputPort {
             kind: PortKind::Data,
             vreg: Some(vreg),
+            debug_scope: self.debug_scope,
         }
     }
 
-    fn cursor_output() -> OutputPort {
+    fn cursor_output(debug_scope: DebugScopeId) -> OutputPort {
         OutputPort {
             kind: PortKind::StateCursor,
             vreg: None,
+            debug_scope,
         }
     }
 
-    fn output_output() -> OutputPort {
+    fn output_output(debug_scope: DebugScopeId) -> OutputPort {
         OutputPort {
             kind: PortKind::StateOutput,
             vreg: None,
+            debug_scope,
         }
     }
 
@@ -1023,6 +1097,7 @@ impl<'a> RegionBuilder<'a> {
         let out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![],
             outputs: vec![out],
             kind: NodeKind::Simple(IrOp::Const { value }),
@@ -1036,6 +1111,7 @@ impl<'a> RegionBuilder<'a> {
         let out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![
                 InputPort {
                     kind: PortKind::Data,
@@ -1058,6 +1134,7 @@ impl<'a> RegionBuilder<'a> {
         let out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::Data,
                 source: src,
@@ -1075,11 +1152,12 @@ impl<'a> RegionBuilder<'a> {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateCursor,
                 source: self.cursor_state,
             }],
-            outputs: vec![data_out, Self::cursor_output()],
+            outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::ReadBytes { count }),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 1 });
@@ -1091,11 +1169,12 @@ impl<'a> RegionBuilder<'a> {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateCursor,
                 source: self.cursor_state,
             }],
-            outputs: vec![data_out, Self::cursor_output()],
+            outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::PeekByte),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 1 });
@@ -1106,11 +1185,12 @@ impl<'a> RegionBuilder<'a> {
     pub fn advance_cursor(&mut self, count: u32) {
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateCursor,
                 source: self.cursor_state,
             }],
-            outputs: vec![Self::cursor_output()],
+            outputs: vec![Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::AdvanceCursor { count }),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 0 });
@@ -1120,6 +1200,7 @@ impl<'a> RegionBuilder<'a> {
     pub fn advance_cursor_by(&mut self, count: PortSource) {
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![
                 InputPort {
                     kind: PortKind::Data,
@@ -1130,7 +1211,7 @@ impl<'a> RegionBuilder<'a> {
                     source: self.cursor_state,
                 },
             ],
-            outputs: vec![Self::cursor_output()],
+            outputs: vec![Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::AdvanceCursorBy),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 0 });
@@ -1140,11 +1221,12 @@ impl<'a> RegionBuilder<'a> {
     pub fn bounds_check(&mut self, count: u32) {
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateCursor,
                 source: self.cursor_state,
             }],
-            outputs: vec![Self::cursor_output()],
+            outputs: vec![Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::BoundsCheck { count }),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 0 });
@@ -1156,11 +1238,12 @@ impl<'a> RegionBuilder<'a> {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateCursor,
                 source: self.cursor_state,
             }],
-            outputs: vec![data_out, Self::cursor_output()],
+            outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::SaveCursor),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 1 });
@@ -1171,6 +1254,7 @@ impl<'a> RegionBuilder<'a> {
     pub fn restore_cursor(&mut self, saved: PortSource) {
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![
                 InputPort {
                     kind: PortKind::Data,
@@ -1181,7 +1265,7 @@ impl<'a> RegionBuilder<'a> {
                     source: self.cursor_state,
                 },
             ],
-            outputs: vec![Self::cursor_output()],
+            outputs: vec![Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::RestoreCursor),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 0 });
@@ -1193,6 +1277,7 @@ impl<'a> RegionBuilder<'a> {
     pub fn write_to_field(&mut self, src: PortSource, offset: u32, width: Width) {
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![
                 InputPort {
                     kind: PortKind::Data,
@@ -1203,7 +1288,7 @@ impl<'a> RegionBuilder<'a> {
                     source: self.output_state,
                 },
             ],
-            outputs: vec![Self::output_output()],
+            outputs: vec![Self::output_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::WriteToField { offset, width }),
         });
         self.output_state = PortSource::Node(OutputRef { node, index: 0 });
@@ -1214,11 +1299,12 @@ impl<'a> RegionBuilder<'a> {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateOutput,
                 source: self.output_state,
             }],
-            outputs: vec![data_out, Self::output_output()],
+            outputs: vec![data_out, Self::output_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::ReadFromField { offset, width }),
         });
         self.output_state = PortSource::Node(OutputRef { node, index: 1 });
@@ -1230,11 +1316,12 @@ impl<'a> RegionBuilder<'a> {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateOutput,
                 source: self.output_state,
             }],
-            outputs: vec![data_out, Self::output_output()],
+            outputs: vec![data_out, Self::output_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::SaveOutPtr),
         });
         self.output_state = PortSource::Node(OutputRef { node, index: 1 });
@@ -1245,6 +1332,7 @@ impl<'a> RegionBuilder<'a> {
     pub fn set_out_ptr(&mut self, ptr: PortSource) {
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![
                 InputPort {
                     kind: PortKind::Data,
@@ -1255,7 +1343,7 @@ impl<'a> RegionBuilder<'a> {
                     source: self.output_state,
                 },
             ],
-            outputs: vec![Self::output_output()],
+            outputs: vec![Self::output_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::SetOutPtr),
         });
         self.output_state = PortSource::Node(OutputRef { node, index: 0 });
@@ -1266,6 +1354,7 @@ impl<'a> RegionBuilder<'a> {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![],
             outputs: vec![data_out],
             kind: NodeKind::Simple(IrOp::SlotAddr { slot }),
@@ -1277,6 +1366,7 @@ impl<'a> RegionBuilder<'a> {
     pub fn write_to_slot(&mut self, slot: SlotId, src: PortSource) {
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![
                 InputPort {
                     kind: PortKind::Data,
@@ -1287,7 +1377,7 @@ impl<'a> RegionBuilder<'a> {
                     source: self.cursor_state,
                 },
             ],
-            outputs: vec![Self::cursor_output()],
+            outputs: vec![Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::WriteToSlot { slot }),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 0 });
@@ -1298,11 +1388,12 @@ impl<'a> RegionBuilder<'a> {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateCursor,
                 source: self.cursor_state,
             }],
-            outputs: vec![data_out, Self::cursor_output()],
+            outputs: vec![data_out, Self::cursor_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::ReadFromSlot { slot }),
         });
         self.cursor_state = PortSource::Node(OutputRef { node, index: 1 });
@@ -1341,12 +1432,13 @@ impl<'a> RegionBuilder<'a> {
             outputs.push(self.data_output());
         }
         let cursor_out_idx = outputs.len() as u16;
-        outputs.push(Self::cursor_output());
+        outputs.push(Self::cursor_output(self.debug_scope));
         let output_out_idx = outputs.len() as u16;
-        outputs.push(Self::output_output());
+        outputs.push(Self::output_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs,
             outputs,
             kind: NodeKind::Simple(IrOp::CallIntrinsic {
@@ -1386,6 +1478,7 @@ impl<'a> RegionBuilder<'a> {
         let out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs,
             outputs: vec![out],
             kind: NodeKind::Simple(IrOp::CallPure {
@@ -1402,6 +1495,7 @@ impl<'a> RegionBuilder<'a> {
     pub fn error_exit(&mut self, code: ErrorCode) {
         self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs: vec![InputPort {
                 kind: PortKind::StateCursor,
                 source: self.cursor_state,
@@ -1431,7 +1525,7 @@ impl<'a> RegionBuilder<'a> {
     ) -> Vec<PortSource> {
         // Create sub-regions, one per branch.
         let mut region_ids = Vec::with_capacity(branch_count);
-        for _ in 0..branch_count {
+        for branch_index in 0..branch_count {
             // Each region gets: passthrough data args + cursor state + output state.
             let mut args = Vec::with_capacity(passthrough.len() + 2);
             for &pt in passthrough {
@@ -1450,7 +1544,14 @@ impl<'a> RegionBuilder<'a> {
                 vreg: None,
             });
 
+            let debug_scope = self.func.debug_scopes.push(DebugScope {
+                parent: Some(self.debug_scope),
+                kind: DebugScopeKind::GammaBranch {
+                    branch_index: branch_index as u16,
+                },
+            });
             let region = self.func.regions.push(Region {
+                debug_scope,
                 args,
                 results: Vec::new(),
                 nodes: Vec::new(),
@@ -1462,6 +1563,7 @@ impl<'a> RegionBuilder<'a> {
         for (i, &region) in region_ids.iter().enumerate() {
             let cs_idx = passthrough.len() as u16;
             let os_idx = cs_idx + 1;
+            let debug_scope = self.func.regions[region].debug_scope;
             let cursor_state = PortSource::RegionArg(RegionArgRef {
                 region,
                 index: cs_idx,
@@ -1474,6 +1576,7 @@ impl<'a> RegionBuilder<'a> {
             let mut branch_builder = RegionBuilder {
                 func: self.func,
                 region,
+                debug_scope,
                 cursor_state,
                 output_state,
             };
@@ -1518,12 +1621,13 @@ impl<'a> RegionBuilder<'a> {
             outputs.push(self.data_output());
         }
         let cursor_out_idx = outputs.len() as u16;
-        outputs.push(Self::cursor_output());
+        outputs.push(Self::cursor_output(self.debug_scope));
         let output_out_idx = outputs.len() as u16;
-        outputs.push(Self::output_output());
+        outputs.push(Self::output_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs,
             outputs,
             kind: NodeKind::Gamma {
@@ -1583,7 +1687,12 @@ impl<'a> RegionBuilder<'a> {
             vreg: None,
         });
 
+        let body_debug_scope = self.func.debug_scopes.push(DebugScope {
+            parent: Some(self.debug_scope),
+            kind: DebugScopeKind::ThetaBody,
+        });
         let body = self.func.regions.push(Region {
+            debug_scope: body_debug_scope,
             args,
             results: Vec::new(),
             nodes: Vec::new(),
@@ -1604,6 +1713,7 @@ impl<'a> RegionBuilder<'a> {
         let mut body_builder = RegionBuilder {
             func: self.func,
             region: body,
+            debug_scope: body_debug_scope,
             cursor_state,
             output_state,
         };
@@ -1642,12 +1752,13 @@ impl<'a> RegionBuilder<'a> {
             outputs.push(self.data_output());
         }
         let cursor_out_idx = outputs.len() as u16;
-        outputs.push(Self::cursor_output());
+        outputs.push(Self::cursor_output(self.debug_scope));
         let output_out_idx = outputs.len() as u16;
-        outputs.push(Self::output_output());
+        outputs.push(Self::output_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs,
             outputs,
             kind: NodeKind::Theta { body },
@@ -1703,12 +1814,13 @@ impl<'a> RegionBuilder<'a> {
             outputs.push(self.data_output());
         }
         let cursor_out_idx = outputs.len() as u16;
-        outputs.push(Self::cursor_output());
+        outputs.push(Self::cursor_output(self.debug_scope));
         let output_out_idx = outputs.len() as u16;
-        outputs.push(Self::output_output());
+        outputs.push(Self::output_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
+            debug_scope: self.debug_scope,
             inputs,
             outputs,
             kind: NodeKind::Apply { target },
@@ -1796,6 +1908,7 @@ pub struct IrFuncDisplay<'a> {
 
 impl<'a> fmt::Display for IrFuncDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.func.fmt_debug_scopes(f)?;
         self.func.fmt_node(f, self.func.root, 0, self.registry)
     }
 }
@@ -1828,17 +1941,19 @@ impl IrFunc {
                 shape,
                 lambda_id,
             } => {
-                writeln!(
-                    f,
-                    "{pad}lambda @{} (shape: {:?}) {{",
-                    lambda_id.index(),
-                    shape.type_identifier,
-                )?;
+                write!(f, "{pad}lambda @{} ", lambda_id.index())?;
+                self.fmt_scope_ref(f, node.debug_scope)?;
+                writeln!(f, " (shape: {:?}) {{", shape.type_identifier,)?;
                 self.fmt_region(f, *body, indent + 1, registry)?;
                 writeln!(f, "{pad}}}")?;
             }
             NodeKind::Simple(op) => {
-                write!(f, "{pad}n{} = ", node_id.index())?;
+                write!(f, "{pad}n{}", node_id.index())?;
+                if node.debug_scope != self.regions[node.region].debug_scope {
+                    write!(f, " ")?;
+                    self.fmt_scope_ref(f, node.debug_scope)?;
+                }
+                write!(f, " = ")?;
                 self.fmt_op(f, op, registry)?;
                 write!(f, " [")?;
                 for (i, inp) in node.inputs.iter().enumerate() {
@@ -1852,12 +1967,18 @@ impl IrFunc {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.fmt_output(f, out)?;
+                    self.fmt_output(f, out, node.debug_scope)?;
                 }
                 writeln!(f, "]")?;
             }
             NodeKind::Gamma { regions } => {
-                writeln!(f, "{pad}n{} = gamma [", node_id.index())?;
+                write!(f, "{pad}n{}", node_id.index())?;
+                if node.debug_scope != self.regions[node.region].debug_scope {
+                    write!(f, " ")?;
+                    self.fmt_scope_ref(f, node.debug_scope)?;
+                }
+                write!(f, " = ")?;
+                writeln!(f, "gamma [")?;
                 // Show inputs.
                 let inputs_pad = "  ".repeat(indent + 1);
                 write!(f, "{inputs_pad}pred: ")?;
@@ -1880,12 +2001,17 @@ impl IrFunc {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.fmt_output(f, out)?;
+                    self.fmt_output(f, out, node.debug_scope)?;
                 }
                 writeln!(f, "]")?;
             }
             NodeKind::Theta { body } => {
-                write!(f, "{pad}n{} = theta [", node_id.index())?;
+                write!(f, "{pad}n{}", node_id.index())?;
+                if node.debug_scope != self.regions[node.region].debug_scope {
+                    write!(f, " ")?;
+                    self.fmt_scope_ref(f, node.debug_scope)?;
+                }
+                write!(f, " = theta [")?;
                 for (i, inp) in node.inputs.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -1899,12 +2025,18 @@ impl IrFunc {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.fmt_output(f, out)?;
+                    self.fmt_output(f, out, node.debug_scope)?;
                 }
                 writeln!(f, "]")?;
             }
             NodeKind::Apply { target } => {
-                write!(f, "{pad}n{} = apply @{} [", node_id.index(), target.index())?;
+                write!(f, "{pad}n{}", node_id.index())?;
+                if node.debug_scope != self.regions[node.region].debug_scope {
+                    write!(f, " ")?;
+                    self.fmt_scope_ref(f, node.debug_scope)?;
+                }
+                write!(f, " = ")?;
+                write!(f, "apply @{} [", target.index())?;
                 for (i, inp) in node.inputs.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
@@ -1916,7 +2048,7 @@ impl IrFunc {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.fmt_output(f, out)?;
+                    self.fmt_output(f, out, node.debug_scope)?;
                 }
                 writeln!(f, "]")?;
             }
@@ -1934,7 +2066,9 @@ impl IrFunc {
         let region = &self.regions[region_id];
         let pad = "  ".repeat(indent);
 
-        writeln!(f, "{pad}region {{")?;
+        write!(f, "{pad}region ")?;
+        self.fmt_scope_ref(f, region.debug_scope)?;
+        writeln!(f, " {{")?;
         let inner_pad = "  ".repeat(indent + 1);
 
         // Args.
@@ -2077,18 +2211,28 @@ impl IrFunc {
         }
     }
 
-    fn fmt_output(&self, f: &mut fmt::Formatter<'_>, out: &OutputPort) -> fmt::Result {
+    fn fmt_output(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        out: &OutputPort,
+        default_scope: DebugScopeId,
+    ) -> fmt::Result {
         match out.kind {
             PortKind::Data => {
                 if let Some(vreg) = out.vreg {
-                    write!(f, "v{}", vreg.index())
+                    write!(f, "v{}", vreg.index())?;
                 } else {
-                    write!(f, "?")
+                    write!(f, "?")?;
                 }
             }
-            PortKind::StateCursor => write!(f, "%cs"),
-            PortKind::StateOutput => write!(f, "%os"),
+            PortKind::StateCursor => write!(f, "%cs")?,
+            PortKind::StateOutput => write!(f, "%os")?,
         }
+
+        if out.debug_scope != default_scope {
+            self.fmt_scope_ref(f, out.debug_scope)?;
+        }
+        Ok(())
     }
 
     fn fmt_region_arg(
@@ -2103,6 +2247,40 @@ impl IrFunc {
             PortKind::StateCursor => write!(f, "%cs"),
             PortKind::StateOutput => write!(f, "%os"),
         }
+    }
+
+    fn fmt_debug_scopes(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "scopes {{")?;
+        for (scope_id, scope) in self.debug_scopes.iter() {
+            write!(f, "  s{} = ", scope_id.index())?;
+            self.fmt_debug_scope_kind(f, &scope.kind)?;
+            if let Some(parent) = scope.parent {
+                write!(f, " parent s{}", parent.index())?;
+            }
+            writeln!(f)?;
+        }
+        writeln!(f, "}}")?;
+        Ok(())
+    }
+
+    fn fmt_debug_scope_kind(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        kind: &DebugScopeKind,
+    ) -> fmt::Result {
+        match kind {
+            DebugScopeKind::LambdaBody { lambda_id } => {
+                write!(f, "lambda_body(@{})", lambda_id.index())
+            }
+            DebugScopeKind::GammaBranch { branch_index } => {
+                write!(f, "gamma_branch({branch_index})")
+            }
+            DebugScopeKind::ThetaBody => write!(f, "theta_body"),
+        }
+    }
+
+    fn fmt_scope_ref(&self, f: &mut fmt::Formatter<'_>, scope: DebugScopeId) -> fmt::Result {
+        write!(f, "@s{}", scope.index())
     }
 }
 
@@ -2396,6 +2574,72 @@ mod tests {
             }
             _ => panic!("expected theta node"),
         }
+    }
+
+    #[test]
+    fn debug_scopes_track_structured_region_nesting() {
+        let mut builder = IrBuilder::new(test_shape());
+
+        {
+            let mut rb = builder.root_region();
+            let predicate = rb.const_val(1);
+            let parent_scope = rb.debug_scope();
+            let _ = rb.gamma(predicate, &[], 2, |branch_idx, branch| {
+                match branch.func.debug_scopes[branch.debug_scope()].kind {
+                    DebugScopeKind::GammaBranch { branch_index } => {
+                        assert_eq!(branch_index as usize, branch_idx);
+                    }
+                    other => panic!("expected gamma branch scope, got {other:?}"),
+                }
+                assert_eq!(
+                    branch.func.debug_scopes[branch.debug_scope()].parent,
+                    Some(parent_scope)
+                );
+                branch.set_results(&[]);
+            });
+            let _ = rb.theta(&[], |body| {
+                assert_eq!(
+                    body.func.debug_scopes[body.debug_scope()].kind,
+                    DebugScopeKind::ThetaBody
+                );
+                assert_eq!(
+                    body.func.debug_scopes[body.debug_scope()].parent,
+                    Some(parent_scope)
+                );
+                let predicate = body.const_val(0);
+                body.set_results(&[predicate]);
+            });
+            rb.set_results(&[]);
+        }
+
+        let func = builder.finish();
+        assert_eq!(
+            func.debug_scopes[func.root_debug_scope].kind,
+            DebugScopeKind::LambdaBody {
+                lambda_id: LambdaId::new(0)
+            }
+        );
+    }
+
+    #[test]
+    fn debug_scope_provenance_is_stored_on_nodes_and_outputs() {
+        let mut builder = IrBuilder::new(test_shape());
+
+        let (const_node, output_ref, region_scope) = {
+            let mut rb = builder.root_region();
+            let src = rb.const_val(7);
+            rb.set_results(&[src]);
+            let output_ref = match src {
+                PortSource::Node(output_ref) => output_ref,
+                other => panic!("expected node source, got {other:?}"),
+            };
+            (output_ref.node, output_ref, rb.debug_scope())
+        };
+
+        let func = builder.finish();
+        assert_eq!(func.node_debug_scope(const_node), region_scope);
+        assert_eq!(func.output_debug_scope(output_ref), region_scope);
+        assert_eq!(func.region_debug_scope(func.root_body()), region_scope);
     }
 
     #[test]

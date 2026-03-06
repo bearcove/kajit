@@ -11,6 +11,7 @@ pub struct JitDwarfSections {
     pub debug_abbrev: Vec<u8>,
     pub debug_info: Vec<u8>,
     pub debug_loc: Vec<u8>,
+    pub debug_ranges: Vec<u8>,
 }
 
 impl JitDwarfSections {
@@ -19,6 +20,7 @@ impl JitDwarfSections {
             && self.debug_abbrev.is_empty()
             && self.debug_info.is_empty()
             && self.debug_loc.is_empty()
+            && self.debug_ranges.is_empty()
     }
 }
 
@@ -48,9 +50,14 @@ pub struct DwarfVariable {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct JitDebugLexicalBlock {
+pub struct JitDebugRange {
     pub low_pc: u64,
     pub high_pc: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JitDebugLexicalBlock {
+    pub ranges: Vec<JitDebugRange>,
     pub variables: Vec<DwarfVariable>,
     pub lexical_blocks: Vec<JitDebugLexicalBlock>,
 }
@@ -134,6 +141,7 @@ const DW_AT_LOW_PC: u8 = 0x11;
 const DW_AT_HIGH_PC: u8 = 0x12;
 const DW_AT_BYTE_SIZE: u8 = 0x0b;
 const DW_AT_FRAME_BASE: u8 = 0x40;
+const DW_AT_RANGES: u8 = 0x55;
 const DW_AT_TYPE: u8 = 0x49;
 const DW_AT_ENCODING: u8 = 0x3e;
 const DW_FORM_ADDR: u8 = 0x01;
@@ -264,11 +272,18 @@ pub fn build_jit_dwarf_sections_from_debug_info(
     }
 
     let (debug_loc, variable_loc_offsets) = build_debug_loc_section_from_debug_info(debug_info);
+    let (debug_ranges, lexical_block_range_offsets) =
+        build_debug_ranges_section_from_debug_info(debug_info);
     Ok(JitDwarfSections {
         debug_line: build_debug_line_section_from_debug_info(debug_info)?,
         debug_abbrev: build_debug_abbrev_section(),
-        debug_info: build_debug_info_section_from_debug_info(debug_info, &variable_loc_offsets),
+        debug_info: build_debug_info_section_from_debug_info(
+            debug_info,
+            &variable_loc_offsets,
+            &lexical_block_range_offsets,
+        ),
         debug_loc,
+        debug_ranges,
     })
 }
 
@@ -347,10 +362,8 @@ pub fn build_debug_abbrev_section() -> Vec<u8> {
     push_uleb128(&mut out, 6);
     out.push(DW_TAG_LEXICAL_BLOCK);
     out.push(DW_CHILDREN_YES);
-    out.push(DW_AT_LOW_PC);
-    out.push(DW_FORM_ADDR);
-    out.push(DW_AT_HIGH_PC);
-    out.push(DW_FORM_DATA8);
+    out.push(DW_AT_RANGES);
+    out.push(DW_FORM_SEC_OFFSET);
     out.push(0);
     out.push(0);
 
@@ -368,6 +381,7 @@ pub fn build_debug_info_section(
     variables: &[DwarfVariable],
     lexical_blocks: &[JitDebugLexicalBlock],
     variable_loc_offsets: &[u32],
+    lexical_block_range_offsets: &[u32],
 ) -> Vec<u8> {
     let mut die = Vec::new();
     // Compile unit DIE (abbrev 1).
@@ -397,12 +411,15 @@ pub fn build_debug_info_section(
 
     // Variable DIEs and lexical blocks as children of subprogram.
     let mut next_loc_offset = 0usize;
+    let mut next_range_offset = 0usize;
     emit_variable_dies(
         &mut die,
         variables,
         lexical_blocks,
         variable_loc_offsets,
+        lexical_block_range_offsets,
         &mut next_loc_offset,
+        &mut next_range_offset,
         base_type_die_offset,
     );
 
@@ -425,7 +442,9 @@ fn emit_variable_dies(
     variables: &[DwarfVariable],
     lexical_blocks: &[JitDebugLexicalBlock],
     variable_loc_offsets: &[u32],
+    lexical_block_range_offsets: &[u32],
     next_loc_offset: &mut usize,
+    next_range_offset: &mut usize,
     base_type_die_offset: u32,
 ) {
     for variable in variables {
@@ -454,7 +473,9 @@ fn emit_variable_dies(
             die,
             lexical_block,
             variable_loc_offsets,
+            lexical_block_range_offsets,
             next_loc_offset,
+            next_range_offset,
             base_type_die_offset,
         );
     }
@@ -464,23 +485,23 @@ fn emit_lexical_block_die(
     die: &mut Vec<u8>,
     lexical_block: &JitDebugLexicalBlock,
     variable_loc_offsets: &[u32],
+    lexical_block_range_offsets: &[u32],
     next_loc_offset: &mut usize,
+    next_range_offset: &mut usize,
     base_type_die_offset: u32,
 ) {
     push_uleb128(die, 6);
-    die.extend_from_slice(&lexical_block.low_pc.to_le_bytes());
-    die.extend_from_slice(
-        &lexical_block
-            .high_pc
-            .saturating_sub(lexical_block.low_pc)
-            .to_le_bytes(),
-    );
+    let range_offset = lexical_block_range_offsets[*next_range_offset];
+    *next_range_offset += 1;
+    die.extend_from_slice(&range_offset.to_le_bytes());
     emit_variable_dies(
         die,
         &lexical_block.variables,
         &lexical_block.lexical_blocks,
         variable_loc_offsets,
+        lexical_block_range_offsets,
         next_loc_offset,
+        next_range_offset,
         base_type_die_offset,
     );
     die.push(0);
@@ -513,6 +534,7 @@ fn subprogram_variables_in_preorder(subprogram: &JitDebugSubprogram) -> Vec<&Dwa
 pub fn build_debug_info_section_from_debug_info(
     debug_info: &JitDebugInfo,
     variable_loc_offsets: &[u32],
+    lexical_block_range_offsets: &[u32],
 ) -> Vec<u8> {
     build_debug_info_section(
         debug_info.code_address,
@@ -523,6 +545,7 @@ pub fn build_debug_info_section_from_debug_info(
         &debug_info.subprogram.variables,
         &debug_info.subprogram.lexical_blocks,
         variable_loc_offsets,
+        lexical_block_range_offsets,
     )
 }
 
@@ -561,6 +584,48 @@ pub fn build_debug_loc_section_from_debug_info(debug_info: &JitDebugInfo) -> (Ve
         &debug_info.subprogram.lexical_blocks,
         debug_info.code_address,
     )
+}
+
+fn lexical_blocks_in_preorder<'a>(
+    lexical_blocks: &'a [JitDebugLexicalBlock],
+) -> Vec<&'a JitDebugLexicalBlock> {
+    let mut out = Vec::new();
+    collect_lexical_blocks_in_preorder(lexical_blocks, &mut out);
+    out
+}
+
+fn collect_lexical_blocks_in_preorder<'a>(
+    lexical_blocks: &'a [JitDebugLexicalBlock],
+    out: &mut Vec<&'a JitDebugLexicalBlock>,
+) {
+    for lexical_block in lexical_blocks {
+        out.push(lexical_block);
+        collect_lexical_blocks_in_preorder(&lexical_block.lexical_blocks, out);
+    }
+}
+
+pub fn build_debug_ranges_section(lexical_blocks: &[JitDebugLexicalBlock]) -> (Vec<u8>, Vec<u32>) {
+    let mut section = Vec::<u8>::new();
+    let mut offsets = Vec::<u32>::new();
+    for lexical_block in lexical_blocks_in_preorder(lexical_blocks) {
+        offsets.push(section.len() as u32);
+        for range in &lexical_block.ranges {
+            if range.high_pc <= range.low_pc {
+                continue;
+            }
+            section.extend_from_slice(&range.low_pc.to_le_bytes());
+            section.extend_from_slice(&range.high_pc.to_le_bytes());
+        }
+        section.extend_from_slice(&0u64.to_le_bytes());
+        section.extend_from_slice(&0u64.to_le_bytes());
+    }
+    (section, offsets)
+}
+
+pub fn build_debug_ranges_section_from_debug_info(
+    debug_info: &JitDebugInfo,
+) -> (Vec<u8>, Vec<u32>) {
+    build_debug_ranges_section(&debug_info.subprogram.lexical_blocks)
 }
 
 pub fn dwarf_register_from_hw_encoding(target_arch: DwarfTargetArch, hw_enc: u8) -> Option<u16> {
@@ -951,6 +1016,7 @@ mod tests {
             &variables,
             &[],
             &[0],
+            &[],
         );
 
         let unit_length = u32::from_le_bytes(info[0..4].try_into().unwrap()) as usize;
@@ -1073,8 +1139,10 @@ mod tests {
     #[test]
     fn debug_loc_collects_lexical_block_variables() {
         let lexical_blocks = vec![JitDebugLexicalBlock {
-            low_pc: 0x1000,
-            high_pc: 0x1010,
+            ranges: vec![JitDebugRange {
+                low_pc: 0x1000,
+                high_pc: 0x1010,
+            }],
             variables: vec![DwarfVariable {
                 name: "scoped".to_string(),
                 location: DwarfVariableLocation::List(vec![DwarfLocationRange {
@@ -1177,8 +1245,10 @@ mod tests {
                     location: DwarfVariableLocation::Expr(expr_reg(0)),
                 }],
                 lexical_blocks: vec![JitDebugLexicalBlock {
-                    low_pc: 0x1000,
-                    high_pc: 0x1008,
+                    ranges: vec![JitDebugRange {
+                        low_pc: 0x1000,
+                        high_pc: 0x1008,
+                    }],
                     variables: vec![DwarfVariable {
                         name: "v0".to_string(),
                         location: DwarfVariableLocation::List(vec![DwarfLocationRange {

@@ -9,8 +9,8 @@ use std::fmt;
 
 use kajit_ir::ErrorCode;
 use kajit_ir::{
-    Id, IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, PortKind, PortSource,
-    RegionId, SlotId, VReg, Width,
+    Arena, DebugScope, DebugScopeId, Id, IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId,
+    NodeKind, PortKind, PortSource, RegionId, SlotId, VReg, Width,
 };
 
 // ─── Label ID ────────────────────────────────────────────────────────────────
@@ -205,6 +205,16 @@ pub struct LinearIr {
     pub vreg_count: u32,
     /// Total number of stack slots.
     pub slot_count: u32,
+    /// Preserved debug scope provenance copied from RVSDG.
+    pub debug: LinearDebugProvenance,
+}
+
+#[derive(Clone, Default)]
+pub struct LinearDebugProvenance {
+    pub scopes: Arena<DebugScope>,
+    pub root_scope: Option<DebugScopeId>,
+    pub op_scopes: Vec<Option<DebugScopeId>>,
+    pub vreg_scopes: Vec<Option<DebugScopeId>>,
 }
 
 // ─── Linearizer state ────────────────────────────────────────────────────────
@@ -213,6 +223,8 @@ struct Linearizer<'a> {
     func: &'a IrFunc,
     ops: Vec<LinearOp>,
     label_count: u32,
+    op_scopes: Vec<Option<DebugScopeId>>,
+    vreg_scopes: Vec<Option<DebugScopeId>>,
 }
 
 impl<'a> Linearizer<'a> {
@@ -221,6 +233,8 @@ impl<'a> Linearizer<'a> {
             func,
             ops: Vec::new(),
             label_count: 0,
+            op_scopes: Vec::new(),
+            vreg_scopes: vec![None; func.vreg_count() as usize],
         }
     }
 
@@ -230,8 +244,27 @@ impl<'a> Linearizer<'a> {
         id
     }
 
-    fn emit(&mut self, op: LinearOp) {
+    fn emit(&mut self, scope: Option<DebugScopeId>, op: LinearOp) {
         self.ops.push(op);
+        self.op_scopes.push(scope);
+    }
+
+    fn record_vreg_scope(&mut self, vreg: VReg, scope: DebugScopeId) {
+        let slot = self
+            .vreg_scopes
+            .get_mut(vreg.index())
+            .expect("vreg scope index must fit");
+        *slot = Some(scope);
+    }
+
+    fn record_output_scopes(&mut self, node: &Node) {
+        for output in &node.outputs {
+            if output.kind == PortKind::Data
+                && let Some(vreg) = output.vreg
+            {
+                self.record_vreg_scope(vreg, output.debug_scope);
+            }
+        }
     }
 
     /// Resolve a PortSource to the VReg it produces.
@@ -402,6 +435,7 @@ impl<'a> Linearizer<'a> {
 
     fn linearize_simple(&mut self, node_id: NodeId, op: &IrOp) {
         let node = &self.func.nodes[node_id];
+        self.record_output_scopes(node);
 
         // Helper: get the VReg of data output at index.
         let data_dst =
@@ -417,10 +451,13 @@ impl<'a> Linearizer<'a> {
         match op {
             // ── Constants ──
             IrOp::Const { value } => {
-                self.emit(LinearOp::Const {
-                    dst: data_dst(0),
-                    value: *value,
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::Const {
+                        dst: data_dst(0),
+                        value: *value,
+                    },
+                );
             }
 
             // ── Binary arithmetic ──
@@ -435,88 +472,136 @@ impl<'a> Linearizer<'a> {
 
             // ── Unary ──
             IrOp::ZigzagDecode { wide } => {
-                self.emit(LinearOp::UnaryOp {
-                    op: UnaryOpKind::ZigzagDecode { wide: *wide },
-                    dst: data_dst(0),
-                    src: data_in(0),
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::UnaryOp {
+                        op: UnaryOpKind::ZigzagDecode { wide: *wide },
+                        dst: data_dst(0),
+                        src: data_in(0),
+                    },
+                );
             }
             IrOp::SignExtend { from_width } => {
-                self.emit(LinearOp::UnaryOp {
-                    op: UnaryOpKind::SignExtend {
-                        from_width: *from_width,
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::UnaryOp {
+                        op: UnaryOpKind::SignExtend {
+                            from_width: *from_width,
+                        },
+                        dst: data_dst(0),
+                        src: data_in(0),
                     },
-                    dst: data_dst(0),
-                    src: data_in(0),
-                });
+                );
             }
 
             // ── Cursor ops ──
             IrOp::BoundsCheck { count } => {
-                self.emit(LinearOp::BoundsCheck { count: *count });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::BoundsCheck { count: *count },
+                );
             }
             IrOp::ReadBytes { count } => {
-                self.emit(LinearOp::ReadBytes {
-                    dst: data_dst(0),
-                    count: *count,
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::ReadBytes {
+                        dst: data_dst(0),
+                        count: *count,
+                    },
+                );
             }
             IrOp::PeekByte => {
-                self.emit(LinearOp::PeekByte { dst: data_dst(0) });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::PeekByte { dst: data_dst(0) },
+                );
             }
             IrOp::AdvanceCursor { count } => {
-                self.emit(LinearOp::AdvanceCursor { count: *count });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::AdvanceCursor { count: *count },
+                );
             }
             IrOp::AdvanceCursorBy => {
-                self.emit(LinearOp::AdvanceCursorBy { src: data_in(0) });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::AdvanceCursorBy { src: data_in(0) },
+                );
             }
             IrOp::SaveCursor => {
-                self.emit(LinearOp::SaveCursor { dst: data_dst(0) });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::SaveCursor { dst: data_dst(0) },
+                );
             }
             IrOp::RestoreCursor => {
-                self.emit(LinearOp::RestoreCursor { src: data_in(0) });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::RestoreCursor { src: data_in(0) },
+                );
             }
 
             // ── Output ops ──
             IrOp::WriteToField { offset, width } => {
-                self.emit(LinearOp::WriteToField {
-                    src: data_in(0),
-                    offset: *offset,
-                    width: *width,
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::WriteToField {
+                        src: data_in(0),
+                        offset: *offset,
+                        width: *width,
+                    },
+                );
             }
             IrOp::ReadFromField { offset, width } => {
-                self.emit(LinearOp::ReadFromField {
-                    dst: data_dst(0),
-                    offset: *offset,
-                    width: *width,
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::ReadFromField {
+                        dst: data_dst(0),
+                        offset: *offset,
+                        width: *width,
+                    },
+                );
             }
             IrOp::SaveOutPtr => {
-                self.emit(LinearOp::SaveOutPtr { dst: data_dst(0) });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::SaveOutPtr { dst: data_dst(0) },
+                );
             }
             IrOp::SetOutPtr => {
-                self.emit(LinearOp::SetOutPtr { src: data_in(0) });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::SetOutPtr { src: data_in(0) },
+                );
             }
 
             // ── Stack ops ──
             IrOp::SlotAddr { slot } => {
-                self.emit(LinearOp::SlotAddr {
-                    dst: data_dst(0),
-                    slot: *slot,
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::SlotAddr {
+                        dst: data_dst(0),
+                        slot: *slot,
+                    },
+                );
             }
             IrOp::WriteToSlot { slot } => {
-                self.emit(LinearOp::WriteToSlot {
-                    slot: *slot,
-                    src: data_in(0),
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::WriteToSlot {
+                        slot: *slot,
+                        src: data_in(0),
+                    },
+                );
             }
             IrOp::ReadFromSlot { slot } => {
-                self.emit(LinearOp::ReadFromSlot {
-                    dst: data_dst(0),
-                    slot: *slot,
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::ReadFromSlot {
+                        dst: data_dst(0),
+                        slot: *slot,
+                    },
+                );
             }
 
             // ── Call ops ──
@@ -528,36 +613,45 @@ impl<'a> Linearizer<'a> {
             } => {
                 let args: Vec<VReg> = (0..*arg_count as usize).map(&data_in).collect();
                 let dst = if *has_result { Some(data_dst(0)) } else { None };
-                self.emit(LinearOp::CallIntrinsic {
-                    func: *func,
-                    args,
-                    dst,
-                    field_offset: *field_offset,
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::CallIntrinsic {
+                        func: *func,
+                        args,
+                        dst,
+                        field_offset: *field_offset,
+                    },
+                );
             }
             IrOp::CallPure { func, arg_count } => {
                 let args: Vec<VReg> = (0..*arg_count as usize).map(&data_in).collect();
-                self.emit(LinearOp::CallPure {
-                    func: *func,
-                    args,
-                    dst: data_dst(0),
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::CallPure {
+                        func: *func,
+                        args,
+                        dst: data_dst(0),
+                    },
+                );
             }
 
             // ── Error ──
             IrOp::ErrorExit { code } => {
-                self.emit(LinearOp::ErrorExit { code: *code });
+                self.emit(Some(node.debug_scope), LinearOp::ErrorExit { code: *code });
             }
 
             // ── SIMD ──
             IrOp::SimdStringScan => {
-                self.emit(LinearOp::SimdStringScan {
-                    pos: data_dst(0),
-                    kind: data_dst(1),
-                });
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::SimdStringScan {
+                        pos: data_dst(0),
+                        kind: data_dst(1),
+                    },
+                );
             }
             IrOp::SimdWhitespaceSkip => {
-                self.emit(LinearOp::SimdWhitespaceSkip);
+                self.emit(Some(node.debug_scope), LinearOp::SimdWhitespaceSkip);
             }
         }
     }
@@ -566,7 +660,11 @@ impl<'a> Linearizer<'a> {
         let dst = node.outputs[0].vreg.expect("binop must have vreg");
         let lhs = self.resolve_vreg(node.inputs[0].source);
         let rhs = self.resolve_vreg(node.inputs[1].source);
-        self.emit(LinearOp::BinOp { op, dst, lhs, rhs });
+        self.record_vreg_scope(dst, node.outputs[0].debug_scope);
+        self.emit(
+            Some(node.debug_scope),
+            LinearOp::BinOp { op, dst, lhs, rhs },
+        );
     }
 
     // ─── Gamma (conditional) ─────────────────────────────────────────
@@ -585,18 +683,24 @@ impl<'a> Linearizer<'a> {
         // Emit JumpTable if > 2 branches, or BranchIfZero for 2-branch case.
         if branch_count == 2 {
             // predicate==0 → branch 0, predicate!=0 → branch 1
-            self.emit(LinearOp::BranchIfZero {
-                cond: predicate,
-                target: branch_labels[0],
-            });
-            self.emit(LinearOp::Branch(branch_labels[1]));
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIfZero {
+                    cond: predicate,
+                    target: branch_labels[0],
+                },
+            );
+            self.emit(Some(node.debug_scope), LinearOp::Branch(branch_labels[1]));
         } else {
             // General case: jump table
-            self.emit(LinearOp::JumpTable {
-                predicate,
-                labels: branch_labels.clone(),
-                default: branch_labels[branch_count - 1],
-            });
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::JumpTable {
+                    predicate,
+                    labels: branch_labels.clone(),
+                    default: branch_labels[branch_count - 1],
+                },
+            );
         }
 
         // Determine the data output count from the gamma node.
@@ -608,7 +712,10 @@ impl<'a> Linearizer<'a> {
 
         // Emit each branch.
         for (branch_idx, &region_id) in regions.iter().enumerate() {
-            self.emit(LinearOp::Label(branch_labels[branch_idx]));
+            self.emit(
+                Some(self.func.regions[region_id].debug_scope),
+                LinearOp::Label(branch_labels[branch_idx]),
+            );
 
             // Emit copies for passthrough inputs → region args.
             self.emit_gamma_entry_copies(node, region_id);
@@ -621,11 +728,14 @@ impl<'a> Linearizer<'a> {
 
             // Branch to merge (skip for last branch — it falls through).
             if branch_idx < branch_count - 1 {
-                self.emit(LinearOp::Branch(merge_label));
+                self.emit(
+                    Some(self.func.regions[region_id].debug_scope),
+                    LinearOp::Branch(merge_label),
+                );
             }
         }
 
-        self.emit(LinearOp::Label(merge_label));
+        self.emit(Some(node.debug_scope), LinearOp::Label(merge_label));
     }
 
     /// Emit Copy ops for passthrough data inputs entering a gamma branch region.
@@ -643,10 +753,14 @@ impl<'a> Linearizer<'a> {
                 if let Some(dst_vreg) = region.args[i].vreg
                     && src_vreg != dst_vreg
                 {
-                    self.emit(LinearOp::Copy {
-                        dst: dst_vreg,
-                        src: src_vreg,
-                    });
+                    self.emit(
+                        Some(region.debug_scope),
+                        LinearOp::Copy {
+                            dst: dst_vreg,
+                            src: src_vreg,
+                        },
+                    );
+                    self.record_vreg_scope(dst_vreg, region.debug_scope);
                 }
             }
         }
@@ -671,10 +785,14 @@ impl<'a> Linearizer<'a> {
                     .vreg
                     .expect("gamma data output must have vreg");
                 if src_vreg != dst_vreg {
-                    self.emit(LinearOp::Copy {
-                        dst: dst_vreg,
-                        src: src_vreg,
-                    });
+                    self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
+                    self.emit(
+                        Some(node.outputs[i].debug_scope),
+                        LinearOp::Copy {
+                            dst: dst_vreg,
+                            src: src_vreg,
+                        },
+                    );
                 }
             }
         }
@@ -702,10 +820,14 @@ impl<'a> Linearizer<'a> {
                 if let Some(dst_vreg) = body_region.args[i].vreg
                     && src_vreg != dst_vreg
                 {
-                    self.emit(LinearOp::Copy {
-                        dst: dst_vreg,
-                        src: src_vreg,
-                    });
+                    self.emit(
+                        Some(body_region.debug_scope),
+                        LinearOp::Copy {
+                            dst: dst_vreg,
+                            src: src_vreg,
+                        },
+                    );
+                    self.record_vreg_scope(dst_vreg, body_region.debug_scope);
                 }
             }
         }
@@ -713,7 +835,7 @@ impl<'a> Linearizer<'a> {
         // Loop top label.
         let loop_top = self.fresh_label();
         let loop_exit = self.fresh_label();
-        self.emit(LinearOp::Label(loop_top));
+        self.emit(Some(body_region.debug_scope), LinearOp::Label(loop_top));
 
         // Linearize the body.
         self.linearize_region(body);
@@ -732,21 +854,28 @@ impl<'a> Linearizer<'a> {
                 if let Some(dst_vreg) = body_region.args[i].vreg
                     && src_vreg != dst_vreg
                 {
-                    self.emit(LinearOp::Copy {
-                        dst: dst_vreg,
-                        src: src_vreg,
-                    });
+                    self.emit(
+                        Some(body_region.debug_scope),
+                        LinearOp::Copy {
+                            dst: dst_vreg,
+                            src: src_vreg,
+                        },
+                    );
+                    self.record_vreg_scope(dst_vreg, body_region.debug_scope);
                 }
             }
         }
 
         // Branch back to loop top if predicate is nonzero.
-        self.emit(LinearOp::BranchIf {
-            cond: predicate_vreg,
-            target: loop_top,
-        });
+        self.emit(
+            Some(body_region.debug_scope),
+            LinearOp::BranchIf {
+                cond: predicate_vreg,
+                target: loop_top,
+            },
+        );
 
-        self.emit(LinearOp::Label(loop_exit));
+        self.emit(Some(node.debug_scope), LinearOp::Label(loop_exit));
 
         // Emit copies for final loop var values → theta output vregs.
         // After the loop exits, the body's region args hold the final values
@@ -757,10 +886,14 @@ impl<'a> Linearizer<'a> {
                 && let Some(dst_vreg) = node.outputs[i].vreg
                 && src_vreg != dst_vreg
             {
-                self.emit(LinearOp::Copy {
-                    dst: dst_vreg,
-                    src: src_vreg,
-                });
+                self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
+                self.emit(
+                    Some(node.outputs[i].debug_scope),
+                    LinearOp::Copy {
+                        dst: dst_vreg,
+                        src: src_vreg,
+                    },
+                );
             }
         }
     }
@@ -786,20 +919,27 @@ impl<'a> Linearizer<'a> {
             .filter(|r| r.kind == PortKind::Data)
             .map(|r| self.resolve_vreg(r.source))
             .collect();
-        self.emit(LinearOp::FuncStart {
-            lambda_id,
-            shape,
-            data_args,
-            data_results,
-        });
+        for arg in &data_args {
+            self.record_vreg_scope(*arg, region.debug_scope);
+        }
+        self.emit(
+            Some(region.debug_scope),
+            LinearOp::FuncStart {
+                lambda_id,
+                shape,
+                data_args,
+                data_results,
+            },
+        );
         self.linearize_region(body);
-        self.emit(LinearOp::FuncEnd);
+        self.emit(Some(region.debug_scope), LinearOp::FuncEnd);
     }
 
     // ─── Apply ───────────────────────────────────────────────────────
 
     fn linearize_apply(&mut self, node_id: NodeId, target: LambdaId) {
         let node = &self.func.nodes[node_id];
+        self.record_output_scopes(node);
         let args: Vec<VReg> = node
             .inputs
             .iter()
@@ -812,11 +952,14 @@ impl<'a> Linearizer<'a> {
             .filter(|o| o.kind == PortKind::Data)
             .filter_map(|o| o.vreg)
             .collect();
-        self.emit(LinearOp::CallLambda {
-            target,
-            args,
-            results,
-        });
+        self.emit(
+            Some(node.debug_scope),
+            LinearOp::CallLambda {
+                target,
+                args,
+                results,
+            },
+        );
     }
 }
 
@@ -1297,6 +1440,12 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
         label_count: lin.label_count,
         vreg_count: func.vreg_count(),
         slot_count: func.slot_count(),
+        debug: LinearDebugProvenance {
+            scopes: func.debug_scopes.clone(),
+            root_scope: Some(func.root_debug_scope),
+            op_scopes: lin.op_scopes,
+            vreg_scopes: lin.vreg_scopes,
+        },
     }
 }
 
@@ -1588,7 +1737,9 @@ impl fmt::Debug for LinearIr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IrBuilder, IrOp, LambdaId, VReg, Width};
+    use kajit_ir::{
+        DebugScope, DebugScopeKind, IrBuilder, IrOp, LambdaId, PortSource, VReg, Width,
+    };
 
     #[test]
     fn linearize_simple_chain() {
@@ -1618,6 +1769,50 @@ mod tests {
         ));
         assert!(matches!(ir.ops[4], LinearOp::FuncEnd));
         assert_eq!(ir.ops.len(), 5);
+    }
+
+    #[test]
+    fn linearize_preserves_debug_scope_provenance() {
+        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let (const_node, output_index, root_scope) = {
+            let mut rb = builder.root_region();
+            let value = rb.const_val(42);
+            rb.set_results(&[value]);
+            let output_ref = match value {
+                PortSource::Node(output_ref) => output_ref,
+                other => panic!("expected node output, got {other:?}"),
+            };
+            (output_ref.node, output_ref.index as usize, rb.debug_scope())
+        };
+
+        let mut func = builder.finish();
+        let value_vreg = func.nodes[const_node].outputs[output_index]
+            .vreg
+            .expect("expected vreg on const output");
+        let extra_scope = func.debug_scopes.push(DebugScope {
+            parent: Some(root_scope),
+            kind: DebugScopeKind::ThetaBody,
+        });
+        func.nodes[const_node].debug_scope = extra_scope;
+        func.nodes[const_node].outputs[0].debug_scope = root_scope;
+
+        let linear = linearize(&mut func);
+        assert_eq!(linear.debug.root_scope, Some(root_scope));
+        assert_eq!(linear.debug.scopes.len(), func.debug_scopes.len());
+        assert_eq!(
+            linear.debug.vreg_scopes[value_vreg.index()],
+            Some(root_scope)
+        );
+
+        let const_scope = linear
+            .ops
+            .iter()
+            .zip(linear.debug.op_scopes.iter())
+            .find_map(|(op, scope)| match op {
+                LinearOp::Const { dst, .. } if *dst == value_vreg => *scope,
+                _ => None,
+            });
+        assert_eq!(const_scope, Some(extra_scope));
     }
 
     #[test]
