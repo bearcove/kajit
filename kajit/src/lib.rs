@@ -215,6 +215,27 @@ pub fn debug_postcard_hir(shape: &'static facet::Shape) -> kajit_hir::Module {
     compiler::build_postcard_decoder_hir(shape)
 }
 
+/// Build postcard RVSDG by first lowering through the prototype HIR path.
+///
+/// This currently supports only the narrow postcard subset covered by the
+/// prototype HIR producer and lowerer.
+pub fn debug_postcard_ir_via_hir_text(shape: &'static facet::Shape) -> String {
+    let func = compiler::build_postcard_decoder_ir_via_hir(shape);
+    let registry = symbol_registry_for_shape(shape);
+    format!("{}", func.display_with_registry(&registry))
+}
+
+/// Compile a postcard decoder by lowering through the prototype HIR path.
+///
+/// This is currently limited to the subset supported by the postcard HIR
+/// producer and HIR->RVSDG lowerer.
+pub fn compile_postcard_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
+    let mut func = compiler::build_postcard_decoder_ir_via_hir(shape);
+    compiler::run_default_passes_from_env(&mut func);
+    let linear = linearize::linearize(&mut func);
+    compiler::compile_linear_ir_decoder(&linear, false)
+}
+
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
 ///
 /// Intended for snapshot tests and debugging.

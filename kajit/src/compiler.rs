@@ -2819,6 +2819,331 @@ pub(crate) fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
     lowerer.finish()
 }
 
+struct PostcardHirIrLowerer<'a> {
+    module: &'a hir::Module,
+    decoder: crate::postcard::KajitPostcard,
+    cursor_local: hir::LocalId,
+}
+
+impl<'a> PostcardHirIrLowerer<'a> {
+    fn new(module: &'a hir::Module, function: &'a hir::Function) -> Self {
+        let cursor_local = function
+            .params
+            .iter()
+            .find(|param| param.kind == hir::LocalKind::Param)
+            .map(|param| param.local)
+            .expect("postcard HIR function should have a cursor param");
+        Self {
+            module,
+            decoder: crate::postcard::KajitPostcard,
+            cursor_local,
+        }
+    }
+
+    fn callable_name(&self, call: &hir::CallExpr) -> &str {
+        match call.target {
+            hir::CallTarget::Callable(callable) => &self.module.callables[callable].name,
+        }
+    }
+
+    fn resolve_place(
+        &self,
+        place: &hir::Place,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> (&'static Shape, usize, Option<&'static str>) {
+        match place {
+            hir::Place::Local(local) => {
+                assert_eq!(
+                    *local, dest_local,
+                    "HIR->RVSDG prototype only supports places rooted in the active destination local"
+                );
+                (dest_shape, 0, None)
+            }
+            hir::Place::Field { base, field } => {
+                let (base_shape, base_offset, _) = self.resolve_place(base, dest_local, dest_shape);
+                let (fields, skipped) = collect_fields(base_shape);
+                assert!(
+                    skipped.is_empty(),
+                    "HIR->RVSDG postcard prototype does not support skipped/defaulted fields"
+                );
+                let field_info = fields
+                    .into_iter()
+                    .find(|candidate| candidate.name == field.as_str())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "missing field {field} while lowering HIR place for {}",
+                            base_shape.type_identifier
+                        )
+                    });
+                (
+                    field_info.shape,
+                    base_offset + field_info.offset,
+                    Some(field_info.name),
+                )
+            }
+            hir::Place::Index { .. } => {
+                panic!("HIR->RVSDG postcard prototype does not support indexed places yet")
+            }
+        }
+    }
+
+    fn lower_reader_call(&self, rb: &mut RegionBuilder<'_>, call: &hir::CallExpr, offset: usize) {
+        assert_eq!(
+            call.args,
+            vec![hir::Expr::Local(self.cursor_local)],
+            "postcard HIR readers should consume the cursor local directly"
+        );
+        match self.callable_name(call) {
+            "postcard.read_bool" => self.decoder.lower_read_scalar(rb, offset, ScalarType::Bool),
+            "postcard.read_u8" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U8),
+            "postcard.read_u16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U16),
+            "postcard.read_u32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U32),
+            "postcard.read_u64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U64),
+            "postcard.read_u128" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U128),
+            "postcard.read_usize" => self
+                .decoder
+                .lower_read_scalar(rb, offset, ScalarType::USize),
+            "postcard.read_i8" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I8),
+            "postcard.read_i16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I16),
+            "postcard.read_i32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I32),
+            "postcard.read_i64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I64),
+            "postcard.read_i128" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I128),
+            "postcard.read_isize" => self
+                .decoder
+                .lower_read_scalar(rb, offset, ScalarType::ISize),
+            "postcard.read_str" => self.decoder.lower_read_string(rb, offset, ScalarType::Str),
+            other => panic!("unsupported postcard HIR reader {other}"),
+        }
+    }
+
+    fn with_place_debug<R>(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        place: &hir::Place,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+        f: impl FnOnce(&mut RegionBuilder<'_>, &'static Shape, usize) -> R,
+    ) -> R {
+        let (place_shape, offset, debug_field) = self.resolve_place(place, dest_local, dest_shape);
+        if let Some(field) = debug_field {
+            let debug_value = rb.define_debug_field(field, offset as u32);
+            rb.with_debug_value(Some(debug_value), |field_rb| {
+                f(field_rb, place_shape, offset)
+            })
+        } else {
+            f(rb, place_shape, offset)
+        }
+    }
+
+    fn lower_init_stmt(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        place: &hir::Place,
+        value: &hir::Expr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        match value {
+            hir::Expr::Call(call) => {
+                self.with_place_debug(rb, place, dest_local, dest_shape, |field_rb, _, offset| {
+                    self.lower_reader_call(field_rb, call, offset);
+                });
+            }
+            other => panic!("unsupported HIR init expression in postcard lowering: {other:?}"),
+        }
+    }
+
+    fn lower_option_pair(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        tag_stmt: &hir::Stmt,
+        if_stmt: &hir::Stmt,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> bool {
+        let hir::StmtKind::Init {
+            place: hir::Place::Local(tag_local),
+            value: hir::Expr::Call(tag_call),
+        } = &tag_stmt.kind
+        else {
+            return false;
+        };
+        if self.callable_name(tag_call) != "postcard.read_option_tag" {
+            return false;
+        }
+
+        let hir::StmtKind::If {
+            condition: hir::Expr::Local(condition_local),
+            then_block,
+            else_block: Some(else_block),
+        } = &if_stmt.kind
+        else {
+            return false;
+        };
+        if condition_local != tag_local {
+            return false;
+        }
+
+        let Some(then_final_stmt) = then_block.statements.last() else {
+            return false;
+        };
+        let Some(else_final_stmt) = else_block.statements.last() else {
+            return false;
+        };
+
+        let hir::StmtKind::Init {
+            place: then_place,
+            value:
+                hir::Expr::Variant {
+                    variant: then_variant,
+                    fields: then_fields,
+                    ..
+                },
+        } = &then_final_stmt.kind
+        else {
+            return false;
+        };
+        let hir::StmtKind::Init {
+            place: else_place,
+            value:
+                hir::Expr::Variant {
+                    variant: else_variant,
+                    fields: else_fields,
+                    ..
+                },
+        } = &else_final_stmt.kind
+        else {
+            return false;
+        };
+        if then_variant != "Some"
+            || else_variant != "None"
+            || !else_fields.is_empty()
+            || then_place != else_place
+        {
+            return false;
+        }
+
+        self.with_place_debug(
+            rb,
+            then_place,
+            dest_local,
+            dest_shape,
+            |field_rb, option_shape, offset| {
+                let opt_def = get_option_def(option_shape).unwrap_or_else(|| {
+                    panic!(
+                        "expected Option shape while lowering postcard HIR place, got {}",
+                        option_shape.type_identifier
+                    )
+                });
+                let init_none_fn = opt_def.vtable.init_none as *const u8;
+                let init_some_fn = opt_def.vtable.init_some as *const u8;
+                let inner_layout = opt_def
+                    .t
+                    .layout
+                    .sized_layout()
+                    .expect("Option inner type must be Sized");
+                let bytes = inner_layout.size().max(1);
+                let slots = bytes.div_ceil(8);
+                let scratch_slot = field_rb.alloc_slot();
+                for _ in 1..slots {
+                    let _ = field_rb.alloc_slot();
+                }
+
+                self.decoder.lower_option(
+                    field_rb,
+                    offset,
+                    init_none_fn,
+                    init_some_fn,
+                    scratch_slot,
+                    &mut |inner_rb| {
+                        if is_unit(opt_def.t) {
+                            assert!(
+                                then_block.statements.len() == 1 && then_fields.len() == 1,
+                                "Option<()> lowering should only construct Some(())"
+                            );
+                            return;
+                        }
+
+                        let hir::Expr::Local(payload_local) = &then_fields[0].1 else {
+                            panic!(
+                                "postcard Option HIR lowering expects Some payload to be a local"
+                            );
+                        };
+                        self.lower_block(
+                            inner_rb,
+                            &then_block.statements[..then_block.statements.len() - 1],
+                            *payload_local,
+                            opt_def.t,
+                        );
+                    },
+                );
+            },
+        );
+
+        true
+    }
+
+    fn lower_block(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        statements: &[hir::Stmt],
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        let mut index = 0;
+        while index < statements.len() {
+            if index + 1 < statements.len()
+                && self.lower_option_pair(
+                    rb,
+                    &statements[index],
+                    &statements[index + 1],
+                    dest_local,
+                    dest_shape,
+                )
+            {
+                index += 2;
+                continue;
+            }
+
+            match &statements[index].kind {
+                hir::StmtKind::Init { place, value } => {
+                    self.lower_init_stmt(rb, place, value, dest_local, dest_shape);
+                }
+                hir::StmtKind::Return(None) => {}
+                other => {
+                    panic!("unsupported postcard HIR statement in RVSDG lowering: {other:?}")
+                }
+            }
+            index += 1;
+        }
+    }
+}
+
+pub(crate) fn build_postcard_decoder_ir_via_hir(shape: &'static Shape) -> crate::ir::IrFunc {
+    let module = build_postcard_decoder_hir(shape);
+    let (_, function) = module
+        .functions
+        .iter()
+        .next()
+        .expect("postcard HIR module should contain one function");
+    let out_local = function
+        .params
+        .iter()
+        .find(|param| param.kind == hir::LocalKind::Destination)
+        .map(|param| param.local)
+        .expect("postcard HIR function should have a destination param");
+
+    let lowerer = PostcardHirIrLowerer::new(&module, function);
+    let mut builder = crate::ir::IrBuilder::new(shape);
+    {
+        let mut rb = builder.root_region();
+        lowerer.lower_block(&mut rb, &function.body.statements, out_local, shape);
+        rb.set_results(&[]);
+    }
+    builder.finish()
+}
+
 pub(crate) fn run_default_passes_from_env(func: &mut crate::ir::IrFunc) {
     let pipeline_opts = PipelineOptions::from_env();
     run_configured_default_passes(func, &pipeline_opts);
@@ -3141,7 +3466,7 @@ mod tests {
         name: &'a str,
     }
 
-    #[derive(Facet)]
+    #[derive(Debug, PartialEq, Eq, Facet)]
     struct MaybeBorrowedName<'a> {
         name: Option<&'a str>,
     }
@@ -3327,6 +3652,19 @@ mod tests {
         };
         assert_eq!(variant, "None");
         assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn postcard_hir_ir_path_decodes_option_borrowed_fields() {
+        let decoder = crate::compile_postcard_decoder_via_hir(<MaybeBorrowedName<'static>>::SHAPE);
+
+        let some = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[1, 2, b'h', b'i'])
+            .expect("HIR->RVSDG postcard decoder should decode Some(&str)");
+        assert_eq!(some, MaybeBorrowedName { name: Some("hi") });
+
+        let none = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[0])
+            .expect("HIR->RVSDG postcard decoder should decode None");
+        assert_eq!(none, MaybeBorrowedName { name: None });
     }
 
     #[test]
