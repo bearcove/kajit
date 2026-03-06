@@ -71,6 +71,10 @@ impl Decoder for KajitJson {
                     let loop_out = rb.theta(&[bitset_in], |tb| {
                         let args = tb.region_args(1);
                         let mut bitset_iter = args[0];
+                        let key_ptr_value = tb.define_debug_value("key_ptr");
+                        let key_len_value = tb.define_debug_value("key_len");
+                        let handled_value = tb.define_debug_value("handled_field");
+                        let continue_value = tb.define_debug_value("continue_object");
 
                         let key_ptr_out_addr = tb.slot_addr(key_ptr_slot);
                         let key_len_out_addr = tb.slot_addr(key_len_slot);
@@ -80,18 +84,32 @@ impl Decoder for KajitJson {
                             0,
                             false,
                         );
-                        let key_ptr = tb.read_from_slot(key_ptr_slot);
-                        let key_len = tb.read_from_slot(key_len_slot);
-                        tb.call_intrinsic(ifn(json_intrinsics::kajit_json_expect_colon as _), &[], 0, false);
+                        let key_ptr = tb.with_debug_value(Some(key_ptr_value), |tb| {
+                            tb.read_from_slot(key_ptr_slot)
+                        });
+                        let key_len = tb.with_debug_value(Some(key_len_value), |tb| {
+                            tb.read_from_slot(key_len_slot)
+                        });
+                        tb.call_intrinsic(
+                            ifn(json_intrinsics::kajit_json_expect_colon as _),
+                            &[],
+                            0,
+                            false,
+                        );
 
-                        let mut handled = tb.const_val(0);
+                        let mut handled =
+                            tb.with_debug_value(Some(handled_value), |tb| tb.const_val(0));
                         for field in fields {
+                            let key_match_value =
+                                tb.define_debug_value(format!("is_field_{}", field.name));
                             let expected_ptr = tb.const_val(field.name.as_ptr() as u64);
                             let expected_len = tb.const_val(field.name.len() as u64);
-                            let eq = tb.call_pure(
-                                ifn(json_intrinsics::kajit_json_key_equals as _),
-                                &[key_ptr, key_len, expected_ptr, expected_len],
-                            );
+                            let eq = tb.with_debug_value(Some(key_match_value), |tb| {
+                                tb.call_pure(
+                                    ifn(json_intrinsics::kajit_json_key_equals as _),
+                                    &[key_ptr, key_len, expected_ptr, expected_len],
+                                )
+                            });
                             let one = tb.const_val(1);
                             let not_handled = tb.binop(crate::ir::IrOp::CmpNe, handled, one);
                             let should_handle = tb.binop(crate::ir::IrOp::And, eq, not_handled);
@@ -107,7 +125,10 @@ impl Decoder for KajitJson {
                                         let mask = mb.const_val(1u64 << field.required_index);
                                         let bitset_new =
                                             mb.binop(crate::ir::IrOp::Or, bitset_in, mask);
-                                        let handled_yes = mb.const_val(1);
+                                        let handled_yes = mb.with_debug_value(
+                                            Some(handled_value),
+                                            |mb| mb.const_val(1),
+                                        );
                                         mb.set_results(&[bitset_new, handled_yes]);
                                     }
                                     _ => unreachable!(),
@@ -157,7 +178,9 @@ impl Decoder for KajitJson {
                             let sep_val = pass[1];
                             match idx {
                                 0 => {
-                                    let cont = db.const_val(1);
+                                    let cont = db.with_debug_value(Some(continue_value), |db| {
+                                        db.const_val(1)
+                                    });
                                     db.set_results(&[cont, bitset_in]);
                                 }
                                 1 => {
@@ -170,7 +193,10 @@ impl Decoder for KajitJson {
                                             let bitset_in = pass[0];
                                             match j {
                                                 0 => {
-                                                    let stop = cb.const_val(0);
+                                                    let stop = cb.with_debug_value(
+                                                        Some(continue_value),
+                                                        |cb| cb.const_val(0),
+                                                    );
                                                     cb.set_results(&[stop, bitset_in]);
                                                 }
                                                 1 => {
@@ -183,7 +209,10 @@ impl Decoder for KajitJson {
                                                         0,
                                                         false,
                                                     );
-                                                    let stop = cb.const_val(0);
+                                                    let stop = cb.with_debug_value(
+                                                        Some(continue_value),
+                                                        |cb| cb.const_val(0),
+                                                    );
                                                     cb.set_results(&[stop, bitset_in]);
                                                 }
                                                 _ => unreachable!(),

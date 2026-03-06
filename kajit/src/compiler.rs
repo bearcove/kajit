@@ -377,7 +377,9 @@ fn cfg_semantic_field_dwarf_variables(
                         continue;
                     };
                     let debug_value = &program.debug.values[debug_value_id];
-                    let crate::ir::DebugValueKind::Field { offset } = debug_value.kind;
+                    let crate::ir::DebugValueKind::Field { offset } = debug_value.kind else {
+                        continue;
+                    };
                     if offset != field.offset as u32 || debug_value.name != field.name {
                         continue;
                     }
@@ -609,6 +611,13 @@ struct ScopedDwarfVariable {
     variable: crate::jit_dwarf::DwarfVariable,
 }
 
+#[derive(Debug, Clone)]
+struct VRegDwarfVariableInfo {
+    scope: Option<crate::ir::DebugScopeId>,
+    lexical_intro_ranges: Vec<crate::jit_dwarf::JitDebugRange>,
+    locations: Vec<crate::jit_dwarf::DwarfLocationRange>,
+}
+
 fn merge_jit_debug_ranges(
     mut ranges: Vec<crate::jit_dwarf::JitDebugRange>,
 ) -> Vec<crate::jit_dwarf::JitDebugRange> {
@@ -627,6 +636,53 @@ fn merge_jit_debug_ranges(
         merged.push(range);
     }
     merged
+}
+
+fn merge_dwarf_location_ranges(
+    mut locations: Vec<crate::jit_dwarf::DwarfLocationRange>,
+) -> Vec<crate::jit_dwarf::DwarfLocationRange> {
+    locations.sort_by_key(|location| (location.start, location.end));
+    let mut merged = Vec::<crate::jit_dwarf::DwarfLocationRange>::new();
+    for location in locations {
+        if location.end <= location.start {
+            continue;
+        }
+        if let Some(last) = merged.last_mut()
+            && last.expression == location.expression
+            && last.end >= location.start
+        {
+            last.end = last.end.max(location.end);
+            continue;
+        }
+        merged.push(location);
+    }
+    merged
+}
+
+fn common_debug_scope(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+    scopes: impl IntoIterator<Item = crate::ir::DebugScopeId>,
+) -> Option<crate::ir::DebugScopeId> {
+    let scopes = scopes.into_iter().collect::<Vec<_>>();
+    let first = *scopes.first()?;
+    let mut ancestors = Vec::new();
+    let mut cursor = Some(first);
+    while let Some(scope_id) = cursor {
+        ancestors.push(scope_id);
+        cursor = program.debug.scopes[scope_id].parent;
+    }
+    ancestors.into_iter().find(|candidate| {
+        scopes.iter().all(|scope_id| {
+            let mut cursor = Some(*scope_id);
+            while let Some(current) = cursor {
+                if current == *candidate {
+                    return true;
+                }
+                cursor = program.debug.scopes[current].parent;
+            }
+            false
+        })
+    })
 }
 
 fn build_variable_interval_blocks(
@@ -760,17 +816,16 @@ fn scope_ranges_from_backend(
     memo
 }
 
-fn cfg_value_dwarf_variables(
+fn cfg_vreg_dwarf_variable_infos(
     program: &crate::regalloc_engine::cfg_mir::Program,
     alloc: &crate::regalloc_engine::AllocatedCfgProgram,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
     apply_regalloc_edits: bool,
-    suppress_semantic_vregs: bool,
-) -> Vec<ScopedDwarfVariable> {
+) -> BTreeMap<crate::ir::VReg, VRegDwarfVariableInfo> {
     let Some(backend_debug_info) = backend_debug_info else {
-        return Vec::new();
+        return BTreeMap::new();
     };
     let op_ranges = backend_op_ranges_by_op(backend_debug_info, code_ptr);
     let alloc_func_by_lambda = alloc
@@ -949,47 +1004,135 @@ fn cfg_value_dwarf_variables(
 
     ranges_by_vreg
         .into_iter()
-        .filter_map(
-            |(vreg, mut locations): (
-                crate::ir::VReg,
-                Vec<crate::jit_dwarf::DwarfLocationRange>,
-            )| {
-                if suppress_semantic_vregs && program.vreg_debug_value(vreg).is_some() {
-                    return None;
+        .map(|(vreg, locations)| {
+            (
+                vreg,
+                VRegDwarfVariableInfo {
+                    scope: program.vreg_debug_scope(vreg),
+                    lexical_intro_ranges: lexical_intro_ranges_by_vreg
+                        .remove(&vreg)
+                        .unwrap_or_default(),
+                    locations: merge_dwarf_location_ranges(locations),
+                },
+            )
+        })
+        .collect()
+}
+
+fn cfg_value_dwarf_variables(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
+    code_ptr: *const u8,
+    target_arch: crate::jit_dwarf::DwarfTargetArch,
+    apply_regalloc_edits: bool,
+    suppress_semantic_vregs: bool,
+) -> Vec<ScopedDwarfVariable> {
+    cfg_vreg_dwarf_variable_infos(
+        program,
+        alloc,
+        backend_debug_info,
+        code_ptr,
+        target_arch,
+        apply_regalloc_edits,
+    )
+    .into_iter()
+    .filter_map(|(vreg, info): (crate::ir::VReg, VRegDwarfVariableInfo)| {
+        if suppress_semantic_vregs && program.vreg_debug_value(vreg).is_some() {
+            return None;
+        }
+        if info.locations.is_empty() {
+            return None;
+        }
+        let mut lexical_ranges = info.lexical_intro_ranges;
+        lexical_ranges.extend(info.locations.iter().map(|location| {
+            crate::jit_dwarf::JitDebugRange {
+                low_pc: location.start,
+                high_pc: location.end,
+            }
+        }));
+        let lexical_ranges = merge_jit_debug_ranges(lexical_ranges);
+        let variable = crate::jit_dwarf::DwarfVariable {
+            name: format!("v{}", vreg.index()),
+            location: crate::jit_dwarf::DwarfVariableLocation::List(info.locations),
+        };
+        Some(ScopedDwarfVariable {
+            scope: info.scope,
+            lexical_ranges,
+            variable,
+        })
+    })
+    .collect()
+}
+
+fn cfg_semantic_named_dwarf_variables(
+    program: &crate::regalloc_engine::cfg_mir::Program,
+    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
+    code_ptr: *const u8,
+    target_arch: crate::jit_dwarf::DwarfTargetArch,
+    apply_regalloc_edits: bool,
+) -> Vec<ScopedDwarfVariable> {
+    let mut vregs_by_value = BTreeMap::<crate::ir::DebugValueId, Vec<crate::ir::VReg>>::new();
+    for vreg_index in 0..program.vreg_count {
+        let vreg = crate::ir::VReg::new(vreg_index);
+        let Some(debug_value_id) = program.vreg_debug_value(vreg) else {
+            continue;
+        };
+        let debug_value = &program.debug.values[debug_value_id];
+        if !matches!(debug_value.kind, crate::ir::DebugValueKind::Named) {
+            continue;
+        }
+        vregs_by_value.entry(debug_value_id).or_default().push(vreg);
+    }
+
+    let vreg_infos = cfg_vreg_dwarf_variable_infos(
+        program,
+        alloc,
+        backend_debug_info,
+        code_ptr,
+        target_arch,
+        apply_regalloc_edits,
+    );
+
+    vregs_by_value
+        .into_iter()
+        .filter_map(|(debug_value_id, vregs)| {
+            let debug_value = &program.debug.values[debug_value_id];
+            let mut scopes = Vec::new();
+            let mut lexical_ranges = Vec::new();
+            let mut locations = Vec::new();
+            for vreg in vregs {
+                let Some(info) = vreg_infos.get(&vreg) else {
+                    continue;
+                };
+                if let Some(scope) = info.scope {
+                    scopes.push(scope);
                 }
-                locations.sort_by_key(|loc| (loc.start, loc.end));
-                let mut merged = Vec::<crate::jit_dwarf::DwarfLocationRange>::new();
-                for location in locations {
-                    if let Some(last) = merged.last_mut()
-                        && last.end == location.start
-                        && last.expression == location.expression
-                    {
-                        last.end = location.end;
-                        continue;
-                    }
-                    merged.push(location);
-                }
-                let mut lexical_ranges = lexical_intro_ranges_by_vreg
-                    .remove(&vreg)
-                    .unwrap_or_default();
-                lexical_ranges.extend(merged.iter().map(|location| {
+                lexical_ranges.extend(info.lexical_intro_ranges.clone());
+                lexical_ranges.extend(info.locations.iter().map(|location| {
                     crate::jit_dwarf::JitDebugRange {
                         low_pc: location.start,
                         high_pc: location.end,
                     }
                 }));
-                let lexical_ranges = merge_jit_debug_ranges(lexical_ranges);
-                let variable = crate::jit_dwarf::DwarfVariable {
-                    name: format!("v{}", vreg.index()),
-                    location: crate::jit_dwarf::DwarfVariableLocation::List(merged),
-                };
-                Some(ScopedDwarfVariable {
-                    scope: program.vreg_debug_scope(vreg),
-                    lexical_ranges,
-                    variable,
-                })
-            },
-        )
+                locations.extend(info.locations.clone());
+            }
+            let locations = merge_dwarf_location_ranges(locations);
+            if locations.is_empty() {
+                return None;
+            }
+            let lexical_ranges = merge_jit_debug_ranges(lexical_ranges);
+            let scope = common_debug_scope(program, scopes).or(program.debug.root_scope);
+            Some(ScopedDwarfVariable {
+                scope,
+                lexical_ranges,
+                variable: crate::jit_dwarf::DwarfVariable {
+                    name: debug_value.name.clone(),
+                    location: crate::jit_dwarf::DwarfVariableLocation::List(locations),
+                },
+            })
+        })
         .collect()
 }
 
@@ -1003,6 +1146,12 @@ fn cfg_mir_dwarf_variables(
     apply_regalloc_edits: bool,
 ) -> crate::jit_dwarf::JitDebugSubprogram {
     let mut variables = deser_dwarf_variables(target_arch);
+    let suppress_semantic_vregs = root_shape.is_some()
+        || program
+            .debug
+            .values
+            .iter()
+            .any(|(_, value)| matches!(value.kind, crate::ir::DebugValueKind::Named));
     let mut cfg_variables = cfg_value_dwarf_variables(
         program,
         alloc,
@@ -1010,8 +1159,16 @@ fn cfg_mir_dwarf_variables(
         code_ptr,
         target_arch,
         apply_regalloc_edits,
-        root_shape.is_some(),
+        suppress_semantic_vregs,
     );
+    cfg_variables.extend(cfg_semantic_named_dwarf_variables(
+        program,
+        alloc,
+        backend_debug_info,
+        code_ptr,
+        target_arch,
+        apply_regalloc_edits,
+    ));
     if let Some(root_shape) = root_shape {
         cfg_variables.extend(cfg_semantic_field_dwarf_variables(
             root_shape,
@@ -3454,5 +3611,232 @@ mod tests {
         );
 
         assert!(vars.is_empty(), "semantic-owned vregs should be hidden");
+    }
+
+    #[test]
+    fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
+        let v0 = crate::ir::VReg::new(0);
+        let v1 = crate::ir::VReg::new(1);
+        let inst0 = crate::regalloc_engine::cfg_mir::InstId::new(0);
+        let inst1 = crate::regalloc_engine::cfg_mir::InstId::new(1);
+        let inst2 = crate::regalloc_engine::cfg_mir::InstId::new(2);
+        let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
+        let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
+        let op0 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst0);
+        let op1 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst1);
+        let op2 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst2);
+        let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
+        let root_scope = crate::ir::DebugScopeId::new(0);
+        let func = crate::regalloc_engine::cfg_mir::Function {
+            id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+            lambda_id: crate::ir::LambdaId::new(0),
+            entry: block_id,
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+                id: block_id,
+                params: Vec::new(),
+                insts: vec![inst0, inst1, inst2],
+                term: term_id,
+                preds: Vec::new(),
+                succs: Vec::new(),
+            }],
+            edges: Vec::new(),
+            insts: vec![
+                crate::regalloc_engine::cfg_mir::Inst {
+                    id: inst0,
+                    op: crate::linearize::LinearOp::Const { dst: v0, value: 1 },
+                    operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                        vreg: v0,
+                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
+                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                },
+                crate::regalloc_engine::cfg_mir::Inst {
+                    id: inst1,
+                    op: crate::linearize::LinearOp::Copy { dst: v1, src: v0 },
+                    operands: vec![
+                        crate::regalloc_engine::cfg_mir::Operand {
+                            vreg: v0,
+                            kind: crate::regalloc_engine::cfg_mir::OperandKind::Use,
+                            class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                            fixed: None,
+                        },
+                        crate::regalloc_engine::cfg_mir::Operand {
+                            vreg: v1,
+                            kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
+                            class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                            fixed: None,
+                        },
+                    ],
+                    clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                },
+                crate::regalloc_engine::cfg_mir::Inst {
+                    id: inst2,
+                    op: crate::linearize::LinearOp::WriteToField {
+                        src: v1,
+                        offset: 0,
+                        width: crate::ir::Width::W1,
+                    },
+                    operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                        vreg: v1,
+                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Use,
+                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                },
+            ],
+            terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        };
+        let mut scopes = crate::ir::Arena::new();
+        scopes.push(crate::ir::DebugScope {
+            parent: None,
+            kind: crate::ir::DebugScopeKind::LambdaBody {
+                lambda_id: crate::ir::LambdaId::new(0),
+            },
+        });
+        let mut values = crate::ir::Arena::new();
+        let debug_flag = values.push(crate::ir::DebugValue {
+            name: "flag".to_string(),
+            kind: crate::ir::DebugValueKind::Named,
+        });
+        let program = crate::regalloc_engine::cfg_mir::Program {
+            funcs: vec![func],
+            vreg_count: 2,
+            slot_count: 0,
+            debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+                scopes,
+                values,
+                root_scope: Some(root_scope),
+                op_scopes: std::collections::HashMap::from([
+                    ((crate::ir::LambdaId::new(0), op0), root_scope),
+                    ((crate::ir::LambdaId::new(0), op1), root_scope),
+                    ((crate::ir::LambdaId::new(0), op2), root_scope),
+                    ((crate::ir::LambdaId::new(0), term_op), root_scope),
+                ]),
+                op_values: std::collections::HashMap::from([
+                    ((crate::ir::LambdaId::new(0), op0), debug_flag),
+                    ((crate::ir::LambdaId::new(0), op1), debug_flag),
+                ]),
+                vreg_scopes: vec![Some(root_scope), Some(root_scope)],
+                vreg_values: vec![Some(debug_flag), Some(debug_flag)],
+            },
+        };
+        #[cfg(target_arch = "aarch64")]
+        let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
+        #[cfg(target_arch = "x86_64")]
+        let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+        let alloc = crate::regalloc_engine::AllocatedCfgProgram {
+            cfg_program: program.clone(),
+            functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
+                lambda_id: crate::ir::LambdaId::new(0),
+                num_spillslots: 0,
+                edits: Vec::new(),
+                op_allocs: std::collections::HashMap::from([
+                    (op0, vec![regalloc2::Allocation::reg(reg)]),
+                    (
+                        op1,
+                        vec![
+                            regalloc2::Allocation::reg(reg),
+                            regalloc2::Allocation::reg(reg),
+                        ],
+                    ),
+                    (op2, vec![regalloc2::Allocation::reg(reg)]),
+                ]),
+                op_operands: std::collections::HashMap::from([
+                    (
+                        op0,
+                        vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
+                    ),
+                    (
+                        op1,
+                        vec![
+                            (v0, crate::regalloc_engine::cfg_mir::OperandKind::Use),
+                            (v1, crate::regalloc_engine::cfg_mir::OperandKind::Def),
+                        ],
+                    ),
+                    (
+                        op2,
+                        vec![(v1, crate::regalloc_engine::cfg_mir::OperandKind::Use)],
+                    ),
+                    (term_op, Vec::new()),
+                ]),
+                edge_edits: Vec::new(),
+                return_result_allocs: Vec::new(),
+            }],
+        };
+        let backend_debug_info = crate::ir_backend::BackendDebugInfo {
+            op_infos: vec![
+                crate::ir_backend::BackendOpDebugInfo {
+                    lambda_id: 0,
+                    op_id: op0,
+                    line: 1,
+                    code_ranges: vec![crate::ir_backend::BackendCodeRange {
+                        start_offset: 0,
+                        end_offset: 4,
+                    }],
+                },
+                crate::ir_backend::BackendOpDebugInfo {
+                    lambda_id: 0,
+                    op_id: op1,
+                    line: 2,
+                    code_ranges: vec![crate::ir_backend::BackendCodeRange {
+                        start_offset: 4,
+                        end_offset: 8,
+                    }],
+                },
+                crate::ir_backend::BackendOpDebugInfo {
+                    lambda_id: 0,
+                    op_id: op2,
+                    line: 3,
+                    code_ranges: vec![crate::ir_backend::BackendCodeRange {
+                        start_offset: 8,
+                        end_offset: 12,
+                    }],
+                },
+                crate::ir_backend::BackendOpDebugInfo {
+                    lambda_id: 0,
+                    op_id: term_op,
+                    line: 4,
+                    code_ranges: vec![crate::ir_backend::BackendCodeRange {
+                        start_offset: 12,
+                        end_offset: 16,
+                    }],
+                },
+            ],
+        };
+
+        let vars = cfg_semantic_named_dwarf_variables(
+            &program,
+            &alloc,
+            Some(&backend_debug_info),
+            0x1000 as *const u8,
+            jit_dwarf_target_arch(),
+            true,
+        );
+
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].scope, Some(root_scope));
+        assert_eq!(vars[0].variable.name, "flag");
+        assert_eq!(
+            vars[0].lexical_ranges,
+            vec![crate::jit_dwarf::JitDebugRange {
+                low_pc: 0x1000,
+                high_pc: 0x100c,
+            }]
+        );
+        match &vars[0].variable.location {
+            crate::jit_dwarf::DwarfVariableLocation::List(locations) => {
+                assert_eq!(locations.len(), 1);
+                assert_eq!(locations[0].start, 0x1004);
+                assert_eq!(locations[0].end, 0x100c);
+            }
+            crate::jit_dwarf::DwarfVariableLocation::Expr(_) => {
+                panic!("semantic named vars should use ranged locations")
+            }
+        }
     }
 }
