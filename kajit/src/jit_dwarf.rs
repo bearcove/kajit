@@ -604,7 +604,10 @@ fn collect_lexical_blocks_in_preorder<'a>(
     }
 }
 
-pub fn build_debug_ranges_section(lexical_blocks: &[JitDebugLexicalBlock]) -> (Vec<u8>, Vec<u32>) {
+pub fn build_debug_ranges_section(
+    lexical_blocks: &[JitDebugLexicalBlock],
+    code_address: u64,
+) -> (Vec<u8>, Vec<u32>) {
     let mut section = Vec::<u8>::new();
     let mut offsets = Vec::<u32>::new();
     for lexical_block in lexical_blocks_in_preorder(lexical_blocks) {
@@ -613,8 +616,8 @@ pub fn build_debug_ranges_section(lexical_blocks: &[JitDebugLexicalBlock]) -> (V
             if range.high_pc <= range.low_pc {
                 continue;
             }
-            section.extend_from_slice(&range.low_pc.to_le_bytes());
-            section.extend_from_slice(&range.high_pc.to_le_bytes());
+            section.extend_from_slice(&range.low_pc.saturating_sub(code_address).to_le_bytes());
+            section.extend_from_slice(&range.high_pc.saturating_sub(code_address).to_le_bytes());
         }
         section.extend_from_slice(&0u64.to_le_bytes());
         section.extend_from_slice(&0u64.to_le_bytes());
@@ -625,7 +628,10 @@ pub fn build_debug_ranges_section(lexical_blocks: &[JitDebugLexicalBlock]) -> (V
 pub fn build_debug_ranges_section_from_debug_info(
     debug_info: &JitDebugInfo,
 ) -> (Vec<u8>, Vec<u32>) {
-    build_debug_ranges_section(&debug_info.subprogram.lexical_blocks)
+    build_debug_ranges_section(
+        &debug_info.subprogram.lexical_blocks,
+        debug_info.code_address,
+    )
 }
 
 pub fn dwarf_register_from_hw_encoding(target_arch: DwarfTargetArch, hw_enc: u8) -> Option<u16> {
@@ -1160,6 +1166,39 @@ mod tests {
         let end = u64::from_le_bytes(loc[8..16].try_into().unwrap());
         assert_eq!(start, 0x4);
         assert_eq!(end, 0x8);
+    }
+
+    #[test]
+    fn debug_ranges_encode_ranges_relative_to_cu_low_pc() {
+        let lexical_blocks = vec![JitDebugLexicalBlock {
+            ranges: vec![
+                JitDebugRange {
+                    low_pc: 0x1010,
+                    high_pc: 0x1020,
+                },
+                JitDebugRange {
+                    low_pc: 0x1030,
+                    high_pc: 0x1040,
+                },
+            ],
+            variables: Vec::new(),
+            lexical_blocks: Vec::new(),
+        }];
+
+        let (ranges, offsets) = build_debug_ranges_section(&lexical_blocks, 0x1000);
+        assert_eq!(offsets, vec![0]);
+        let first_start = u64::from_le_bytes(ranges[0..8].try_into().unwrap());
+        let first_end = u64::from_le_bytes(ranges[8..16].try_into().unwrap());
+        let second_start = u64::from_le_bytes(ranges[16..24].try_into().unwrap());
+        let second_end = u64::from_le_bytes(ranges[24..32].try_into().unwrap());
+        let terminator_start = u64::from_le_bytes(ranges[32..40].try_into().unwrap());
+        let terminator_end = u64::from_le_bytes(ranges[40..48].try_into().unwrap());
+        assert_eq!(first_start, 0x10);
+        assert_eq!(first_end, 0x20);
+        assert_eq!(second_start, 0x30);
+        assert_eq!(second_end, 0x40);
+        assert_eq!(terminator_start, 0);
+        assert_eq!(terminator_end, 0);
     }
 
     #[test]
