@@ -543,6 +543,7 @@ The script resolves the concrete test binary via `cargo nextest list`, then laun
 - Sets `KAJIT_DEBUG=1` (enables DWARF `.debug_line` + `.debug_info` + `.debug_abbrev` emission)
 - Enables the GDB JIT loader (`settings set plugin.jit-loader.gdb.enable on`)
 - Sets a breakpoint on `__jit_debug_register_code`
+- For corpus tests, tries to build a line-synchronized interpreter reference and imports LLDB helper commands
 - Passes test args `--exact <test_name> --nocapture`
 - Leaves LLDB interactive (does not auto-run; type `run` yourself)
 
@@ -554,6 +555,17 @@ When `KAJIT_DEBUG=1`:
 3. A minimal DWARF v4 compilation unit is built (`.debug_info` referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`)
 4. The JIT ELF registered via the GDB JIT interface contains `.text`, `.symtab`, `.debug_line`, `.debug_abbrev`, and `.debug_info`
 5. LLDB (with JIT loader enabled) parses the ELF, loads the line table, and maps code offsets to `.cfg-mir` listing lines
+
+If the selected test is one of the generated corpus cases, the wrapper also:
+1. Extracts CFG-MIR text with `xtask corpus-cfg-mir`
+2. Builds an interpreter-side per-line reference with `xtask debug-cfg-mir lldb-ref --corpus-test ...`
+3. Imports `scripts/kajit_lldb_side_by_side.py`
+
+That helper gives you LLDB commands keyed by the same CFG-MIR line numbers as DWARF:
+- `kajit-here` — print interpreter reference for the current JIT source line
+- `kajit-list` — list available reference lines, or dump one explicit line
+- `kajit-step` — `thread step-over`, then print interpreter reference for the new line
+- `kajit-help` — summarize the helper commands
 
 ### LLDB commands for JIT code
 
@@ -584,6 +596,12 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 # Once stopped in JIT code, source-level stepping uses the .cfg-mir listing
 (lldb) source info
 (lldb) step
+
+# Show interpreter-side expectations for the current JIT line
+(lldb) kajit-here
+
+# Step once, then print the matching interpreter reference
+(lldb) kajit-step
 ```
 
 ### Key files
@@ -594,6 +612,7 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 | `kajit/src/jit_debug.rs` | GDB JIT interface: builds in-memory ELF, registers with debugger, writes perf map |
 | `kajit/src/compiler.rs` | Glue: `build_dwarf_from_source_map()` converts backend source maps to DWARF |
 | `scripts/lldb-test.sh` | Standalone LLDB launcher for one exact test |
+| `scripts/kajit_lldb_side_by_side.py` | LLDB helper commands that map current DWARF line back to interpreter reference |
 | `/tmp/kajit-debug/*.cfg-mir` | Generated listing files (one per JIT-compiled type) |
 | `/tmp/perf-<pid>.map` | perf sampling map (always written, even without `KAJIT_DEBUG`) |
 

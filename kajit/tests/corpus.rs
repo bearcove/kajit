@@ -460,6 +460,7 @@ fn debug_cfg_mir_command_from_env() -> Result<kajit_mir::DebugCfgMirCommand, Str
         "run" => Ok(kajit_mir::DebugCfgMirCommand::Run),
         "trace" => Ok(kajit_mir::DebugCfgMirCommand::Trace),
         "diff" => Ok(kajit_mir::DebugCfgMirCommand::Diff),
+        "lldb-ref" => Ok(kajit_mir::DebugCfgMirCommand::LldbRef),
         "why-vreg" => {
             let raw = std::env::var(DEBUG_CFG_MIR_VREG_ENV)
                 .map_err(|_| format!("missing {DEBUG_CFG_MIR_VREG_ENV}"))?;
@@ -513,11 +514,16 @@ where
             eprintln!("failed to parse CFG-MIR from {}: {err}", path.display());
             std::process::exit(1);
         });
-    let output =
-        kajit_mir::run_debug_cfg_mir_command(&program, input, &command).unwrap_or_else(|err| {
-            eprintln!("debug CFG-MIR command failed: {err}");
-            std::process::exit(1);
-        });
+    let output = kajit_mir::run_debug_cfg_mir_command_with_registry(
+        &program,
+        input,
+        &command,
+        Some(&registry),
+    )
+    .unwrap_or_else(|err| {
+        eprintln!("debug CFG-MIR command failed: {err}");
+        std::process::exit(1);
+    });
     println!("KAJIT_CASE_DEBUG_CFG_MIR_BEGIN");
     print!("{output}");
     if !output.ends_with('\n') {

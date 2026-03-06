@@ -9,6 +9,7 @@ fi
 
 filter="$1"
 export KAJIT_DEBUG=1
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 json_output="$(cargo nextest list -p kajit -E "test(=$filter)" --message-format json)"
 
@@ -76,9 +77,32 @@ test_name="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["test_name"
 echo "KAJIT_DEBUG=1"
 echo "binary: $binary_path"
 echo "test:   $test_name"
+extra_lldb_args=()
+
+cfg_mir_tmp="$(mktemp /tmp/kajit-lldb-cfg-XXXX.cfg)"
+ref_tmp="$(mktemp /tmp/kajit-lldb-ref-XXXX.txt)"
+if cargo run -q --manifest-path "$repo_root/xtask/Cargo.toml" -- corpus-cfg-mir "$filter" >"$cfg_mir_tmp" 2>/dev/null; then
+  if cargo run -q --manifest-path "$repo_root/xtask/Cargo.toml" -- \
+    debug-cfg-mir lldb-ref "$cfg_mir_tmp" --corpus-test "$filter" >"$ref_tmp" 2>/dev/null; then
+    export KAJIT_LLDB_REF_FILE="$ref_tmp"
+    extra_lldb_args+=(
+      -o "command script import $repo_root/scripts/kajit_lldb_side_by_side.py"
+    )
+    echo "side-by-side reference: $ref_tmp"
+    echo "LLDB helper commands: kajit-here, kajit-list, kajit-step, kajit-help"
+  else
+    rm -f "$ref_tmp"
+    echo "note: failed to build side-by-side interpreter reference; continuing with plain LLDB"
+  fi
+else
+  rm -f "$cfg_mir_tmp" "$ref_tmp"
+  echo "note: no corpus CFG-MIR artifact available for $filter; continuing with plain LLDB"
+fi
+
 echo "LLDB will start without auto-run. Type 'run' when ready."
 
 exec lldb \
   -o 'settings set plugin.jit-loader.gdb.enable on' \
   -o 'breakpoint set -n __jit_debug_register_code' \
+  "${extra_lldb_args[@]}" \
   -- "$binary_path" --exact "$test_name" --nocapture
