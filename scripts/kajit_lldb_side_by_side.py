@@ -115,6 +115,7 @@ def kajit_step(debugger, _command, result, _internal_dict):
 
 def kajit_help(_debugger, _command, result, _internal_dict):
     parts = [
+        "kajit-break [regex] - set a JIT-code breakpoint (default regex: kajit::decode::)",
         "kajit-here [line]  - show interpreter reference for current or explicit CFG-MIR line",
         "kajit-list [line]  - list available reference lines or dump one explicit line",
         "kajit-step         - thread step-over, then print interpreter reference for the new line",
@@ -124,7 +125,18 @@ def kajit_help(_debugger, _command, result, _internal_dict):
     result.PutCString("\n".join(parts))
 
 
+def kajit_break(debugger, command, result, _internal_dict):
+    raw = command.strip()
+    pattern = raw if raw else "kajit::decode::"
+    escaped = pattern.replace("\\", "\\\\").replace('"', '\\"')
+    debugger.HandleCommand(f'breakpoint set -r "{escaped}"')
+    result.PutCString(f"set JIT breakpoint regex: {pattern}")
+
+
 def __lldb_init_module(debugger, _internal_dict):
+    debugger.HandleCommand(
+        "command script add -f kajit_lldb_side_by_side.kajit_break kajit-break"
+    )
     debugger.HandleCommand(
         "command script add -f kajit_lldb_side_by_side.kajit_here kajit-here"
     )
