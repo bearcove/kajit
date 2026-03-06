@@ -10,3 +10,4 @@ bench_report/
 .handoffs/
 .playwright-mcp/
 *.v3*
+scripts/__pycache__/

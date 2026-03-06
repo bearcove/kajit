@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 
 use crate::arch::{BASE_FRAME, EmitCtx};
 use crate::ir::Width;
-use crate::ir_backend::LinearBackendResult;
+use crate::ir_backend::{
+    BackendCodeRange, BackendDebugInfo, BackendOpDebugInfo, LinearBackendResult,
+};
 use crate::linearize::{BinOpKind, LinearOp, UnaryOpKind};
 use crate::recipe::{Op, Recipe};
 use crate::regalloc_engine::{AllocatedCfgProgram, cfg_mir};
@@ -62,6 +64,7 @@ pub(crate) struct Lowerer {
     pub(crate) apply_regalloc_edits: bool,
     pub(crate) no_edit_edge_tmp_base: u32,
     pub(crate) edge_args_by_lambda: BTreeMap<u32, BTreeMap<cfg_mir::EdgeId, Vec<cfg_mir::EdgeArg>>>,
+    pub(crate) backend_debug_info: BackendDebugInfo,
 }
 
 #[derive(Clone, Copy)]
@@ -384,7 +387,30 @@ impl Lowerer {
             apply_regalloc_edits,
             no_edit_edge_tmp_base,
             edge_args_by_lambda,
+            backend_debug_info: BackendDebugInfo::default(),
         }
+    }
+
+    fn record_debug_op_range(
+        &mut self,
+        lambda_id: u32,
+        op_id: cfg_mir::OpId,
+        line: u32,
+        start: u32,
+        end: u32,
+    ) {
+        if end <= start {
+            return;
+        }
+        self.backend_debug_info.op_infos.push(BackendOpDebugInfo {
+            lambda_id,
+            op_id,
+            line,
+            code_ranges: vec![BackendCodeRange {
+                start_offset: start,
+                end_offset: end,
+            }],
+        });
     }
 
     pub(super) fn slot_off(&self, s: crate::ir::SlotId) -> u32 {
@@ -817,6 +843,7 @@ impl Lowerer {
                         self.current_inst_allocs =
                             Some(self.canonical_allocs_for_operands(&inst.operands));
                     }
+                    let start_offset = self.ectx.emit.current_offset();
                     if self.apply_regalloc_edits {
                         self.apply_regalloc_edits(op_id, InstPosition::Before);
                     }
@@ -824,6 +851,8 @@ impl Lowerer {
                     if self.apply_regalloc_edits {
                         self.apply_regalloc_edits(op_id, InstPosition::After);
                     }
+                    let end_offset = self.ectx.emit.current_offset();
+                    self.record_debug_op_range(lambda_id, op_id, line, start_offset, end_offset);
                     self.current_inst_allocs = None;
                     self.current_op_id = None;
                 }
@@ -839,7 +868,10 @@ impl Lowerer {
                     column: 0,
                 });
                 let next_block = func.blocks.get(block_index + 1);
+                let start_offset = self.ectx.emit.current_offset();
                 self.emit_terminator(func, block, next_block, term_op);
+                let end_offset = self.ectx.emit.current_offset();
+                self.record_debug_op_range(lambda_id, term_op, line, start_offset, end_offset);
             }
 
             self.flush_all_vregs();
@@ -860,6 +892,7 @@ impl Lowerer {
             buf,
             entry,
             source_map,
+            backend_debug_info: Some(self.backend_debug_info),
         }
     }
 }

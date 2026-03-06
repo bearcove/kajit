@@ -547,6 +547,19 @@ The script resolves the concrete test binary via `cargo nextest list`, then laun
 - Passes test args `--exact <test_name> --nocapture`
 - Leaves LLDB interactive (does not auto-run; type `run` yourself)
 
+For scripted variable-availability checks, use:
+
+```bash
+scripts/lldb-check-vars.sh json::bool_true_false \
+  4:v46:unavailable \
+  5:v46:available \
+  5:v47:unlisted
+```
+
+This runs LLDB in batch mode, steps to each requested CFG-MIR line in order, and
+fails if a variable does not match the expected `available` / `unavailable` /
+`listed` / `unlisted` state.
+
 ### How it works
 
 When `KAJIT_DEBUG=1`:
@@ -565,6 +578,7 @@ That helper gives you LLDB commands keyed by the same CFG-MIR line numbers as DW
 - `kajit-bytes [count]` — read bytes at `input_ptr` as hex plus printable ASCII
 - `kajit-text [count]` — read bytes at `input_ptr` as printable text
 - `kajit-break [regex]` — set a breakpoint on registered JIT decode code
+- `kajit-listed-vars` — print local names visible in the current lexical scope
 - `kajit-here` — print interpreter reference for the current JIT source line
 - `kajit-list` — list available reference lines, or dump one explicit line
 - `kajit-step` — `thread step-over`, then print interpreter reference for the new line
@@ -644,6 +658,7 @@ When LLDB stops at `__jit_debug_register_code`, the JIT code has just been regis
 | `kajit/src/jit_debug.rs` | GDB JIT interface: builds in-memory ELF, registers with debugger, writes perf map |
 | `kajit/src/compiler.rs` | Glue: `build_dwarf_from_source_map()` converts backend source maps to DWARF |
 | `scripts/lldb-test.sh` | Standalone LLDB launcher for one exact test |
+| `scripts/lldb-check-vars.sh` | Batch LLDB checker for per-line variable availability |
 | `scripts/kajit_lldb_side_by_side.py` | LLDB helper commands that map current DWARF line back to interpreter reference |
 | `/tmp/kajit-debug/*.cfg-mir` | Generated listing files (one per JIT-compiled type) |
 | `/tmp/perf-<pid>.map` | perf sampling map (always written, even without `KAJIT_DEBUG`) |
