@@ -578,6 +578,7 @@ real:
 - `ctx`
 - `error_code`
 - `error_offset`
+- CFG-MIR def locals such as `v3`, `v46`, `v2384`
 
 These are fixed-runtime-state variables, not reconstructed semantic locals.
 They are useful with:
@@ -587,7 +588,9 @@ They are useful with:
 ```
 
 Vreg/temporary naming is not wired into DWARF yet. Unnamed CFG-MIR temporaries
-still need debug metadata before they can appear as meaningful LLDB variables.
+still fall back to `vN` naming. The current `vN` locals are emitted only on the
+machine-code ranges for their defining CFG-MIR op, so they are most useful when
+stopped exactly on that line.
 
 ### LLDB commands for JIT code
 
