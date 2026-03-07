@@ -606,6 +606,10 @@ pub enum IrOp {
     /// Inputs: [StateCursor]. Outputs: [Data, StateCursor].
     SaveCursor,
 
+    /// Snapshot the one-past-end input pointer into a data value.
+    /// Inputs: [StateCursor]. Outputs: [Data, StateCursor].
+    SaveInputEnd,
+
     /// Restore cursor from a saved snapshot.
     /// Inputs: [Data, StateCursor]. Outputs: [StateCursor].
     RestoreCursor,
@@ -688,9 +692,29 @@ pub enum IrOp {
     /// Inputs: [Data, Data]. Outputs: [Data].
     Xor,
 
+    /// Compare equal. Returns 1 if lhs == rhs, else 0.
+    /// Inputs: [Data, Data]. Outputs: [Data].
+    CmpEq,
+
     /// Compare not-equal. Returns 1 if lhs != rhs, else 0.
     /// Inputs: [Data, Data]. Outputs: [Data].
     CmpNe,
+
+    /// Compare less-than. Returns 1 if lhs < rhs, else 0.
+    /// Inputs: [Data, Data]. Outputs: [Data].
+    CmpLt,
+
+    /// Compare less-than-or-equal. Returns 1 if lhs <= rhs, else 0.
+    /// Inputs: [Data, Data]. Outputs: [Data].
+    CmpLe,
+
+    /// Compare greater-than. Returns 1 if lhs > rhs, else 0.
+    /// Inputs: [Data, Data]. Outputs: [Data].
+    CmpGt,
+
+    /// Compare greater-than-or-equal. Returns 1 if lhs >= rhs, else 0.
+    /// Inputs: [Data, Data]. Outputs: [Data].
+    CmpGe,
 
     /// Zigzag decode for postcard signed integers.
     /// Inputs: [Data]. Outputs: [Data].
@@ -788,7 +812,12 @@ impl IrOp {
             | IrOp::Shr
             | IrOp::Shl
             | IrOp::Xor
+            | IrOp::CmpEq
             | IrOp::CmpNe
+            | IrOp::CmpLt
+            | IrOp::CmpLe
+            | IrOp::CmpGt
+            | IrOp::CmpGe
             | IrOp::ZigzagDecode { .. }
             | IrOp::SignExtend { .. }
             | IrOp::SlotAddr { .. }
@@ -797,7 +826,7 @@ impl IrOp {
             // Cursor ops
             IrOp::ReadBytes { count } => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(*count)),
             IrOp::AdvanceCursor { count } => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(*count)),
-            IrOp::PeekByte | IrOp::SaveCursor | IrOp::BoundsCheck { .. } => {
+            IrOp::PeekByte | IrOp::SaveCursor | IrOp::SaveInputEnd | IrOp::BoundsCheck { .. } => {
                 (Effect::Domain(CURSOR_STATE_DOMAIN), Some(0))
             }
             IrOp::AdvanceCursorBy
@@ -1466,6 +1495,30 @@ impl<'a> RegionBuilder<'a> {
                 Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope),
             ],
             kind: NodeKind::Simple(IrOp::SaveCursor),
+        });
+        self.set_state_source(
+            CURSOR_STATE_DOMAIN,
+            PortSource::Node(OutputRef { node, index: 1 }),
+        );
+        PortSource::Node(OutputRef { node, index: 0 })
+    }
+
+    /// Save the current input_end pointer. Returns data output.
+    pub fn save_input_end(&mut self) -> PortSource {
+        let data_out = self.data_output();
+        let node = self.add_node(Node {
+            region: self.region,
+            debug_scope: self.debug_scope,
+            debug_value: self.debug_value,
+            inputs: vec![InputPort {
+                kind: CURSOR_STATE_PORT,
+                source: self.state_source(CURSOR_STATE_DOMAIN),
+            }],
+            outputs: vec![
+                data_out,
+                Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope),
+            ],
+            kind: NodeKind::Simple(IrOp::SaveInputEnd),
         });
         self.set_state_source(
             CURSOR_STATE_DOMAIN,
@@ -2453,6 +2506,7 @@ impl IrFunc {
             IrOp::AdvanceCursorBy => write!(f, "AdvanceCursorBy"),
             IrOp::BoundsCheck { count } => write!(f, "BoundsCheck({count})"),
             IrOp::SaveCursor => write!(f, "SaveCursor"),
+            IrOp::SaveInputEnd => write!(f, "SaveInputEnd"),
             IrOp::RestoreCursor => write!(f, "RestoreCursor"),
             IrOp::WriteToField { offset, width } => {
                 write!(f, "WriteToField(offset={offset}, {width})")
@@ -2480,7 +2534,12 @@ impl IrFunc {
             IrOp::Shr => write!(f, "Shr"),
             IrOp::Shl => write!(f, "Shl"),
             IrOp::Xor => write!(f, "Xor"),
+            IrOp::CmpEq => write!(f, "CmpEq"),
             IrOp::CmpNe => write!(f, "CmpNe"),
+            IrOp::CmpLt => write!(f, "CmpLt"),
+            IrOp::CmpLe => write!(f, "CmpLe"),
+            IrOp::CmpGt => write!(f, "CmpGt"),
+            IrOp::CmpGe => write!(f, "CmpGe"),
             IrOp::ZigzagDecode { wide } => write!(f, "ZigzagDecode(wide={wide})"),
             IrOp::SignExtend { from_width } => write!(f, "SignExtend(from={from_width})"),
             IrOp::CallIntrinsic {

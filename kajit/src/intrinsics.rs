@@ -722,6 +722,33 @@ pub unsafe extern "C" fn kajit_postcard_validate_and_alloc_string(
     unsafe { out.write(s.to_owned()) };
 }
 
+/// Validate that a raw byte range is UTF-8.
+///
+/// This is the lean borrowed-string helper for generated HIR: the decoder
+/// computes the byte range and cursor movement itself, and this helper only
+/// checks UTF-8 validity in the current trust mode.
+///
+/// # Safety
+///
+/// - `ctx` must be a valid, aligned, non-null pointer to a `DeserContext`
+/// - `data_ptr` must point to at least `data_len` readable bytes
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kajit_validate_utf8_range(
+    ctx: *mut DeserContext,
+    data_ptr: *const u8,
+    data_len: u32,
+) {
+    let len = data_len as usize;
+    let ctx = unsafe { &mut *ctx };
+    if ctx.trusted_utf8 {
+        return;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+    if core::str::from_utf8(bytes).is_err() {
+        ctx.error.code = ErrorCode::InvalidUtf8 as u32;
+    }
+}
+
 /// Validate UTF-8, allocate raw buffer, and copy bytes. Returns buffer pointer.
 ///
 /// Malum string intrinsic — the JIT writes the returned pointer + len directly

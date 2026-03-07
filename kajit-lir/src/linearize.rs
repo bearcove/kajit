@@ -33,7 +33,12 @@ pub enum BinOpKind {
     Shr,
     Shl,
     Xor,
+    CmpEq,
     CmpNe,
+    CmpLt,
+    CmpLe,
+    CmpGt,
+    CmpGe,
 }
 
 /// Unary operation kind for linear IR.
@@ -96,6 +101,9 @@ pub enum LinearOp {
         src: VReg,
     },
     SaveCursor {
+        dst: VReg,
+    },
+    SaveInputEnd {
         dst: VReg,
     },
     RestoreCursor {
@@ -512,7 +520,12 @@ impl<'a> Linearizer<'a> {
             IrOp::Shr => self.emit_binop(BinOpKind::Shr, node),
             IrOp::Shl => self.emit_binop(BinOpKind::Shl, node),
             IrOp::Xor => self.emit_binop(BinOpKind::Xor, node),
+            IrOp::CmpEq => self.emit_binop(BinOpKind::CmpEq, node),
             IrOp::CmpNe => self.emit_binop(BinOpKind::CmpNe, node),
+            IrOp::CmpLt => self.emit_binop(BinOpKind::CmpLt, node),
+            IrOp::CmpLe => self.emit_binop(BinOpKind::CmpLe, node),
+            IrOp::CmpGt => self.emit_binop(BinOpKind::CmpGt, node),
+            IrOp::CmpGe => self.emit_binop(BinOpKind::CmpGe, node),
 
             // ── Unary ──
             IrOp::ZigzagDecode { wide } => {
@@ -562,6 +575,9 @@ impl<'a> Linearizer<'a> {
             }
             IrOp::SaveCursor => {
                 self.emit_node(node, LinearOp::SaveCursor { dst: data_dst(0) });
+            }
+            IrOp::SaveInputEnd => {
+                self.emit_node(node, LinearOp::SaveInputEnd { dst: data_dst(0) });
             }
             IrOp::RestoreCursor => {
                 self.emit_node(node, LinearOp::RestoreCursor { src: data_in(0) });
@@ -1047,6 +1063,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         | LinearOp::PeekByte { .. }
         | LinearOp::AdvanceCursor { .. }
         | LinearOp::SaveCursor { .. }
+        | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
         | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
@@ -1068,6 +1085,7 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::ReadBytes { dst, .. } => vec![*dst],
         LinearOp::PeekByte { dst } => vec![*dst],
         LinearOp::SaveCursor { dst } => vec![*dst],
+        LinearOp::SaveInputEnd { dst } => vec![*dst],
         LinearOp::ReadFromField { dst, .. } => vec![*dst],
         LinearOp::SaveOutPtr { dst } => vec![*dst],
         LinearOp::SlotAddr { dst, .. } => vec![*dst],
@@ -1157,6 +1175,7 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         | LinearOp::PeekByte { .. }
         | LinearOp::AdvanceCursor { .. }
         | LinearOp::SaveCursor { .. }
+        | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
         | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
@@ -1638,6 +1657,10 @@ fn fmt_op(
         LinearOp::SaveCursor { dst } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = save_cursor")
+        }
+        LinearOp::SaveInputEnd { dst } => {
+            fmt_vreg(f, *dst)?;
+            write!(f, " = save_input_end")
         }
         LinearOp::RestoreCursor { src } => {
             write!(f, "restore_cursor ")?;

@@ -187,6 +187,7 @@ impl Lowerer {
             let lid = func.lambda_id.index() as u32;
             for block in &func.blocks {
                 if block.insts.is_empty()
+                    && block.params.is_empty()
                     && let Some(cfg_mir::Terminator::Branch { edge }) = func.term(block.term)
                 {
                     let target = func.edge(*edge).expect("branch edge should exist").to;
@@ -364,6 +365,14 @@ impl Lowerer {
                 self.ectx
                     .emit
                     .emit_with(|buf| x64::encode_mov_r64_r64(10, 12, buf))
+                    .expect("mov");
+                self.emit_store_def_r10(*dst, 0);
+                self.set_const(*dst, None);
+            }
+            LinearOp::SaveInputEnd { dst } => {
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_r64(10, 13, buf))
                     .expect("mov");
                 self.emit_store_def_r10(*dst, 0);
                 self.set_const(*dst, None);

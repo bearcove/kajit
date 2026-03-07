@@ -371,7 +371,12 @@ impl Lowerer {
                         .expect("xor");
                 }
             }
-            BinOpKind::CmpNe => {
+            BinOpKind::CmpEq
+            | BinOpKind::CmpNe
+            | BinOpKind::CmpLt
+            | BinOpKind::CmpLe
+            | BinOpKind::CmpGt
+            | BinOpKind::CmpGe => {
                 let rhs_alloc = self.current_alloc(1);
                 if let Some(reg) = rhs_alloc.as_reg() {
                     let enc = reg.hw_enc() as u8;
@@ -386,13 +391,22 @@ impl Lowerer {
                         .emit_with(|buf| x64::encode_cmp_r64_m(10, Mem { base: 4, disp: off }, buf))
                         .expect("cmp");
                 }
+                let cond = match kind {
+                    BinOpKind::CmpEq => x64::Condition::Eq,
+                    BinOpKind::CmpNe => x64::Condition::Ne,
+                    BinOpKind::CmpLt => x64::Condition::Lo,
+                    BinOpKind::CmpLe => x64::Condition::Ls,
+                    BinOpKind::CmpGt => x64::Condition::Hi,
+                    BinOpKind::CmpGe => x64::Condition::Hs,
+                    _ => unreachable!(),
+                };
                 self.ectx
                     .emit
                     .emit_with(|buf| {
-                        x64::encode_setne_r8(10, buf)?;
+                        x64::encode_setcc_r8(cond, 10, buf)?;
                         x64::encode_movzx_r64_rm8(10, Operand::Reg(10), buf)
                     })
-                    .expect("cmpne");
+                    .expect("cmp");
             }
             BinOpKind::Shr => {
                 let rhs_alloc = self.current_alloc(1);

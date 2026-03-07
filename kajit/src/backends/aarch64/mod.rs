@@ -311,6 +311,7 @@ impl Lowerer {
 
             for block in &func.blocks {
                 if block.insts.is_empty()
+                    && block.params.is_empty()
                     && let Some(cfg_mir::Terminator::Branch { edge }) = func.term(block.term)
                 {
                     let target = func.edge(*edge).expect("branch edge should exist").to;
@@ -592,6 +593,13 @@ impl Lowerer {
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, None);
             }
+            LinearOp::SaveInputEnd { dst } => {
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X20).expect("mov"),
+                );
+                self.emit_store_def_x9(*dst, 0);
+                self.set_const(*dst, None);
+            }
             LinearOp::RestoreCursor { src } => {
                 self.emit_load_use_x9(*src, 0);
                 self.ectx.emit.emit_word(
@@ -626,17 +634,11 @@ impl Lowerer {
             LinearOp::WriteToSlot { slot, src } => {
                 self.emit_load_use_x9(*src, 0);
                 let off = self.slot_off(*slot);
-                self.ectx.emit.emit_word(
-                    aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off)
-                        .expect("str"),
-                );
+                self.emit_stack_store(aarch64::Width::X64, Reg::X9, off);
             }
             LinearOp::ReadFromSlot { dst, slot } => {
                 let off = self.slot_off(*slot);
-                self.ectx.emit.emit_word(
-                    aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off)
-                        .expect("ldr"),
-                );
+                self.emit_stack_load(aarch64::Width::X64, Reg::X9, off);
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, None);
             }

@@ -2,9 +2,9 @@ use std::fmt;
 
 use crate::{
     AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallTarget, CallableKind,
-    ControlTransfer, DomainAccess, EffectClass, Expr, Function, GenericArg, GenericParam, Literal,
-    LocalId, LocalKind, MatchArm, Module, Pattern, PatternField, Place, Scope, Stmt, StmtKind,
-    Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
+    ControlTransfer, DomainAccess, EffectClass, ErrorCode, Expr, Function, GenericArg,
+    GenericParam, Literal, LocalId, LocalKind, MatchArm, Module, Pattern, PatternField, Place,
+    Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
 };
 
 impl fmt::Display for Module {
@@ -438,6 +438,7 @@ fn fmt_stmt(
             }
             writeln!(f, "{}}}", pad)
         }
+        StmtKind::Fail { code } => writeln!(f, "fail {}", ErrorCodeDisplay { code: *code }),
         StmtKind::Break => writeln!(f, "break"),
         StmtKind::Continue => writeln!(f, "continue"),
         StmtKind::Return(None) => writeln!(f, "return"),
@@ -479,6 +480,37 @@ impl fmt::Display for MemoryWidthDisplay {
             crate::MemoryWidth::W2 => write!(f, "w2"),
             crate::MemoryWidth::W4 => write!(f, "w4"),
             crate::MemoryWidth::W8 => write!(f, "w8"),
+        }
+    }
+}
+
+struct ErrorCodeDisplay {
+    code: ErrorCode,
+}
+
+impl fmt::Display for ErrorCodeDisplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.code {
+            ErrorCode::Ok => write!(f, "Ok"),
+            ErrorCode::UnexpectedEof => write!(f, "UnexpectedEof"),
+            ErrorCode::InvalidVarint => write!(f, "InvalidVarint"),
+            ErrorCode::InvalidUtf8 => write!(f, "InvalidUtf8"),
+            ErrorCode::UnsupportedShape => write!(f, "UnsupportedShape"),
+            ErrorCode::ExpectedObjectStart => write!(f, "ExpectedObjectStart"),
+            ErrorCode::ExpectedColon => write!(f, "ExpectedColon"),
+            ErrorCode::ExpectedStringKey => write!(f, "ExpectedStringKey"),
+            ErrorCode::UnterminatedString => write!(f, "UnterminatedString"),
+            ErrorCode::InvalidJsonNumber => write!(f, "InvalidJsonNumber"),
+            ErrorCode::MissingRequiredField => write!(f, "MissingRequiredField"),
+            ErrorCode::UnexpectedCharacter => write!(f, "UnexpectedCharacter"),
+            ErrorCode::NumberOutOfRange => write!(f, "NumberOutOfRange"),
+            ErrorCode::InvalidBool => write!(f, "InvalidBool"),
+            ErrorCode::UnknownVariant => write!(f, "UnknownVariant"),
+            ErrorCode::ExpectedTagKey => write!(f, "ExpectedTagKey"),
+            ErrorCode::AmbiguousVariant => write!(f, "AmbiguousVariant"),
+            ErrorCode::AllocError => write!(f, "AllocError"),
+            ErrorCode::InvalidEscapeSequence => write!(f, "InvalidEscapeSequence"),
+            ErrorCode::UnknownField => write!(f, "UnknownField"),
         }
     }
 }
@@ -611,6 +643,34 @@ impl fmt::Display for ExprDisplay<'_> {
                 ExprDisplay {
                     module: self.module,
                     expr: addr
+                }
+            ),
+            Expr::SliceData { value } => write!(
+                f,
+                "slice_data({})",
+                ExprDisplay {
+                    module: self.module,
+                    expr: value
+                }
+            ),
+            Expr::SliceLen { value } => write!(
+                f,
+                "slice_len({})",
+                ExprDisplay {
+                    module: self.module,
+                    expr: value
+                }
+            ),
+            Expr::Str { data, len } => write!(
+                f,
+                "str({}, {})",
+                ExprDisplay {
+                    module: self.module,
+                    expr: data
+                },
+                ExprDisplay {
+                    module: self.module,
+                    expr: len
                 }
             ),
             Expr::Field { base, field } => write!(

@@ -583,7 +583,12 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
                 lhs.wrapping_shr(rhs as u32)
             }
         }
+        BinOpKind::CmpEq => u64::from(lhs == rhs),
         BinOpKind::CmpNe => u64::from(lhs != rhs),
+        BinOpKind::CmpLt => u64::from(lhs < rhs),
+        BinOpKind::CmpLe => u64::from(lhs <= rhs),
+        BinOpKind::CmpGt => u64::from(lhs > rhs),
+        BinOpKind::CmpGe => u64::from(lhs >= rhs),
     }
 }
 

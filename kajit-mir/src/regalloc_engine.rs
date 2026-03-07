@@ -290,24 +290,18 @@ fn caller_saved_simd() -> PRegSet {
 
 #[cfg(target_arch = "aarch64")]
 fn machine_env() -> MachineEnv {
-    let preferred_int = set_from_regs(&[
-        preg_int(23),
-        preg_int(24),
-        preg_int(25),
-        preg_int(26),
-        preg_int(11),
-        preg_int(12),
-        preg_int(13),
-        preg_int(14),
-        preg_int(15),
-    ]);
+    let preferred_int = set_from_regs(&[preg_int(23), preg_int(24), preg_int(25), preg_int(26)]);
 
     let mut non_pref_int_regs = Vec::new();
     for n in 0..=8 {
         non_pref_int_regs.push(preg_int(n));
     }
-    // x10/x16 are used as fixed backend temporaries during lowering.
-    // Keep them out of allocatable sets to avoid silent clobbers.
+    // x9 is the regalloc scratch register.
+    //
+    // x10/x16 are fixed backend temporaries during lowering, and x11..x15 are
+    // also used as implicit temporaries by the aarch64 recipe/emission layer.
+    // Keep all of them out of allocatable sets so emitted code cannot silently
+    // clobber values that regalloc thinks are live.
     non_pref_int_regs.push(preg_int(17));
 
     let non_preferred_int = set_from_regs(&non_pref_int_regs);
@@ -1298,7 +1292,12 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
                 lhs.wrapping_shr(rhs as u32)
             }
         }
+        BinOpKind::CmpEq => u64::from(lhs == rhs),
         BinOpKind::CmpNe => u64::from(lhs != rhs),
+        BinOpKind::CmpLt => u64::from(lhs < rhs),
+        BinOpKind::CmpLe => u64::from(lhs <= rhs),
+        BinOpKind::CmpGt => u64::from(lhs > rhs),
+        BinOpKind::CmpGe => u64::from(lhs >= rhs),
     }
 }
 
@@ -1774,7 +1773,19 @@ fn execute_sim_linear_op(
                 RaOperandKind::Def,
                 linear_op_index,
             )?;
-            write_allocation(regs, spills, dst_alloc, *cursor as u64);
+            let ptr = unsafe { sim.input_base.add(*cursor) } as usize as u64;
+            write_allocation(regs, spills, dst_alloc, ptr);
+        }
+        LinearOp::SaveInputEnd { dst } => {
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
+            let end = unsafe { sim.input_base.add(sim.input_len) } as usize as u64;
+            write_allocation(regs, spills, dst_alloc, end);
         }
         LinearOp::RestoreCursor { src } => {
             let src_alloc = find_operand_alloc(
@@ -1784,11 +1795,12 @@ fn execute_sim_linear_op(
                 RaOperandKind::Use,
                 linear_op_index,
             )?;
-            let next = read_allocation(regs, spills, src_alloc) as usize;
-            if next > sim.input_len {
+            let next_ptr = read_allocation(regs, spills, src_alloc) as usize as *const u8;
+            let delta = unsafe { next_ptr.offset_from(sim.input_base) };
+            if delta < 0 || delta as usize > sim.input_len {
                 set_trap_if_none(trap, *cursor, ErrorCode::UnexpectedEof);
             } else {
-                *cursor = next;
+                *cursor = delta as usize;
             }
         }
         LinearOp::WriteToField { src, offset, width } => {

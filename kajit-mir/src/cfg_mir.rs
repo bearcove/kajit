@@ -711,6 +711,7 @@ fn fmt_cfg_op_name(
         LinearOp::AdvanceCursor { count } => write!(f, "advance({count})"),
         LinearOp::AdvanceCursorBy { .. } => write!(f, "advance_by"),
         LinearOp::SaveCursor { .. } => write!(f, "save_cursor"),
+        LinearOp::SaveInputEnd { .. } => write!(f, "save_input_end"),
         LinearOp::RestoreCursor { .. } => write!(f, "restore_cursor"),
         LinearOp::WriteToField { offset, width, .. } => write!(f, "store([{offset}:{width}])"),
         LinearOp::ReadFromField { offset, width, .. } => write!(f, "load([{offset}:{width}])"),
@@ -1011,6 +1012,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::ReadBytes { dst, .. }
         | LinearOp::PeekByte { dst }
         | LinearOp::SaveCursor { dst }
+        | LinearOp::SaveInputEnd { dst }
         | LinearOp::ReadFromField { dst, .. }
         | LinearOp::SaveOutPtr { dst }
         | LinearOp::SlotAddr { dst, .. }

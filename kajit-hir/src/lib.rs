@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
+pub use kajit_ir::ErrorCode;
+
 mod text;
 
 pub struct Id<T> {
@@ -201,6 +203,8 @@ pub struct VixenCoreCallables {
 pub struct RuntimeMemoryCallables {
     pub alloc_transient: CallableId,
     pub alloc_persistent: CallableId,
+    pub validate_utf8_range: CallableId,
+    pub string_validate_alloc_copy: CallableId,
     pub vec_from_raw_parts: CallableId,
     pub vec_from_chunks: CallableId,
 }
@@ -395,6 +399,48 @@ impl Module {
             },
             docs: Some("Materialize a Vec-like host value from persistent raw parts.".to_owned()),
         });
+        let validate_utf8_range = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.validate_utf8_range".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::u(64), Type::u(32)],
+                returns: vec![],
+                effect_class: EffectClass::Reads,
+                domain_effects: vec![DomainEffect {
+                    domain: "input".to_owned(),
+                    access: DomainAccess::Read,
+                }],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["runtime.utf8".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Validate that a borrowed byte range is UTF-8.".to_owned()),
+        });
+        let string_validate_alloc_copy = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.string_validate_alloc_copy".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::u(64), Type::u(32)],
+                returns: vec![Type::persistent_addr()],
+                effect_class: EffectClass::Barrier,
+                domain_effects: vec![
+                    DomainEffect {
+                        domain: "input".to_owned(),
+                        access: DomainAccess::Read,
+                    },
+                    DomainEffect {
+                        domain: "persistent_heap".to_owned(),
+                        access: DomainAccess::Mutate,
+                    },
+                ],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["runtime.alloc".to_owned(), "runtime.utf8".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some(
+                "Validate a UTF-8 range, allocate persistent bytes, and copy them.".to_owned(),
+            ),
+        });
         let vec_from_chunks = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.vec_from_chunks".to_owned(),
@@ -424,6 +470,8 @@ impl Module {
         RuntimeMemoryCallables {
             alloc_transient,
             alloc_persistent,
+            validate_utf8_range,
+            string_validate_alloc_copy,
             vec_from_raw_parts,
             vec_from_chunks,
         }
@@ -1169,6 +1217,9 @@ pub enum StmtKind {
         scrutinee: Expr,
         arms: Vec<MatchArm>,
     },
+    Fail {
+        code: ErrorCode,
+    },
     Break,
     Continue,
     Return(Option<Expr>),
@@ -1265,6 +1316,16 @@ pub enum Expr {
     Load {
         addr: Box<Expr>,
         width: MemoryWidth,
+    },
+    SliceData {
+        value: Box<Expr>,
+    },
+    SliceLen {
+        value: Box<Expr>,
+    },
+    Str {
+        data: Box<Expr>,
+        len: Box<Expr>,
     },
     Field {
         base: Box<Expr>,
@@ -2453,6 +2514,12 @@ mod tests {
             vec![Type::persistent_addr()]
         );
         assert_eq!(
+            module.callables[callables.string_validate_alloc_copy]
+                .signature
+                .returns,
+            vec![Type::persistent_addr()]
+        );
+        assert_eq!(
             module.callables[callables.vec_from_chunks].signature.params[0],
             Type::transient_addr()
         );
@@ -2531,5 +2598,81 @@ mod tests {
 
         let text = module.to_string();
         assert!(text.contains("load w4(l0)"));
+    }
+
+    #[test]
+    fn slice_view_and_fail_render_in_text() {
+        let mut module = Module::new();
+        let r0 = module.add_region("input");
+        let cursor = module.add_type_def(TypeDef {
+            name: "Cursor".to_owned(),
+            generic_params: vec![GenericParam::Region {
+                name: "r_input".to_owned(),
+            }],
+            kind: TypeDefKind::Struct {
+                fields: vec![
+                    FieldDef {
+                        name: "bytes".to_owned(),
+                        ty: Type::slice(r0, Type::u(8)),
+                    },
+                    FieldDef {
+                        name: "pos".to_owned(),
+                        ty: Type::u(64),
+                    },
+                ],
+            },
+        });
+        module.add_function(Function {
+            name: "slice_demo".to_owned(),
+            region_params: vec![r0],
+            store_params: vec![],
+            params: vec![Parameter {
+                local: LocalId::new(0),
+                name: "cursor".to_owned(),
+                ty: Type::named(cursor, vec![GenericArg::Region(r0)]),
+                kind: LocalKind::Param,
+            }],
+            locals: vec![],
+            return_type: Type::unit(),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: None,
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![
+                    Stmt {
+                        id: StmtId::new(0),
+                        kind: StmtKind::Expr(Expr::SliceData {
+                            value: Box::new(Expr::Field {
+                                base: Box::new(Expr::Local(LocalId::new(0))),
+                                field: "bytes".to_owned(),
+                            }),
+                        }),
+                    },
+                    Stmt {
+                        id: StmtId::new(1),
+                        kind: StmtKind::Expr(Expr::SliceLen {
+                            value: Box::new(Expr::Field {
+                                base: Box::new(Expr::Local(LocalId::new(0))),
+                                field: "bytes".to_owned(),
+                            }),
+                        }),
+                    },
+                    Stmt {
+                        id: StmtId::new(2),
+                        kind: StmtKind::Fail {
+                            code: ErrorCode::UnexpectedEof,
+                        },
+                    },
+                ],
+            },
+        });
+
+        let text = module.to_string();
+        assert!(text.contains("slice_data("));
+        assert!(text.contains("slice_len("));
+        assert!(text.contains("fail UnexpectedEof"));
     }
 }
