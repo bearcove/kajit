@@ -241,6 +241,21 @@ pub fn compile_postcard_decoder_via_hir(shape: &'static facet::Shape) -> Compile
     compiler::compile_linear_ir_decoder(&linear, false)
 }
 
+/// Compile a postcard decoder via the structural HIR lowering subset.
+///
+/// This bypasses the older postcard-template recognizer and instead lowers the
+/// supported HIR subset structurally. The currently supported subset is small
+/// and intended for bring-up/debugging, not general postcard coverage.
+pub fn compile_postcard_decoder_via_structural_hir(
+    shape: &'static facet::Shape,
+) -> CompiledDecoder {
+    let module = compiler::build_postcard_decoder_hir(shape);
+    let mut func = compiler::build_structural_hir_ir(shape, &module);
+    compiler::run_default_passes_from_env(&mut func);
+    let linear = linearize::linearize(&mut func);
+    compiler::compile_linear_ir_decoder(&linear, false)
+}
+
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
 ///
 /// Intended for snapshot tests and debugging.

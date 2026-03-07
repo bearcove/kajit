@@ -3362,19 +3362,26 @@ pub(crate) fn build_postcard_decoder_ir_via_hir(shape: &'static Shape) -> crate:
     builder.finish()
 }
 
-#[cfg(test)]
 struct StructuralHirIrLowerer<'a> {
+    module: &'a hir::Module,
+    decoder: crate::postcard::KajitPostcard,
+    cursor_local: hir::LocalId,
     local_slots: std::collections::HashMap<hir::LocalId, crate::ir::SlotId>,
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
-#[cfg(test)]
 impl<'a> StructuralHirIrLowerer<'a> {
     fn new(
         rb: &mut RegionBuilder<'_>,
-        _module: &'a hir::Module,
+        module: &'a hir::Module,
         function: &'a hir::Function,
     ) -> Self {
+        let cursor_local = function
+            .params
+            .iter()
+            .find(|param| param.kind == hir::LocalKind::Param)
+            .map(|param| param.local)
+            .expect("structural HIR function should have a cursor param");
         let mut local_slots = std::collections::HashMap::new();
         for param in &function.params {
             if param.kind != hir::LocalKind::Destination {
@@ -3385,8 +3392,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
             local_slots.insert(local.local, rb.alloc_slot());
         }
         Self {
+            module,
+            decoder: crate::postcard::KajitPostcard,
+            cursor_local,
             local_slots,
             _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn callable_name(&self, call: &hir::CallExpr) -> &str {
+        match call.target {
+            hir::CallTarget::Callable(callable) => &self.module.callables[callable].name,
         }
     }
 
@@ -3471,9 +3487,18 @@ impl<'a> StructuralHirIrLowerer<'a> {
     ) {
         match place {
             hir::Place::Local(local) => {
-                let slot = self.local_slots[local];
-                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
-                rb.write_to_slot(slot, scalar);
+                if *local == dest_local {
+                    self.lower_place_write(rb, place, value, dest_local, dest_shape);
+                } else {
+                    let slot = self.local_slots[local];
+                    match value {
+                        hir::Expr::Call(call) => self.lower_postcard_call_into_slot(rb, call, slot),
+                        _ => {
+                            let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                            rb.write_to_slot(slot, scalar);
+                        }
+                    }
+                }
             }
             hir::Place::Field { .. } => {
                 self.lower_place_write(rb, place, value, dest_local, dest_shape);
@@ -3494,6 +3519,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
     ) {
         let (place_shape, offset, _) = self.resolve_place(place, dest_local, dest_shape);
         match value {
+            hir::Expr::Call(call) => {
+                self.lower_postcard_call_at_offset(rb, call, offset);
+            }
             hir::Expr::Variant {
                 variant, fields, ..
             } => {
@@ -3521,6 +3549,57 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let width = self.scalar_width_for_shape(place_shape);
                 rb.write_to_field(scalar, offset as u32, width);
             }
+        }
+    }
+
+    fn lower_postcard_call_into_slot(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        slot: crate::ir::SlotId,
+    ) {
+        let zero = rb.const_val(0);
+        rb.write_to_slot(slot, zero);
+        let saved_out = rb.save_out_ptr();
+        let slot_ptr = rb.slot_addr(slot);
+        rb.set_out_ptr(slot_ptr);
+        self.lower_postcard_call_at_offset(rb, call, 0);
+        rb.set_out_ptr(saved_out);
+    }
+
+    fn lower_postcard_call_at_offset(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        offset: usize,
+    ) {
+        assert_eq!(
+            call.args,
+            vec![hir::Expr::Local(self.cursor_local)],
+            "structural postcard readers should consume the cursor local directly"
+        );
+        match self.callable_name(call) {
+            "postcard.read_bool" => self.decoder.lower_read_scalar(rb, offset, ScalarType::Bool),
+            "postcard.read_u8" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U8),
+            "postcard.read_u16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U16),
+            "postcard.read_u32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U32),
+            "postcard.read_u64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U64),
+            "postcard.read_u128" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U128),
+            "postcard.read_usize" => self
+                .decoder
+                .lower_read_scalar(rb, offset, ScalarType::USize),
+            "postcard.read_i8" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I8),
+            "postcard.read_i16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I16),
+            "postcard.read_i32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I32),
+            "postcard.read_i64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I64),
+            "postcard.read_i128" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I128),
+            "postcard.read_isize" => self
+                .decoder
+                .lower_read_scalar(rb, offset, ScalarType::ISize),
+            "postcard.read_discriminant" => {
+                self.decoder.lower_read_scalar(rb, offset, ScalarType::U32)
+            }
+            other => panic!("unsupported structural postcard reader {other}"),
         }
     }
 
@@ -3639,8 +3718,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
     }
 }
 
-#[cfg(test)]
-fn build_structural_hir_ir(shape: &'static Shape, module: &hir::Module) -> crate::ir::IrFunc {
+pub(crate) fn build_structural_hir_ir(
+    shape: &'static Shape,
+    module: &hir::Module,
+) -> crate::ir::IrFunc {
     let (_, function) = module
         .functions
         .iter()
@@ -4006,6 +4087,11 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, Eq, Facet)]
+    struct ScalarNumber {
+        value: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
     struct BranchyAnimal {
         animal: UnitAnimal,
         value: u32,
@@ -4019,6 +4105,11 @@ mod tests {
         run_default_passes_from_env(&mut func);
         let linear = crate::linearize::linearize(&mut func);
         compile_linear_ir_decoder(&linear, false)
+    }
+
+    fn compile_postcard_decoder_via_structural_hir(shape: &'static Shape) -> CompiledDecoder {
+        let module = build_postcard_decoder_hir(shape);
+        compile_structural_hir_decoder(shape, &module)
     }
 
     #[test]
@@ -4285,6 +4376,32 @@ mod tests {
 
         let parrot = crate::deserialize::<UnitAnimal>(&decoder, &[2])
             .expect("HIR->RVSDG postcard decoder should decode Parrot");
+        assert_eq!(parrot, UnitAnimal::Parrot);
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_scalar_field() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<ScalarNumber>::SHAPE);
+
+        let value = crate::deserialize::<ScalarNumber>(&decoder, &[42])
+            .expect("structural HIR postcard decoder should decode a scalar field");
+        assert_eq!(value, ScalarNumber { value: 42 });
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_unit_enums() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<UnitAnimal>::SHAPE);
+
+        let cat = crate::deserialize::<UnitAnimal>(&decoder, &[0])
+            .expect("structural HIR postcard decoder should decode Cat");
+        assert_eq!(cat, UnitAnimal::Cat);
+
+        let dog = crate::deserialize::<UnitAnimal>(&decoder, &[1])
+            .expect("structural HIR postcard decoder should decode Dog");
+        assert_eq!(dog, UnitAnimal::Dog);
+
+        let parrot = crate::deserialize::<UnitAnimal>(&decoder, &[2])
+            .expect("structural HIR postcard decoder should decode Parrot");
         assert_eq!(parrot, UnitAnimal::Parrot);
     }
 
