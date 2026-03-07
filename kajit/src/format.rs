@@ -2,6 +2,12 @@ use facet::{MapDef, ScalarType, StructKind};
 
 // r[impl no-ir.format-trait]
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HIRLoweringKind {
+    Json,
+    Postcard,
+}
+
 /// Resolved default information for a field.
 #[derive(Clone, Copy)]
 pub struct DefaultInfo {
@@ -120,6 +126,10 @@ pub struct VariantLowerInfo {
 /// but hold no mutable state between calls. Runtime state lives in the
 /// `format_state` pointer inside `DeserContext`.
 pub trait Decoder {
+    fn hir_lowering_kind(&self) -> Option<HIRLoweringKind> {
+        None
+    }
+
     // r[impl ir.format-trait.lower]
 
     /// Whether this format can safely treat string slices as trusted UTF-8 input.

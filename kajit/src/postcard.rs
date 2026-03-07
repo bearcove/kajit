@@ -1,6 +1,6 @@
 use facet::ScalarType;
 
-use crate::format::{Decoder, FieldLowerInfo};
+use crate::format::{Decoder, FieldLowerInfo, HIRLoweringKind};
 use crate::intrinsics;
 use crate::ir::{IntrinsicFn, IrOp, PortSource, RegionBuilder, SlotId};
 
@@ -152,6 +152,10 @@ fn lower_postcard_varint_scalar(
 }
 
 impl Decoder for KajitPostcard {
+    fn hir_lowering_kind(&self) -> Option<HIRLoweringKind> {
+        Some(HIRLoweringKind::Postcard)
+    }
+
     // r[impl ir.format-trait.lower]
 
     fn lower_struct_fields(

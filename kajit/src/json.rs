@@ -1,7 +1,7 @@
 use facet::ScalarType;
 
 use crate::context::ErrorCode;
-use crate::format::{Decoder, FieldLowerInfo};
+use crate::format::{Decoder, FieldLowerInfo, HIRLoweringKind};
 use crate::intrinsics;
 use crate::ir::{IntrinsicFn, RegionBuilder};
 use crate::json_intrinsics;
@@ -17,6 +17,10 @@ fn ifn(f: *const u8) -> IntrinsicFn {
 pub struct KajitJson;
 
 impl Decoder for KajitJson {
+    fn hir_lowering_kind(&self) -> Option<HIRLoweringKind> {
+        Some(HIRLoweringKind::Json)
+    }
+
     fn supports_trusted_utf8_input(&self) -> bool {
         true
     }

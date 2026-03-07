@@ -249,10 +249,7 @@ pub fn debug_postcard_ir_via_hir_text(shape: &'static facet::Shape) -> String {
 /// This is currently limited to the subset supported by the postcard HIR
 /// producer and HIR->RVSDG lowerer.
 pub fn compile_postcard_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
-    let mut func = compiler::build_postcard_decoder_ir_via_hir(shape);
-    compiler::run_default_passes_from_env(&mut func);
-    let linear = linearize::linearize(&mut func);
-    compiler::compile_linear_ir_decoder(&linear, false)
+    compiler::compile_postcard_decoder_via_hir_with_options(shape, PipelineOptions::from_env())
 }
 
 /// Compile a JSON decoder by lowering through the prototype HIR path.
@@ -260,11 +257,7 @@ pub fn compile_postcard_decoder_via_hir(shape: &'static facet::Shape) -> Compile
 /// This currently supports only the narrow JSON subset covered by the
 /// prototype HIR producer and structural HIR lowerer.
 pub fn compile_json_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
-    let module = compiler::build_json_decoder_hir(shape);
-    let mut func = compiler::build_structural_hir_ir(shape, &module);
-    compiler::run_default_passes_from_env(&mut func);
-    let linear = linearize::linearize(&mut func);
-    compiler::compile_linear_ir_decoder(&linear, false)
+    compiler::compile_json_decoder_via_hir_with_options(shape, PipelineOptions::from_env())
 }
 
 /// Compile a postcard decoder via the structural HIR lowering subset.
@@ -275,11 +268,7 @@ pub fn compile_json_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDec
 pub fn compile_postcard_decoder_via_structural_hir(
     shape: &'static facet::Shape,
 ) -> CompiledDecoder {
-    let module = compiler::build_postcard_decoder_hir(shape);
-    let mut func = compiler::build_structural_hir_ir(shape, &module);
-    compiler::run_default_passes_from_env(&mut func);
-    let linear = linearize::linearize(&mut func);
-    compiler::compile_linear_ir_decoder(&linear, false)
+    compiler::compile_postcard_decoder_via_hir_with_options(shape, PipelineOptions::from_env())
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.

@@ -9,8 +9,8 @@ use kajit_hir as hir;
 
 use crate::arch::EmitCtx;
 use crate::format::{
-    Decoder, FieldEmitInfo, FieldLowerInfo, SkippedFieldInfo, VariantEmitInfo, VariantKind,
-    VariantLowerInfo,
+    Decoder, FieldEmitInfo, FieldLowerInfo, HIRLoweringKind, SkippedFieldInfo, VariantEmitInfo,
+    VariantKind, VariantLowerInfo,
 };
 use crate::intrinsics;
 use crate::ir::{LambdaId, RegionBuilder, Width as IrWidth};
@@ -2072,6 +2072,16 @@ pub fn compile_decoder_with_options(
     decoder: &dyn Decoder,
     pipeline_opts: &PipelineOptions,
 ) -> CompiledDecoder {
+    match decoder.hir_lowering_kind() {
+        Some(HIRLoweringKind::Json) if supports_json_decoder_hir(shape) => {
+            return compile_json_decoder_via_hir_with_options(shape, pipeline_opts.clone());
+        }
+        Some(HIRLoweringKind::Postcard) if supports_postcard_decoder_hir(shape) => {
+            return compile_postcard_decoder_via_hir_with_options(shape, pipeline_opts.clone());
+        }
+        _ => {}
+    }
+
     let mut func = build_decoder_ir(shape, decoder);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
@@ -5016,6 +5026,64 @@ pub(crate) fn build_json_decoder_hir(shape: &'static Shape) -> hir::Module {
     }
 }
 
+pub(crate) fn supports_json_decoder_hir(shape: &'static Shape) -> bool {
+    matches!(
+        shape.scalar_type(),
+        Some(ScalarType::Bool | ScalarType::U32 | ScalarType::U64)
+    )
+}
+
+pub(crate) fn supports_postcard_decoder_hir(shape: &'static Shape) -> bool {
+    fn fields_are_supported(shape: &'static Shape) -> bool {
+        let (fields, skipped) = collect_fields(shape);
+        skipped.is_empty()
+            && fields
+                .into_iter()
+                .all(|field| supports_postcard_decoder_hir(field.shape))
+    }
+
+    if is_unit(shape) {
+        return true;
+    }
+
+    if get_pointer_def(shape).is_some() {
+        return false;
+    }
+
+    match &shape.def {
+        Def::List(list_def) => return supports_postcard_decoder_hir(list_def.t),
+        Def::Array(array_def) => return supports_postcard_decoder_hir(array_def.t),
+        Def::Option(opt_def) => return supports_postcard_decoder_hir(opt_def.t),
+        Def::Map(_) => return false,
+        _ => {}
+    }
+
+    if shape.is_transparent() {
+        let (fields, skipped) = collect_fields(shape);
+        return skipped.is_empty()
+            && fields.len() == 1
+            && supports_postcard_decoder_hir(fields[0].shape);
+    }
+
+    if let Some(st) = shape.scalar_type() {
+        return !matches!(st, ScalarType::CowStr);
+    }
+
+    match &shape.ty {
+        Type::User(UserType::Struct(_)) => fields_are_supported(shape),
+        Type::User(UserType::Enum(enum_type)) => {
+            !matches!(enum_type.enum_repr, EnumRepr::Rust | EnumRepr::RustNPO)
+                && collect_variants(enum_type).into_iter().all(|variant| {
+                    variant
+                        .fields
+                        .into_iter()
+                        .all(|field| supports_postcard_decoder_hir(field.shape))
+                })
+        }
+        _ => false,
+    }
+}
+
 fn build_json_root_bool_decoder_hir(shape: &'static Shape) -> hir::Module {
     let mut module = hir::Module::new();
     let input_region = module.add_region("input");
@@ -7856,6 +7924,28 @@ pub(crate) fn build_structural_hir_ir(
     builder.finish()
 }
 
+pub(crate) fn compile_postcard_decoder_via_hir_with_options(
+    shape: &'static Shape,
+    pipeline_opts: PipelineOptions,
+) -> CompiledDecoder {
+    let module = build_postcard_decoder_hir(shape);
+    let mut func = build_structural_hir_ir(shape, &module);
+    run_configured_default_passes(&mut func, &pipeline_opts);
+    let linear = crate::linearize::linearize(&mut func);
+    compile_linear_ir_decoder_with_options(&linear, false, pipeline_opts)
+}
+
+pub(crate) fn compile_json_decoder_via_hir_with_options(
+    shape: &'static Shape,
+    pipeline_opts: PipelineOptions,
+) -> CompiledDecoder {
+    let module = build_json_decoder_hir(shape);
+    let mut func = build_structural_hir_ir(shape, &module);
+    run_configured_default_passes(&mut func, &pipeline_opts);
+    let linear = crate::linearize::linearize(&mut func);
+    compile_linear_ir_decoder_with_options(&linear, true, pipeline_opts)
+}
+
 pub(crate) fn run_default_passes_from_env(func: &mut crate::ir::IrFunc) {
     let pipeline_opts = PipelineOptions::from_env();
     run_configured_default_passes(func, &pipeline_opts);
@@ -8885,6 +8975,21 @@ mod tests {
     }
 
     #[test]
+    fn compile_decoder_prefers_hir_for_supported_json_root_u32() {
+        let decoder = crate::compile_decoder(<u32>::SHAPE, &crate::json::KajitJson);
+        let listing = decoder.cfg_mir_line_text_by_line.join("\n");
+
+        assert!(
+            !listing.contains("kajit_json_read_u32"),
+            "supported JSON shapes should compile through the HIR path"
+        );
+        assert!(
+            listing.contains("branch_if_zero") || listing.contains("branch "),
+            "HIR JSON lowering should still produce explicit control flow"
+        );
+    }
+
+    #[test]
     fn postcard_hir_models_owned_output_strings() {
         let module = build_postcard_decoder_hir(<OwnedHeader>::SHAPE);
         let (_, function) = module.functions.iter().next().unwrap();
@@ -8918,6 +9023,17 @@ mod tests {
                 } if module.callables[*callable_id].name == "runtime.string_validate_alloc_copy"
             )),
             "owned string lowering should compute string storage through the lean helper"
+        );
+    }
+
+    #[test]
+    fn compile_decoder_prefers_hir_for_supported_postcard_bool_field() {
+        let decoder = crate::compile_decoder(<BoolHeader>::SHAPE, &crate::postcard::KajitPostcard);
+        let listing = decoder.cfg_mir_line_text_by_line.join("\n");
+
+        assert!(
+            !listing.contains("kajit_read_bool"),
+            "supported postcard shapes should compile through the HIR path"
         );
     }
 
