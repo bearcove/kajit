@@ -5460,6 +5460,211 @@ mod tests {
     }
 
     #[test]
+    fn structural_hir_ir_path_materializes_root_vec_from_raw_parts() {
+        let mut module = hir::Module::new();
+        let runtime = module.install_runtime_memory_callables();
+        module.add_function(hir::Function {
+            name: "build_root_vec".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "len".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Temp,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "bytes".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Temp,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(4),
+                    name: "ptr".to_owned(),
+                    ty: hir::Type::persistent_addr(),
+                    kind: hir::LocalKind::Temp,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("root vec materialization kernel".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(2)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(2)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(3)),
+                            value: hir::Expr::Binary {
+                                op: hir::BinaryOp::Mul,
+                                lhs: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(4))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(4)),
+                            value: hir::Expr::Call(hir::CallExpr {
+                                target: hir::CallTarget::Callable(runtime.alloc_persistent),
+                                args: vec![
+                                    hir::Expr::Local(hir::LocalId::new(3)),
+                                    hir::Expr::Literal(hir::Literal::Integer(4)),
+                                ],
+                            }),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Store {
+                            addr: hir::Expr::Local(hir::LocalId::new(4)),
+                            width: hir::MemoryWidth::W4,
+                            value: hir::Expr::Literal(hir::Literal::Integer(10)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Store {
+                            addr: hir::Expr::Binary {
+                                op: hir::BinaryOp::Add,
+                                lhs: Box::new(hir::Expr::Local(hir::LocalId::new(4))),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(4))),
+                            },
+                            width: hir::MemoryWidth::W4,
+                            value: hir::Expr::Literal(hir::Literal::Integer(20)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(1)),
+                            value: hir::Expr::Call(hir::CallExpr {
+                                target: hir::CallTarget::Callable(runtime.vec_from_raw_parts),
+                                args: vec![
+                                    hir::Expr::Local(hir::LocalId::new(4)),
+                                    hir::Expr::Local(hir::LocalId::new(2)),
+                                    hir::Expr::Local(hir::LocalId::new(2)),
+                                    hir::Expr::Literal(hir::Literal::Integer(4)),
+                                ],
+                            }),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(6),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<Vec<u32>>::SHAPE, &module);
+        let value = crate::deserialize::<Vec<u32>>(&decoder, &[])
+            .expect("structural HIR decoder should materialize a root Vec from raw parts");
+        assert_eq!(value, vec![10, 20]);
+    }
+
+    #[test]
+    fn structural_hir_ir_path_materializes_empty_vec_from_raw_parts() {
+        let mut module = hir::Module::new();
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <VecHolder>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![hir::FieldDef {
+                    name: "values".to_owned(),
+                    ty: hir::Type::u(64),
+                }],
+            },
+        });
+        let runtime = module.install_runtime_memory_callables();
+        module.add_function(hir::Function {
+            name: "build_empty_vec_holder".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("empty vec materialization kernel".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "values".to_owned(),
+                            },
+                            value: hir::Expr::Call(hir::CallExpr {
+                                target: hir::CallTarget::Callable(runtime.vec_from_raw_parts),
+                                args: vec![
+                                    hir::Expr::Literal(hir::Literal::Integer(0)),
+                                    hir::Expr::Literal(hir::Literal::Integer(0)),
+                                    hir::Expr::Literal(hir::Literal::Integer(0)),
+                                    hir::Expr::Literal(hir::Literal::Integer(4)),
+                                ],
+                            }),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<VecHolder>::SHAPE, &module);
+        let value = crate::deserialize::<VecHolder>(&decoder, &[])
+            .expect("structural HIR decoder should materialize an empty Vec from raw parts");
+        assert!(value.values.is_empty());
+    }
+
+    #[test]
     fn structural_hir_ir_path_decodes_if_and_match() {
         let mut module = hir::Module::new();
         let animal_def = module.add_type_def(hir::TypeDef {
