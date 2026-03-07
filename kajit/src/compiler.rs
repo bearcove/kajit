@@ -2943,7 +2943,7 @@ pub(crate) fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
             hir::Parameter {
                 local: out_local,
                 name: "out".to_owned(),
-                ty: hir::Type::place(root_type),
+                ty: root_type,
                 kind: hir::LocalKind::Destination,
             },
         ],
@@ -2999,7 +2999,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             .expect("structural HIR function should have a cursor param");
         let mut local_slots = std::collections::HashMap::new();
         for param in &function.params {
-            if param.kind != hir::LocalKind::Destination {
+            if !param.is_destination() {
                 local_slots.insert(
                     param.local,
                     Self::alloc_local_storage(rb, module, &param.ty),
@@ -3044,7 +3044,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 .saturating_mul(*len)
                 .max(1),
             hir::Type::Str { .. } | hir::Type::Slice { .. } => 2,
-            hir::Type::Place(inner) => Self::slot_count_for_type(module, inner),
             hir::Type::Handle { .. } => 1,
             hir::Type::Named { def, .. } => match &module.type_defs[*def].kind {
                 hir::TypeDefKind::Struct { fields } => fields
@@ -3613,9 +3612,7 @@ pub(crate) fn build_structural_hir_ir(
         .next()
         .expect("structural HIR module should contain one function");
     let dest_local = function
-        .params
-        .iter()
-        .find(|param| param.kind == hir::LocalKind::Destination)
+        .destination_param()
         .map(|param| param.local)
         .expect("structural HIR function should have a destination param");
 
@@ -4053,10 +4050,8 @@ mod tests {
         assert_eq!(function.params.len(), 2);
         assert_eq!(function.region_params.len(), 1);
 
-        let hir::Type::Place(out_ty) = &function.params[1].ty else {
-            panic!("expected destination Place<T> param");
-        };
-        let hir::Type::Named { def, args } = &**out_ty else {
+        let destination = function.destination_param().unwrap();
+        let hir::Type::Named { def, args } = &destination.ty else {
             panic!("expected named root output type");
         };
         assert_eq!(
@@ -4448,7 +4443,7 @@ mod tests {
                 hir::Parameter {
                     local: hir::LocalId::new(1),
                     name: "out".to_owned(),
-                    ty: hir::Type::place(hir::Type::named(root_def, Vec::new())),
+                    ty: hir::Type::named(root_def, Vec::new()),
                     kind: hir::LocalKind::Destination,
                 },
             ],
@@ -4540,7 +4535,7 @@ mod tests {
                 hir::Parameter {
                     local: hir::LocalId::new(1),
                     name: "out".to_owned(),
-                    ty: hir::Type::place(hir::Type::named(root_def, Vec::new())),
+                    ty: hir::Type::named(root_def, Vec::new()),
                     kind: hir::LocalKind::Destination,
                 },
             ],

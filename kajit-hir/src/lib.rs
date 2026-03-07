@@ -886,7 +886,6 @@ pub enum Type {
     Str {
         region: RegionId,
     },
-    Place(Box<Type>),
     Handle {
         store: StoreId,
         value: Box<Type>,
@@ -941,10 +940,6 @@ impl Type {
         Self::Str { region }
     }
 
-    pub fn place(inner: Type) -> Self {
-        Self::Place(Box::new(inner))
-    }
-
     pub fn handle(store: StoreId, value: Type) -> Self {
         Self::Handle {
             store,
@@ -965,6 +960,12 @@ pub struct Function {
     pub body: Block,
 }
 
+impl Function {
+    pub fn destination_param(&self) -> Option<&Parameter> {
+        self.params.iter().find(|param| param.is_destination())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
     pub id: ScopeId,
@@ -978,6 +979,12 @@ pub struct Parameter {
     pub name: String,
     pub ty: Type,
     pub kind: LocalKind,
+}
+
+impl Parameter {
+    pub fn is_destination(&self) -> bool {
+        self.kind == LocalKind::Destination
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1276,7 +1283,7 @@ mod tests {
                 Parameter {
                     local: LocalId::new(1),
                     name: "out".to_owned(),
-                    ty: Type::place(Type::named(header, vec![GenericArg::Region(r_input)])),
+                    ty: Type::named(header, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Destination,
                 },
             ],
@@ -1297,7 +1304,8 @@ mod tests {
         };
 
         assert_eq!(function.region_params, vec![r_input]);
-        assert!(matches!(function.params[1].ty, Type::Place(_)));
+        let destination = function.destination_param().unwrap();
+        assert!(matches!(destination.ty, Type::Named { .. }));
         assert!(function.locals.is_empty());
     }
 

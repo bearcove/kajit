@@ -511,14 +511,6 @@ impl fmt::Display for TypeDisplay<'_> {
                 }
             ),
             Type::Str { region } => write!(f, "str<r{}>", region.index()),
-            Type::Place(inner) => write!(
-                f,
-                "Place<{}>",
-                TypeDisplay {
-                    module: self.module,
-                    ty: inner
-                }
-            ),
             Type::Handle { store, value } => write!(
                 f,
                 "Handle<store{}, {}>",

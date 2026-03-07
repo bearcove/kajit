@@ -868,7 +868,7 @@ Example shape with borrowed output typing:
 ```text
 fn decode_name<r_input>(
   cursor: Cursor<r_input>,
-  out: Place<Header<r_input>>,
+  destination out: Header<r_input>,
 ) {
   let mut handled = false
 

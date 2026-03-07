@@ -213,11 +213,6 @@ fn ty<'src>() -> impl Parser<'src, &'src str, Type, Extra<'src>> + Clone {
                 .ignore_then(region_id())
                 .then_ignore(token(">"))
                 .map(Type::str),
-            token("Place")
-                .ignore_then(token("<"))
-                .ignore_then(ty.clone())
-                .then_ignore(token(">"))
-                .map(Type::place),
             token("Handle")
                 .ignore_then(token("<"))
                 .ignore_then(store_id())
@@ -1062,7 +1057,7 @@ mod tests {
                 kajit_hir::Parameter {
                     local: LocalId::new(1),
                     name: "out".to_owned(),
-                    ty: Type::place(Type::named(record, vec![GenericArg::Region(r_input)])),
+                    ty: Type::named(record, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Destination,
                 },
             ],
