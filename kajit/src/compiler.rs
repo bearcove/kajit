@@ -2596,7 +2596,10 @@ impl PostcardHirLowerer {
                 ScalarType::ISize => hir::Type::i(64),
                 ScalarType::Str => hir::Type::str(self.input_region),
                 ScalarType::String => hir::Type::named(self.ensure_string_raw_type(), Vec::new()),
-                ScalarType::CowStr | ScalarType::Char | ScalarType::F32 | ScalarType::F64 => {
+                ScalarType::Char => hir::Type::u(32),
+                ScalarType::F32 => hir::Type::u(32),
+                ScalarType::F64 => hir::Type::u(64),
+                ScalarType::CowStr => {
                     panic!(
                         "postcard HIR prototype does not support scalar {st:?} yet for {}",
                         shape.type_identifier
@@ -2687,6 +2690,9 @@ impl PostcardHirLowerer {
             ScalarType::I64 => hir::Type::i(64),
             ScalarType::I128 => hir::Type::i(128),
             ScalarType::ISize => hir::Type::i(64),
+            ScalarType::Char => hir::Type::u(32),
+            ScalarType::F32 => hir::Type::u(32),
+            ScalarType::F64 => hir::Type::u(64),
             other => panic!("unsupported postcard HIR scalar type {other:?}"),
         }
     }
@@ -2770,6 +2776,8 @@ impl PostcardHirLowerer {
     ) {
         let width = match scalar_type {
             ScalarType::Bool | ScalarType::U8 | ScalarType::I8 => hir::MemoryWidth::W1,
+            ScalarType::F32 => hir::MemoryWidth::W4,
+            ScalarType::F64 => hir::MemoryWidth::W8,
             other => panic!("unsupported fixed-width postcard HIR scalar {other:?}"),
         };
         self.push_cursor_bounds_check(
@@ -2791,7 +2799,12 @@ impl PostcardHirLowerer {
 
         let raw_local = self.alloc_local(
             format!("fixed_scalar_{}", self.locals.len()),
-            hir::Type::u(8),
+            match width {
+                hir::MemoryWidth::W1 => hir::Type::u(8),
+                hir::MemoryWidth::W2 => hir::Type::u(16),
+                hir::MemoryWidth::W4 => hir::Type::u(32),
+                hir::MemoryWidth::W8 => hir::Type::u(64),
+            },
             hir::LocalKind::Temp,
         );
         self.push_init(
@@ -2856,11 +2869,366 @@ impl PostcardHirLowerer {
                     },
                 });
             }
-            ScalarType::U8 | ScalarType::I8 => {
+            ScalarType::U8 | ScalarType::I8 | ScalarType::F32 | ScalarType::F64 => {
                 self.push_init(statements, place, hir::Expr::Local(raw_local));
             }
             _ => unreachable!(),
         }
+    }
+
+    fn lower_postcard_char_into_place(
+        &mut self,
+        statements: &mut Vec<hir::Stmt>,
+        cursor_local: hir::LocalId,
+        place: hir::Place,
+    ) {
+        let len_local = self.alloc_local(
+            format!("char_len_{}", self.locals.len()),
+            hir::Type::u(32),
+            hir::LocalKind::Temp,
+        );
+        self.lower_postcard_varint_into_place(
+            statements,
+            cursor_local,
+            hir::Place::Local(len_local),
+            32,
+            false,
+        );
+
+        let invalid_len = hir::Expr::Binary {
+            op: hir::BinaryOp::Or,
+            lhs: Box::new(hir::Expr::Binary {
+                op: hir::BinaryOp::Eq,
+                lhs: Box::new(hir::Expr::Local(len_local)),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+            }),
+            rhs: Box::new(hir::Expr::Binary {
+                op: hir::BinaryOp::Gt,
+                lhs: Box::new(hir::Expr::Local(len_local)),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(4))),
+            }),
+        };
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::If {
+                condition: invalid_len,
+                then_block: hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: vec![hir::Stmt {
+                        id: self.next_stmt_id(),
+                        kind: hir::StmtKind::Fail {
+                            code: hir::ErrorCode::InvalidUtf8,
+                        },
+                    }],
+                },
+                else_block: Some(hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: Vec::new(),
+                }),
+            },
+        });
+
+        self.push_cursor_bounds_check_expr(
+            statements,
+            cursor_local,
+            hir::Expr::Local(len_local),
+            hir::ErrorCode::UnexpectedEof,
+        );
+
+        let bytes = self.cursor_bytes_expr(cursor_local);
+        let pos = self.cursor_pos_expr(cursor_local);
+        let data_local = self.alloc_local(
+            format!("char_data_{}", self.locals.len()),
+            hir::Type::u(64),
+            hir::LocalKind::Temp,
+        );
+        self.push_init(
+            statements,
+            hir::Place::Local(data_local),
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(hir::Expr::SliceData {
+                    value: Box::new(bytes),
+                }),
+                rhs: Box::new(pos.clone()),
+            },
+        );
+
+        let validate_utf8 = self.ensure_runtime_validate_utf8_range();
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                target: hir::CallTarget::Callable(validate_utf8),
+                args: vec![hir::Expr::Local(data_local), hir::Expr::Local(len_local)],
+            })),
+        });
+
+        let raw0 = self.alloc_local(
+            format!("char_raw0_{}", self.locals.len()),
+            hir::Type::u(8),
+            hir::LocalKind::Temp,
+        );
+        let raw1 = self.alloc_local(
+            format!("char_raw1_{}", self.locals.len()),
+            hir::Type::u(8),
+            hir::LocalKind::Temp,
+        );
+        let raw2 = self.alloc_local(
+            format!("char_raw2_{}", self.locals.len()),
+            hir::Type::u(8),
+            hir::LocalKind::Temp,
+        );
+        let raw3 = self.alloc_local(
+            format!("char_raw3_{}", self.locals.len()),
+            hir::Type::u(8),
+            hir::LocalKind::Temp,
+        );
+        let code_local = self.alloc_local(
+            format!("char_code_{}", self.locals.len()),
+            hir::Type::u(32),
+            hir::LocalKind::Temp,
+        );
+
+        self.push_init(
+            statements,
+            hir::Place::Local(raw0),
+            hir::Expr::Load {
+                addr: Box::new(hir::Expr::Local(data_local)),
+                width: hir::MemoryWidth::W1,
+            },
+        );
+
+        let load_byte = |data_local, offset| hir::Expr::Load {
+            addr: Box::new(hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(hir::Expr::Local(data_local)),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(offset))),
+            }),
+            width: hir::MemoryWidth::W1,
+        };
+
+        let one_byte = hir::Block {
+            scope: hir::ScopeId::new(0),
+            statements: vec![hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Init {
+                    place: hir::Place::Local(code_local),
+                    value: hir::Expr::Local(raw0),
+                },
+            }],
+        };
+
+        let mut two_byte_statements = Vec::new();
+        self.push_init(
+            &mut two_byte_statements,
+            hir::Place::Local(raw1),
+            load_byte(data_local, 1),
+        );
+        two_byte_statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Init {
+                place: hir::Place::Local(code_local),
+                value: hir::Expr::Binary {
+                    op: hir::BinaryOp::BitOr,
+                    lhs: Box::new(hir::Expr::Binary {
+                        op: hir::BinaryOp::Shl,
+                        lhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::BitAnd,
+                            lhs: Box::new(hir::Expr::Local(raw0)),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x1f))),
+                        }),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(6))),
+                    }),
+                    rhs: Box::new(hir::Expr::Binary {
+                        op: hir::BinaryOp::BitAnd,
+                        lhs: Box::new(hir::Expr::Local(raw1)),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x3f))),
+                    }),
+                },
+            },
+        });
+        let two_byte = hir::Block {
+            scope: hir::ScopeId::new(0),
+            statements: two_byte_statements,
+        };
+
+        let mut three_byte_statements = Vec::new();
+        self.push_init(
+            &mut three_byte_statements,
+            hir::Place::Local(raw1),
+            load_byte(data_local, 1),
+        );
+        self.push_init(
+            &mut three_byte_statements,
+            hir::Place::Local(raw2),
+            load_byte(data_local, 2),
+        );
+        three_byte_statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Init {
+                place: hir::Place::Local(code_local),
+                value: hir::Expr::Binary {
+                    op: hir::BinaryOp::BitOr,
+                    lhs: Box::new(hir::Expr::Binary {
+                        op: hir::BinaryOp::Shl,
+                        lhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::BitAnd,
+                            lhs: Box::new(hir::Expr::Local(raw0)),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x0f))),
+                        }),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(12))),
+                    }),
+                    rhs: Box::new(hir::Expr::Binary {
+                        op: hir::BinaryOp::BitOr,
+                        lhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::Shl,
+                            lhs: Box::new(hir::Expr::Binary {
+                                op: hir::BinaryOp::BitAnd,
+                                lhs: Box::new(hir::Expr::Local(raw1)),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x3f))),
+                            }),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(6))),
+                        }),
+                        rhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::BitAnd,
+                            lhs: Box::new(hir::Expr::Local(raw2)),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x3f))),
+                        }),
+                    }),
+                },
+            },
+        });
+        let three_byte = hir::Block {
+            scope: hir::ScopeId::new(0),
+            statements: three_byte_statements,
+        };
+
+        let mut four_byte_statements = Vec::new();
+        self.push_init(
+            &mut four_byte_statements,
+            hir::Place::Local(raw1),
+            load_byte(data_local, 1),
+        );
+        self.push_init(
+            &mut four_byte_statements,
+            hir::Place::Local(raw2),
+            load_byte(data_local, 2),
+        );
+        self.push_init(
+            &mut four_byte_statements,
+            hir::Place::Local(raw3),
+            load_byte(data_local, 3),
+        );
+        four_byte_statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Init {
+                place: hir::Place::Local(code_local),
+                value: hir::Expr::Binary {
+                    op: hir::BinaryOp::BitOr,
+                    lhs: Box::new(hir::Expr::Binary {
+                        op: hir::BinaryOp::BitOr,
+                        lhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::Shl,
+                            lhs: Box::new(hir::Expr::Binary {
+                                op: hir::BinaryOp::BitAnd,
+                                lhs: Box::new(hir::Expr::Local(raw0)),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x07))),
+                            }),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(18))),
+                        }),
+                        rhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::Shl,
+                            lhs: Box::new(hir::Expr::Binary {
+                                op: hir::BinaryOp::BitAnd,
+                                lhs: Box::new(hir::Expr::Local(raw1)),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x3f))),
+                            }),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(12))),
+                        }),
+                    }),
+                    rhs: Box::new(hir::Expr::Binary {
+                        op: hir::BinaryOp::BitOr,
+                        lhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::Shl,
+                            lhs: Box::new(hir::Expr::Binary {
+                                op: hir::BinaryOp::BitAnd,
+                                lhs: Box::new(hir::Expr::Local(raw2)),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x3f))),
+                            }),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(6))),
+                        }),
+                        rhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::BitAnd,
+                            lhs: Box::new(hir::Expr::Local(raw3)),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x3f))),
+                        }),
+                    }),
+                },
+            },
+        });
+        let four_byte = hir::Block {
+            scope: hir::ScopeId::new(0),
+            statements: four_byte_statements,
+        };
+
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::If {
+                condition: hir::Expr::Binary {
+                    op: hir::BinaryOp::Eq,
+                    lhs: Box::new(hir::Expr::Local(len_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                },
+                then_block: one_byte,
+                else_block: Some(hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: vec![hir::Stmt {
+                        id: self.next_stmt_id(),
+                        kind: hir::StmtKind::If {
+                            condition: hir::Expr::Binary {
+                                op: hir::BinaryOp::Eq,
+                                lhs: Box::new(hir::Expr::Local(len_local)),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(2))),
+                            },
+                            then_block: two_byte,
+                            else_block: Some(hir::Block {
+                                scope: hir::ScopeId::new(0),
+                                statements: vec![hir::Stmt {
+                                    id: self.next_stmt_id(),
+                                    kind: hir::StmtKind::If {
+                                        condition: hir::Expr::Binary {
+                                            op: hir::BinaryOp::Eq,
+                                            lhs: Box::new(hir::Expr::Local(len_local)),
+                                            rhs: Box::new(hir::Expr::Literal(
+                                                hir::Literal::Integer(3),
+                                            )),
+                                        },
+                                        then_block: three_byte,
+                                        else_block: Some(four_byte),
+                                    },
+                                }],
+                            }),
+                        },
+                    }],
+                }),
+            },
+        });
+
+        self.push_init(statements, place, hir::Expr::Local(code_local));
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Field {
+                    base: Box::new(hir::Place::Local(cursor_local)),
+                    field: "pos".to_owned(),
+                },
+                value: hir::Expr::Binary {
+                    op: hir::BinaryOp::Add,
+                    lhs: Box::new(pos),
+                    rhs: Box::new(hir::Expr::Local(len_local)),
+                },
+            },
+        });
     }
 
     fn lower_postcard_option_tag_into_local(
@@ -3331,7 +3699,7 @@ impl PostcardHirLowerer {
                     self.push_store(statements, base_addr, hir::MemoryWidth::W2, value);
                     return;
                 }
-                ScalarType::U32 | ScalarType::I32 | ScalarType::F32 => {
+                ScalarType::U32 | ScalarType::I32 | ScalarType::F32 | ScalarType::Char => {
                     self.push_store(statements, base_addr, hir::MemoryWidth::W4, value);
                     return;
                 }
@@ -4037,6 +4405,19 @@ impl PostcardHirLowerer {
                         64,
                         true,
                     );
+                    return;
+                }
+                ScalarType::F32 | ScalarType::F64 => {
+                    self.lower_postcard_fixed_width_scalar_into_place(
+                        statements,
+                        cursor_local,
+                        place,
+                        st,
+                    );
+                    return;
+                }
+                ScalarType::Char => {
+                    self.lower_postcard_char_into_place(statements, cursor_local, place);
                     return;
                 }
                 ScalarType::Str => {
@@ -5826,14 +6207,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
         match shape.scalar_type() {
             Some(ScalarType::Bool | ScalarType::U8 | ScalarType::I8) => crate::ir::Width::W1,
             Some(ScalarType::U16 | ScalarType::I16) => crate::ir::Width::W2,
-            Some(ScalarType::U32 | ScalarType::I32) => crate::ir::Width::W4,
+            Some(ScalarType::U32 | ScalarType::I32 | ScalarType::F32 | ScalarType::Char) => {
+                crate::ir::Width::W4
+            }
             Some(
                 ScalarType::U64
                 | ScalarType::I64
                 | ScalarType::USize
                 | ScalarType::ISize
                 | ScalarType::U128
-                | ScalarType::I128,
+                | ScalarType::I128
+                | ScalarType::F64,
             ) => crate::ir::Width::W8,
             _ => panic!(
                 "unsupported structural HIR scalar width for {}",
@@ -6228,6 +6612,17 @@ mod tests {
         zip: u32,
     }
 
+    #[derive(Debug, PartialEq, Facet)]
+    struct FloatHeader {
+        a: f32,
+        b: f64,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct CharHeader {
+        ch: char,
+    }
+
     #[derive(Debug, PartialEq, Eq, Facet)]
     struct MaybeBorrowedName<'a> {
         name: Option<&'a str>,
@@ -6469,6 +6864,36 @@ mod tests {
     }
 
     #[test]
+    fn postcard_hir_models_float_scalars_without_reader_calls() {
+        let module = build_postcard_decoder_hir(<FloatHeader>::SHAPE);
+
+        assert!(
+            module.callable_named("postcard.read_f32").is_none(),
+            "float lowering should not use postcard.read_f32"
+        );
+        assert!(
+            module.callable_named("postcard.read_f64").is_none(),
+            "float lowering should not use postcard.read_f64"
+        );
+    }
+
+    #[test]
+    fn postcard_hir_models_char_without_reader_calls() {
+        let module = build_postcard_decoder_hir(<CharHeader>::SHAPE);
+
+        assert!(
+            module.callable_named("postcard.read_char").is_none(),
+            "char lowering should not use postcard.read_char"
+        );
+        assert!(
+            module
+                .callable_named("runtime.validate_utf8_range")
+                .is_some(),
+            "char lowering should validate UTF-8 explicitly"
+        );
+    }
+
+    #[test]
     fn postcard_hir_models_option_borrowed_fields() {
         let module = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
         let (_, function) = module.functions.iter().next().unwrap();
@@ -6623,6 +7048,29 @@ mod tests {
         let none = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[0])
             .expect("HIR->RVSDG postcard decoder should decode None");
         assert_eq!(none, MaybeBorrowedName { name: None });
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_float_fields() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<FloatHeader>::SHAPE);
+
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&3.14f32.to_le_bytes());
+        bytes.extend_from_slice(&2.718281828459045f64.to_le_bytes());
+
+        let value = crate::deserialize::<FloatHeader>(&decoder, &bytes)
+            .expect("structural HIR postcard decoder should decode float fields");
+        assert_eq!(value.a.to_bits(), 3.14f32.to_bits());
+        assert_eq!(value.b.to_bits(), 2.718281828459045f64.to_bits());
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_char_field() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<CharHeader>::SHAPE);
+
+        let value = crate::deserialize::<CharHeader>(&decoder, &[2, 0xC3, 0x9F])
+            .expect("structural HIR postcard decoder should decode char fields");
+        assert_eq!(value, CharHeader { ch: 'ß' });
     }
 
     #[test]
