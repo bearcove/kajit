@@ -5227,8 +5227,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             "structural postcard readers should consume the cursor local directly"
         );
         match self.callable_name(call) {
-            "postcard.read_bool" => self.decoder.lower_read_scalar(rb, offset, ScalarType::Bool),
-            "postcard.read_u8" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U8),
             "postcard.read_u16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U16),
             "postcard.read_u32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U32),
             "postcard.read_u64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U64),
@@ -5236,7 +5234,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             "postcard.read_usize" => self
                 .decoder
                 .lower_read_scalar(rb, offset, ScalarType::USize),
-            "postcard.read_i8" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I8),
             "postcard.read_i16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I16),
             "postcard.read_i32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I32),
             "postcard.read_i64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I64),
@@ -5245,10 +5242,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 .decoder
                 .lower_read_scalar(rb, offset, ScalarType::ISize),
             "postcard.read_str" => self.decoder.lower_read_string(rb, offset, ScalarType::Str),
-            "postcard.read_option_tag" => self.lower_postcard_option_tag(rb, offset),
-            "postcard.read_discriminant" => {
-                self.decoder.lower_read_scalar(rb, offset, ScalarType::U32)
-            }
             other => panic!("unsupported structural postcard reader {other}"),
         }
     }
@@ -5300,23 +5293,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             branch.write_to_field(ptr_value, (offset as u32) + offsets.ptr_offset, usize_width);
             branch.write_to_field(len, (offset as u32) + offsets.len_offset, usize_width);
             branch.write_to_field(cap, (offset as u32) + offsets.cap_offset, usize_width);
-            branch.set_results(&[]);
-        });
-    }
-
-    fn lower_postcard_option_tag(&self, rb: &mut RegionBuilder<'_>, offset: usize) {
-        rb.bounds_check(1);
-        let tag = rb.read_bytes(1);
-        let width = crate::ir::Width::W1;
-        rb.gamma(tag, &[], 3, |branch_idx, branch| {
-            match branch_idx {
-                0 | 1 => {
-                    let value = branch.const_val(branch_idx as u64);
-                    branch.write_to_field(value, offset as u32, width);
-                }
-                2 => branch.error_exit(crate::context::ErrorCode::UnknownVariant),
-                _ => unreachable!(),
-            }
             branch.set_results(&[]);
         });
     }
@@ -6430,6 +6406,10 @@ mod tests {
             "borrowed string lowering should not use postcard.read_str"
         );
         assert!(
+            module.callable_named("postcard.read_u32").is_none(),
+            "borrowed header lowering should not use postcard.read_u32"
+        );
+        assert!(
             statements.iter().any(|stmt| matches!(
                 &stmt.kind,
                 hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
@@ -6493,6 +6473,11 @@ mod tests {
         let module = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
         let (_, function) = module.functions.iter().next().unwrap();
         let input_region = function.region_params[0];
+
+        assert!(
+            module.callable_named("postcard.read_option_tag").is_none(),
+            "option lowering should not use postcard.read_option_tag"
+        );
 
         assert!(function.locals.len() >= 4);
         assert!(
@@ -6644,6 +6629,13 @@ mod tests {
     fn postcard_hir_models_unit_enums() {
         let module = build_postcard_decoder_hir(<UnitAnimal>::SHAPE);
         let (_, function) = module.functions.iter().next().unwrap();
+
+        assert!(
+            module
+                .callable_named("postcard.read_discriminant")
+                .is_none(),
+            "unit enum lowering should not use postcard.read_discriminant"
+        );
 
         assert!(
             function
