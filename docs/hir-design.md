@@ -213,6 +213,13 @@ problems:
 Rust `String` is the clearest example. Generated decoder HIR does not need a
 semantic `String` value just because the host result contains one.
 
+The same principle applies to format decoding itself. HIR should not push
+format semantics down into opaque helper leaves when those semantics can be
+expressed as ordinary low-level code. Byte reads, scalar assembly, bounds
+checks, cursor updates, and dispatch should live in HIR whenever that is part
+of the intended executable subset. Runtime calls remain appropriate for true
+runtime boundaries such as allocation and host-value materialization.
+
 ### HIR should include first-class structs and enums
 
 HIR should treat structs and Rust-style enums as ordinary source-semantic

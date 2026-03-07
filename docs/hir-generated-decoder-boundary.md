@@ -96,6 +96,18 @@ So the important boundary is:
 - host values may be constructed by destination-directed materialization without
   ever existing as ordinary HIR locals or return values
 
+That same boundary applies to format logic. Format-specific parsing should be
+ordinary HIR code where possible:
+
+- byte loads
+- scalar arithmetic and comparisons
+- explicit cursor updates
+- structured control flow
+
+Runtime calls remain appropriate for true runtime boundaries such as allocation
+and host-value materialization. They are not the place to hide format semantics
+that should live in generated HIR programs.
+
 ## Place Pressure Point
 
 The current `Place<T>` spelling is under pressure.
