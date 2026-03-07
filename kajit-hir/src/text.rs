@@ -604,6 +604,15 @@ impl fmt::Display for ExprDisplay<'_> {
                 Literal::String(value) => write!(f, "{}", quoted(value)),
             },
             Expr::Local(local) => write!(f, "l{}", local.index()),
+            Expr::Load { addr, width } => write!(
+                f,
+                "load {}({})",
+                MemoryWidthDisplay { width: *width },
+                ExprDisplay {
+                    module: self.module,
+                    expr: addr
+                }
+            ),
             Expr::Field { base, field } => write!(
                 f,
                 "field({}, {})",

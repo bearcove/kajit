@@ -1262,6 +1262,10 @@ pub enum BinaryOp {
 pub enum Expr {
     Literal(Literal),
     Local(LocalId),
+    Load {
+        addr: Box<Expr>,
+        width: MemoryWidth,
+    },
     Field {
         base: Box<Expr>,
         field: String,
@@ -2477,5 +2481,55 @@ mod tests {
         assert!(text.contains("function f0 \"build_vec_u32_2\""));
         assert!(text.contains("store w4"));
         assert!(text.contains("runtime.vec_from_raw_parts"));
+    }
+
+    #[test]
+    fn load_expressions_model_typed_memory_reads() {
+        let mut module = Module::new();
+        module.add_function(Function {
+            name: "load_demo".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![Parameter {
+                local: LocalId::new(0),
+                name: "addr".to_owned(),
+                ty: Type::persistent_addr(),
+                kind: LocalKind::Param,
+            }],
+            locals: vec![LocalDecl {
+                local: LocalId::new(1),
+                name: "word".to_owned(),
+                ty: Type::u(32),
+                kind: LocalKind::Temp,
+            }],
+            return_type: Type::unit(),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: None,
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![
+                    Stmt {
+                        id: StmtId::new(0),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(1)),
+                            value: Expr::Load {
+                                addr: Box::new(Expr::Local(LocalId::new(0))),
+                                width: MemoryWidth::W4,
+                            },
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(1),
+                        kind: StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let text = module.to_string();
+        assert!(text.contains("load w4(l0)"));
     }
 }

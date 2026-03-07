@@ -3741,6 +3741,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let slot = self.local_slots[local].base_slot;
                 rb.read_from_slot(slot)
             }
+            hir::Expr::Load { addr, width } => {
+                let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_shape);
+                rb.load_from_addr(addr, self.ir_width_for_memory_width(*width))
+            }
             hir::Expr::Field { .. } | hir::Expr::Index { .. } => {
                 let place = self.expr_to_place(expr);
                 if let hir::Place::Index { base, index } = &place
@@ -5662,6 +5666,101 @@ mod tests {
         let value = crate::deserialize::<VecHolder>(&decoder, &[])
             .expect("structural HIR decoder should materialize an empty Vec from raw parts");
         assert!(value.values.is_empty());
+    }
+
+    #[test]
+    fn structural_hir_ir_path_loads_from_persistent_buffer() {
+        let mut module = hir::Module::new();
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <ScalarNumber>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![hir::FieldDef {
+                    name: "value".to_owned(),
+                    ty: hir::Type::u(32),
+                }],
+            },
+        });
+        let runtime = module.install_runtime_memory_callables();
+        module.add_function(hir::Function {
+            name: "load_persistent_word".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![hir::LocalDecl {
+                local: hir::LocalId::new(2),
+                name: "ptr".to_owned(),
+                ty: hir::Type::persistent_addr(),
+                kind: hir::LocalKind::Temp,
+            }],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("persistent buffer load kernel".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(2)),
+                            value: hir::Expr::Call(hir::CallExpr {
+                                target: hir::CallTarget::Callable(runtime.alloc_persistent),
+                                args: vec![
+                                    hir::Expr::Literal(hir::Literal::Integer(4)),
+                                    hir::Expr::Literal(hir::Literal::Integer(4)),
+                                ],
+                            }),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Store {
+                            addr: hir::Expr::Local(hir::LocalId::new(2)),
+                            width: hir::MemoryWidth::W4,
+                            value: hir::Expr::Literal(hir::Literal::Integer(0x1234)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "value".to_owned(),
+                            },
+                            value: hir::Expr::Load {
+                                addr: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                width: hir::MemoryWidth::W4,
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<ScalarNumber>::SHAPE, &module);
+        let value = crate::deserialize::<ScalarNumber>(&decoder, &[])
+            .expect("structural HIR decoder should load from persistent buffer");
+        assert_eq!(value, ScalarNumber { value: 0x1234 });
     }
 
     #[test]

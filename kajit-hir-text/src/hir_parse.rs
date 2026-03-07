@@ -480,6 +480,16 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
                 })
             });
 
+        let load_expr = token("load")
+            .ignore_then(memory_width())
+            .then_ignore(token("("))
+            .then(expr.clone())
+            .then_ignore(token(")"))
+            .map(|(width, addr)| Expr::Load {
+                addr: Box::new(addr),
+                width,
+            });
+
         let field_expr = token("field")
             .ignore_then(token("("))
             .ignore_then(expr.clone())
@@ -583,6 +593,7 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
             });
 
         choice((
+            load_expr,
             call,
             field_expr,
             index_expr,
@@ -1342,6 +1353,57 @@ hir_module {
         let text = module.to_string();
         let reparsed = parse_hir(&text).expect("kernel HIR text should parse");
         assert_eq!(reparsed, module);
+    }
+
+    #[test]
+    fn round_trips_load_expressions() {
+        let mut module = Module::new();
+        module.add_function(Function {
+            name: "load_demo".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![kajit_hir::Parameter {
+                local: LocalId::new(0),
+                name: "addr".to_owned(),
+                ty: Type::persistent_addr(),
+                kind: LocalKind::Param,
+            }],
+            locals: vec![LocalDecl {
+                local: LocalId::new(1),
+                name: "word".to_owned(),
+                ty: Type::u(32),
+                kind: LocalKind::Temp,
+            }],
+            return_type: Type::unit(),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: None,
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![
+                    Stmt {
+                        id: StmtId::new(0),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(1)),
+                            value: Expr::Load {
+                                addr: Box::new(Expr::Local(LocalId::new(0))),
+                                width: MemoryWidth::W4,
+                            },
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(1),
+                        kind: StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let text = module.to_string();
+        let reparsed = parse_hir(&text).expect("round-tripped load expressions should parse");
+        assert_eq!(module, reparsed);
     }
 
     #[test]
