@@ -5019,7 +5019,6 @@ struct StructuralLocalStorage {
 
 struct StructuralHirIrLowerer<'a> {
     module: &'a hir::Module,
-    decoder: crate::postcard::KajitPostcard,
     cursor_local: hir::LocalId,
     local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
@@ -5084,7 +5083,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             Self::initialize_cursor_shadow(rb, module, cursor_local, &local_slots, &local_types);
         Self {
             module,
-            decoder: crate::postcard::KajitPostcard,
             cursor_local,
             local_slots,
             local_types,
@@ -5514,39 +5512,24 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     }
                     return;
                 }
-                if self.is_postcard_reader(call) {
-                    match resolved {
-                        ResolvedStructuralPlace::Destination { offset, .. } => {
-                            self.lower_postcard_call_at_offset(rb, call, offset);
-                        }
-                        ResolvedStructuralPlace::Local {
-                            ty,
-                            storage,
-                            slot_offset,
-                        } => {
-                            self.lower_postcard_call_into_local(rb, call, ty, storage, slot_offset)
-                        }
+                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                match resolved {
+                    ResolvedStructuralPlace::Destination { shape, offset } => {
+                        let width = self.scalar_width_for_shape(shape);
+                        rb.write_to_field(scalar, offset as u32, width);
                     }
-                } else {
-                    let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
-                    match resolved {
-                        ResolvedStructuralPlace::Destination { shape, offset } => {
-                            let width = self.scalar_width_for_shape(shape);
-                            rb.write_to_field(scalar, offset as u32, width);
-                        }
-                        ResolvedStructuralPlace::Local {
-                            ty,
-                            storage,
-                            slot_offset,
-                        } => {
-                            assert_eq!(
-                                Self::slot_count_for_type(self.module, ty),
-                                1,
-                                "structural local scalar write requires single-slot type"
-                            );
-                            rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
-                            self.maybe_sync_cursor_position(rb, place, scalar);
-                        }
+                    ResolvedStructuralPlace::Local {
+                        ty,
+                        storage,
+                        slot_offset,
+                    } => {
+                        assert_eq!(
+                            Self::slot_count_for_type(self.module, ty),
+                            1,
+                            "structural local scalar write requires single-slot type"
+                        );
+                        rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
+                        self.maybe_sync_cursor_position(rb, place, scalar);
                     }
                 }
             }
@@ -5721,30 +5704,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         )
     }
 
-    fn lower_postcard_call_into_local(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        call: &hir::CallExpr,
-        ty: &hir::Type,
-        storage: StructuralLocalStorage,
-        slot_offset: usize,
-    ) {
-        let slot_count = Self::slot_count_for_type(self.module, ty);
-        let base_slot = Self::slot_at(storage, slot_offset);
-        for slot_index in 0..slot_count {
-            let zero = rb.const_val(0);
-            rb.write_to_slot(
-                crate::ir::SlotId::new(base_slot.index() as u32 + slot_index as u32),
-                zero,
-            );
-        }
-        let saved_out = rb.save_out_ptr();
-        let slot_ptr = rb.slot_addr(base_slot);
-        rb.set_out_ptr(slot_ptr);
-        self.lower_postcard_call_at_offset(rb, call, 0);
-        rb.set_out_ptr(saved_out);
-    }
-
     fn lower_option_variant_write(
         &self,
         rb: &mut RegionBuilder<'_>,
@@ -5824,9 +5783,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 self.lower_vec_from_raw_parts_at_offset(
                     rb, call, shape, offset, dest_local, dest_shape,
                 );
-            }
-            hir::Expr::Call(call) if self.is_postcard_reader(call) => {
-                self.lower_postcard_call_at_offset(rb, call, offset)
             }
             hir::Expr::Call(_) => {
                 let scalar = self.lower_scalar_expr(rb, expr, dest_local, dest_shape);
@@ -5994,41 +5950,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             };
             rb.write_to_field(value, (offset + full_slots * 8) as u32, width);
         }
-    }
-
-    fn lower_postcard_call_at_offset(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        call: &hir::CallExpr,
-        offset: usize,
-    ) {
-        assert_eq!(
-            call.args,
-            vec![hir::Expr::Local(self.cursor_local)],
-            "structural postcard readers should consume the cursor local directly"
-        );
-        match self.callable_name(call) {
-            "postcard.read_u16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U16),
-            "postcard.read_u32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U32),
-            "postcard.read_u64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U64),
-            "postcard.read_u128" => self.decoder.lower_read_scalar(rb, offset, ScalarType::U128),
-            "postcard.read_usize" => self
-                .decoder
-                .lower_read_scalar(rb, offset, ScalarType::USize),
-            "postcard.read_i16" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I16),
-            "postcard.read_i32" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I32),
-            "postcard.read_i64" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I64),
-            "postcard.read_i128" => self.decoder.lower_read_scalar(rb, offset, ScalarType::I128),
-            "postcard.read_isize" => self
-                .decoder
-                .lower_read_scalar(rb, offset, ScalarType::ISize),
-            "postcard.read_str" => self.decoder.lower_read_string(rb, offset, ScalarType::Str),
-            other => panic!("unsupported structural postcard reader {other}"),
-        }
-    }
-
-    fn is_postcard_reader(&self, call: &hir::CallExpr) -> bool {
-        self.callable_name(call).starts_with("postcard.")
     }
 
     fn is_vec_from_raw_parts(&self, call: &hir::CallExpr) -> bool {
