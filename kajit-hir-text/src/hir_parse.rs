@@ -201,6 +201,13 @@ fn ty<'src>() -> impl Parser<'src, &'src str, Type, Extra<'src>> + Clone {
                 .then(ty.clone())
                 .then_ignore(token(">"))
                 .map(|(region, element)| Type::slice(region, element)),
+            token("Array")
+                .ignore_then(token("<"))
+                .ignore_then(ty.clone())
+                .then_ignore(token(","))
+                .then(uint32())
+                .then_ignore(token(">"))
+                .map(|(element, len)| Type::array(element, len as usize)),
             token("str")
                 .ignore_then(token("<"))
                 .ignore_then(region_id())

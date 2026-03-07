@@ -467,6 +467,15 @@ impl fmt::Display for TypeDisplay<'_> {
                 crate::Signedness::Signed => write!(f, "i{}", int.bits),
                 crate::Signedness::Unsigned => write!(f, "u{}", int.bits),
             },
+            Type::Array { element, len } => write!(
+                f,
+                "Array<{}, {}>",
+                TypeDisplay {
+                    module: self.module,
+                    ty: element
+                },
+                len
+            ),
             Type::Named { def, args } => {
                 write!(f, "t{}", def.index())?;
                 if !args.is_empty() {

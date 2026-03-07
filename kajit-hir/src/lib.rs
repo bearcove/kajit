@@ -871,6 +871,10 @@ pub enum Type {
     Unit,
     Bool,
     Integer(IntegerType),
+    Array {
+        element: Box<Type>,
+        len: usize,
+    },
     Named {
         def: TypeDefId,
         args: Vec<GenericArg>,
@@ -910,6 +914,13 @@ impl Type {
             signedness: Signedness::Signed,
             bits,
         })
+    }
+
+    pub fn array(element: Type, len: usize) -> Self {
+        Self::Array {
+            element: Box::new(element),
+            len,
+        }
     }
 
     pub fn named(def: TypeDefId, args: impl Into<Vec<GenericArg>>) -> Self {

@@ -2474,6 +2474,10 @@ impl PostcardHirLowerer {
             return hir::Type::unit();
         }
 
+        if let Def::Array(array_def) = &shape.def {
+            return hir::Type::array(self.lower_type(array_def.t), array_def.n);
+        }
+
         if shape.is_transparent() {
             let (fields, skipped) = collect_fields(shape);
             assert!(
@@ -2687,6 +2691,17 @@ impl PostcardHirLowerer {
                 "transparent HIR prototype expects one lowered field"
             );
             self.lower_shape_into_place(statements, cursor_local, place, fields[0].shape);
+            return;
+        }
+
+        if let Def::Array(array_def) = &shape.def {
+            for index in 0..array_def.n {
+                let elem_place = hir::Place::Index {
+                    base: Box::new(place.clone()),
+                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(index as u64))),
+                };
+                self.lower_shape_into_place(statements, cursor_local, elem_place, array_def.t);
+            }
             return;
         }
 
@@ -3025,6 +3040,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
     fn slot_count_for_type(module: &'a hir::Module, ty: &hir::Type) -> usize {
         match ty {
             hir::Type::Unit | hir::Type::Bool | hir::Type::Integer(_) => 1,
+            hir::Type::Array { element, len } => Self::slot_count_for_type(module, element)
+                .saturating_mul(*len)
+                .max(1),
             hir::Type::Str { .. } | hir::Type::Slice { .. } => 2,
             hir::Type::Place(inner) => Self::slot_count_for_type(module, inner),
             hir::Type::Handle { .. } => 1,
@@ -3154,11 +3172,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     }
                 }
             }
-            hir::Place::Field { .. } => {
+            hir::Place::Field { .. } | hir::Place::Index { .. } => {
                 self.lower_place_write(rb, place, value, dest_local, dest_shape);
-            }
-            hir::Place::Index { .. } => {
-                panic!("structural HIR subset does not support indexed places")
             }
         }
     }
@@ -3539,7 +3554,31 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     Some(field_info.name),
                 )
             }
-            hir::Place::Index { .. } => panic!("indexed places are unsupported"),
+            hir::Place::Index { base, index } => {
+                let (base_shape, base_offset, _) = self.resolve_place(base, dest_local, dest_shape);
+                let Def::Array(array_def) = &base_shape.def else {
+                    panic!(
+                        "indexed structural HIR place requires an array base, got {}",
+                        base_shape.type_identifier
+                    );
+                };
+                let hir::Expr::Literal(hir::Literal::Integer(index)) = &**index else {
+                    panic!("structural HIR array indices must be integer literals");
+                };
+                let index = usize::try_from(*index).expect("array index must fit in usize");
+                assert!(
+                    index < array_def.n,
+                    "array index {index} out of bounds for {}",
+                    base_shape.type_identifier
+                );
+                let elem_layout = array_def
+                    .t
+                    .layout
+                    .sized_layout()
+                    .expect("array element must be Sized");
+                let stride = elem_layout.size();
+                (array_def.t, base_offset + index * stride, None)
+            }
         }
     }
 
@@ -3951,6 +3990,16 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, Eq, Facet)]
+    struct ScalarArrayHolder {
+        values: [u32; 4],
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct BorrowedArrayHolder<'a> {
+        values: [&'a str; 2],
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
     struct BranchyAnimal {
         animal: UnitAnimal,
         value: u32,
@@ -4264,6 +4313,33 @@ mod tests {
         };
         let hir::CallTarget::Callable(callable_id) = call.target;
         assert_eq!(module.callables[callable_id].name, "postcard.read_str");
+    }
+
+    #[test]
+    fn postcard_hir_models_arrays() {
+        let module = build_postcard_decoder_hir(<BorrowedArrayHolder<'static>>::SHAPE);
+        let (_, function) = module.functions.iter().next().unwrap();
+
+        let array_inits = function
+            .body
+            .statements
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                hir::StmtKind::Init {
+                    place: hir::Place::Index { .. },
+                    value,
+                } => Some(value),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(array_inits.len(), 2);
+        for value in array_inits {
+            let hir::Expr::Call(call) = value else {
+                panic!("expected array element init to be a postcard reader call");
+            };
+            let hir::CallTarget::Callable(callable_id) = call.target;
+            assert_eq!(module.callables[callable_id].name, "postcard.read_str");
+        }
     }
 
     #[test]
@@ -4607,6 +4683,38 @@ mod tests {
             BranchyAnimal {
                 animal: UnitAnimal::Dog,
                 value: 42,
+            }
+        );
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_scalar_arrays() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<ScalarArrayHolder>::SHAPE);
+
+        let value = crate::deserialize::<ScalarArrayHolder>(&decoder, &[1, 2, 3, 4])
+            .expect("structural HIR postcard decoder should decode scalar arrays");
+        assert_eq!(
+            value,
+            ScalarArrayHolder {
+                values: [1, 2, 3, 4],
+            }
+        );
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_borrowed_arrays() {
+        let decoder =
+            compile_postcard_decoder_via_structural_hir(<BorrowedArrayHolder<'static>>::SHAPE);
+
+        let value = crate::deserialize::<BorrowedArrayHolder<'_>>(
+            &decoder,
+            &[2, b'h', b'i', 2, b'o', b'k'],
+        )
+        .expect("structural HIR postcard decoder should decode borrowed arrays");
+        assert_eq!(
+            value,
+            BorrowedArrayHolder {
+                values: ["hi", "ok"],
             }
         );
     }
