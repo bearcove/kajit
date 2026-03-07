@@ -2801,12 +2801,6 @@ impl PostcardHirLowerer {
             }
             Type::User(UserType::Enum(enum_type)) => {
                 let variants = collect_variants(enum_type);
-                assert!(
-                    variants.iter().all(|variant| variant.fields.is_empty()),
-                    "postcard HIR prototype only supports unit enums for now: {}",
-                    shape.type_identifier
-                );
-
                 let enum_def = self.ensure_type_def(shape);
                 let disc_local = self.alloc_local(
                     format!("enum_discriminant_{}", self.locals.len()),
@@ -2838,17 +2832,52 @@ impl PostcardHirLowerer {
                                 ),
                                 body: hir::Block {
                                     scope: hir::ScopeId::new(0),
-                                    statements: vec![hir::Stmt {
-                                        id: self.next_stmt_id(),
-                                        kind: hir::StmtKind::Init {
-                                            place: place.clone(),
-                                            value: hir::Expr::Variant {
-                                                def: enum_def,
-                                                variant: variant.name.to_owned(),
-                                                fields: Vec::new(),
+                                    statements: {
+                                        let mut statements = Vec::new();
+                                        let mut variant_fields = Vec::new();
+                                        for field in &variant.fields {
+                                            if is_unit(field.shape) {
+                                                variant_fields.push((
+                                                    field.name.to_owned(),
+                                                    hir::Expr::Literal(hir::Literal::Unit),
+                                                ));
+                                                continue;
+                                            }
+                                            let field_ty = self.lower_type(field.shape);
+                                            let field_local = self.alloc_local(
+                                                format!(
+                                                    "variant_{}_{}_{}",
+                                                    variant.name,
+                                                    field.name,
+                                                    self.locals.len()
+                                                ),
+                                                field_ty,
+                                                hir::LocalKind::Temp,
+                                            );
+                                            self.lower_shape_into_place(
+                                                &mut statements,
+                                                cursor_local,
+                                                hir::Place::Local(field_local),
+                                                field.shape,
+                                            );
+                                            variant_fields.push((
+                                                field.name.to_owned(),
+                                                hir::Expr::Local(field_local),
+                                            ));
+                                        }
+                                        statements.push(hir::Stmt {
+                                            id: self.next_stmt_id(),
+                                            kind: hir::StmtKind::Init {
+                                                place: place.clone(),
+                                                value: hir::Expr::Variant {
+                                                    def: enum_def,
+                                                    variant: variant.name.to_owned(),
+                                                    fields: variant_fields,
+                                                },
                                             },
-                                        },
-                                    }],
+                                        });
+                                        statements
+                                    },
                                 },
                             })
                             .collect(),
@@ -3154,23 +3183,39 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     self.lower_option_variant_write(rb, offset, *opt_def, variant, fields);
                     return;
                 }
-                assert!(
-                    fields.is_empty(),
-                    "structural HIR subset only supports unit variants"
-                );
                 let Type::User(UserType::Enum(enum_type)) = &place_shape.ty else {
-                    panic!("unit variant init must target an enum place");
+                    panic!("variant init must target an enum place");
                 };
-                let disc_width = ir_width_from_disc_size(discriminant_size(enum_type.enum_repr));
-                let disc = collect_variants(enum_type)
+                let variant_info = collect_variants(enum_type)
                     .into_iter()
                     .find(|candidate| candidate.name == variant.as_str())
-                    .unwrap_or_else(|| panic!("missing enum variant {variant}"))
+                    .unwrap_or_else(|| panic!("missing enum variant {variant}"));
+                let disc_width = ir_width_from_disc_size(discriminant_size(enum_type.enum_repr));
+                let disc = variant_info
                     .rust_discriminant
                     .try_into()
                     .expect("enum discriminant must fit in u64");
                 let value = rb.const_val(disc);
                 rb.write_to_field(value, offset as u32, disc_width);
+                for field in &variant_info.fields {
+                    let (_, expr) = fields
+                        .iter()
+                        .find(|(name, _)| name == field.name)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "missing enum payload field {} for variant {variant}",
+                                field.name
+                            )
+                        });
+                    self.lower_value_into_shape_offset(
+                        rb,
+                        field.shape,
+                        field.offset,
+                        expr,
+                        dest_local,
+                        dest_shape,
+                    );
+                }
             }
             hir::Expr::Literal(hir::Literal::Unit) => {}
             _ => {
@@ -3243,6 +3288,89 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 );
             }
             other => panic!("unsupported structural Option variant {other}"),
+        }
+    }
+
+    fn lower_value_into_shape_offset(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        shape: &'static Shape,
+        offset: usize,
+        expr: &hir::Expr,
+        _dest_local: hir::LocalId,
+        _dest_shape: &'static Shape,
+    ) {
+        match expr {
+            hir::Expr::Call(call) => self.lower_postcard_call_at_offset(rb, call, offset),
+            hir::Expr::Local(local) => self.copy_local_into_shape_offset(rb, *local, shape, offset),
+            hir::Expr::Literal(hir::Literal::Unit) => {}
+            hir::Expr::Literal(hir::Literal::Bool(value)) => {
+                let value = rb.const_val(u64::from(*value));
+                rb.write_to_field(value, offset as u32, crate::ir::Width::W1);
+            }
+            hir::Expr::Literal(hir::Literal::Integer(value)) => {
+                let value = rb.const_val(*value);
+                let width = self.scalar_width_for_shape(shape);
+                rb.write_to_field(value, offset as u32, width);
+            }
+            hir::Expr::Variant {
+                variant, fields, ..
+            } => {
+                if let Some(opt_def) = get_option_def(shape) {
+                    self.lower_option_variant_write(rb, offset, *opt_def, variant, fields);
+                } else {
+                    panic!("nested non-Option variant payloads are not supported yet");
+                }
+            }
+            other => panic!("unsupported structural payload expression: {other:?}"),
+        }
+    }
+
+    fn copy_local_into_shape_offset(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        local: hir::LocalId,
+        shape: &'static Shape,
+        offset: usize,
+    ) {
+        let storage = self.local_slots[&local];
+        if let Some(st) = shape.scalar_type() {
+            if !is_string_like_scalar(st) {
+                let value = rb.read_from_slot(storage.base_slot);
+                let width = self.scalar_width_for_shape(shape);
+                rb.write_to_field(value, offset as u32, width);
+                return;
+            }
+        }
+
+        let size = shape
+            .layout
+            .sized_layout()
+            .expect("structural local copy requires Sized layout")
+            .size();
+        let full_slots = size / 8;
+        let remainder = size % 8;
+
+        for slot_index in 0..full_slots {
+            let slot = crate::ir::SlotId::new(storage.base_slot.index() as u32 + slot_index as u32);
+            let value = rb.read_from_slot(slot);
+            rb.write_to_field(
+                value,
+                (offset + slot_index * 8) as u32,
+                crate::ir::Width::W8,
+            );
+        }
+
+        if remainder != 0 {
+            let slot = crate::ir::SlotId::new(storage.base_slot.index() as u32 + full_slots as u32);
+            let value = rb.read_from_slot(slot);
+            let width = match remainder {
+                1 => crate::ir::Width::W1,
+                2 => crate::ir::Width::W2,
+                4 => crate::ir::Width::W4,
+                _ => panic!("unsupported remainder width {remainder}"),
+            };
+            rb.write_to_field(value, (offset + full_slots * 8) as u32, width);
         }
     }
 
@@ -3805,6 +3933,14 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, Eq, Facet)]
+    #[repr(u8)]
+    enum PayloadAnimal<'a> {
+        Cat,
+        Count(u32),
+        Name(&'a str),
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
     struct ConstantNumber {
         value: u32,
     }
@@ -4083,6 +4219,51 @@ mod tests {
         };
         assert_eq!(variant, "Dog");
         assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn postcard_hir_models_payload_enums() {
+        let module = build_postcard_decoder_hir(<PayloadAnimal<'static>>::SHAPE);
+        let (_, function) = module.functions.iter().next().unwrap();
+
+        let hir::StmtKind::Match { arms, .. } = &function.body.statements[1].kind else {
+            panic!("expected enum match statement");
+        };
+        assert_eq!(arms.len(), 3);
+
+        let count_arm = &arms[1];
+        assert_eq!(count_arm.body.statements.len(), 2);
+        let hir::StmtKind::Init { value, .. } = &count_arm.body.statements[0].kind else {
+            panic!("expected payload init in Count arm");
+        };
+        let hir::Expr::Call(call) = value else {
+            panic!("expected Count payload reader call");
+        };
+        let hir::CallTarget::Callable(callable_id) = call.target;
+        assert_eq!(module.callables[callable_id].name, "postcard.read_u32");
+
+        let hir::StmtKind::Init { value, .. } = &count_arm.body.statements[1].kind else {
+            panic!("expected Count variant init");
+        };
+        let hir::Expr::Variant {
+            variant, fields, ..
+        } = value
+        else {
+            panic!("expected Count variant expression");
+        };
+        assert_eq!(variant, "Count");
+        assert_eq!(fields.len(), 1);
+
+        let name_arm = &arms[2];
+        assert_eq!(name_arm.body.statements.len(), 2);
+        let hir::StmtKind::Init { value, .. } = &name_arm.body.statements[0].kind else {
+            panic!("expected payload init in Name arm");
+        };
+        let hir::Expr::Call(call) = value else {
+            panic!("expected Name payload reader call");
+        };
+        let hir::CallTarget::Callable(callable_id) = call.target;
+        assert_eq!(module.callables[callable_id].name, "postcard.read_str");
     }
 
     #[test]
@@ -4428,6 +4609,23 @@ mod tests {
                 value: 42,
             }
         );
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_payload_enums() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<PayloadAnimal<'static>>::SHAPE);
+
+        let cat = crate::deserialize::<PayloadAnimal<'_>>(&decoder, &[0])
+            .expect("structural HIR postcard decoder should decode unit enum variant");
+        assert_eq!(cat, PayloadAnimal::Cat);
+
+        let count = crate::deserialize::<PayloadAnimal<'_>>(&decoder, &[1, 42])
+            .expect("structural HIR postcard decoder should decode scalar payload enum variant");
+        assert_eq!(count, PayloadAnimal::Count(42));
+
+        let name = crate::deserialize::<PayloadAnimal<'_>>(&decoder, &[2, 2, b'h', b'i'])
+            .expect("structural HIR postcard decoder should decode borrowed payload enum variant");
+        assert_eq!(name, PayloadAnimal::Name("hi"));
     }
 
     #[test]
