@@ -540,6 +540,11 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
                 token("sub").to(BinaryOp::Sub),
                 token("mul").to(BinaryOp::Mul),
                 token("div").to(BinaryOp::Div),
+                token("bitand").to(BinaryOp::BitAnd),
+                token("bitor").to(BinaryOp::BitOr),
+                token("xor").to(BinaryOp::Xor),
+                token("shl").to(BinaryOp::Shl),
+                token("shr").to(BinaryOp::Shr),
                 token("eq").to(BinaryOp::Eq),
                 token("ne").to(BinaryOp::Ne),
                 token("lt").to(BinaryOp::Lt),
@@ -1213,9 +1218,13 @@ mod tests {
                     Stmt {
                         id: StmtId::new(0),
                         kind: StmtKind::Expr(Expr::Binary {
-                            op: BinaryOp::Add,
+                            op: BinaryOp::BitAnd,
                             lhs: Box::new(Expr::Literal(Literal::Integer(1))),
-                            rhs: Box::new(Expr::Literal(Literal::Integer(2))),
+                            rhs: Box::new(Expr::Binary {
+                                op: BinaryOp::Shl,
+                                lhs: Box::new(Expr::Literal(Literal::Integer(3))),
+                                rhs: Box::new(Expr::Literal(Literal::Integer(1))),
+                            }),
                         }),
                     },
                     Stmt {

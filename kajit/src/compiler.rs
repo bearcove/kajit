@@ -3489,6 +3489,11 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let ir_op = match op {
                     hir::BinaryOp::Add => crate::ir::IrOp::Add,
                     hir::BinaryOp::Sub => crate::ir::IrOp::Sub,
+                    hir::BinaryOp::BitAnd => crate::ir::IrOp::And,
+                    hir::BinaryOp::BitOr => crate::ir::IrOp::Or,
+                    hir::BinaryOp::Xor => crate::ir::IrOp::Xor,
+                    hir::BinaryOp::Shl => crate::ir::IrOp::Shl,
+                    hir::BinaryOp::Shr => crate::ir::IrOp::Shr,
                     hir::BinaryOp::And => crate::ir::IrOp::And,
                     hir::BinaryOp::Or => crate::ir::IrOp::Or,
                     hir::BinaryOp::Ne => crate::ir::IrOp::CmpNe,
@@ -4000,6 +4005,14 @@ mod tests {
     struct BranchyAnimal {
         animal: UnitAnimal,
         value: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct MaskSummary {
+        masked: u32,
+        shifted: u32,
+        toggled: u32,
+        combined: u32,
     }
 
     fn compile_structural_hir_decoder(
@@ -4678,6 +4691,210 @@ mod tests {
             BranchyAnimal {
                 animal: UnitAnimal::Dog,
                 value: 42,
+            }
+        );
+    }
+
+    #[test]
+    fn structural_hir_ir_path_computes_bit_masks() {
+        let mut module = hir::Module::new();
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <MaskSummary>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "masked".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                    hir::FieldDef {
+                        name: "shifted".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                    hir::FieldDef {
+                        name: "toggled".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                    hir::FieldDef {
+                        name: "combined".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                ],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "mask_summary".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "mask".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "masked".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(4),
+                    name: "shifted".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(5),
+                    name: "toggled".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(6),
+                    name: "combined".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("structural bit-mask HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(2)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(0b1111)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(3)),
+                            value: hir::Expr::Binary {
+                                op: hir::BinaryOp::BitAnd,
+                                lhs: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0b1011))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(4)),
+                            value: hir::Expr::Binary {
+                                op: hir::BinaryOp::Shr,
+                                lhs: Box::new(hir::Expr::Local(hir::LocalId::new(3))),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(5)),
+                            value: hir::Expr::Binary {
+                                op: hir::BinaryOp::Xor,
+                                lhs: Box::new(hir::Expr::Local(hir::LocalId::new(3))),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0b0011))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(6)),
+                            value: hir::Expr::Binary {
+                                op: hir::BinaryOp::BitOr,
+                                lhs: Box::new(hir::Expr::Binary {
+                                    op: hir::BinaryOp::Shl,
+                                    lhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(3))),
+                                }),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "masked".to_owned(),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(3)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(6),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "shifted".to_owned(),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(4)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(7),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "toggled".to_owned(),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(5)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(8),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "combined".to_owned(),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(6)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(9),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<MaskSummary>::SHAPE, &module);
+        let value = crate::deserialize::<MaskSummary>(&decoder, &[])
+            .expect("structural HIR decoder should compute bit-mask values");
+        assert_eq!(
+            value,
+            MaskSummary {
+                masked: 0b1011,
+                shifted: 0b0101,
+                toggled: 0b1000,
+                combined: 0b1001,
             }
         );
     }

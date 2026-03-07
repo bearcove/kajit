@@ -753,9 +753,15 @@ impl Module {
                 | BinaryOp::Ge
                 | BinaryOp::And
                 | BinaryOp::Or => Ok(Type::bool()),
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                    self.vixen_expr_type(lhs, local_types)
-                }
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::Xor
+                | BinaryOp::Shl
+                | BinaryOp::Shr => self.vixen_expr_type(lhs, local_types),
             },
             VixenTypedExpr::Call { callee, .. } => {
                 let callable = self.resolve_vixen_callable(callee)?;
@@ -1093,6 +1099,11 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    BitAnd,
+    BitOr,
+    Xor,
+    Shl,
+    Shr,
     Eq,
     Ne,
     Lt,
