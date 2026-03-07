@@ -948,7 +948,8 @@ mod tests {
         CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr, FieldDef,
         Function, GenericArg, GenericParam, Literal, LocalDecl, LocalId, LocalKind, MatchArm,
         Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId, StmtKind, Type,
-        TypeDef, TypeDefKind, VariantDef,
+        TypeDef, TypeDefKind, VariantDef, VixenBuiltin, VixenCoreTypes, VixenTypedExpr,
+        VixenTypedFunction, VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
     };
 
     fn sample_module() -> Module {
@@ -1269,5 +1270,140 @@ mod tests {
         let text = module.to_string();
         let reparsed = parse_hir(&text).expect("HIR text should parse");
         assert_eq!(reparsed, module);
+    }
+
+    #[test]
+    fn round_trips_lowered_vixen_function_module() {
+        let mut module = Module::new();
+        let string = module.add_type_def(TypeDef {
+            name: "String".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let node = module.add_type_def(TypeDef {
+            name: "Node".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "label".to_owned(),
+                    ty: Type::named(string, Vec::new()),
+                }],
+            },
+        });
+        let edge = module.add_type_def(TypeDef {
+            name: "Edge".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let fact = module.add_type_def(TypeDef {
+            name: "Fact".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_graph = module.add_type_def(TypeDef {
+            name: "CrateGraph".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_node = module.add_type_def(TypeDef {
+            name: "CrateNode".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_id = module.add_type_def(TypeDef {
+            name: "CrateId".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "value".to_owned(),
+                    ty: Type::named(string, Vec::new()),
+                }],
+            },
+        });
+        let crate_type = module.add_type_def(TypeDef {
+            name: "CrateType".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Enum {
+                variants: vec![
+                    VariantDef {
+                        name: "Lib".to_owned(),
+                        fields: vec![],
+                    },
+                    VariantDef {
+                        name: "Bin".to_owned(),
+                        fields: vec![],
+                    },
+                ],
+            },
+        });
+
+        module.install_vixen_core_callables(&VixenCoreTypes {
+            string: Type::named(string, Vec::new()),
+            node: Type::named(node, Vec::new()),
+            edge: Type::named(edge, Vec::new()),
+            fact: Type::named(fact, Vec::new()),
+            crate_graph: Type::named(crate_graph, Vec::new()),
+            crate_node: Type::named(crate_node, Vec::new()),
+            crate_id: Type::named(crate_id, Vec::new()),
+            crate_type: Type::named(crate_type, Vec::new()),
+        });
+
+        let lowered = module
+            .lower_vixen_typed_function_into_module(&VixenTypedFunction {
+                name: "plan_compile".to_owned(),
+                params: vec![VixenTypedParam {
+                    local: LocalId::new(0),
+                    name: "graph".to_owned(),
+                    ty: Type::named(crate_graph, Vec::new()),
+                }],
+                locals: vec![
+                    VixenTypedLocal {
+                        local: LocalId::new(1),
+                        name: "node".to_owned(),
+                        ty: Type::named(node, Vec::new()),
+                    },
+                    VixenTypedLocal {
+                        local: LocalId::new(2),
+                        name: "emit_enabled".to_owned(),
+                        ty: Type::bool(),
+                    },
+                ],
+                return_type: Type::unit(),
+                body: vec![
+                    VixenTypedStmt::Let {
+                        local: LocalId::new(2),
+                        value: VixenTypedExpr::Literal(Literal::Bool(true)),
+                    },
+                    VixenTypedStmt::If {
+                        condition: VixenTypedExpr::Local(LocalId::new(2)),
+                        then_body: vec![
+                            VixenTypedStmt::Let {
+                                local: LocalId::new(1),
+                                value: VixenTypedExpr::Struct {
+                                    def: node,
+                                    fields: vec![(
+                                        "label".to_owned(),
+                                        VixenTypedExpr::Literal(Literal::String(
+                                            "compile".to_owned(),
+                                        )),
+                                    )],
+                                },
+                            },
+                            VixenTypedStmt::Expr(VixenTypedExpr::Call {
+                                builtin: VixenBuiltin::EmitNode,
+                                args: vec![VixenTypedExpr::Local(LocalId::new(1))],
+                            }),
+                        ],
+                        else_body: vec![],
+                    },
+                    VixenTypedStmt::Return(None),
+                ],
+                comment: Some("lowered from typed Vixen stub".to_owned()),
+            })
+            .expect("typed Vixen function should lower");
+
+        let text = lowered.to_string();
+        let reparsed = parse_hir(&text).expect("HIR text should parse");
+        assert_eq!(reparsed, lowered);
     }
 }
