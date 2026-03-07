@@ -3363,11 +3363,17 @@ pub(crate) fn build_postcard_decoder_ir_via_hir(shape: &'static Shape) -> crate:
     builder.finish()
 }
 
+#[derive(Clone, Copy)]
+struct StructuralLocalStorage {
+    base_slot: crate::ir::SlotId,
+    slot_count: usize,
+}
+
 struct StructuralHirIrLowerer<'a> {
     module: &'a hir::Module,
     decoder: crate::postcard::KajitPostcard,
     cursor_local: hir::LocalId,
-    local_slots: std::collections::HashMap<hir::LocalId, crate::ir::SlotId>,
+    local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
@@ -3386,11 +3392,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
         let mut local_slots = std::collections::HashMap::new();
         for param in &function.params {
             if param.kind != hir::LocalKind::Destination {
-                local_slots.insert(param.local, rb.alloc_slot());
+                local_slots.insert(
+                    param.local,
+                    Self::alloc_local_storage(rb, module, &param.ty),
+                );
             }
         }
         for local in &function.locals {
-            local_slots.insert(local.local, rb.alloc_slot());
+            local_slots.insert(
+                local.local,
+                Self::alloc_local_storage(rb, module, &local.ty),
+            );
         }
         Self {
             module,
@@ -3398,6 +3410,52 @@ impl<'a> StructuralHirIrLowerer<'a> {
             cursor_local,
             local_slots,
             _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn alloc_local_storage(
+        rb: &mut RegionBuilder<'_>,
+        module: &'a hir::Module,
+        ty: &hir::Type,
+    ) -> StructuralLocalStorage {
+        let slot_count = Self::slot_count_for_type(module, ty);
+        let base_slot = rb.alloc_slot();
+        for _ in 1..slot_count {
+            let _ = rb.alloc_slot();
+        }
+        StructuralLocalStorage {
+            base_slot,
+            slot_count,
+        }
+    }
+
+    fn slot_count_for_type(module: &'a hir::Module, ty: &hir::Type) -> usize {
+        match ty {
+            hir::Type::Unit | hir::Type::Bool | hir::Type::Integer(_) => 1,
+            hir::Type::Str { .. } | hir::Type::Slice { .. } => 2,
+            hir::Type::Place(inner) => Self::slot_count_for_type(module, inner),
+            hir::Type::Handle { .. } => 1,
+            hir::Type::Named { def, .. } => match &module.type_defs[*def].kind {
+                hir::TypeDefKind::Struct { fields } => fields
+                    .iter()
+                    .map(|field| Self::slot_count_for_type(module, &field.ty))
+                    .sum::<usize>()
+                    .max(1),
+                hir::TypeDefKind::Enum { variants } => {
+                    let payload_slots = variants
+                        .iter()
+                        .map(|variant| {
+                            variant
+                                .fields
+                                .iter()
+                                .map(|field| Self::slot_count_for_type(module, &field.ty))
+                                .sum::<usize>()
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    (1 + payload_slots).max(1)
+                }
+            },
         }
     }
 
@@ -3491,12 +3549,14 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 if *local == dest_local {
                     self.lower_place_write(rb, place, value, dest_local, dest_shape);
                 } else {
-                    let slot = self.local_slots[local];
+                    let storage = self.local_slots[local];
                     match value {
-                        hir::Expr::Call(call) => self.lower_postcard_call_into_slot(rb, call, slot),
+                        hir::Expr::Call(call) => {
+                            self.lower_postcard_call_into_slot(rb, call, storage)
+                        }
                         _ => {
                             let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
-                            rb.write_to_slot(slot, scalar);
+                            rb.write_to_slot(storage.base_slot, scalar);
                         }
                     }
                 }
@@ -3589,7 +3649,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     "Option::Some should carry exactly one payload field"
                 );
                 let payload_ptr = match &fields[0].1 {
-                    hir::Expr::Local(local) => rb.slot_addr(self.local_slots[local]),
+                    hir::Expr::Local(local) => rb.slot_addr(self.local_slots[local].base_slot),
                     hir::Expr::Literal(hir::Literal::Unit) => {
                         let slot = rb.alloc_slot();
                         rb.slot_addr(slot)
@@ -3626,12 +3686,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
         &self,
         rb: &mut RegionBuilder<'_>,
         call: &hir::CallExpr,
-        slot: crate::ir::SlotId,
+        storage: StructuralLocalStorage,
     ) {
-        let zero = rb.const_val(0);
-        rb.write_to_slot(slot, zero);
+        for slot_index in 0..storage.slot_count {
+            let zero = rb.const_val(0);
+            rb.write_to_slot(
+                crate::ir::SlotId::new(storage.base_slot.index() as u32 + slot_index as u32),
+                zero,
+            );
+        }
         let saved_out = rb.save_out_ptr();
-        let slot_ptr = rb.slot_addr(slot);
+        let slot_ptr = rb.slot_addr(storage.base_slot);
         rb.set_out_ptr(slot_ptr);
         self.lower_postcard_call_at_offset(rb, call, 0);
         rb.set_out_ptr(saved_out);
@@ -3666,6 +3731,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             "postcard.read_isize" => self
                 .decoder
                 .lower_read_scalar(rb, offset, ScalarType::ISize),
+            "postcard.read_str" => self.decoder.lower_read_string(rb, offset, ScalarType::Str),
             "postcard.read_option_tag" => self.lower_postcard_option_tag(rb, offset),
             "postcard.read_discriminant" => {
                 self.decoder.lower_read_scalar(rb, offset, ScalarType::U32)
@@ -3702,7 +3768,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
             hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
             hir::Expr::Local(local) => {
-                let slot = self.local_slots[local];
+                let slot = self.local_slots[local].base_slot;
                 rb.read_from_slot(slot)
             }
             hir::Expr::Field { base, field } => {
@@ -4509,6 +4575,20 @@ mod tests {
         let none = crate::deserialize::<MaybeCount>(&decoder, &[0])
             .expect("structural HIR postcard decoder should decode None");
         assert_eq!(none, MaybeCount { count: None });
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_option_borrowed_field() {
+        let decoder =
+            compile_postcard_decoder_via_structural_hir(<MaybeBorrowedName<'static>>::SHAPE);
+
+        let some = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[1, 2, b'h', b'i'])
+            .expect("structural HIR postcard decoder should decode Some(&str)");
+        assert_eq!(some, MaybeBorrowedName { name: Some("hi") });
+
+        let none = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[0])
+            .expect("structural HIR postcard decoder should decode None");
+        assert_eq!(none, MaybeBorrowedName { name: None });
     }
 
     #[test]
