@@ -6905,7 +6905,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         self.lower_value_into_shape_offset(
                             rb,
                             field.shape,
-                            field.offset,
+                            offset + field.offset,
                             expr,
                             dest_local,
                             dest_shape,
@@ -7725,6 +7725,18 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Place::Field { base, field } => {
                 match self.resolve_place(base, dest_local, dest_shape) {
                     ResolvedStructuralPlace::Destination { shape, offset } => {
+                        let mut shape = shape;
+                        let mut offset = offset;
+                        while shape.is_transparent() {
+                            let (fields, skipped) = collect_fields(shape);
+                            assert!(
+                                skipped.is_empty() && fields.len() == 1,
+                                "structural HIR subset requires transparent wrappers to lower to one field"
+                            );
+                            let field_info = &fields[0];
+                            shape = field_info.shape;
+                            offset += field_info.offset;
+                        }
                         if matches!(
                             shape.scalar_type(),
                             Some(ScalarType::U128 | ScalarType::I128)
@@ -8333,6 +8345,20 @@ mod tests {
         Cat,
         Count(u32),
         Name(&'a str),
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    #[repr(u8)]
+    enum OwnedAnimal {
+        Cat,
+        Dog { name: String, good_boy: bool },
+        Parrot(String),
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct OwnedZoo {
+        name: String,
+        star: OwnedAnimal,
     }
 
     #[derive(Debug, PartialEq, Eq, Facet)]
@@ -13040,6 +13066,32 @@ mod tests {
         let name = crate::deserialize::<PayloadAnimal<'_>>(&decoder, &[2, 2, b'h', b'i'])
             .expect("structural HIR postcard decoder should decode borrowed payload enum variant");
         assert_eq!(name, PayloadAnimal::Name("hi"));
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_enum_in_struct_field() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<OwnedZoo>::SHAPE);
+
+        let value = crate::deserialize::<OwnedZoo>(
+            &decoder,
+            &[
+                8, b'C', b'i', b't', b'y', b' ', b'Z', b'o', b'o', // zoo name
+                1,    // Dog discriminant
+                3, b'R', b'e', b'x', // dog name
+                1,    // good_boy
+            ],
+        )
+        .expect("structural HIR postcard decoder should decode nested enum payloads");
+        assert_eq!(
+            value,
+            OwnedZoo {
+                name: "City Zoo".to_owned(),
+                star: OwnedAnimal::Dog {
+                    name: "Rex".to_owned(),
+                    good_boy: true,
+                },
+            }
+        );
     }
 
     #[test]
