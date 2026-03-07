@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use facet::{
-    ConstParamKind, Def, EnumRepr, KnownPointer, ListDef, OptionDef, PointerDef, ScalarType, Shape,
-    StructKind, Type, UserType,
+    ConstParamKind, Def, EnumRepr, Facet, KnownPointer, ListDef, OptionDef, PointerDef, ScalarType,
+    Shape, StructKind, Type, UserType,
 };
 use kajit_hir as hir;
 
@@ -2244,6 +2244,7 @@ struct PostcardHirLowerer {
     input_region: hir::RegionId,
     cursor_type: hir::TypeDefId,
     string_raw_type: Option<hir::TypeDefId>,
+    bits128_raw_type: Option<hir::TypeDefId>,
     type_defs_by_shape: HashMap<*const Shape, hir::TypeDefId>,
     callables_by_name: HashMap<&'static str, hir::CallableId>,
     locals: Vec<hir::LocalDecl>,
@@ -2279,6 +2280,7 @@ impl PostcardHirLowerer {
             input_region,
             cursor_type,
             string_raw_type: None,
+            bits128_raw_type: None,
             type_defs_by_shape: HashMap::new(),
             callables_by_name: HashMap::new(),
             locals: Vec::new(),
@@ -2540,6 +2542,30 @@ impl PostcardHirLowerer {
         type_id
     }
 
+    fn ensure_bits128_raw_type(&mut self) -> hir::TypeDefId {
+        if let Some(existing) = self.bits128_raw_type {
+            return existing;
+        }
+        let type_id = self.module.add_type_def(hir::TypeDef {
+            name: "Bits128Raw".to_owned(),
+            generic_params: Vec::new(),
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "lo".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                    hir::FieldDef {
+                        name: "hi".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                ],
+            },
+        });
+        self.bits128_raw_type = Some(type_id);
+        type_id
+    }
+
     fn lower_type(&mut self, shape: &'static Shape) -> hir::Type {
         if is_unit(shape) {
             return hir::Type::unit();
@@ -2586,13 +2612,13 @@ impl PostcardHirLowerer {
                 ScalarType::U16 => hir::Type::u(16),
                 ScalarType::U32 => hir::Type::u(32),
                 ScalarType::U64 => hir::Type::u(64),
-                ScalarType::U128 => hir::Type::u(128),
+                ScalarType::U128 => hir::Type::named(self.ensure_bits128_raw_type(), Vec::new()),
                 ScalarType::USize => hir::Type::u(64),
                 ScalarType::I8 => hir::Type::i(8),
                 ScalarType::I16 => hir::Type::i(16),
                 ScalarType::I32 => hir::Type::i(32),
                 ScalarType::I64 => hir::Type::i(64),
-                ScalarType::I128 => hir::Type::i(128),
+                ScalarType::I128 => hir::Type::named(self.ensure_bits128_raw_type(), Vec::new()),
                 ScalarType::ISize => hir::Type::i(64),
                 ScalarType::Str => hir::Type::str(self.input_region),
                 ScalarType::String => hir::Type::named(self.ensure_string_raw_type(), Vec::new()),
@@ -2675,20 +2701,20 @@ impl PostcardHirLowerer {
         callable_id
     }
 
-    fn lower_type_for_scalar(&self, scalar_type: ScalarType) -> hir::Type {
+    fn lower_type_for_scalar(&mut self, scalar_type: ScalarType) -> hir::Type {
         match scalar_type {
             ScalarType::Bool => hir::Type::bool(),
             ScalarType::U8 => hir::Type::u(8),
             ScalarType::U16 => hir::Type::u(16),
             ScalarType::U32 => hir::Type::u(32),
             ScalarType::U64 => hir::Type::u(64),
-            ScalarType::U128 => hir::Type::u(128),
+            ScalarType::U128 => hir::Type::named(self.ensure_bits128_raw_type(), Vec::new()),
             ScalarType::USize => hir::Type::u(64),
             ScalarType::I8 => hir::Type::i(8),
             ScalarType::I16 => hir::Type::i(16),
             ScalarType::I32 => hir::Type::i(32),
             ScalarType::I64 => hir::Type::i(64),
-            ScalarType::I128 => hir::Type::i(128),
+            ScalarType::I128 => hir::Type::named(self.ensure_bits128_raw_type(), Vec::new()),
             ScalarType::ISize => hir::Type::i(64),
             ScalarType::Char => hir::Type::u(32),
             ScalarType::F32 => hir::Type::u(32),
@@ -2874,6 +2900,345 @@ impl PostcardHirLowerer {
             }
             _ => unreachable!(),
         }
+    }
+
+    fn bits128_field_place(&self, base: hir::Place, field: &str) -> hir::Place {
+        hir::Place::Field {
+            base: Box::new(base),
+            field: field.to_owned(),
+        }
+    }
+
+    fn postcard_varint128_finish_into_place(
+        &mut self,
+        statements: &mut Vec<hir::Stmt>,
+        place: hir::Place,
+        zigzag: bool,
+        acc_lo_local: hir::LocalId,
+        acc_hi_local: hir::LocalId,
+    ) {
+        let (lo_value, hi_value) = if zigzag {
+            let shifted_lo = hir::Expr::Binary {
+                op: hir::BinaryOp::BitOr,
+                lhs: Box::new(hir::Expr::Binary {
+                    op: hir::BinaryOp::Shr,
+                    lhs: Box::new(hir::Expr::Local(acc_lo_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                }),
+                rhs: Box::new(hir::Expr::Binary {
+                    op: hir::BinaryOp::Shl,
+                    lhs: Box::new(hir::Expr::Local(acc_hi_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(63))),
+                }),
+            };
+            let shifted_hi = hir::Expr::Binary {
+                op: hir::BinaryOp::Shr,
+                lhs: Box::new(hir::Expr::Local(acc_hi_local)),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+            };
+            let sign = hir::Expr::Binary {
+                op: hir::BinaryOp::BitAnd,
+                lhs: Box::new(hir::Expr::Local(acc_lo_local)),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+            };
+            let neg_mask = hir::Expr::Binary {
+                op: hir::BinaryOp::Sub,
+                lhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                rhs: Box::new(sign),
+            };
+            (
+                hir::Expr::Binary {
+                    op: hir::BinaryOp::Xor,
+                    lhs: Box::new(shifted_lo),
+                    rhs: Box::new(neg_mask.clone()),
+                },
+                hir::Expr::Binary {
+                    op: hir::BinaryOp::Xor,
+                    lhs: Box::new(shifted_hi),
+                    rhs: Box::new(neg_mask),
+                },
+            )
+        } else {
+            (
+                hir::Expr::Local(acc_lo_local),
+                hir::Expr::Local(acc_hi_local),
+            )
+        };
+
+        self.push_init(
+            statements,
+            self.bits128_field_place(place.clone(), "lo"),
+            lo_value,
+        );
+        self.push_init(statements, self.bits128_field_place(place, "hi"), hi_value);
+    }
+
+    fn postcard_varint128_finish_block(
+        &mut self,
+        place: hir::Place,
+        zigzag: bool,
+        acc_lo_local: hir::LocalId,
+        acc_hi_local: hir::LocalId,
+        byte_index: u64,
+        raw_local: hir::LocalId,
+    ) -> hir::Block {
+        let mut block = hir::Block {
+            scope: hir::ScopeId::new(0),
+            statements: Vec::new(),
+        };
+
+        if byte_index + 1 == Self::postcard_varint_max_bytes(128) {
+            let extra_bits = hir::Expr::Binary {
+                op: hir::BinaryOp::BitAnd,
+                lhs: Box::new(hir::Expr::Local(raw_local)),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x7e))),
+            };
+            let mut ok_block = hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: Vec::new(),
+            };
+            self.postcard_varint128_finish_into_place(
+                &mut ok_block.statements,
+                place,
+                zigzag,
+                acc_lo_local,
+                acc_hi_local,
+            );
+            block.statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::If {
+                    condition: hir::Expr::Binary {
+                        op: hir::BinaryOp::Ne,
+                        lhs: Box::new(extra_bits),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                    },
+                    then_block: hir::Block {
+                        scope: hir::ScopeId::new(0),
+                        statements: vec![hir::Stmt {
+                            id: self.next_stmt_id(),
+                            kind: hir::StmtKind::Fail {
+                                code: hir::ErrorCode::InvalidVarint,
+                            },
+                        }],
+                    },
+                    else_block: Some(ok_block),
+                },
+            });
+            return block;
+        }
+
+        self.postcard_varint128_finish_into_place(
+            &mut block.statements,
+            place,
+            zigzag,
+            acc_lo_local,
+            acc_hi_local,
+        );
+        block
+    }
+
+    fn lower_postcard_varint128_step(
+        &mut self,
+        statements: &mut Vec<hir::Stmt>,
+        cursor_local: hir::LocalId,
+        place: hir::Place,
+        zigzag: bool,
+        acc_lo_local: hir::LocalId,
+        acc_hi_local: hir::LocalId,
+        byte_index: u64,
+    ) {
+        self.push_cursor_bounds_check(statements, cursor_local, 1, hir::ErrorCode::UnexpectedEof);
+
+        let pos = self.cursor_pos_expr(cursor_local);
+        let addr = hir::Expr::Binary {
+            op: hir::BinaryOp::Add,
+            lhs: Box::new(hir::Expr::SliceData {
+                value: Box::new(self.cursor_bytes_expr(cursor_local)),
+            }),
+            rhs: Box::new(pos.clone()),
+        };
+        let raw_local = self.alloc_local(
+            format!("varint128_byte_{}", self.locals.len()),
+            hir::Type::u(8),
+            hir::LocalKind::Temp,
+        );
+        self.push_init(
+            statements,
+            hir::Place::Local(raw_local),
+            hir::Expr::Load {
+                addr: Box::new(addr),
+                width: hir::MemoryWidth::W1,
+            },
+        );
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Field {
+                    base: Box::new(hir::Place::Local(cursor_local)),
+                    field: "pos".to_owned(),
+                },
+                value: hir::Expr::Binary {
+                    op: hir::BinaryOp::Add,
+                    lhs: Box::new(pos),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                },
+            },
+        });
+
+        let low = hir::Expr::Binary {
+            op: hir::BinaryOp::BitAnd,
+            lhs: Box::new(hir::Expr::Local(raw_local)),
+            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x7f))),
+        };
+        let shift = byte_index * 7;
+        if shift < 64 {
+            let lo_part = if shift == 0 {
+                low.clone()
+            } else {
+                hir::Expr::Binary {
+                    op: hir::BinaryOp::Shl,
+                    lhs: Box::new(low.clone()),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(shift))),
+                }
+            };
+            statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Assign {
+                    place: hir::Place::Local(acc_lo_local),
+                    value: hir::Expr::Binary {
+                        op: hir::BinaryOp::BitOr,
+                        lhs: Box::new(hir::Expr::Local(acc_lo_local)),
+                        rhs: Box::new(lo_part),
+                    },
+                },
+            });
+
+            if shift > 57 {
+                let hi_part = hir::Expr::Binary {
+                    op: hir::BinaryOp::Shr,
+                    lhs: Box::new(low),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(64 - shift))),
+                };
+                statements.push(hir::Stmt {
+                    id: self.next_stmt_id(),
+                    kind: hir::StmtKind::Assign {
+                        place: hir::Place::Local(acc_hi_local),
+                        value: hir::Expr::Binary {
+                            op: hir::BinaryOp::BitOr,
+                            lhs: Box::new(hir::Expr::Local(acc_hi_local)),
+                            rhs: Box::new(hi_part),
+                        },
+                    },
+                });
+            }
+        } else {
+            let hi_part = hir::Expr::Binary {
+                op: hir::BinaryOp::Shl,
+                lhs: Box::new(low),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(shift - 64))),
+            };
+            statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Assign {
+                    place: hir::Place::Local(acc_hi_local),
+                    value: hir::Expr::Binary {
+                        op: hir::BinaryOp::BitOr,
+                        lhs: Box::new(hir::Expr::Local(acc_hi_local)),
+                        rhs: Box::new(hi_part),
+                    },
+                },
+            });
+        }
+
+        let max_bytes = Self::postcard_varint_max_bytes(128);
+        let then_block = if byte_index + 1 == max_bytes {
+            hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![hir::Stmt {
+                    id: self.next_stmt_id(),
+                    kind: hir::StmtKind::Fail {
+                        code: hir::ErrorCode::InvalidVarint,
+                    },
+                }],
+            }
+        } else {
+            let mut block = hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: Vec::new(),
+            };
+            self.lower_postcard_varint128_step(
+                &mut block.statements,
+                cursor_local,
+                place.clone(),
+                zigzag,
+                acc_lo_local,
+                acc_hi_local,
+                byte_index + 1,
+            );
+            block
+        };
+        let else_block = Some(self.postcard_varint128_finish_block(
+            place,
+            zigzag,
+            acc_lo_local,
+            acc_hi_local,
+            byte_index,
+            raw_local,
+        ));
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::If {
+                condition: hir::Expr::Binary {
+                    op: hir::BinaryOp::Ne,
+                    lhs: Box::new(hir::Expr::Binary {
+                        op: hir::BinaryOp::BitAnd,
+                        lhs: Box::new(hir::Expr::Local(raw_local)),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x80))),
+                    }),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                },
+                then_block,
+                else_block,
+            },
+        });
+    }
+
+    fn lower_postcard_varint128_into_place(
+        &mut self,
+        statements: &mut Vec<hir::Stmt>,
+        cursor_local: hir::LocalId,
+        place: hir::Place,
+        zigzag: bool,
+    ) {
+        let acc_lo_local = self.alloc_local(
+            format!("varint128_lo_{}", self.locals.len()),
+            hir::Type::u(64),
+            hir::LocalKind::Temp,
+        );
+        let acc_hi_local = self.alloc_local(
+            format!("varint128_hi_{}", self.locals.len()),
+            hir::Type::u(64),
+            hir::LocalKind::Temp,
+        );
+        self.push_init(
+            statements,
+            hir::Place::Local(acc_lo_local),
+            hir::Expr::Literal(hir::Literal::Integer(0)),
+        );
+        self.push_init(
+            statements,
+            hir::Place::Local(acc_hi_local),
+            hir::Expr::Literal(hir::Literal::Integer(0)),
+        );
+        self.lower_postcard_varint128_step(
+            statements,
+            cursor_local,
+            place,
+            zigzag,
+            acc_lo_local,
+            acc_hi_local,
+            0,
+        );
     }
 
     fn lower_postcard_char_into_place(
@@ -3711,6 +4076,27 @@ impl PostcardHirLowerer {
                     self.push_store(statements, base_addr, hir::MemoryWidth::W8, value);
                     return;
                 }
+                ScalarType::U128 | ScalarType::I128 => {
+                    self.push_store(
+                        statements,
+                        base_addr.clone(),
+                        hir::MemoryWidth::W8,
+                        hir::Expr::Field {
+                            base: Box::new(value.clone()),
+                            field: "lo".to_owned(),
+                        },
+                    );
+                    self.push_store(
+                        statements,
+                        Self::add_addr_offset(base_addr, 8),
+                        hir::MemoryWidth::W8,
+                        hir::Expr::Field {
+                            base: Box::new(value),
+                            field: "hi".to_owned(),
+                        },
+                    );
+                    return;
+                }
                 ScalarType::Str => {
                     self.push_store(
                         statements,
@@ -3945,6 +4331,7 @@ impl PostcardHirLowerer {
             16 => 3,
             32 => 5,
             64 => 10,
+            128 => 19,
             _ => panic!("unsupported postcard HIR varint width {bits}"),
         }
     }
@@ -4377,6 +4764,15 @@ impl PostcardHirLowerer {
                     );
                     return;
                 }
+                ScalarType::U128 => {
+                    self.lower_postcard_varint128_into_place(
+                        statements,
+                        cursor_local,
+                        place,
+                        false,
+                    );
+                    return;
+                }
                 ScalarType::I16 => {
                     self.lower_postcard_varint_into_place(
                         statements,
@@ -4405,6 +4801,10 @@ impl PostcardHirLowerer {
                         64,
                         true,
                     );
+                    return;
+                }
+                ScalarType::I128 => {
+                    self.lower_postcard_varint128_into_place(statements, cursor_local, place, true);
                     return;
                 }
                 ScalarType::F32 | ScalarType::F64 => {
@@ -6096,6 +6496,23 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Place::Field { base, field } => {
                 match self.resolve_place(base, dest_local, dest_shape) {
                     ResolvedStructuralPlace::Destination { shape, offset } => {
+                        if matches!(
+                            shape.scalar_type(),
+                            Some(ScalarType::U128 | ScalarType::I128)
+                        ) {
+                            let field_offset = match field.as_str() {
+                                "lo" => 0,
+                                "hi" => 8,
+                                _ => panic!(
+                                    "missing raw128 field {field} while lowering structural HIR place for {}",
+                                    shape.type_identifier
+                                ),
+                            };
+                            return ResolvedStructuralPlace::Destination {
+                                shape: u64::SHAPE,
+                                offset: offset + field_offset,
+                            };
+                        }
                         let (fields, skipped) = collect_fields(shape);
                         assert!(
                             skipped.is_empty(),
@@ -6580,6 +6997,7 @@ fn compile_cfg_mir_decoder_with_options(
 #[cfg(test)]
 mod tests {
     use kajit_hir_text::parse_hir;
+    use serde::Serialize;
 
     use super::*;
     use facet::Facet;
@@ -6621,6 +7039,21 @@ mod tests {
     #[derive(Debug, PartialEq, Eq, Facet)]
     struct CharHeader {
         ch: char,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet, Serialize)]
+    struct BigUnsigned {
+        value: u128,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet, Serialize)]
+    struct BigSigned {
+        value: i128,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet, Serialize)]
+    struct MaybeBigUnsigned {
+        value: Option<u128>,
     }
 
     #[derive(Debug, PartialEq, Eq, Facet)]
@@ -6894,6 +7327,26 @@ mod tests {
     }
 
     #[test]
+    fn postcard_hir_models_128bit_scalars_without_reader_calls() {
+        let unsigned = build_postcard_decoder_hir(<BigUnsigned>::SHAPE);
+        let signed = build_postcard_decoder_hir(<BigSigned>::SHAPE);
+        let optional = build_postcard_decoder_hir(<MaybeBigUnsigned>::SHAPE);
+
+        assert!(
+            unsigned.callable_named("postcard.read_u128").is_none(),
+            "u128 lowering should not use postcard.read_u128"
+        );
+        assert!(
+            signed.callable_named("postcard.read_i128").is_none(),
+            "i128 lowering should not use postcard.read_i128"
+        );
+        assert!(
+            optional.callable_named("postcard.read_u128").is_none(),
+            "Option<u128> lowering should not use postcard.read_u128"
+        );
+    }
+
+    #[test]
     fn postcard_hir_models_option_borrowed_fields() {
         let module = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
         let (_, function) = module.functions.iter().next().unwrap();
@@ -7071,6 +7524,42 @@ mod tests {
         let value = crate::deserialize::<CharHeader>(&decoder, &[2, 0xC3, 0x9F])
             .expect("structural HIR postcard decoder should decode char fields");
         assert_eq!(value, CharHeader { ch: 'ß' });
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_128bit_fields() {
+        let unsigned = BigUnsigned {
+            value: (1_u128 << 100) | 0x1234_5678_9abc_def0_u128,
+        };
+        let signed = BigSigned {
+            value: -((1_i128 << 97) - 0x1234_5678_9abc_i128),
+        };
+
+        let unsigned_decoder = compile_postcard_decoder_via_structural_hir(<BigUnsigned>::SHAPE);
+        let unsigned_bytes = postcard::to_allocvec(&unsigned)
+            .expect("postcard should encode unsigned 128-bit sample");
+        let unsigned_value = crate::deserialize::<BigUnsigned>(&unsigned_decoder, &unsigned_bytes)
+            .expect("structural HIR postcard decoder should decode u128 fields");
+        assert_eq!(unsigned_value, unsigned);
+
+        let signed_decoder = compile_postcard_decoder_via_structural_hir(<BigSigned>::SHAPE);
+        let signed_bytes =
+            postcard::to_allocvec(&signed).expect("postcard should encode signed 128-bit sample");
+        let signed_value = crate::deserialize::<BigSigned>(&signed_decoder, &signed_bytes)
+            .expect("structural HIR postcard decoder should decode i128 fields");
+        assert_eq!(signed_value, signed);
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_option_u128_field() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<MaybeBigUnsigned>::SHAPE);
+        let sample = MaybeBigUnsigned {
+            value: Some((1_u128 << 72) | 0x55aa_33cc_77ee_u128),
+        };
+        let bytes = postcard::to_allocvec(&sample).expect("postcard should encode Option<u128>");
+        let value = crate::deserialize::<MaybeBigUnsigned>(&decoder, &bytes)
+            .expect("structural HIR postcard decoder should decode Option<u128>");
+        assert_eq!(value, sample);
     }
 
     #[test]
