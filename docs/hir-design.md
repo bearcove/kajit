@@ -387,6 +387,9 @@ The current design direction is:
 
 - no garbage collector in the core model
 - no raw pointers as an ordinary source-language concept
+- explicit address values are allowed when the language needs to talk about
+  allocated memory directly, but those addresses should remain typed by
+  allocation domain rather than degenerating into untyped pointers
 - no explicit lifetime annotations in normal source code
 - ownership and borrowing are real semantic constraints, not optional compiler
   magic
@@ -402,6 +405,18 @@ This means the user-facing language should primarily expose:
 - explicit state structs passed through normal locals and parameters
 - typed handles or arena-backed references when shared long-lived objects are
   needed
+
+For generated deserializers, there is also a lower-level allocation concern
+that should be explicit in HIR:
+
+- some allocated memory is transient scratch/chunk storage that dies with the
+  decode
+- some allocated memory becomes part of the returned Rust value and must live
+  on the persistent Rust heap
+
+HIR should make that distinction explicit with typed address values or another
+domain-aware memory abstraction. It should not collapse both cases into a
+single undifferentiated "heap pointer".
 
 ### Borrowing must be first-class in HIR
 
@@ -527,6 +542,19 @@ For example:
 
 If lower layers want to optimize those shapes into raw pointers and reserved
 registers, that is a job for lowering, regalloc, and backend/runtime contracts.
+
+That still leaves room for HIR to model direct memory construction when it is
+the clearest honest representation of the generated algorithm. In those cases,
+the model should be:
+
+- typed address values, not naked pointers
+- allocation domains that distinguish transient scratch/chunk storage from
+  persistent returned allocation
+- explicit runtime finalization calls when a low-level memory assembly process
+  becomes a Rust value such as `Vec<T>` or `String`
+
+So HIR may need to talk about addresses. It should not talk about *unsafe*
+addresses.
 
 ### Practical safety tools
 

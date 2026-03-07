@@ -1,11 +1,11 @@
 use chumsky::prelude::*;
 
 use kajit_hir::{
-    BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableId, CallableKind,
-    CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr, FieldDef,
-    Function, FunctionId, GenericArg, GenericParam, Id, Literal, LocalDecl, LocalId, LocalKind,
-    MatchArm, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId, StmtKind,
-    StoreId, Type, TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
+    AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableId,
+    CallableKind, CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr,
+    FieldDef, Function, FunctionId, GenericArg, GenericParam, Id, Literal, LocalDecl, LocalId,
+    LocalKind, MatchArm, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId,
+    StmtKind, StoreId, Type, TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
 };
 
 type Extra<'src> = extra::Err<Rich<'src, char>>;
@@ -194,6 +194,14 @@ fn ty<'src>() -> impl Parser<'src, &'src str, Type, Extra<'src>> + Clone {
                 .ignore_then(uint32())
                 .map(|bits| Type::i(bits as u16))
                 .padded_by(ws()),
+            token("addr")
+                .ignore_then(token("<"))
+                .ignore_then(choice((
+                    token("transient").to(AllocationDomain::Transient),
+                    token("persistent").to(AllocationDomain::Persistent),
+                )))
+                .then_ignore(token(">"))
+                .map(Type::address),
             token("Slice")
                 .ignore_then(token("<"))
                 .ignore_then(region_id())
@@ -1163,6 +1171,33 @@ mod tests {
         });
 
         module
+    }
+
+    #[test]
+    fn round_trip_address_types() {
+        let text = r#"
+hir_module {
+  regions [
+  ]
+  stores [
+  ]
+  types [
+    type t0 "RawParts" = struct {
+      "transient": addr<transient>
+      "persistent": addr<persistent>
+    }
+  ]
+  callables [
+  ]
+  functions [
+  ]
+}
+"#;
+
+        let module = parse_hir(text).expect("address types should parse");
+        let round_trip = module.to_string();
+        let reparsed = parse_hir(&round_trip).expect("round-tripped address types should parse");
+        assert_eq!(module, reparsed);
     }
 
     #[test]

@@ -198,6 +198,14 @@ pub struct VixenCoreCallables {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeMemoryCallables {
+    pub alloc_transient: CallableId,
+    pub alloc_persistent: CallableId,
+    pub vec_from_raw_parts: CallableId,
+    pub vec_from_chunks: CallableId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VixenBuiltin {
     EmitNode,
     EmitEdge,
@@ -330,6 +338,97 @@ pub enum VixenLoweringError {
 }
 
 impl Module {
+    pub fn install_runtime_memory_callables(&mut self) -> RuntimeMemoryCallables {
+        let alloc_transient = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.alloc_transient".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::u(64), Type::u(64)],
+                returns: vec![Type::transient_addr()],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![DomainEffect {
+                    domain: "transient_heap".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["runtime.alloc".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Allocate transient decode-time memory.".to_owned()),
+        });
+        let alloc_persistent = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.alloc_persistent".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::u(64), Type::u(64)],
+                returns: vec![Type::persistent_addr()],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![DomainEffect {
+                    domain: "persistent_heap".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["runtime.alloc".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Allocate persistent memory that may escape in the result.".to_owned()),
+        });
+        let vec_from_raw_parts = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.vec_from_raw_parts".to_owned(),
+            signature: CallSignature {
+                params: vec![
+                    Type::persistent_addr(),
+                    Type::u(64),
+                    Type::u(64),
+                    Type::u(64),
+                ],
+                returns: vec![Type::u(64)],
+                effect_class: EffectClass::Barrier,
+                domain_effects: vec![DomainEffect {
+                    domain: "persistent_heap".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["runtime.alloc".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Materialize a Vec-like host value from persistent raw parts.".to_owned()),
+        });
+        let vec_from_chunks = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.vec_from_chunks".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::transient_addr(), Type::u(64), Type::u(64)],
+                returns: vec![Type::u(64)],
+                effect_class: EffectClass::Barrier,
+                domain_effects: vec![
+                    DomainEffect {
+                        domain: "transient_heap".to_owned(),
+                        access: DomainAccess::Read,
+                    },
+                    DomainEffect {
+                        domain: "persistent_heap".to_owned(),
+                        access: DomainAccess::Mutate,
+                    },
+                ],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["runtime.alloc".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some(
+                "Materialize a Vec-like host value from transient chunk storage.".to_owned(),
+            ),
+        });
+
+        RuntimeMemoryCallables {
+            alloc_transient,
+            alloc_persistent,
+            vec_from_raw_parts,
+            vec_from_chunks,
+        }
+    }
+
     pub fn install_vixen_core_callables(&mut self, types: &VixenCoreTypes) -> VixenCoreCallables {
         let emit_node = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
@@ -865,6 +964,12 @@ pub struct IntegerType {
     pub bits: u16,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllocationDomain {
+    Transient,
+    Persistent,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GenericArg {
     Type(Type),
@@ -877,6 +982,9 @@ pub enum Type {
     Unit,
     Bool,
     Integer(IntegerType),
+    Address {
+        domain: AllocationDomain,
+    },
     Array {
         element: Box<Type>,
         len: usize,
@@ -905,6 +1013,18 @@ impl Type {
 
     pub const fn bool() -> Self {
         Self::Bool
+    }
+
+    pub const fn address(domain: AllocationDomain) -> Self {
+        Self::Address { domain }
+    }
+
+    pub const fn transient_addr() -> Self {
+        Self::address(AllocationDomain::Transient)
+    }
+
+    pub const fn persistent_addr() -> Self {
+        Self::address(AllocationDomain::Persistent)
     }
 
     pub const fn u(bits: u16) -> Self {
@@ -1318,6 +1438,15 @@ mod tests {
         let destination = function.destination_param().unwrap();
         assert!(matches!(destination.ty, Type::Named { .. }));
         assert!(function.locals.is_empty());
+    }
+
+    #[test]
+    fn address_types_distinguish_allocation_domains() {
+        assert_ne!(Type::transient_addr(), Type::persistent_addr());
+        assert_eq!(
+            Type::address(AllocationDomain::Transient),
+            Type::transient_addr()
+        );
     }
 
     #[test]
@@ -2156,5 +2285,42 @@ mod tests {
 
         assert_eq!(signature.capabilities, vec!["env.read".to_owned()]);
         assert_eq!(signature.safety, CallSafety::OpaqueHost);
+    }
+
+    #[test]
+    fn call_signatures_can_name_transient_and_persistent_addresses() {
+        let mut module = Module::new();
+        let callables = module.install_runtime_memory_callables();
+
+        let signature = &module.callables[callables.vec_from_raw_parts].signature;
+        assert_eq!(signature.params[0], Type::persistent_addr());
+        assert_eq!(signature.effect_class, EffectClass::Barrier);
+    }
+
+    #[test]
+    fn installs_runtime_memory_callable_table() {
+        let mut module = Module::new();
+        let callables = module.install_runtime_memory_callables();
+
+        assert_eq!(
+            module.callable_named("runtime.alloc_transient"),
+            Some(callables.alloc_transient)
+        );
+        assert_eq!(
+            module.callables[callables.alloc_transient]
+                .signature
+                .returns,
+            vec![Type::transient_addr()]
+        );
+        assert_eq!(
+            module.callables[callables.alloc_persistent]
+                .signature
+                .returns,
+            vec![Type::persistent_addr()]
+        );
+        assert_eq!(
+            module.callables[callables.vec_from_chunks].signature.params[0],
+            Type::transient_addr()
+        );
     }
 }

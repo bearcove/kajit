@@ -17,6 +17,7 @@ It should be able to express:
 - fixed arrays and indexing
 - structs and enums
 - slices and borrowed views
+- typed address values when generated code needs to talk about allocated memory
 - explicit initialization and overwrite
 - calls with typed signatures and effect summaries
 
@@ -110,7 +111,19 @@ The intended mutation model is still:
 - borrowed views with explicit provenance
 - safe builders or scratch-state constructs when needed
 
-If generated code wants pointer-shaped lowering, that belongs below HIR.
+If generated code needs to assemble heap-backed results honestly, HIR may still
+need direct memory construction primitives. The intended boundary there is:
+
+- HIR may talk about typed addresses
+- address values should be explicit about allocation domain
+- at minimum, generated decoders need to distinguish transient scratch/chunk
+  allocation from persistent allocation that becomes part of the returned Rust
+  value
+- raw pointers, integer casts, and unconstrained aliasing still belong below
+  HIR
+
+If generated code wants *untyped* pointer-shaped lowering, that belongs below
+HIR.
 
 ## Immediate Implementation Rule
 

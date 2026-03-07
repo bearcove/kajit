@@ -1,10 +1,10 @@
 use std::fmt;
 
 use crate::{
-    BinaryOp, Block, CallExpr, CallSafety, CallTarget, CallableKind, ControlTransfer, DomainAccess,
-    EffectClass, Expr, Function, GenericArg, GenericParam, Literal, LocalId, LocalKind, MatchArm,
-    Module, Pattern, PatternField, Place, Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind,
-    UnaryOp, VariantDef,
+    AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallTarget, CallableKind,
+    ControlTransfer, DomainAccess, EffectClass, Expr, Function, GenericArg, GenericParam, Literal,
+    LocalId, LocalKind, MatchArm, Module, Pattern, PatternField, Place, Scope, Stmt, StmtKind,
+    Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
 };
 
 impl fmt::Display for Module {
@@ -466,6 +466,10 @@ impl fmt::Display for TypeDisplay<'_> {
             Type::Integer(int) => match int.signedness {
                 crate::Signedness::Signed => write!(f, "i{}", int.bits),
                 crate::Signedness::Unsigned => write!(f, "u{}", int.bits),
+            },
+            Type::Address { domain } => match domain {
+                AllocationDomain::Transient => write!(f, "addr<transient>"),
+                AllocationDomain::Persistent => write!(f, "addr<persistent>"),
             },
             Type::Array { element, len } => write!(
                 f,
