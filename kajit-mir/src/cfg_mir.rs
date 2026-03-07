@@ -711,12 +711,15 @@ fn fmt_cfg_op_name(
         LinearOp::AdvanceCursor { count } => write!(f, "advance({count})"),
         LinearOp::AdvanceCursorBy { .. } => write!(f, "advance_by"),
         LinearOp::SaveCursor { .. } => write!(f, "save_cursor"),
+        LinearOp::SaveInputEnd { .. } => write!(f, "save_input_end"),
         LinearOp::RestoreCursor { .. } => write!(f, "restore_cursor"),
         LinearOp::WriteToField { offset, width, .. } => write!(f, "store([{offset}:{width}])"),
         LinearOp::ReadFromField { offset, width, .. } => write!(f, "load([{offset}:{width}])"),
         LinearOp::SaveOutPtr { .. } => write!(f, "save_out_ptr"),
         LinearOp::SetOutPtr { .. } => write!(f, "set_out_ptr"),
         LinearOp::SlotAddr { slot, .. } => write!(f, "slot_addr({})", slot.index()),
+        LinearOp::StoreToAddr { width, .. } => write!(f, "store_addr([{width}])"),
+        LinearOp::LoadFromAddr { width, .. } => write!(f, "load_addr([{width}])"),
         LinearOp::WriteToSlot { slot, .. } => write!(f, "write_slot({})", slot.index()),
         LinearOp::ReadFromSlot { slot, .. } => write!(f, "read_slot({})", slot.index()),
         LinearOp::CallIntrinsic {
@@ -1009,10 +1012,15 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::ReadBytes { dst, .. }
         | LinearOp::PeekByte { dst }
         | LinearOp::SaveCursor { dst }
+        | LinearOp::SaveInputEnd { dst }
         | LinearOp::ReadFromField { dst, .. }
         | LinearOp::SaveOutPtr { dst }
         | LinearOp::SlotAddr { dst, .. }
         | LinearOp::ReadFromSlot { dst, .. } => {
+            push_def(&mut operands, *dst, None);
+        }
+        LinearOp::LoadFromAddr { dst, addr, .. } => {
+            push_use(&mut operands, *addr, None);
             push_def(&mut operands, *dst, None);
         }
         LinearOp::BinOp {
@@ -1047,6 +1055,10 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::WriteToField { src, .. }
         | LinearOp::SetOutPtr { src }
         | LinearOp::WriteToSlot { src, .. } => {
+            push_use(&mut operands, *src, None);
+        }
+        LinearOp::StoreToAddr { addr, src, .. } => {
+            push_use(&mut operands, *addr, None);
             push_use(&mut operands, *src, None);
         }
         LinearOp::CallIntrinsic { args, dst, .. } => {

@@ -4,6 +4,93 @@ use super::*;
 use kajit_emit::aarch64::{self, Reg};
 
 impl Lowerer {
+    fn scratch_reg_avoiding(&self, a: Reg, b: Option<Reg>) -> Reg {
+        for reg in [Reg::X9, Reg::X10, Reg::X16] {
+            if reg != a && Some(reg) != b {
+                return reg;
+            }
+        }
+        panic!("no scratch register available");
+    }
+
+    pub(super) fn emit_load_u64_reg(&mut self, rd: Reg, value: u64) {
+        let p0 = (value & 0xFFFF) as u32;
+        let p1 = ((value >> 16) & 0xFFFF) as u32;
+        let p2 = ((value >> 32) & 0xFFFF) as u32;
+        let p3 = ((value >> 48) & 0xFFFF) as u32;
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_movz(aarch64::Width::X64, rd, p0 as u16, 0).expect("movz"));
+        if p1 != 0 {
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, rd, p1 as u16, 16).expect("movk"),
+            );
+        }
+        if p2 != 0 {
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, rd, p2 as u16, 32).expect("movk"),
+            );
+        }
+        if p3 != 0 {
+            self.ectx.emit.emit_word(
+                aarch64::encode_movk(aarch64::Width::X64, rd, p3 as u16, 48).expect("movk"),
+            );
+        }
+    }
+
+    fn emit_add_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
+        if imm <= 0x0fff {
+            self.ectx.emit.emit_word(
+                aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, imm as u16, false)
+                    .expect("add"),
+            );
+            return;
+        }
+        if (imm & 0x0fff) == 0 {
+            let shifted = imm >> 12;
+            if shifted <= 0x0fff {
+                self.ectx.emit.emit_word(
+                    aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, shifted as u16, true)
+                        .expect("add"),
+                );
+                return;
+            }
+        }
+        let scratch = self.scratch_reg_avoiding(rd, Some(rn));
+        self.emit_load_u64_reg(scratch, imm as u64);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_add_reg(aarch64::Width::X64, rd, rn, scratch).expect("add"));
+    }
+
+    pub(super) fn emit_stack_addr(&mut self, rd: Reg, off: u32) {
+        self.emit_add_imm_any(rd, Reg::SP, off);
+    }
+
+    pub(super) fn emit_stack_load(&mut self, width: aarch64::Width, rd: Reg, off: u32) {
+        if let Ok(word) = aarch64::encode_ldr_imm(width, rd, Reg::SP, off) {
+            self.ectx.emit.emit_word(word);
+            return;
+        }
+        let addr_reg = self.scratch_reg_avoiding(rd, None);
+        self.emit_stack_addr(addr_reg, off);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_ldr_imm(width, rd, addr_reg, 0).expect("ldr"));
+    }
+
+    pub(super) fn emit_stack_store(&mut self, width: aarch64::Width, rs: Reg, off: u32) {
+        if let Ok(word) = aarch64::encode_str_imm(width, rs, Reg::SP, off) {
+            self.ectx.emit.emit_word(word);
+            return;
+        }
+        let addr_reg = self.scratch_reg_avoiding(rs, None);
+        self.emit_stack_addr(addr_reg, off);
+        self.ectx
+            .emit
+            .emit_word(aarch64::encode_str_imm(width, rs, addr_reg, 0).expect("str"));
+    }
+
     pub(super) fn emit_mov_x9_from_preg(&mut self, preg: regalloc2::PReg) -> bool {
         if preg.class() != regalloc2::RegClass::Int {
             return false;
@@ -57,10 +144,7 @@ impl Lowerer {
             return false;
         }
         let r = preg.hw_enc() as u8;
-        self.ectx.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::from_raw(r), Reg::SP, off)
-                .expect("str"),
-        );
+        self.emit_stack_store(aarch64::Width::X64, Reg::from_raw(r), off);
         true
     }
 
@@ -69,10 +153,7 @@ impl Lowerer {
             return false;
         }
         let r = preg.hw_enc() as u8;
-        self.ectx.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::from_raw(r), Reg::SP, off)
-                .expect("ldr"),
-        );
+        self.emit_stack_load(aarch64::Width::X64, Reg::from_raw(r), off);
         true
     }
 
@@ -87,9 +168,7 @@ impl Lowerer {
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("ldr"),
-            );
+            self.emit_stack_load(aarch64::Width::X64, Reg::X9, off);
             return;
         }
         panic!("unexpected none allocation for x9 load");
@@ -113,9 +192,7 @@ impl Lowerer {
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, off).expect("ldr"),
-            );
+            self.emit_stack_load(aarch64::Width::X64, Reg::X10, off);
             return;
         }
         panic!("unexpected none allocation for x10 load");
@@ -127,9 +204,7 @@ impl Lowerer {
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            self.ectx.emit.emit_word(
-                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("str"),
-            );
+            self.emit_stack_store(aarch64::Width::X64, Reg::X9, off);
             return true;
         }
         false
@@ -166,10 +241,7 @@ impl Lowerer {
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
             let target_r = target.hw_enc() as u8;
-            self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::from_raw(target_r), Reg::SP, off)
-                    .expect("ldr"),
-            );
+            self.emit_stack_load(aarch64::Width::X64, Reg::from_raw(target_r), off);
             return;
         }
         panic!("unexpected none allocation for CallLambda arg");
@@ -208,52 +280,10 @@ impl Lowerer {
     }
 
     pub(super) fn emit_load_u64_x10(&mut self, value: u64) {
-        let p0 = (value & 0xFFFF) as u32;
-        let p1 = ((value >> 16) & 0xFFFF) as u32;
-        let p2 = ((value >> 32) & 0xFFFF) as u32;
-        let p3 = ((value >> 48) & 0xFFFF) as u32;
-        self.ectx.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X10, p0 as u16, 0).expect("movz"),
-        );
-        if p1 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p1 as u16, 16).expect("movk"),
-            );
-        }
-        if p2 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p2 as u16, 32).expect("movk"),
-            );
-        }
-        if p3 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X10, p3 as u16, 48).expect("movk"),
-            );
-        }
+        self.emit_load_u64_reg(Reg::X10, value);
     }
 
     pub(super) fn emit_load_u64_x9(&mut self, value: u64) {
-        let p0 = (value & 0xFFFF) as u32;
-        let p1 = ((value >> 16) & 0xFFFF) as u32;
-        let p2 = ((value >> 32) & 0xFFFF) as u32;
-        let p3 = ((value >> 48) & 0xFFFF) as u32;
-        self.ectx.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X9, p0 as u16, 0).expect("movz"),
-        );
-        if p1 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p1 as u16, 16).expect("movk"),
-            );
-        }
-        if p2 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p2 as u16, 32).expect("movk"),
-            );
-        }
-        if p3 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, Reg::X9, p3 as u16, 48).expect("movk"),
-            );
-        }
+        self.emit_load_u64_reg(Reg::X9, value);
     }
 }

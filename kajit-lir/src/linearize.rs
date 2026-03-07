@@ -27,12 +27,18 @@ pub type LabelId = Id<LabelMarker>;
 pub enum BinOpKind {
     Add,
     Sub,
+    Mul,
     And,
     Or,
     Shr,
     Shl,
     Xor,
+    CmpEq,
     CmpNe,
+    CmpLt,
+    CmpLe,
+    CmpGt,
+    CmpGe,
 }
 
 /// Unary operation kind for linear IR.
@@ -97,6 +103,9 @@ pub enum LinearOp {
     SaveCursor {
         dst: VReg,
     },
+    SaveInputEnd {
+        dst: VReg,
+    },
     RestoreCursor {
         src: VReg,
     },
@@ -123,6 +132,16 @@ pub enum LinearOp {
     SlotAddr {
         dst: VReg,
         slot: SlotId,
+    },
+    StoreToAddr {
+        addr: VReg,
+        src: VReg,
+        width: Width,
+    },
+    LoadFromAddr {
+        dst: VReg,
+        addr: VReg,
+        width: Width,
     },
     WriteToSlot {
         slot: SlotId,
@@ -495,12 +514,18 @@ impl<'a> Linearizer<'a> {
             // ── Binary arithmetic ──
             IrOp::Add => self.emit_binop(BinOpKind::Add, node),
             IrOp::Sub => self.emit_binop(BinOpKind::Sub, node),
+            IrOp::Mul => self.emit_binop(BinOpKind::Mul, node),
             IrOp::And => self.emit_binop(BinOpKind::And, node),
             IrOp::Or => self.emit_binop(BinOpKind::Or, node),
             IrOp::Shr => self.emit_binop(BinOpKind::Shr, node),
             IrOp::Shl => self.emit_binop(BinOpKind::Shl, node),
             IrOp::Xor => self.emit_binop(BinOpKind::Xor, node),
+            IrOp::CmpEq => self.emit_binop(BinOpKind::CmpEq, node),
             IrOp::CmpNe => self.emit_binop(BinOpKind::CmpNe, node),
+            IrOp::CmpLt => self.emit_binop(BinOpKind::CmpLt, node),
+            IrOp::CmpLe => self.emit_binop(BinOpKind::CmpLe, node),
+            IrOp::CmpGt => self.emit_binop(BinOpKind::CmpGt, node),
+            IrOp::CmpGe => self.emit_binop(BinOpKind::CmpGe, node),
 
             // ── Unary ──
             IrOp::ZigzagDecode { wide } => {
@@ -551,6 +576,9 @@ impl<'a> Linearizer<'a> {
             IrOp::SaveCursor => {
                 self.emit_node(node, LinearOp::SaveCursor { dst: data_dst(0) });
             }
+            IrOp::SaveInputEnd => {
+                self.emit_node(node, LinearOp::SaveInputEnd { dst: data_dst(0) });
+            }
             IrOp::RestoreCursor => {
                 self.emit_node(node, LinearOp::RestoreCursor { src: data_in(0) });
             }
@@ -590,6 +618,26 @@ impl<'a> Linearizer<'a> {
                     LinearOp::SlotAddr {
                         dst: data_dst(0),
                         slot: *slot,
+                    },
+                );
+            }
+            IrOp::StoreToAddr { width } => {
+                self.emit_node(
+                    node,
+                    LinearOp::StoreToAddr {
+                        addr: data_in(0),
+                        src: data_in(1),
+                        width: *width,
+                    },
+                );
+            }
+            IrOp::LoadFromAddr { width } => {
+                self.emit_node(
+                    node,
+                    LinearOp::LoadFromAddr {
+                        dst: data_dst(0),
+                        addr: data_in(0),
+                        width: *width,
                     },
                 );
             }
@@ -746,10 +794,11 @@ impl<'a> Linearizer<'a> {
     /// Emit Copy ops for passthrough data inputs entering a gamma branch region.
     fn emit_gamma_entry_copies(&mut self, node: &Node, region_id: RegionId) {
         let region = &self.func.regions[region_id];
-        // Inputs layout: [predicate, passthrough..., cursor_state, output_state]
-        // Region args layout: [passthrough..., cursor_state, output_state]
+        let state_count = self.func.state_domains.len();
+        // Inputs layout: [predicate, passthrough..., state domains...]
+        // Region args layout: [passthrough..., state domains...]
         // Skip predicate (input 0), skip state inputs at the end.
-        let passthrough_count = node.inputs.len() - 3; // minus predicate, cursor, output
+        let passthrough_count = node.inputs.len() - 1 - state_count;
 
         for i in 0..passthrough_count {
             let src_input = &node.inputs[i + 1]; // +1 to skip predicate
@@ -808,14 +857,15 @@ impl<'a> Linearizer<'a> {
     fn linearize_theta(&mut self, node_id: NodeId, body: RegionId) {
         let node = &self.func.nodes[node_id];
         let body_region = &self.func.regions[body];
+        let state_count = self.func.state_domains.len();
 
-        // Theta inputs: [loop_vars..., cursor_state, output_state]
-        // Body args: [loop_vars..., cursor_state, output_state]
-        // Body results: [predicate, loop_vars..., cursor_state, output_state]
-        // Theta outputs: [loop_vars..., cursor_state, output_state]
+        // Theta inputs: [loop_vars..., state domains...]
+        // Body args: [loop_vars..., state domains...]
+        // Body results: [predicate, loop_vars..., state domains...]
+        // Theta outputs: [loop_vars..., state domains...]
 
         let total_inputs = node.inputs.len();
-        let loop_var_count = total_inputs - 2; // minus cursor_state, output_state
+        let loop_var_count = total_inputs - state_count;
 
         // Emit copies for initial loop var values → body region args.
         for i in 0..loop_var_count {
@@ -996,6 +1046,8 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::RestoreCursor { src } => vec![*src],
         LinearOp::WriteToField { src, .. } => vec![*src],
         LinearOp::SetOutPtr { src } => vec![*src],
+        LinearOp::StoreToAddr { addr, src, .. } => vec![*addr, *src],
+        LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
         LinearOp::WriteToSlot { src, .. } => vec![*src],
         LinearOp::CallIntrinsic { args, .. } => args.clone(),
         LinearOp::CallPure { args, .. } => args.clone(),
@@ -1011,6 +1063,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         | LinearOp::PeekByte { .. }
         | LinearOp::AdvanceCursor { .. }
         | LinearOp::SaveCursor { .. }
+        | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
         | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
@@ -1032,9 +1085,11 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::ReadBytes { dst, .. } => vec![*dst],
         LinearOp::PeekByte { dst } => vec![*dst],
         LinearOp::SaveCursor { dst } => vec![*dst],
+        LinearOp::SaveInputEnd { dst } => vec![*dst],
         LinearOp::ReadFromField { dst, .. } => vec![*dst],
         LinearOp::SaveOutPtr { dst } => vec![*dst],
         LinearOp::SlotAddr { dst, .. } => vec![*dst],
+        LinearOp::LoadFromAddr { dst, .. } => vec![*dst],
         LinearOp::ReadFromSlot { dst, .. } => vec![*dst],
         LinearOp::CallIntrinsic { dst, .. } => dst.iter().copied().collect(),
         LinearOp::CallPure { dst, .. } => vec![*dst],
@@ -1047,6 +1102,7 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         | LinearOp::RestoreCursor { .. }
         | LinearOp::WriteToField { .. }
         | LinearOp::SetOutPtr { .. }
+        | LinearOp::StoreToAddr { .. }
         | LinearOp::WriteToSlot { .. }
         | LinearOp::Label(_)
         | LinearOp::Branch(_)
@@ -1092,6 +1148,11 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         LinearOp::RestoreCursor { src } => rewrite(src, &mut resolve),
         LinearOp::WriteToField { src, .. } => rewrite(src, &mut resolve),
         LinearOp::SetOutPtr { src } => rewrite(src, &mut resolve),
+        LinearOp::StoreToAddr { addr, src, .. } => {
+            rewrite(addr, &mut resolve);
+            rewrite(src, &mut resolve);
+        }
+        LinearOp::LoadFromAddr { addr, .. } => rewrite(addr, &mut resolve),
         LinearOp::WriteToSlot { src, .. } => rewrite(src, &mut resolve),
         LinearOp::CallIntrinsic { args, .. }
         | LinearOp::CallPure { args, .. }
@@ -1114,6 +1175,7 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         | LinearOp::PeekByte { .. }
         | LinearOp::AdvanceCursor { .. }
         | LinearOp::SaveCursor { .. }
+        | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
         | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
@@ -1596,6 +1658,10 @@ fn fmt_op(
             fmt_vreg(f, *dst)?;
             write!(f, " = save_cursor")
         }
+        LinearOp::SaveInputEnd { dst } => {
+            fmt_vreg(f, *dst)?;
+            write!(f, " = save_input_end")
+        }
         LinearOp::RestoreCursor { src } => {
             write!(f, "restore_cursor ")?;
             fmt_vreg(f, *src)
@@ -1619,6 +1685,17 @@ fn fmt_op(
         LinearOp::SlotAddr { dst, slot } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = slot_addr {}", slot.index())
+        }
+        LinearOp::StoreToAddr { addr, src, width } => {
+            write!(f, "store_addr [{width}] ")?;
+            fmt_vreg(f, *addr)?;
+            write!(f, ", ")?;
+            fmt_vreg(f, *src)
+        }
+        LinearOp::LoadFromAddr { dst, addr, width } => {
+            fmt_vreg(f, *dst)?;
+            write!(f, " = load_addr [{width}] ")?;
+            fmt_vreg(f, *addr)
         }
         LinearOp::WriteToSlot { slot, src } => {
             write!(f, "slot[{}] = ", slot.index())?;

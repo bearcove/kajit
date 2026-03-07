@@ -631,7 +631,7 @@ mod ir_tests {
         let cursor_input = node1
             .inputs
             .iter()
-            .find(|i| i.kind == crate::ir::PortKind::StateCursor)
+            .find(|i| i.kind == crate::ir::CURSOR_STATE_PORT)
             .expect("second node should have cursor state input");
 
         // The source should be an OutputRef pointing at nodes[0].

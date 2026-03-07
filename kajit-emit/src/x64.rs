@@ -42,6 +42,14 @@ pub struct ExecutableBuffer {
     len: usize,
 }
 
+// SAFETY: ExecutableBuffer owns an immutable RX mapping after construction.
+// Sharing or moving the handle across threads does not permit mutation through
+// the raw pointer; destruction is still uniquely owned by the buffer value.
+unsafe impl Send for ExecutableBuffer {}
+// SAFETY: Shared references only expose read-only byte views and code pointers.
+// The mapping itself is immutable after setup, so concurrent access is safe.
+unsafe impl Sync for ExecutableBuffer {}
+
 impl ExecutableBuffer {
     fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
@@ -187,6 +195,7 @@ pub enum Condition {
     Lo,
     Hs,
     Hi,
+    Ls,
     O,
     No,
     S,
@@ -205,6 +214,7 @@ impl Condition {
             Condition::Lo => 0x2,
             Condition::Hs => 0x3,
             Condition::Hi => 0x7,
+            Condition::Ls => 0x6,
             Condition::S => 0x8,
             Condition::Ns => 0x9,
             Condition::P => 0xa,

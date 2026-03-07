@@ -147,6 +147,75 @@ impl Lowerer {
         self.set_const(dst, None);
     }
 
+    pub(super) fn emit_store_to_addr(
+        &mut self,
+        addr: crate::ir::VReg,
+        src: crate::ir::VReg,
+        width: Width,
+    ) {
+        self.emit_load_use_r11(addr, 0);
+        self.emit_load_use_r10(src, 1);
+        match width {
+            Width::W1 => self
+                .ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r8(11, 0, 10, buf))
+                .expect("mov"),
+            Width::W2 => self
+                .ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r16(11, 0, 10, buf))
+                .expect("mov"),
+            Width::W4 => self
+                .ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r32(Mem { base: 11, disp: 0 }, 10, buf))
+                .expect("mov"),
+            Width::W8 => self
+                .ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 11, disp: 0 }, 10, buf))
+                .expect("mov"),
+        }
+    }
+
+    pub(super) fn emit_load_from_addr(
+        &mut self,
+        dst: crate::ir::VReg,
+        addr: crate::ir::VReg,
+        width: Width,
+    ) {
+        self.emit_load_use_r11(addr, 0);
+        match width {
+            Width::W1 => self
+                .ectx
+                .emit
+                .emit_with(|buf| {
+                    x64::encode_movzx_r32_rm8(10, Operand::Mem(Mem { base: 11, disp: 0 }), buf)
+                })
+                .expect("movzx"),
+            Width::W2 => self
+                .ectx
+                .emit
+                .emit_with(|buf| {
+                    x64::encode_movzx_r32_rm16(10, Operand::Mem(Mem { base: 11, disp: 0 }), buf)
+                })
+                .expect("movzx"),
+            Width::W4 => self
+                .ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_r32_m(10, Mem { base: 11, disp: 0 }, buf))
+                .expect("mov"),
+            Width::W8 => self
+                .ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 11, disp: 0 }, buf))
+                .expect("mov"),
+        }
+        self.emit_store_def_r10(dst, 1);
+        self.set_const(dst, None);
+    }
+
     pub(super) fn emit_read_bytes(&mut self, dst: crate::ir::VReg, count: u32) {
         self.emit_recipe_ops(vec![Op::BoundsCheck { count }]);
         match count {
@@ -234,6 +303,26 @@ impl Lowerer {
                         .expect("sub");
                 }
             }
+            BinOpKind::Mul => {
+                let rhs_alloc = self.current_alloc(1);
+                if let Some(reg) = rhs_alloc.as_reg() {
+                    let enc = reg.hw_enc() as u8;
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_imul_r64_r64(10, enc, buf))
+                        .expect("imul");
+                } else if let Some(slot) = rhs_alloc.as_stack() {
+                    let off = self.spill_off(slot) as i32;
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_m(11, Mem { base: 4, disp: off }, buf))
+                        .expect("mov");
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_imul_r64_r64(10, 11, buf))
+                        .expect("imul");
+                }
+            }
             BinOpKind::And => {
                 let rhs_alloc = self.current_alloc(1);
                 if let Some(reg) = rhs_alloc.as_reg() {
@@ -282,7 +371,12 @@ impl Lowerer {
                         .expect("xor");
                 }
             }
-            BinOpKind::CmpNe => {
+            BinOpKind::CmpEq
+            | BinOpKind::CmpNe
+            | BinOpKind::CmpLt
+            | BinOpKind::CmpLe
+            | BinOpKind::CmpGt
+            | BinOpKind::CmpGe => {
                 let rhs_alloc = self.current_alloc(1);
                 if let Some(reg) = rhs_alloc.as_reg() {
                     let enc = reg.hw_enc() as u8;
@@ -297,13 +391,22 @@ impl Lowerer {
                         .emit_with(|buf| x64::encode_cmp_r64_m(10, Mem { base: 4, disp: off }, buf))
                         .expect("cmp");
                 }
+                let cond = match kind {
+                    BinOpKind::CmpEq => x64::Condition::Eq,
+                    BinOpKind::CmpNe => x64::Condition::Ne,
+                    BinOpKind::CmpLt => x64::Condition::Lo,
+                    BinOpKind::CmpLe => x64::Condition::Ls,
+                    BinOpKind::CmpGt => x64::Condition::Hi,
+                    BinOpKind::CmpGe => x64::Condition::Hs,
+                    _ => unreachable!(),
+                };
                 self.ectx
                     .emit
                     .emit_with(|buf| {
-                        x64::encode_setne_r8(10, buf)?;
+                        x64::encode_setcc_r8(cond, 10, buf)?;
                         x64::encode_movzx_r64_rm8(10, Operand::Reg(10), buf)
                     })
-                    .expect("cmpne");
+                    .expect("cmp");
             }
             BinOpKind::Shr => {
                 let rhs_alloc = self.current_alloc(1);

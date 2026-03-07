@@ -79,7 +79,7 @@ impl EmitCtx {
     }
 
     /// Load a 64-bit immediate into a register using movz + 3×movk.
-    fn emit_load_imm64(&mut self, rd: Reg, val: u64) {
+    pub(crate) fn emit_load_imm64(&mut self, rd: Reg, val: u64) {
         self.emit.emit_word(
             aarch64::encode_movz(aarch64::Width::X64, rd, (val & 0xFFFF) as u16, 0).expect("movz"),
         );
@@ -95,6 +95,56 @@ impl EmitCtx {
             aarch64::encode_movk(aarch64::Width::X64, rd, ((val >> 48) & 0xFFFF) as u16, 48)
                 .expect("movk"),
         );
+    }
+
+    fn emit_add_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
+        self.emit_add_sub_imm_chunks(rd, rn, imm, false);
+    }
+
+    fn emit_sub_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
+        self.emit_add_sub_imm_chunks(rd, rn, imm, true);
+    }
+
+    fn emit_add_sub_imm_chunks(&mut self, rd: Reg, rn: Reg, mut imm: u32, subtract: bool) {
+        if imm == 0 {
+            if rd != rn {
+                let opcode = if subtract { "sub" } else { "add" };
+                self.emit.emit_word(
+                    if subtract {
+                        aarch64::encode_sub_imm(aarch64::Width::X64, rd, rn, 0, false)
+                    } else {
+                        aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, 0, false)
+                    }
+                    .unwrap_or_else(|_| panic!("{opcode}")),
+                );
+            }
+            return;
+        }
+
+        let mut base = rn;
+        while imm != 0 {
+            let (imm12, shift, chunk) = if imm > 0x0fff {
+                let shifted = (imm >> 12).min(0x0fff);
+                if shifted != 0 {
+                    (shifted as u16, true, shifted << 12)
+                } else {
+                    let low = imm.min(0x0fff);
+                    (low as u16, false, low)
+                }
+            } else {
+                (imm as u16, false, imm)
+            };
+
+            let word = if subtract {
+                aarch64::encode_sub_imm(aarch64::Width::X64, rd, base, imm12, shift).expect("sub")
+            } else {
+                aarch64::encode_add_imm(aarch64::Width::X64, rd, base, imm12, shift).expect("add")
+            };
+            self.emit.emit_word(word);
+
+            imm -= chunk;
+            base = rd;
+        }
     }
 
     /// Flush the cached input cursor (x19) back to ctx.input_ptr.
@@ -218,16 +268,7 @@ impl EmitCtx {
         let entry = self.emit.current_offset();
         let frame_size = self.frame_size;
 
-        self.emit.emit_word(
-            aarch64::encode_sub_imm(
-                aarch64::Width::X64,
-                Reg::SP,
-                Reg::SP,
-                frame_size as u16,
-                false,
-            )
-            .expect("sub"),
-        );
+        self.emit_sub_imm_any(Reg::SP, Reg::SP, frame_size);
         self.emit.emit_word(
             aarch64::encode_stp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("stp"),
         );
@@ -340,16 +381,7 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("ldp"),
         );
-        self.emit.emit_word(
-            aarch64::encode_add_imm(
-                aarch64::Width::X64,
-                Reg::SP,
-                Reg::SP,
-                frame_size as u16,
-                false,
-            )
-            .expect("add"),
-        );
+        self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
         self.emit
             .emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
         self.emit.bind_label(error_exit).expect("bind");
@@ -380,16 +412,7 @@ impl EmitCtx {
         self.emit.emit_word(
             aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("ldp"),
         );
-        self.emit.emit_word(
-            aarch64::encode_add_imm(
-                aarch64::Width::X64,
-                Reg::SP,
-                Reg::SP,
-                frame_size as u16,
-                false,
-            )
-            .expect("add"),
-        );
+        self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
         self.emit
             .emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
     }

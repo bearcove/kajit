@@ -133,11 +133,10 @@ impl Lowerer {
             )
             .expect("str"),
         );
+        self.emit_set_abi_intrinsic_args_parallel(1, args);
         self.ectx.emit.emit_word(
             aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
         );
-
-        self.emit_set_abi_intrinsic_args_parallel(1, args);
 
         let ptr = fn_ptr as u64;
         let p0 = (ptr & 0xFFFF) as u32;
@@ -400,13 +399,6 @@ impl Lowerer {
             )
             .expect("str"),
         );
-        self.ectx.emit.emit_word(
-            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X21).expect("mov"),
-        );
-        self.ectx.emit.emit_word(
-            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X22).expect("mov"),
-        );
-
         let lambda_moves: Vec<(Allocation, Allocation)> = args
             .iter()
             .enumerate()
@@ -418,6 +410,12 @@ impl Lowerer {
             })
             .collect();
         emit_parallel_moves(self, &lambda_moves);
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X21).expect("mov"),
+        );
+        self.ectx.emit.emit_word(
+            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X22).expect("mov"),
+        );
 
         self.ectx.emit.emit_bl_label(label).expect("bl");
         self.ectx.emit.emit_word(

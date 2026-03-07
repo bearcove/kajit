@@ -66,17 +66,61 @@ impl Lowerer {
 
     pub(super) fn emit_slot_addr(&mut self, dst: crate::ir::VReg, slot: crate::ir::SlotId) {
         let slot_off = self.slot_off(slot);
-        self.ectx.emit.emit_word(
-            aarch64::encode_add_imm(
-                aarch64::Width::X64,
-                Reg::X9,
-                Reg::SP,
-                slot_off as u16,
-                false,
-            )
-            .expect("add"),
-        );
+        self.emit_stack_addr(Reg::X9, slot_off);
         self.emit_store_def_x9(dst, 0);
+        self.set_const(dst, None);
+    }
+
+    pub(super) fn emit_store_to_addr(
+        &mut self,
+        addr: crate::ir::VReg,
+        src: crate::ir::VReg,
+        width: Width,
+    ) {
+        self.emit_load_use_x10(addr, 0);
+        self.emit_load_use_x9(src, 1);
+        match width {
+            Width::W1 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_strb_imm(Reg::X9, Reg::X10, 0).expect("strb")),
+            Width::W2 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_strh_imm(Reg::X9, Reg::X10, 0).expect("strh")),
+            Width::W4 => self.ectx.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0).expect("str"),
+            ),
+            Width::W8 => self.ectx.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0).expect("str"),
+            ),
+        }
+    }
+
+    pub(super) fn emit_load_from_addr(
+        &mut self,
+        dst: crate::ir::VReg,
+        addr: crate::ir::VReg,
+        width: Width,
+    ) {
+        self.emit_load_use_x10(addr, 0);
+        match width {
+            Width::W1 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X10, 0).expect("ldrb")),
+            Width::W2 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_ldrh_imm(Reg::X9, Reg::X10, 0).expect("ldrh")),
+            Width::W4 => self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0).expect("ldr"),
+            ),
+            Width::W8 => self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0).expect("ldr"),
+            ),
+        }
+        self.emit_store_def_x9(dst, 1);
         self.set_const(dst, None);
     }
 
@@ -120,7 +164,15 @@ impl Lowerer {
         lhs: crate::ir::VReg,
         rhs: crate::ir::VReg,
     ) {
-        if kind == BinOpKind::CmpNe {
+        if matches!(
+            kind,
+            BinOpKind::CmpEq
+                | BinOpKind::CmpNe
+                | BinOpKind::CmpLt
+                | BinOpKind::CmpLe
+                | BinOpKind::CmpGt
+                | BinOpKind::CmpGe
+        ) {
             let lhs_alloc = self.current_alloc(0);
             let rhs_alloc = self.current_alloc(1);
             let rhs_const = self.const_of(rhs);
@@ -128,14 +180,14 @@ impl Lowerer {
             if let Some(reg) = lhs_alloc.as_reg() {
                 assert!(
                     reg.class() == regalloc2::RegClass::Int,
-                    "unsupported register allocation class {:?} for CmpNe lhs",
+                    "unsupported register allocation class {:?} for compare lhs",
                     reg.class()
                 );
             }
             if let Some(reg) = rhs_alloc.as_reg() {
                 assert!(
                     reg.class() == regalloc2::RegClass::Int,
-                    "unsupported register allocation class {:?} for CmpNe rhs",
+                    "unsupported register allocation class {:?} for compare rhs",
                     reg.class()
                 );
             }
@@ -161,10 +213,7 @@ impl Lowerer {
                 }
                 (None, Some(lhs_stack), Some(c), _, _) => {
                     let lhs_off = self.spill_off(lhs_stack);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, lhs_off)
-                            .expect("ldr"),
-                    );
+                    self.emit_stack_load(aarch64::Width::X64, Reg::X9, lhs_off);
                     if c <= 4095 {
                         self.ectx.emit.emit_word(
                             aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X9, c as u16, false)
@@ -193,10 +242,7 @@ impl Lowerer {
                 (Some(lhs_reg), None, None, None, Some(rhs_stack)) => {
                     let lhs_r = lhs_reg.hw_enc() as u8;
                     let rhs_off = self.spill_off(rhs_stack);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, rhs_off)
-                            .expect("ldr"),
-                    );
+                    self.emit_stack_load(aarch64::Width::X64, Reg::X10, rhs_off);
                     self.ectx.emit.emit_word(
                         aarch64::encode_cmp_reg(
                             aarch64::Width::X64,
@@ -209,10 +255,7 @@ impl Lowerer {
                 (None, Some(lhs_stack), None, Some(rhs_reg), None) => {
                     let lhs_off = self.spill_off(lhs_stack);
                     let rhs_r = rhs_reg.hw_enc() as u8;
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, lhs_off)
-                            .expect("ldr"),
-                    );
+                    self.emit_stack_load(aarch64::Width::X64, Reg::X9, lhs_off);
                     self.ectx.emit.emit_word(
                         aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::from_raw(rhs_r))
                             .expect("cmp"),
@@ -221,46 +264,45 @@ impl Lowerer {
                 (None, Some(lhs_stack), None, None, Some(rhs_stack)) => {
                     let lhs_off = self.spill_off(lhs_stack);
                     let rhs_off = self.spill_off(rhs_stack);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, lhs_off)
-                            .expect("ldr"),
-                    );
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X10, Reg::SP, rhs_off)
-                            .expect("ldr"),
-                    );
+                    self.emit_stack_load(aarch64::Width::X64, Reg::X9, lhs_off);
+                    self.emit_stack_load(aarch64::Width::X64, Reg::X10, rhs_off);
                     self.ectx.emit.emit_word(
                         aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::X10)
                             .expect("cmp"),
                     );
                 }
-                _ => panic!("unexpected none allocation for CmpNe operands"),
+                _ => panic!("unexpected none allocation for compare operands"),
             }
 
             let dst_alloc = self.current_alloc(2);
+            let condition = match kind {
+                BinOpKind::CmpEq => Condition::Eq,
+                BinOpKind::CmpNe => Condition::Ne,
+                BinOpKind::CmpLt => Condition::Lo,
+                BinOpKind::CmpLe => Condition::Ls,
+                BinOpKind::CmpGt => Condition::Hi,
+                BinOpKind::CmpGe => Condition::Hs,
+                _ => unreachable!(),
+            };
             if let Some(dst_reg) = dst_alloc.as_reg() {
                 assert!(
                     dst_reg.class() == regalloc2::RegClass::Int,
-                    "unsupported register allocation class {:?} for CmpNe dst",
+                    "unsupported register allocation class {:?} for compare dst",
                     dst_reg.class()
                 );
                 let dst_r = dst_reg.hw_enc() as u8;
                 self.ectx.emit.emit_word(
-                    aarch64::encode_cset(aarch64::Width::X64, Reg::from_raw(dst_r), Condition::Ne)
+                    aarch64::encode_cset(aarch64::Width::X64, Reg::from_raw(dst_r), condition)
                         .expect("cset"),
                 );
             } else if let Some(dst_stack) = dst_alloc.as_stack() {
                 let dst_off = self.spill_off(dst_stack);
                 self.ectx.emit.emit_word(
-                    aarch64::encode_cset(aarch64::Width::X64, Reg::X9, Condition::Ne)
-                        .expect("cset"),
+                    aarch64::encode_cset(aarch64::Width::X64, Reg::X9, condition).expect("cset"),
                 );
-                self.ectx.emit.emit_word(
-                    aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::SP, dst_off)
-                        .expect("str"),
-                );
+                self.emit_stack_store(aarch64::Width::X64, Reg::X9, dst_off);
             } else {
-                panic!("unexpected none allocation for CmpNe dst");
+                panic!("unexpected none allocation for compare dst");
             }
             self.set_const(dst, None);
             return;
@@ -369,6 +411,48 @@ impl Lowerer {
                     } else {
                         false
                     }
+                }
+                BinOpKind::Mul => {
+                    if dst_r == lhs_r {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mul(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(rhs_r),
+                            )
+                            .expect("mul"),
+                        );
+                    } else if dst_r == rhs_r {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mul(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                            )
+                            .expect("mul"),
+                        );
+                    } else {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mov_reg(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                            )
+                            .expect("mov"),
+                        );
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mul(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(rhs_r),
+                            )
+                            .expect("mul"),
+                        );
+                    }
+                    true
                 }
                 BinOpKind::And => {
                     if dst_r == lhs_r {
@@ -584,7 +668,12 @@ impl Lowerer {
                         false
                     }
                 }
-                BinOpKind::CmpNe => unreachable!("CmpNe handled above"),
+                BinOpKind::CmpEq
+                | BinOpKind::CmpNe
+                | BinOpKind::CmpLt
+                | BinOpKind::CmpLe
+                | BinOpKind::CmpGt
+                | BinOpKind::CmpGe => unreachable!("compare handled above"),
             };
             if handled {
                 self.set_const(dst, None);
@@ -639,6 +728,13 @@ impl Lowerer {
                     );
                 }
             }
+            BinOpKind::Mul => {
+                self.emit_load_use_x10(rhs, 1);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mul(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                        .expect("mul"),
+                );
+            }
             BinOpKind::And => {
                 if let Some(c) = rhs_const
                     && let Ok(word) =
@@ -688,7 +784,12 @@ impl Lowerer {
                     .expect("eor"),
                 );
             }
-            BinOpKind::CmpNe => unreachable!("CmpNe handled above"),
+            BinOpKind::CmpEq
+            | BinOpKind::CmpNe
+            | BinOpKind::CmpLt
+            | BinOpKind::CmpLe
+            | BinOpKind::CmpGt
+            | BinOpKind::CmpGe => unreachable!("compare handled above"),
             BinOpKind::Shr => {
                 if let Some(c) = rhs_const
                     && c <= 63
@@ -836,9 +937,7 @@ impl Lowerer {
         }
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("ldr"),
-            );
+            self.emit_stack_load(aarch64::Width::X64, Reg::X9, off);
             if invert {
                 self.ectx
                     .emit
@@ -875,9 +974,7 @@ impl Lowerer {
         });
         if let Some(slot) = alloc.as_stack() {
             let off = self.spill_off(slot);
-            self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::SP, off).expect("ldr"),
-            );
+            self.emit_stack_load(aarch64::Width::X64, Reg::X9, off);
         } else if pred_reg.is_none() {
             panic!("unexpected none allocation for jumptable predicate");
         }

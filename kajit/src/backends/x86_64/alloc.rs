@@ -29,6 +29,33 @@ impl Lowerer {
         panic!("unexpected none allocation for r10 load");
     }
 
+    pub(super) fn emit_load_r11_from_allocation(&mut self, alloc: Allocation) {
+        if let Some(reg) = alloc.as_reg() {
+            assert!(
+                reg.class() == RegClass::Int,
+                "unsupported register class {:?} for r11 load",
+                reg.class()
+            );
+            let enc = reg.hw_enc() as u8;
+            if enc != 11 {
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_r64(11, enc, buf))
+                    .expect("mov");
+            }
+            return;
+        }
+        if let Some(slot) = alloc.as_stack() {
+            let off = self.spill_off(slot) as i32;
+            self.ectx
+                .emit
+                .emit_with(|buf| x64::encode_mov_r64_m(11, Mem { base: 4, disp: off }, buf))
+                .expect("mov");
+            return;
+        }
+        panic!("unexpected none allocation for r11 load");
+    }
+
     pub(super) fn emit_store_r10_to_allocation(&mut self, alloc: Allocation) {
         if let Some(reg) = alloc.as_reg() {
             assert!(
@@ -59,6 +86,11 @@ impl Lowerer {
     pub(super) fn emit_load_use_r10(&mut self, _v: crate::ir::VReg, operand_index: usize) {
         let alloc = self.current_alloc(operand_index);
         self.emit_load_r10_from_allocation(alloc);
+    }
+
+    pub(super) fn emit_load_use_r11(&mut self, _v: crate::ir::VReg, operand_index: usize) {
+        let alloc = self.current_alloc(operand_index);
+        self.emit_load_r11_from_allocation(alloc);
     }
 
     pub(super) fn emit_store_def_r10(&mut self, _v: crate::ir::VReg, operand_index: usize) {

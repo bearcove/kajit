@@ -722,6 +722,33 @@ pub unsafe extern "C" fn kajit_postcard_validate_and_alloc_string(
     unsafe { out.write(s.to_owned()) };
 }
 
+/// Validate that a raw byte range is UTF-8.
+///
+/// This is the lean borrowed-string helper for generated HIR: the decoder
+/// computes the byte range and cursor movement itself, and this helper only
+/// checks UTF-8 validity in the current trust mode.
+///
+/// # Safety
+///
+/// - `ctx` must be a valid, aligned, non-null pointer to a `DeserContext`
+/// - `data_ptr` must point to at least `data_len` readable bytes
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kajit_validate_utf8_range(
+    ctx: *mut DeserContext,
+    data_ptr: *const u8,
+    data_len: u32,
+) {
+    let len = data_len as usize;
+    let ctx = unsafe { &mut *ctx };
+    if ctx.trusted_utf8 {
+        return;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+    if core::str::from_utf8(bytes).is_err() {
+        ctx.error.code = ErrorCode::InvalidUtf8 as u32;
+    }
+}
+
 /// Validate UTF-8, allocate raw buffer, and copy bytes. Returns buffer pointer.
 ///
 /// Malum string intrinsic — the JIT writes the returned pointer + len directly
@@ -771,6 +798,39 @@ pub unsafe extern "C" fn kajit_string_validate_alloc_copy(
 
     // Copy bytes.
     unsafe { core::ptr::copy_nonoverlapping(data_ptr, buf, len) };
+    buf
+}
+
+/// Allocate raw persistent heap memory with the requested layout.
+///
+/// This is the low-level primitive used by generated decoders that build
+/// heap-backed host values in place before a later materialization step.
+///
+/// # Safety
+/// - `ctx` must be a valid, aligned, non-null pointer to a `DeserContext`
+/// - `align` must be accepted by `Layout::from_size_align`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kajit_alloc_persistent(
+    ctx: *mut DeserContext,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    if size == 0 {
+        return core::ptr::null_mut();
+    }
+    let layout = match std::alloc::Layout::from_size_align(size, align) {
+        Ok(layout) => layout,
+        Err(_) => {
+            let ctx = unsafe { &mut *ctx };
+            ctx.error.code = ErrorCode::AllocError as u32;
+            return core::ptr::null_mut();
+        }
+    };
+    let buf = unsafe { std::alloc::alloc(layout) };
+    if buf.is_null() {
+        let ctx = unsafe { &mut *ctx };
+        ctx.error.code = ErrorCode::AllocError as u32;
+    }
     buf
 }
 
@@ -1273,6 +1333,10 @@ pub fn known_intrinsics() -> Vec<(&'static str, crate::ir::IntrinsicFn)> {
         (
             "kajit_string_validate_alloc_copy",
             IntrinsicFn(kajit_string_validate_alloc_copy as *const () as usize),
+        ),
+        (
+            "kajit_alloc_persistent",
+            IntrinsicFn(kajit_alloc_persistent as *const () as usize),
         ),
         (
             "kajit_vec_alloc",

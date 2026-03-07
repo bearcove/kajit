@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource,
-    RegionArgRef, RegionId,
+    CURSOR_STATE_DOMAIN, DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind,
+    OUTPUT_STATE_DOMAIN, OutputRef, PortKind, PortSource, RegionArgRef, RegionId, StateDomainId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,6 +20,9 @@ struct StateUsage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {
+    InvalidStateDomain {
+        domain: StateDomainId,
+    },
     InvalidLambdaNode {
         lambda: LambdaId,
         node: NodeId,
@@ -129,8 +132,12 @@ fn debug_scope_exists(func: &IrFunc, scope: DebugScopeId) -> bool {
     scope.index() < func.debug_scopes.len()
 }
 
+fn state_domain_exists(func: &IrFunc, domain: StateDomainId) -> bool {
+    func.has_state_domain(domain)
+}
+
 fn is_state_kind(kind: PortKind) -> bool {
-    matches!(kind, PortKind::StateCursor | PortKind::StateOutput)
+    kind.is_state()
 }
 
 fn in_scope(
@@ -304,6 +311,17 @@ fn state_source(source: PortSource) -> StateProducer {
 }
 
 pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
+    if !state_domain_exists(func, CURSOR_STATE_DOMAIN) {
+        return Err(VerifyError::InvalidStateDomain {
+            domain: CURSOR_STATE_DOMAIN,
+        });
+    }
+    if !state_domain_exists(func, OUTPUT_STATE_DOMAIN) {
+        return Err(VerifyError::InvalidStateDomain {
+            domain: OUTPUT_STATE_DOMAIN,
+        });
+    }
+
     if !debug_scope_exists(func, func.root_debug_scope) {
         return Err(VerifyError::InvalidDebugScope {
             scope: func.root_debug_scope,
@@ -326,6 +344,13 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 scope: region.debug_scope,
             });
         }
+        for arg in &region.args {
+            if let Some(domain) = arg.kind.state_domain()
+                && !state_domain_exists(func, domain)
+            {
+                return Err(VerifyError::InvalidStateDomain { domain });
+            }
+        }
         let mut positions: HashMap<NodeId, usize> = HashMap::with_capacity(region.nodes.len());
         for (idx, &node_id) in region.nodes.iter().enumerate() {
             positions.insert(node_id, idx);
@@ -344,8 +369,18 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         scope: output.debug_scope,
                     });
                 }
+                if let Some(domain) = output.kind.state_domain()
+                    && !state_domain_exists(func, domain)
+                {
+                    return Err(VerifyError::InvalidStateDomain { domain });
+                }
             }
             for (input_index, input) in node.inputs.iter().enumerate() {
+                if let Some(domain) = input.kind.state_domain()
+                    && !state_domain_exists(func, domain)
+                {
+                    return Err(VerifyError::InvalidStateDomain { domain });
+                }
                 match input.source {
                     PortSource::Node(source) => {
                         let kind = check_node_source(func, source, input.kind).map_err(|_| {
@@ -427,6 +462,11 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         }
 
         for (result_index, result) in region.results.iter().enumerate() {
+            if let Some(domain) = result.kind.state_domain()
+                && !state_domain_exists(func, domain)
+            {
+                return Err(VerifyError::InvalidStateDomain { domain });
+            }
             match result.source {
                 PortSource::Node(source) => {
                     let kind = check_node_source(func, source, result.kind).map_err(|_| {
@@ -489,40 +529,38 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         }
     }
 
-    let mut cursor_uses: HashMap<StateProducer, StateUsage> = HashMap::new();
-    let mut output_uses: HashMap<StateProducer, StateUsage> = HashMap::new();
+    let mut state_uses: HashMap<StateDomainId, HashMap<StateProducer, StateUsage>> = HashMap::new();
     for &region_id in &region_order {
         let region = &func.regions[region_id];
         for &node_id in &region.nodes {
             let node = &func.nodes[node_id];
             for input in &node.inputs {
                 let producer = state_source(input.source);
-                match input.kind {
-                    PortKind::StateCursor => {
-                        let usage = cursor_uses.entry(producer).or_default();
-                        if matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. })) {
-                            usage.error_exit_sinks += 1;
-                        } else {
-                            usage.chain_uses += 1;
-                        }
+                if let Some(domain) = input.kind.state_domain() {
+                    let usage = state_uses
+                        .entry(domain)
+                        .or_default()
+                        .entry(producer)
+                        .or_default();
+                    if domain == CURSOR_STATE_DOMAIN
+                        && matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. }))
+                    {
+                        usage.error_exit_sinks += 1;
+                    } else {
+                        usage.chain_uses += 1;
                     }
-                    PortKind::StateOutput => {
-                        output_uses.entry(producer).or_default().chain_uses += 1;
-                    }
-                    PortKind::Data => {}
                 }
             }
         }
         for result in &region.results {
             let producer = state_source(result.source);
-            match result.kind {
-                PortKind::StateCursor => {
-                    cursor_uses.entry(producer).or_default().chain_uses += 1;
-                }
-                PortKind::StateOutput => {
-                    output_uses.entry(producer).or_default().chain_uses += 1;
-                }
-                PortKind::Data => {}
+            if let Some(domain) = result.kind.state_domain() {
+                state_uses
+                    .entry(domain)
+                    .or_default()
+                    .entry(producer)
+                    .or_default()
+                    .chain_uses += 1;
             }
         }
     }
@@ -537,17 +575,12 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 region: region_id,
                 index: arg_index as u16,
             });
-            let usage = match arg.kind {
-                PortKind::StateCursor => cursor_uses
-                    .get(&state_source(producer))
-                    .copied()
-                    .unwrap_or_default(),
-                PortKind::StateOutput => output_uses
-                    .get(&state_source(producer))
-                    .copied()
-                    .unwrap_or_default(),
-                PortKind::Data => StateUsage::default(),
-            };
+            let domain = arg.kind.state_domain().unwrap();
+            let usage = state_uses
+                .get(&domain)
+                .and_then(|uses| uses.get(&state_source(producer)))
+                .copied()
+                .unwrap_or_default();
             if usage.chain_uses != 1 {
                 return Err(VerifyError::StateChainViolation {
                     kind: arg.kind,
@@ -555,7 +588,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     uses: usage.chain_uses,
                 });
             }
-            if arg.kind == PortKind::StateCursor && usage.error_exit_sinks > 1 {
+            if domain == CURSOR_STATE_DOMAIN && usage.error_exit_sinks > 1 {
                 return Err(VerifyError::StateErrorExitSinkViolation {
                     producer,
                     sinks: usage.error_exit_sinks,
@@ -573,17 +606,12 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     node: node_id,
                     index: output_index as u16,
                 });
-                let usage = match output.kind {
-                    PortKind::StateCursor => cursor_uses
-                        .get(&state_source(producer))
-                        .copied()
-                        .unwrap_or_default(),
-                    PortKind::StateOutput => output_uses
-                        .get(&state_source(producer))
-                        .copied()
-                        .unwrap_or_default(),
-                    PortKind::Data => StateUsage::default(),
-                };
+                let domain = output.kind.state_domain().unwrap();
+                let usage = state_uses
+                    .get(&domain)
+                    .and_then(|uses| uses.get(&state_source(producer)))
+                    .copied()
+                    .unwrap_or_default();
                 if usage.chain_uses != 1 {
                     return Err(VerifyError::StateChainViolation {
                         kind: output.kind,
@@ -591,7 +619,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         uses: usage.chain_uses,
                     });
                 }
-                if output.kind == PortKind::StateCursor && usage.error_exit_sinks > 1 {
+                if domain == CURSOR_STATE_DOMAIN && usage.error_exit_sinks > 1 {
                     return Err(VerifyError::StateErrorExitSinkViolation {
                         producer,
                         sinks: usage.error_exit_sinks,
@@ -708,6 +736,24 @@ mod tests {
         assert!(matches!(
             err,
             VerifyError::StateErrorExitSinkViolation { sinks: 2, .. }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_unknown_state_domains() {
+        let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
+        {
+            let mut rb = builder.root_region();
+            rb.set_results(&[]);
+        }
+        let mut func = builder.finish();
+        let root = func.root_body();
+        func.regions[root].args[0].kind = PortKind::state(StateDomainId::new(99));
+
+        let err = verify(&func).expect_err("verifier should reject unknown state domains");
+        assert!(matches!(
+            err,
+            VerifyError::InvalidStateDomain { domain } if domain == StateDomainId::new(99)
         ));
     }
 }

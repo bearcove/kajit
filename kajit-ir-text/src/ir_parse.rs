@@ -9,9 +9,11 @@ use chumsky::prelude::*;
 
 use kajit_ir::ErrorCode;
 use kajit_ir::{
-    Arena, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry,
-    IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
-    Region, RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, VReg, Width,
+    Arena, CURSOR_STATE_DOMAIN, CURSOR_STATE_DOMAIN_NAME, CURSOR_STATE_PORT, DebugScope,
+    DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry, IrFunc, IrOp,
+    LambdaId, Node, NodeId, NodeKind, OUTPUT_STATE_DOMAIN, OUTPUT_STATE_DOMAIN_NAME,
+    OUTPUT_STATE_PORT, OutputPort, OutputRef, PortKind, PortSource, Region, RegionArg,
+    RegionArgRef, RegionId, RegionResult, SlotId, StateDomain, StateDomainId, VReg, Width,
 };
 
 // ─── AST types (first pass) ────────────────────────────────────────────────
@@ -21,14 +23,10 @@ use kajit_ir::{
 enum AstSource {
     /// `v0`, `v42` — data value from a node output
     VReg(u32),
-    /// `%cs:n5` — cursor state from node n5's output
-    CursorNode(u32),
-    /// `%os:n3` — output state from node n3's output
-    OutputNode(u32),
-    /// `%cs:arg` — cursor state from region argument
-    CursorArg,
-    /// `%os:arg` — output state from region argument
-    OutputArg,
+    /// `%cs:n5`, `%os:n3`, `%s2:n8` — state from node output
+    StateNode { domain: u32, node: u32 },
+    /// `%cs:arg`, `%os:arg`, `%s2:arg` — state from region argument
+    StateArg(u32),
     /// `arg0`, `arg1` — data value from region argument
     RegionArg(u16),
     /// `n1.2` — node output by index (fallback when no vreg)
@@ -40,10 +38,8 @@ enum AstSource {
 enum AstOutput {
     /// `v0` — data output with vreg
     VReg(u32),
-    /// `%cs` — cursor state output
-    Cursor,
-    /// `%os` — output state output
-    Output,
+    /// `%cs`, `%os`, `%s2` — state output
+    State(u32),
     /// `?` — data output without vreg assignment
     Unknown,
 }
@@ -99,9 +95,14 @@ struct AstRegion {
 
 #[derive(Debug, Clone)]
 enum AstRegionArg {
-    Data(u16), // arg0, arg1, ...
-    Cursor,    // %cs
-    Output,    // %os
+    Data(u16),  // arg0, arg1, ...
+    State(u32), // %cs, %os, %s2
+}
+
+#[derive(Debug, Clone)]
+struct AstStateDomainDef {
+    id: u32,
+    name: String,
 }
 
 /// A parsed lambda (unresolved).
@@ -130,6 +131,7 @@ struct AstScopeDef {
 
 #[derive(Debug, Clone)]
 struct AstProgram {
+    state_domains: Vec<AstStateDomainDef>,
     scopes: Vec<AstScopeDef>,
     lambdas: Vec<AstLambda>,
 }
@@ -162,6 +164,14 @@ fn uint64<'src>() -> impl Parser<'src, &'src str, u64, Extra<'src>> + Clone {
 /// Parse a u16 decimal number.
 fn uint16<'src>() -> impl Parser<'src, &'src str, u16, Extra<'src>> + Clone {
     text::int::<_, Extra<'_>>(10).map(|s: &str| s.parse::<u16>().unwrap())
+}
+
+fn state_domain_ref<'src>() -> impl Parser<'src, &'src str, u32, Extra<'src>> + Clone {
+    choice((
+        just("%cs").to(CURSOR_STATE_DOMAIN.index() as u32),
+        just("%os").to(OUTPUT_STATE_DOMAIN.index() as u32),
+        just("%s").ignore_then(uint32()),
+    ))
 }
 
 /// Parse a width: W1, W2, W4, W8.
@@ -201,15 +211,13 @@ fn error_code<'src>() -> impl Parser<'src, &'src str, ErrorCode, Extra<'src>> + 
 
 /// Parse a source reference.
 fn source<'src>() -> impl Parser<'src, &'src str, AstSource, Extra<'src>> + Clone {
-    // Order matters: try more specific patterns first
-    let cursor_node = just("%cs:n")
-        .ignore_then(uint32())
-        .map(AstSource::CursorNode);
-    let output_node = just("%os:n")
-        .ignore_then(uint32())
-        .map(AstSource::OutputNode);
-    let cursor_arg = just("%cs:arg").to(AstSource::CursorArg);
-    let output_arg = just("%os:arg").to(AstSource::OutputArg);
+    let state_node = state_domain_ref()
+        .then_ignore(just(":n"))
+        .then(uint32())
+        .map(|(domain, node)| AstSource::StateNode { domain, node });
+    let state_arg = state_domain_ref()
+        .then_ignore(just(":arg"))
+        .map(AstSource::StateArg);
     let region_arg = just("arg").ignore_then(uint16()).map(AstSource::RegionArg);
     let node_output = just("n")
         .ignore_then(uint32())
@@ -218,25 +226,16 @@ fn source<'src>() -> impl Parser<'src, &'src str, AstSource, Extra<'src>> + Clon
         .map(|(n, i)| AstSource::NodeOutput(n, i));
     let vreg = just("v").ignore_then(uint32()).map(AstSource::VReg);
 
-    choice((
-        cursor_arg,
-        output_arg,
-        cursor_node,
-        output_node,
-        region_arg,
-        node_output,
-        vreg,
-    ))
+    choice((state_arg, state_node, region_arg, node_output, vreg))
 }
 
 /// Parse an output port.
 fn output<'src>() -> impl Parser<'src, &'src str, AstOutput, Extra<'src>> + Clone {
-    let cursor = just("%cs").to(AstOutput::Cursor);
-    let output_state = just("%os").to(AstOutput::Output);
+    let state = state_domain_ref().map(AstOutput::State);
     let unknown = just("?").to(AstOutput::Unknown);
     let vreg = just("v").ignore_then(uint32()).map(AstOutput::VReg);
 
-    choice((cursor, output_state, unknown, vreg))
+    choice((state, unknown, vreg))
 }
 
 fn scope_ref<'src>() -> impl Parser<'src, &'src str, u32, Extra<'src>> + Clone {
@@ -275,6 +274,30 @@ fn scopes_block<'src>() -> impl Parser<'src, &'src str, Vec<AstScopeDef>, Extra<
         .ignore_then(just("{"))
         .ignore_then(ws())
         .ignore_then(scope_def().padded_by(ws()).repeated().collect::<Vec<_>>())
+        .then_ignore(ws().then(just("}")))
+}
+
+fn state_domain_def<'src>() -> impl Parser<'src, &'src str, AstStateDomainDef, Extra<'src>> + Clone
+{
+    just("d")
+        .ignore_then(uint32())
+        .then_ignore(ws().then(just("=")).then(ws()))
+        .then(symbol_name())
+        .map(|(id, name)| AstStateDomainDef { id, name })
+}
+
+fn state_domains_block<'src>()
+-> impl Parser<'src, &'src str, Vec<AstStateDomainDef>, Extra<'src>> + Clone {
+    just("state_domains")
+        .padded_by(ws())
+        .ignore_then(just("{"))
+        .ignore_then(ws())
+        .ignore_then(
+            state_domain_def()
+                .padded_by(ws())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
         .then_ignore(ws().then(just("}")))
 }
 
@@ -384,6 +407,14 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
                     slot: SlotId::new(s),
                 })
             }),
+        just("StoreToAddr(")
+            .ignore_then(width())
+            .then_ignore(just(")"))
+            .map(|width| AstOp::Resolved(IrOp::StoreToAddr { width })),
+        just("LoadFromAddr(")
+            .ignore_then(width())
+            .then_ignore(just(")"))
+            .map(|width| AstOp::Resolved(IrOp::LoadFromAddr { width })),
         just("WriteToSlot(")
             .ignore_then(uint32())
             .then_ignore(just(")"))
@@ -415,6 +446,7 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
         just("CmpNe").to(AstOp::Resolved(IrOp::CmpNe)),
         just("Add").to(AstOp::Resolved(IrOp::Add)),
         just("Sub").to(AstOp::Resolved(IrOp::Sub)),
+        just("Mul").to(AstOp::Resolved(IrOp::Mul)),
         just("And").to(AstOp::Resolved(IrOp::And)),
         just("Or").to(AstOp::Resolved(IrOp::Or)),
         just("Shr").to(AstOp::Resolved(IrOp::Shr)),
@@ -471,10 +503,9 @@ enum AstOp {
 
 /// Parse a region arg: `%cs`, `%os`, `arg0`, `arg1`, etc.
 fn region_arg<'src>() -> impl Parser<'src, &'src str, AstRegionArg, Extra<'src>> + Clone {
-    let cursor = just("%cs").to(AstRegionArg::Cursor);
-    let output_state = just("%os").to(AstRegionArg::Output);
+    let state = state_domain_ref().map(AstRegionArg::State);
     let data = just("arg").ignore_then(uint16()).map(AstRegionArg::Data);
-    choice((cursor, output_state, data))
+    choice((state, data))
 }
 
 fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clone {
@@ -658,17 +689,20 @@ fn lambda<'src>() -> impl Parser<'src, &'src str, AstLambda, Extra<'src>> + Clon
 }
 
 fn program<'src>() -> impl Parser<'src, &'src str, AstProgram, Extra<'src>> + Clone {
-    scopes_block()
+    state_domains_block()
         .padded_by(ws())
         .or_not()
         .then(
-            lambda()
-                .padded_by(ws())
-                .repeated()
-                .at_least(1)
-                .collect::<Vec<_>>(),
+            scopes_block().padded_by(ws()).or_not().then(
+                lambda()
+                    .padded_by(ws())
+                    .repeated()
+                    .at_least(1)
+                    .collect::<Vec<_>>(),
+            ),
         )
-        .map(|(scopes, lambdas)| AstProgram {
+        .map(|(state_domains, (scopes, lambdas))| AstProgram {
+            state_domains: state_domains.unwrap_or_default(),
             scopes: scopes.unwrap_or_default(),
             lambdas,
         })
@@ -723,6 +757,11 @@ fn resolve(
     let mut func = IrFunc {
         nodes: Arena::new(),
         regions: Arena::new(),
+        state_domains: if program.state_domains.is_empty() {
+            IrFunc::builtin_state_domains()
+        } else {
+            Arena::new()
+        },
         root: NodeId::new(0),
         vreg_count: 0,
         slot_count: 0,
@@ -731,6 +770,10 @@ fn resolve(
         debug_values: Arena::new(),
         root_debug_scope: DebugScopeId::new(0),
     };
+
+    if !program.state_domains.is_empty() {
+        build_explicit_state_domains(&mut func, &program.state_domains)?;
+    }
 
     if program.scopes.is_empty() {
         func.root_debug_scope = func.debug_scopes.push(DebugScope {
@@ -834,6 +877,44 @@ fn resolve(
     Ok(func)
 }
 
+fn build_explicit_state_domains(
+    func: &mut IrFunc,
+    state_domains: &[AstStateDomainDef],
+) -> Result<(), ParseError> {
+    for domain in state_domains {
+        let expected = func.state_domains.len() as u32;
+        if domain.id != expected {
+            return Err(ParseError {
+                message: format!(
+                    "state domain IDs must be dense and in order: expected d{expected}, found d{}",
+                    domain.id
+                ),
+            });
+        }
+        func.state_domains.push(StateDomain {
+            name: domain.name.clone(),
+        });
+    }
+
+    if func.state_domains.len() <= OUTPUT_STATE_DOMAIN.index() {
+        return Err(ParseError {
+            message: "explicit state domains must define d0 = cursor and d1 = output".to_string(),
+        });
+    }
+
+    if func.state_domains[CURSOR_STATE_DOMAIN].name != CURSOR_STATE_DOMAIN_NAME
+        || func.state_domains[OUTPUT_STATE_DOMAIN].name != OUTPUT_STATE_DOMAIN_NAME
+    {
+        return Err(ParseError {
+            message: format!(
+                "explicit state domains must define d0 = {CURSOR_STATE_DOMAIN_NAME} and d1 = {OUTPUT_STATE_DOMAIN_NAME}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 fn build_explicit_scopes(func: &mut IrFunc, scopes: &[AstScopeDef]) -> Result<(), ParseError> {
     for scope in scopes {
         let expected = func.debug_scopes.len() as u32;
@@ -889,6 +970,16 @@ fn lookup_scope(func: &IrFunc, scope: u32) -> Result<DebugScopeId, ParseError> {
     Ok(scope_id)
 }
 
+fn lookup_state_domain(func: &IrFunc, domain: u32) -> Result<StateDomainId, ParseError> {
+    let domain_id = StateDomainId::new(domain);
+    if !func.has_state_domain(domain_id) {
+        return Err(ParseError {
+            message: format!("unknown state domain d{domain}"),
+        });
+    }
+    Ok(domain_id)
+}
+
 fn find_lambda_body_scope(func: &IrFunc, lambda_id: LambdaId) -> Result<DebugScopeId, ParseError> {
     func.debug_scopes
         .iter()
@@ -937,24 +1028,19 @@ fn resolve_region(
         .map(|a| match a {
             AstRegionArg::Data(idx) => {
                 let _ = idx;
-                RegionArg {
+                Ok(RegionArg {
                     kind: PortKind::Data,
                     vreg: None,
                     debug_value: None,
-                }
+                })
             }
-            AstRegionArg::Cursor => RegionArg {
-                kind: PortKind::StateCursor,
+            AstRegionArg::State(domain) => Ok(RegionArg {
+                kind: PortKind::state(lookup_state_domain(func, *domain)?),
                 vreg: None,
                 debug_value: None,
-            },
-            AstRegionArg::Output => RegionArg {
-                kind: PortKind::StateOutput,
-                vreg: None,
-                debug_value: None,
-            },
+            }),
         })
-        .collect();
+        .collect::<Result<_, ParseError>>()?;
 
     let region_id = func.regions.push(Region {
         debug_scope,
@@ -978,10 +1064,10 @@ fn resolve_region(
         .results
         .iter()
         .map(|s| {
-            let (source, kind) = resolve_source(s, region_id, node_map, func);
-            RegionResult { kind, source }
+            let (source, kind) = resolve_source(s, region_id, node_map, func)?;
+            Ok(RegionResult { kind, source })
         })
-        .collect();
+        .collect::<Result<_, ParseError>>()?;
     func.regions[region_id].results = results;
 
     Ok(region_id)
@@ -1024,10 +1110,10 @@ fn resolve_node(
             let resolved_inputs: Vec<InputPort> = inputs
                 .iter()
                 .map(|s| {
-                    let (source, kind) = resolve_source(s, region_id, node_map, func);
-                    InputPort { kind, source }
+                    let (source, kind) = resolve_source(s, region_id, node_map, func)?;
+                    Ok(InputPort { kind, source })
                 })
-                .collect();
+                .collect::<Result<_, ParseError>>()?;
 
             let resolved_outputs: Vec<OutputPort> = outputs
                 .iter()
@@ -1113,13 +1199,13 @@ fn resolve_node(
 
             // Build inputs: pred + extra + cursor + output state
             let mut resolved_inputs = Vec::new();
-            let (pred_source, pred_kind) = resolve_source(pred, region_id, node_map, func);
+            let (pred_source, pred_kind) = resolve_source(pred, region_id, node_map, func)?;
             resolved_inputs.push(InputPort {
                 kind: pred_kind,
                 source: pred_source,
             });
             for s in extra_inputs {
-                let (source, kind) = resolve_source(s, region_id, node_map, func);
+                let (source, kind) = resolve_source(s, region_id, node_map, func)?;
                 resolved_inputs.push(InputPort { kind, source });
             }
 
@@ -1167,10 +1253,10 @@ fn resolve_node(
             let resolved_inputs: Vec<InputPort> = inputs
                 .iter()
                 .map(|s| {
-                    let (source, kind) = resolve_source(s, region_id, node_map, func);
-                    InputPort { kind, source }
+                    let (source, kind) = resolve_source(s, region_id, node_map, func)?;
+                    Ok(InputPort { kind, source })
                 })
-                .collect();
+                .collect::<Result<_, ParseError>>()?;
 
             let resolved_outputs: Vec<OutputPort> = outputs
                 .iter()
@@ -1218,14 +1304,14 @@ fn resolve_node(
             let body_arg_last = body_region.args.len() - 1;
             let body_res_last = body_region.results.len() - 1;
 
-            if resolved_inputs[in_last - 1].kind != PortKind::StateCursor
-                || resolved_inputs[in_last].kind != PortKind::StateOutput
-                || body_region.args[body_arg_last - 1].kind != PortKind::StateCursor
-                || body_region.args[body_arg_last].kind != PortKind::StateOutput
-                || resolved_outputs[out_last - 1].kind != PortKind::StateCursor
-                || resolved_outputs[out_last].kind != PortKind::StateOutput
-                || body_region.results[body_res_last - 1].kind != PortKind::StateCursor
-                || body_region.results[body_res_last].kind != PortKind::StateOutput
+            if resolved_inputs[in_last - 1].kind != CURSOR_STATE_PORT
+                || resolved_inputs[in_last].kind != OUTPUT_STATE_PORT
+                || body_region.args[body_arg_last - 1].kind != CURSOR_STATE_PORT
+                || body_region.args[body_arg_last].kind != OUTPUT_STATE_PORT
+                || resolved_outputs[out_last - 1].kind != CURSOR_STATE_PORT
+                || resolved_outputs[out_last].kind != OUTPUT_STATE_PORT
+                || body_region.results[body_res_last - 1].kind != CURSOR_STATE_PORT
+                || body_region.results[body_res_last].kind != OUTPUT_STATE_PORT
             {
                 return Err(ParseError {
                     message: format!(
@@ -1282,10 +1368,10 @@ fn resolve_node(
             let resolved_inputs: Vec<InputPort> = inputs
                 .iter()
                 .map(|s| {
-                    let (source, kind) = resolve_source(s, region_id, node_map, func);
-                    InputPort { kind, source }
+                    let (source, kind) = resolve_source(s, region_id, node_map, func)?;
+                    Ok(InputPort { kind, source })
                 })
-                .collect();
+                .collect::<Result<_, ParseError>>()?;
 
             let resolved_outputs: Vec<OutputPort> = outputs
                 .iter()
@@ -1314,7 +1400,7 @@ fn resolve_source(
     region_id: RegionId,
     node_map: &HashMap<u32, NodeId>,
     func: &IrFunc,
-) -> (PortSource, PortKind) {
+) -> Result<(PortSource, PortKind), ParseError> {
     match s {
         AstSource::VReg(v) => {
             // Find which node output has this vreg. We need to search for it.
@@ -1326,13 +1412,13 @@ fn resolve_source(
                         && let Some(vreg) = out.vreg
                         && vreg.index() == *v as usize
                     {
-                        return (
+                        return Ok((
                             PortSource::Node(OutputRef {
                                 node: node_id,
                                 index: idx as u16,
                             }),
                             PortKind::Data,
-                        );
+                        ));
                     }
                 }
             }
@@ -1340,86 +1426,59 @@ fn resolve_source(
             // This shouldn't happen in our format, but panic clearly.
             panic!("unresolved vreg v{v}");
         }
-        AstSource::CursorNode(n) => {
+        AstSource::StateNode { domain, node: n } => {
+            let domain = lookup_state_domain(func, *domain)?;
+            let kind = PortKind::state(domain);
             let node_id = node_map[n];
             let node = &func.nodes[node_id];
             for (idx, out) in node.outputs.iter().enumerate() {
-                if out.kind == PortKind::StateCursor {
-                    return (
+                if out.kind == kind {
+                    return Ok((
                         PortSource::Node(OutputRef {
                             node: node_id,
                             index: idx as u16,
                         }),
-                        PortKind::StateCursor,
-                    );
+                        kind,
+                    ));
                 }
             }
-            panic!("no cursor state output on node n{n}");
+            panic!("no state domain d{} output on node n{n}", domain.index());
         }
-        AstSource::OutputNode(n) => {
-            let node_id = node_map[n];
-            let node = &func.nodes[node_id];
-            for (idx, out) in node.outputs.iter().enumerate() {
-                if out.kind == PortKind::StateOutput {
-                    return (
-                        PortSource::Node(OutputRef {
-                            node: node_id,
-                            index: idx as u16,
-                        }),
-                        PortKind::StateOutput,
-                    );
-                }
-            }
-            panic!("no output state output on node n{n}");
-        }
-        AstSource::CursorArg => {
+        AstSource::StateArg(domain) => {
+            let domain = lookup_state_domain(func, *domain)?;
+            let kind = PortKind::state(domain);
             let region = &func.regions[region_id];
             for (idx, arg) in region.args.iter().enumerate() {
-                if arg.kind == PortKind::StateCursor {
-                    return (
+                if arg.kind == kind {
+                    return Ok((
                         PortSource::RegionArg(RegionArgRef {
                             region: region_id,
                             index: idx as u16,
                         }),
-                        PortKind::StateCursor,
-                    );
+                        kind,
+                    ));
                 }
             }
-            panic!("no cursor state arg in region");
+            panic!("no state domain d{} arg in region", domain.index());
         }
-        AstSource::OutputArg => {
-            let region = &func.regions[region_id];
-            for (idx, arg) in region.args.iter().enumerate() {
-                if arg.kind == PortKind::StateOutput {
-                    return (
-                        PortSource::RegionArg(RegionArgRef {
-                            region: region_id,
-                            index: idx as u16,
-                        }),
-                        PortKind::StateOutput,
-                    );
-                }
-            }
-            panic!("no output state arg in region");
-        }
-        AstSource::RegionArg(idx) => (
+        AstSource::RegionArg(idx) => Ok((
             PortSource::RegionArg(RegionArgRef {
                 region: region_id,
                 index: *idx,
             }),
             PortKind::Data,
-        ),
+        )),
         AstSource::NodeOutput(n, idx) => {
             let node_id = node_map[n];
             let node = &func.nodes[node_id];
             let kind = node.outputs[*idx as usize].kind;
-            (
+            Ok((
                 PortSource::Node(OutputRef {
                     node: node_id,
                     index: *idx,
                 }),
                 kind,
-            )
+            ))
         }
     }
 }
@@ -1444,13 +1503,8 @@ fn resolve_output(
                 debug_scope,
             }
         }
-        AstOutput::Cursor => OutputPort {
-            kind: PortKind::StateCursor,
-            vreg: None,
-            debug_scope,
-        },
-        AstOutput::Output => OutputPort {
-            kind: PortKind::StateOutput,
+        AstOutput::State(domain) => OutputPort {
+            kind: PortKind::state(lookup_state_domain(func, *domain)?),
             vreg: None,
             debug_scope,
         },
@@ -1712,6 +1766,58 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
+    fn round_trip_generic_state_domain() {
+        let input = r#"
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = planner
+}
+lambda @0 (shape: "u8") {
+  region {
+    args: [%cs, %os, %s2]
+    n0 = Const(0x2a) [] -> [v0]
+    results: [%cs:arg, %os:arg, %s2:arg]
+  }
+}
+"#;
+
+        let registry = IntrinsicRegistry::empty();
+        let func = parse_ir(input, test_shape(), &registry).unwrap();
+        assert_eq!(func.state_domains.len(), 3);
+        assert_eq!(func.state_domains[StateDomainId::new(2)].name, "planner");
+
+        let text1 = format!("{}", func.display_with_registry(&registry));
+        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let text2 = format!("{}", func2.display_with_registry(&registry));
+
+        assert_eq!(
+            text1, text2,
+            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
+        );
+    }
+
+    #[test]
+    fn parse_unknown_state_domain_fails() {
+        let input = r#"
+lambda @0 (shape: "u8") {
+  region {
+    args: [%cs, %os, %s2]
+    results: [%cs:arg, %os:arg, %s2:arg]
+  }
+}
+"#;
+
+        let registry = IntrinsicRegistry::empty();
+        let err = match parse_ir(input, test_shape(), &registry) {
+            Ok(_) => panic!("expected parse error"),
+            Err(err) => err,
+        };
+
+        assert!(err.message.contains("unknown state domain d2"));
+    }
+
+    #[test]
     fn parse_error_unknown_intrinsic() {
         let input = r#"
 lambda @0 (shape: "u8") {
@@ -1846,6 +1952,10 @@ lambda @0 (shape: "u8") {
     #[test]
     fn parse_and_round_trip_explicit_debug_scopes() {
         let input = r#"
+state_domains {
+  d0 = cursor
+  d1 = output
+}
 scopes {
   s0 = lambda_body(@0)
   s1 = theta_body parent s0

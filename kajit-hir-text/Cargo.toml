@@ -1,0 +1,13 @@
+[package]
+name = "kajit-hir-text"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+kajit-hir = { path = "../kajit-hir" }
+chumsky = "1.0.0-alpha.8"

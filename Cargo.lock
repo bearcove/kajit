@@ -594,6 +594,8 @@ dependencies = [
  "insta",
  "itoa",
  "kajit-emit",
+ "kajit-hir",
+ "kajit-hir-text",
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
@@ -617,6 +619,21 @@ name = "kajit-emit"
 version = "0.1.0"
 dependencies = [
  "proptest",
+]
+
+[[package]]
+name = "kajit-hir"
+version = "0.1.0"
+dependencies = [
+ "kajit-ir",
+]
+
+[[package]]
+name = "kajit-hir-text"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "kajit-hir",
 ]
 
 [[package]]

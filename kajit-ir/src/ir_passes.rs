@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputRef, PortKind, PortSource,
-    Region, RegionArgRef, RegionId, RegionResult, verify,
+    CURSOR_STATE_PORT, InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputRef,
+    PortSource, Region, RegionArgRef, RegionId, RegionResult, verify,
 };
 
 const MAX_INLINE_NODES_SINGLE_USE: usize = 256;
@@ -287,7 +287,7 @@ fn state_cursor_input_source(func: &IrFunc, node_id: NodeId) -> Option<PortSourc
     func.nodes[node_id]
         .inputs
         .iter()
-        .find(|inp| inp.kind == PortKind::StateCursor)
+        .find(|inp| inp.kind == CURSOR_STATE_PORT)
         .map(|inp| inp.source)
 }
 
@@ -295,7 +295,7 @@ fn state_cursor_output_ref(func: &IrFunc, node_id: NodeId) -> Option<OutputRef> 
     func.nodes[node_id]
         .outputs
         .iter()
-        .position(|out| out.kind == PortKind::StateCursor)
+        .position(|out| out.kind == CURSOR_STATE_PORT)
         .map(|idx| OutputRef {
             node: node_id,
             index: idx as u16,
