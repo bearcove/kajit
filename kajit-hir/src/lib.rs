@@ -515,6 +515,24 @@ impl Module {
         })
     }
 
+    pub fn lower_vixen_typed_function_into_module(
+        &self,
+        function: &VixenTypedFunction,
+    ) -> Result<Module, VixenLoweringError> {
+        let mut module = self.clone();
+        let function = module.lower_vixen_typed_function(function)?;
+        module.add_function(function);
+        Ok(module)
+    }
+
+    pub fn debug_vixen_typed_function_text(
+        &self,
+        function: &VixenTypedFunction,
+    ) -> Result<String, VixenLoweringError> {
+        self.lower_vixen_typed_function_into_module(function)
+            .map(|module| module.to_string())
+    }
+
     fn lower_vixen_typed_block(
         &self,
         body: &[VixenTypedStmt],
