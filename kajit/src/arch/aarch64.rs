@@ -98,51 +98,53 @@ impl EmitCtx {
     }
 
     fn emit_add_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
-        if imm <= 0x0fff {
-            self.emit.emit_word(
-                aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, imm as u16, false)
-                    .expect("add"),
-            );
-            return;
-        }
-        if (imm & 0x0fff) == 0 {
-            let shifted = imm >> 12;
-            if shifted <= 0x0fff {
-                self.emit.emit_word(
-                    aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, shifted as u16, true)
-                        .expect("add"),
-                );
-                return;
-            }
-        }
-
-        self.emit_load_imm64(Reg::X9, imm as u64);
-        self.emit
-            .emit_word(aarch64::encode_add_reg(aarch64::Width::X64, rd, rn, Reg::X9).expect("add"));
+        self.emit_add_sub_imm_chunks(rd, rn, imm, false);
     }
 
     fn emit_sub_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
-        if imm <= 0x0fff {
-            self.emit.emit_word(
-                aarch64::encode_sub_imm(aarch64::Width::X64, rd, rn, imm as u16, false)
-                    .expect("sub"),
-            );
+        self.emit_add_sub_imm_chunks(rd, rn, imm, true);
+    }
+
+    fn emit_add_sub_imm_chunks(&mut self, rd: Reg, rn: Reg, mut imm: u32, subtract: bool) {
+        if imm == 0 {
+            if rd != rn {
+                let opcode = if subtract { "sub" } else { "add" };
+                self.emit.emit_word(
+                    if subtract {
+                        aarch64::encode_sub_imm(aarch64::Width::X64, rd, rn, 0, false)
+                    } else {
+                        aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, 0, false)
+                    }
+                    .unwrap_or_else(|_| panic!("{opcode}")),
+                );
+            }
             return;
         }
-        if (imm & 0x0fff) == 0 {
-            let shifted = imm >> 12;
-            if shifted <= 0x0fff {
-                self.emit.emit_word(
-                    aarch64::encode_sub_imm(aarch64::Width::X64, rd, rn, shifted as u16, true)
-                        .expect("sub"),
-                );
-                return;
-            }
-        }
 
-        self.emit_load_imm64(Reg::X9, imm as u64);
-        self.emit
-            .emit_word(aarch64::encode_sub_reg(aarch64::Width::X64, rd, rn, Reg::X9).expect("sub"));
+        let mut base = rn;
+        while imm != 0 {
+            let (imm12, shift, chunk) = if imm > 0x0fff {
+                let shifted = (imm >> 12).min(0x0fff);
+                if shifted != 0 {
+                    (shifted as u16, true, shifted << 12)
+                } else {
+                    let low = imm.min(0x0fff);
+                    (low as u16, false, low)
+                }
+            } else {
+                (imm as u16, false, imm)
+            };
+
+            let word = if subtract {
+                aarch64::encode_sub_imm(aarch64::Width::X64, rd, base, imm12, shift).expect("sub")
+            } else {
+                aarch64::encode_add_imm(aarch64::Width::X64, rd, base, imm12, shift).expect("add")
+            };
+            self.emit.emit_word(word);
+
+            imm -= chunk;
+            base = rd;
+        }
     }
 
     /// Flush the cached input cursor (x19) back to ctx.input_ptr.
