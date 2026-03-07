@@ -948,7 +948,7 @@ mod tests {
         CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr, FieldDef,
         Function, GenericArg, GenericParam, Literal, LocalDecl, LocalId, LocalKind, MatchArm,
         Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId, StmtKind, Type,
-        TypeDef, TypeDefKind, VariantDef, VixenBuiltin, VixenCoreTypes, VixenTypedExpr,
+        TypeDef, TypeDefKind, VariantDef, VixenCallableRef, VixenCoreTypes, VixenTypedExpr,
         VixenTypedFunction, VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
     };
 
@@ -1390,7 +1390,7 @@ mod tests {
                                 },
                             },
                             VixenTypedStmt::Expr(VixenTypedExpr::Call {
-                                builtin: VixenBuiltin::EmitNode,
+                                callee: VixenCallableRef::Named("emit.node".to_owned()),
                                 args: vec![VixenTypedExpr::Local(LocalId::new(1))],
                             }),
                         ],

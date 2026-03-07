@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
@@ -222,6 +223,12 @@ impl VixenBuiltin {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VixenCallableRef {
+    Builtin(VixenBuiltin),
+    Named(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VixenTypedExpr {
     Literal(Literal),
     Local(LocalId),
@@ -244,7 +251,12 @@ pub enum VixenTypedExpr {
         rhs: Box<VixenTypedExpr>,
     },
     Call {
-        builtin: VixenBuiltin,
+        callee: VixenCallableRef,
+        args: Vec<VixenTypedExpr>,
+    },
+    MethodCall {
+        receiver: Box<VixenTypedExpr>,
+        method: String,
         args: Vec<VixenTypedExpr>,
     },
 }
@@ -290,7 +302,31 @@ pub struct VixenTypedFunction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VixenLoweringError {
-    MissingCallable { builtin: VixenBuiltin },
+    MissingCallable {
+        builtin: VixenBuiltin,
+    },
+    MissingNamedCallable {
+        name: String,
+    },
+    MissingMethod {
+        method: String,
+        receiver_ty: Type,
+    },
+    AmbiguousMethod {
+        method: String,
+        receiver_ty: Type,
+        candidates: Vec<String>,
+    },
+    UnknownLocalType {
+        local: LocalId,
+    },
+    UnknownFieldType {
+        field: String,
+        base: Type,
+    },
+    CannotInferExprType {
+        expr: &'static str,
+    },
 }
 
 impl Module {
@@ -427,18 +463,31 @@ impl Module {
         &self,
         expr: &VixenTypedExpr,
     ) -> Result<Expr, VixenLoweringError> {
+        self.lower_vixen_typed_expr_with_locals(expr, &BTreeMap::new())
+    }
+
+    fn lower_vixen_typed_expr_with_locals(
+        &self,
+        expr: &VixenTypedExpr,
+        local_types: &BTreeMap<LocalId, Type>,
+    ) -> Result<Expr, VixenLoweringError> {
         match expr {
             VixenTypedExpr::Literal(literal) => Ok(Expr::Literal(literal.clone())),
             VixenTypedExpr::Local(local) => Ok(Expr::Local(*local)),
             VixenTypedExpr::Field { base, field } => Ok(Expr::Field {
-                base: Box::new(self.lower_vixen_typed_expr(base)?),
+                base: Box::new(self.lower_vixen_typed_expr_with_locals(base, local_types)?),
                 field: field.clone(),
             }),
             VixenTypedExpr::Struct { def, fields } => Ok(Expr::Struct {
                 def: *def,
                 fields: fields
                     .iter()
-                    .map(|(field, expr)| Ok((field.clone(), self.lower_vixen_typed_expr(expr)?)))
+                    .map(|(field, expr)| {
+                        Ok((
+                            field.clone(),
+                            self.lower_vixen_typed_expr_with_locals(expr, local_types)?,
+                        ))
+                    })
                     .collect::<Result<Vec<_>, VixenLoweringError>>()?,
             }),
             VixenTypedExpr::Variant {
@@ -450,24 +499,47 @@ impl Module {
                 variant: variant.clone(),
                 fields: fields
                     .iter()
-                    .map(|(field, expr)| Ok((field.clone(), self.lower_vixen_typed_expr(expr)?)))
+                    .map(|(field, expr)| {
+                        Ok((
+                            field.clone(),
+                            self.lower_vixen_typed_expr_with_locals(expr, local_types)?,
+                        ))
+                    })
                     .collect::<Result<Vec<_>, VixenLoweringError>>()?,
             }),
             VixenTypedExpr::Binary { op, lhs, rhs } => Ok(Expr::Binary {
                 op: *op,
-                lhs: Box::new(self.lower_vixen_typed_expr(lhs)?),
-                rhs: Box::new(self.lower_vixen_typed_expr(rhs)?),
+                lhs: Box::new(self.lower_vixen_typed_expr_with_locals(lhs, local_types)?),
+                rhs: Box::new(self.lower_vixen_typed_expr_with_locals(rhs, local_types)?),
             }),
-            VixenTypedExpr::Call { builtin, args } => {
-                let Some(callable) = self.callable_named(builtin.callable_name()) else {
-                    return Err(VixenLoweringError::MissingCallable { builtin: *builtin });
-                };
+            VixenTypedExpr::Call { callee, args } => {
+                let callable = self.resolve_vixen_callable(callee)?;
                 Ok(Expr::Call(CallExpr {
                     target: CallTarget::Callable(callable),
                     args: args
                         .iter()
-                        .map(|arg| self.lower_vixen_typed_expr(arg))
+                        .map(|arg| self.lower_vixen_typed_expr_with_locals(arg, local_types))
                         .collect::<Result<Vec<_>, VixenLoweringError>>()?,
+                }))
+            }
+            VixenTypedExpr::MethodCall {
+                receiver,
+                method,
+                args,
+            } => {
+                let receiver_ty = self.vixen_expr_type(receiver, local_types)?;
+                let callable = self.resolve_vixen_method(&receiver_ty, method)?;
+                let receiver = self.lower_vixen_typed_expr_with_locals(receiver, local_types)?;
+                let mut lowered_args = Vec::with_capacity(args.len() + 1);
+                lowered_args.push(receiver);
+                lowered_args.extend(
+                    args.iter()
+                        .map(|arg| self.lower_vixen_typed_expr_with_locals(arg, local_types))
+                        .collect::<Result<Vec<_>, VixenLoweringError>>()?,
+                );
+                Ok(Expr::Call(CallExpr {
+                    target: CallTarget::Callable(callable),
+                    args: lowered_args,
                 }))
             }
         }
@@ -479,7 +551,19 @@ impl Module {
     ) -> Result<Function, VixenLoweringError> {
         let scope = ScopeId::new(0);
         let mut next_stmt = 0u32;
-        let body = self.lower_vixen_typed_block(&function.body, scope, &mut next_stmt)?;
+        let local_types = function
+            .params
+            .iter()
+            .map(|param| (param.local, param.ty.clone()))
+            .chain(
+                function
+                    .locals
+                    .iter()
+                    .map(|local| (local.local, local.ty.clone())),
+            )
+            .collect::<BTreeMap<_, _>>();
+        let body =
+            self.lower_vixen_typed_block(&function.body, scope, &mut next_stmt, &local_types)?;
 
         Ok(Function {
             name: function.name.clone(),
@@ -538,10 +622,11 @@ impl Module {
         body: &[VixenTypedStmt],
         scope: ScopeId,
         next_stmt: &mut u32,
+        local_types: &BTreeMap<LocalId, Type>,
     ) -> Result<Block, VixenLoweringError> {
         let statements = body
             .iter()
-            .map(|stmt| self.lower_vixen_typed_stmt(stmt, scope, next_stmt))
+            .map(|stmt| self.lower_vixen_typed_stmt(stmt, scope, next_stmt, local_types))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Block { scope, statements })
     }
@@ -551,31 +636,172 @@ impl Module {
         stmt: &VixenTypedStmt,
         scope: ScopeId,
         next_stmt: &mut u32,
+        local_types: &BTreeMap<LocalId, Type>,
     ) -> Result<Stmt, VixenLoweringError> {
         let id = StmtId::new(*next_stmt);
         *next_stmt += 1;
         let kind = match stmt {
             VixenTypedStmt::Let { local, value } => StmtKind::Init {
                 place: Place::Local(*local),
-                value: self.lower_vixen_typed_expr(value)?,
+                value: self.lower_vixen_typed_expr_with_locals(value, local_types)?,
             },
-            VixenTypedStmt::Expr(expr) => StmtKind::Expr(self.lower_vixen_typed_expr(expr)?),
+            VixenTypedStmt::Expr(expr) => {
+                StmtKind::Expr(self.lower_vixen_typed_expr_with_locals(expr, local_types)?)
+            }
             VixenTypedStmt::If {
                 condition,
                 then_body,
                 else_body,
             } => StmtKind::If {
-                condition: self.lower_vixen_typed_expr(condition)?,
-                then_block: self.lower_vixen_typed_block(then_body, scope, next_stmt)?,
-                else_block: Some(self.lower_vixen_typed_block(else_body, scope, next_stmt)?),
+                condition: self.lower_vixen_typed_expr_with_locals(condition, local_types)?,
+                then_block: self.lower_vixen_typed_block(
+                    then_body,
+                    scope,
+                    next_stmt,
+                    local_types,
+                )?,
+                else_block: Some(self.lower_vixen_typed_block(
+                    else_body,
+                    scope,
+                    next_stmt,
+                    local_types,
+                )?),
             },
             VixenTypedStmt::Return(expr) => StmtKind::Return(
                 expr.as_ref()
-                    .map(|expr| self.lower_vixen_typed_expr(expr))
+                    .map(|expr| self.lower_vixen_typed_expr_with_locals(expr, local_types))
                     .transpose()?,
             ),
         };
         Ok(Stmt { id, kind })
+    }
+
+    fn resolve_vixen_callable(
+        &self,
+        callee: &VixenCallableRef,
+    ) -> Result<CallableId, VixenLoweringError> {
+        match callee {
+            VixenCallableRef::Builtin(builtin) => self
+                .callable_named(builtin.callable_name())
+                .ok_or(VixenLoweringError::MissingCallable { builtin: *builtin }),
+            VixenCallableRef::Named(name) => self
+                .callable_named(name)
+                .ok_or_else(|| VixenLoweringError::MissingNamedCallable { name: name.clone() }),
+        }
+    }
+
+    fn resolve_vixen_method(
+        &self,
+        receiver_ty: &Type,
+        method: &str,
+    ) -> Result<CallableId, VixenLoweringError> {
+        let mut matches = self
+            .callables
+            .iter()
+            .filter_map(|(id, callable)| {
+                let suffix = callable.name.rsplit('.').next().unwrap_or(&callable.name);
+                let first_param = callable.signature.params.first()?;
+                (suffix == method && first_param == receiver_ty)
+                    .then_some((id, callable.name.clone()))
+            })
+            .collect::<Vec<_>>();
+
+        match matches.len() {
+            0 => Err(VixenLoweringError::MissingMethod {
+                method: method.to_owned(),
+                receiver_ty: receiver_ty.clone(),
+            }),
+            1 => Ok(matches.pop().unwrap().0),
+            _ => Err(VixenLoweringError::AmbiguousMethod {
+                method: method.to_owned(),
+                receiver_ty: receiver_ty.clone(),
+                candidates: matches.into_iter().map(|(_, name)| name).collect(),
+            }),
+        }
+    }
+
+    fn vixen_expr_type(
+        &self,
+        expr: &VixenTypedExpr,
+        local_types: &BTreeMap<LocalId, Type>,
+    ) -> Result<Type, VixenLoweringError> {
+        match expr {
+            VixenTypedExpr::Literal(Literal::Unit) => Ok(Type::unit()),
+            VixenTypedExpr::Literal(Literal::Bool(_)) => Ok(Type::bool()),
+            VixenTypedExpr::Literal(Literal::Integer(_)) => Ok(Type::u(64)),
+            VixenTypedExpr::Literal(Literal::String(_)) => {
+                Err(VixenLoweringError::CannotInferExprType {
+                    expr: "string literal",
+                })
+            }
+            VixenTypedExpr::Local(local) => local_types
+                .get(local)
+                .cloned()
+                .ok_or(VixenLoweringError::UnknownLocalType { local: *local }),
+            VixenTypedExpr::Field { base, field } => {
+                let base_ty = self.vixen_expr_type(base, local_types)?;
+                self.field_type(&base_ty, field)
+            }
+            VixenTypedExpr::Struct { def, .. } => Ok(Type::named(*def, Vec::new())),
+            VixenTypedExpr::Variant { def, .. } => Ok(Type::named(*def, Vec::new())),
+            VixenTypedExpr::Binary { op, lhs, .. } => match op {
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Le
+                | BinaryOp::Gt
+                | BinaryOp::Ge
+                | BinaryOp::And
+                | BinaryOp::Or => Ok(Type::bool()),
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                    self.vixen_expr_type(lhs, local_types)
+                }
+            },
+            VixenTypedExpr::Call { callee, .. } => {
+                let callable = self.resolve_vixen_callable(callee)?;
+                Ok(self.callables[callable]
+                    .signature
+                    .returns
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(Type::unit))
+            }
+            VixenTypedExpr::MethodCall {
+                receiver, method, ..
+            } => {
+                let receiver_ty = self.vixen_expr_type(receiver, local_types)?;
+                let callable = self.resolve_vixen_method(&receiver_ty, method)?;
+                Ok(self.callables[callable]
+                    .signature
+                    .returns
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(Type::unit))
+            }
+        }
+    }
+
+    fn field_type(&self, base: &Type, field: &str) -> Result<Type, VixenLoweringError> {
+        match base {
+            Type::Named { def, .. } => match &self.type_defs[*def].kind {
+                TypeDefKind::Struct { fields } => fields
+                    .iter()
+                    .find(|candidate| candidate.name == field)
+                    .map(|field| field.ty.clone())
+                    .ok_or_else(|| VixenLoweringError::UnknownFieldType {
+                        field: field.to_owned(),
+                        base: base.clone(),
+                    }),
+                TypeDefKind::Enum { .. } => Err(VixenLoweringError::UnknownFieldType {
+                    field: field.to_owned(),
+                    base: base.clone(),
+                }),
+            },
+            _ => Err(VixenLoweringError::UnknownFieldType {
+                field: field.to_owned(),
+                base: base.clone(),
+            }),
+        }
     }
 }
 
@@ -1520,7 +1746,7 @@ mod tests {
 
         let emit_expr = module
             .lower_vixen_typed_expr(&VixenTypedExpr::Call {
-                builtin: VixenBuiltin::EmitNode,
+                callee: VixenCallableRef::Named("emit.node".to_owned()),
                 args: vec![VixenTypedExpr::Struct {
                     def: node,
                     fields: vec![(
@@ -1539,10 +1765,10 @@ mod tests {
 
         let lookup_expr = module
             .lower_vixen_typed_expr(&VixenTypedExpr::Call {
-                builtin: VixenBuiltin::GraphLookupCrate,
+                callee: VixenCallableRef::Named("graph.lookup_crate".to_owned()),
                 args: vec![
                     VixenTypedExpr::Call {
-                        builtin: VixenBuiltin::RustCrateGraph,
+                        callee: VixenCallableRef::Named("rust.crate_graph".to_owned()),
                         args: vec![],
                     },
                     VixenTypedExpr::Struct {
@@ -1577,7 +1803,7 @@ mod tests {
         let module = Module::new();
         let err = module
             .lower_vixen_typed_expr(&VixenTypedExpr::Call {
-                builtin: VixenBuiltin::EmitFact,
+                callee: VixenCallableRef::Builtin(VixenBuiltin::EmitFact),
                 args: vec![],
             })
             .expect_err("missing callable table should fail");
@@ -1708,7 +1934,7 @@ mod tests {
                                 },
                             },
                             VixenTypedStmt::Expr(VixenTypedExpr::Call {
-                                builtin: VixenBuiltin::EmitNode,
+                                callee: VixenCallableRef::Named("emit.node".to_owned()),
                                 args: vec![VixenTypedExpr::Local(LocalId::new(1))],
                             }),
                         ],
@@ -1758,6 +1984,129 @@ mod tests {
             function.body.statements[2].kind,
             StmtKind::Return(None)
         ));
+    }
+
+    #[test]
+    fn lowers_vixen_method_calls_into_callable_resolution() {
+        let mut module = Module::new();
+        let string = module.add_type_def(TypeDef {
+            name: "String".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let node = module.add_type_def(TypeDef {
+            name: "Node".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let edge = module.add_type_def(TypeDef {
+            name: "Edge".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let fact = module.add_type_def(TypeDef {
+            name: "Fact".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_graph = module.add_type_def(TypeDef {
+            name: "CrateGraph".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_node = module.add_type_def(TypeDef {
+            name: "CrateNode".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_id = module.add_type_def(TypeDef {
+            name: "CrateId".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_type = module.add_type_def(TypeDef {
+            name: "CrateType".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Enum {
+                variants: vec![
+                    VariantDef {
+                        name: "Lib".to_owned(),
+                        fields: vec![],
+                    },
+                    VariantDef {
+                        name: "Bin".to_owned(),
+                        fields: vec![],
+                    },
+                ],
+            },
+        });
+
+        let callables = module.install_vixen_core_callables(&VixenCoreTypes {
+            string: Type::named(string, Vec::new()),
+            node: Type::named(node, Vec::new()),
+            edge: Type::named(edge, Vec::new()),
+            fact: Type::named(fact, Vec::new()),
+            crate_graph: Type::named(crate_graph, Vec::new()),
+            crate_node: Type::named(crate_node, Vec::new()),
+            crate_id: Type::named(crate_id, Vec::new()),
+            crate_type: Type::named(crate_type, Vec::new()),
+        });
+
+        let lowered = module
+            .lower_vixen_typed_function(&VixenTypedFunction {
+                name: "plan_dep".to_owned(),
+                params: vec![
+                    VixenTypedParam {
+                        local: LocalId::new(0),
+                        name: "graph".to_owned(),
+                        ty: Type::named(crate_graph, Vec::new()),
+                    },
+                    VixenTypedParam {
+                        local: LocalId::new(1),
+                        name: "crate_id".to_owned(),
+                        ty: Type::named(crate_id, Vec::new()),
+                    },
+                ],
+                locals: vec![],
+                return_type: Type::named(crate_node, Vec::new()),
+                body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::MethodCall {
+                    receiver: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                    method: "lookup_crate".to_owned(),
+                    args: vec![VixenTypedExpr::Local(LocalId::new(1))],
+                }))],
+                comment: Some("method call lowers through callable table".to_owned()),
+            })
+            .expect("method call should lower");
+
+        let StmtKind::Return(Some(Expr::Call(call))) = &lowered.body.statements[0].kind else {
+            panic!("expected method call return");
+        };
+        assert_eq!(
+            call.target,
+            CallTarget::Callable(callables.graph_lookup_crate)
+        );
+        assert_eq!(
+            call.args,
+            vec![Expr::Local(LocalId::new(0)), Expr::Local(LocalId::new(1))]
+        );
+    }
+
+    #[test]
+    fn lowering_vixen_named_expr_requires_installed_callables() {
+        let module = Module::new();
+        let err = module
+            .lower_vixen_typed_expr(&VixenTypedExpr::Call {
+                callee: VixenCallableRef::Named("emit.node".to_owned()),
+                args: vec![],
+            })
+            .expect_err("missing named callable should fail");
+
+        assert_eq!(
+            err,
+            VixenLoweringError::MissingNamedCallable {
+                name: "emit.node".to_owned(),
+            }
+        );
     }
 
     #[test]
