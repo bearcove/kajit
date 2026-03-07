@@ -220,6 +220,20 @@ pub fn debug_postcard_hir_text(shape: &'static facet::Shape) -> String {
     debug_postcard_hir(shape).to_string()
 }
 
+/// Build the current prototype JSON HIR for a shape.
+///
+/// This currently supports only a deliberately narrow subset: root `bool`
+/// decoding expressed as low-level HIR over bytes, bounds checks, cursor
+/// updates, and control flow.
+pub fn debug_json_hir(shape: &'static facet::Shape) -> kajit_hir::Module {
+    compiler::build_json_decoder_hir(shape)
+}
+
+/// Build the current prototype JSON HIR and render it in canonical text form.
+pub fn debug_json_hir_text(shape: &'static facet::Shape) -> String {
+    debug_json_hir(shape).to_string()
+}
+
 /// Build postcard RVSDG by first lowering through the prototype HIR path.
 ///
 /// This currently supports only the narrow postcard subset covered by the
@@ -236,6 +250,18 @@ pub fn debug_postcard_ir_via_hir_text(shape: &'static facet::Shape) -> String {
 /// producer and HIR->RVSDG lowerer.
 pub fn compile_postcard_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
     let mut func = compiler::build_postcard_decoder_ir_via_hir(shape);
+    compiler::run_default_passes_from_env(&mut func);
+    let linear = linearize::linearize(&mut func);
+    compiler::compile_linear_ir_decoder(&linear, false)
+}
+
+/// Compile a JSON decoder by lowering through the prototype HIR path.
+///
+/// This currently supports only the narrow JSON subset covered by the
+/// prototype HIR producer and structural HIR lowerer.
+pub fn compile_json_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
+    let module = compiler::build_json_decoder_hir(shape);
+    let mut func = compiler::build_structural_hir_ir(shape, &module);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
     compiler::compile_linear_ir_decoder(&linear, false)
