@@ -6,6 +6,11 @@ This document defines the role of a high-level intermediate representation
 (HIR) above RVSDG. It is the design reference for issue #208 and the
 follow-up implementation issues in the HIR epic.
 
+The corrective boundary note for generated deserializers lives in
+[hir-generated-decoder-boundary.md](./hir-generated-decoder-boundary.md).
+That note freezes what planner concepts stay above HIR and what low-level
+responsibilities belong inside HIR programs.
+
 ## Why HIR exists
 
 Kajit now has two plausible frontend domains:
@@ -115,6 +120,16 @@ This means "HIR lowers to RVSDG" is not just a new frontend layer. It also
 implies that RVSDG itself must stop being purely deserializer-shaped.
 
 ## Execution model
+
+The generated-decoder boundary matters here:
+
+- planner concepts such as `flatten`, `untagged`, candidate-set narrowing,
+  evidence accumulation, and ambiguity resolution stay above HIR
+- generated HIR executes the chosen algorithm using ordinary low-level control
+  flow, state, and data structures
+
+HIR is therefore the language used to implement generated solver plans, not the
+place where those planning concepts become first-class language features.
 
 HIR should not bake deserializer-specific ambient concepts such as "input
 operations" or a privileged cursor abstraction into the language itself.
@@ -490,6 +505,12 @@ That gives the first implementation a real contract to target:
 This is not just lowering detail. Kajit already has destination-oriented
 semantics, partial initialization concerns, and caller-provided output storage.
 HIR should name that directly.
+
+One pressure point remains: `Place<T>` may be too neat as a universal model.
+It works naturally for ordinary HIR storage typed by HIR semantic types. It is
+less obviously correct for generated host-schema destinations. The boundary note
+above freezes that as an active design pressure instead of silently assuming
+that one generic `Place<T>` covers both cases.
 
 ### Raw pointers should be a lowering concern, not a default source feature
 
@@ -942,6 +963,11 @@ The design decisions in this document are:
   borrowed output types for zero-copy deserialization.
 - Places and definite initialization are part of the HIR contract, including a
   v1 destination contract for success and failure.
+- Generated decoder planning concepts such as `flatten` and `untagged` stay
+  above HIR; HIR executes generated low-level algorithms rather than modeling
+  those concepts directly.
+- `Place<T>` should be treated as provisional where generated host destinations
+  are concerned; do not assume it is already the final universal abstraction.
 - HIR does not expose raw pointers as a normal source feature.
 - HIR owns semantic names, scopes, spans, comments, and debug identities.
 - RVSDG remains the optimization boundary.
