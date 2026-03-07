@@ -3362,6 +3362,307 @@ pub(crate) fn build_postcard_decoder_ir_via_hir(shape: &'static Shape) -> crate:
     builder.finish()
 }
 
+#[cfg(test)]
+struct StructuralHirIrLowerer<'a> {
+    local_slots: std::collections::HashMap<hir::LocalId, crate::ir::SlotId>,
+    _marker: std::marker::PhantomData<&'a hir::Module>,
+}
+
+#[cfg(test)]
+impl<'a> StructuralHirIrLowerer<'a> {
+    fn new(
+        rb: &mut RegionBuilder<'_>,
+        _module: &'a hir::Module,
+        function: &'a hir::Function,
+    ) -> Self {
+        let mut local_slots = std::collections::HashMap::new();
+        for param in &function.params {
+            if param.kind != hir::LocalKind::Destination {
+                local_slots.insert(param.local, rb.alloc_slot());
+            }
+        }
+        for local in &function.locals {
+            local_slots.insert(local.local, rb.alloc_slot());
+        }
+        Self {
+            local_slots,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn lower_block(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        statements: &[hir::Stmt],
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        for stmt in statements {
+            self.lower_stmt(rb, stmt, dest_local, dest_shape);
+        }
+    }
+
+    fn lower_stmt(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        stmt: &hir::Stmt,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        match &stmt.kind {
+            hir::StmtKind::Init { place, value } | hir::StmtKind::Assign { place, value } => {
+                self.lower_assign_like(rb, place, value, dest_local, dest_shape);
+            }
+            hir::StmtKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let predicate = self.lower_scalar_expr(rb, condition, dest_local, dest_shape);
+                let else_block = else_block
+                    .as_ref()
+                    .expect("structural HIR subset requires else");
+                let _ = rb.gamma(predicate, &[], 2, |branch_idx, branch| {
+                    match branch_idx {
+                        0 => {
+                            self.lower_block(branch, &else_block.statements, dest_local, dest_shape)
+                        }
+                        1 => {
+                            self.lower_block(branch, &then_block.statements, dest_local, dest_shape)
+                        }
+                        _ => unreachable!(),
+                    }
+                    branch.set_results(&[]);
+                });
+            }
+            hir::StmtKind::Match { scrutinee, arms } => {
+                let predicate = self.lower_scalar_expr(rb, scrutinee, dest_local, dest_shape);
+                for (expected, arm) in arms.iter().enumerate() {
+                    let hir::Pattern::Integer(value) = arm.pattern else {
+                        panic!("structural HIR subset only supports integer match patterns");
+                    };
+                    assert_eq!(
+                        value, expected as u64,
+                        "structural HIR subset requires contiguous integer match arms starting at 0"
+                    );
+                }
+                let _ = rb.gamma(predicate, &[], arms.len(), |branch_idx, branch| {
+                    self.lower_block(
+                        branch,
+                        &arms[branch_idx].body.statements,
+                        dest_local,
+                        dest_shape,
+                    );
+                    branch.set_results(&[]);
+                });
+            }
+            hir::StmtKind::Return(None) => {}
+            other => panic!("unsupported structural HIR statement: {other:?}"),
+        }
+    }
+
+    fn lower_assign_like(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        place: &hir::Place,
+        value: &hir::Expr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        match place {
+            hir::Place::Local(local) => {
+                let slot = self.local_slots[local];
+                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                rb.write_to_slot(slot, scalar);
+            }
+            hir::Place::Field { .. } => {
+                self.lower_place_write(rb, place, value, dest_local, dest_shape);
+            }
+            hir::Place::Index { .. } => {
+                panic!("structural HIR subset does not support indexed places")
+            }
+        }
+    }
+
+    fn lower_place_write(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        place: &hir::Place,
+        value: &hir::Expr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        let (place_shape, offset, _) = self.resolve_place(place, dest_local, dest_shape);
+        match value {
+            hir::Expr::Variant {
+                variant, fields, ..
+            } => {
+                assert!(
+                    fields.is_empty(),
+                    "structural HIR subset only supports unit variants"
+                );
+                let Type::User(UserType::Enum(enum_type)) = &place_shape.ty else {
+                    panic!("unit variant init must target an enum place");
+                };
+                let disc_width = ir_width_from_disc_size(discriminant_size(enum_type.enum_repr));
+                let disc = collect_variants(enum_type)
+                    .into_iter()
+                    .find(|candidate| candidate.name == variant.as_str())
+                    .unwrap_or_else(|| panic!("missing enum variant {variant}"))
+                    .rust_discriminant
+                    .try_into()
+                    .expect("enum discriminant must fit in u64");
+                let value = rb.const_val(disc);
+                rb.write_to_field(value, offset as u32, disc_width);
+            }
+            hir::Expr::Literal(hir::Literal::Unit) => {}
+            _ => {
+                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                let width = self.scalar_width_for_shape(place_shape);
+                rb.write_to_field(scalar, offset as u32, width);
+            }
+        }
+    }
+
+    fn lower_scalar_expr(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        expr: &hir::Expr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> crate::ir::PortSource {
+        match expr {
+            hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
+            hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
+            hir::Expr::Local(local) => {
+                let slot = self.local_slots[local];
+                rb.read_from_slot(slot)
+            }
+            hir::Expr::Field { base, field } => {
+                let place = self.expr_field_to_place(base, field);
+                let (shape, offset, _) = self.resolve_place(&place, dest_local, dest_shape);
+                let width = self.scalar_width_for_shape(shape);
+                rb.read_from_field(offset as u32, width)
+            }
+            hir::Expr::Binary { op, lhs, rhs } => {
+                let lhs = self.lower_scalar_expr(rb, lhs, dest_local, dest_shape);
+                let rhs = self.lower_scalar_expr(rb, rhs, dest_local, dest_shape);
+                let ir_op = match op {
+                    hir::BinaryOp::Add => crate::ir::IrOp::Add,
+                    hir::BinaryOp::Sub => crate::ir::IrOp::Sub,
+                    hir::BinaryOp::And => crate::ir::IrOp::And,
+                    hir::BinaryOp::Or => crate::ir::IrOp::Or,
+                    hir::BinaryOp::Ne => crate::ir::IrOp::CmpNe,
+                    other => panic!("unsupported structural HIR binary op: {other:?}"),
+                };
+                rb.binop(ir_op, lhs, rhs)
+            }
+            other => panic!("unsupported structural HIR scalar expression: {other:?}"),
+        }
+    }
+
+    fn expr_field_to_place(&self, base: &hir::Expr, field: &str) -> hir::Place {
+        match base {
+            hir::Expr::Local(local) => hir::Place::Field {
+                base: Box::new(hir::Place::Local(*local)),
+                field: field.to_owned(),
+            },
+            hir::Expr::Field {
+                base: inner_base,
+                field: inner_field,
+            } => hir::Place::Field {
+                base: Box::new(self.expr_field_to_place(inner_base, inner_field)),
+                field: field.to_owned(),
+            },
+            other => panic!("unsupported structural HIR field base: {other:?}"),
+        }
+    }
+
+    fn resolve_place(
+        &self,
+        place: &hir::Place,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> (&'static Shape, usize, Option<&'static str>) {
+        match place {
+            hir::Place::Local(local) => {
+                assert_eq!(
+                    *local, dest_local,
+                    "structural HIR subset only supports local root on the destination parameter"
+                );
+                (dest_shape, 0, None)
+            }
+            hir::Place::Field { base, field } => {
+                let (base_shape, base_offset, _) = self.resolve_place(base, dest_local, dest_shape);
+                let (fields, skipped) = collect_fields(base_shape);
+                assert!(
+                    skipped.is_empty(),
+                    "structural HIR subset does not support skipped/defaulted fields"
+                );
+                let field_info = fields
+                    .into_iter()
+                    .find(|candidate| candidate.name == field.as_str())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "missing field {field} while lowering structural HIR place for {}",
+                            base_shape.type_identifier
+                        )
+                    });
+                (
+                    field_info.shape,
+                    base_offset + field_info.offset,
+                    Some(field_info.name),
+                )
+            }
+            hir::Place::Index { .. } => panic!("indexed places are unsupported"),
+        }
+    }
+
+    fn scalar_width_for_shape(&self, shape: &'static Shape) -> crate::ir::Width {
+        match shape.scalar_type() {
+            Some(ScalarType::Bool | ScalarType::U8 | ScalarType::I8) => crate::ir::Width::W1,
+            Some(ScalarType::U16 | ScalarType::I16) => crate::ir::Width::W2,
+            Some(ScalarType::U32 | ScalarType::I32) => crate::ir::Width::W4,
+            Some(
+                ScalarType::U64
+                | ScalarType::I64
+                | ScalarType::USize
+                | ScalarType::ISize
+                | ScalarType::U128
+                | ScalarType::I128,
+            ) => crate::ir::Width::W8,
+            _ => panic!(
+                "unsupported structural HIR scalar width for {}",
+                shape.type_identifier
+            ),
+        }
+    }
+}
+
+#[cfg(test)]
+fn build_structural_hir_ir(shape: &'static Shape, module: &hir::Module) -> crate::ir::IrFunc {
+    let (_, function) = module
+        .functions
+        .iter()
+        .next()
+        .expect("structural HIR module should contain one function");
+    let dest_local = function
+        .params
+        .iter()
+        .find(|param| param.kind == hir::LocalKind::Destination)
+        .map(|param| param.local)
+        .expect("structural HIR function should have a destination param");
+
+    let mut builder = crate::ir::IrBuilder::new(shape);
+    {
+        let mut rb = builder.root_region();
+        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function);
+        lowerer.lower_block(&mut rb, &function.body.statements, dest_local, shape);
+        rb.set_results(&[]);
+    }
+    builder.finish()
+}
+
 pub(crate) fn run_default_passes_from_env(func: &mut crate::ir::IrFunc) {
     let pipeline_opts = PipelineOptions::from_env();
     run_configured_default_passes(func, &pipeline_opts);
@@ -3699,6 +4000,27 @@ mod tests {
         Parrot,
     }
 
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct ConstantNumber {
+        value: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct BranchyAnimal {
+        animal: UnitAnimal,
+        value: u32,
+    }
+
+    fn compile_structural_hir_decoder(
+        shape: &'static Shape,
+        module: &hir::Module,
+    ) -> CompiledDecoder {
+        let mut func = build_structural_hir_ir(shape, module);
+        run_default_passes_from_env(&mut func);
+        let linear = crate::linearize::linearize(&mut func);
+        compile_linear_ir_decoder(&linear, false)
+    }
+
     #[test]
     fn instantiated_shape_symbol_key_distinguishes_generic_instantiations() {
         let u32_key = instantiated_shape_symbol_key(<Wrapper<u32>>::SHAPE);
@@ -3964,6 +4286,272 @@ mod tests {
         let parrot = crate::deserialize::<UnitAnimal>(&decoder, &[2])
             .expect("HIR->RVSDG postcard decoder should decode Parrot");
         assert_eq!(parrot, UnitAnimal::Parrot);
+    }
+
+    #[test]
+    fn structural_hir_ir_path_decodes_constant_output() {
+        let mut module = hir::Module::new();
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <ConstantNumber>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![hir::FieldDef {
+                    name: "value".to_owned(),
+                    ty: hir::Type::u(32),
+                }],
+            },
+        });
+        module.add_function(hir::Function {
+            name: "const_number".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::place(hir::Type::named(root_def, Vec::new())),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("constant structural HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "value".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(42)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<ConstantNumber>::SHAPE, &module);
+        let value = crate::deserialize::<ConstantNumber>(&decoder, &[])
+            .expect("structural HIR decoder should ignore input and write a constant");
+        assert_eq!(value, ConstantNumber { value: 42 });
+    }
+
+    #[test]
+    fn structural_hir_ir_path_decodes_if_and_match() {
+        let mut module = hir::Module::new();
+        let animal_def = module.add_type_def(hir::TypeDef {
+            name: <UnitAnimal>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Enum {
+                variants: vec![
+                    hir::VariantDef {
+                        name: "Cat".to_owned(),
+                        fields: vec![],
+                    },
+                    hir::VariantDef {
+                        name: "Dog".to_owned(),
+                        fields: vec![],
+                    },
+                    hir::VariantDef {
+                        name: "Parrot".to_owned(),
+                        fields: vec![],
+                    },
+                ],
+            },
+        });
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <BranchyAnimal>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "animal".to_owned(),
+                        ty: hir::Type::named(animal_def, Vec::new()),
+                    },
+                    hir::FieldDef {
+                        name: "value".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                ],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "branchy_animal".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::place(hir::Type::named(root_def, Vec::new())),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "flag".to_owned(),
+                    ty: hir::Type::bool(),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "tag".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("structural if/match HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(2)),
+                            value: hir::Expr::Literal(hir::Literal::Bool(true)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::If {
+                            condition: hir::Expr::Local(hir::LocalId::new(2)),
+                            then_block: hir::Block {
+                                scope: hir::ScopeId::new(0),
+                                statements: vec![hir::Stmt {
+                                    id: hir::StmtId::new(2),
+                                    kind: hir::StmtKind::Init {
+                                        place: hir::Place::Field {
+                                            base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                            field: "animal".to_owned(),
+                                        },
+                                        value: hir::Expr::Variant {
+                                            def: animal_def,
+                                            variant: "Dog".to_owned(),
+                                            fields: vec![],
+                                        },
+                                    },
+                                }],
+                            },
+                            else_block: Some(hir::Block {
+                                scope: hir::ScopeId::new(0),
+                                statements: vec![hir::Stmt {
+                                    id: hir::StmtId::new(3),
+                                    kind: hir::StmtKind::Init {
+                                        place: hir::Place::Field {
+                                            base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                            field: "animal".to_owned(),
+                                        },
+                                        value: hir::Expr::Variant {
+                                            def: animal_def,
+                                            variant: "Cat".to_owned(),
+                                            fields: vec![],
+                                        },
+                                    },
+                                }],
+                            }),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(3)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Match {
+                            scrutinee: hir::Expr::Local(hir::LocalId::new(3)),
+                            arms: vec![
+                                hir::MatchArm {
+                                    pattern: hir::Pattern::Integer(0),
+                                    body: hir::Block {
+                                        scope: hir::ScopeId::new(0),
+                                        statements: vec![hir::Stmt {
+                                            id: hir::StmtId::new(6),
+                                            kind: hir::StmtKind::Init {
+                                                place: hir::Place::Field {
+                                                    base: Box::new(hir::Place::Local(
+                                                        hir::LocalId::new(1),
+                                                    )),
+                                                    field: "value".to_owned(),
+                                                },
+                                                value: hir::Expr::Literal(hir::Literal::Integer(7)),
+                                            },
+                                        }],
+                                    },
+                                },
+                                hir::MatchArm {
+                                    pattern: hir::Pattern::Integer(1),
+                                    body: hir::Block {
+                                        scope: hir::ScopeId::new(0),
+                                        statements: vec![hir::Stmt {
+                                            id: hir::StmtId::new(7),
+                                            kind: hir::StmtKind::Init {
+                                                place: hir::Place::Field {
+                                                    base: Box::new(hir::Place::Local(
+                                                        hir::LocalId::new(1),
+                                                    )),
+                                                    field: "value".to_owned(),
+                                                },
+                                                value: hir::Expr::Literal(hir::Literal::Integer(
+                                                    42,
+                                                )),
+                                            },
+                                        }],
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(8),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<BranchyAnimal>::SHAPE, &module);
+        let value = crate::deserialize::<BranchyAnimal>(&decoder, &[])
+            .expect("structural HIR decoder should lower if+match");
+        assert_eq!(
+            value,
+            BranchyAnimal {
+                animal: UnitAnimal::Dog,
+                value: 42,
+            }
+        );
     }
 
     #[test]
