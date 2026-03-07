@@ -42,6 +42,14 @@ pub struct ExecutableBuffer {
     len: usize,
 }
 
+// SAFETY: ExecutableBuffer owns an immutable RX mapping after construction.
+// Sharing or moving the handle across threads does not permit mutation through
+// the raw pointer; destruction is still uniquely owned by the buffer value.
+unsafe impl Send for ExecutableBuffer {}
+// SAFETY: Shared references only expose read-only byte views and code pointers.
+// The mapping itself is immutable after setup, so concurrent access is safe.
+unsafe impl Sync for ExecutableBuffer {}
+
 impl ExecutableBuffer {
     fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
