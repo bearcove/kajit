@@ -2441,6 +2441,22 @@ impl PostcardHirLowerer {
                             .collect(),
                     }
                 }
+                Type::User(UserType::Enum(enum_type)) => hir::TypeDefKind::Enum {
+                    variants: collect_variants(enum_type)
+                        .into_iter()
+                        .map(|variant| hir::VariantDef {
+                            name: variant.name.to_owned(),
+                            fields: variant
+                                .fields
+                                .into_iter()
+                                .map(|field| hir::FieldDef {
+                                    name: field.name.to_owned(),
+                                    ty: self.lower_type(field.shape),
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                },
                 _ => panic!(
                     "postcard HIR prototype only supports struct-like composite roots for now: {}",
                     shape.type_identifier
@@ -2603,6 +2619,36 @@ impl PostcardHirLowerer {
         callable_id
     }
 
+    fn ensure_postcard_discriminant_reader(&mut self) -> hir::CallableId {
+        const NAME: &str = "postcard.read_discriminant";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+
+        let callable_id = self.module.add_callable(hir::CallableSpec {
+            kind: hir::CallableKind::Builtin,
+            name: NAME.to_owned(),
+            signature: hir::CallSignature {
+                params: vec![hir::Type::named(
+                    self.cursor_type,
+                    vec![hir::GenericArg::Region(self.input_region)],
+                )],
+                returns: vec![hir::Type::u(32)],
+                effect_class: hir::EffectClass::Mutates,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "cursor".to_owned(),
+                    access: hir::DomainAccess::Mutate,
+                }],
+                control: hir::ControlTransfer::MayFail,
+                capabilities: vec!["deser.postcard".to_owned()],
+                safety: hir::CallSafety::SafeCore,
+            },
+            docs: Some("Read a postcard enum discriminant.".to_owned()),
+        });
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
     fn lower_type_for_scalar(&self, scalar_type: ScalarType) -> hir::Type {
         match scalar_type {
             ScalarType::Bool => hir::Type::bool(),
@@ -2751,6 +2797,62 @@ impl PostcardHirLowerer {
                     };
                     self.lower_shape_into_place(statements, cursor_local, field_place, field.shape);
                 }
+            }
+            Type::User(UserType::Enum(enum_type)) => {
+                let variants = collect_variants(enum_type);
+                assert!(
+                    variants.iter().all(|variant| variant.fields.is_empty()),
+                    "postcard HIR prototype only supports unit enums for now: {}",
+                    shape.type_identifier
+                );
+
+                let enum_def = self.ensure_type_def(shape);
+                let disc_local = self.alloc_local(
+                    format!("enum_discriminant_{}", self.locals.len()),
+                    hir::Type::u(32),
+                    hir::LocalKind::Temp,
+                );
+                let disc_reader = self.ensure_postcard_discriminant_reader();
+                self.push_init(
+                    statements,
+                    hir::Place::Local(disc_local),
+                    hir::Expr::Call(hir::CallExpr {
+                        target: hir::CallTarget::Callable(disc_reader),
+                        args: vec![hir::Expr::Local(cursor_local)],
+                    }),
+                );
+
+                statements.push(hir::Stmt {
+                    id: self.next_stmt_id(),
+                    kind: hir::StmtKind::Match {
+                        scrutinee: hir::Expr::Local(disc_local),
+                        arms: variants
+                            .into_iter()
+                            .map(|variant| hir::MatchArm {
+                                pattern: hir::Pattern::Integer(
+                                    variant
+                                        .rust_discriminant
+                                        .try_into()
+                                        .expect("enum discriminant must fit in u64"),
+                                ),
+                                body: hir::Block {
+                                    scope: hir::ScopeId::new(0),
+                                    statements: vec![hir::Stmt {
+                                        id: self.next_stmt_id(),
+                                        kind: hir::StmtKind::Init {
+                                            place: place.clone(),
+                                            value: hir::Expr::Variant {
+                                                def: enum_def,
+                                                variant: variant.name.to_owned(),
+                                                fields: Vec::new(),
+                                            },
+                                        },
+                                    }],
+                                },
+                            })
+                            .collect(),
+                    },
+                });
             }
             _ => panic!(
                 "postcard HIR prototype does not support shape {} yet",
@@ -3084,6 +3186,110 @@ impl<'a> PostcardHirIrLowerer<'a> {
         true
     }
 
+    fn lower_unit_enum_pair(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        disc_stmt: &hir::Stmt,
+        match_stmt: &hir::Stmt,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> bool {
+        let hir::StmtKind::Init {
+            place: hir::Place::Local(disc_local),
+            value: hir::Expr::Call(disc_call),
+        } = &disc_stmt.kind
+        else {
+            return false;
+        };
+        if self.callable_name(disc_call) != "postcard.read_discriminant" {
+            return false;
+        }
+
+        let hir::StmtKind::Match { scrutinee, arms } = &match_stmt.kind else {
+            return false;
+        };
+        let hir::Expr::Local(scrutinee_local) = scrutinee else {
+            return false;
+        };
+        if scrutinee_local != disc_local {
+            return false;
+        }
+
+        let Type::User(UserType::Enum(enum_type)) = &dest_shape.ty else {
+            return false;
+        };
+        let variants = lower_variants_for_ir(enum_type, 0);
+        if variants.iter().any(|variant| !variant.fields.is_empty()) || arms.len() != variants.len()
+        {
+            return false;
+        }
+
+        let first_place = match &arms[0].body.statements[..] {
+            [
+                hir::Stmt {
+                    kind: hir::StmtKind::Init { place, .. },
+                    ..
+                },
+            ] => place,
+            _ => return false,
+        };
+
+        for (arm, variant) in arms.iter().zip(variants.iter()) {
+            let hir::Pattern::Integer(discriminant) = arm.pattern else {
+                return false;
+            };
+            if discriminant
+                != variant
+                    .rust_discriminant
+                    .try_into()
+                    .expect("enum discriminant must fit in u64")
+            {
+                return false;
+            }
+            let [stmt] = arm.body.statements.as_slice() else {
+                return false;
+            };
+            let hir::StmtKind::Init {
+                place,
+                value:
+                    hir::Expr::Variant {
+                        variant: hir_variant,
+                        fields,
+                        ..
+                    },
+            } = &stmt.kind
+            else {
+                return false;
+            };
+            if place != first_place || hir_variant != variant.name || !fields.is_empty() {
+                return false;
+            }
+        }
+
+        let disc_size = discriminant_size(enum_type.enum_repr);
+        let disc_width = ir_width_from_disc_size(disc_size);
+        self.with_place_debug(
+            rb,
+            first_place,
+            dest_local,
+            dest_shape,
+            |field_rb, _, offset| {
+                self.decoder
+                    .lower_enum(field_rb, &variants, &mut |inner_rb, variant| {
+                        let disc = inner_rb.const_val(
+                            variant
+                                .rust_discriminant
+                                .try_into()
+                                .expect("enum discriminant must fit in u64"),
+                        );
+                        inner_rb.write_to_field(disc, offset as u32, disc_width);
+                    });
+            },
+        );
+
+        true
+    }
+
     fn lower_block(
         &self,
         rb: &mut RegionBuilder<'_>,
@@ -3095,6 +3301,18 @@ impl<'a> PostcardHirIrLowerer<'a> {
         while index < statements.len() {
             if index + 1 < statements.len()
                 && self.lower_option_pair(
+                    rb,
+                    &statements[index],
+                    &statements[index + 1],
+                    dest_local,
+                    dest_shape,
+                )
+            {
+                index += 2;
+                continue;
+            }
+            if index + 1 < statements.len()
+                && self.lower_unit_enum_pair(
                     rb,
                     &statements[index],
                     &statements[index + 1],
@@ -3473,6 +3691,14 @@ mod tests {
         name: Option<&'a str>,
     }
 
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    #[repr(u8)]
+    enum UnitAnimal {
+        Cat,
+        Dog,
+        Parrot,
+    }
+
     #[test]
     fn instantiated_shape_symbol_key_distinguishes_generic_instantiations() {
         let u32_key = instantiated_shape_symbol_key(<Wrapper<u32>>::SHAPE);
@@ -3676,6 +3902,68 @@ mod tests {
         let none = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[0])
             .expect("HIR->RVSDG postcard decoder should decode None");
         assert_eq!(none, MaybeBorrowedName { name: None });
+    }
+
+    #[test]
+    fn postcard_hir_models_unit_enums() {
+        let module = build_postcard_decoder_hir(<UnitAnimal>::SHAPE);
+        let (_, function) = module.functions.iter().next().unwrap();
+
+        assert_eq!(function.locals.len(), 1);
+        assert_eq!(function.body.statements.len(), 3);
+
+        let hir::StmtKind::Init { value, .. } = &function.body.statements[0].kind else {
+            panic!("expected enum discriminant init");
+        };
+        let hir::Expr::Call(call) = value else {
+            panic!("expected discriminant reader call");
+        };
+        let hir::CallTarget::Callable(callable_id) = call.target;
+        assert_eq!(
+            module.callables[callable_id].name,
+            "postcard.read_discriminant"
+        );
+
+        let hir::StmtKind::Match { scrutinee, arms } = &function.body.statements[1].kind else {
+            panic!("expected enum match statement");
+        };
+        let hir::Expr::Local(disc_local) = scrutinee else {
+            panic!("expected discriminant local");
+        };
+        assert_eq!(function.locals[0].local, *disc_local);
+        assert_eq!(arms.len(), 3);
+        assert!(matches!(arms[0].pattern, hir::Pattern::Integer(0)));
+        assert!(matches!(arms[1].pattern, hir::Pattern::Integer(1)));
+        assert!(matches!(arms[2].pattern, hir::Pattern::Integer(2)));
+
+        let hir::StmtKind::Init { value, .. } = &arms[1].body.statements[0].kind else {
+            panic!("expected unit variant init");
+        };
+        let hir::Expr::Variant {
+            variant, fields, ..
+        } = value
+        else {
+            panic!("expected unit variant expression");
+        };
+        assert_eq!(variant, "Dog");
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn postcard_hir_ir_path_decodes_unit_enums() {
+        let decoder = crate::compile_postcard_decoder_via_hir(<UnitAnimal>::SHAPE);
+
+        let cat = crate::deserialize::<UnitAnimal>(&decoder, &[0])
+            .expect("HIR->RVSDG postcard decoder should decode Cat");
+        assert_eq!(cat, UnitAnimal::Cat);
+
+        let dog = crate::deserialize::<UnitAnimal>(&decoder, &[1])
+            .expect("HIR->RVSDG postcard decoder should decode Dog");
+        assert_eq!(dog, UnitAnimal::Dog);
+
+        let parrot = crate::deserialize::<UnitAnimal>(&decoder, &[2])
+            .expect("HIR->RVSDG postcard decoder should decode Parrot");
+        assert_eq!(parrot, UnitAnimal::Parrot);
     }
 
     #[test]
