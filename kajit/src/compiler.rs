@@ -2974,7 +2974,6 @@ pub(crate) fn build_postcard_decoder_ir_via_hir(shape: &'static Shape) -> crate:
 #[derive(Clone, Copy)]
 struct StructuralLocalStorage {
     base_slot: crate::ir::SlotId,
-    slot_count: usize,
 }
 
 struct StructuralHirIrLowerer<'a> {
@@ -2982,7 +2981,20 @@ struct StructuralHirIrLowerer<'a> {
     decoder: crate::postcard::KajitPostcard,
     cursor_local: hir::LocalId,
     local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
+    local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
     _marker: std::marker::PhantomData<&'a hir::Module>,
+}
+
+enum ResolvedStructuralPlace<'a> {
+    Destination {
+        shape: &'static Shape,
+        offset: usize,
+    },
+    Local {
+        ty: &'a hir::Type,
+        storage: StructuralLocalStorage,
+        slot_offset: usize,
+    },
 }
 
 impl<'a> StructuralHirIrLowerer<'a> {
@@ -2998,6 +3010,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             .map(|param| param.local)
             .expect("structural HIR function should have a cursor param");
         let mut local_slots = std::collections::HashMap::new();
+        let mut local_types = std::collections::HashMap::new();
         for param in &function.params {
             if !param.is_destination() {
                 local_slots.insert(
@@ -3005,18 +3018,21 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     Self::alloc_local_storage(rb, module, &param.ty),
                 );
             }
+            local_types.insert(param.local, &param.ty);
         }
         for local in &function.locals {
             local_slots.insert(
                 local.local,
                 Self::alloc_local_storage(rb, module, &local.ty),
             );
+            local_types.insert(local.local, &local.ty);
         }
         Self {
             module,
             decoder: crate::postcard::KajitPostcard,
             cursor_local,
             local_slots,
+            local_types,
             _marker: std::marker::PhantomData,
         }
     }
@@ -3031,10 +3047,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         for _ in 1..slot_count {
             let _ = rb.alloc_slot();
         }
-        StructuralLocalStorage {
-            base_slot,
-            slot_count,
-        }
+        StructuralLocalStorage { base_slot }
     }
 
     fn slot_count_for_type(module: &'a hir::Module, ty: &hir::Type) -> usize {
@@ -3073,6 +3086,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
         match call.target {
             hir::CallTarget::Callable(callable) => &self.module.callables[callable].name,
         }
+    }
+
+    fn slot_at(storage: StructuralLocalStorage, slot_offset: usize) -> crate::ir::SlotId {
+        crate::ir::SlotId::new(storage.base_slot.index() as u32 + slot_offset as u32)
     }
 
     fn lower_block(
@@ -3154,27 +3171,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_local: hir::LocalId,
         dest_shape: &'static Shape,
     ) {
-        match place {
-            hir::Place::Local(local) => {
-                if *local == dest_local {
-                    self.lower_place_write(rb, place, value, dest_local, dest_shape);
-                } else {
-                    let storage = self.local_slots[local];
-                    match value {
-                        hir::Expr::Call(call) => {
-                            self.lower_postcard_call_into_slot(rb, call, storage)
-                        }
-                        _ => {
-                            let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
-                            rb.write_to_slot(storage.base_slot, scalar);
-                        }
-                    }
-                }
-            }
-            hir::Place::Field { .. } | hir::Place::Index { .. } => {
-                self.lower_place_write(rb, place, value, dest_local, dest_shape);
-            }
-        }
+        self.lower_place_write(rb, place, value, dest_local, dest_shape);
     }
 
     fn lower_place_write(
@@ -3185,59 +3182,112 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_local: hir::LocalId,
         dest_shape: &'static Shape,
     ) {
-        let (place_shape, offset, _) = self.resolve_place(place, dest_local, dest_shape);
+        let resolved = self.resolve_place(place, dest_local, dest_shape);
         match value {
-            hir::Expr::Call(call) => {
-                self.lower_postcard_call_at_offset(rb, call, offset);
-            }
+            hir::Expr::Call(call) => match resolved {
+                ResolvedStructuralPlace::Destination { offset, .. } => {
+                    self.lower_postcard_call_at_offset(rb, call, offset);
+                }
+                ResolvedStructuralPlace::Local {
+                    ty,
+                    storage,
+                    slot_offset,
+                } => self.lower_postcard_call_into_local(rb, call, ty, storage, slot_offset),
+            },
             hir::Expr::Variant {
                 variant, fields, ..
-            } => {
-                if let Some(opt_def) = get_option_def(place_shape) {
-                    self.lower_option_variant_write(rb, offset, *opt_def, variant, fields);
-                    return;
+            } => match resolved {
+                ResolvedStructuralPlace::Destination { shape, offset } => {
+                    if let Some(opt_def) = get_option_def(shape) {
+                        self.lower_option_variant_write(rb, offset, *opt_def, variant, fields);
+                        return;
+                    }
+                    let Type::User(UserType::Enum(enum_type)) = &shape.ty else {
+                        panic!("variant init must target an enum place");
+                    };
+                    let variant_info = collect_variants(enum_type)
+                        .into_iter()
+                        .find(|candidate| candidate.name == variant.as_str())
+                        .unwrap_or_else(|| panic!("missing enum variant {variant}"));
+                    let disc_width =
+                        ir_width_from_disc_size(discriminant_size(enum_type.enum_repr));
+                    let disc = variant_info
+                        .rust_discriminant
+                        .try_into()
+                        .expect("enum discriminant must fit in u64");
+                    let value = rb.const_val(disc);
+                    rb.write_to_field(value, offset as u32, disc_width);
+                    for field in &variant_info.fields {
+                        let (_, expr) = fields
+                            .iter()
+                            .find(|(name, _)| name == field.name)
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "missing enum payload field {} for variant {variant}",
+                                    field.name
+                                )
+                            });
+                        self.lower_value_into_shape_offset(
+                            rb,
+                            field.shape,
+                            field.offset,
+                            expr,
+                            dest_local,
+                            dest_shape,
+                        );
+                    }
                 }
-                let Type::User(UserType::Enum(enum_type)) = &place_shape.ty else {
-                    panic!("variant init must target an enum place");
-                };
-                let variant_info = collect_variants(enum_type)
-                    .into_iter()
-                    .find(|candidate| candidate.name == variant.as_str())
-                    .unwrap_or_else(|| panic!("missing enum variant {variant}"));
-                let disc_width = ir_width_from_disc_size(discriminant_size(enum_type.enum_repr));
-                let disc = variant_info
-                    .rust_discriminant
-                    .try_into()
-                    .expect("enum discriminant must fit in u64");
-                let value = rb.const_val(disc);
-                rb.write_to_field(value, offset as u32, disc_width);
-                for field in &variant_info.fields {
-                    let (_, expr) = fields
-                        .iter()
-                        .find(|(name, _)| name == field.name)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "missing enum payload field {} for variant {variant}",
-                                field.name
-                            )
-                        });
-                    self.lower_value_into_shape_offset(
-                        rb,
-                        field.shape,
-                        field.offset,
-                        expr,
-                        dest_local,
-                        dest_shape,
-                    );
+                ResolvedStructuralPlace::Local { .. } => {
+                    panic!("local enum writes are not supported yet");
                 }
-            }
+            },
             hir::Expr::Literal(hir::Literal::Unit) => {}
             _ => {
                 let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
-                let width = self.scalar_width_for_shape(place_shape);
-                rb.write_to_field(scalar, offset as u32, width);
+                match resolved {
+                    ResolvedStructuralPlace::Destination { shape, offset } => {
+                        let width = self.scalar_width_for_shape(shape);
+                        rb.write_to_field(scalar, offset as u32, width);
+                    }
+                    ResolvedStructuralPlace::Local {
+                        ty,
+                        storage,
+                        slot_offset,
+                    } => {
+                        assert_eq!(
+                            Self::slot_count_for_type(self.module, ty),
+                            1,
+                            "structural local scalar write requires single-slot type"
+                        );
+                        rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
+                    }
+                }
             }
         }
+    }
+
+    fn lower_postcard_call_into_local(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        ty: &hir::Type,
+        storage: StructuralLocalStorage,
+        slot_offset: usize,
+    ) {
+        let slot_count = Self::slot_count_for_type(self.module, ty);
+        let base_slot = Self::slot_at(storage, slot_offset);
+        for slot_index in 0..slot_count {
+            let zero = rb.const_val(0);
+            rb.write_to_slot(
+                crate::ir::SlotId::new(base_slot.index() as u32 + slot_index as u32),
+                zero,
+            );
+        }
+        let saved_out = rb.save_out_ptr();
+        let slot_ptr = rb.slot_addr(base_slot);
+        rb.set_out_ptr(slot_ptr);
+        self.lower_postcard_call_at_offset(rb, call, 0);
+        rb.set_out_ptr(saved_out);
     }
 
     fn lower_option_variant_write(
@@ -3388,26 +3438,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
-    fn lower_postcard_call_into_slot(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        call: &hir::CallExpr,
-        storage: StructuralLocalStorage,
-    ) {
-        for slot_index in 0..storage.slot_count {
-            let zero = rb.const_val(0);
-            rb.write_to_slot(
-                crate::ir::SlotId::new(storage.base_slot.index() as u32 + slot_index as u32),
-                zero,
-            );
-        }
-        let saved_out = rb.save_out_ptr();
-        let slot_ptr = rb.slot_addr(storage.base_slot);
-        rb.set_out_ptr(slot_ptr);
-        self.lower_postcard_call_at_offset(rb, call, 0);
-        rb.set_out_ptr(saved_out);
-    }
-
     fn lower_postcard_call_at_offset(
         &self,
         rb: &mut RegionBuilder<'_>,
@@ -3479,9 +3509,24 @@ impl<'a> StructuralHirIrLowerer<'a> {
             }
             hir::Expr::Field { base, field } => {
                 let place = self.expr_field_to_place(base, field);
-                let (shape, offset, _) = self.resolve_place(&place, dest_local, dest_shape);
-                let width = self.scalar_width_for_shape(shape);
-                rb.read_from_field(offset as u32, width)
+                match self.resolve_place(&place, dest_local, dest_shape) {
+                    ResolvedStructuralPlace::Destination { shape, offset } => {
+                        let width = self.scalar_width_for_shape(shape);
+                        rb.read_from_field(offset as u32, width)
+                    }
+                    ResolvedStructuralPlace::Local {
+                        ty,
+                        storage,
+                        slot_offset,
+                    } => {
+                        assert_eq!(
+                            Self::slot_count_for_type(self.module, ty),
+                            1,
+                            "structural local scalar read requires single-slot type"
+                        );
+                        rb.read_from_slot(Self::slot_at(storage, slot_offset))
+                    }
+                }
             }
             hir::Expr::Binary { op, lhs, rhs } => {
                 let lhs = self.lower_scalar_expr(rb, lhs, dest_local, dest_shape);
@@ -3527,61 +3572,128 @@ impl<'a> StructuralHirIrLowerer<'a> {
         place: &hir::Place,
         dest_local: hir::LocalId,
         dest_shape: &'static Shape,
-    ) -> (&'static Shape, usize, Option<&'static str>) {
+    ) -> ResolvedStructuralPlace<'a> {
         match place {
             hir::Place::Local(local) => {
-                assert_eq!(
-                    *local, dest_local,
-                    "structural HIR subset only supports local root on the destination parameter"
-                );
-                (dest_shape, 0, None)
+                if *local == dest_local {
+                    ResolvedStructuralPlace::Destination {
+                        shape: dest_shape,
+                        offset: 0,
+                    }
+                } else {
+                    ResolvedStructuralPlace::Local {
+                        ty: self.local_types[local],
+                        storage: self.local_slots[local],
+                        slot_offset: 0,
+                    }
+                }
             }
             hir::Place::Field { base, field } => {
-                let (base_shape, base_offset, _) = self.resolve_place(base, dest_local, dest_shape);
-                let (fields, skipped) = collect_fields(base_shape);
-                assert!(
-                    skipped.is_empty(),
-                    "structural HIR subset does not support skipped/defaulted fields"
-                );
-                let field_info = fields
-                    .into_iter()
-                    .find(|candidate| candidate.name == field.as_str())
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "missing field {field} while lowering structural HIR place for {}",
-                            base_shape.type_identifier
-                        )
-                    });
-                (
-                    field_info.shape,
-                    base_offset + field_info.offset,
-                    Some(field_info.name),
-                )
+                match self.resolve_place(base, dest_local, dest_shape) {
+                    ResolvedStructuralPlace::Destination { shape, offset } => {
+                        let (fields, skipped) = collect_fields(shape);
+                        assert!(
+                            skipped.is_empty(),
+                            "structural HIR subset does not support skipped/defaulted fields"
+                        );
+                        let field_info = fields
+                            .into_iter()
+                            .find(|candidate| candidate.name == field.as_str())
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "missing field {field} while lowering structural HIR place for {}",
+                                    shape.type_identifier
+                                )
+                            });
+                        ResolvedStructuralPlace::Destination {
+                            shape: field_info.shape,
+                            offset: offset + field_info.offset,
+                        }
+                    }
+                    ResolvedStructuralPlace::Local {
+                        ty,
+                        storage,
+                        slot_offset,
+                    } => {
+                        let hir::Type::Named { def, .. } = ty else {
+                            panic!("local field place requires a named struct type");
+                        };
+                        let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind
+                        else {
+                            panic!("local field place requires a struct type");
+                        };
+                        let mut running_slots = 0usize;
+                        let field_info = fields
+                            .iter()
+                            .find_map(|candidate| {
+                                let found = (candidate.name == field.as_str())
+                                    .then_some((&candidate.ty, running_slots));
+                                running_slots +=
+                                    Self::slot_count_for_type(self.module, &candidate.ty);
+                                found
+                            })
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "missing HIR struct field {field} while resolving local place"
+                                )
+                            });
+                        ResolvedStructuralPlace::Local {
+                            ty: field_info.0,
+                            storage,
+                            slot_offset: slot_offset + field_info.1,
+                        }
+                    }
+                }
             }
             hir::Place::Index { base, index } => {
-                let (base_shape, base_offset, _) = self.resolve_place(base, dest_local, dest_shape);
-                let Def::Array(array_def) = &base_shape.def else {
-                    panic!(
-                        "indexed structural HIR place requires an array base, got {}",
-                        base_shape.type_identifier
-                    );
-                };
                 let hir::Expr::Literal(hir::Literal::Integer(index)) = &**index else {
                     panic!("structural HIR array indices must be integer literals");
                 };
                 let index = usize::try_from(*index).expect("array index must fit in usize");
-                assert!(
-                    index < array_def.n,
-                    "array index {index} out of bounds for {}",
-                    base_shape.type_identifier
-                );
-                let elem_layout = array_def
-                    .t
-                    .layout
-                    .sized_layout()
-                    .expect("array element must be Sized");
-                let stride = elem_layout.size();
-                (array_def.t, base_offset + index * stride, None)
+                match self.resolve_place(base, dest_local, dest_shape) {
+                    ResolvedStructuralPlace::Destination { shape, offset } => {
+                        let Def::Array(array_def) = &shape.def else {
+                            panic!(
+                                "indexed structural HIR place requires an array base, got {}",
+                                shape.type_identifier
+                            );
+                        };
+                        assert!(
+                            index < array_def.n,
+                            "array index {index} out of bounds for {}",
+                            shape.type_identifier
+                        );
+                        let elem_layout = array_def
+                            .t
+                            .layout
+                            .sized_layout()
+                            .expect("array element must be Sized");
+                        let stride = elem_layout.size();
+                        ResolvedStructuralPlace::Destination {
+                            shape: array_def.t,
+                            offset: offset + index * stride,
+                        }
+                    }
+                    ResolvedStructuralPlace::Local {
+                        ty,
+                        storage,
+                        slot_offset,
+                    } => {
+                        let hir::Type::Array { element, len } = ty else {
+                            panic!("indexed local place requires an HIR array type");
+                        };
+                        assert!(
+                            index < *len,
+                            "local array index {index} out of bounds for {len}"
+                        );
+                        let elem_slots = Self::slot_count_for_type(self.module, element);
+                        ResolvedStructuralPlace::Local {
+                            ty: element,
+                            storage,
+                            slot_offset: slot_offset + index * elem_slots,
+                        }
+                    }
+                }
             }
         }
     }
@@ -4013,6 +4125,12 @@ mod tests {
         shifted: u32,
         toggled: u32,
         combined: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct ScratchSummary {
+        mask: u32,
+        done: u32,
     }
 
     fn compile_structural_hir_decoder(
@@ -4895,6 +5013,148 @@ mod tests {
                 shifted: 0b0101,
                 toggled: 0b1000,
                 combined: 0b1001,
+            }
+        );
+    }
+
+    #[test]
+    fn structural_hir_ir_path_updates_local_scratch_struct_fields() {
+        let mut module = hir::Module::new();
+        let scratch_def = module.add_type_def(hir::TypeDef {
+            name: "ScratchState".to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "mask".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                    hir::FieldDef {
+                        name: "done".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                ],
+            },
+        });
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <ScratchSummary>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "mask".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                    hir::FieldDef {
+                        name: "done".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                ],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "scratch_summary".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![hir::LocalDecl {
+                local: hir::LocalId::new(2),
+                name: "scratch".to_owned(),
+                ty: hir::Type::named(scratch_def, Vec::new()),
+                kind: hir::LocalKind::Let,
+            }],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("structural local scratch-state HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                field: "mask".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(0b1111)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                field: "done".to_owned(),
+                            },
+                            value: hir::Expr::Binary {
+                                op: hir::BinaryOp::BitAnd,
+                                lhs: Box::new(hir::Expr::Field {
+                                    base: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                    field: "mask".to_owned(),
+                                }),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0b0011))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "mask".to_owned(),
+                            },
+                            value: hir::Expr::Field {
+                                base: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                field: "mask".to_owned(),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "done".to_owned(),
+                            },
+                            value: hir::Expr::Field {
+                                base: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                field: "done".to_owned(),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<ScratchSummary>::SHAPE, &module);
+        let value = crate::deserialize::<ScratchSummary>(&decoder, &[])
+            .expect("structural HIR decoder should support local scratch-state fields");
+        assert_eq!(
+            value,
+            ScratchSummary {
+                mask: 0b1111,
+                done: 0b0011,
             }
         );
     }
