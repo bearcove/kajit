@@ -80,6 +80,22 @@ Examples:
 HIR has its own semantic type system. Host layout/schema information may still
 be referenced during lowering, but that is a separate concern.
 
+This matters especially for host-owned values such as Rust `String`.
+
+Generated HIR does not need to model every such host value as a first-class HIR
+value. A generated decoder may instead:
+
+- compute low-level ingredients such as byte ranges, lengths, capacities, and
+  addresses
+- use host layout/schema information to identify the destination subtree
+- materialize the host value directly into that destination
+
+So the important boundary is:
+
+- HIR values are HIR semantic values
+- host values may be constructed by destination-directed materialization without
+  ever existing as ordinary HIR locals or return values
+
 ## Place Pressure Point
 
 The current `Place<T>` spelling is under pressure.
@@ -98,6 +114,12 @@ So the important boundary is:
 This note does not settle the replacement design. It does freeze one thing:
 we should stop assuming that `Place<T>` is automatically the correct universal
 abstraction for both ordinary HIR values and generated host destinations.
+
+One practical consequence is that destination-directed materialization is a
+first-class lowering pattern for generated decoders. If a host value is best
+described as "a destination subtree with known layout plus some raw
+ingredients", HIR lowering should use that model instead of forcing the host
+value through a "compute value, then assign" path.
 
 ## Safety Direction
 

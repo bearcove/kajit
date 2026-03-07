@@ -624,6 +624,9 @@ dependencies = [
 [[package]]
 name = "kajit-hir"
 version = "0.1.0"
+dependencies = [
+ "kajit-ir",
+]
 
 [[package]]
 name = "kajit-hir-text"

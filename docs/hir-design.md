@@ -200,6 +200,19 @@ identity. HIR needs a semantic type layer that can represent region/provenance
 parameters directly. Layout metadata may still be attached separately for
 HIR->RVSDG lowering.
 
+That does not imply every host-side runtime value must become a first-class
+HIR value. Some host values are better treated as destination-materialization
+problems:
+
+- HIR computes raw ingredients such as addresses, lengths, capacities, and
+  validated byte ranges
+- host layout/schema identifies the destination subtree
+- lowering/runtime calls materialize the final host value directly into that
+  destination
+
+Rust `String` is the clearest example. Generated decoder HIR does not need a
+semantic `String` value just because the host result contains one.
+
 ### HIR should include first-class structs and enums
 
 HIR should treat structs and Rust-style enums as ordinary source-semantic
@@ -526,6 +539,10 @@ It works naturally for ordinary HIR storage typed by HIR semantic types. It is
 less obviously correct for generated host-schema destinations. The boundary note
 above freezes that as an active design pressure instead of silently assuming
 that one generic `Place<T>` covers both cases.
+
+One practical consequence is that generated decoder lowering should not force
+every host-owned aggregate through a "compute typed value, then assign" path.
+Direct destination materialization is part of the intended model.
 
 ### Raw pointers should be a lowering concern, not a default source feature
 
