@@ -388,6 +388,16 @@ fn fmt_stmt(
                 expr: value
             }
         ),
+        StmtKind::Store { addr, width, value } => writeln!(
+            f,
+            "store {} {} = {}",
+            MemoryWidthDisplay { width: *width },
+            ExprDisplay { module, expr: addr },
+            ExprDisplay {
+                module,
+                expr: value
+            }
+        ),
         StmtKind::Expr(expr) => writeln!(f, "expr {}", ExprDisplay { module, expr }),
         StmtKind::If {
             condition,
@@ -456,6 +466,21 @@ fn fmt_match_arm(
 struct TypeDisplay<'a> {
     module: &'a Module,
     ty: &'a Type,
+}
+
+struct MemoryWidthDisplay {
+    width: crate::MemoryWidth,
+}
+
+impl fmt::Display for MemoryWidthDisplay {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.width {
+            crate::MemoryWidth::W1 => write!(f, "w1"),
+            crate::MemoryWidth::W2 => write!(f, "w2"),
+            crate::MemoryWidth::W4 => write!(f, "w4"),
+            crate::MemoryWidth::W8 => write!(f, "w8"),
+        }
+    }
 }
 
 impl fmt::Display for TypeDisplay<'_> {

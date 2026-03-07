@@ -3063,7 +3063,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
 
     fn slot_count_for_type(module: &'a hir::Module, ty: &hir::Type) -> usize {
         match ty {
-            hir::Type::Unit | hir::Type::Bool | hir::Type::Integer(_) => 1,
+            hir::Type::Unit
+            | hir::Type::Bool
+            | hir::Type::Integer(_)
+            | hir::Type::Address { .. } => 1,
             hir::Type::Array { element, len } => Self::slot_count_for_type(module, element)
                 .saturating_mul(*len)
                 .max(1),

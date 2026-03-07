@@ -4,8 +4,8 @@ use kajit_hir::{
     AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableId,
     CallableKind, CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr,
     FieldDef, Function, FunctionId, GenericArg, GenericParam, Id, Literal, LocalDecl, LocalId,
-    LocalKind, MatchArm, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId,
-    StmtKind, StoreId, Type, TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
+    LocalKind, MatchArm, MemoryWidth, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt,
+    StmtId, StmtKind, StoreId, Type, TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
 };
 
 type Extra<'src> = extra::Err<Rich<'src, char>>;
@@ -136,6 +136,15 @@ fn local_id<'src>() -> impl Parser<'src, &'src str, LocalId, Extra<'src>> + Clon
         .ignore_then(uint32())
         .map(LocalId::new)
         .padded_by(ws())
+}
+
+fn memory_width<'src>() -> impl Parser<'src, &'src str, MemoryWidth, Extra<'src>> + Clone {
+    choice((
+        token("w1").to(MemoryWidth::W1),
+        token("w2").to(MemoryWidth::W2),
+        token("w4").to(MemoryWidth::W4),
+        token("w8").to(MemoryWidth::W8),
+    ))
 }
 
 fn stmt_id<'src>() -> impl Parser<'src, &'src str, StmtId, Extra<'src>> + Clone {
@@ -695,6 +704,18 @@ fn stmt<'src>() -> impl Parser<'src, &'src str, Stmt, Extra<'src>> + Clone {
                 kind: StmtKind::Assign { place, value },
             });
 
+        let store_stmt = stmt_id()
+            .then_ignore(token(":"))
+            .then_ignore(token("store"))
+            .then(memory_width())
+            .then(expr.clone())
+            .then_ignore(token("="))
+            .then(expr.clone())
+            .map(|(((id, width), addr), value)| Stmt {
+                id,
+                kind: StmtKind::Store { addr, width, value },
+            });
+
         let expr_stmt = stmt_id()
             .then_ignore(token(":"))
             .then_ignore(token("expr"))
@@ -735,6 +756,7 @@ fn stmt<'src>() -> impl Parser<'src, &'src str, Stmt, Extra<'src>> + Clone {
             match_stmt,
             init_stmt,
             assign_stmt,
+            store_stmt,
             expr_stmt,
             break_stmt,
             continue_stmt,
@@ -962,8 +984,8 @@ mod tests {
         BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableKind,
         CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr, FieldDef,
         Function, GenericArg, GenericParam, Literal, LocalDecl, LocalId, LocalKind, MatchArm,
-        Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId, StmtKind, Type,
-        TypeDef, TypeDefKind, VariantDef, VixenCallableRef, VixenCoreTypes, VixenTypedExpr,
+        MemoryWidth, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId, StmtKind,
+        Type, TypeDef, TypeDefKind, VariantDef, VixenCallableRef, VixenCoreTypes, VixenTypedExpr,
         VixenTypedFunction, VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
     };
 
@@ -1173,6 +1195,112 @@ mod tests {
         module
     }
 
+    fn known_len_persistent_vec_kernel_module() -> Module {
+        let mut module = Module::new();
+        let callables = module.install_runtime_memory_callables();
+        module.add_function(Function {
+            name: "build_vec_u32_2".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![],
+            locals: vec![
+                LocalDecl {
+                    local: LocalId::new(0),
+                    name: "len".to_owned(),
+                    ty: Type::u(64),
+                    kind: LocalKind::Temp,
+                },
+                LocalDecl {
+                    local: LocalId::new(1),
+                    name: "bytes".to_owned(),
+                    ty: Type::u(64),
+                    kind: LocalKind::Temp,
+                },
+                LocalDecl {
+                    local: LocalId::new(2),
+                    name: "ptr".to_owned(),
+                    ty: Type::persistent_addr(),
+                    kind: LocalKind::Temp,
+                },
+            ],
+            return_type: Type::u(64),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: Some("Known-length persistent vec kernel".to_owned()),
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![
+                    Stmt {
+                        id: StmtId::new(0),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(0)),
+                            value: Expr::Literal(Literal::Integer(2)),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(1),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(1)),
+                            value: Expr::Binary {
+                                op: BinaryOp::Mul,
+                                lhs: Box::new(Expr::Local(LocalId::new(0))),
+                                rhs: Box::new(Expr::Literal(Literal::Integer(4))),
+                            },
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(2),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(2)),
+                            value: Expr::Call(CallExpr {
+                                target: CallTarget::Callable(callables.alloc_persistent),
+                                args: vec![
+                                    Expr::Local(LocalId::new(1)),
+                                    Expr::Literal(Literal::Integer(4)),
+                                ],
+                            }),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(3),
+                        kind: StmtKind::Store {
+                            addr: Expr::Local(LocalId::new(2)),
+                            width: MemoryWidth::W4,
+                            value: Expr::Literal(Literal::Integer(10)),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(4),
+                        kind: StmtKind::Store {
+                            addr: Expr::Binary {
+                                op: BinaryOp::Add,
+                                lhs: Box::new(Expr::Local(LocalId::new(2))),
+                                rhs: Box::new(Expr::Literal(Literal::Integer(4))),
+                            },
+                            width: MemoryWidth::W4,
+                            value: Expr::Literal(Literal::Integer(20)),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(5),
+                        kind: StmtKind::Return(Some(Expr::Call(CallExpr {
+                            target: CallTarget::Callable(callables.vec_from_raw_parts),
+                            args: vec![
+                                Expr::Local(LocalId::new(2)),
+                                Expr::Local(LocalId::new(0)),
+                                Expr::Local(LocalId::new(0)),
+                                Expr::Literal(Literal::Integer(4)),
+                            ],
+                        }))),
+                    },
+                ],
+            },
+        });
+        module
+    }
+
     #[test]
     fn round_trip_address_types() {
         let text = r#"
@@ -1205,6 +1333,14 @@ hir_module {
         let module = sample_module();
         let text = module.to_string();
         let reparsed = parse_hir(&text).expect("HIR text should parse");
+        assert_eq!(reparsed, module);
+    }
+
+    #[test]
+    fn round_trips_known_len_persistent_vec_kernel() {
+        let module = known_len_persistent_vec_kernel_module();
+        let text = module.to_string();
+        let reparsed = parse_hir(&text).expect("kernel HIR text should parse");
         assert_eq!(reparsed, module);
     }
 

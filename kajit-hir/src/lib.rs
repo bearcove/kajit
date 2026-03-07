@@ -1151,6 +1151,11 @@ pub enum StmtKind {
         place: Place,
         value: Expr,
     },
+    Store {
+        addr: Expr,
+        width: MemoryWidth,
+        value: Expr,
+    },
     Expr(Expr),
     If {
         condition: Expr,
@@ -1197,6 +1202,25 @@ pub enum Place {
     Local(LocalId),
     Field { base: Box<Place>, field: String },
     Index { base: Box<Place>, index: Box<Expr> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryWidth {
+    W1,
+    W2,
+    W4,
+    W8,
+}
+
+impl MemoryWidth {
+    pub const fn bytes(self) -> u16 {
+        match self {
+            Self::W1 => 1,
+            Self::W2 => 2,
+            Self::W4 => 4,
+            Self::W8 => 8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1340,6 +1364,112 @@ pub struct CallExpr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn build_known_len_persistent_vec_kernel_module() -> Module {
+        let mut module = Module::new();
+        let callables = module.install_runtime_memory_callables();
+        module.add_function(Function {
+            name: "build_vec_u32_2".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![],
+            locals: vec![
+                LocalDecl {
+                    local: LocalId::new(0),
+                    name: "len".to_owned(),
+                    ty: Type::u(64),
+                    kind: LocalKind::Temp,
+                },
+                LocalDecl {
+                    local: LocalId::new(1),
+                    name: "bytes".to_owned(),
+                    ty: Type::u(64),
+                    kind: LocalKind::Temp,
+                },
+                LocalDecl {
+                    local: LocalId::new(2),
+                    name: "ptr".to_owned(),
+                    ty: Type::persistent_addr(),
+                    kind: LocalKind::Temp,
+                },
+            ],
+            return_type: Type::u(64),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: Some("Known-length persistent vec kernel".to_owned()),
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![
+                    Stmt {
+                        id: StmtId::new(0),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(0)),
+                            value: Expr::Literal(Literal::Integer(2)),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(1),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(1)),
+                            value: Expr::Binary {
+                                op: BinaryOp::Mul,
+                                lhs: Box::new(Expr::Local(LocalId::new(0))),
+                                rhs: Box::new(Expr::Literal(Literal::Integer(4))),
+                            },
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(2),
+                        kind: StmtKind::Init {
+                            place: Place::Local(LocalId::new(2)),
+                            value: Expr::Call(CallExpr {
+                                target: CallTarget::Callable(callables.alloc_persistent),
+                                args: vec![
+                                    Expr::Local(LocalId::new(1)),
+                                    Expr::Literal(Literal::Integer(4)),
+                                ],
+                            }),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(3),
+                        kind: StmtKind::Store {
+                            addr: Expr::Local(LocalId::new(2)),
+                            width: MemoryWidth::W4,
+                            value: Expr::Literal(Literal::Integer(10)),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(4),
+                        kind: StmtKind::Store {
+                            addr: Expr::Binary {
+                                op: BinaryOp::Add,
+                                lhs: Box::new(Expr::Local(LocalId::new(2))),
+                                rhs: Box::new(Expr::Literal(Literal::Integer(4))),
+                            },
+                            width: MemoryWidth::W4,
+                            value: Expr::Literal(Literal::Integer(20)),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(5),
+                        kind: StmtKind::Return(Some(Expr::Call(CallExpr {
+                            target: CallTarget::Callable(callables.vec_from_raw_parts),
+                            args: vec![
+                                Expr::Local(LocalId::new(2)),
+                                Expr::Local(LocalId::new(0)),
+                                Expr::Local(LocalId::new(0)),
+                                Expr::Literal(Literal::Integer(4)),
+                            ],
+                        }))),
+                    },
+                ],
+            },
+        });
+        module
+    }
 
     #[test]
     fn named_types_distinguish_region_arguments() {
@@ -2322,5 +2452,30 @@ mod tests {
             module.callables[callables.vec_from_chunks].signature.params[0],
             Type::transient_addr()
         );
+    }
+
+    #[test]
+    fn known_len_persistent_vec_kernel_uses_low_level_memory_ops() {
+        let module = build_known_len_persistent_vec_kernel_module();
+        let function = &module.functions[FunctionId::new(0)];
+
+        assert_eq!(function.return_type, Type::u(64));
+        assert_eq!(function.locals[2].ty, Type::persistent_addr());
+
+        let StmtKind::Store { width, .. } = &function.body.statements[3].kind else {
+            panic!("expected first store");
+        };
+        assert_eq!(*width, MemoryWidth::W4);
+
+        let StmtKind::Return(Some(Expr::Call(call))) = &function.body.statements[5].kind else {
+            panic!("expected final vec materialization call");
+        };
+        let CallTarget::Callable(target) = call.target;
+        assert_eq!(module.callables[target].name, "runtime.vec_from_raw_parts");
+
+        let text = module.to_string();
+        assert!(text.contains("function f0 \"build_vec_u32_2\""));
+        assert!(text.contains("store w4"));
+        assert!(text.contains("runtime.vec_from_raw_parts"));
     }
 }
