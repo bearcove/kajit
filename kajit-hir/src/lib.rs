@@ -174,6 +174,394 @@ impl Module {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VixenCoreTypes {
+    pub string: Type,
+    pub node: Type,
+    pub edge: Type,
+    pub fact: Type,
+    pub crate_graph: Type,
+    pub crate_node: Type,
+    pub crate_id: Type,
+    pub crate_type: Type,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VixenCoreCallables {
+    pub emit_node: CallableId,
+    pub emit_edge: CallableId,
+    pub emit_fact: CallableId,
+    pub rust_crate_graph: CallableId,
+    pub rust_root: CallableId,
+    pub graph_lookup_crate: CallableId,
+    pub cargo_registry_package_exists: CallableId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VixenBuiltin {
+    EmitNode,
+    EmitEdge,
+    EmitFact,
+    RustCrateGraph,
+    RustRoot,
+    GraphLookupCrate,
+    CargoRegistryPackageExists,
+}
+
+impl VixenBuiltin {
+    pub const fn callable_name(self) -> &'static str {
+        match self {
+            Self::EmitNode => "emit.node",
+            Self::EmitEdge => "emit.edge",
+            Self::EmitFact => "emit.fact",
+            Self::RustCrateGraph => "rust.crate_graph",
+            Self::RustRoot => "rust.root",
+            Self::GraphLookupCrate => "graph.lookup_crate",
+            Self::CargoRegistryPackageExists => "cargo.registry_package_exists",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VixenTypedExpr {
+    Literal(Literal),
+    Local(LocalId),
+    Field {
+        base: Box<VixenTypedExpr>,
+        field: String,
+    },
+    Struct {
+        def: TypeDefId,
+        fields: Vec<(String, VixenTypedExpr)>,
+    },
+    Variant {
+        def: TypeDefId,
+        variant: String,
+        fields: Vec<(String, VixenTypedExpr)>,
+    },
+    Binary {
+        op: BinaryOp,
+        lhs: Box<VixenTypedExpr>,
+        rhs: Box<VixenTypedExpr>,
+    },
+    Call {
+        builtin: VixenBuiltin,
+        args: Vec<VixenTypedExpr>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VixenTypedParam {
+    pub local: LocalId,
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VixenTypedLocal {
+    pub local: LocalId,
+    pub name: String,
+    pub ty: Type,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VixenTypedStmt {
+    Let {
+        local: LocalId,
+        value: VixenTypedExpr,
+    },
+    Expr(VixenTypedExpr),
+    If {
+        condition: VixenTypedExpr,
+        then_body: Vec<VixenTypedStmt>,
+        else_body: Vec<VixenTypedStmt>,
+    },
+    Return(Option<VixenTypedExpr>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VixenTypedFunction {
+    pub name: String,
+    pub params: Vec<VixenTypedParam>,
+    pub locals: Vec<VixenTypedLocal>,
+    pub return_type: Type,
+    pub body: Vec<VixenTypedStmt>,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VixenLoweringError {
+    MissingCallable { builtin: VixenBuiltin },
+}
+
+impl Module {
+    pub fn install_vixen_core_callables(&mut self, types: &VixenCoreTypes) -> VixenCoreCallables {
+        let emit_node = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "emit.node".to_owned(),
+            signature: CallSignature {
+                params: vec![types.node.clone()],
+                returns: vec![Type::unit()],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![DomainEffect {
+                    domain: "ruleplan".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::Returns,
+                capabilities: vec!["emit.graph".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Append a typed node to the host RulePlan.".to_owned()),
+        });
+        let emit_edge = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "emit.edge".to_owned(),
+            signature: CallSignature {
+                params: vec![types.edge.clone()],
+                returns: vec![Type::unit()],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![DomainEffect {
+                    domain: "ruleplan".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::Returns,
+                capabilities: vec!["emit.graph".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Append a typed edge to the host RulePlan.".to_owned()),
+        });
+        let emit_fact = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "emit.fact".to_owned(),
+            signature: CallSignature {
+                params: vec![types.fact.clone()],
+                returns: vec![Type::unit()],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![DomainEffect {
+                    domain: "ruleplan".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::Returns,
+                capabilities: vec!["emit.graph".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Append a typed fact to the host RulePlan.".to_owned()),
+        });
+        let rust_crate_graph = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "rust.crate_graph".to_owned(),
+            signature: CallSignature {
+                params: vec![],
+                returns: vec![types.crate_graph.clone()],
+                effect_class: EffectClass::Reads,
+                domain_effects: vec![DomainEffect {
+                    domain: "workspace".to_owned(),
+                    access: DomainAccess::Read,
+                }],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["env.read".to_owned(), "rust.graph".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some("Load the workspace crate graph from the host environment.".to_owned()),
+        });
+        let rust_root = self.add_callable(CallableSpec {
+            kind: CallableKind::Builtin,
+            name: "rust.root".to_owned(),
+            signature: CallSignature {
+                params: vec![types.crate_graph.clone()],
+                returns: vec![types.crate_node.clone()],
+                effect_class: EffectClass::Pure,
+                domain_effects: vec![],
+                control: ControlTransfer::Returns,
+                capabilities: vec!["transform".to_owned()],
+                safety: CallSafety::SafeCore,
+            },
+            docs: Some("Return the root crate from a typed crate graph value.".to_owned()),
+        });
+        let graph_lookup_crate = self.add_callable(CallableSpec {
+            kind: CallableKind::Builtin,
+            name: "graph.lookup_crate".to_owned(),
+            signature: CallSignature {
+                params: vec![types.crate_graph.clone(), types.crate_id.clone()],
+                returns: vec![types.crate_node.clone()],
+                effect_class: EffectClass::Pure,
+                domain_effects: vec![],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["transform".to_owned()],
+                safety: CallSafety::SafeCore,
+            },
+            docs: Some("Look up one crate node by id and fail if it is missing.".to_owned()),
+        });
+        let cargo_registry_package_exists = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "cargo.registry_package_exists".to_owned(),
+            signature: CallSignature {
+                params: vec![types.string.clone(), types.string.clone()],
+                returns: vec![Type::bool()],
+                effect_class: EffectClass::Reads,
+                domain_effects: vec![DomainEffect {
+                    domain: "cargo_registry".to_owned(),
+                    access: DomainAccess::Read,
+                }],
+                control: ControlTransfer::MayFail,
+                capabilities: vec!["env.read".to_owned(), "cargo.registry".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some(
+                "Check whether a registry package exists in the current Cargo environment."
+                    .to_owned(),
+            ),
+        });
+
+        VixenCoreCallables {
+            emit_node,
+            emit_edge,
+            emit_fact,
+            rust_crate_graph,
+            rust_root,
+            graph_lookup_crate,
+            cargo_registry_package_exists,
+        }
+    }
+
+    pub fn lower_vixen_typed_expr(
+        &self,
+        expr: &VixenTypedExpr,
+    ) -> Result<Expr, VixenLoweringError> {
+        match expr {
+            VixenTypedExpr::Literal(literal) => Ok(Expr::Literal(literal.clone())),
+            VixenTypedExpr::Local(local) => Ok(Expr::Local(*local)),
+            VixenTypedExpr::Field { base, field } => Ok(Expr::Field {
+                base: Box::new(self.lower_vixen_typed_expr(base)?),
+                field: field.clone(),
+            }),
+            VixenTypedExpr::Struct { def, fields } => Ok(Expr::Struct {
+                def: *def,
+                fields: fields
+                    .iter()
+                    .map(|(field, expr)| Ok((field.clone(), self.lower_vixen_typed_expr(expr)?)))
+                    .collect::<Result<Vec<_>, VixenLoweringError>>()?,
+            }),
+            VixenTypedExpr::Variant {
+                def,
+                variant,
+                fields,
+            } => Ok(Expr::Variant {
+                def: *def,
+                variant: variant.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(field, expr)| Ok((field.clone(), self.lower_vixen_typed_expr(expr)?)))
+                    .collect::<Result<Vec<_>, VixenLoweringError>>()?,
+            }),
+            VixenTypedExpr::Binary { op, lhs, rhs } => Ok(Expr::Binary {
+                op: *op,
+                lhs: Box::new(self.lower_vixen_typed_expr(lhs)?),
+                rhs: Box::new(self.lower_vixen_typed_expr(rhs)?),
+            }),
+            VixenTypedExpr::Call { builtin, args } => {
+                let Some(callable) = self.callable_named(builtin.callable_name()) else {
+                    return Err(VixenLoweringError::MissingCallable { builtin: *builtin });
+                };
+                Ok(Expr::Call(CallExpr {
+                    target: CallTarget::Callable(callable),
+                    args: args
+                        .iter()
+                        .map(|arg| self.lower_vixen_typed_expr(arg))
+                        .collect::<Result<Vec<_>, VixenLoweringError>>()?,
+                }))
+            }
+        }
+    }
+
+    pub fn lower_vixen_typed_function(
+        &self,
+        function: &VixenTypedFunction,
+    ) -> Result<Function, VixenLoweringError> {
+        let scope = ScopeId::new(0);
+        let mut next_stmt = 0u32;
+        let body = self.lower_vixen_typed_block(&function.body, scope, &mut next_stmt)?;
+
+        Ok(Function {
+            name: function.name.clone(),
+            region_params: Vec::new(),
+            store_params: Vec::new(),
+            params: function
+                .params
+                .iter()
+                .map(|param| Parameter {
+                    local: param.local,
+                    name: param.name.clone(),
+                    ty: param.ty.clone(),
+                    kind: LocalKind::Param,
+                })
+                .collect(),
+            locals: function
+                .locals
+                .iter()
+                .map(|local| LocalDecl {
+                    local: local.local,
+                    name: local.name.clone(),
+                    ty: local.ty.clone(),
+                    kind: LocalKind::Let,
+                })
+                .collect(),
+            return_type: function.return_type.clone(),
+            scopes: vec![Scope {
+                id: scope,
+                parent: None,
+                comment: function.comment.clone(),
+            }],
+            body,
+        })
+    }
+
+    fn lower_vixen_typed_block(
+        &self,
+        body: &[VixenTypedStmt],
+        scope: ScopeId,
+        next_stmt: &mut u32,
+    ) -> Result<Block, VixenLoweringError> {
+        let statements = body
+            .iter()
+            .map(|stmt| self.lower_vixen_typed_stmt(stmt, scope, next_stmt))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Block { scope, statements })
+    }
+
+    fn lower_vixen_typed_stmt(
+        &self,
+        stmt: &VixenTypedStmt,
+        scope: ScopeId,
+        next_stmt: &mut u32,
+    ) -> Result<Stmt, VixenLoweringError> {
+        let id = StmtId::new(*next_stmt);
+        *next_stmt += 1;
+        let kind = match stmt {
+            VixenTypedStmt::Let { local, value } => StmtKind::Init {
+                place: Place::Local(*local),
+                value: self.lower_vixen_typed_expr(value)?,
+            },
+            VixenTypedStmt::Expr(expr) => StmtKind::Expr(self.lower_vixen_typed_expr(expr)?),
+            VixenTypedStmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => StmtKind::If {
+                condition: self.lower_vixen_typed_expr(condition)?,
+                then_block: self.lower_vixen_typed_block(then_body, scope, next_stmt)?,
+                else_block: Some(self.lower_vixen_typed_block(else_body, scope, next_stmt)?),
+            },
+            VixenTypedStmt::Return(expr) => StmtKind::Return(
+                expr.as_ref()
+                    .map(|expr| self.lower_vixen_typed_expr(expr))
+                    .transpose()?,
+            ),
+        };
+        Ok(Stmt { id, kind })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionParam {
     pub name: String,
 }
@@ -400,11 +788,20 @@ pub struct MatchArm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PatternField {
+    Bind { field: String, local: LocalId },
+    Wildcard { field: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pattern {
     Wildcard,
     Bool(bool),
     Integer(u64),
-    Variant { name: String },
+    Variant {
+        name: String,
+        fields: Vec<PatternField>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -742,6 +1139,607 @@ mod tests {
         assert_eq!(host.kind, CallableKind::Host);
         assert_eq!(host.signature.effect_class, EffectClass::Barrier);
         assert_eq!(host.signature.control, ControlTransfer::Returns);
+    }
+
+    #[test]
+    fn function_can_model_result_style_early_return() {
+        let mut module = Module::new();
+        let parse_error = module.add_type_def(TypeDef {
+            name: "ParseError".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "code".to_owned(),
+                    ty: Type::u(32),
+                }],
+            },
+        });
+        let result_u32 = module.add_type_def(TypeDef {
+            name: "ResultU32".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Enum {
+                variants: vec![
+                    VariantDef {
+                        name: "Ok".to_owned(),
+                        fields: vec![FieldDef {
+                            name: "value".to_owned(),
+                            ty: Type::u(32),
+                        }],
+                    },
+                    VariantDef {
+                        name: "Err".to_owned(),
+                        fields: vec![FieldDef {
+                            name: "error".to_owned(),
+                            ty: Type::named(parse_error, Vec::new()),
+                        }],
+                    },
+                ],
+            },
+        });
+
+        let function = Function {
+            name: "parse_with_try_shape".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![Parameter {
+                local: LocalId::new(0),
+                name: "result".to_owned(),
+                ty: Type::named(result_u32, Vec::new()),
+                kind: LocalKind::Param,
+            }],
+            locals: vec![
+                LocalDecl {
+                    local: LocalId::new(1),
+                    name: "value".to_owned(),
+                    ty: Type::u(32),
+                    kind: LocalKind::Let,
+                },
+                LocalDecl {
+                    local: LocalId::new(2),
+                    name: "error".to_owned(),
+                    ty: Type::named(parse_error, Vec::new()),
+                    kind: LocalKind::Let,
+                },
+            ],
+            return_type: Type::named(result_u32, Vec::new()),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: Some("Result-style early return".to_owned()),
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![Stmt {
+                    id: StmtId::new(0),
+                    kind: StmtKind::Match {
+                        scrutinee: Expr::Local(LocalId::new(0)),
+                        arms: vec![
+                            MatchArm {
+                                pattern: Pattern::Variant {
+                                    name: "Ok".to_owned(),
+                                    fields: vec![PatternField::Bind {
+                                        field: "value".to_owned(),
+                                        local: LocalId::new(1),
+                                    }],
+                                },
+                                body: Block {
+                                    scope: ScopeId::new(0),
+                                    statements: vec![Stmt {
+                                        id: StmtId::new(1),
+                                        kind: StmtKind::Return(Some(Expr::Variant {
+                                            def: result_u32,
+                                            variant: "Ok".to_owned(),
+                                            fields: vec![(
+                                                "value".to_owned(),
+                                                Expr::Local(LocalId::new(1)),
+                                            )],
+                                        })),
+                                    }],
+                                },
+                            },
+                            MatchArm {
+                                pattern: Pattern::Variant {
+                                    name: "Err".to_owned(),
+                                    fields: vec![PatternField::Bind {
+                                        field: "error".to_owned(),
+                                        local: LocalId::new(2),
+                                    }],
+                                },
+                                body: Block {
+                                    scope: ScopeId::new(0),
+                                    statements: vec![Stmt {
+                                        id: StmtId::new(2),
+                                        kind: StmtKind::Return(Some(Expr::Variant {
+                                            def: result_u32,
+                                            variant: "Err".to_owned(),
+                                            fields: vec![(
+                                                "error".to_owned(),
+                                                Expr::Local(LocalId::new(2)),
+                                            )],
+                                        })),
+                                    }],
+                                },
+                            },
+                        ],
+                    },
+                }],
+            },
+        };
+
+        let StmtKind::Match { arms, .. } = &function.body.statements[0].kind else {
+            panic!("expected top-level match");
+        };
+        assert_eq!(arms.len(), 2);
+        assert!(matches!(
+            arms[0].pattern,
+            Pattern::Variant { ref name, ref fields }
+                if name == "Ok"
+                    && fields == &vec![PatternField::Bind {
+                        field: "value".to_owned(),
+                        local: LocalId::new(1),
+                    }]
+        ));
+        assert!(matches!(
+            arms[1].pattern,
+            Pattern::Variant { ref name, ref fields }
+                if name == "Err"
+                    && fields == &vec![PatternField::Bind {
+                        field: "error".to_owned(),
+                        local: LocalId::new(2),
+                    }]
+        ));
+    }
+
+    #[test]
+    fn installs_vixen_core_callable_table() {
+        let mut module = Module::new();
+        let string = module.add_type_def(TypeDef {
+            name: "String".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let node = module.add_type_def(TypeDef {
+            name: "Node".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let edge = module.add_type_def(TypeDef {
+            name: "Edge".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let fact = module.add_type_def(TypeDef {
+            name: "Fact".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_graph = module.add_type_def(TypeDef {
+            name: "CrateGraph".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_node = module.add_type_def(TypeDef {
+            name: "CrateNode".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_id = module.add_type_def(TypeDef {
+            name: "CrateId".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_type = module.add_type_def(TypeDef {
+            name: "CrateType".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Enum {
+                variants: vec![
+                    VariantDef {
+                        name: "Lib".to_owned(),
+                        fields: vec![],
+                    },
+                    VariantDef {
+                        name: "Bin".to_owned(),
+                        fields: vec![],
+                    },
+                ],
+            },
+        });
+
+        let callables = module.install_vixen_core_callables(&VixenCoreTypes {
+            string: Type::named(string, Vec::new()),
+            node: Type::named(node, Vec::new()),
+            edge: Type::named(edge, Vec::new()),
+            fact: Type::named(fact, Vec::new()),
+            crate_graph: Type::named(crate_graph, Vec::new()),
+            crate_node: Type::named(crate_node, Vec::new()),
+            crate_id: Type::named(crate_id, Vec::new()),
+            crate_type: Type::named(crate_type, Vec::new()),
+        });
+
+        assert_eq!(
+            module.callable_named("emit.node"),
+            Some(callables.emit_node)
+        );
+        assert_eq!(
+            module.callable_named("graph.lookup_crate"),
+            Some(callables.graph_lookup_crate)
+        );
+
+        let emit_node = &module.callables[callables.emit_node];
+        assert_eq!(emit_node.kind, CallableKind::Host);
+        assert_eq!(emit_node.signature.effect_class, EffectClass::Mutates);
+        assert_eq!(
+            emit_node.signature.domain_effects,
+            vec![DomainEffect {
+                domain: "ruleplan".to_owned(),
+                access: DomainAccess::Mutate,
+            }]
+        );
+        assert_eq!(
+            emit_node.signature.capabilities,
+            vec!["emit.graph".to_owned()]
+        );
+
+        let rust_crate_graph = &module.callables[callables.rust_crate_graph];
+        assert_eq!(rust_crate_graph.kind, CallableKind::Host);
+        assert_eq!(rust_crate_graph.signature.effect_class, EffectClass::Reads);
+        assert_eq!(rust_crate_graph.signature.control, ControlTransfer::MayFail);
+        assert_eq!(
+            rust_crate_graph.signature.returns,
+            vec![Type::named(crate_graph, Vec::new())]
+        );
+
+        let lookup = &module.callables[callables.graph_lookup_crate];
+        assert_eq!(lookup.kind, CallableKind::Builtin);
+        assert_eq!(lookup.signature.effect_class, EffectClass::Pure);
+        assert_eq!(lookup.signature.control, ControlTransfer::MayFail);
+        assert_eq!(
+            lookup.signature.params,
+            vec![
+                Type::named(crate_graph, Vec::new()),
+                Type::named(crate_id, Vec::new()),
+            ]
+        );
+        assert_eq!(
+            lookup.signature.returns,
+            vec![Type::named(crate_node, Vec::new())]
+        );
+
+        let registry_exists = &module.callables[callables.cargo_registry_package_exists];
+        assert_eq!(registry_exists.kind, CallableKind::Host);
+        assert_eq!(registry_exists.signature.effect_class, EffectClass::Reads);
+        assert_eq!(
+            registry_exists.signature.domain_effects,
+            vec![DomainEffect {
+                domain: "cargo_registry".to_owned(),
+                access: DomainAccess::Read,
+            }]
+        );
+        assert_eq!(
+            registry_exists.signature.params,
+            vec![
+                Type::named(string, Vec::new()),
+                Type::named(string, Vec::new())
+            ]
+        );
+    }
+
+    #[test]
+    fn lowers_vixen_typed_exprs_into_hir_calls() {
+        let mut module = Module::new();
+        let string = module.add_type_def(TypeDef {
+            name: "String".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let node = module.add_type_def(TypeDef {
+            name: "Node".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "label".to_owned(),
+                    ty: Type::named(string, Vec::new()),
+                }],
+            },
+        });
+        let edge = module.add_type_def(TypeDef {
+            name: "Edge".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let fact = module.add_type_def(TypeDef {
+            name: "Fact".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_graph = module.add_type_def(TypeDef {
+            name: "CrateGraph".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_node = module.add_type_def(TypeDef {
+            name: "CrateNode".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_id = module.add_type_def(TypeDef {
+            name: "CrateId".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "value".to_owned(),
+                    ty: Type::named(string, Vec::new()),
+                }],
+            },
+        });
+        let crate_type = module.add_type_def(TypeDef {
+            name: "CrateType".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Enum {
+                variants: vec![
+                    VariantDef {
+                        name: "Lib".to_owned(),
+                        fields: vec![],
+                    },
+                    VariantDef {
+                        name: "Bin".to_owned(),
+                        fields: vec![],
+                    },
+                ],
+            },
+        });
+
+        let callables = module.install_vixen_core_callables(&VixenCoreTypes {
+            string: Type::named(string, Vec::new()),
+            node: Type::named(node, Vec::new()),
+            edge: Type::named(edge, Vec::new()),
+            fact: Type::named(fact, Vec::new()),
+            crate_graph: Type::named(crate_graph, Vec::new()),
+            crate_node: Type::named(crate_node, Vec::new()),
+            crate_id: Type::named(crate_id, Vec::new()),
+            crate_type: Type::named(crate_type, Vec::new()),
+        });
+
+        let emit_expr = module
+            .lower_vixen_typed_expr(&VixenTypedExpr::Call {
+                builtin: VixenBuiltin::EmitNode,
+                args: vec![VixenTypedExpr::Struct {
+                    def: node,
+                    fields: vec![(
+                        "label".to_owned(),
+                        VixenTypedExpr::Literal(Literal::String("compile app".to_owned())),
+                    )],
+                }],
+            })
+            .expect("emit.node should lower");
+
+        let Expr::Call(call) = emit_expr else {
+            panic!("expected lowered call");
+        };
+        assert_eq!(call.target, CallTarget::Callable(callables.emit_node));
+        assert_eq!(call.args.len(), 1);
+
+        let lookup_expr = module
+            .lower_vixen_typed_expr(&VixenTypedExpr::Call {
+                builtin: VixenBuiltin::GraphLookupCrate,
+                args: vec![
+                    VixenTypedExpr::Call {
+                        builtin: VixenBuiltin::RustCrateGraph,
+                        args: vec![],
+                    },
+                    VixenTypedExpr::Struct {
+                        def: crate_id,
+                        fields: vec![(
+                            "value".to_owned(),
+                            VixenTypedExpr::Literal(Literal::String("root".to_owned())),
+                        )],
+                    },
+                ],
+            })
+            .expect("graph.lookup_crate should lower");
+
+        let Expr::Call(lookup_call) = lookup_expr else {
+            panic!("expected lookup call");
+        };
+        assert_eq!(
+            lookup_call.target,
+            CallTarget::Callable(callables.graph_lookup_crate)
+        );
+        let Expr::Call(graph_call) = &lookup_call.args[0] else {
+            panic!("expected nested rust.crate_graph call");
+        };
+        assert_eq!(
+            graph_call.target,
+            CallTarget::Callable(callables.rust_crate_graph)
+        );
+    }
+
+    #[test]
+    fn lowering_vixen_typed_expr_requires_installed_callables() {
+        let module = Module::new();
+        let err = module
+            .lower_vixen_typed_expr(&VixenTypedExpr::Call {
+                builtin: VixenBuiltin::EmitFact,
+                args: vec![],
+            })
+            .expect_err("missing callable table should fail");
+
+        assert_eq!(
+            err,
+            VixenLoweringError::MissingCallable {
+                builtin: VixenBuiltin::EmitFact,
+            }
+        );
+    }
+
+    #[test]
+    fn lowers_vixen_typed_function_into_hir_function() {
+        let mut module = Module::new();
+        let string = module.add_type_def(TypeDef {
+            name: "String".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let node = module.add_type_def(TypeDef {
+            name: "Node".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "label".to_owned(),
+                    ty: Type::named(string, Vec::new()),
+                }],
+            },
+        });
+        let edge = module.add_type_def(TypeDef {
+            name: "Edge".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let fact = module.add_type_def(TypeDef {
+            name: "Fact".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_graph = module.add_type_def(TypeDef {
+            name: "CrateGraph".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_node = module.add_type_def(TypeDef {
+            name: "CrateNode".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct { fields: vec![] },
+        });
+        let crate_id = module.add_type_def(TypeDef {
+            name: "CrateId".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "value".to_owned(),
+                    ty: Type::named(string, Vec::new()),
+                }],
+            },
+        });
+        let crate_type = module.add_type_def(TypeDef {
+            name: "CrateType".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Enum {
+                variants: vec![
+                    VariantDef {
+                        name: "Lib".to_owned(),
+                        fields: vec![],
+                    },
+                    VariantDef {
+                        name: "Bin".to_owned(),
+                        fields: vec![],
+                    },
+                ],
+            },
+        });
+
+        let callables = module.install_vixen_core_callables(&VixenCoreTypes {
+            string: Type::named(string, Vec::new()),
+            node: Type::named(node, Vec::new()),
+            edge: Type::named(edge, Vec::new()),
+            fact: Type::named(fact, Vec::new()),
+            crate_graph: Type::named(crate_graph, Vec::new()),
+            crate_node: Type::named(crate_node, Vec::new()),
+            crate_id: Type::named(crate_id, Vec::new()),
+            crate_type: Type::named(crate_type, Vec::new()),
+        });
+
+        let function = module
+            .lower_vixen_typed_function(&VixenTypedFunction {
+                name: "plan_compile".to_owned(),
+                params: vec![VixenTypedParam {
+                    local: LocalId::new(0),
+                    name: "graph".to_owned(),
+                    ty: Type::named(crate_graph, Vec::new()),
+                }],
+                locals: vec![
+                    VixenTypedLocal {
+                        local: LocalId::new(1),
+                        name: "node".to_owned(),
+                        ty: Type::named(node, Vec::new()),
+                    },
+                    VixenTypedLocal {
+                        local: LocalId::new(2),
+                        name: "emit_enabled".to_owned(),
+                        ty: Type::bool(),
+                    },
+                ],
+                return_type: Type::unit(),
+                body: vec![
+                    VixenTypedStmt::Let {
+                        local: LocalId::new(2),
+                        value: VixenTypedExpr::Literal(Literal::Bool(true)),
+                    },
+                    VixenTypedStmt::If {
+                        condition: VixenTypedExpr::Local(LocalId::new(2)),
+                        then_body: vec![
+                            VixenTypedStmt::Let {
+                                local: LocalId::new(1),
+                                value: VixenTypedExpr::Struct {
+                                    def: node,
+                                    fields: vec![(
+                                        "label".to_owned(),
+                                        VixenTypedExpr::Literal(Literal::String(
+                                            "compile".to_owned(),
+                                        )),
+                                    )],
+                                },
+                            },
+                            VixenTypedStmt::Expr(VixenTypedExpr::Call {
+                                builtin: VixenBuiltin::EmitNode,
+                                args: vec![VixenTypedExpr::Local(LocalId::new(1))],
+                            }),
+                        ],
+                        else_body: vec![],
+                    },
+                    VixenTypedStmt::Return(None),
+                ],
+                comment: Some("lowered from typed Vixen stub".to_owned()),
+            })
+            .expect("typed Vixen function should lower");
+
+        assert_eq!(function.name, "plan_compile");
+        assert_eq!(function.params.len(), 1);
+        assert_eq!(function.locals.len(), 2);
+        assert_eq!(function.scopes.len(), 1);
+        assert_eq!(
+            function.scopes[0].comment,
+            Some("lowered from typed Vixen stub".to_owned())
+        );
+        assert_eq!(function.body.statements.len(), 3);
+
+        let StmtKind::Init { place, .. } = &function.body.statements[0].kind else {
+            panic!("expected first local init");
+        };
+        assert_eq!(*place, Place::Local(LocalId::new(2)));
+
+        let StmtKind::If {
+            then_block,
+            else_block,
+            ..
+        } = &function.body.statements[1].kind
+        else {
+            panic!("expected lowered if");
+        };
+        assert_eq!(then_block.statements.len(), 2);
+        let Some(else_block) = else_block else {
+            panic!("expected explicit else block");
+        };
+        assert!(else_block.statements.is_empty());
+
+        let StmtKind::Expr(Expr::Call(call)) = &then_block.statements[1].kind else {
+            panic!("expected emit.node call inside then block");
+        };
+        assert_eq!(call.target, CallTarget::Callable(callables.emit_node));
+
+        assert!(matches!(
+            function.body.statements[2].kind,
+            StmtKind::Return(None)
+        ));
     }
 
     #[test]

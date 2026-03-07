@@ -3,7 +3,8 @@ use std::fmt;
 use crate::{
     BinaryOp, Block, CallExpr, CallSafety, CallTarget, CallableKind, ControlTransfer, DomainAccess,
     EffectClass, Expr, Function, GenericArg, GenericParam, Literal, LocalId, LocalKind, MatchArm,
-    Module, Pattern, Place, Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
+    Module, Pattern, PatternField, Place, Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind,
+    UnaryOp, VariantDef,
 };
 
 impl fmt::Display for Module {
@@ -700,7 +701,26 @@ impl fmt::Display for PatternDisplay<'_> {
             Pattern::Wildcard => write!(f, "_"),
             Pattern::Bool(value) => write!(f, "{value}"),
             Pattern::Integer(value) => write!(f, "{value:#x}"),
-            Pattern::Variant { name } => write!(f, "variant {}", quoted(name)),
+            Pattern::Variant { name, fields } => {
+                write!(f, "variant {} ", quoted(name))?;
+                if fields.is_empty() {
+                    write!(f, "{{}}")
+                } else {
+                    write!(f, "{{")?;
+                    for (index, field) in fields.iter().enumerate() {
+                        if index > 0 {
+                            write!(f, ", ")?;
+                        }
+                        match field {
+                            PatternField::Bind { field, local } => {
+                                write!(f, "{} = l{}", quoted(field), local.index())?
+                            }
+                            PatternField::Wildcard { field } => write!(f, "{} = _", quoted(field))?,
+                        }
+                    }
+                    write!(f, "}}")
+                }
+            }
         }
     }
 }

@@ -4,8 +4,8 @@ use kajit_hir::{
     BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableId, CallableKind,
     CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr, FieldDef,
     Function, FunctionId, GenericArg, GenericParam, Id, Literal, LocalDecl, LocalId, LocalKind,
-    MatchArm, Module, Pattern, Place, Scope, ScopeId, Stmt, StmtId, StmtKind, StoreId, Type,
-    TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
+    MatchArm, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId, StmtKind,
+    StoreId, Type, TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
 };
 
 type Extra<'src> = extra::Err<Rich<'src, char>>;
@@ -403,13 +403,34 @@ fn scope<'src>() -> impl Parser<'src, &'src str, Scope, Extra<'src>> + Clone {
 }
 
 fn pattern<'src>() -> impl Parser<'src, &'src str, Pattern, Extra<'src>> + Clone {
+    let pattern_field = quoted_string()
+        .then_ignore(token("="))
+        .then(choice((
+            local_id().map(|local| PatternField::Bind {
+                field: String::new(),
+                local,
+            }),
+            token("_").to(PatternField::Wildcard {
+                field: String::new(),
+            }),
+        )))
+        .map(|(field, pattern)| match pattern {
+            PatternField::Bind { local, .. } => PatternField::Bind { field, local },
+            PatternField::Wildcard { .. } => PatternField::Wildcard { field },
+        });
+
     choice((
         token("_").to(Pattern::Wildcard),
         token("true").to(Pattern::Bool(true)),
         token("false").to(Pattern::Bool(false)),
         token("variant")
             .ignore_then(quoted_string())
-            .map(|name| Pattern::Variant { name }),
+            .then(
+                token("{")
+                    .ignore_then(pattern_field.separated_by(token(",")).collect::<Vec<_>>())
+                    .then_ignore(token("}")),
+            )
+            .map(|(name, fields)| Pattern::Variant { name, fields }),
         uint64().map(Pattern::Integer),
     ))
 }
@@ -926,8 +947,8 @@ mod tests {
         BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableKind,
         CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr, FieldDef,
         Function, GenericArg, GenericParam, Literal, LocalDecl, LocalId, LocalKind, MatchArm,
-        Module, Pattern, Place, Scope, ScopeId, Stmt, StmtId, StmtKind, Type, TypeDef, TypeDefKind,
-        VariantDef,
+        Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt, StmtId, StmtKind, Type,
+        TypeDef, TypeDefKind, VariantDef,
     };
 
     fn sample_module() -> Module {
@@ -1154,7 +1175,10 @@ mod tests {
             kind: TypeDefKind::Enum {
                 variants: vec![VariantDef {
                     name: "Set".to_owned(),
-                    fields: vec![],
+                    fields: vec![FieldDef {
+                        name: "value".to_owned(),
+                        ty: Type::u(32),
+                    }],
                 }],
             },
         });
@@ -1168,7 +1192,12 @@ mod tests {
                 ty: Type::u(32),
                 kind: LocalKind::Param,
             }],
-            locals: vec![],
+            locals: vec![LocalDecl {
+                local: LocalId::new(1),
+                name: "value".to_owned(),
+                ty: Type::u(32),
+                kind: LocalKind::Let,
+            }],
             return_type: Type::unit(),
             scopes: vec![Scope {
                 id: ScopeId::new(0),
@@ -1192,19 +1221,32 @@ mod tests {
                             scrutinee: Expr::Variant {
                                 def: enum_id,
                                 variant: "Set".to_owned(),
-                                fields: vec![],
+                                fields: vec![(
+                                    "value".to_owned(),
+                                    Expr::Literal(Literal::Integer(7)),
+                                )],
                             },
                             arms: vec![
                                 MatchArm {
                                     pattern: Pattern::Variant {
                                         name: "Set".to_owned(),
+                                        fields: vec![PatternField::Bind {
+                                            field: "value".to_owned(),
+                                            local: LocalId::new(1),
+                                        }],
                                     },
                                     body: Block {
                                         scope: ScopeId::new(0),
-                                        statements: vec![Stmt {
-                                            id: StmtId::new(2),
-                                            kind: StmtKind::Break,
-                                        }],
+                                        statements: vec![
+                                            Stmt {
+                                                id: StmtId::new(2),
+                                                kind: StmtKind::Expr(Expr::Local(LocalId::new(1))),
+                                            },
+                                            Stmt {
+                                                id: StmtId::new(3),
+                                                kind: StmtKind::Break,
+                                            },
+                                        ],
                                     },
                                 },
                                 MatchArm {
@@ -1212,7 +1254,7 @@ mod tests {
                                     body: Block {
                                         scope: ScopeId::new(0),
                                         statements: vec![Stmt {
-                                            id: StmtId::new(3),
+                                            id: StmtId::new(4),
                                             kind: StmtKind::Continue,
                                         }],
                                     },
