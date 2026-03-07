@@ -617,6 +617,12 @@ impl Lowerer {
                 self.emit_slot_addr(*dst, *slot);
                 self.set_const(*dst, None);
             }
+            LinearOp::StoreToAddr { addr, src, width } => {
+                self.emit_store_to_addr(*addr, *src, *width);
+            }
+            LinearOp::LoadFromAddr { dst, addr, width } => {
+                self.emit_load_from_addr(*dst, *addr, *width);
+            }
             LinearOp::WriteToSlot { slot, src } => {
                 self.emit_load_use_x9(*src, 0);
                 let off = self.slot_off(*slot);

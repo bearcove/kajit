@@ -407,6 +407,14 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
                     slot: SlotId::new(s),
                 })
             }),
+        just("StoreToAddr(")
+            .ignore_then(width())
+            .then_ignore(just(")"))
+            .map(|width| AstOp::Resolved(IrOp::StoreToAddr { width })),
+        just("LoadFromAddr(")
+            .ignore_then(width())
+            .then_ignore(just(")"))
+            .map(|width| AstOp::Resolved(IrOp::LoadFromAddr { width })),
         just("WriteToSlot(")
             .ignore_then(uint32())
             .then_ignore(just(")"))
@@ -438,6 +446,7 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
         just("CmpNe").to(AstOp::Resolved(IrOp::CmpNe)),
         just("Add").to(AstOp::Resolved(IrOp::Add)),
         just("Sub").to(AstOp::Resolved(IrOp::Sub)),
+        just("Mul").to(AstOp::Resolved(IrOp::Mul)),
         just("And").to(AstOp::Resolved(IrOp::And)),
         just("Or").to(AstOp::Resolved(IrOp::Or)),
         just("Shr").to(AstOp::Resolved(IrOp::Shr)),

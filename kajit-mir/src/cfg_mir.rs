@@ -717,6 +717,8 @@ fn fmt_cfg_op_name(
         LinearOp::SaveOutPtr { .. } => write!(f, "save_out_ptr"),
         LinearOp::SetOutPtr { .. } => write!(f, "set_out_ptr"),
         LinearOp::SlotAddr { slot, .. } => write!(f, "slot_addr({})", slot.index()),
+        LinearOp::StoreToAddr { width, .. } => write!(f, "store_addr([{width}])"),
+        LinearOp::LoadFromAddr { width, .. } => write!(f, "load_addr([{width}])"),
         LinearOp::WriteToSlot { slot, .. } => write!(f, "write_slot({})", slot.index()),
         LinearOp::ReadFromSlot { slot, .. } => write!(f, "read_slot({})", slot.index()),
         LinearOp::CallIntrinsic {
@@ -1015,6 +1017,10 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::ReadFromSlot { dst, .. } => {
             push_def(&mut operands, *dst, None);
         }
+        LinearOp::LoadFromAddr { dst, addr, .. } => {
+            push_use(&mut operands, *addr, None);
+            push_def(&mut operands, *dst, None);
+        }
         LinearOp::BinOp {
             dst, lhs, rhs, op, ..
         } => {
@@ -1047,6 +1053,10 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::WriteToField { src, .. }
         | LinearOp::SetOutPtr { src }
         | LinearOp::WriteToSlot { src, .. } => {
+            push_use(&mut operands, *src, None);
+        }
+        LinearOp::StoreToAddr { addr, src, .. } => {
+            push_use(&mut operands, *addr, None);
             push_use(&mut operands, *src, None);
         }
         LinearOp::CallIntrinsic { args, dst, .. } => {

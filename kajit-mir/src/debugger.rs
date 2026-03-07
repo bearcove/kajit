@@ -565,6 +565,7 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
     match op {
         BinOpKind::Add => lhs.wrapping_add(rhs),
         BinOpKind::Sub => lhs.wrapping_sub(rhs),
+        BinOpKind::Mul => lhs.wrapping_mul(rhs),
         BinOpKind::And => lhs & rhs,
         BinOpKind::Or => lhs | rhs,
         BinOpKind::Xor => lhs ^ rhs,

@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 
-use kajit_ir::ErrorCode;
+use kajit_ir::{ErrorCode, SLOT_ADDR_STRIDE_BYTES};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use regalloc2::{
     Allocation, Block, Edit, Inst, InstRange, MachineEnv, Operand, OperandConstraint, OperandKind,
@@ -1194,7 +1194,7 @@ pub fn allocate_cfg_program(
 }
 
 const MAX_SIM_STEPS: usize = 1_000_000;
-const SLOT_ADDR_STRIDE: usize = 16;
+const SLOT_ADDR_STRIDE: usize = SLOT_ADDR_STRIDE_BYTES;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionTraceEntry {
@@ -1280,6 +1280,7 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
     match op {
         BinOpKind::Add => lhs.wrapping_add(rhs),
         BinOpKind::Sub => lhs.wrapping_sub(rhs),
+        BinOpKind::Mul => lhs.wrapping_mul(rhs),
         BinOpKind::And => lhs & rhs,
         BinOpKind::Or => lhs | rhs,
         BinOpKind::Xor => lhs ^ rhs,
@@ -1816,6 +1817,55 @@ fn execute_sim_linear_op(
             let mut value = 0u64;
             unsafe {
                 let src = sim.out_ptr.add(base);
+                for i in 0..width_bytes {
+                    value |= (*src.add(i) as u64) << (i * 8);
+                }
+            }
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
+            write_allocation(regs, spills, dst_alloc, value);
+        }
+        LinearOp::StoreToAddr { addr, src, width } => {
+            let addr_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *addr,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
+            let src_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *src,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
+            let dst = read_allocation(regs, spills, addr_alloc) as *mut u8;
+            let value = read_allocation(regs, spills, src_alloc);
+            let width_bytes = width.bytes() as usize;
+            unsafe {
+                for i in 0..width_bytes {
+                    *dst.add(i) = ((value >> (i * 8)) & 0xff) as u8;
+                }
+            }
+        }
+        LinearOp::LoadFromAddr { dst, addr, width } => {
+            let addr_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *addr,
+                RaOperandKind::Use,
+                linear_op_index,
+            )?;
+            let src = read_allocation(regs, spills, addr_alloc) as *const u8;
+            let width_bytes = width.bytes() as usize;
+            let mut value = 0u64;
+            unsafe {
                 for i in 0..width_bytes {
                     value |= (*src.add(i) as u64) << (i * 8);
                 }

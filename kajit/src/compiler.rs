@@ -2997,6 +2997,17 @@ enum ResolvedStructuralPlace<'a> {
     },
 }
 
+enum ResolvedDynamicIndex<'a> {
+    Destination {
+        shape: &'static Shape,
+        addr: crate::ir::PortSource,
+    },
+    Local {
+        ty: &'a hir::Type,
+        addr: crate::ir::PortSource,
+    },
+}
+
 impl<'a> StructuralHirIrLowerer<'a> {
     fn new(
         rb: &mut RegionBuilder<'_>,
@@ -3182,6 +3193,20 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_local: hir::LocalId,
         dest_shape: &'static Shape,
     ) {
+        if let hir::Place::Index { base, index } = place
+            && !matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_)))
+        {
+            if let hir::Expr::Local(local) = value
+                && Self::slot_count_for_type(self.module, self.local_types[local]) > 1
+            {
+                self.lower_dynamic_index_write_from_local(
+                    rb, base, index, *local, dest_local, dest_shape,
+                );
+            } else {
+                self.lower_dynamic_index_write(rb, base, index, value, dest_local, dest_shape);
+            }
+            return;
+        }
         let resolved = self.resolve_place(place, dest_local, dest_shape);
         match value {
             hir::Expr::Call(call) => match resolved {
@@ -3239,6 +3264,26 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 }
                 ResolvedStructuralPlace::Local { .. } => {
                     panic!("local enum writes are not supported yet");
+                }
+            },
+            hir::Expr::Index { .. } => match resolved {
+                ResolvedStructuralPlace::Destination { shape, offset } => {
+                    self.lower_value_into_shape_offset(
+                        rb, shape, offset, value, dest_local, dest_shape,
+                    );
+                }
+                ResolvedStructuralPlace::Local {
+                    ty,
+                    storage,
+                    slot_offset,
+                } => {
+                    let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                    assert_eq!(
+                        Self::slot_count_for_type(self.module, ty),
+                        1,
+                        "structural local indexed write requires single-slot type"
+                    );
+                    rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
                 }
             },
             hir::Expr::Literal(hir::Literal::Unit) => {}
@@ -3361,12 +3406,54 @@ impl<'a> StructuralHirIrLowerer<'a> {
         shape: &'static Shape,
         offset: usize,
         expr: &hir::Expr,
-        _dest_local: hir::LocalId,
-        _dest_shape: &'static Shape,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
     ) {
         match expr {
             hir::Expr::Call(call) => self.lower_postcard_call_at_offset(rb, call, offset),
             hir::Expr::Local(local) => self.copy_local_into_shape_offset(rb, *local, shape, offset),
+            hir::Expr::Index { base, index } => {
+                let base = self.expr_to_place(base);
+                if matches!(&**index, hir::Expr::Literal(hir::Literal::Integer(_))) {
+                    let place = hir::Place::Index {
+                        base: Box::new(base),
+                        index: index.clone(),
+                    };
+                    match self.resolve_place(&place, dest_local, dest_shape) {
+                        ResolvedStructuralPlace::Destination {
+                            shape: source_shape,
+                            offset: source_offset,
+                        } => {
+                            self.copy_shape_bytes_to_shape_offset(
+                                rb,
+                                source_shape,
+                                source_offset,
+                                offset,
+                            );
+                        }
+                        ResolvedStructuralPlace::Local {
+                            ty: source_ty,
+                            storage,
+                            slot_offset,
+                        } => {
+                            let slot_count = Self::slot_count_for_type(self.module, source_ty);
+                            for slot_index in 0..slot_count {
+                                let slot = Self::slot_at(storage, slot_offset + slot_index);
+                                let value = rb.read_from_slot(slot);
+                                rb.write_to_field(
+                                    value,
+                                    (offset + slot_index * 8) as u32,
+                                    crate::ir::Width::W8,
+                                );
+                            }
+                        }
+                    }
+                } else {
+                    self.copy_dynamic_index_into_shape_offset(
+                        rb, &base, index, offset, dest_local, dest_shape,
+                    );
+                }
+            }
             hir::Expr::Literal(hir::Literal::Unit) => {}
             hir::Expr::Literal(hir::Literal::Bool(value)) => {
                 let value = rb.const_val(u64::from(*value));
@@ -3387,6 +3474,43 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 }
             }
             other => panic!("unsupported structural payload expression: {other:?}"),
+        }
+    }
+
+    fn copy_shape_bytes_to_shape_offset(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        source_shape: &'static Shape,
+        source_offset: usize,
+        target_offset: usize,
+    ) {
+        let size = source_shape
+            .layout
+            .sized_layout()
+            .expect("indexed destination element must be Sized")
+            .size();
+        let full_words = size / 8;
+        let remainder = size % 8;
+        for word_index in 0..full_words {
+            let value = rb.read_from_field(
+                (source_offset + word_index * 8) as u32,
+                crate::ir::Width::W8,
+            );
+            rb.write_to_field(
+                value,
+                (target_offset + word_index * 8) as u32,
+                crate::ir::Width::W8,
+            );
+        }
+        if remainder != 0 {
+            let width = match remainder {
+                1 => crate::ir::Width::W1,
+                2 => crate::ir::Width::W2,
+                4 => crate::ir::Width::W4,
+                _ => panic!("unsupported indexed destination remainder width {remainder}"),
+            };
+            let value = rb.read_from_field((source_offset + full_words * 8) as u32, width);
+            rb.write_to_field(value, (target_offset + full_words * 8) as u32, width);
         }
     }
 
@@ -3507,8 +3631,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let slot = self.local_slots[local].base_slot;
                 rb.read_from_slot(slot)
             }
-            hir::Expr::Field { base, field } => {
-                let place = self.expr_field_to_place(base, field);
+            hir::Expr::Field { .. } | hir::Expr::Index { .. } => {
+                let place = self.expr_to_place(expr);
+                if let hir::Place::Index { base, index } = &place
+                    && !matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_)))
+                {
+                    return self.lower_dynamic_index_read(rb, base, index, dest_local, dest_shape);
+                }
                 match self.resolve_place(&place, dest_local, dest_shape) {
                     ResolvedStructuralPlace::Destination { shape, offset } => {
                         let width = self.scalar_width_for_shape(shape);
@@ -3534,6 +3663,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let ir_op = match op {
                     hir::BinaryOp::Add => crate::ir::IrOp::Add,
                     hir::BinaryOp::Sub => crate::ir::IrOp::Sub,
+                    hir::BinaryOp::Mul => crate::ir::IrOp::Mul,
                     hir::BinaryOp::BitAnd => crate::ir::IrOp::And,
                     hir::BinaryOp::BitOr => crate::ir::IrOp::Or,
                     hir::BinaryOp::Xor => crate::ir::IrOp::Xor,
@@ -3550,20 +3680,236 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
-    fn expr_field_to_place(&self, base: &hir::Expr, field: &str) -> hir::Place {
-        match base {
-            hir::Expr::Local(local) => hir::Place::Field {
-                base: Box::new(hir::Place::Local(*local)),
-                field: field.to_owned(),
+    fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {
+        match expr {
+            hir::Expr::Local(local) => hir::Place::Local(*local),
+            hir::Expr::Field { base, field } => hir::Place::Field {
+                base: Box::new(self.expr_to_place(base)),
+                field: field.clone(),
             },
-            hir::Expr::Field {
-                base: inner_base,
-                field: inner_field,
-            } => hir::Place::Field {
-                base: Box::new(self.expr_field_to_place(inner_base, inner_field)),
-                field: field.to_owned(),
+            hir::Expr::Index { base, index } => hir::Place::Index {
+                base: Box::new(self.expr_to_place(base)),
+                index: index.clone(),
             },
-            other => panic!("unsupported structural HIR field base: {other:?}"),
+            other => panic!("unsupported structural HIR place expression: {other:?}"),
+        }
+    }
+
+    fn add_scaled_index(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base_addr: crate::ir::PortSource,
+        index: crate::ir::PortSource,
+        stride_bytes: usize,
+    ) -> crate::ir::PortSource {
+        if stride_bytes == 1 {
+            rb.binop(crate::ir::IrOp::Add, base_addr, index)
+        } else {
+            let stride = rb.const_val(stride_bytes as u64);
+            let scaled = rb.binop(crate::ir::IrOp::Mul, index, stride);
+            rb.binop(crate::ir::IrOp::Add, base_addr, scaled)
+        }
+    }
+
+    fn add_byte_offset(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base_addr: crate::ir::PortSource,
+        offset: usize,
+    ) -> crate::ir::PortSource {
+        if offset == 0 {
+            base_addr
+        } else {
+            let offset = rb.const_val(offset as u64);
+            rb.binop(crate::ir::IrOp::Add, base_addr, offset)
+        }
+    }
+
+    fn lower_dynamic_index_read(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base: &hir::Place,
+        index: &hir::Expr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> crate::ir::PortSource {
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
+        match resolved {
+            ResolvedDynamicIndex::Destination { shape, addr } => {
+                let width = self.scalar_width_for_shape(shape);
+                rb.load_from_addr(addr, width)
+            }
+            ResolvedDynamicIndex::Local { ty, addr } => {
+                let width = self.scalar_width_for_hir_type(ty);
+                rb.load_from_addr(addr, width)
+            }
+        }
+    }
+
+    fn lower_dynamic_index_write(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base: &hir::Place,
+        index: &hir::Expr,
+        value: &hir::Expr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
+        let value = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+        match resolved {
+            ResolvedDynamicIndex::Destination { shape, addr } => {
+                let width = self.scalar_width_for_shape(shape);
+                rb.store_to_addr(addr, value, width);
+            }
+            ResolvedDynamicIndex::Local { ty, addr } => {
+                let width = self.scalar_width_for_hir_type(ty);
+                rb.store_to_addr(addr, value, width);
+            }
+        }
+    }
+
+    fn lower_dynamic_index_write_from_local(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base: &hir::Place,
+        index: &hir::Expr,
+        local: hir::LocalId,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
+        let storage = self.local_slots[&local];
+        let slot_count = Self::slot_count_for_type(self.module, self.local_types[&local]);
+        let base_addr = match resolved {
+            ResolvedDynamicIndex::Destination { addr, .. }
+            | ResolvedDynamicIndex::Local { addr, .. } => addr,
+        };
+        for slot_index in 0..slot_count {
+            let slot = Self::slot_at(storage, slot_index);
+            let value = rb.read_from_slot(slot);
+            let dst_addr = self.add_byte_offset(
+                rb,
+                base_addr,
+                slot_index * crate::ir::SLOT_ADDR_STRIDE_BYTES,
+            );
+            rb.store_to_addr(dst_addr, value, crate::ir::Width::W8);
+        }
+    }
+
+    fn copy_dynamic_index_into_shape_offset(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base: &hir::Place,
+        index: &hir::Expr,
+        target_offset: usize,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) {
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
+        match resolved {
+            ResolvedDynamicIndex::Destination { shape, addr } => {
+                let size = shape
+                    .layout
+                    .sized_layout()
+                    .expect("dynamic indexed destination element must be Sized")
+                    .size();
+                let full_words = size / 8;
+                let remainder = size % 8;
+                for word_index in 0..full_words {
+                    let src_addr = self.add_byte_offset(rb, addr, word_index * 8);
+                    let value = rb.load_from_addr(src_addr, crate::ir::Width::W8);
+                    rb.write_to_field(
+                        value,
+                        (target_offset + word_index * 8) as u32,
+                        crate::ir::Width::W8,
+                    );
+                }
+                if remainder != 0 {
+                    let src_addr = self.add_byte_offset(rb, addr, full_words * 8);
+                    let width = match remainder {
+                        1 => crate::ir::Width::W1,
+                        2 => crate::ir::Width::W2,
+                        4 => crate::ir::Width::W4,
+                        _ => panic!(
+                            "unsupported dynamic indexed destination remainder width {remainder}"
+                        ),
+                    };
+                    let value = rb.load_from_addr(src_addr, width);
+                    rb.write_to_field(value, (target_offset + full_words * 8) as u32, width);
+                }
+            }
+            ResolvedDynamicIndex::Local { ty, addr } => {
+                let slot_count = Self::slot_count_for_type(self.module, ty);
+                for slot_index in 0..slot_count {
+                    let src_addr = self.add_byte_offset(
+                        rb,
+                        addr,
+                        slot_index * crate::ir::SLOT_ADDR_STRIDE_BYTES,
+                    );
+                    let value = rb.load_from_addr(src_addr, crate::ir::Width::W8);
+                    rb.write_to_field(
+                        value,
+                        (target_offset + slot_index * 8) as u32,
+                        crate::ir::Width::W8,
+                    );
+                }
+            }
+        }
+    }
+
+    fn lower_dynamic_index_addr(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base: &hir::Place,
+        index: &hir::Expr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> ResolvedDynamicIndex<'a> {
+        let index = self.lower_scalar_expr(rb, index, dest_local, dest_shape);
+        match self.resolve_place(base, dest_local, dest_shape) {
+            ResolvedStructuralPlace::Destination { shape, offset } => {
+                let Def::Array(array_def) = &shape.def else {
+                    panic!(
+                        "dynamic indexed structural HIR place requires an array destination, got {}",
+                        shape.type_identifier
+                    );
+                };
+                let elem_layout = array_def
+                    .t
+                    .layout
+                    .sized_layout()
+                    .expect("array element must be Sized");
+                let mut base_addr = rb.save_out_ptr();
+                if offset != 0 {
+                    let offset_val = rb.const_val(offset as u64);
+                    base_addr = rb.binop(crate::ir::IrOp::Add, base_addr, offset_val);
+                }
+                let addr = self.add_scaled_index(rb, base_addr, index, elem_layout.size());
+                ResolvedDynamicIndex::Destination {
+                    shape: array_def.t,
+                    addr,
+                }
+            }
+            ResolvedStructuralPlace::Local {
+                ty,
+                storage,
+                slot_offset,
+            } => {
+                let hir::Type::Array { element, .. } = ty else {
+                    panic!("dynamic indexed local place requires an HIR array type");
+                };
+                let base_slot = Self::slot_at(storage, slot_offset);
+                let base_addr = rb.slot_addr(base_slot);
+                let elem_slots = Self::slot_count_for_type(self.module, element);
+                let addr = self.add_scaled_index(
+                    rb,
+                    base_addr,
+                    index,
+                    elem_slots * crate::ir::SLOT_ADDR_STRIDE_BYTES,
+                );
+                ResolvedDynamicIndex::Local { ty: element, addr }
+            }
         }
     }
 
@@ -3717,6 +4063,20 @@ impl<'a> StructuralHirIrLowerer<'a> {
             ),
         }
     }
+
+    fn scalar_width_for_hir_type(&self, ty: &hir::Type) -> crate::ir::Width {
+        match ty {
+            hir::Type::Bool => crate::ir::Width::W1,
+            hir::Type::Integer(kind) => match kind.bits {
+                8 => crate::ir::Width::W1,
+                16 => crate::ir::Width::W2,
+                32 => crate::ir::Width::W4,
+                64 => crate::ir::Width::W8,
+                other => panic!("unsupported structural HIR integer width: {other}"),
+            },
+            _ => panic!("unsupported structural HIR scalar local type: {ty:?}"),
+        }
+    }
 }
 
 pub(crate) fn build_structural_hir_ir(
@@ -3734,6 +4094,7 @@ pub(crate) fn build_structural_hir_ir(
         .expect("structural HIR function should have a destination param");
 
     let mut builder = crate::ir::IrBuilder::new(shape);
+    let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();
         let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function);
@@ -4131,6 +4492,34 @@ mod tests {
     struct ScratchSummary {
         mask: u32,
         done: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct DynamicIndexSummary {
+        selected: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct DynamicDestinationSummary {
+        values: [u32; 4],
+        selected: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct Pair {
+        lo: u64,
+        hi: u64,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct DynamicAggregateSummary {
+        pair: Pair,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct DynamicAggregateDestinationSummary {
+        pairs: [Pair; 2],
+        selected: Pair,
     }
 
     fn compile_structural_hir_decoder(
@@ -5155,6 +5544,754 @@ mod tests {
             ScratchSummary {
                 mask: 0b1111,
                 done: 0b0011,
+            }
+        );
+    }
+
+    #[test]
+    fn structural_hir_ir_path_updates_dynamic_local_array_elements() {
+        let mut module = hir::Module::new();
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <DynamicIndexSummary>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![hir::FieldDef {
+                    name: "selected".to_owned(),
+                    ty: hir::Type::u(32),
+                }],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "dynamic_index_summary".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "scratch".to_owned(),
+                    ty: hir::Type::array(hir::Type::u(32), 4),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "idx".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("structural dynamic indexed scratch-array HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(3)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(2)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Assign {
+                            place: hir::Place::Index {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(3))),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(42)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "selected".to_owned(),
+                            },
+                            value: hir::Expr::Index {
+                                base: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(3))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<DynamicIndexSummary>::SHAPE, &module);
+        let value = crate::deserialize::<DynamicIndexSummary>(&decoder, &[])
+            .expect("structural HIR decoder should support computed local array indexing");
+        assert_eq!(value, DynamicIndexSummary { selected: 42 });
+    }
+
+    #[test]
+    fn structural_hir_ir_path_updates_dynamic_destination_array_elements() {
+        let mut module = hir::Module::new();
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <DynamicDestinationSummary>::SHAPE
+                .type_identifier
+                .to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "values".to_owned(),
+                        ty: hir::Type::array(hir::Type::u(32), 4),
+                    },
+                    hir::FieldDef {
+                        name: "selected".to_owned(),
+                        ty: hir::Type::u(32),
+                    },
+                ],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "dynamic_destination_summary".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![hir::LocalDecl {
+                local: hir::LocalId::new(2),
+                name: "idx".to_owned(),
+                ty: hir::Type::u(32),
+                kind: hir::LocalKind::Let,
+            }],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("structural dynamic indexed destination-array HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(2)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Index {
+                                base: Box::new(hir::Place::Field {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                    field: "values".to_owned(),
+                                }),
+                                index: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(5)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Assign {
+                            place: hir::Place::Index {
+                                base: Box::new(hir::Place::Field {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                    field: "values".to_owned(),
+                                }),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(7)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Index {
+                                base: Box::new(hir::Place::Field {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                    field: "values".to_owned(),
+                                }),
+                                index: Box::new(hir::Expr::Literal(hir::Literal::Integer(2))),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(11)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Index {
+                                base: Box::new(hir::Place::Field {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                    field: "values".to_owned(),
+                                }),
+                                index: Box::new(hir::Expr::Literal(hir::Literal::Integer(3))),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(13)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "selected".to_owned(),
+                            },
+                            value: hir::Expr::Index {
+                                base: Box::new(hir::Expr::Field {
+                                    base: Box::new(hir::Expr::Local(hir::LocalId::new(1))),
+                                    field: "values".to_owned(),
+                                }),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(6),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<DynamicDestinationSummary>::SHAPE, &module);
+        let value = crate::deserialize::<DynamicDestinationSummary>(&decoder, &[])
+            .expect("structural HIR decoder should support computed destination array indexing");
+        assert_eq!(
+            value,
+            DynamicDestinationSummary {
+                values: [5, 7, 11, 13],
+                selected: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn structural_hir_ir_path_reads_dynamic_local_aggregate_elements() {
+        let mut module = hir::Module::new();
+        let pair_def = module.add_type_def(hir::TypeDef {
+            name: "Pair".to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "lo".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                    hir::FieldDef {
+                        name: "hi".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                ],
+            },
+        });
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <DynamicAggregateSummary>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![hir::FieldDef {
+                    name: "pair".to_owned(),
+                    ty: hir::Type::named(pair_def, Vec::new()),
+                }],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "dynamic_aggregate_summary".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "pairs".to_owned(),
+                    ty: hir::Type::array(hir::Type::named(pair_def, Vec::new()), 2),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "idx".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("structural dynamic indexed aggregate-array HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Index {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                                }),
+                                field: "lo".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Index {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                                }),
+                                field: "hi".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(2)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Index {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                                }),
+                                field: "lo".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(3)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Index {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                                }),
+                                field: "hi".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(4)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(3)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "pair".to_owned(),
+                            },
+                            value: hir::Expr::Index {
+                                base: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(3))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(6),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<DynamicAggregateSummary>::SHAPE, &module);
+        let value = crate::deserialize::<DynamicAggregateSummary>(&decoder, &[]).expect(
+            "structural HIR decoder should support computed aggregate local array indexing",
+        );
+        assert_eq!(
+            value,
+            DynamicAggregateSummary {
+                pair: Pair { lo: 3, hi: 4 },
+            }
+        );
+    }
+
+    #[test]
+    fn structural_hir_ir_path_writes_dynamic_local_aggregate_elements() {
+        let mut module = hir::Module::new();
+        let pair_def = module.add_type_def(hir::TypeDef {
+            name: "Pair".to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "lo".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                    hir::FieldDef {
+                        name: "hi".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                ],
+            },
+        });
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <DynamicAggregateSummary>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![hir::FieldDef {
+                    name: "pair".to_owned(),
+                    ty: hir::Type::named(pair_def, Vec::new()),
+                }],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "dynamic_aggregate_write_summary".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "pairs".to_owned(),
+                    ty: hir::Type::array(hir::Type::named(pair_def, Vec::new()), 2),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "pair".to_owned(),
+                    ty: hir::Type::named(pair_def, Vec::new()),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(4),
+                    name: "idx".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("structural dynamic indexed aggregate-array write HIR".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(3))),
+                                field: "lo".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(9)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(3))),
+                                field: "hi".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(10)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(4)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Assign {
+                            place: hir::Place::Index {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(4))),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(3)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "pair".to_owned(),
+                            },
+                            value: hir::Expr::Index {
+                                base: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(4))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<DynamicAggregateSummary>::SHAPE, &module);
+        let value = crate::deserialize::<DynamicAggregateSummary>(&decoder, &[])
+            .expect("structural HIR decoder should support computed aggregate local array writes");
+        assert_eq!(
+            value,
+            DynamicAggregateSummary {
+                pair: Pair { lo: 9, hi: 10 },
+            }
+        );
+    }
+
+    #[test]
+    fn structural_hir_ir_path_writes_dynamic_destination_aggregate_elements() {
+        let mut module = hir::Module::new();
+        let pair_def = module.add_type_def(hir::TypeDef {
+            name: "Pair".to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "lo".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                    hir::FieldDef {
+                        name: "hi".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                ],
+            },
+        });
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <DynamicAggregateDestinationSummary>::SHAPE
+                .type_identifier
+                .to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "pairs".to_owned(),
+                        ty: hir::Type::array(hir::Type::named(pair_def, Vec::new()), 2),
+                    },
+                    hir::FieldDef {
+                        name: "selected".to_owned(),
+                        ty: hir::Type::named(pair_def, Vec::new()),
+                    },
+                ],
+            },
+        });
+
+        module.add_function(hir::Function {
+            name: "dynamic_aggregate_destination_summary".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "pair".to_owned(),
+                    ty: hir::Type::named(pair_def, Vec::new()),
+                    kind: hir::LocalKind::Let,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "idx".to_owned(),
+                    ty: hir::Type::u(32),
+                    kind: hir::LocalKind::Let,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some(
+                    "structural dynamic indexed destination aggregate-array HIR".to_owned(),
+                ),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                field: "lo".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(21)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(2))),
+                                field: "hi".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(22)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(3)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Assign {
+                            place: hir::Place::Index {
+                                base: Box::new(hir::Place::Field {
+                                    base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                    field: "pairs".to_owned(),
+                                }),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(3))),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(2)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Index {
+                                    base: Box::new(hir::Place::Field {
+                                        base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                        field: "pairs".to_owned(),
+                                    }),
+                                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                                }),
+                                field: "lo".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Index {
+                                    base: Box::new(hir::Place::Field {
+                                        base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                        field: "pairs".to_owned(),
+                                    }),
+                                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                                }),
+                                field: "hi".to_owned(),
+                            },
+                            value: hir::Expr::Literal(hir::Literal::Integer(2)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(6),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "selected".to_owned(),
+                            },
+                            value: hir::Expr::Index {
+                                base: Box::new(hir::Expr::Field {
+                                    base: Box::new(hir::Expr::Local(hir::LocalId::new(1))),
+                                    field: "pairs".to_owned(),
+                                }),
+                                index: Box::new(hir::Expr::Local(hir::LocalId::new(3))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(7),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder =
+            compile_structural_hir_decoder(<DynamicAggregateDestinationSummary>::SHAPE, &module);
+        let value = crate::deserialize::<DynamicAggregateDestinationSummary>(&decoder, &[])
+            .expect("structural HIR decoder should support computed aggregate destination writes");
+        assert_eq!(
+            value,
+            DynamicAggregateDestinationSummary {
+                pairs: [Pair { lo: 1, hi: 2 }, Pair { lo: 21, hi: 22 }],
+                selected: Pair { lo: 21, hi: 22 },
             }
         );
     }

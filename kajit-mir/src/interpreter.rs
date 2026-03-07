@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use kajit_ir::ErrorCode;
+use kajit_ir::SLOT_ADDR_STRIDE_BYTES;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 
 use crate::cfg_mir;
@@ -755,6 +756,27 @@ fn execute_function_inner(
                     }
                     state.write_vreg(dst.index(), value);
                 }
+                LinearOp::StoreToAddr { addr, src, width } => {
+                    let dst = state.read_vreg(addr.index()) as *mut u8;
+                    let value = state.read_vreg(src.index());
+                    let width_bytes = width.bytes() as usize;
+                    unsafe {
+                        for i in 0..width_bytes {
+                            *dst.add(i) = ((value >> (i * 8)) & 0xff) as u8;
+                        }
+                    }
+                }
+                LinearOp::LoadFromAddr { dst, addr, width } => {
+                    let src = state.read_vreg(addr.index()) as *const u8;
+                    let width_bytes = width.bytes() as usize;
+                    let mut value = 0u64;
+                    unsafe {
+                        for i in 0..width_bytes {
+                            value |= (*src.add(i) as u64) << (i * 8);
+                        }
+                    }
+                    state.write_vreg(dst.index(), value);
+                }
                 LinearOp::SaveOutPtr { dst } => {
                     state.write_vreg(dst.index(), state.out_ptr as u64);
                 }
@@ -1250,6 +1272,54 @@ fn execute_function_inner_with_event_trace(
                         },
                     );
                 }
+                LinearOp::StoreToAddr { addr, src, width } => {
+                    let dst = state.read_vreg(addr.index()) as *mut u8;
+                    let base = state.read_trace_vreg(addr.index());
+                    let value = state.read_vreg(src.index());
+                    let trace_value = state.read_trace_vreg(src.index());
+                    let width_bytes = width.bytes() as usize;
+                    let mut bytes = Vec::with_capacity(width_bytes);
+                    unsafe {
+                        for i in 0..width_bytes {
+                            let byte = ((value >> (i * 8)) & 0xff) as u8;
+                            *dst.add(i) = byte;
+                            bytes.push(byte);
+                        }
+                    }
+                    push_interpreter_event(
+                        trace,
+                        step_index,
+                        location,
+                        InterpreterEventKind::OutputWrite {
+                            base,
+                            offset: 0,
+                            bytes,
+                        },
+                    );
+                    let _ = trace_value;
+                }
+                LinearOp::LoadFromAddr { dst, addr, width } => {
+                    let src = state.read_vreg(addr.index()) as *const u8;
+                    let width_bytes = width.bytes() as usize;
+                    let mut value = 0u64;
+                    unsafe {
+                        for i in 0..width_bytes {
+                            value |= (*src.add(i) as u64) << (i * 8);
+                        }
+                    }
+                    let trace_value = TraceValue::U64(value);
+                    state.write_vreg(dst.index(), value);
+                    state.write_trace_vreg(dst.index(), trace_value.clone());
+                    push_interpreter_event(
+                        trace,
+                        step_index,
+                        location,
+                        InterpreterEventKind::VregWrite {
+                            vreg: *dst,
+                            value: trace_value,
+                        },
+                    );
+                }
                 LinearOp::SaveOutPtr { dst } => {
                     let raw = state.out_ptr as u64;
                     let trace_value = state.trace_out_ptr.clone();
@@ -1723,7 +1793,7 @@ fn execute_function_inner_with_event_trace(
     }
 }
 
-const SLOT_ADDR_STRIDE: usize = 16;
+const SLOT_ADDR_STRIDE: usize = SLOT_ADDR_STRIDE_BYTES;
 
 #[repr(C)]
 struct RuntimeErrorSlot {
@@ -1958,6 +2028,7 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
     match op {
         BinOpKind::Add => lhs.wrapping_add(rhs),
         BinOpKind::Sub => lhs.wrapping_sub(rhs),
+        BinOpKind::Mul => lhs.wrapping_mul(rhs),
         BinOpKind::And => lhs & rhs,
         BinOpKind::Or => lhs | rhs,
         BinOpKind::Xor => lhs ^ rhs,

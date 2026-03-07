@@ -80,6 +80,59 @@ impl Lowerer {
         self.set_const(dst, None);
     }
 
+    pub(super) fn emit_store_to_addr(
+        &mut self,
+        addr: crate::ir::VReg,
+        src: crate::ir::VReg,
+        width: Width,
+    ) {
+        self.emit_load_use_x10(addr, 0);
+        self.emit_load_use_x9(src, 1);
+        match width {
+            Width::W1 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_strb_imm(Reg::X9, Reg::X10, 0).expect("strb")),
+            Width::W2 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_strh_imm(Reg::X9, Reg::X10, 0).expect("strh")),
+            Width::W4 => self.ectx.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0).expect("str"),
+            ),
+            Width::W8 => self.ectx.emit.emit_word(
+                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0).expect("str"),
+            ),
+        }
+    }
+
+    pub(super) fn emit_load_from_addr(
+        &mut self,
+        dst: crate::ir::VReg,
+        addr: crate::ir::VReg,
+        width: Width,
+    ) {
+        self.emit_load_use_x10(addr, 0);
+        match width {
+            Width::W1 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X10, 0).expect("ldrb")),
+            Width::W2 => self
+                .ectx
+                .emit
+                .emit_word(aarch64::encode_ldrh_imm(Reg::X9, Reg::X10, 0).expect("ldrh")),
+            Width::W4 => self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0).expect("ldr"),
+            ),
+            Width::W8 => self.ectx.emit.emit_word(
+                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0).expect("ldr"),
+            ),
+        }
+        self.emit_store_def_x9(dst, 1);
+        self.set_const(dst, None);
+    }
+
     pub(super) fn emit_read_bytes(&mut self, dst: crate::ir::VReg, count: u32) {
         self.emit_recipe_ops(vec![Op::BoundsCheck { count }]);
         match count {
@@ -370,6 +423,48 @@ impl Lowerer {
                         false
                     }
                 }
+                BinOpKind::Mul => {
+                    if dst_r == lhs_r {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mul(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(rhs_r),
+                            )
+                            .expect("mul"),
+                        );
+                    } else if dst_r == rhs_r {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mul(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                            )
+                            .expect("mul"),
+                        );
+                    } else {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mov_reg(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                            )
+                            .expect("mov"),
+                        );
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_mul(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(rhs_r),
+                            )
+                            .expect("mul"),
+                        );
+                    }
+                    true
+                }
                 BinOpKind::And => {
                     if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
@@ -638,6 +733,13 @@ impl Lowerer {
                             .expect("sub"),
                     );
                 }
+            }
+            BinOpKind::Mul => {
+                self.emit_load_use_x10(rhs, 1);
+                self.ectx.emit.emit_word(
+                    aarch64::encode_mul(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                        .expect("mul"),
+                );
             }
             BinOpKind::And => {
                 if let Some(c) = rhs_const
