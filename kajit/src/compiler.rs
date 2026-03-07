@@ -12,6 +12,7 @@ use crate::format::{
     Decoder, FieldEmitInfo, FieldLowerInfo, SkippedFieldInfo, VariantEmitInfo, VariantKind,
     VariantLowerInfo,
 };
+use crate::intrinsics;
 use crate::ir::{LambdaId, RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;
 
@@ -3525,6 +3526,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Expr::Variant {
                 variant, fields, ..
             } => {
+                if let Some(opt_def) = get_option_def(place_shape) {
+                    self.lower_option_variant_write(rb, offset, *opt_def, variant, fields);
+                    return;
+                }
                 assert!(
                     fields.is_empty(),
                     "structural HIR subset only supports unit variants"
@@ -3549,6 +3554,71 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let width = self.scalar_width_for_shape(place_shape);
                 rb.write_to_field(scalar, offset as u32, width);
             }
+        }
+    }
+
+    fn lower_option_variant_write(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        offset: usize,
+        opt_def: OptionDef,
+        variant: &str,
+        fields: &[(String, hir::Expr)],
+    ) {
+        let offset = offset as u32;
+        match variant {
+            "None" => {
+                assert!(
+                    fields.is_empty(),
+                    "Option::None should not carry payload fields"
+                );
+                let init_fn = rb.const_val(opt_def.vtable.init_none as *const () as usize as u64);
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_option_init_none_ctx as *const () as usize,
+                    ),
+                    &[init_fn],
+                    offset,
+                    false,
+                );
+            }
+            "Some" => {
+                assert_eq!(
+                    fields.len(),
+                    1,
+                    "Option::Some should carry exactly one payload field"
+                );
+                let payload_ptr = match &fields[0].1 {
+                    hir::Expr::Local(local) => rb.slot_addr(self.local_slots[local]),
+                    hir::Expr::Literal(hir::Literal::Unit) => {
+                        let slot = rb.alloc_slot();
+                        rb.slot_addr(slot)
+                    }
+                    hir::Expr::Literal(hir::Literal::Bool(value)) => {
+                        let slot = rb.alloc_slot();
+                        let value = rb.const_val(u64::from(*value));
+                        rb.write_to_slot(slot, value);
+                        rb.slot_addr(slot)
+                    }
+                    hir::Expr::Literal(hir::Literal::Integer(value)) => {
+                        let slot = rb.alloc_slot();
+                        let value = rb.const_val(*value);
+                        rb.write_to_slot(slot, value);
+                        rb.slot_addr(slot)
+                    }
+                    other => panic!("unsupported structural Option payload: {other:?}"),
+                };
+                let init_fn = rb.const_val(opt_def.vtable.init_some as *const () as usize as u64);
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_option_init_some_ctx as *const () as usize,
+                    ),
+                    &[init_fn, payload_ptr],
+                    offset,
+                    false,
+                );
+            }
+            other => panic!("unsupported structural Option variant {other}"),
         }
     }
 
@@ -3596,11 +3666,29 @@ impl<'a> StructuralHirIrLowerer<'a> {
             "postcard.read_isize" => self
                 .decoder
                 .lower_read_scalar(rb, offset, ScalarType::ISize),
+            "postcard.read_option_tag" => self.lower_postcard_option_tag(rb, offset),
             "postcard.read_discriminant" => {
                 self.decoder.lower_read_scalar(rb, offset, ScalarType::U32)
             }
             other => panic!("unsupported structural postcard reader {other}"),
         }
+    }
+
+    fn lower_postcard_option_tag(&self, rb: &mut RegionBuilder<'_>, offset: usize) {
+        rb.bounds_check(1);
+        let tag = rb.read_bytes(1);
+        let width = crate::ir::Width::W1;
+        rb.gamma(tag, &[], 3, |branch_idx, branch| {
+            match branch_idx {
+                0 | 1 => {
+                    let value = branch.const_val(branch_idx as u64);
+                    branch.write_to_field(value, offset as u32, width);
+                }
+                2 => branch.error_exit(crate::context::ErrorCode::UnknownVariant),
+                _ => unreachable!(),
+            }
+            branch.set_results(&[]);
+        });
     }
 
     fn lower_scalar_expr(
@@ -4074,6 +4162,11 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, Eq, Facet)]
+    struct MaybeCount {
+        count: Option<u32>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
     #[repr(u8)]
     enum UnitAnimal {
         Cat,
@@ -4403,6 +4496,19 @@ mod tests {
         let parrot = crate::deserialize::<UnitAnimal>(&decoder, &[2])
             .expect("structural HIR postcard decoder should decode Parrot");
         assert_eq!(parrot, UnitAnimal::Parrot);
+    }
+
+    #[test]
+    fn postcard_structural_hir_ir_path_decodes_option_scalar_field() {
+        let decoder = compile_postcard_decoder_via_structural_hir(<MaybeCount>::SHAPE);
+
+        let some = crate::deserialize::<MaybeCount>(&decoder, &[1, 42])
+            .expect("structural HIR postcard decoder should decode Some(u32)");
+        assert_eq!(some, MaybeCount { count: Some(42) });
+
+        let none = crate::deserialize::<MaybeCount>(&decoder, &[0])
+            .expect("structural HIR postcard decoder should decode None");
+        assert_eq!(none, MaybeCount { count: None });
     }
 
     #[test]
