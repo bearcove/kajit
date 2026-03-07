@@ -774,6 +774,39 @@ pub unsafe extern "C" fn kajit_string_validate_alloc_copy(
     buf
 }
 
+/// Allocate raw persistent heap memory with the requested layout.
+///
+/// This is the low-level primitive used by generated decoders that build
+/// heap-backed host values in place before a later materialization step.
+///
+/// # Safety
+/// - `ctx` must be a valid, aligned, non-null pointer to a `DeserContext`
+/// - `align` must be accepted by `Layout::from_size_align`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kajit_alloc_persistent(
+    ctx: *mut DeserContext,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    if size == 0 {
+        return core::ptr::null_mut();
+    }
+    let layout = match std::alloc::Layout::from_size_align(size, align) {
+        Ok(layout) => layout,
+        Err(_) => {
+            let ctx = unsafe { &mut *ctx };
+            ctx.error.code = ErrorCode::AllocError as u32;
+            return core::ptr::null_mut();
+        }
+    };
+    let buf = unsafe { std::alloc::alloc(layout) };
+    if buf.is_null() {
+        let ctx = unsafe { &mut *ctx };
+        ctx.error.code = ErrorCode::AllocError as u32;
+    }
+    buf
+}
+
 // --- Vec intrinsics ---
 
 // r[impl seq.malum.alloc-compat]
@@ -1273,6 +1306,10 @@ pub fn known_intrinsics() -> Vec<(&'static str, crate::ir::IntrinsicFn)> {
         (
             "kajit_string_validate_alloc_copy",
             IntrinsicFn(kajit_string_validate_alloc_copy as *const () as usize),
+        ),
+        (
+            "kajit_alloc_persistent",
+            IntrinsicFn(kajit_alloc_persistent as *const () as usize),
         ),
         (
             "kajit_vec_alloc",

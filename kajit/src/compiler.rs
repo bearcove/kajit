@@ -3129,6 +3129,11 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::StmtKind::Init { place, value } | hir::StmtKind::Assign { place, value } => {
                 self.lower_assign_like(rb, place, value, dest_local, dest_shape);
             }
+            hir::StmtKind::Store { addr, width, value } => {
+                let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_shape);
+                let value = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                rb.store_to_addr(addr, value, self.ir_width_for_memory_width(*width));
+            }
             hir::StmtKind::If {
                 condition,
                 then_block,
@@ -3212,16 +3217,42 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
         let resolved = self.resolve_place(place, dest_local, dest_shape);
         match value {
-            hir::Expr::Call(call) => match resolved {
-                ResolvedStructuralPlace::Destination { offset, .. } => {
-                    self.lower_postcard_call_at_offset(rb, call, offset);
+            hir::Expr::Call(call) => {
+                if self.is_postcard_reader(call) {
+                    match resolved {
+                        ResolvedStructuralPlace::Destination { offset, .. } => {
+                            self.lower_postcard_call_at_offset(rb, call, offset);
+                        }
+                        ResolvedStructuralPlace::Local {
+                            ty,
+                            storage,
+                            slot_offset,
+                        } => {
+                            self.lower_postcard_call_into_local(rb, call, ty, storage, slot_offset)
+                        }
+                    }
+                } else {
+                    let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                    match resolved {
+                        ResolvedStructuralPlace::Destination { shape, offset } => {
+                            let width = self.scalar_width_for_shape(shape);
+                            rb.write_to_field(scalar, offset as u32, width);
+                        }
+                        ResolvedStructuralPlace::Local {
+                            ty,
+                            storage,
+                            slot_offset,
+                        } => {
+                            assert_eq!(
+                                Self::slot_count_for_type(self.module, ty),
+                                1,
+                                "structural local scalar write requires single-slot type"
+                            );
+                            rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
+                        }
+                    }
                 }
-                ResolvedStructuralPlace::Local {
-                    ty,
-                    storage,
-                    slot_offset,
-                } => self.lower_postcard_call_into_local(rb, call, ty, storage, slot_offset),
-            },
+            }
             hir::Expr::Variant {
                 variant, fields, ..
             } => match resolved {
@@ -3413,7 +3444,14 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_shape: &'static Shape,
     ) {
         match expr {
-            hir::Expr::Call(call) => self.lower_postcard_call_at_offset(rb, call, offset),
+            hir::Expr::Call(call) if self.is_postcard_reader(call) => {
+                self.lower_postcard_call_at_offset(rb, call, offset)
+            }
+            hir::Expr::Call(_) => {
+                let scalar = self.lower_scalar_expr(rb, expr, dest_local, dest_shape);
+                let width = self.scalar_width_for_shape(shape);
+                rb.write_to_field(scalar, offset as u32, width);
+            }
             hir::Expr::Local(local) => self.copy_local_into_shape_offset(rb, *local, shape, offset),
             hir::Expr::Index { base, index } => {
                 let base = self.expr_to_place(base);
@@ -3603,6 +3641,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
+    fn is_postcard_reader(&self, call: &hir::CallExpr) -> bool {
+        self.callable_name(call).starts_with("postcard.")
+    }
+
     fn lower_postcard_option_tag(&self, rb: &mut RegionBuilder<'_>, offset: usize) {
         rb.bounds_check(1);
         let tag = rb.read_bytes(1);
@@ -3679,8 +3721,31 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 };
                 rb.binop(ir_op, lhs, rhs)
             }
+            hir::Expr::Call(call) => self.lower_scalar_call_expr(rb, call, dest_local, dest_shape),
             other => panic!("unsupported structural HIR scalar expression: {other:?}"),
         }
+    }
+
+    fn lower_scalar_call_expr(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        dest_local: hir::LocalId,
+        dest_shape: &'static Shape,
+    ) -> crate::ir::PortSource {
+        let args = call
+            .args
+            .iter()
+            .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_shape))
+            .collect::<Vec<_>>();
+        let func = match self.callable_name(call) {
+            "runtime.alloc_persistent" => {
+                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize)
+            }
+            other => panic!("unsupported structural HIR scalar call {other}"),
+        };
+        rb.call_intrinsic(func, &args, 0, true)
+            .expect("scalar intrinsic call should return a value")
     }
 
     fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {
@@ -4077,7 +4142,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 64 => crate::ir::Width::W8,
                 other => panic!("unsupported structural HIR integer width: {other}"),
             },
+            hir::Type::Address { .. } => crate::ir::Width::W8,
             _ => panic!("unsupported structural HIR scalar local type: {ty:?}"),
+        }
+    }
+
+    fn ir_width_for_memory_width(&self, width: hir::MemoryWidth) -> crate::ir::Width {
+        match width {
+            hir::MemoryWidth::W1 => crate::ir::Width::W1,
+            hir::MemoryWidth::W2 => crate::ir::Width::W2,
+            hir::MemoryWidth::W4 => crate::ir::Width::W4,
+            hir::MemoryWidth::W8 => crate::ir::Width::W8,
         }
     }
 }
@@ -4506,6 +4581,12 @@ mod tests {
     struct DynamicDestinationSummary {
         values: [u32; 4],
         selected: u32,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Facet)]
+    struct PersistentBufferSummary {
+        ptr: usize,
+        len: usize,
     }
 
     #[derive(Debug, PartialEq, Eq, Facet)]
@@ -5002,6 +5083,166 @@ mod tests {
         let value = crate::deserialize::<ConstantNumber>(&decoder, &[])
             .expect("structural HIR decoder should ignore input and write a constant");
         assert_eq!(value, ConstantNumber { value: 42 });
+    }
+
+    #[test]
+    fn structural_hir_ir_path_builds_persistent_buffer_kernel() {
+        let mut module = hir::Module::new();
+        let root_def = module.add_type_def(hir::TypeDef {
+            name: <PersistentBufferSummary>::SHAPE.type_identifier.to_owned(),
+            generic_params: vec![],
+            kind: hir::TypeDefKind::Struct {
+                fields: vec![
+                    hir::FieldDef {
+                        name: "ptr".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                    hir::FieldDef {
+                        name: "len".to_owned(),
+                        ty: hir::Type::u(64),
+                    },
+                ],
+            },
+        });
+        let runtime = module.install_runtime_memory_callables();
+        module.add_function(hir::Function {
+            name: "build_persistent_buffer".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![
+                hir::Parameter {
+                    local: hir::LocalId::new(0),
+                    name: "cursor".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Param,
+                },
+                hir::Parameter {
+                    local: hir::LocalId::new(1),
+                    name: "out".to_owned(),
+                    ty: hir::Type::named(root_def, Vec::new()),
+                    kind: hir::LocalKind::Destination,
+                },
+            ],
+            locals: vec![
+                hir::LocalDecl {
+                    local: hir::LocalId::new(2),
+                    name: "len".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Temp,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(3),
+                    name: "bytes".to_owned(),
+                    ty: hir::Type::u(64),
+                    kind: hir::LocalKind::Temp,
+                },
+                hir::LocalDecl {
+                    local: hir::LocalId::new(4),
+                    name: "ptr".to_owned(),
+                    ty: hir::Type::persistent_addr(),
+                    kind: hir::LocalKind::Temp,
+                },
+            ],
+            return_type: hir::Type::unit(),
+            scopes: vec![hir::Scope {
+                id: hir::ScopeId::new(0),
+                parent: None,
+                comment: Some("persistent buffer kernel".to_owned()),
+            }],
+            body: hir::Block {
+                scope: hir::ScopeId::new(0),
+                statements: vec![
+                    hir::Stmt {
+                        id: hir::StmtId::new(0),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(2)),
+                            value: hir::Expr::Literal(hir::Literal::Integer(2)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(1),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(3)),
+                            value: hir::Expr::Binary {
+                                op: hir::BinaryOp::Mul,
+                                lhs: Box::new(hir::Expr::Local(hir::LocalId::new(2))),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(4))),
+                            },
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(2),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(hir::LocalId::new(4)),
+                            value: hir::Expr::Call(hir::CallExpr {
+                                target: hir::CallTarget::Callable(runtime.alloc_persistent),
+                                args: vec![
+                                    hir::Expr::Local(hir::LocalId::new(3)),
+                                    hir::Expr::Literal(hir::Literal::Integer(4)),
+                                ],
+                            }),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(3),
+                        kind: hir::StmtKind::Store {
+                            addr: hir::Expr::Local(hir::LocalId::new(4)),
+                            width: hir::MemoryWidth::W4,
+                            value: hir::Expr::Literal(hir::Literal::Integer(10)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(4),
+                        kind: hir::StmtKind::Store {
+                            addr: hir::Expr::Binary {
+                                op: hir::BinaryOp::Add,
+                                lhs: Box::new(hir::Expr::Local(hir::LocalId::new(4))),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(4))),
+                            },
+                            width: hir::MemoryWidth::W4,
+                            value: hir::Expr::Literal(hir::Literal::Integer(20)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(5),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "ptr".to_owned(),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(4)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(6),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Field {
+                                base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
+                                field: "len".to_owned(),
+                            },
+                            value: hir::Expr::Local(hir::LocalId::new(2)),
+                        },
+                    },
+                    hir::Stmt {
+                        id: hir::StmtId::new(7),
+                        kind: hir::StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let decoder = compile_structural_hir_decoder(<PersistentBufferSummary>::SHAPE, &module);
+        let value = crate::deserialize::<PersistentBufferSummary>(&decoder, &[])
+            .expect("structural HIR decoder should build a persistent buffer kernel");
+        assert_eq!(value.len, 2);
+        assert_ne!(value.ptr, 0);
+
+        let ptr = value.ptr as *const u32;
+        let words = unsafe { std::slice::from_raw_parts(ptr, value.len) };
+        assert_eq!(words, &[10, 20]);
+
+        let layout = std::alloc::Layout::from_size_align(8, 4).unwrap();
+        unsafe { std::alloc::dealloc(value.ptr as *mut u8, layout) };
     }
 
     #[test]
