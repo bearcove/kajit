@@ -11,3 +11,4 @@ bench_report/
 .playwright-mcp/
 *.v3*
 scripts/__pycache__/
+.ship/
