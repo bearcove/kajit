@@ -288,25 +288,35 @@ fn check_arg_source(
         return Err(());
     }
     let region = &func.regions[source.region];
-    let Some(arg) = region.args.get(source.index as usize) else {
+    // Check that this arg exists in the region
+    if !region.args.iter().any(|&id| id == source.arg) {
         return Err(());
-    };
+    }
+    let arg = &func.region_args[source.arg];
     if arg.kind != expected_kind {
         return Ok(arg.kind);
     }
     Ok(expected_kind)
 }
 
-fn state_source(source: PortSource) -> StateProducer {
+fn state_source(source: PortSource, func: &IrFunc) -> StateProducer {
     match source {
         PortSource::Node(out) => StateProducer::Node {
             node: out.node,
             index: out.index,
         },
-        PortSource::RegionArg(arg) => StateProducer::RegionArg {
-            region: arg.region,
-            index: arg.index,
-        },
+        PortSource::RegionArg(aref) => {
+            // Find position of this arg in the region for display
+            let index = func.regions[aref.region]
+                .args
+                .iter()
+                .position(|&id| id == aref.arg)
+                .unwrap_or(0) as u16;
+            StateProducer::RegionArg {
+                region: aref.region,
+                index,
+            }
+        }
     }
 }
 
@@ -344,7 +354,8 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 scope: region.debug_scope,
             });
         }
-        for arg in &region.args {
+        for &arg_id in &region.args {
+            let arg = &func.region_args[arg_id];
             if let Some(domain) = arg.kind.state_domain()
                 && !state_domain_exists(func, domain)
             {
@@ -461,7 +472,8 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
             }
         }
 
-        for (result_index, result) in region.results.iter().enumerate() {
+        for (result_index, &result_id) in region.results.iter().enumerate() {
+            let result = &func.region_results[result_id];
             if let Some(domain) = result.kind.state_domain()
                 && !state_domain_exists(func, domain)
             {
@@ -535,7 +547,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         for &node_id in &region.nodes {
             let node = &func.nodes[node_id];
             for input in &node.inputs {
-                let producer = state_source(input.source);
+                let producer = state_source(input.source, func);
                 if let Some(domain) = input.kind.state_domain() {
                     let usage = state_uses
                         .entry(domain)
@@ -552,8 +564,9 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 }
             }
         }
-        for result in &region.results {
-            let producer = state_source(result.source);
+        for &result_id in &region.results {
+            let result = &func.region_results[result_id];
+            let producer = state_source(result.source, func);
             if let Some(domain) = result.kind.state_domain() {
                 state_uses
                     .entry(domain)
@@ -567,18 +580,19 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
 
     for &region_id in &region_order {
         let region = &func.regions[region_id];
-        for (arg_index, arg) in region.args.iter().enumerate() {
+        for &arg_id in &region.args {
+            let arg = &func.region_args[arg_id];
             if !is_state_kind(arg.kind) {
                 continue;
             }
             let producer = PortSource::RegionArg(RegionArgRef {
                 region: region_id,
-                index: arg_index as u16,
+                arg: arg_id,
             });
             let domain = arg.kind.state_domain().unwrap();
             let usage = state_uses
                 .get(&domain)
-                .and_then(|uses| uses.get(&state_source(producer)))
+                .and_then(|uses| uses.get(&state_source(producer, func)))
                 .copied()
                 .unwrap_or_default();
             if usage.chain_uses != 1 {
@@ -609,7 +623,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 let domain = output.kind.state_domain().unwrap();
                 let usage = state_uses
                     .get(&domain)
-                    .and_then(|uses| uses.get(&state_source(producer)))
+                    .and_then(|uses| uses.get(&state_source(producer, func)))
                     .copied()
                     .unwrap_or_default();
                 if usage.chain_uses != 1 {
@@ -690,7 +704,8 @@ mod tests {
         let mut func = builder.finish();
         let root = func.root_body();
         let first = func.regions[root].nodes[0];
-        func.regions[root].results[0].source = PortSource::Node(OutputRef {
+        let result_id = func.regions[root].results[0];
+        func.region_results[result_id].source = PortSource::Node(OutputRef {
             node: first,
             index: 0,
         });
@@ -748,7 +763,8 @@ mod tests {
         }
         let mut func = builder.finish();
         let root = func.root_body();
-        func.regions[root].args[0].kind = PortKind::state(StateDomainId::new(99));
+        let arg_id = func.regions[root].args[0];
+        func.region_args[arg_id].kind = PortKind::state(StateDomainId::new(99));
 
         let err = verify(&func).expect_err("verifier should reject unknown state domains");
         assert!(matches!(

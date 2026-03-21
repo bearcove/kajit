@@ -757,6 +757,8 @@ fn resolve(
     let mut func = IrFunc {
         nodes: Arena::new(),
         regions: Arena::new(),
+        region_args: Arena::new(),
+        region_results: Arena::new(),
         state_domains: if program.state_domains.is_empty() {
             IrFunc::builtin_state_domains()
         } else {
@@ -1022,29 +1024,27 @@ fn resolve_region(
     registry: &IntrinsicRegistry,
 ) -> Result<RegionId, ParseError> {
     // Build region args.
-    let args: Vec<RegionArg> = ast
-        .args
-        .iter()
-        .map(|a| match a {
-            AstRegionArg::Data(idx) => {
-                let _ = idx;
-                Ok(RegionArg {
-                    kind: PortKind::Data,
-                    vreg: None,
-                    debug_value: None,
-                })
-            }
-            AstRegionArg::State(domain) => Ok(RegionArg {
+    let mut arg_ids = Vec::with_capacity(ast.args.len());
+    for a in &ast.args {
+        let arg = match a {
+            AstRegionArg::Data(_idx) => RegionArg {
+                kind: PortKind::Data,
+                vreg: None,
+                debug_value: None,
+            },
+            AstRegionArg::State(domain) => RegionArg {
                 kind: PortKind::state(lookup_state_domain(func, *domain)?),
                 vreg: None,
                 debug_value: None,
-            }),
-        })
-        .collect::<Result<_, ParseError>>()?;
+            },
+        };
+        let arg_id = func.region_args.push(arg);
+        arg_ids.push(arg_id);
+    }
 
     let region_id = func.regions.push(Region {
         debug_scope,
-        args,
+        args: arg_ids,
         results: Vec::new(),
         nodes: Vec::new(),
     });
@@ -1060,15 +1060,13 @@ fn resolve_region(
     }
 
     // Resolve results.
-    let results: Vec<RegionResult> = ast
-        .results
-        .iter()
-        .map(|s| {
-            let (source, kind) = resolve_source(s, region_id, node_map, func)?;
-            Ok(RegionResult { kind, source })
-        })
-        .collect::<Result<_, ParseError>>()?;
-    func.regions[region_id].results = results;
+    let mut result_ids = Vec::with_capacity(ast.results.len());
+    for s in &ast.results {
+        let (source, kind) = resolve_source(s, region_id, node_map, func)?;
+        let result_id = func.region_results.push(RegionResult { kind, source });
+        result_ids.push(result_id);
+    }
+    func.regions[region_id].results = result_ids;
 
     Ok(region_id)
 }
@@ -1304,14 +1302,22 @@ fn resolve_node(
             let body_arg_last = body_region.args.len() - 1;
             let body_res_last = body_region.results.len() - 1;
 
+            let body_arg_second_last_kind =
+                func.region_args[body_region.args[body_arg_last - 1]].kind;
+            let body_arg_last_kind = func.region_args[body_region.args[body_arg_last]].kind;
+            let body_res_second_last_kind =
+                func.region_results[body_region.results[body_res_last - 1]].kind;
+            let body_res_last_kind = func.region_results[body_region.results[body_res_last]].kind;
+            let body_res_first_kind = func.region_results[body_region.results[0]].kind;
+
             if resolved_inputs[in_last - 1].kind != CURSOR_STATE_PORT
                 || resolved_inputs[in_last].kind != OUTPUT_STATE_PORT
-                || body_region.args[body_arg_last - 1].kind != CURSOR_STATE_PORT
-                || body_region.args[body_arg_last].kind != OUTPUT_STATE_PORT
+                || body_arg_second_last_kind != CURSOR_STATE_PORT
+                || body_arg_last_kind != OUTPUT_STATE_PORT
                 || resolved_outputs[out_last - 1].kind != CURSOR_STATE_PORT
                 || resolved_outputs[out_last].kind != OUTPUT_STATE_PORT
-                || body_region.results[body_res_last - 1].kind != CURSOR_STATE_PORT
-                || body_region.results[body_res_last].kind != OUTPUT_STATE_PORT
+                || body_res_second_last_kind != CURSOR_STATE_PORT
+                || body_res_last_kind != OUTPUT_STATE_PORT
             {
                 return Err(ParseError {
                     message: format!(
@@ -1320,7 +1326,7 @@ fn resolve_node(
                 });
             }
 
-            if body_region.results[0].kind != PortKind::Data {
+            if body_res_first_kind != PortKind::Data {
                 return Err(ParseError {
                     message: format!("theta n{id} first body result must be predicate data"),
                 });
@@ -1328,9 +1334,11 @@ fn resolve_node(
 
             let loop_var_count = resolved_inputs.len() - 2;
             for i in 0..loop_var_count {
+                let body_arg_i_kind = func.region_args[body_region.args[i]].kind;
+                let body_res_i_kind = func.region_results[body_region.results[i + 1]].kind;
                 if resolved_inputs[i].kind != PortKind::Data
-                    || body_region.args[i].kind != PortKind::Data
-                    || body_region.results[i + 1].kind != PortKind::Data
+                    || body_arg_i_kind != PortKind::Data
+                    || body_res_i_kind != PortKind::Data
                     || resolved_outputs[i].kind != PortKind::Data
                 {
                     return Err(ParseError {
@@ -1448,12 +1456,13 @@ fn resolve_source(
             let domain = lookup_state_domain(func, *domain)?;
             let kind = PortKind::state(domain);
             let region = &func.regions[region_id];
-            for (idx, arg) in region.args.iter().enumerate() {
+            for &arg_id in &region.args {
+                let arg = &func.region_args[arg_id];
                 if arg.kind == kind {
                     return Ok((
                         PortSource::RegionArg(RegionArgRef {
                             region: region_id,
-                            index: idx as u16,
+                            arg: arg_id,
                         }),
                         kind,
                     ));
@@ -1461,13 +1470,17 @@ fn resolve_source(
             }
             panic!("no state domain d{} arg in region", domain.index());
         }
-        AstSource::RegionArg(idx) => Ok((
-            PortSource::RegionArg(RegionArgRef {
-                region: region_id,
-                index: *idx,
-            }),
-            PortKind::Data,
-        )),
+        AstSource::RegionArg(idx) => {
+            let region = &func.regions[region_id];
+            let arg_id = region.args[*idx as usize];
+            Ok((
+                PortSource::RegionArg(RegionArgRef {
+                    region: region_id,
+                    arg: arg_id,
+                }),
+                PortKind::Data,
+            ))
+        }
         AstSource::NodeOutput(n, idx) => {
             let node_id = node_map[n];
             let node = &func.nodes[node_id];

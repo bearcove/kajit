@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CURSOR_STATE_PORT, InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputRef,
-    PortSource, Region, RegionArgRef, RegionId, RegionResult, verify,
+    CURSOR_STATE_PORT, InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort,
+    OutputRef, PortKind, PortSource, Region, RegionArg, RegionArgRef, RegionId, RegionResult,
+    ResultId, verify,
 };
 
 const MAX_INLINE_NODES_SINGLE_USE: usize = 256;
@@ -12,7 +13,7 @@ const MAX_INLINE_CALL_SITES_MULTI_USE: usize = 4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UseSite {
     NodeInput { node: NodeId, input_index: u16 },
-    RegionResult { region: RegionId, result_index: u16 },
+    RegionResult { result: ResultId },
 }
 
 #[derive(Default)]
@@ -24,7 +25,7 @@ impl UseLists {
     fn build(func: &IrFunc) -> Self {
         let mut out = Self::default();
 
-        for (region_id, region) in func.regions.iter() {
+        for (_region_id, region) in func.regions.iter() {
             for &node_id in &region.nodes {
                 for (input_index, input) in func.nodes[node_id].inputs.iter().enumerate() {
                     let PortSource::Node(source) = input.source else {
@@ -40,17 +41,15 @@ impl UseLists {
                 }
             }
 
-            for (result_index, result) in region.results.iter().enumerate() {
+            for &result_id in &region.results {
+                let result = &func.region_results[result_id];
                 let PortSource::Node(source) = result.source else {
                     continue;
                 };
                 out.by_output
                     .entry(source)
                     .or_default()
-                    .push(UseSite::RegionResult {
-                        region: region_id,
-                        result_index: result_index as u16,
-                    });
+                    .push(UseSite::RegionResult { result: result_id });
             }
         }
 
@@ -86,14 +85,8 @@ impl UseLists {
                         false
                     }
                 }
-                UseSite::RegionResult {
-                    region,
-                    result_index,
-                } => {
-                    let Some(result) = func.regions[region].results.get_mut(result_index as usize)
-                    else {
-                        continue;
-                    };
+                UseSite::RegionResult { result: result_id } => {
+                    let result = &mut func.region_results[result_id];
                     if result.source == from_source {
                         result.source = to;
                         true
@@ -323,6 +316,7 @@ fn cursor_chain_step(
 
 // r[impl ir.passes.pre-regalloc.loop-invariants]
 fn hoist_theta_loop_invariant_setup_pass(func: &mut IrFunc) {
+    // First pass: hoist complete subtrees (existing logic)
     loop {
         let live_nodes = collect_live_nodes(func);
         let theta_nodes: Vec<NodeId> = func
@@ -342,6 +336,46 @@ fn hoist_theta_loop_invariant_setup_pass(func: &mut IrFunc) {
             let mut use_lists = UseLists::build(func);
             if hoist_theta_loop_invariants_for_node(func, theta, &mut use_lists) {
                 changed = true;
+                // Verify after each change
+                #[cfg(debug_assertions)]
+                if let Err(err) = verify(func) {
+                    panic!(
+                        "IR verification failed after hoist_theta_loop_invariants_for_node: {err}"
+                    );
+                }
+                break;
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    // Second pass: hoist remaining constants by threading as theta arguments
+    loop {
+        let live_nodes = collect_live_nodes(func);
+        let theta_nodes: Vec<NodeId> = func
+            .nodes
+            .iter()
+            .filter_map(|(nid, node)| {
+                if live_nodes.contains(&nid) && matches!(node.kind, NodeKind::Theta { .. }) {
+                    Some(nid)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let mut changed = false;
+        for theta in theta_nodes {
+            if hoist_theta_constants_as_args(func, theta) {
+                changed = true;
+                // Verify after each change
+                #[cfg(debug_assertions)]
+                if let Err(err) = verify(func) {
+                    panic!("IR verification failed after hoist_theta_constants_as_args: {err}");
+                }
                 break;
             }
         }
@@ -492,6 +526,165 @@ fn hoist_theta_loop_invariants_for_node(
     true
 }
 
+/// Hoist constants from a theta body by threading them as arguments.
+///
+/// Unlike the main hoisting logic, this doesn't require all uses to be
+/// hoistable. Instead, it creates the constant outside the theta, passes it
+/// in as an argument, and rewrites uses inside the body to reference the
+/// new region arg.
+fn hoist_theta_constants_as_args(func: &mut IrFunc, theta: NodeId) -> bool {
+    let (parent_region, body_region, theta_debug_scope) = {
+        let node = &func.nodes[theta];
+        let NodeKind::Theta { body } = &node.kind else {
+            return false;
+        };
+        (node.region, *body, node.debug_scope)
+    };
+
+    // Find constants in the body
+    let body_nodes = func.regions[body_region].nodes.clone();
+    let const_nodes: Vec<NodeId> = body_nodes
+        .iter()
+        .copied()
+        .filter(|&nid| matches!(func.nodes[nid].kind, NodeKind::Simple(IrOp::Const { .. })))
+        .collect();
+
+    if const_nodes.is_empty() {
+        return false;
+    }
+
+    // Find the theta's position in the parent region
+    let Some(theta_pos) = func.regions[parent_region]
+        .nodes
+        .iter()
+        .position(|&n| n == theta)
+    else {
+        return false;
+    };
+
+    // Hoist one constant at a time (loop will iterate until all are done)
+    let old_const = const_nodes[0];
+    let const_value = {
+        let NodeKind::Simple(IrOp::Const { value }) = &func.nodes[old_const].kind else {
+            return false;
+        };
+        *value
+    };
+
+    // Create the constant in the parent region (before the theta)
+    let new_const = func.nodes.push(Node {
+        region: parent_region,
+        debug_scope: func.nodes[old_const].debug_scope,
+        debug_value: func.nodes[old_const].debug_value,
+        inputs: vec![],
+        outputs: vec![OutputPort {
+            kind: PortKind::Data,
+            vreg: None,
+            debug_scope: func.nodes[old_const].debug_scope,
+        }],
+        kind: NodeKind::Simple(IrOp::Const { value: const_value }),
+    });
+    func.regions[parent_region]
+        .nodes
+        .insert(theta_pos, new_const);
+
+    // All theta-related structures have layout: [loop_vars..., state_domains...]
+    // (Body results also have a predicate prefix: [predicate, loop_vars..., state_domains...])
+    // We must insert the new hoisted constant as a loop_var, BEFORE the state domains.
+    let state_count = func.state_domains.len();
+
+    // Insert theta input before state domains
+    let input_insert_pos = func.nodes[theta].inputs.len() - state_count;
+    let new_input = InputPort {
+        kind: PortKind::Data,
+        source: PortSource::Node(OutputRef {
+            node: new_const,
+            index: 0,
+        }),
+    };
+    func.nodes[theta].inputs.insert(input_insert_pos, new_input);
+
+    // Insert body arg before state domains
+    let arg_insert_pos = func.regions[body_region].args.len() - state_count;
+    let new_arg_id = func.region_args.push(RegionArg {
+        kind: PortKind::Data,
+        vreg: None,
+        debug_value: func.nodes[old_const].debug_value,
+    });
+    func.regions[body_region]
+        .args
+        .insert(arg_insert_pos, new_arg_id);
+
+    // With stable ArgIds, no shifting of RegionArgRef is needed!
+    // The new ArgId is a stable handle that won't be affected by insertions.
+
+    // Rewrite all uses of the old constant to use the new region arg
+    let new_source = PortSource::RegionArg(RegionArgRef {
+        region: body_region,
+        arg: new_arg_id,
+    });
+    let use_lists = UseLists::build(func);
+    let old_output = OutputRef {
+        node: old_const,
+        index: 0,
+    };
+
+    let mut use_lists = use_lists;
+    replace_output_use(func, &mut use_lists, old_output, new_source);
+
+    // Remove the old constant from the body
+    func.regions[body_region]
+        .nodes
+        .retain(|&nid| nid != old_const);
+
+    // Insert body result before state domains (accounting for predicate prefix)
+    // Body results: [predicate, loop_vars..., state_domains...]
+    let result_insert_pos = func.regions[body_region].results.len() - state_count;
+    let new_result_id = func.region_results.push(RegionResult {
+        kind: PortKind::Data,
+        source: new_source,
+    });
+    func.regions[body_region]
+        .results
+        .insert(result_insert_pos, new_result_id);
+
+    // Insert theta output before state domains
+    let output_insert_pos = func.nodes[theta].outputs.len() - state_count;
+    func.nodes[theta].outputs.insert(
+        output_insert_pos,
+        OutputPort {
+            kind: PortKind::Data,
+            vreg: None,
+            debug_scope: theta_debug_scope,
+        },
+    );
+
+    // After inserting a new theta output, we need to shift OutputRef indices
+    // in the parent region's results that reference the theta's outputs.
+    // Any result referencing theta output at index >= output_insert_pos needs
+    // its index incremented by 1.
+    for &result_id in &func.regions[parent_region].results {
+        let result = &mut func.region_results[result_id];
+        if let PortSource::Node(ref mut out) = result.source {
+            if out.node == theta && out.index >= output_insert_pos as u16 {
+                out.index += 1;
+            }
+        }
+    }
+    // Also update any node inputs in the parent region that reference the theta
+    for &node_id in &func.regions[parent_region].nodes {
+        for input in func.nodes[node_id].inputs.iter_mut() {
+            if let PortSource::Node(ref mut out) = input.source {
+                if out.node == theta && out.index >= output_insert_pos as u16 {
+                    out.index += 1;
+                }
+            }
+        }
+    }
+
+    true
+}
+
 fn remap_hoisted_source(source: PortSource, old_to_new: &HashMap<NodeId, NodeId>) -> PortSource {
     match source {
         PortSource::Node(out) => {
@@ -542,7 +735,10 @@ fn theta_hoist_uses_stay_within_body_subset(
             UseSite::NodeInput { node, .. } => {
                 func.nodes[node].region != body_region || hoistable_set.contains(&node)
             }
-            UseSite::RegionResult { region, .. } => region != body_region,
+            UseSite::RegionResult { result } => {
+                // Check if this result belongs to the body region
+                !func.regions[body_region].results.contains(&result)
+            }
         })
     })
 }
@@ -845,10 +1041,11 @@ struct CloneCtx {
     top_arg_sources: Vec<PortSource>,
     node_map: HashMap<NodeId, NodeId>,
     region_map: HashMap<RegionId, RegionId>,
+    arg_map: HashMap<crate::ArgId, crate::ArgId>,
     top_new_nodes: Vec<NodeId>,
 }
 
-fn remap_source(source: PortSource, ctx: &CloneCtx) -> PortSource {
+fn remap_source(source: PortSource, ctx: &CloneCtx, func: &IrFunc) -> PortSource {
     match source {
         PortSource::Node(out) => {
             let new_node = *ctx
@@ -862,15 +1059,25 @@ fn remap_source(source: PortSource, ctx: &CloneCtx) -> PortSource {
         }
         PortSource::RegionArg(arg) => {
             if arg.region == ctx.top_old_region {
-                ctx.top_arg_sources[arg.index as usize]
+                // Find position of this arg in the old region's args
+                let pos = func.regions[ctx.top_old_region]
+                    .args
+                    .iter()
+                    .position(|&id| id == arg.arg)
+                    .expect("arg should exist in region");
+                ctx.top_arg_sources[pos]
             } else {
                 let region = *ctx
                     .region_map
                     .get(&arg.region)
                     .expect("cloned source region should be available");
+                let new_arg = *ctx
+                    .arg_map
+                    .get(&arg.arg)
+                    .expect("cloned arg should be available");
                 PortSource::RegionArg(RegionArgRef {
                     region,
-                    index: arg.index,
+                    arg: new_arg,
                 })
             }
         }
@@ -910,9 +1117,17 @@ fn clone_region_into(
             NodeKind::Gamma { regions } => {
                 for old_sub in regions {
                     let old_reg = &func.regions[old_sub];
+                    // Clone args, creating new ArgIds
+                    let mut new_args = Vec::with_capacity(old_reg.args.len());
+                    for &old_arg_id in &old_reg.args {
+                        let old_arg = &func.region_args[old_arg_id];
+                        let new_arg_id = func.region_args.push(old_arg.clone());
+                        ctx.arg_map.insert(old_arg_id, new_arg_id);
+                        new_args.push(new_arg_id);
+                    }
                     let new_sub = func.regions.push(Region {
                         debug_scope: old_reg.debug_scope,
-                        args: old_reg.args.clone(),
+                        args: new_args,
                         results: Vec::new(),
                         nodes: Vec::new(),
                     });
@@ -925,9 +1140,17 @@ fn clone_region_into(
             }
             NodeKind::Theta { body } => {
                 let old_reg = &func.regions[body];
+                // Clone args, creating new ArgIds
+                let mut new_args = Vec::with_capacity(old_reg.args.len());
+                for &old_arg_id in &old_reg.args {
+                    let old_arg = &func.region_args[old_arg_id];
+                    let new_arg_id = func.region_args.push(old_arg.clone());
+                    ctx.arg_map.insert(old_arg_id, new_arg_id);
+                    new_args.push(new_arg_id);
+                }
                 let new_body = func.regions.push(Region {
                     debug_scope: old_reg.debug_scope,
-                    args: old_reg.args.clone(),
+                    args: new_args,
                     results: Vec::new(),
                     nodes: Vec::new(),
                 });
@@ -941,7 +1164,7 @@ fn clone_region_into(
             .into_iter()
             .map(|inp| InputPort {
                 kind: inp.kind,
-                source: remap_source(inp.source, ctx),
+                source: remap_source(inp.source, ctx, func),
             })
             .collect();
 
@@ -964,13 +1187,18 @@ fn clone_region_into(
 
     if !is_top {
         let old_results = func.regions[old_region].results.clone();
-        func.regions[new_region].results = old_results
+        let new_results: Vec<_> = old_results
             .into_iter()
-            .map(|result| RegionResult {
-                kind: result.kind,
-                source: remap_source(result.source, ctx),
+            .map(|result_id| {
+                let old_result = &func.region_results[result_id];
+                let new_result_id = func.region_results.push(RegionResult {
+                    kind: old_result.kind,
+                    source: remap_source(old_result.source, ctx, func),
+                });
+                new_result_id
             })
             .collect();
+        func.regions[new_region].results = new_results;
     }
 }
 
@@ -1008,6 +1236,7 @@ fn inline_one_apply(func: &mut IrFunc, use_lists: &mut UseLists, apply: NodeId) 
         top_arg_sources,
         node_map: HashMap::new(),
         region_map: HashMap::new(),
+        arg_map: HashMap::new(),
         top_new_nodes: Vec::new(),
     };
     clone_region_into(func, callee_body, caller_region, &mut ctx);
@@ -1015,7 +1244,10 @@ fn inline_one_apply(func: &mut IrFunc, use_lists: &mut UseLists, apply: NodeId) 
     let mapped_results: Vec<PortSource> = func.regions[callee_body]
         .results
         .iter()
-        .map(|result| remap_source(result.source, &ctx))
+        .map(|&result_id| {
+            let result = &func.region_results[result_id];
+            remap_source(result.source, &ctx, func)
+        })
         .collect();
     if mapped_results.len() != output_count {
         panic!(
@@ -1134,7 +1366,8 @@ mod tests {
         };
         let mut func = builder.finish();
         let root = func.root_body();
-        let old_result = match func.regions[root].results[0].source {
+        let result_id = func.regions[root].results[0];
+        let old_result = match func.region_results[result_id].source {
             PortSource::Node(out) => out,
             PortSource::RegionArg(_) => panic!("root result should be node output"),
         };
@@ -1148,8 +1381,9 @@ mod tests {
             PortSource::Node(new_output),
         );
 
+        let result_id = func.regions[root].results[0];
         assert_eq!(
-            func.regions[root].results[0].source,
+            func.region_results[result_id].source,
             PortSource::Node(new_output)
         );
     }
@@ -1426,7 +1660,10 @@ mod tests {
     }
 
     #[test]
-    fn theta_hoist_keeps_partially_used_consts_inside_body() {
+    fn theta_hoist_threads_consts_as_args_when_used_by_non_hoistable_ops() {
+        // This test verifies that constants used by non-hoistable ops are still
+        // hoisted, but via threading as theta arguments rather than being left
+        // inside the body.
         let mut builder = IrBuilder::new(<u8 as facet::Facet>::SHAPE);
         {
             let mut rb = builder.root_region();
@@ -1466,6 +1703,7 @@ mod tests {
             .iter()
             .filter(|&&nid| matches!(func.nodes[nid].kind, NodeKind::Simple(IrOp::Const { .. })))
             .count();
+        let theta_inputs_before = func.nodes[theta].inputs.len();
         assert!(
             body_consts_before >= 1,
             "fixture should include theta-body constants before pass"
@@ -1473,14 +1711,35 @@ mod tests {
 
         hoist_theta_loop_invariant_setup_pass(&mut func);
 
-        let body_consts_after = func.regions[body]
+        // After hoisting, constants are threaded as theta inputs, so:
+        // - The theta should have more inputs than before
+        // - The body should have NO const nodes (they're now accessed via args)
+        let theta_after = func.regions[root]
+            .nodes
+            .iter()
+            .copied()
+            .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
+            .expect("theta should still exist");
+        let body_after = match &func.nodes[theta_after].kind {
+            NodeKind::Theta { body } => *body,
+            _ => unreachable!(),
+        };
+        let body_consts_after = func.regions[body_after]
             .nodes
             .iter()
             .filter(|&&nid| matches!(func.nodes[nid].kind, NodeKind::Simple(IrOp::Const { .. })))
             .count();
+        let theta_inputs_after = func.nodes[theta_after].inputs.len();
+
+        assert_eq!(
+            body_consts_after, 0,
+            "all body constants should be hoisted as theta arguments"
+        );
         assert!(
-            body_consts_after >= 1,
-            "constants that feed non-hoistable body ops must not be hoisted out of theta"
+            theta_inputs_after > theta_inputs_before,
+            "theta should have more inputs after hoisting constants as args (before={}, after={})",
+            theta_inputs_before,
+            theta_inputs_after
         );
     }
 

@@ -327,12 +327,9 @@ impl<'a> Linearizer<'a> {
                     .vreg
                     .expect("data port must have vreg assigned")
             }
-            PortSource::RegionArg(arg_ref) => {
-                let region = &self.func.regions[arg_ref.region];
-                region.args[arg_ref.index as usize]
-                    .vreg
-                    .expect("data region arg must have vreg assigned")
-            }
+            PortSource::RegionArg(arg_ref) => self.func.region_args[arg_ref.arg]
+                .vreg
+                .expect("data region arg must have vreg assigned"),
         }
     }
 
@@ -366,7 +363,8 @@ impl<'a> Linearizer<'a> {
                 _ => {}
             }
         }
-        for result in &region.results {
+        for &result_id in &region.results {
+            let result = &self.func.region_results[result_id];
             if let PortSource::Node(output_ref) = result.source
                 && let Some(&dep_pos) = node_pos.get(&output_ref.node)
             {
@@ -804,7 +802,8 @@ impl<'a> Linearizer<'a> {
             let src_input = &node.inputs[i + 1]; // +1 to skip predicate
             if src_input.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(src_input.source);
-                if let Some(dst_vreg) = region.args[i].vreg
+                let arg = &self.func.region_args[region.args[i]];
+                if let Some(dst_vreg) = arg.vreg
                     && src_vreg != dst_vreg
                 {
                     self.emit(
@@ -832,7 +831,7 @@ impl<'a> Linearizer<'a> {
         // Region results: [data..., cursor_state, output_state]
         // Gamma outputs: [data..., cursor_state, output_state]
         for i in 0..data_output_count {
-            let result = &region.results[i];
+            let result = &self.func.region_results[region.results[i]];
             if result.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(result.source);
                 let dst_vreg = node.outputs[i]
@@ -872,7 +871,8 @@ impl<'a> Linearizer<'a> {
             let input = &node.inputs[i];
             if input.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(input.source);
-                if let Some(dst_vreg) = body_region.args[i].vreg
+                let arg = &self.func.region_args[body_region.args[i]];
+                if let Some(dst_vreg) = arg.vreg
                     && src_vreg != dst_vreg
                 {
                     self.emit(
@@ -897,16 +897,17 @@ impl<'a> Linearizer<'a> {
 
         // Body results: [predicate, loop_vars..., cursor_state, output_state]
         // predicate: 0 = exit, nonzero = continue
-        let predicate_source = body_region.results[0].source;
-        let predicate_vreg = self.resolve_vreg(predicate_source);
+        let predicate_result = &self.func.region_results[body_region.results[0]];
+        let predicate_vreg = self.resolve_vreg(predicate_result.source);
 
         // Emit copies for body results → body region args (feedback).
         // Results[1..1+loop_var_count] → args[0..loop_var_count]
         for i in 0..loop_var_count {
-            let result = &body_region.results[i + 1]; // +1 to skip predicate
+            let result = &self.func.region_results[body_region.results[i + 1]]; // +1 to skip predicate
             if result.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(result.source);
-                if let Some(dst_vreg) = body_region.args[i].vreg
+                let arg = &self.func.region_args[body_region.args[i]];
+                if let Some(dst_vreg) = arg.vreg
                     && src_vreg != dst_vreg
                 {
                     self.emit(
@@ -937,7 +938,8 @@ impl<'a> Linearizer<'a> {
         // (or the body results, depending on convention). We use body args
         // since the feedback copies already wrote there.
         for i in 0..loop_var_count {
-            if let Some(src_vreg) = body_region.args[i].vreg
+            let arg = &self.func.region_args[body_region.args[i]];
+            if let Some(src_vreg) = arg.vreg
                 && let Some(dst_vreg) = node.outputs[i].vreg
                 && src_vreg != dst_vreg
             {
@@ -965,12 +967,14 @@ impl<'a> Linearizer<'a> {
         let data_args: Vec<VReg> = region
             .args
             .iter()
+            .map(|&arg_id| &self.func.region_args[arg_id])
             .filter(|a| a.kind == PortKind::Data)
             .map(|a| a.vreg.expect("lambda data arg must have vreg assigned"))
             .collect();
         let data_results: Vec<VReg> = region
             .results
             .iter()
+            .map(|&result_id| &self.func.region_results[result_id])
             .filter(|r| r.kind == PortKind::Data)
             .map(|r| self.resolve_vreg(r.source))
             .collect();
@@ -1495,13 +1499,13 @@ fn assign_vregs(func: &mut IrFunc) {
     let region_count = func.regions.len();
     for i in 0..region_count {
         let region_id = RegionId::new(i as u32);
-        let arg_count = func.regions[region_id].args.len();
-        for j in 0..arg_count {
-            if func.regions[region_id].args[j].kind == PortKind::Data
-                && func.regions[region_id].args[j].vreg.is_none()
+        let arg_ids: Vec<_> = func.regions[region_id].args.clone();
+        for arg_id in arg_ids {
+            if func.region_args[arg_id].kind == PortKind::Data
+                && func.region_args[arg_id].vreg.is_none()
             {
                 let vreg = func.fresh_vreg();
-                func.regions[region_id].args[j].vreg = Some(vreg);
+                func.region_args[arg_id].vreg = Some(vreg);
             }
         }
     }
