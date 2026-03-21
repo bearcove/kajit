@@ -4,7 +4,7 @@
 //! for blocks/edges/operations. It is intended to be the source-of-truth IR for
 //! post-linearization stages (regalloc, backends, simulation, and debug views).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 
@@ -413,9 +413,12 @@ impl Function {
             )));
         }
 
-        if used_insts.len() != self.insts.len() {
+        // Note: We allow used_insts.len() < self.insts.len() because DCE may leave
+        // orphaned instructions in the arena to keep InstIds stable. However, we still
+        // check that blocks don't reference more instructions than exist.
+        if used_insts.len() > self.insts.len() {
             return Err(CfgMirError::new(format!(
-                "func @{} instruction ownership mismatch: {} unique inst refs for {} insts",
+                "func @{} instruction refs exceed arena: {} unique refs for {} insts",
                 self.lambda_id.index(),
                 used_insts.len(),
                 self.insts.len()
@@ -443,6 +446,68 @@ impl Function {
             }
         }
 
+        // Validate that every vreg use has a reaching definition
+        self.validate_def_use()?;
+
+        Ok(())
+    }
+
+    /// Check that every vreg use is satisfied by a definition that reaches it.
+    /// This catches issues like DCE removing too much.
+    fn validate_def_use(&self) -> Result<(), CfgMirError> {
+        for block in &self.blocks {
+            // Track definitions available at each point in the block
+            let mut defs_available: HashSet<VReg> = HashSet::new();
+
+            // Block params are defined at entry
+            for &param in &block.params {
+                defs_available.insert(param);
+            }
+
+            // Also, vregs defined in dominating blocks are available
+            // For simplicity, we assume entry block defs are available everywhere
+            // (a more precise analysis would compute dominators)
+            if block.id != self.entry {
+                let entry_block = &self.blocks[self.entry.index()];
+                for &param in &entry_block.params {
+                    defs_available.insert(param);
+                }
+                for &inst_id in &entry_block.insts {
+                    let inst = &self.insts[inst_id.index()];
+                    for op in &inst.operands {
+                        if op.kind == OperandKind::Def {
+                            defs_available.insert(op.vreg);
+                        }
+                    }
+                }
+            }
+
+            // Walk instructions in order
+            for &inst_id in &block.insts {
+                let inst = &self.insts[inst_id.index()];
+
+                // Check uses come before the instruction's defs
+                for op in &inst.operands {
+                    if op.kind == OperandKind::Use && !defs_available.contains(&op.vreg) {
+                        return Err(CfgMirError::new(format!(
+                            "func @{} block b{} inst i{}: use of v{} has no reaching definition (inst op: {:?})",
+                            self.lambda_id.index(),
+                            block.id.0,
+                            inst_id.0,
+                            op.vreg.index(),
+                            inst.op
+                        )));
+                    }
+                }
+
+                // Add this instruction's defs
+                for op in &inst.operands {
+                    if op.kind == OperandKind::Def {
+                        defs_available.insert(op.vreg);
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -1630,6 +1695,476 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
             vreg_values: ir.debug.vreg_values.clone(),
         },
     }
+}
+
+/// Rematerialize constants that are passed as block parameters.
+///
+/// When constants are defined in one block and passed through edges to other
+/// blocks as parameters, they become regular vregs that consume registers.
+/// This pass identifies such constants and re-emits them locally in each block
+/// Lower linear IR to CFG-MIR and run all optimization passes.
+///
+/// This is the single entry point for producing optimized CFG-MIR from linear IR,
+/// ensuring consistent behavior between compilation and debug/test paths.
+pub fn lower_and_optimize(ir: &LinearIr) -> Program {
+    let debug = std::env::var("KAJIT_DEBUG_REMAT").is_ok();
+    if debug {
+        eprintln!("[lower_and_optimize] called with {} ops", ir.ops.len());
+    }
+    let mut cfg = lower_linear_ir(ir);
+    rematerialize_constants(&mut cfg);
+    dead_code_elimination(&mut cfg);
+    cfg
+}
+
+/// that needs them, eliminating the need to pass them through edges.
+///
+/// Benefits:
+/// - Reduces register pressure (constants don't need to be kept live)
+/// - Enables immediate encoding in backends (AND reg, #imm instead of AND reg, reg)
+/// - Removes unnecessary edge argument traffic
+pub fn rematerialize_constants(program: &mut Program) {
+    // Build a map of VReg -> constant value for all constants in the program
+    let mut const_values: HashMap<VReg, u64> = HashMap::new();
+    for func in &program.funcs {
+        for inst in &func.insts {
+            if let LinearOp::Const { dst, value } = &inst.op {
+                const_values.insert(*dst, *value);
+            }
+        }
+    }
+
+    if const_values.is_empty() {
+        return;
+    }
+
+    let debug = std::env::var("KAJIT_DEBUG_REMAT").is_ok();
+    if debug {
+        // Print first block's first param to identify which IR this is
+        let first_param = program
+            .funcs
+            .first()
+            .and_then(|f| f.blocks.get(1))
+            .and_then(|b| b.params.first())
+            .map(|v| v.index());
+        eprintln!(
+            "[remat] Found {} consts, vregs={}, b1.params[0]=v{:?}",
+            const_values.len(),
+            program.vreg_count,
+            first_param
+        );
+    }
+
+    for func in &mut program.funcs {
+        rematerialize_constants_in_function(func, &const_values, debug);
+    }
+
+    if debug {
+        let first_param = program
+            .funcs
+            .first()
+            .and_then(|f| f.blocks.get(1))
+            .and_then(|b| b.params.first())
+            .map(|v| v.index());
+        let param_count = program
+            .funcs
+            .first()
+            .and_then(|f| f.blocks.get(1))
+            .map(|b| b.params.len())
+            .unwrap_or(0);
+        eprintln!(
+            "[remat] AFTER: b1 has {} params, first=v{:?}",
+            param_count, first_param
+        );
+    }
+}
+
+fn rematerialize_constants_in_function(
+    func: &mut Function,
+    const_values: &HashMap<VReg, u64>,
+    debug: bool,
+) {
+    // Track which block params to remove and what constants to insert
+    // Key: BlockId, Value: Vec<(param_index, vreg, constant_value)>
+    let mut remat_plan: HashMap<BlockId, Vec<(usize, VReg, u64)>> = HashMap::new();
+
+    if debug {
+        eprintln!(
+            "[remat] func f{} const_values has {} entries",
+            func.id.0,
+            const_values.len()
+        );
+        for (vreg, val) in const_values.iter().take(10) {
+            eprintln!("[remat]   v{} = {}", vreg.index(), val);
+        }
+    }
+
+    // For each block (except entry), check its params
+    for block in &func.blocks {
+        if block.id == func.entry {
+            continue;
+        }
+
+        if block.params.is_empty() || block.preds.is_empty() {
+            continue;
+        }
+
+        if debug && block.id.0 < 3 {
+            eprintln!(
+                "[remat] checking block b{} with {} params",
+                block.id.0,
+                block.params.len()
+            );
+        }
+
+        // For each param position, check if all incoming edges provide the same constant
+        for (param_idx, &param_vreg) in block.params.iter().enumerate() {
+            let mut all_same_const: Option<u64> = None;
+            let mut is_uniform_const = true;
+
+            for &pred_edge_id in &block.preds {
+                let edge = &func.edges[pred_edge_id.index()];
+                if param_idx >= edge.args.len() {
+                    if debug && block.id.0 < 3 && param_idx < 3 {
+                        eprintln!(
+                            "[remat]   b{} param {} (v{}): edge e{} has only {} args",
+                            block.id.0,
+                            param_idx,
+                            param_vreg.index(),
+                            pred_edge_id.0,
+                            edge.args.len()
+                        );
+                    }
+                    is_uniform_const = false;
+                    break;
+                }
+                let source_vreg = edge.args[param_idx].source;
+                if let Some(&const_val) = const_values.get(&source_vreg) {
+                    match all_same_const {
+                        None => all_same_const = Some(const_val),
+                        Some(v) if v == const_val => {}
+                        Some(_) => {
+                            is_uniform_const = false;
+                            break;
+                        }
+                    }
+                } else {
+                    if debug && block.id.0 < 3 && param_idx < 3 {
+                        eprintln!(
+                            "[remat]   b{} param {} (v{}): source v{} not a constant",
+                            block.id.0,
+                            param_idx,
+                            param_vreg.index(),
+                            source_vreg.index()
+                        );
+                    }
+                    is_uniform_const = false;
+                    break;
+                }
+            }
+
+            if is_uniform_const {
+                if let Some(const_val) = all_same_const {
+                    if debug && block.id.0 < 3 {
+                        eprintln!(
+                            "[remat]   b{} param {} (v{}): rematerializing const {}",
+                            block.id.0,
+                            param_idx,
+                            param_vreg.index(),
+                            const_val
+                        );
+                    }
+                    remat_plan
+                        .entry(block.id)
+                        .or_default()
+                        .push((param_idx, param_vreg, const_val));
+                }
+            }
+        }
+    }
+
+    if remat_plan.is_empty() {
+        return;
+    }
+
+    // Apply the rematerialization plan
+    // We need to process params in reverse order to keep indices valid during removal
+    for (block_id, mut params_to_remat) in remat_plan {
+        // Sort by param_idx descending so removals don't shift indices
+        params_to_remat.sort_by(|a, b| b.0.cmp(&a.0));
+
+        let block = &mut func.blocks[block_id.index()];
+
+        // Collect new instructions to insert
+        let mut new_insts = Vec::new();
+
+        for (param_idx, vreg, const_val) in &params_to_remat {
+            // Remove from block params
+            block.params.remove(*param_idx);
+
+            // Create new Const instruction
+            let inst_id = InstId(func.insts.len() as u32);
+            func.insts.push(Inst {
+                id: inst_id,
+                op: LinearOp::Const {
+                    dst: *vreg,
+                    value: *const_val,
+                },
+                operands: vec![Operand {
+                    vreg: *vreg,
+                    kind: OperandKind::Def,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                }],
+                clobbers: Clobbers::default(),
+            });
+            new_insts.push(inst_id);
+        }
+
+        // Insert new instructions at the beginning of the block
+        let block = &mut func.blocks[block_id.index()];
+        for inst_id in new_insts.into_iter().rev() {
+            block.insts.insert(0, inst_id);
+        }
+
+        // Remove corresponding edge args from all predecessor edges
+        // Again, process in reverse order to keep indices valid
+        for &pred_edge_id in &func.blocks[block_id.index()].preds.clone() {
+            let edge = &mut func.edges[pred_edge_id.index()];
+            for (param_idx, _, _) in &params_to_remat {
+                if *param_idx < edge.args.len() {
+                    edge.args.remove(*param_idx);
+                }
+            }
+        }
+    }
+}
+
+/// Dead code elimination for CFG-MIR.
+///
+/// Removes instructions whose outputs are never used. This is particularly
+/// useful after rematerialization, which can leave the original constant
+/// definitions unused.
+pub fn dead_code_elimination(program: &mut Program) {
+    for func in &mut program.funcs {
+        dead_code_elimination_in_function(func);
+    }
+}
+
+fn dead_code_elimination_in_function(func: &mut Function) {
+    let debug = std::env::var("KAJIT_DEBUG_DCE").is_ok();
+    // Iterate until no more changes (some dead code may only become visible
+    // after other dead code is removed)
+    let mut iteration = 0;
+    loop {
+        iteration += 1;
+        // Collect which instructions are actually live (referenced by blocks)
+        let live_insts: HashSet<InstId> = func
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter().copied())
+            .collect();
+        if debug && iteration == 1 {
+            eprintln!(
+                "[dce] func f{} has {} live insts",
+                func.id.0,
+                live_insts.len()
+            );
+        }
+
+        // Collect all used vregs
+        let mut used_vregs: HashSet<VReg> = HashSet::new();
+
+        // Uses from instruction operands (inputs) - only from live instructions
+        // Track which vregs have been defined so far in each block (order-aware)
+        // We need to track two things:
+        // 1. external_uses: vregs used that come from outside this block (for cross-block DCE)
+        // 2. all uses: any vreg used (to keep local definitions alive)
+        let mut external_uses: HashSet<VReg> = HashSet::new();
+
+        for block in &func.blocks {
+            // Block params are defined at entry
+            let mut defs_so_far: HashSet<VReg> = block.params.iter().copied().collect();
+
+            for &inst_id in &block.insts {
+                if !live_insts.contains(&inst_id) {
+                    continue;
+                }
+                let inst = &func.insts[inst_id.index()];
+
+                // First, check uses - they see defs from BEFORE this instruction
+                for operand in &inst.operands {
+                    if operand.kind == OperandKind::Use {
+                        // ALL uses keep definitions alive
+                        used_vregs.insert(operand.vreg);
+
+                        // But only external uses matter for cross-block analysis
+                        if !defs_so_far.contains(&operand.vreg) {
+                            if debug && operand.vreg.index() == 37 {
+                                eprintln!("[dce] v37 used by inst i{} (external)", inst_id.0);
+                            }
+                            external_uses.insert(operand.vreg);
+                        }
+                    }
+                }
+
+                // Then, add this instruction's defs
+                for operand in &inst.operands {
+                    if operand.kind == OperandKind::Def {
+                        defs_so_far.insert(operand.vreg);
+                    }
+                }
+            }
+        }
+
+        // Collect which instructions are in the entry block
+        let entry_block_insts: HashSet<InstId> = func
+            .blocks
+            .get(func.entry.index())
+            .map(|b| b.insts.iter().copied().collect())
+            .unwrap_or_default();
+
+        // Uses from terminators
+        for term in &func.terms {
+            match term {
+                Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                    used_vregs.insert(*cond);
+                }
+                Terminator::JumpTable { predicate, .. } => {
+                    used_vregs.insert(*predicate);
+                }
+                Terminator::Return | Terminator::ErrorExit { .. } | Terminator::Branch { .. } => {}
+            }
+        }
+
+        // Uses from edge arguments (source vregs that flow into target blocks)
+        for edge in &func.edges {
+            for arg in &edge.args {
+                used_vregs.insert(arg.source);
+            }
+        }
+
+        // Uses from data_results (function return values)
+        for &vreg in &func.data_results {
+            used_vregs.insert(vreg);
+        }
+
+        // Find instructions to remove: those that define vregs that are never used
+        // and have no side effects (only consider live instructions)
+        let mut insts_to_remove: HashSet<InstId> = HashSet::new();
+        for inst in &func.insts {
+            if !live_insts.contains(&inst.id) {
+                continue;
+            }
+            if is_pure_instruction(&inst.op) {
+                // Check if all defs are unused
+                let all_defs_unused = inst.operands.iter().all(|op| {
+                    if op.kind != OperandKind::Def {
+                        return true;
+                    }
+                    // A def is unused if:
+                    // 1. It's not in used_vregs at all, OR
+                    // 2. It's in entry block AND not in external_uses (meaning all uses
+                    //    are satisfied by local redefinitions in other blocks)
+                    if !used_vregs.contains(&op.vreg) {
+                        return true;
+                    }
+                    // TODO: For entry block defs, we could check if all uses are satisfied
+                    // by local redefinitions in other blocks. For now, keep it simple.
+                    false
+                });
+                if all_defs_unused {
+                    insts_to_remove.insert(inst.id);
+                } else if debug
+                    && matches!(&inst.op, LinearOp::Const { dst, .. } if dst.index() == 37)
+                {
+                    // Debug: show why v37 const is considered used
+                    let is_external = external_uses.contains(&VReg::new(37));
+                    eprintln!(
+                        "[dce] const i{} v37 is used (external={})",
+                        inst.id.0, is_external
+                    );
+                }
+            }
+        }
+
+        if insts_to_remove.is_empty() {
+            if debug {
+                eprintln!("[dce] iteration {} found no dead code, done", iteration);
+            }
+            break;
+        }
+
+        if debug {
+            eprintln!(
+                "[dce] iteration {} removing {} dead insts",
+                iteration,
+                insts_to_remove.len()
+            );
+            // Show first few removed consts
+            let mut shown = 0;
+            for &inst_id in &insts_to_remove {
+                let inst = &func.insts[inst_id.index()];
+                if let LinearOp::Const { dst, .. } = &inst.op {
+                    if shown < 5 {
+                        eprintln!("[dce]   removing const i{} v{}", inst_id.0, dst.index());
+                        shown += 1;
+                    }
+                }
+            }
+        }
+
+        // Remove dead instructions from blocks
+        for block in &mut func.blocks {
+            block.insts.retain(|id| !insts_to_remove.contains(id));
+        }
+
+        // Note: We leave func.insts intact to keep InstIds stable.
+        // Orphaned instructions in the arena are harmless.
+    }
+}
+
+/// Check if a vreg is used by any instruction after `def_inst` in the entry block,
+/// OR by any edge arg flowing out of the entry block.
+fn is_used_later_in_entry_block(func: &Function, def_inst: InstId, vreg: VReg) -> bool {
+    let entry_block = &func.blocks[func.entry.index()];
+    let mut seen_def = false;
+    for &inst_id in &entry_block.insts {
+        if inst_id == def_inst {
+            seen_def = true;
+            continue;
+        }
+        if seen_def {
+            let inst = &func.insts[inst_id.index()];
+            for op in &inst.operands {
+                if op.kind == OperandKind::Use && op.vreg == vreg {
+                    return true;
+                }
+            }
+        }
+    }
+    // Also check edge args from successor edges
+    for &edge_id in &entry_block.succs {
+        let edge = &func.edges[edge_id.index()];
+        for arg in &edge.args {
+            if arg.source == vreg {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Returns true if an instruction has no side effects and can be safely removed
+/// if its outputs are unused.
+fn is_pure_instruction(op: &LinearOp) -> bool {
+    matches!(
+        op,
+        LinearOp::Const { .. }
+            | LinearOp::Copy { .. }
+            | LinearOp::BinOp { .. }
+            | LinearOp::UnaryOp { .. }
+    )
 }
 
 #[cfg(test)]

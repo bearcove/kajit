@@ -203,7 +203,7 @@ pub fn debug_cfg_mir(
     let mut func = compiler::build_decoder_ir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
-    regalloc_engine::cfg_mir::lower_linear_ir(&linear)
+    regalloc_engine::cfg_mir::lower_and_optimize(&linear)
 }
 
 /// Build the current prototype postcard HIR for a shape.

@@ -602,8 +602,14 @@ where
     }
     let expected: T = ::postcard::from_bytes(&encoded).unwrap();
     maybe_wait_for_debugger();
-    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
     let case = runtime_case_name();
+    // Dump CFG before full compilation so we get it even on failure
+    if dumps_enabled_for_case("postcard", &case) && should_dump_stage("cfg") {
+        let cfg_text = kajit::debug_cfg_mir_text(T::SHAPE, &kajit::postcard::KajitPostcard);
+        dump_stage("postcard", &case, "cfg", &cfg_text);
+    }
+    let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+    // Dump remaining artifacts after successful compilation
     if dumps_enabled_for_case("postcard", &case) {
         let artifacts = codegen_artifacts::<T, _>(&kajit::postcard::KajitPostcard);
         maybe_dump_codegen_artifacts("postcard", &case, &artifacts);

@@ -371,7 +371,6 @@ fn hoist_theta_loop_invariant_setup_pass(func: &mut IrFunc) {
         for theta in theta_nodes {
             if hoist_theta_constants_as_args(func, theta) {
                 changed = true;
-                // Verify after each change
                 #[cfg(debug_assertions)]
                 if let Err(err) = verify(func) {
                     panic!("IR verification failed after hoist_theta_constants_as_args: {err}");

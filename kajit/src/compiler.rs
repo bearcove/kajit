@@ -8070,7 +8070,7 @@ fn compile_linear_ir_decoder_with_options(
     let jit_debug = jit_debug_enabled();
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(ir);
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir);
     let regalloc_alloc = if apply_regalloc_edits {
         let mut alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
             .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
