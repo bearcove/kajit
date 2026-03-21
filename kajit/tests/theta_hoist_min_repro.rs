@@ -73,6 +73,7 @@ where
 
 #[test]
 #[cfg(target_arch = "aarch64")]
+#[ignore = "non-HIR path disabled"]
 fn theta_hoist_minimized_repros_remain_fixed() {
     // Keep this input aligned with `Boundaries` style values from corpus.
     let two_fields = br#"{"u8_max":255,"i32_min":-2147483648}"#;

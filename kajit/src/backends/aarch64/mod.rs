@@ -1306,6 +1306,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "non-HIR path disabled"]
     fn linear_backend_call_lambda_with_data_args_and_results() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);

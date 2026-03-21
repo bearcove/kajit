@@ -167,11 +167,12 @@ pub fn deserialize_from_cfg_mir_text<'input, T: facet::Facet<'input>>(
 /// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + CFG-MIR dumps.
 ///
 /// Intended for snapshot tests and debugging.
+/// Routes through HIR when the decoder/shape supports it, matching the compile path.
 pub fn debug_ir_and_cfg_mir_text(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
 ) -> (String, String) {
-    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     let registry = symbol_registry_for_shape(shape);
     let ir_text = format!("{}", func.display_with_registry(&registry));
@@ -196,11 +197,13 @@ pub fn debug_cfg_mir_text(
 ///
 /// This preserves real intrinsic function pointers and is intended for
 /// in-process debugging tools (e.g. differential checking).
+///
+/// Routes through HIR when the decoder/shape supports it, matching the compile path.
 pub fn debug_cfg_mir(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
 ) -> regalloc_engine::cfg_mir::Program {
-    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
     regalloc_engine::cfg_mir::lower_and_optimize(&linear)
@@ -274,11 +277,12 @@ pub fn compile_postcard_decoder_via_structural_hir(
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
 ///
 /// Intended for snapshot tests and debugging.
+/// Routes through HIR when the decoder/shape supports it, matching the compile path.
 pub fn debug_linear_ir(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
 ) -> linearize::LinearIr {
-    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
     compiler::run_default_passes_from_env(&mut func);
     linearize::linearize(&mut func)
 }
@@ -307,12 +311,13 @@ pub fn debug_ir_opt_timeline_text(
 }
 
 /// Same as [`debug_ir_opt_timeline_text`], but with explicit pipeline options.
+/// Routes through HIR when the decoder/shape supports it, matching the compile path.
 pub fn debug_ir_opt_timeline_text_with_options(
     shape: &'static facet::Shape,
     ir_decoder: &dyn format::Decoder,
     pipeline_opts: &PipelineOptions,
 ) -> Vec<(String, String)> {
-    let mut func = compiler::build_decoder_ir(shape, ir_decoder);
+    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
     let registry = symbol_registry_for_shape(shape);
     let mut checkpoints = vec![(
         "initial".to_string(),

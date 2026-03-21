@@ -3460,6 +3460,7 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
+    #[ignore = "non-HIR path disabled"]
     fn differential_checker_matches_for_call_lambda_data_result() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
@@ -3490,6 +3491,7 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
+    #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_materializes_lambda_return_result_allocs() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
@@ -3524,6 +3526,7 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
+    #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_assigns_call_lambda_abi_operands() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
@@ -3585,6 +3588,7 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
+    #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_wires_lambda_data_arg_from_abi_register() {
         let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
         let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
