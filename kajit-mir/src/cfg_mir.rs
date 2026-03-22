@@ -1707,10 +1707,6 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
 /// This is the single entry point for producing optimized CFG-MIR from linear IR,
 /// ensuring consistent behavior between compilation and debug/test paths.
 pub fn lower_and_optimize(ir: &LinearIr) -> Program {
-    let debug = std::env::var("KAJIT_DEBUG_REMAT").is_ok();
-    if debug {
-        eprintln!("[lower_and_optimize] called with {} ops", ir.ops.len());
-    }
     let mut cfg = lower_linear_ir(ir);
     rematerialize_constants(&mut cfg);
     local_cse(&mut cfg);
@@ -3374,5 +3370,142 @@ mod tests {
             }
             other => panic!("expected BinOp, got {:?}", other),
         }
+    }
+
+    /// Build a two-block function where b0 defines a const and passes it to b1.
+    fn two_block_const_param_func() -> Function {
+        // b0: v0 = const 42; branch to b1 passing v0
+        // b1: param v1 receives v0; return
+        Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: Vec::new(),
+            data_results: vec![v(1)], // v1 is used as result
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    params: Vec::new(),
+                    insts: vec![InstId(0)], // const
+                    term: TermId(0),        // branch to b1
+                    preds: Vec::new(),
+                    succs: vec![EdgeId(0)],
+                },
+                Block {
+                    id: BlockId(1),
+                    params: vec![v(1)], // receives const from b0
+                    insts: Vec::new(),
+                    term: TermId(1), // return
+                    preds: vec![EdgeId(0)],
+                    succs: Vec::new(),
+                },
+            ],
+            edges: vec![Edge {
+                id: EdgeId(0),
+                from: BlockId(0),
+                to: BlockId(1),
+                args: vec![EdgeArg {
+                    source: v(0),
+                    target: v(1),
+                }],
+            }],
+            insts: vec![Inst {
+                id: InstId(0),
+                op: LinearOp::Const {
+                    dst: v(0),
+                    value: 42,
+                },
+                operands: vec![Operand {
+                    vreg: v(0),
+                    kind: OperandKind::Def,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                }],
+                clobbers: Clobbers::default(),
+            }],
+            terms: vec![Terminator::Branch { edge: EdgeId(0) }, Terminator::Return],
+        }
+    }
+
+    #[test]
+    fn rematerialize_constants_replaces_param_with_local_const() {
+        // Before: b0 defines const, passes to b1 as param
+        // After: b1 has local const, param removed
+        let mut program = Program {
+            vreg_count: 2,
+            slot_count: 0,
+            funcs: vec![two_block_const_param_func()],
+            debug: Default::default(),
+        };
+
+        // Verify initial state
+        assert_eq!(
+            program.funcs[0].blocks[1].params.len(),
+            1,
+            "b1 should have 1 param before remat"
+        );
+        assert_eq!(
+            program.funcs[0].blocks[1].insts.len(),
+            0,
+            "b1 should have 0 insts before remat"
+        );
+
+        rematerialize_constants(&mut program);
+
+        let func = &program.funcs[0];
+
+        // b1 should now have no params and one local const instruction
+        assert_eq!(
+            func.blocks[1].params.len(),
+            0,
+            "b1 param should be removed after remat"
+        );
+        assert_eq!(
+            func.blocks[1].insts.len(),
+            1,
+            "b1 should have 1 const inst after remat"
+        );
+
+        // The edge should have no args
+        assert_eq!(
+            func.edges[0].args.len(),
+            0,
+            "edge args should be removed after remat"
+        );
+
+        // The instruction should be a const with value 42
+        let inst_id = func.blocks[1].insts[0];
+        match &func.insts[inst_id.index()].op {
+            LinearOp::Const { value, .. } => {
+                assert_eq!(*value, 42, "rematerialized const should have same value");
+            }
+            other => panic!("expected Const, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn rematerialize_does_not_explode_instruction_count() {
+        // Create a simple two-block program and verify instruction count doesn't grow unexpectedly
+        let mut program = Program {
+            vreg_count: 2,
+            slot_count: 0,
+            funcs: vec![two_block_const_param_func()],
+            debug: Default::default(),
+        };
+
+        let insts_before: usize = program.funcs.iter().map(|f| f.insts.len()).sum();
+
+        rematerialize_constants(&mut program);
+
+        let insts_after: usize = program.funcs.iter().map(|f| f.insts.len()).sum();
+
+        // Should add at most 1 instruction per rematerialized constant
+        // In this case: 1 const in b0, rematerialized to b1 = 2 total
+        assert!(
+            insts_after <= insts_before + 1,
+            "instruction count grew too much: {} -> {}",
+            insts_before,
+            insts_after
+        );
     }
 }
