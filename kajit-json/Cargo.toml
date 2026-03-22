@@ -1,0 +1,17 @@
+[package]
+name = "kajit-json"
+version = "0.1.0"
+edition = "2024"
+authors = ["Amos Wenger <amos@bearcove.eu>"]
+description = "JSON HIR generation for kajit"
+repository = "https://github.com/bearcove/kajit"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+kajit-hir = { path = "../kajit-hir" }

@@ -598,6 +598,7 @@ dependencies = [
  "kajit-hir-text",
  "kajit-ir",
  "kajit-ir-text",
+ "kajit-json",
  "kajit-lir",
  "kajit-mir",
  "kajit-mir-text",
@@ -651,6 +652,14 @@ dependencies = [
  "chumsky",
  "facet",
  "kajit-ir",
+]
+
+[[package]]
+name = "kajit-json"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kajit-hir",
 ]
 
 [[package]]

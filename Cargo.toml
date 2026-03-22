@@ -3,6 +3,7 @@ members = [
   "kajit",
   "kajit-emit",
   "kajit-hir",
+  "kajit-json",
   "kajit-hir-text",
   "kajit-ir",
   "kajit-ir-text",

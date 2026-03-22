@@ -1,8 +1,9 @@
-//! JSON HIR generation — builds hir::Module from facet Shape for JSON format.
+//! JSON HIR generation — builds `hir::Module` from facet `Shape` for JSON format.
 
-use super::*;
+use facet::{ScalarType, Shape};
+use kajit_hir as hir;
 
-pub(crate) fn build_json_decoder_hir(shape: &'static Shape) -> hir::Module {
+pub fn build_json_decoder_hir(shape: &'static Shape) -> hir::Module {
     match shape.scalar_type() {
         Some(ScalarType::Bool) => build_json_root_bool_decoder_hir(shape),
         Some(ScalarType::U32) => build_json_root_u32_decoder_hir(shape),
@@ -11,7 +12,7 @@ pub(crate) fn build_json_decoder_hir(shape: &'static Shape) -> hir::Module {
     }
 }
 
-pub(crate) fn supports_json_decoder_hir(shape: &'static Shape) -> bool {
+pub fn supports_json_decoder_hir(shape: &'static Shape) -> bool {
     matches!(
         shape.scalar_type(),
         Some(ScalarType::Bool | ScalarType::U32 | ScalarType::U64)

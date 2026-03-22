@@ -1,6 +1,5 @@
 mod dwarf;
 mod hir_to_ir;
-mod json_hir;
 mod postcard_hir;
 mod shape_utils;
 
@@ -24,7 +23,7 @@ use crate::ir::{RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;
 
 pub(crate) use hir_to_ir::{build_postcard_decoder_ir_via_hir, build_structural_hir_ir};
-pub(crate) use json_hir::{build_json_decoder_hir, supports_json_decoder_hir};
+pub(crate) use kajit_json::{build_json_decoder_hir, supports_json_decoder_hir};
 pub(crate) use postcard_hir::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
