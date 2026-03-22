@@ -2312,11 +2312,27 @@ fn can_encode_as_immediate(op: kajit_lir::BinOpKind, value: u64) -> bool {
         BinOpKind::Add | BinOpKind::Sub => value <= 4095,
         // ARM64 shift immediate: 6-bit (0-63)
         BinOpKind::Shl | BinOpKind::Shr => value < 64,
-        // ARM64 logical immediate (And/Or/Xor) uses complex bitmask encoding.
-        // The rules are non-trivial, so we don't try to predict what will encode.
-        // Leave these consts with their Def operands so regalloc handles them.
+        // ARM64 logical immediate uses bitmask encoding. Only allow values we know encode.
+        // Common varint masks: 0x7f (7 consecutive 1s), 0x80 (single bit), 0xff, etc.
+        BinOpKind::And | BinOpKind::Or | BinOpKind::Xor => is_encodable_logical_imm(value),
         _ => false,
     }
+}
+
+/// Conservative check for ARM64 logical immediate encoding.
+/// Returns true only for values we're certain can be encoded.
+fn is_encodable_logical_imm(value: u64) -> bool {
+    // All-zeros and all-ones are never encodable
+    if value == 0 || value == u64::MAX {
+        return false;
+    }
+    // Common varint masks - these are all encodable as bitmasks
+    matches!(
+        value,
+        0x1 | 0x3 | 0x7 | 0xf | 0x1f | 0x3f | 0x7f | 0xff |     // 1-8 consecutive 1s
+        0x80 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 |          // single bits
+        0xffff | 0xff00 | 0xf0 | 0x0f // other common masks
+    )
 }
 
 /// Remove def operands from Const instructions that are only used as immediates.
