@@ -1423,9 +1423,15 @@ mod json {
         assert_json_case(value);
     }
     #[test]
-    #[ignore = "json array lowering is not implemented in IR path yet; case=array_u32_4, type=[u32;4]"]
-    fn array_u32_4() {
+    #[ignore = "json array lowering is not implemented in IR path yet; case=array_u32_4_small, type=[u32;4]"]
+    fn array_u32_4_small() {
         let value = [10u32, 20u32, 30u32, 40u32];
+        assert_json_case(value);
+    }
+    #[test]
+    #[ignore = "json array lowering is not implemented in IR path yet; case=array_u32_4_large, type=[u32;4]"]
+    fn array_u32_4_large() {
+        let value = [70_000u32, 80_000u32, 90_000u32, 100_000u32];
         assert_json_case(value);
     }
     #[test]
@@ -2146,8 +2152,13 @@ mod postcard {
         assert_postcard_case(value);
     }
     #[test]
-    fn array_u32_4() {
+    fn array_u32_4_small() {
         let value = [10u32, 20u32, 30u32, 40u32];
+        assert_postcard_case(value);
+    }
+    #[test]
+    fn array_u32_4_large() {
+        let value = [70_000u32, 80_000u32, 90_000u32, 100_000u32];
         assert_postcard_case(value);
     }
     #[test]
@@ -2564,9 +2575,15 @@ mod prop {
         assert_prop_case(&marker);
     }
     #[test]
-    #[ignore = "json: json array lowering is not implemented in IR path yet; case=array_u32_4, type=[u32;4]"]
-    fn array_u32_4() {
+    #[ignore = "json: json array lowering is not implemented in IR path yet; case=array_u32_4_small, type=[u32;4]"]
+    fn array_u32_4_small() {
         let marker = [10u32, 20u32, 30u32, 40u32];
+        assert_prop_case(&marker);
+    }
+    #[test]
+    #[ignore = "json: json array lowering is not implemented in IR path yet; case=array_u32_4_large, type=[u32;4]"]
+    fn array_u32_4_large() {
+        let marker = [70_000u32, 80_000u32, 90_000u32, 100_000u32];
         assert_prop_case(&marker);
     }
     #[test]

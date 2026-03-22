@@ -664,9 +664,15 @@ pub(crate) fn cases() -> Vec<Case> {
             inputs: vec![],
         },
         Case {
-            name: "array_u32_4",
+            name: "array_u32_4_small",
             ty: quote!([u32; 4]),
             values: vec![quote!([10u32, 20u32, 30u32, 40u32])],
+            inputs: vec![],
+        },
+        Case {
+            name: "array_u32_4_large",
+            ty: quote!([u32; 4]),
+            values: vec![quote!([70_000u32, 80_000u32, 90_000u32, 100_000u32])],
             inputs: vec![],
         },
         Case {
