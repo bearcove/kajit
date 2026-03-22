@@ -1,6 +1,6 @@
 #![allow(clippy::approx_constant)]
 
-pub mod arch;
+pub(crate) mod arch;
 pub mod backends;
 pub mod compiler;
 pub mod context;
@@ -22,7 +22,6 @@ pub mod malum;
 pub mod pipeline_opts;
 pub mod postcard;
 mod pow10tab;
-pub mod recipe;
 pub mod regalloc_engine;
 pub mod solver;
 
