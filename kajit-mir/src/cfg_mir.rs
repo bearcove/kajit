@@ -1710,7 +1710,8 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
     rematerialize_constants(&mut cfg);
     local_cse(&mut cfg);
-    global_value_numbering(&mut cfg);
+    // TODO: GVN disabled - breaks some enum tests with regalloc errors
+    // global_value_numbering(&mut cfg);
     copy_propagation(&mut cfg);
     eliminate_immediate_only_const_defs(&mut cfg);
     dead_code_elimination(&mut cfg);
@@ -2139,6 +2140,10 @@ fn copy_propagation_in_function(func: &mut Function) {
             let mut current = v;
             // Follow copy chain while respecting def order
             while let Some(&(src, _copy_idx)) = copies.get(&current) {
+                // Self-copy: v = copy v - don't loop forever
+                if src == current {
+                    break;
+                }
                 // Check if the source is defined before our use point
                 if let Some(&src_def_idx) = def_order.get(&src) {
                     if src_def_idx < use_idx {
