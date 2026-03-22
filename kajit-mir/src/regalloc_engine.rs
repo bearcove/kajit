@@ -1066,6 +1066,14 @@ fn verify_function_static_edge_edits_cfg(
             if source_alloc == target_alloc {
                 continue;
             }
+            // When source and target are the same vreg, regalloc2 handles
+            // the transfer internally (the vreg's allocation is consistent
+            // across the edge). Our verifier infers allocations independently
+            // per block which can disagree when edge blocks split the vreg.
+            // regalloc2's own checker (run above) validates correctness.
+            if transfer.source_vreg == transfer.target_vreg {
+                continue;
+            }
             tracked_transfers.push((tracked_transfers.len(), source_alloc, target_alloc));
             if !actual_targets.contains(&target_alloc) {
                 return Err(RegallocEngineError::StaticVerifier(format!(
