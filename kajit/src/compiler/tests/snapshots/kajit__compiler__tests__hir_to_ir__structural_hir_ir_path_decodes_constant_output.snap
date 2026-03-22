@@ -1,5 +1,6 @@
 ---
-source: kajit/src/compiler/tests/mod.rs
+source: kajit/src/compiler/tests/hir_to_ir.rs
+assertion_line: 46
 expression: "format!(\"{}\", ir.display_with_registry(&registry))"
 ---
 state_domains {
