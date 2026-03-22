@@ -664,8 +664,15 @@ fn main() {
     register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32), false, true);
     register_bench_case(
         &mut v,
-        "array_u32_4",
+        "array_smallval_u32_4",
         [10u32, 20u32, 30u32, 40u32],
+        false,
+        true,
+    );
+    register_bench_case(
+        &mut v,
+        "array_bigval_u32_4",
+        [100_000u32, 200_000u32, 300_000u32, 400_000u32],
         false,
         true,
     );
