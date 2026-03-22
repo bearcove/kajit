@@ -223,7 +223,7 @@ pub struct DebugValue {
 // ─── Value types ────────────────────────────────────────────────────────────
 
 /// Width of a memory operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Width {
     /// 1 byte
     W1,

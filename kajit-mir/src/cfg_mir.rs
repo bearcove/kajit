@@ -1713,6 +1713,7 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     }
     let mut cfg = lower_linear_ir(ir);
     rematerialize_constants(&mut cfg);
+    local_cse(&mut cfg);
     dead_code_elimination(&mut cfg);
     cfg
 }
@@ -2334,6 +2335,195 @@ fn is_pure_instruction(op: &LinearOp) -> bool {
             | LinearOp::BinOp { .. }
             | LinearOp::UnaryOp { .. }
     )
+}
+
+/// Local Common Subexpression Elimination within each basic block.
+///
+/// This pass identifies redundant computations within a block and replaces them
+/// with copies from the first computation. Handles:
+/// - Duplicate constants (same value)
+/// - Duplicate slot reads (same slot, no intervening write)
+/// - Duplicate binary operations (same op and operands)
+/// - Duplicate unary operations (same op and operand)
+pub fn local_cse(program: &mut Program) {
+    for func in &mut program.funcs {
+        local_cse_in_function(func);
+    }
+}
+
+fn local_cse_in_function(func: &mut Function) {
+    use kajit_ir::SlotId;
+    use kajit_lir::{BinOpKind, UnaryOpKind};
+
+    for block in &func.blocks {
+        // Track known values within this block
+        let mut known_consts: HashMap<u64, VReg> = HashMap::new();
+        let mut known_slot_reads: HashMap<SlotId, VReg> = HashMap::new();
+        let mut known_binops: HashMap<(BinOpKind, VReg, VReg), VReg> = HashMap::new();
+        let mut known_unaryops: HashMap<(UnaryOpKind, VReg), VReg> = HashMap::new();
+
+        // Collect replacements: inst_id -> (Copy instruction, new operands)
+        let mut replacements: Vec<(InstId, LinearOp, Vec<Operand>)> = Vec::new();
+
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.index()];
+            match &inst.op {
+                LinearOp::Const { dst, value } => {
+                    if let Some(&existing) = known_consts.get(value) {
+                        // Replace with copy from existing
+                        let new_operands = vec![
+                            Operand {
+                                vreg: existing,
+                                kind: OperandKind::Use,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                            Operand {
+                                vreg: *dst,
+                                kind: OperandKind::Def,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                        ];
+                        replacements.push((
+                            inst_id,
+                            LinearOp::Copy {
+                                dst: *dst,
+                                src: existing,
+                            },
+                            new_operands,
+                        ));
+                    } else {
+                        known_consts.insert(*value, *dst);
+                    }
+                }
+
+                LinearOp::ReadFromSlot { dst, slot } => {
+                    if let Some(&existing) = known_slot_reads.get(slot) {
+                        let new_operands = vec![
+                            Operand {
+                                vreg: existing,
+                                kind: OperandKind::Use,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                            Operand {
+                                vreg: *dst,
+                                kind: OperandKind::Def,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                        ];
+                        replacements.push((
+                            inst_id,
+                            LinearOp::Copy {
+                                dst: *dst,
+                                src: existing,
+                            },
+                            new_operands,
+                        ));
+                    } else {
+                        known_slot_reads.insert(*slot, *dst);
+                    }
+                }
+
+                LinearOp::WriteToSlot { slot, .. } => {
+                    // Invalidate the slot read cache for this slot
+                    known_slot_reads.remove(slot);
+                }
+
+                LinearOp::BinOp { op, dst, lhs, rhs } => {
+                    let key = (*op, *lhs, *rhs);
+                    if let Some(&existing) = known_binops.get(&key) {
+                        let new_operands = vec![
+                            Operand {
+                                vreg: existing,
+                                kind: OperandKind::Use,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                            Operand {
+                                vreg: *dst,
+                                kind: OperandKind::Def,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                        ];
+                        replacements.push((
+                            inst_id,
+                            LinearOp::Copy {
+                                dst: *dst,
+                                src: existing,
+                            },
+                            new_operands,
+                        ));
+                    } else {
+                        known_binops.insert(key, *dst);
+                        // For commutative ops, also insert the swapped version
+                        if matches!(
+                            op,
+                            BinOpKind::Add
+                                | BinOpKind::Mul
+                                | BinOpKind::And
+                                | BinOpKind::Or
+                                | BinOpKind::Xor
+                                | BinOpKind::CmpEq
+                                | BinOpKind::CmpNe
+                        ) && lhs != rhs
+                        {
+                            known_binops.insert((*op, *rhs, *lhs), *dst);
+                        }
+                    }
+                }
+
+                LinearOp::UnaryOp { op, dst, src } => {
+                    let key = (*op, *src);
+                    if let Some(&existing) = known_unaryops.get(&key) {
+                        let new_operands = vec![
+                            Operand {
+                                vreg: existing,
+                                kind: OperandKind::Use,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                            Operand {
+                                vreg: *dst,
+                                kind: OperandKind::Def,
+                                class: RegClass::Gpr,
+                                fixed: None,
+                            },
+                        ];
+                        replacements.push((
+                            inst_id,
+                            LinearOp::Copy {
+                                dst: *dst,
+                                src: existing,
+                            },
+                            new_operands,
+                        ));
+                    } else {
+                        known_unaryops.insert(key, *dst);
+                    }
+                }
+
+                // Other instructions may have side effects or modify state
+                // that invalidates our knowledge
+                LinearOp::CallIntrinsic { .. } | LinearOp::CallLambda { .. } => {
+                    // Calls may modify slots, so clear slot knowledge
+                    known_slot_reads.clear();
+                }
+
+                _ => {}
+            }
+        }
+
+        // Apply replacements
+        for (inst_id, new_op, new_operands) in replacements {
+            let inst = &mut func.insts[inst_id.index()];
+            inst.op = new_op;
+            inst.operands = new_operands;
+        }
+    }
 }
 
 #[cfg(test)]

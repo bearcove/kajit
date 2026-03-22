@@ -23,7 +23,7 @@ pub type LabelId = Id<LabelMarker>;
 // ─── BinOpKind / UnaryOpKind ─────────────────────────────────────────────────
 
 /// Binary operation kind for linear IR.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOpKind {
     Add,
     Sub,
@@ -42,7 +42,7 @@ pub enum BinOpKind {
 }
 
 /// Unary operation kind for linear IR.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOpKind {
     ZigzagDecode { wide: bool },
     SignExtend { from_width: Width },
