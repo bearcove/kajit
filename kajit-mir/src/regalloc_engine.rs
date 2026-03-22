@@ -163,6 +163,27 @@ struct AdapterFunction {
     empty_vregs: Vec<VReg>,
 }
 
+impl AdapterFunction {
+    fn dump_debug(&self, cfg_func: &cfg_mir::Function) {
+        use regalloc2::Function;
+        eprintln!("=== Adapter: lambda @{} ===", cfg_func.lambda_id.index());
+        eprintln!("  num_vregs: {}", self.num_vregs);
+        for (bi, block) in self.blocks.iter().enumerate() {
+            let b = regalloc2::Block::new(bi);
+            let params: Vec<usize> = self.block_params(b).iter().map(|v| v.vreg()).collect();
+            eprintln!("  block {bi}: params={params:?}");
+            for (si, succ_args) in block.succ_args.iter().enumerate() {
+                let args: Vec<usize> = succ_args.iter().map(|v| v.vreg()).collect();
+                if !args.is_empty() || true {
+                    let succ = block.succs.get(si).map(|b| b.index()).unwrap_or(9999);
+                    eprintln!("    succ[{si}] → b{succ}: branch_args={args:?}");
+                }
+            }
+        }
+        eprintln!("=== end ===");
+    }
+}
+
 fn int_vreg(v: kajit_ir::VReg) -> VReg {
     VReg::new(v.index(), RegClass::Int)
 }
@@ -793,6 +814,9 @@ fn allocate_cfg_function(
     options: &RegallocOptions,
 ) -> Result<AllocatedCfgFunction, RegallocEngineError> {
     let adapter = AdapterFunction::from_cfg(func, vreg_count)?;
+    if std::env::var_os("KAJIT_DUMP_ADAPTER").is_some() {
+        adapter.dump_debug(func);
+    }
     let out = regalloc2::run(&adapter, env, options)?;
 
     #[cfg(debug_assertions)]

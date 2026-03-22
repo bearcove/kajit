@@ -974,7 +974,9 @@ impl<'a> Linearizer<'a> {
             if result.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(result.source);
                 let arg = &self.func.region_args[body_region.args[i]];
-                if let Some(dst_vreg) = arg.vreg {
+                if let Some(dst_vreg) = arg.vreg
+                    && src_vreg != dst_vreg
+                {
                     feedback_phi_args.push((src_vreg, dst_vreg));
                 }
             }
