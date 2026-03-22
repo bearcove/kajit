@@ -169,7 +169,21 @@ fn run_dead_code_elimination_pass(func: &mut IrFunc) {
 }
 
 fn run_slot_to_reg_pass(func: &mut IrFunc) {
+    if std::env::var("DUMP_SLOT2REG").is_ok() {
+        let registry = crate::IntrinsicRegistry::empty();
+        eprintln!(
+            "=== BEFORE slot2reg ===\n{}\n=== END BEFORE ===",
+            func.display_with_registry(&registry)
+        );
+    }
     crate::slot2reg::slot_to_reg(func);
+    if std::env::var("DUMP_SLOT2REG").is_ok() {
+        let registry = crate::IntrinsicRegistry::empty();
+        eprintln!(
+            "=== AFTER slot2reg ===\n{}\n=== END AFTER ===",
+            func.display_with_registry(&registry)
+        );
+    }
     debug_verify(func, "slot_to_reg");
 }
 

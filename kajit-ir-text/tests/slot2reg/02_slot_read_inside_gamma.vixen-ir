@@ -1,0 +1,29 @@
+lambda @0 (shape: "test") {
+  region {
+    args: [%cs, %os]
+    n0 = Const(0x2a) [] -> [v0]
+    n1 = WriteToSlot(0) [v0, %cs:arg] -> [%cs]
+    n2 = Const(0x0) [] -> [v1]
+    n7 = gamma [
+      pred: v1
+      in0: %cs:n1
+      in1: %os:arg
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          n3 = ReadFromSlot(0) [%cs:arg] -> [v2, %cs]
+          n4 = WriteToField(offset=0, W4) [v2, %os:arg] -> [%os]
+          results: [%cs:n3, %os:n4]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n5 = ReadFromSlot(0) [%cs:arg] -> [v3, %cs]
+          n6 = WriteToField(offset=0, W4) [v3, %os:arg] -> [%os]
+          results: [%cs:n5, %os:n6]
+        }
+    } -> [%cs, %os]
+    results: [%cs:n7, %os:n7]
+  }
+}

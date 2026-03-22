@@ -1,0 +1,10 @@
+lambda @0 (shape: "test") {
+  region {
+    args: [%cs, %os]
+    n0 = Const(0x2a) [] -> [v0]
+    n1 = WriteToSlot(0) [v0, %cs:arg] -> [%cs]
+    n2 = ReadFromSlot(0) [%cs:n1] -> [v1, %cs]
+    n3 = WriteToField(offset=0, W4) [v1, %os:arg] -> [%os]
+    results: [%cs:n2, %os:n3]
+  }
+}

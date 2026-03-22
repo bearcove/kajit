@@ -1,7 +1,3 @@
----
-source: kajit-ir-text/src/slot2reg_tests.rs
-expression: ir
----
 state_domains {
   d0 = cursor
   d1 = output
