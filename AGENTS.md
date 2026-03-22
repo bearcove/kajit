@@ -103,19 +103,10 @@ KAJIT_OPTS='-regalloc' cargo nextest run ...
 
 Print all available options: `KAJIT_OPTS=help cargo nextest run -p kajit --test corpus -E 'test(=any::test)'`
 
-### Printing HIR
-
-HIR isn't part of the env-var dump system yet. To print HIR in tests:
-
-```rust
-let module = build_postcard_decoder_hir(shape);
-eprintln!("{}", module);  // uses Display impl from kajit-hir/src/text.rs
-```
-
 ### Stage dumps
 
 Dump pipeline artifacts with environment variables:
-- `KAJIT_DUMP_STAGES` — comma-separated: `ir`, `linear`, `cfg`, `edits`, `opts`, `all` (note: `hir` not yet supported)
+- `KAJIT_DUMP_STAGES` — comma-separated: `hir`, `ir`, `linear`, `cfg`, `edits`, `opts`, `emit`, `all`
 - `KAJIT_DUMP_FILTER` — substring match on `<format>::<case>` (e.g. `postcard::scalar_u64_v3`)
 - `KAJIT_DUMP_DIR` — output directory (default: `target/kajit-stage-dumps`)
 

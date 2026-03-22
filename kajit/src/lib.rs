@@ -237,6 +237,17 @@ pub fn debug_json_hir_text(shape: &'static facet::Shape) -> String {
     debug_json_hir(shape).to_string()
 }
 
+/// Build HIR for a decoder and render it in canonical text form.
+///
+/// Dispatches to the appropriate HIR builder based on the decoder's format.
+pub fn debug_hir_text(shape: &'static facet::Shape, decoder: &dyn format::Decoder) -> String {
+    match decoder.hir_lowering_kind() {
+        Some(format::HIRLoweringKind::Postcard) => debug_postcard_hir_text(shape),
+        Some(format::HIRLoweringKind::Json) => debug_json_hir_text(shape),
+        None => "(no HIR path for this decoder)".to_string(),
+    }
+}
+
 /// Build postcard RVSDG by first lowering through the prototype HIR path.
 ///
 /// This currently supports only the narrow postcard subset covered by the
