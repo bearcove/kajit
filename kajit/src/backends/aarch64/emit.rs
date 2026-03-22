@@ -186,14 +186,14 @@ impl Lowerer {
                     reg.class()
                 );
             }
-            if let Some(alloc) = rhs_alloc {
-                if let Some(reg) = alloc.as_reg() {
-                    assert!(
-                        reg.class() == regalloc2::RegClass::Int,
-                        "unsupported register allocation class {:?} for compare rhs",
-                        reg.class()
-                    );
-                }
+            if let Some(alloc) = rhs_alloc
+                && let Some(reg) = alloc.as_reg()
+            {
+                assert!(
+                    reg.class() == regalloc2::RegClass::Int,
+                    "unsupported register allocation class {:?} for compare rhs",
+                    reg.class()
+                );
             }
 
             // For rhs_alloc, extract reg/stack if present
@@ -734,8 +734,7 @@ impl Lowerer {
                 BinOpKind::Shl => {
                     // Try immediate encoding first (shift amount 1-63, not 0)
                     if let Some(c) = rhs_const
-                        && c >= 1
-                        && c <= 63
+                        && (1..=63).contains(&c)
                     {
                         self.ectx.emit.emit_word(
                             aarch64::encode_lsl_imm(

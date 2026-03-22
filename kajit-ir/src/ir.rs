@@ -2128,7 +2128,7 @@ impl<'a> RegionBuilder<'a> {
         // Body results layout: [predicate, loop_vars..., state domains...].
         let total_results = self.func.regions[body].results.len();
         assert!(
-            total_results >= state_count + 1,
+            total_results > state_count,
             "theta body must have predicate plus state results for all declared domains"
         );
         let data_result_count = total_results - state_count; // predicate + loop_vars

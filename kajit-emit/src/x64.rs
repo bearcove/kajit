@@ -143,6 +143,10 @@ impl FinalizedEmission {
         self.exec.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.exec.is_empty()
+    }
+
     pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
         crate::build_trace(self.exec.as_ref(), &self.source_map)
     }

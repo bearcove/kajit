@@ -150,13 +150,8 @@ impl EmitCtx {
     /// Flush the cached input cursor (x19) back to ctx.input_ptr.
     fn emit_flush_input_cursor(&mut self) {
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("str"),
         );
     }
 
@@ -165,22 +160,12 @@ impl EmitCtx {
     fn emit_reload_cursor_and_check_error(&mut self) {
         let error_exit = self.error_exit;
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
@@ -192,13 +177,8 @@ impl EmitCtx {
     fn emit_check_error(&mut self) {
         let error_exit = self.error_exit;
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
@@ -208,13 +188,8 @@ impl EmitCtx {
     /// Flush the cached output cursor (x19) back to ctx for encoding.
     fn emit_enc_flush_output_cursor(&mut self) {
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                ENC_OUTPUT_PTR as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, ENC_OUTPUT_PTR)
+                .expect("str"),
         );
     }
 
@@ -222,31 +197,16 @@ impl EmitCtx {
     fn emit_enc_reload_and_check_error(&mut self) {
         let error_exit = self.error_exit;
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                ENC_OUTPUT_PTR as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, ENC_OUTPUT_PTR)
+                .expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X20,
-                Reg::X22,
-                ENC_OUTPUT_END as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X20, Reg::X22, ENC_OUTPUT_END)
+                .expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                ENC_ERROR_CODE as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, ENC_ERROR_CODE)
+                .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X9, error_exit)
@@ -311,22 +271,12 @@ impl EmitCtx {
             aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X22, Reg::X1).expect("mov"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("ldr"),
         );
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X20,
-                Reg::X22,
-                CTX_INPUT_END as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X20, Reg::X22, CTX_INPUT_END)
+                .expect("ldr"),
         );
 
         self.error_exit = error_exit;
@@ -346,13 +296,8 @@ impl EmitCtx {
         );
 
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("str"),
         );
         if extra_pairs >= 3 {
             self.emit.emit_word(
@@ -627,13 +572,8 @@ impl EmitCtx {
         );
         // str w9, [x22, #CTX_ERROR_CODE]
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("encode_str_imm"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("encode_str_imm"),
         );
         // b =>error_exit
         self.emit.emit_b_label(error_exit).expect("emit_b_label");
@@ -777,13 +717,8 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(ok_label).expect("bind");
@@ -1208,13 +1143,8 @@ impl EmitCtx {
                 .expect("add"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::X11,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X11, Reg::X22, CTX_INPUT_PTR)
+                .expect("str"),
         );
         self.emit.emit_word(
             aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22).expect("mov"),
@@ -1530,13 +1460,8 @@ impl EmitCtx {
             .expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(done_label).expect("bind");
@@ -1562,13 +1487,8 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
     }
@@ -1768,13 +1688,8 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
     }
@@ -1860,13 +1775,8 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, err_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
 
@@ -2115,12 +2025,10 @@ impl EmitCtx {
             aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X1, Reg::X9).expect("mov"),
         );
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, (elem_size as u16), 0)
-                .expect("movz"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X2, elem_size as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::X64, Reg::X3, (elem_align as u16), 0)
-                .expect("movz"),
+            aarch64::encode_movz(aarch64::Width::X64, Reg::X3, elem_align as u16, 0).expect("movz"),
         );
         self.emit_call_fn_ptr(alloc_fn);
         self.emit_reload_cursor_and_check_error();
@@ -2243,13 +2151,8 @@ impl EmitCtx {
     /// Check ctx.error.code and branch to label if nonzero.
     pub fn emit_check_error_branch(&mut self, label: LabelId) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::W32,
-                Reg::X10,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X10, Reg::X22, CTX_ERROR_CODE)
+                .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X10, label)
@@ -2328,13 +2231,8 @@ impl EmitCtx {
         error_cleanup_label: LabelId,
     ) {
         self.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::W32,
-                Reg::X10,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X10, Reg::X22, CTX_ERROR_CODE)
+                .expect("ldr"),
         );
         self.emit
             .emit_cbnz_label(aarch64::Width::W32, Reg::X10, error_cleanup_label)
@@ -3154,7 +3052,7 @@ impl EmitCtx {
                             aarch64::Width::W32,
                             Reg::X9,
                             Reg::X22,
-                            CTX_ERROR_CODE as u32,
+                            CTX_ERROR_CODE,
                         )
                         .expect("str"),
                     );
@@ -3837,13 +3735,8 @@ impl EmitCtx {
             aarch64::encode_movz(aarch64::Width::W32, Reg::X9, eof_code as u16, 0).expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(done_label).expect("bind");
@@ -4829,13 +4722,8 @@ impl EmitCtx {
             aarch64::encode_str_imm(aarch64::Width::X64, Reg::X7, Reg::X21, offset).expect("str"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("str"),
         );
 
         // ── Cold: error paths ──
@@ -4849,13 +4737,8 @@ impl EmitCtx {
                 .expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X8,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X8, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
 
@@ -4865,13 +4748,8 @@ impl EmitCtx {
                 .expect("movz"),
         );
         self.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::W32,
-                Reg::X8,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X8, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
         );
         self.emit.emit_b_label(error_exit).expect("b");
 

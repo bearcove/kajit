@@ -664,19 +664,21 @@ fn hoist_theta_constants_as_args(func: &mut IrFunc, theta: NodeId) -> bool {
     // its index incremented by 1.
     for &result_id in &func.regions[parent_region].results {
         let result = &mut func.region_results[result_id];
-        if let PortSource::Node(ref mut out) = result.source {
-            if out.node == theta && out.index >= output_insert_pos as u16 {
-                out.index += 1;
-            }
+        if let PortSource::Node(ref mut out) = result.source
+            && out.node == theta
+            && out.index >= output_insert_pos as u16
+        {
+            out.index += 1;
         }
     }
     // Also update any node inputs in the parent region that reference the theta
     for &node_id in &func.regions[parent_region].nodes {
         for input in func.nodes[node_id].inputs.iter_mut() {
-            if let PortSource::Node(ref mut out) = input.source {
-                if out.node == theta && out.index >= output_insert_pos as u16 {
-                    out.index += 1;
-                }
+            if let PortSource::Node(ref mut out) = input.source
+                && out.node == theta
+                && out.index >= output_insert_pos as u16
+            {
+                out.index += 1;
             }
         }
     }
@@ -1190,11 +1192,11 @@ fn clone_region_into(
             .into_iter()
             .map(|result_id| {
                 let old_result = &func.region_results[result_id];
-                let new_result_id = func.region_results.push(RegionResult {
+
+                func.region_results.push(RegionResult {
                     kind: old_result.kind,
                     source: remap_source(old_result.source, ctx, func),
-                });
-                new_result_id
+                })
             })
             .collect();
         func.regions[new_region].results = new_results;

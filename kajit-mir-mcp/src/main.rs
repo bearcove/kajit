@@ -501,7 +501,7 @@ fn parse_hex_input(input: &str) -> Result<Vec<u8>, String> {
     if cleaned.is_empty() {
         return Ok(Vec::new());
     }
-    if cleaned.len() % 2 != 0 {
+    if !cleaned.len().is_multiple_of(2) {
         return Err("hex input has odd number of digits".to_owned());
     }
 

@@ -968,7 +968,7 @@ fn execute_function_inner(
                 let target_block_idx = *block_indices
                     .get(&target)
                     .ok_or(InterpreterError::UnknownBlock { block: target })?;
-                let at_terminator = 0 >= func.blocks[target_block_idx].insts.len();
+                let at_terminator = func.blocks[target_block_idx].insts.is_empty();
                 trace.push(InterpreterTraceEntry {
                     step_index,
                     block: target,
@@ -993,7 +993,7 @@ fn execute_function_inner(
                 let target_block_idx = *block_indices
                     .get(&next)
                     .ok_or(InterpreterError::UnknownBlock { block: next })?;
-                let at_terminator = 0 >= func.blocks[target_block_idx].insts.len();
+                let at_terminator = func.blocks[target_block_idx].insts.is_empty();
                 trace.push(InterpreterTraceEntry {
                     step_index,
                     block: next,
@@ -1018,7 +1018,7 @@ fn execute_function_inner(
                 let target_block_idx = *block_indices
                     .get(&next)
                     .ok_or(InterpreterError::UnknownBlock { block: next })?;
-                let at_terminator = 0 >= func.blocks[target_block_idx].insts.len();
+                let at_terminator = func.blocks[target_block_idx].insts.is_empty();
                 trace.push(InterpreterTraceEntry {
                     step_index,
                     block: next,

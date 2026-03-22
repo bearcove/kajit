@@ -907,13 +907,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
         offset: usize,
     ) {
         let storage = self.local_slots[&local];
-        if let Some(st) = shape.scalar_type() {
-            if !is_string_like_scalar(st) {
-                let value = rb.read_from_slot(storage.base_slot);
-                let width = self.scalar_width_for_shape(shape);
-                rb.write_to_field(value, offset as u32, width);
-                return;
-            }
+        if let Some(st) = shape.scalar_type()
+            && !is_string_like_scalar(st)
+        {
+            let value = rb.read_from_slot(storage.base_slot);
+            let width = self.scalar_width_for_shape(shape);
+            rb.write_to_field(value, offset as u32, width);
+            return;
         }
 
         let size = shape

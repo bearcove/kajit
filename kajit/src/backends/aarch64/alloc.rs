@@ -259,26 +259,6 @@ impl Lowerer {
         let _ = self.emit_store_x9_to_allocation(alloc);
     }
 
-    pub(super) fn emit_set_abi_arg_from_allocation(&mut self, abi_arg: u8, operand_index: usize) {
-        let alloc = self.current_alloc(operand_index);
-        let target = PReg::new(abi_arg as usize, RegClass::Int);
-        if let Some(reg) = alloc.as_reg() {
-            assert!(
-                self.emit_mov_preg_to_preg(reg, target),
-                "unsupported register allocation class {:?} for CallLambda arg",
-                reg.class()
-            );
-            return;
-        }
-        if let Some(slot) = alloc.as_stack() {
-            let off = self.spill_off(slot);
-            let target_r = target.hw_enc() as u8;
-            self.emit_stack_load(aarch64::Width::X64, Reg::from_raw(target_r), off);
-            return;
-        }
-        panic!("unexpected none allocation for CallLambda arg");
-    }
-
     pub(super) fn emit_capture_abi_ret_to_allocation(&mut self, abi_ret: u8, operand_index: usize) {
         let alloc = self.current_alloc(operand_index);
         let source = PReg::new(abi_ret as usize, RegClass::Int);

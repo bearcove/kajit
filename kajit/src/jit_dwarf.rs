@@ -206,10 +206,10 @@ pub fn build_jit_dwarf_sections_with_variables(
     if file_name.as_bytes().contains(&0) {
         return Err(DwarfPrepError::InteriorNul { field: "file_name" });
     }
-    if let Some(dir) = directory {
-        if dir.as_bytes().contains(&0) {
-            return Err(DwarfPrepError::InteriorNul { field: "directory" });
-        }
+    if let Some(dir) = directory
+        && dir.as_bytes().contains(&0)
+    {
+        return Err(DwarfPrepError::InteriorNul { field: "directory" });
     }
     if subprogram_name.as_bytes().contains(&0) {
         return Err(DwarfPrepError::InteriorNul {
@@ -588,9 +588,9 @@ pub fn build_debug_loc_section_from_debug_info(debug_info: &JitDebugInfo) -> (Ve
     )
 }
 
-fn lexical_blocks_in_preorder<'a>(
-    lexical_blocks: &'a [JitDebugLexicalBlock],
-) -> Vec<&'a JitDebugLexicalBlock> {
+fn lexical_blocks_in_preorder(
+    lexical_blocks: &[JitDebugLexicalBlock],
+) -> Vec<&JitDebugLexicalBlock> {
     let mut out = Vec::new();
     collect_lexical_blocks_in_preorder(lexical_blocks, &mut out);
     out
@@ -721,10 +721,10 @@ pub fn build_debug_line_section(
     if file_name.as_bytes().contains(&0) {
         return Err(DwarfPrepError::InteriorNul { field: "file_name" });
     }
-    if let Some(dir) = directory {
-        if dir.as_bytes().contains(&0) {
-            return Err(DwarfPrepError::InteriorNul { field: "directory" });
-        }
+    if let Some(dir) = directory
+        && dir.as_bytes().contains(&0)
+    {
+        return Err(DwarfPrepError::InteriorNul { field: "directory" });
     }
 
     for window in source_map.windows(2) {
@@ -747,13 +747,14 @@ pub fn build_debug_line_section(
         }
     }
 
-    let mut header_body = Vec::new();
-    header_body.push(MIN_INSN_LEN);
-    header_body.push(MAX_OPS_PER_INSN);
-    header_body.push(DEFAULT_IS_STMT);
-    header_body.push(LINE_BASE as u8);
-    header_body.push(LINE_RANGE);
-    header_body.push(OPCODE_BASE);
+    let mut header_body = vec![
+        MIN_INSN_LEN,
+        MAX_OPS_PER_INSN,
+        DEFAULT_IS_STMT,
+        LINE_BASE as u8,
+        LINE_RANGE,
+        OPCODE_BASE,
+    ];
     header_body.extend_from_slice(&STANDARD_OPCODE_LENGTHS);
 
     let has_dir = directory.is_some_and(|dir| !dir.is_empty());

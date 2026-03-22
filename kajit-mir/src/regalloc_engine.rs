@@ -676,7 +676,7 @@ impl AdapterFunction {
                 let is_self_loop = block.succs.iter().any(|s| s.index() == block_index);
                 let is_edge_of_self_loop = edge_infos[block_index].is_some()
                     && block.succs.iter().any(|s| {
-                        adapter_blocks.get(s.index()).map_or(false, |target| {
+                        adapter_blocks.get(s.index()).is_some_and(|target| {
                             target.succs.iter().any(|t| t.index() == s.index())
                         })
                     });
@@ -948,12 +948,11 @@ fn infer_cfg_block_param_entry_alloc(
         }
     }
     let term_op = cfg_mir::OpId::Term(block.term);
-    if cfg_func.term(block.term).is_some() {
-        if let Some(a) =
+    if cfg_func.term(block.term).is_some()
+        && let Some(a) =
             find_cfg_alloc_for_vreg_in_op(func, term_op, param, Some(RaOperandKind::Use))
-        {
-            return Some(a);
-        }
+    {
+        return Some(a);
     }
     None
 }

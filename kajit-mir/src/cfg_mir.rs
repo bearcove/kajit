@@ -1762,29 +1762,29 @@ fn fuse_compare_zero_branch_in_function(func: &mut Function) {
     let mut compare_zero_map: HashMap<VReg, CompareZeroInfo> = HashMap::new();
 
     for inst in &func.insts {
-        if let LinearOp::BinOp { op, dst, lhs, rhs } = &inst.op {
-            if *op == BinOpKind::CmpEq || *op == BinOpKind::CmpNe {
-                // Check if one operand is const(0)
-                let lhs_is_zero = const_values.get(lhs) == Some(&0);
-                let rhs_is_zero = const_values.get(rhs) == Some(&0);
+        if let LinearOp::BinOp { op, dst, lhs, rhs } = &inst.op
+            && (*op == BinOpKind::CmpEq || *op == BinOpKind::CmpNe)
+        {
+            // Check if one operand is const(0)
+            let lhs_is_zero = const_values.get(lhs) == Some(&0);
+            let rhs_is_zero = const_values.get(rhs) == Some(&0);
 
-                if lhs_is_zero && !rhs_is_zero {
-                    compare_zero_map.insert(
-                        *dst,
-                        CompareZeroInfo {
-                            kind: *op,
-                            operand: *rhs,
-                        },
-                    );
-                } else if rhs_is_zero && !lhs_is_zero {
-                    compare_zero_map.insert(
-                        *dst,
-                        CompareZeroInfo {
-                            kind: *op,
-                            operand: *lhs,
-                        },
-                    );
-                }
+            if lhs_is_zero && !rhs_is_zero {
+                compare_zero_map.insert(
+                    *dst,
+                    CompareZeroInfo {
+                        kind: *op,
+                        operand: *rhs,
+                    },
+                );
+            } else if rhs_is_zero && !lhs_is_zero {
+                compare_zero_map.insert(
+                    *dst,
+                    CompareZeroInfo {
+                        kind: *op,
+                        operand: *lhs,
+                    },
+                );
             }
         }
     }
@@ -1913,11 +1913,9 @@ pub fn rematerialize_constants(program: &mut Program) {
                             break;
                         }
                     }
-                    if is_uniform_const {
-                        if let Some(const_val) = all_same_const {
-                            const_values.insert(param_vreg, const_val);
-                            changed = true;
-                        }
+                    if is_uniform_const && let Some(const_val) = all_same_const {
+                        const_values.insert(param_vreg, const_val);
+                        changed = true;
                     }
                 }
             }
@@ -2049,22 +2047,20 @@ fn rematerialize_constants_in_function(
                 }
             }
 
-            if is_uniform_const {
-                if let Some(const_val) = all_same_const {
-                    if debug && block.id.0 < 3 {
-                        eprintln!(
-                            "[remat]   b{} param {} (v{}): rematerializing const {}",
-                            block.id.0,
-                            param_idx,
-                            param_vreg.index(),
-                            const_val
-                        );
-                    }
-                    remat_plan
-                        .entry(block.id)
-                        .or_default()
-                        .push((param_idx, param_vreg, const_val));
+            if is_uniform_const && let Some(const_val) = all_same_const {
+                if debug && block.id.0 < 3 {
+                    eprintln!(
+                        "[remat]   b{} param {} (v{}): rematerializing const {}",
+                        block.id.0,
+                        param_idx,
+                        param_vreg.index(),
+                        const_val
+                    );
                 }
+                remat_plan
+                    .entry(block.id)
+                    .or_default()
+                    .push((param_idx, param_vreg, const_val));
             }
         }
     }
@@ -2278,11 +2274,11 @@ fn copy_propagation_in_function(func: &mut Function) {
                     break;
                 }
                 // Check if the source is defined before our use point
-                if let Some(&src_def_idx) = def_order.get(&src) {
-                    if src_def_idx < use_idx {
-                        current = src;
-                        continue;
-                    }
+                if let Some(&src_def_idx) = def_order.get(&src)
+                    && src_def_idx < use_idx
+                {
+                    current = src;
+                    continue;
                 }
                 // Can't propagate further - source not defined yet
                 break;
@@ -2499,10 +2495,10 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
     // copy_to_const[copy_dst] = (original_const_vreg, const_value)
     let mut copy_to_const: HashMap<VReg, (VReg, u64)> = HashMap::new();
     for inst in &func.insts {
-        if let LinearOp::Copy { dst, src } = &inst.op {
-            if let Some(&value) = const_values.get(src) {
-                copy_to_const.insert(*dst, (*src, value));
-            }
+        if let LinearOp::Copy { dst, src } = &inst.op
+            && let Some(&value) = const_values.get(src)
+        {
+            copy_to_const.insert(*dst, (*src, value));
         }
     }
 
@@ -2517,10 +2513,10 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
 
     // Track use kinds for both original consts and copies of consts
     let mut use_kinds: HashMap<VReg, UseKind> = HashMap::new();
-    for (vreg, _) in &const_values {
+    for vreg in const_values.keys() {
         use_kinds.insert(*vreg, UseKind::ImmediateOnly);
     }
-    for (vreg, _) in &copy_to_const {
+    for vreg in copy_to_const.keys() {
         use_kinds.insert(*vreg, UseKind::ImmediateOnly);
     }
 
@@ -2548,10 +2544,10 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                     use_kinds.insert(*lhs, UseKind::RequiresRegister);
                 }
                 // RHS can potentially be immediate
-                if let Some(value) = get_const_value(rhs) {
-                    if !can_encode_as_immediate(*op, value) {
-                        use_kinds.insert(*rhs, UseKind::RequiresRegister);
-                    }
+                if let Some(value) = get_const_value(rhs)
+                    && !can_encode_as_immediate(*op, value)
+                {
+                    use_kinds.insert(*rhs, UseKind::RequiresRegister);
                 }
             }
             LinearOp::Copy { dst, src } => {
@@ -2572,10 +2568,8 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
             // Any other use requires a register
             _ => {
                 for operand in &inst.operands {
-                    if operand.kind == OperandKind::Use {
-                        if is_const_like(&operand.vreg) {
-                            use_kinds.insert(operand.vreg, UseKind::RequiresRegister);
-                        }
+                    if operand.kind == OperandKind::Use && is_const_like(&operand.vreg) {
+                        use_kinds.insert(operand.vreg, UseKind::RequiresRegister);
                     }
                 }
             }
@@ -2591,10 +2585,10 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
             Terminator::JumpTable { predicate, .. } => Some(*predicate),
             _ => None,
         };
-        if let Some(cond) = cond {
-            if is_const_like(&cond) {
-                use_kinds.insert(cond, UseKind::RequiresRegister);
-            }
+        if let Some(cond) = cond
+            && is_const_like(&cond)
+        {
+            use_kinds.insert(cond, UseKind::RequiresRegister);
         }
     }
 

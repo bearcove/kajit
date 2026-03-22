@@ -4,7 +4,7 @@ mod json_hir;
 mod postcard_hir;
 mod shape_utils;
 
-pub(crate) use dwarf::*;
+use dwarf::*;
 pub(crate) use shape_utils::*;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -16,7 +16,6 @@ use facet::{
 };
 use kajit_hir as hir;
 
-use crate::arch::EmitCtx;
 use crate::format::{
     Decoder, FieldEmitInfo, HIRLoweringKind, SkippedFieldInfo, VariantEmitInfo, VariantKind,
 };
@@ -26,9 +25,7 @@ use crate::pipeline_opts::PipelineOptions;
 
 pub(crate) use hir_to_ir::{build_postcard_decoder_ir_via_hir, build_structural_hir_ir};
 pub(crate) use json_hir::{build_json_decoder_hir, supports_json_decoder_hir};
-pub(crate) use postcard_hir::{
-    PostcardHirLowerer, build_postcard_decoder_hir, supports_postcard_decoder_hir,
-};
+pub(crate) use postcard_hir::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
 pub struct CompiledDecoder {

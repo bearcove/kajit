@@ -125,13 +125,8 @@ impl Lowerer {
         self.flush_all_vregs();
 
         self.ectx.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("str"),
         );
         self.emit_set_abi_intrinsic_args_parallel(1, args);
         self.ectx.emit.emit_word(
@@ -166,22 +161,12 @@ impl Lowerer {
             .emit_word(aarch64::encode_blr(Reg::X16).expect("blr"));
 
         self.ectx.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("ldr"),
         );
         self.ectx.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("ldr"),
         );
         self.ectx
             .emit
@@ -391,13 +376,8 @@ impl Lowerer {
             .error_exit;
         self.flush_all_vregs();
         self.ectx.emit.emit_word(
-            aarch64::encode_str_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("str"),
+            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("str"),
         );
         let lambda_moves: Vec<(Allocation, Allocation)> = args
             .iter()
@@ -419,22 +399,12 @@ impl Lowerer {
 
         self.ectx.emit.emit_bl_label(label).expect("bl");
         self.ectx.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::X64,
-                Reg::X19,
-                Reg::X22,
-                CTX_INPUT_PTR as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("ldr"),
         );
         self.ectx.emit.emit_word(
-            aarch64::encode_ldr_imm(
-                aarch64::Width::W32,
-                Reg::X9,
-                Reg::X22,
-                CTX_ERROR_CODE as u32,
-            )
-            .expect("ldr"),
+            aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("ldr"),
         );
         self.ectx
             .emit

@@ -261,6 +261,10 @@ impl FinalizedEmission {
         self.exec.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.exec.is_empty()
+    }
+
     pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
         crate::build_trace(&self.code, &self.source_map)
     }
@@ -1240,7 +1244,7 @@ pub fn encode_and_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, E
     let is_64bit = width == Width::X64;
 
     let (n, immr, imms) =
-        encode_logical_imm_params(imm, is_64bit).ok_or_else(|| EmitError::InvalidImmediate {
+        encode_logical_imm_params(imm, is_64bit).ok_or(EmitError::InvalidImmediate {
             instruction: "and imm",
             value: imm as i64,
         })?;
@@ -1258,7 +1262,7 @@ pub fn encode_orr_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, E
     let is_64bit = width == Width::X64;
 
     let (n, immr, imms) =
-        encode_logical_imm_params(imm, is_64bit).ok_or_else(|| EmitError::InvalidImmediate {
+        encode_logical_imm_params(imm, is_64bit).ok_or(EmitError::InvalidImmediate {
             instruction: "orr imm",
             value: imm as i64,
         })?;
@@ -1276,7 +1280,7 @@ pub fn encode_eor_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, E
     let is_64bit = width == Width::X64;
 
     let (n, immr, imms) =
-        encode_logical_imm_params(imm, is_64bit).ok_or_else(|| EmitError::InvalidImmediate {
+        encode_logical_imm_params(imm, is_64bit).ok_or(EmitError::InvalidImmediate {
             instruction: "eor imm",
             value: imm as i64,
         })?;

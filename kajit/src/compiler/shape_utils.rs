@@ -346,24 +346,6 @@ pub(super) fn get_pointer_def(shape: &'static Shape) -> Option<&'static PointerD
 
 // r[impl deser.pointer.nesting]
 
-/// Returns true if the shape is a struct type.
-/// Emit a default initialization call for a field.
-///
-/// Direct types use a 2-arg call (trampoline, fn_ptr, offset).
-/// Indirect types (generic containers) use a 3-arg call that also passes the shape.
-pub fn emit_default_init(ectx: &mut EmitCtx, default: &crate::format::DefaultInfo, offset: u32) {
-    if let Some(shape) = default.shape {
-        ectx.emit_call_trampoline_3(
-            default.trampoline,
-            default.fn_ptr,
-            offset,
-            shape as *const _ as *const u8,
-        );
-    } else {
-        ectx.emit_call_option_init_none(default.trampoline, default.fn_ptr, offset);
-    }
-}
-
 pub(super) fn is_unit(shape: &'static Shape) -> bool {
     shape.scalar_type() == Some(ScalarType::Unit)
 }

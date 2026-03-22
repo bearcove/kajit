@@ -155,16 +155,13 @@ fn in_scope(
     false
 }
 
-fn collect_reachable(
-    func: &IrFunc,
-) -> Result<
-    (
-        HashMap<RegionId, Option<RegionId>>,
-        Vec<RegionId>,
-        HashMap<NodeId, RegionId>,
-    ),
-    VerifyError,
-> {
+type ReachableInfo = (
+    HashMap<RegionId, Option<RegionId>>,
+    Vec<RegionId>,
+    HashMap<NodeId, RegionId>,
+);
+
+fn collect_reachable(func: &IrFunc) -> Result<ReachableInfo, VerifyError> {
     let mut region_parents: HashMap<RegionId, Option<RegionId>> = HashMap::new();
     let mut region_order = Vec::new();
     let mut node_regions: HashMap<NodeId, RegionId> = HashMap::new();
@@ -289,7 +286,7 @@ fn check_arg_source(
     }
     let region = &func.regions[source.region];
     // Check that this arg exists in the region
-    if !region.args.iter().any(|&id| id == source.arg) {
+    if !region.args.contains(&source.arg) {
         return Err(());
     }
     let arg = &func.region_args[source.arg];
