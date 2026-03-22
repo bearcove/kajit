@@ -4,6 +4,7 @@
 //! and the shape collection utilities that extract field/variant information from
 //! facet `Shape` descriptors.
 
+pub mod hir_helpers;
 mod shape_utils;
 mod types;
 

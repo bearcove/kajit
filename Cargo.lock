@@ -630,6 +630,7 @@ name = "kajit-format"
 version = "0.1.0"
 dependencies = [
  "facet",
+ "kajit-hir",
 ]
 
 [[package]]
@@ -669,6 +670,7 @@ name = "kajit-json"
 version = "0.1.0"
 dependencies = [
  "facet",
+ "kajit-format",
  "kajit-hir",
 ]
 

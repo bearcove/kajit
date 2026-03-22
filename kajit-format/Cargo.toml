@@ -14,3 +14,4 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+kajit-hir = { path = "../kajit-hir" }

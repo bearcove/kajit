@@ -64,11 +64,18 @@ fn fmt_type_def(
     let pad = pad(indent);
     write!(f, "{pad}type t{index} {}", quoted(&type_def.name))?;
     fmt_generic_params(&type_def.generic_params, f)?;
+    // Layout annotations
+    if let Some(size) = type_def.size {
+        write!(f, " size={size}")?;
+    }
+    if type_def.transparent {
+        write!(f, " transparent")?;
+    }
     match &type_def.kind {
         TypeDefKind::Struct { fields } => {
             writeln!(f, " = struct {{")?;
             for field in fields {
-                writeln!(
+                write!(
                     f,
                     "{}  {}: {}",
                     pad,
@@ -78,11 +85,22 @@ fn fmt_type_def(
                         ty: &field.ty
                     }
                 )?;
+                if let Some(offset) = field.offset {
+                    write!(f, " @{offset}")?;
+                }
+                writeln!(f)?;
             }
             writeln!(f, "{pad}}}")
         }
-        TypeDefKind::Enum { variants, .. } => {
-            writeln!(f, " = enum {{")?;
+        TypeDefKind::Enum {
+            variants,
+            discriminant_width,
+        } => {
+            if let Some(dw) = discriminant_width {
+                writeln!(f, " = enum disc_width={dw} {{")?;
+            } else {
+                writeln!(f, " = enum {{")?;
+            }
             for variant in variants {
                 fmt_variant_def(module, variant, f, indent + 1)?;
             }
@@ -98,13 +116,17 @@ fn fmt_variant_def(
     indent: usize,
 ) -> fmt::Result {
     let pad = pad(indent);
-    write!(f, "{pad}{} ", quoted(&variant.name))?;
+    write!(f, "{pad}{}", quoted(&variant.name))?;
+    if let Some(disc) = variant.discriminant {
+        write!(f, " = {disc}")?;
+    }
+    write!(f, " ")?;
     if variant.fields.is_empty() {
         writeln!(f, "{{}}")
     } else {
         writeln!(f, "{{")?;
         for field in &variant.fields {
-            writeln!(
+            write!(
                 f,
                 "{}  {}: {}",
                 pad,
@@ -114,6 +136,10 @@ fn fmt_variant_def(
                     ty: &field.ty
                 }
             )?;
+            if let Some(offset) = field.offset {
+                write!(f, " @{offset}")?;
+            }
+            writeln!(f)?;
         }
         writeln!(f, "{pad}}}")
     }

@@ -21,28 +21,7 @@ pub fn supports_json_decoder_hir(shape: &'static Shape) -> bool {
 fn build_json_root_bool_decoder_hir(shape: &'static Shape) -> hir::Module {
     let mut module = hir::Module::new();
     let input_region = module.add_region("input");
-    let cursor_type = module.add_type_def(hir::TypeDef {
-        name: "Cursor".to_owned(),
-        generic_params: vec![hir::GenericParam::Region {
-            name: "r_input".to_owned(),
-        }],
-        kind: hir::TypeDefKind::Struct {
-            fields: vec![
-                hir::FieldDef {
-                    name: "bytes".to_owned(),
-                    ty: hir::Type::slice(input_region, hir::Type::u(8)),
-                    offset: None,
-                },
-                hir::FieldDef {
-                    name: "pos".to_owned(),
-                    ty: hir::Type::u(64),
-                    offset: None,
-                },
-            ],
-        },
-        size: None,
-        transparent: false,
-    });
+    let cursor_type = kajit_format::hir_helpers::add_cursor_type(&mut module, input_region);
 
     let cursor_local = hir::LocalId::new(0);
     let out_local = hir::LocalId::new(1);
@@ -364,28 +343,7 @@ fn build_json_root_bool_decoder_hir(shape: &'static Shape) -> hir::Module {
 fn build_json_root_u32_decoder_hir(shape: &'static Shape) -> hir::Module {
     let mut module = hir::Module::new();
     let input_region = module.add_region("input");
-    let cursor_type = module.add_type_def(hir::TypeDef {
-        name: "Cursor".to_owned(),
-        generic_params: vec![hir::GenericParam::Region {
-            name: "r_input".to_owned(),
-        }],
-        kind: hir::TypeDefKind::Struct {
-            fields: vec![
-                hir::FieldDef {
-                    name: "bytes".to_owned(),
-                    ty: hir::Type::slice(input_region, hir::Type::u(8)),
-                    offset: None,
-                },
-                hir::FieldDef {
-                    name: "pos".to_owned(),
-                    ty: hir::Type::u(64),
-                    offset: None,
-                },
-            ],
-        },
-        size: None,
-        transparent: false,
-    });
+    let cursor_type = kajit_format::hir_helpers::add_cursor_type(&mut module, input_region);
 
     let cursor_local = hir::LocalId::new(0);
     let out_local = hir::LocalId::new(1);
@@ -796,28 +754,7 @@ fn build_json_root_u32_decoder_hir(shape: &'static Shape) -> hir::Module {
 fn build_json_root_u64_decoder_hir(shape: &'static Shape) -> hir::Module {
     let mut module = hir::Module::new();
     let input_region = module.add_region("input");
-    let cursor_type = module.add_type_def(hir::TypeDef {
-        name: "Cursor".to_owned(),
-        generic_params: vec![hir::GenericParam::Region {
-            name: "r_input".to_owned(),
-        }],
-        kind: hir::TypeDefKind::Struct {
-            fields: vec![
-                hir::FieldDef {
-                    name: "bytes".to_owned(),
-                    ty: hir::Type::slice(input_region, hir::Type::u(8)),
-                    offset: None,
-                },
-                hir::FieldDef {
-                    name: "pos".to_owned(),
-                    ty: hir::Type::u(64),
-                    offset: None,
-                },
-            ],
-        },
-        size: None,
-        transparent: false,
-    });
+    let cursor_type = kajit_format::hir_helpers::add_cursor_type(&mut module, input_region);
 
     let cursor_local = hir::LocalId::new(0);
     let out_local = hir::LocalId::new(1);

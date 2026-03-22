@@ -268,61 +268,109 @@ fn ty<'src>() -> impl Parser<'src, &'src str, Type, Extra<'src>> + Clone {
     })
 }
 
+fn signed_int64<'src>() -> impl Parser<'src, &'src str, i64, Extra<'src>> + Clone {
+    just('-')
+        .or_not()
+        .then(uint64())
+        .map(|(neg, v)| if neg.is_some() { -(v as i64) } else { v as i64 })
+        .padded_by(ws())
+}
+
+fn field_offset<'src>() -> impl Parser<'src, &'src str, Option<u32>, Extra<'src>> + Clone {
+    token("@")
+        .ignore_then(uint64())
+        .map(|v| Some(v as u32))
+        .or_not()
+        .map(|opt| opt.flatten())
+}
+
 fn field_defs<'src>() -> impl Parser<'src, &'src str, Vec<FieldDef>, Extra<'src>> + Clone {
     quoted_string()
         .then_ignore(token(":"))
         .then(ty())
-        .map(|(name, ty)| FieldDef {
-            name,
-            ty,
-            offset: None,
-        })
+        .then(field_offset())
+        .map(|((name, ty), offset)| FieldDef { name, ty, offset })
         .repeated()
         .collect()
 }
 
 fn type_def<'src>() -> impl Parser<'src, &'src str, ParsedTypeDef, Extra<'src>> + Clone {
-    let variant =
-        quoted_string().then(token("{").ignore_then(field_defs()).then_ignore(token("}")));
+    let size_attr = token("size=")
+        .ignore_then(uint64())
+        .map(|v| Some(v as u32))
+        .or_not()
+        .map(|opt| opt.flatten());
+
+    let transparent_attr = token("transparent")
+        .to(true)
+        .or_not()
+        .map(|opt| opt.unwrap_or(false));
+
+    let disc_width_attr = token("disc_width=")
+        .ignore_then(uint64())
+        .map(|v| Some(v as u32))
+        .or_not()
+        .map(|opt| opt.flatten());
+
+    let variant_discriminant = token("=")
+        .ignore_then(signed_int64())
+        .map(Some)
+        .or_not()
+        .map(|opt| opt.flatten());
+
+    let variant = quoted_string()
+        .then(variant_discriminant)
+        .then(token("{").ignore_then(field_defs()).then_ignore(token("}")));
 
     token("type")
         .ignore_then(type_id())
         .then(quoted_string())
         .then(generic_params())
+        .then(size_attr)
+        .then(transparent_attr)
         .then_ignore(token("="))
         .then(choice((
             token("struct")
                 .ignore_then(token("{"))
                 .ignore_then(field_defs())
                 .then_ignore(token("}"))
-                .map(|fields| TypeDefKind::Struct { fields }),
+                .map(|fields| (TypeDefKind::Struct { fields }, None)),
             token("enum")
-                .ignore_then(token("{"))
-                .ignore_then(variant.repeated().collect::<Vec<_>>().map(|variants| {
-                    TypeDefKind::Enum {
-                        variants: variants
-                            .into_iter()
-                            .map(|(name, fields)| VariantDef {
-                                name,
-                                fields,
-                                discriminant: None,
-                            })
-                            .collect(),
-                        discriminant_width: None,
-                    }
-                }))
-                .then_ignore(token("}")),
+                .ignore_then(disc_width_attr)
+                .then(
+                    token("{")
+                        .ignore_then(variant.repeated().collect::<Vec<_>>())
+                        .then_ignore(token("}")),
+                )
+                .map(|(dw, variants)| {
+                    (
+                        TypeDefKind::Enum {
+                            variants: variants
+                                .into_iter()
+                                .map(|((name, discriminant), fields)| VariantDef {
+                                    name,
+                                    fields,
+                                    discriminant,
+                                })
+                                .collect(),
+                            discriminant_width: dw,
+                        },
+                        dw,
+                    )
+                }),
         )))
-        .map(|(((id, name), generic_params), kind)| ParsedTypeDef {
-            id,
-            def: TypeDef {
-                name,
-                generic_params,
-                kind,
-                size: None,
-                transparent: false,
+        .map(
+            |(((((id, name), generic_params), size), transparent), (kind, _))| ParsedTypeDef {
+                id,
+                def: TypeDef {
+                    name,
+                    generic_params,
+                    kind,
+                    size,
+                    transparent,
+                },
             },
-        })
+        )
 }
 
 fn effect_class<'src>() -> impl Parser<'src, &'src str, EffectClass, Extra<'src>> + Clone {
