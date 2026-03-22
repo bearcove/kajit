@@ -5,6 +5,7 @@ members = [
   "kajit-format",
   "kajit-hir",
   "kajit-json",
+  "kajit-malum",
   "kajit-hir-text",
   "kajit-ir",
   "kajit-ir-text",

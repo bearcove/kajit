@@ -1,0 +1,16 @@
+[package]
+name = "kajit-malum"
+version = "0.1.0"
+edition = "2024"
+authors = ["Amos Wenger <amos@bearcove.eu>"]
+description = "Runtime layout probing for Vec/String in kajit"
+repository = "https://github.com/bearcove/kajit"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+facet = { git = "https://github.com/facet-rs/facet", branch = "main" }

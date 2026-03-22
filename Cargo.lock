@@ -601,6 +601,7 @@ dependencies = [
  "kajit-ir-text",
  "kajit-json",
  "kajit-lir",
+ "kajit-malum",
  "kajit-mir",
  "kajit-mir-text",
  "libc",
@@ -676,6 +677,13 @@ version = "0.1.0"
 dependencies = [
  "facet",
  "kajit-ir",
+]
+
+[[package]]
+name = "kajit-malum"
+version = "0.1.0"
+dependencies = [
+ "facet",
 ]
 
 [[package]]
