@@ -2361,42 +2361,77 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
         return;
     }
 
-    // Step 2: Track how each const vreg is used
-    // A const is "immediate-only" if ALL its uses are as RHS of BinOp where
-    // the value can be encoded as an immediate.
+    // Step 1b: Build copy chains - track copies of consts
+    // copy_to_const[copy_dst] = (original_const_vreg, const_value)
+    let mut copy_to_const: HashMap<VReg, (VReg, u64)> = HashMap::new();
+    for inst in &func.insts {
+        if let LinearOp::Copy { dst, src } = &inst.op {
+            if let Some(&value) = const_values.get(src) {
+                copy_to_const.insert(*dst, (*src, value));
+            }
+        }
+    }
+
+    // Step 2: Track how each const/copy vreg is used
+    // A const is "immediate-only" if ALL its uses (direct or via copies) are as RHS
+    // of BinOp where the value can be encoded as an immediate.
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum UseKind {
         ImmediateOnly,
         RequiresRegister,
     }
 
+    // Track use kinds for both original consts and copies of consts
     let mut use_kinds: HashMap<VReg, UseKind> = HashMap::new();
     for (vreg, _) in &const_values {
         use_kinds.insert(*vreg, UseKind::ImmediateOnly);
     }
+    for (vreg, _) in &copy_to_const {
+        use_kinds.insert(*vreg, UseKind::ImmediateOnly);
+    }
+
+    // Helper: get const value for a vreg (either direct const or copy of const)
+    let get_const_value = |v: &VReg| -> Option<u64> {
+        if let Some(&val) = const_values.get(v) {
+            return Some(val);
+        }
+        if let Some(&(_, val)) = copy_to_const.get(v) {
+            return Some(val);
+        }
+        None
+    };
+
+    // Helper: check if vreg is a const or copy-of-const
+    let is_const_like =
+        |v: &VReg| -> bool { const_values.contains_key(v) || copy_to_const.contains_key(v) };
 
     // Scan all uses
     for inst in &func.insts {
         match &inst.op {
             LinearOp::BinOp { op, lhs, rhs, .. } => {
                 // LHS use always requires register
-                if const_values.contains_key(lhs) {
+                if is_const_like(lhs) {
                     use_kinds.insert(*lhs, UseKind::RequiresRegister);
                 }
                 // RHS can potentially be immediate
-                if let Some(&value) = const_values.get(rhs) {
+                if let Some(value) = get_const_value(rhs) {
                     if !can_encode_as_immediate(*op, value) {
                         use_kinds.insert(*rhs, UseKind::RequiresRegister);
                     }
                 }
             }
-            LinearOp::Copy { src, .. } => {
-                if const_values.contains_key(src) {
+            LinearOp::Copy { dst, src } => {
+                // If src is a const and dst is tracked as a copy-of-const, we handle
+                // this specially - don't mark src as requiring register yet.
+                // The copy is "transparent" - we'll decide based on how dst is used.
+                if const_values.contains_key(src) && copy_to_const.contains_key(dst) {
+                    // This copy is tracked - don't mark as RequiresRegister yet
+                } else if is_const_like(src) {
                     use_kinds.insert(*src, UseKind::RequiresRegister);
                 }
             }
             LinearOp::UnaryOp { src, .. } => {
-                if const_values.contains_key(src) {
+                if is_const_like(src) {
                     use_kinds.insert(*src, UseKind::RequiresRegister);
                 }
             }
@@ -2404,7 +2439,7 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
             _ => {
                 for operand in &inst.operands {
                     if operand.kind == OperandKind::Use {
-                        if const_values.contains_key(&operand.vreg) {
+                        if is_const_like(&operand.vreg) {
                             use_kinds.insert(operand.vreg, UseKind::RequiresRegister);
                         }
                     }
@@ -2423,7 +2458,7 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
             _ => None,
         };
         if let Some(cond) = cond {
-            if const_values.contains_key(&cond) {
+            if is_const_like(&cond) {
                 use_kinds.insert(cond, UseKind::RequiresRegister);
             }
         }
@@ -2432,13 +2467,21 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
     // Also check edge args - consts passed through edges require registers
     for edge in &func.edges {
         for arg in &edge.args {
-            if const_values.contains_key(&arg.source) {
+            if is_const_like(&arg.source) {
                 use_kinds.insert(arg.source, UseKind::RequiresRegister);
             }
         }
     }
 
-    // Step 3: Collect vregs that are immediate-only
+    // Step 3: Propagate RequiresRegister from copies back to original consts
+    // If a copy-of-const requires a register, the original const also needs one.
+    for (copy_vreg, (original_const, _)) in &copy_to_const {
+        if use_kinds.get(copy_vreg) == Some(&UseKind::RequiresRegister) {
+            use_kinds.insert(*original_const, UseKind::RequiresRegister);
+        }
+    }
+
+    // Step 4: Collect vregs that are immediate-only
     let immediate_only: HashSet<VReg> = use_kinds
         .iter()
         .filter(|(_, kind)| **kind == UseKind::ImmediateOnly)
@@ -2449,7 +2492,7 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
         return;
     }
 
-    // Step 4: Remove Def operands from Const instructions for immediate-only vregs,
+    // Step 5: Remove Def operands from Const/Copy instructions for immediate-only vregs,
     // AND remove Use operands from BinOps that use them as RHS.
     // This is necessary because regalloc requires all uses to have reaching definitions.
     for inst in &mut func.insts {
@@ -2458,6 +2501,14 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                 if immediate_only.contains(dst) {
                     inst.operands.clear();
                 }
+            }
+            LinearOp::Copy { dst, src } => {
+                // If this is a copy of an immediate-only const, clear its operands too
+                if copy_to_const.contains_key(dst) && immediate_only.contains(dst) {
+                    inst.operands.clear();
+                }
+                // Also handle if src is immediate-only (shouldn't happen given our logic, but be safe)
+                let _ = src;
             }
             LinearOp::BinOp { rhs, .. } => {
                 if immediate_only.contains(rhs) {
@@ -4248,5 +4299,126 @@ mod tests {
         // Both b1 and b2 should keep their const 42 since neither dominates the other
         assert_eq!(func.blocks[1].insts.len(), 1, "b1 keeps its const");
         assert_eq!(func.blocks[2].insts.len(), 1, "b2 keeps its const");
+    }
+
+    #[test]
+    fn eliminate_immediate_handles_copy_chains() {
+        // Test that copy-chain tracking works:
+        // v0 = const 127  (immediate-encodable for AND)
+        // v1 = copy v0
+        // v2 = and v3, v1  (uses copy of const as RHS)
+        //
+        // After eliminate_immediate_only_const_defs:
+        // - v0 and v1 should both be marked immediate-only
+        // - Their operands should be cleared (no regalloc needed)
+        use kajit_lir::BinOpKind;
+
+        let mut program = Program {
+            vreg_count: 4,
+            slot_count: 0,
+            funcs: vec![single_block_func(vec![
+                Inst {
+                    id: InstId(0),
+                    op: LinearOp::Const {
+                        dst: v(0),
+                        value: 127,
+                    },
+                    operands: vec![Operand {
+                        vreg: v(0),
+                        kind: OperandKind::Def,
+                        class: RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: Clobbers::default(),
+                },
+                Inst {
+                    id: InstId(1),
+                    op: LinearOp::Copy {
+                        dst: v(1),
+                        src: v(0),
+                    },
+                    operands: vec![
+                        Operand {
+                            vreg: v(0),
+                            kind: OperandKind::Use,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                        Operand {
+                            vreg: v(1),
+                            kind: OperandKind::Def,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                    ],
+                    clobbers: Clobbers::default(),
+                },
+                Inst {
+                    id: InstId(2),
+                    // v2 = and v3, v1 where v1 is a copy of const 127
+                    op: LinearOp::BinOp {
+                        op: BinOpKind::And,
+                        dst: v(2),
+                        lhs: v(3),
+                        rhs: v(1),
+                    },
+                    operands: vec![
+                        Operand {
+                            vreg: v(3),
+                            kind: OperandKind::Use,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                        Operand {
+                            vreg: v(1),
+                            kind: OperandKind::Use,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                        Operand {
+                            vreg: v(2),
+                            kind: OperandKind::Def,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                    ],
+                    clobbers: Clobbers::default(),
+                },
+            ])],
+            debug: Default::default(),
+        };
+
+        // v3 needs to be defined somewhere (as data_arg)
+        program.funcs[0].data_args = vec![v(3)];
+        // Mark v2 as used
+        program.funcs[0].data_results = vec![v(2)];
+
+        eliminate_immediate_only_const_defs(&mut program);
+
+        let func = &program.funcs[0];
+
+        // const should have no operands (immediate-only)
+        assert!(
+            func.insts[0].operands.is_empty(),
+            "const v0 should have no operands (immediate-only)"
+        );
+
+        // copy should also have no operands (copy of immediate-only const)
+        assert!(
+            func.insts[1].operands.is_empty(),
+            "copy v1 should have no operands (copy of immediate-only const)"
+        );
+
+        // BinOp should only have 2 operands: v3 (Use) and v2 (Def)
+        // v1 (the RHS) should be removed since it's immediate-only
+        assert_eq!(
+            func.insts[2].operands.len(),
+            2,
+            "BinOp should have 2 operands after eliminating immediate RHS"
+        );
+        assert!(
+            func.insts[2].operands.iter().all(|op| op.vreg != v(1)),
+            "BinOp should not have v1 in operands"
+        );
     }
 }
