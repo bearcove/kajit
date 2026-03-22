@@ -1,6 +1,34 @@
 # kajit
 
-Kajit is a JIT deserializer for Rust that generates native machine code at startup from facet type reflection. It walks a type's `Shape` through a multi-stage pipeline: IR (RVSDG with explicit data/side-effect tokens), optimization passes, linearization to `LinearIr`, lowering to canonical `CFG-MIR`, register allocation via regalloc2, and codegen to aarch64 or x86_64.
+Kajit is a JIT deserializer for Rust that generates native machine code at startup from facet type reflection.
+
+## Pipeline
+
+```
+Schema (facet Shape)
+  → HIR (kajit-hir)        — statements, locals, loops, if/match
+  → IR (kajit-ir)          — RVSDG: theta/gamma nodes, ports, SSA
+  → LIR (kajit-lir)        — linearized IR
+  → CFG-MIR (kajit-mir)    — control flow graph, VRegs
+  → Register Allocation    — regalloc2
+  → Backend                — aarch64 or x86_64 machine code
+```
+
+**Why HIR exists:** Multiple frontends (deserializers + Vixen rule language) need a shared semantic layer. RVSDG is too low-level to be human-readable. HIR preserves names, scopes, comments, spans. HIR is the debugger source view. See `docs/hir-design.md`.
+
+**Key files:**
+- `kajit/src/compiler.rs` — HIR generation (`build_postcard_decoder_hir`) and HIR→IR lowering (`build_structural_hir_ir`)
+- `kajit-hir/src/lib.rs` — HIR data structures
+- `kajit-hir/src/text.rs` — `impl Display for Module` (print HIR with `module.to_string()`)
+- `kajit-ir/src/ir.rs` — IR/RVSDG data structures
+- `kajit-lir/src/linearize.rs` — IR→LIR
+- `kajit-mir/src/cfg_mir.rs` — LIR→CFG-MIR, optimization passes
+
+**Design docs:**
+- `docs/hir-design.md` — why HIR exists, what it should/shouldn't do
+- `docs/hir-generated-decoder-boundary.md` — what stays above HIR vs inside HIR
+- `docs/spec.md` — full specification
+- `docs/pipeline-debugging.md` — debugging reference
 
 ## Architecture
 
@@ -75,10 +103,19 @@ KAJIT_OPTS='-regalloc' cargo nextest run ...
 
 Print all available options: `KAJIT_OPTS=help cargo nextest run -p kajit --test corpus -E 'test(=any::test)'`
 
+### Printing HIR
+
+HIR isn't part of the env-var dump system yet. To print HIR in tests:
+
+```rust
+let module = build_postcard_decoder_hir(shape);
+eprintln!("{}", module);  // uses Display impl from kajit-hir/src/text.rs
+```
+
 ### Stage dumps
 
 Dump pipeline artifacts with environment variables:
-- `KAJIT_DUMP_STAGES` — comma-separated: `ir`, `linear`, `cfg`, `edits`, `opts`, `all`
+- `KAJIT_DUMP_STAGES` — comma-separated: `ir`, `linear`, `cfg`, `edits`, `opts`, `all` (note: `hir` not yet supported)
 - `KAJIT_DUMP_FILTER` — substring match on `<format>::<case>` (e.g. `postcard::scalar_u64_v3`)
 - `KAJIT_DUMP_DIR` — output directory (default: `target/kajit-stage-dumps`)
 
