@@ -216,14 +216,46 @@ impl Lowerer {
         self.emit_load_x9_from_allocation(alloc);
     }
 
+    /// Load vreg value into X9 using vreg-based allocation lookup.
+    pub(super) fn emit_load_use_x9_vreg(&mut self, v: crate::ir::VReg) {
+        let alloc = self
+            .alloc_for_vreg(v)
+            .expect("emit_load_use_x9_vreg: vreg should have allocation");
+        self.emit_load_x9_from_allocation(alloc);
+    }
+
     pub(super) fn emit_load_use_x10(&mut self, v: crate::ir::VReg, operand_index: usize) {
         let _ = v;
         let alloc = self.current_alloc(operand_index);
         self.emit_load_x10_from_allocation(alloc);
     }
 
+    /// Load vreg value into X10 using vreg-based allocation lookup.
+    pub(super) fn emit_load_use_x10_vreg(&mut self, v: crate::ir::VReg) {
+        let alloc = self.alloc_for_vreg(v).unwrap_or_else(|| {
+            let const_val = self.const_of(v);
+            let operands = self.current_inst_operands.as_ref();
+            let allocs = self.current_inst_allocs.as_ref();
+            panic!(
+                "emit_load_use_x10_vreg: vreg {:?} should have allocation (const_val={:?}, op_id={:?}, operands={:?}, allocs_len={:?})",
+                v, const_val, self.current_op_id,
+                operands.map(|o| o.iter().map(|x| x.vreg).collect::<Vec<_>>()),
+                allocs.map(|a| a.len())
+            )
+        });
+        self.emit_load_x10_from_allocation(alloc);
+    }
+
     pub(super) fn emit_store_def_x9(&mut self, _v: crate::ir::VReg, operand_index: usize) {
         let alloc = self.current_alloc(operand_index);
+        let _ = self.emit_store_x9_to_allocation(alloc);
+    }
+
+    /// Store X9 to vreg using vreg-based allocation lookup.
+    pub(super) fn emit_store_def_x9_vreg(&mut self, v: crate::ir::VReg) {
+        let alloc = self
+            .alloc_for_vreg(v)
+            .expect("emit_store_def_x9_vreg: vreg should have allocation");
         let _ = self.emit_store_x9_to_allocation(alloc);
     }
 

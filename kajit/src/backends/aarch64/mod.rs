@@ -60,6 +60,7 @@ pub(crate) struct Lowerer {
     pub(crate) edge_trampoline_labels: BTreeMap<(u32, cfg_mir::EdgeId), LabelId>,
     pub(crate) edge_trampolines: Vec<EdgeTrampoline>,
     pub(crate) current_inst_allocs: Option<Vec<Allocation>>,
+    pub(crate) current_inst_operands: Option<Vec<cfg_mir::Operand>>,
     pub(crate) current_op_id: Option<cfg_mir::OpId>,
     pub(crate) apply_regalloc_edits: bool,
     pub(crate) no_edit_edge_tmp_base: u32,
@@ -384,6 +385,7 @@ impl Lowerer {
             edge_trampoline_labels: BTreeMap::new(),
             edge_trampolines: Vec::new(),
             current_inst_allocs: None,
+            current_inst_operands: None,
             current_op_id: None,
             apply_regalloc_edits,
             no_edit_edge_tmp_base,
@@ -428,6 +430,13 @@ impl Lowerer {
 
     // r[impl ir.regalloc.no-boundary-flush]
     pub(super) fn flush_all_vregs(&mut self) {
+        // Note: We intentionally do NOT clear const_vregs here.
+        // Const values are static and must persist across block boundaries
+        // for immediate-only const optimization to work.
+        // const_vregs is cleared at function start via flush_all_vregs_and_consts.
+    }
+
+    pub(super) fn flush_all_vregs_and_consts(&mut self) {
         self.const_vregs.fill(None);
     }
 
@@ -461,6 +470,20 @@ impl Lowerer {
         !self.apply_regalloc_edits
     }
 
+    /// Look up allocation by vreg. Returns None if the vreg has no operand
+    /// (e.g., immediate-only consts that were optimized away).
+    pub(super) fn alloc_for_vreg(&self, v: crate::ir::VReg) -> Option<Allocation> {
+        let operands = self.current_inst_operands.as_ref()?;
+        let allocs = self.current_inst_allocs.as_ref()?;
+
+        for (i, operand) in operands.iter().enumerate() {
+            if operand.vreg == v {
+                return allocs.get(i).copied();
+            }
+        }
+        None
+    }
+
     pub(super) fn canonical_alloc_for_vreg(&self, v: crate::ir::VReg) -> Allocation {
         Allocation::stack(SpillSlot::new(v.index()))
     }
@@ -483,6 +506,32 @@ impl Lowerer {
             }
             cfg_mir::Terminator::JumpTable { predicate, .. } => {
                 vec![self.canonical_alloc_for_vreg(*predicate)]
+            }
+            cfg_mir::Terminator::Return
+            | cfg_mir::Terminator::ErrorExit { .. }
+            | cfg_mir::Terminator::Branch { .. } => Vec::new(),
+        }
+    }
+
+    /// Build operands list for a terminator (for vreg-based allocation lookup).
+    fn operands_for_terminator(&self, term: &cfg_mir::Terminator) -> Vec<cfg_mir::Operand> {
+        match term {
+            cfg_mir::Terminator::BranchIf { cond, .. }
+            | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                vec![cfg_mir::Operand {
+                    vreg: *cond,
+                    kind: cfg_mir::OperandKind::Use,
+                    class: cfg_mir::RegClass::Gpr,
+                    fixed: None,
+                }]
+            }
+            cfg_mir::Terminator::JumpTable { predicate, .. } => {
+                vec![cfg_mir::Operand {
+                    vreg: *predicate,
+                    kind: cfg_mir::OperandKind::Use,
+                    class: cfg_mir::RegClass::Gpr,
+                    fixed: None,
+                }]
             }
             cfg_mir::Terminator::Return
             | cfg_mir::Terminator::ErrorExit { .. }
@@ -555,16 +604,32 @@ impl Lowerer {
         self.const_vregs[v.index()] = value;
     }
 
-    fn emit_inst(&mut self, op: &LinearOp) {
-        match op {
+    fn emit_inst(&mut self, inst: &cfg_mir::Inst) {
+        match &inst.op {
             LinearOp::Const { dst, value } => {
+                // If the Const has no operands, it's an immediate-only const.
+                // Just record the value for const_of() lookups, no code emission needed.
+                if inst.operands.is_empty() {
+                    if std::env::var("KAJIT_DEBUG_CONST").is_ok() {
+                        eprintln!(
+                            "[const] immediate-only const: dst={:?}, value={}, inst_id={:?}",
+                            dst, value, inst.id
+                        );
+                    }
+                    self.set_const(*dst, Some(*value));
+                    return;
+                }
                 self.emit_load_u64_x9(*value);
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, Some(*value));
             }
             LinearOp::Copy { dst, src } => {
-                let from = self.current_alloc(0);
-                let to = self.current_alloc(1);
+                let from = self
+                    .alloc_for_vreg(*src)
+                    .expect("copy src should have alloc");
+                let to = self
+                    .alloc_for_vreg(*dst)
+                    .expect("copy dst should have alloc");
                 self.emit_edit_move(from, to);
                 self.set_const(*dst, self.const_of(*src));
             }
@@ -687,7 +752,10 @@ impl Lowerer {
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. } => {
-                panic!("structural op {op:?} should not appear as a CFG-MIR instruction");
+                panic!(
+                    "structural op {:?} should not appear as a CFG-MIR instruction",
+                    inst.op
+                );
             }
         }
     }
@@ -710,6 +778,7 @@ impl Lowerer {
         } else {
             self.allocs_for_terminator(lambda_id, term_op)
         };
+        self.current_inst_operands = Some(self.operands_for_terminator(term));
         if self.apply_regalloc_edits {
             self.apply_regalloc_edits(term_op, InstPosition::Before);
         }
@@ -799,6 +868,7 @@ impl Lowerer {
             self.apply_regalloc_edits(term_op, InstPosition::After);
         }
         self.current_inst_allocs = None;
+        self.current_inst_operands = None;
         self.current_op_id = None;
     }
 
@@ -807,7 +877,18 @@ impl Lowerer {
         for func in &program.funcs {
             let lambda_id = func.lambda_id.index() as u32;
 
-            self.flush_all_vregs();
+            // Clear all vreg tracking including consts at function start
+            self.flush_all_vregs_and_consts();
+
+            // Pre-populate const_vregs with all Const values from this function.
+            // This is needed because immediate-only consts may be used in blocks
+            // that are emitted before the block containing their Const instruction.
+            for inst in &func.insts {
+                if let kajit_lir::LinearOp::Const { dst, value } = &inst.op {
+                    self.const_vregs[dst.index()] = Some(*value);
+                }
+            }
+
             let label = self.lambda_labels[func.lambda_id.index()];
             self.ectx.bind_label(label);
             self.ectx.set_source_location(kajit_emit::SourceLocation {
@@ -847,6 +928,7 @@ impl Lowerer {
                     });
                     self.current_op_id = Some(op_id);
                     self.current_inst_allocs = self.allocs_for_inst(lambda_id, op_id);
+                    self.current_inst_operands = Some(inst.operands.clone());
                     if self.no_edit_mode() {
                         self.current_inst_allocs =
                             Some(self.canonical_allocs_for_operands(&inst.operands));
@@ -855,7 +937,7 @@ impl Lowerer {
                     if self.apply_regalloc_edits {
                         self.apply_regalloc_edits(op_id, InstPosition::Before);
                     }
-                    self.emit_inst(&inst.op);
+                    self.emit_inst(inst);
                     if self.apply_regalloc_edits {
                         self.apply_regalloc_edits(op_id, InstPosition::After);
                     }

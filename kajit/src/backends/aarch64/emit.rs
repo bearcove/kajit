@@ -28,7 +28,7 @@ impl Lowerer {
     }
 
     pub(super) fn emit_write_to_field(&mut self, src: crate::ir::VReg, offset: u32, width: Width) {
-        self.emit_load_use_x9(src, 0);
+        self.emit_load_use_x9_vreg(src);
         match width {
             Width::W1 => self
                 .ectx
@@ -58,7 +58,7 @@ impl Lowerer {
     }
 
     pub(super) fn emit_set_out_ptr(&mut self, src: crate::ir::VReg) {
-        self.emit_load_use_x9(src, 0);
+        self.emit_load_use_x9_vreg(src);
         self.ectx.emit.emit_word(
             aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X9).expect("mov"),
         );
@@ -173,8 +173,10 @@ impl Lowerer {
                 | BinOpKind::CmpGt
                 | BinOpKind::CmpGe
         ) {
-            let lhs_alloc = self.current_alloc(0);
-            let rhs_alloc = self.current_alloc(1);
+            let lhs_alloc = self
+                .alloc_for_vreg(lhs)
+                .expect("compare lhs should have alloc");
+            let rhs_alloc = self.alloc_for_vreg(rhs); // May be None for immediate-only const
             let rhs_const = self.const_of(rhs);
 
             if let Some(reg) = lhs_alloc.as_reg() {
@@ -184,20 +186,26 @@ impl Lowerer {
                     reg.class()
                 );
             }
-            if let Some(reg) = rhs_alloc.as_reg() {
-                assert!(
-                    reg.class() == regalloc2::RegClass::Int,
-                    "unsupported register allocation class {:?} for compare rhs",
-                    reg.class()
-                );
+            if let Some(alloc) = rhs_alloc {
+                if let Some(reg) = alloc.as_reg() {
+                    assert!(
+                        reg.class() == regalloc2::RegClass::Int,
+                        "unsupported register allocation class {:?} for compare rhs",
+                        reg.class()
+                    );
+                }
             }
+
+            // For rhs_alloc, extract reg/stack if present
+            let rhs_reg = rhs_alloc.and_then(|a| a.as_reg());
+            let rhs_stack = rhs_alloc.and_then(|a| a.as_stack());
 
             match (
                 lhs_alloc.as_reg(),
                 lhs_alloc.as_stack(),
                 rhs_const,
-                rhs_alloc.as_reg(),
-                rhs_alloc.as_stack(),
+                rhs_reg,
+                rhs_stack,
             ) {
                 (Some(lhs_reg), None, Some(c), _, _) => {
                     let lhs_r = lhs_reg.hw_enc() as u8;
@@ -274,7 +282,9 @@ impl Lowerer {
                 _ => panic!("unexpected none allocation for compare operands"),
             }
 
-            let dst_alloc = self.current_alloc(2);
+            let dst_alloc = self
+                .alloc_for_vreg(dst)
+                .expect("compare dst should have alloc");
             let condition = match kind {
                 BinOpKind::CmpEq => Condition::Eq,
                 BinOpKind::CmpNe => Condition::Ne,
@@ -308,22 +318,34 @@ impl Lowerer {
             return;
         }
 
-        let lhs_alloc = self.current_alloc(0);
-        let rhs_alloc = self.current_alloc(1);
-        let dst_alloc = self.current_alloc(2);
-        if let (Some(lhs_reg), Some(rhs_reg), Some(dst_reg)) =
-            (lhs_alloc.as_reg(), rhs_alloc.as_reg(), dst_alloc.as_reg())
+        let lhs_alloc = self
+            .alloc_for_vreg(lhs)
+            .expect("binop lhs should have alloc");
+        let rhs_alloc = self.alloc_for_vreg(rhs); // May be None for immediate-only const
+        let dst_alloc = self
+            .alloc_for_vreg(dst)
+            .expect("binop dst should have alloc");
+
+        // Check if rhs is an immediate-only const (no allocation)
+        let rhs_const = self.const_of(rhs);
+        let rhs_is_immediate_only = rhs_alloc.is_none() && rhs_const.is_some();
+
+        let rhs_reg = rhs_alloc.and_then(|a| a.as_reg());
+        if let (Some(lhs_reg), Some(dst_reg)) = (lhs_alloc.as_reg(), dst_alloc.as_reg())
+            && (rhs_is_immediate_only || rhs_reg.is_some())
         {
             assert!(
                 lhs_reg.class() == regalloc2::RegClass::Int,
                 "unsupported register allocation class {:?} for binop lhs",
                 lhs_reg.class()
             );
-            assert!(
-                rhs_reg.class() == regalloc2::RegClass::Int,
-                "unsupported register allocation class {:?} for binop rhs",
-                rhs_reg.class()
-            );
+            if let Some(rhs_reg) = rhs_reg {
+                assert!(
+                    rhs_reg.class() == regalloc2::RegClass::Int,
+                    "unsupported register allocation class {:?} for binop rhs",
+                    rhs_reg.class()
+                );
+            }
             assert!(
                 dst_reg.class() == regalloc2::RegClass::Int,
                 "unsupported register allocation class {:?} for binop dst",
@@ -331,11 +353,11 @@ impl Lowerer {
             );
 
             let lhs_r = lhs_reg.hw_enc() as u8;
-            let rhs_r = rhs_reg.hw_enc() as u8;
+            // rhs_r is only used when immediate encoding isn't possible.
+            // If rhs_is_immediate_only is true, we should always take the immediate path,
+            // so unwrap_or(0) is safe (the value won't be used).
+            let rhs_r = rhs_reg.map(|r| r.hw_enc() as u8).unwrap_or(0);
             let dst_r = dst_reg.hw_enc() as u8;
-
-            // Check if rhs is a known constant for immediate encoding
-            let rhs_const = self.const_of(rhs);
 
             let handled = match kind {
                 BinOpKind::Add => {
@@ -772,7 +794,7 @@ impl Lowerer {
             }
         }
 
-        self.emit_load_use_x9(lhs, 0);
+        self.emit_load_use_x9_vreg(lhs);
         let rhs_const = self.const_of(rhs);
         match kind {
             BinOpKind::Add => {
@@ -790,7 +812,7 @@ impl Lowerer {
                         .expect("add"),
                     );
                 } else {
-                    self.emit_load_use_x10(rhs, 1);
+                    self.emit_load_use_x10_vreg(rhs);
                     self.ectx.emit.emit_word(
                         aarch64::encode_add_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
                             .expect("add"),
@@ -812,7 +834,7 @@ impl Lowerer {
                         .expect("sub"),
                     );
                 } else {
-                    self.emit_load_use_x10(rhs, 1);
+                    self.emit_load_use_x10_vreg(rhs);
                     self.ectx.emit.emit_word(
                         aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
                             .expect("sub"),
@@ -820,7 +842,7 @@ impl Lowerer {
                 }
             }
             BinOpKind::Mul => {
-                self.emit_load_use_x10(rhs, 1);
+                self.emit_load_use_x10_vreg(rhs);
                 self.ectx.emit.emit_word(
                     aarch64::encode_mul(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
                         .expect("mul"),
@@ -833,7 +855,7 @@ impl Lowerer {
                 {
                     self.ectx.emit.emit_word(word);
                 } else {
-                    self.emit_load_use_x10(rhs, 1);
+                    self.emit_load_use_x10_vreg(rhs);
                     self.ectx.emit.emit_word(
                         aarch64::encode_and_reg(
                             aarch64::Width::X64,
@@ -848,7 +870,7 @@ impl Lowerer {
                 }
             }
             BinOpKind::Or => {
-                self.emit_load_use_x10(rhs, 1);
+                self.emit_load_use_x10_vreg(rhs);
                 self.ectx.emit.emit_word(
                     aarch64::encode_orr_reg(
                         aarch64::Width::X64,
@@ -862,7 +884,7 @@ impl Lowerer {
                 );
             }
             BinOpKind::Xor => {
-                self.emit_load_use_x10(rhs, 1);
+                self.emit_load_use_x10_vreg(rhs);
                 self.ectx.emit.emit_word(
                     aarch64::encode_eor_reg(
                         aarch64::Width::X64,
@@ -890,7 +912,7 @@ impl Lowerer {
                             .expect("lsr"),
                     );
                 } else {
-                    self.emit_load_use_x10(rhs, 1);
+                    self.emit_load_use_x10_vreg(rhs);
                     self.ectx.emit.emit_word(
                         aarch64::encode_lsr_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
                             .expect("lsr"),
@@ -906,7 +928,7 @@ impl Lowerer {
                             .expect("lsl"),
                     );
                 } else {
-                    self.emit_load_use_x10(rhs, 1);
+                    self.emit_load_use_x10_vreg(rhs);
                     self.ectx.emit.emit_word(
                         aarch64::encode_lsl_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
                             .expect("lsl"),
@@ -914,7 +936,7 @@ impl Lowerer {
                 }
             }
         }
-        self.emit_store_def_x9(dst, 2);
+        self.emit_store_def_x9_vreg(dst);
         self.set_const(dst, None);
     }
 
@@ -924,7 +946,7 @@ impl Lowerer {
         dst: crate::ir::VReg,
         src: crate::ir::VReg,
     ) {
-        self.emit_load_use_x9(src, 0);
+        self.emit_load_use_x9_vreg(src);
         match kind {
             UnaryOpKind::ZigzagDecode { wide: true } => {
                 self.ectx.emit.emit_word(
@@ -990,13 +1012,14 @@ impl Lowerer {
                 Width::W8 => {}
             },
         }
-        self.emit_store_def_x9(dst, 1);
+        self.emit_store_def_x9_vreg(dst);
         self.set_const(dst, None);
     }
 
     pub(super) fn emit_branch_if(&mut self, cond: crate::ir::VReg, target: LabelId, invert: bool) {
-        let _ = cond;
-        let alloc = self.current_alloc(0);
+        let alloc = self
+            .alloc_for_vreg(cond)
+            .expect("branch_if cond should have allocation");
         self.emit_branch_if_allocation(alloc, target, invert);
     }
 
@@ -1053,8 +1076,9 @@ impl Lowerer {
         default: cfg_mir::EdgeId,
         func: &cfg_mir::Function,
     ) {
-        let _ = predicate;
-        let alloc = self.current_alloc(0);
+        let alloc = self
+            .alloc_for_vreg(predicate)
+            .expect("jump_table predicate should have allocation");
         let pred_reg = alloc.as_reg().map(|r| {
             assert!(
                 r.class() == regalloc2::RegClass::Int,

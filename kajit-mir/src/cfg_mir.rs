@@ -1714,6 +1714,8 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
     rematerialize_constants(&mut cfg);
     local_cse(&mut cfg);
+    copy_propagation(&mut cfg);
+    eliminate_immediate_only_const_defs(&mut cfg);
     dead_code_elimination(&mut cfg);
     cfg
 }
@@ -2075,6 +2077,385 @@ fn rematerialize_constants_in_function(
     }
 }
 
+/// Copy propagation for CFG-MIR.
+///
+/// Replaces uses of a vreg that's just a copy of another vreg with the
+/// original vreg. This enables later dead code elimination to remove
+/// the now-unused Copy instructions.
+///
+/// Example:
+///   v1 = Const(42)
+///   v2 = Copy(v1)
+///   v3 = Add(v2, v2)
+/// Becomes:
+///   v1 = Const(42)
+///   v2 = Copy(v1)    // now dead
+///   v3 = Add(v1, v1)
+pub fn copy_propagation(program: &mut Program) {
+    for func in &mut program.funcs {
+        copy_propagation_in_function(func);
+    }
+}
+
+fn copy_propagation_in_function(func: &mut Function) {
+    // Process each block independently to avoid cross-block data flow issues.
+    // We track when each vreg is defined within the block to avoid use-before-def.
+
+    for block in &func.blocks {
+        // Build map of vreg -> instruction index where it's defined (first def wins)
+        let mut def_order: HashMap<VReg, usize> = HashMap::new();
+
+        // Block params are considered defined at index 0
+        for &param in &block.params {
+            def_order.insert(param, 0);
+        }
+
+        // Collect definitions from instructions
+        for (idx, &inst_id) in block.insts.iter().enumerate() {
+            let inst = &func.insts[inst_id.index()];
+            // Find the def operand (if any) and record its position
+            for operand in &inst.operands {
+                if operand.kind == OperandKind::Def {
+                    // Only record first definition to handle redefinitions correctly
+                    def_order.entry(operand.vreg).or_insert(idx + 1);
+                }
+            }
+        }
+
+        // Build local copy map: dst -> (src, copy_instruction_index)
+        let mut copies: HashMap<VReg, (VReg, usize)> = HashMap::new();
+
+        for (idx, &inst_id) in block.insts.iter().enumerate() {
+            let inst = &func.insts[inst_id.index()];
+            if let LinearOp::Copy { dst, src } = &inst.op {
+                copies.insert(*dst, (*src, idx + 1));
+            }
+        }
+
+        if copies.is_empty() {
+            continue;
+        }
+
+        // Helper to get canonical vreg, ensuring we don't create use-before-def
+        // Returns the canonical vreg only if the source is defined before use_idx
+        let get_canonical_at = |v: VReg, use_idx: usize| -> VReg {
+            let mut current = v;
+            // Follow copy chain while respecting def order
+            while let Some(&(src, _copy_idx)) = copies.get(&current) {
+                // Check if the source is defined before our use point
+                if let Some(&src_def_idx) = def_order.get(&src) {
+                    if src_def_idx < use_idx {
+                        current = src;
+                        continue;
+                    }
+                }
+                // Can't propagate further - source not defined yet
+                break;
+            }
+            current
+        };
+
+        // Rewrite uses in this block's instructions
+        for (idx, &inst_id) in block.insts.iter().enumerate() {
+            let use_idx = idx + 1; // Instruction indices are 1-based (0 is block params)
+            let inst = &mut func.insts[inst_id.index()];
+            let mut operands_changed = false;
+
+            match &mut inst.op {
+                LinearOp::Copy { src, .. } => {
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_src != *src {
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::BinOp { lhs, rhs, .. } => {
+                    let new_lhs = get_canonical_at(*lhs, use_idx);
+                    let new_rhs = get_canonical_at(*rhs, use_idx);
+                    if new_lhs != *lhs || new_rhs != *rhs {
+                        *lhs = new_lhs;
+                        *rhs = new_rhs;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::UnaryOp { src, .. } => {
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_src != *src {
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::WriteToSlot { src, .. } => {
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_src != *src {
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::WriteToField { src, .. } => {
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_src != *src {
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::StoreToAddr { addr, src, .. } => {
+                    let new_addr = get_canonical_at(*addr, use_idx);
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_addr != *addr || new_src != *src {
+                        *addr = new_addr;
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::LoadFromAddr { addr, .. } => {
+                    let new_addr = get_canonical_at(*addr, use_idx);
+                    if new_addr != *addr {
+                        *addr = new_addr;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::AdvanceCursorBy { src } => {
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_src != *src {
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::RestoreCursor { src } => {
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_src != *src {
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::SetOutPtr { src } => {
+                    let new_src = get_canonical_at(*src, use_idx);
+                    if new_src != *src {
+                        *src = new_src;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::BranchIf { cond, .. } | LinearOp::BranchIfZero { cond, .. } => {
+                    let new_cond = get_canonical_at(*cond, use_idx);
+                    if new_cond != *cond {
+                        *cond = new_cond;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::JumpTable { predicate, .. } => {
+                    let new_pred = get_canonical_at(*predicate, use_idx);
+                    if new_pred != *predicate {
+                        *predicate = new_pred;
+                        operands_changed = true;
+                    }
+                }
+                LinearOp::CallIntrinsic { args, .. }
+                | LinearOp::CallPure { args, .. }
+                | LinearOp::CallLambda { args, .. } => {
+                    for arg in args.iter_mut() {
+                        let new_arg = get_canonical_at(*arg, use_idx);
+                        if new_arg != *arg {
+                            *arg = new_arg;
+                            operands_changed = true;
+                        }
+                    }
+                }
+                LinearOp::SimdStringScan { pos, kind } => {
+                    let new_pos = get_canonical_at(*pos, use_idx);
+                    let new_kind = get_canonical_at(*kind, use_idx);
+                    if new_pos != *pos || new_kind != *kind {
+                        *pos = new_pos;
+                        *kind = new_kind;
+                        operands_changed = true;
+                    }
+                }
+                _ => {}
+            }
+
+            // Update operands to match
+            if operands_changed {
+                for operand in &mut inst.operands {
+                    if operand.kind == OperandKind::Use {
+                        operand.vreg = get_canonical_at(operand.vreg, use_idx);
+                    }
+                }
+            }
+        }
+
+        // Also rewrite the block's terminator (accessed via block.term)
+        // Terminator uses are at the end of the block
+        let term_use_idx = block.insts.len() + 1;
+        let term = &mut func.terms[block.term.index()];
+        match term {
+            Terminator::BranchIf { cond, .. } => {
+                *cond = get_canonical_at(*cond, term_use_idx);
+            }
+            Terminator::BranchIfZero { cond, .. } => {
+                *cond = get_canonical_at(*cond, term_use_idx);
+            }
+            Terminator::JumpTable { predicate, .. } => {
+                *predicate = get_canonical_at(*predicate, term_use_idx);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Check if a value can be encoded as an ARM64 immediate for the given operation.
+/// This is conservative - we only eliminate def operands for values we're confident
+/// can be encoded as immediates on all supported targets.
+fn can_encode_as_immediate(op: kajit_lir::BinOpKind, value: u64) -> bool {
+    use kajit_lir::BinOpKind;
+    match op {
+        // ARM64 add/sub immediate: 12-bit unsigned (0-4095)
+        BinOpKind::Add | BinOpKind::Sub => value <= 4095,
+        // ARM64 shift immediate: 6-bit (0-63)
+        BinOpKind::Shl | BinOpKind::Shr => value < 64,
+        // ARM64 logical immediate (And/Or/Xor) uses complex bitmask encoding.
+        // The rules are non-trivial, so we don't try to predict what will encode.
+        // Leave these consts with their Def operands so regalloc handles them.
+        _ => false,
+    }
+}
+
+/// Remove def operands from Const instructions that are only used as immediates.
+///
+/// When a constant is only used as the RHS of BinOp instructions where the value
+/// can be encoded as an immediate, we don't need regalloc to track it. By removing
+/// the Def operand, regalloc won't allocate a register or generate moves for it.
+/// The backend will use the immediate form directly via `const_of()`.
+pub fn eliminate_immediate_only_const_defs(program: &mut Program) {
+    for func in &mut program.funcs {
+        eliminate_immediate_only_const_defs_in_function(func);
+    }
+}
+
+fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
+    use kajit_lir::BinOpKind;
+
+    // Step 1: Build map of const vreg -> value
+    let mut const_values: HashMap<VReg, u64> = HashMap::new();
+    for inst in &func.insts {
+        if let LinearOp::Const { dst, value } = &inst.op {
+            const_values.insert(*dst, *value);
+        }
+    }
+
+    if const_values.is_empty() {
+        return;
+    }
+
+    // Step 2: Track how each const vreg is used
+    // A const is "immediate-only" if ALL its uses are as RHS of BinOp where
+    // the value can be encoded as an immediate.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum UseKind {
+        ImmediateOnly,
+        RequiresRegister,
+    }
+
+    let mut use_kinds: HashMap<VReg, UseKind> = HashMap::new();
+    for (vreg, _) in &const_values {
+        use_kinds.insert(*vreg, UseKind::ImmediateOnly);
+    }
+
+    // Scan all uses
+    for inst in &func.insts {
+        match &inst.op {
+            LinearOp::BinOp { op, lhs, rhs, .. } => {
+                // LHS use always requires register
+                if const_values.contains_key(lhs) {
+                    use_kinds.insert(*lhs, UseKind::RequiresRegister);
+                }
+                // RHS can potentially be immediate
+                if let Some(&value) = const_values.get(rhs) {
+                    if !can_encode_as_immediate(*op, value) {
+                        use_kinds.insert(*rhs, UseKind::RequiresRegister);
+                    }
+                }
+            }
+            LinearOp::Copy { src, .. } => {
+                if const_values.contains_key(src) {
+                    use_kinds.insert(*src, UseKind::RequiresRegister);
+                }
+            }
+            LinearOp::UnaryOp { src, .. } => {
+                if const_values.contains_key(src) {
+                    use_kinds.insert(*src, UseKind::RequiresRegister);
+                }
+            }
+            // Any other use requires a register
+            _ => {
+                for operand in &inst.operands {
+                    if operand.kind == OperandKind::Use {
+                        if const_values.contains_key(&operand.vreg) {
+                            use_kinds.insert(operand.vreg, UseKind::RequiresRegister);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Also check terminator uses
+    for term in &func.terms {
+        let cond = match term {
+            Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                Some(*cond)
+            }
+            Terminator::JumpTable { predicate, .. } => Some(*predicate),
+            _ => None,
+        };
+        if let Some(cond) = cond {
+            if const_values.contains_key(&cond) {
+                use_kinds.insert(cond, UseKind::RequiresRegister);
+            }
+        }
+    }
+
+    // Also check edge args - consts passed through edges require registers
+    for edge in &func.edges {
+        for arg in &edge.args {
+            if const_values.contains_key(&arg.source) {
+                use_kinds.insert(arg.source, UseKind::RequiresRegister);
+            }
+        }
+    }
+
+    // Step 3: Collect vregs that are immediate-only
+    let immediate_only: HashSet<VReg> = use_kinds
+        .iter()
+        .filter(|(_, kind)| **kind == UseKind::ImmediateOnly)
+        .map(|(vreg, _)| *vreg)
+        .collect();
+
+    if immediate_only.is_empty() {
+        return;
+    }
+
+    // Step 4: Remove Def operands from Const instructions for immediate-only vregs,
+    // AND remove Use operands from BinOps that use them as RHS.
+    // This is necessary because regalloc requires all uses to have reaching definitions.
+    for inst in &mut func.insts {
+        match &inst.op {
+            LinearOp::Const { dst, .. } => {
+                if immediate_only.contains(dst) {
+                    inst.operands.clear();
+                }
+            }
+            LinearOp::BinOp { rhs, .. } => {
+                if immediate_only.contains(rhs) {
+                    // Remove the Use operand for the RHS (which is the second operand)
+                    // Operand order is: lhs (Use), rhs (Use), dst (Def)
+                    inst.operands.retain(|op| op.vreg != *rhs);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Dead code elimination for CFG-MIR.
 ///
 /// Removes instructions whose outputs are never used. This is particularly
@@ -2115,6 +2496,12 @@ fn dead_code_elimination_in_function(func: &mut Function) {
             for &inst_id in &block.insts {
                 let inst = &func.insts[inst_id.index()];
                 if !is_pure_instruction(&inst.op) {
+                    continue;
+                }
+
+                // Don't remove Const instructions with no operands - they're needed
+                // for const_of() tracking in the backend (immediate-only consts).
+                if matches!(&inst.op, LinearOp::Const { .. }) && inst.operands.is_empty() {
                     continue;
                 }
 
