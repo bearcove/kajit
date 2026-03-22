@@ -168,7 +168,17 @@ fn run_dead_code_elimination_pass(func: &mut IrFunc) {
     debug_verify(func, "dead_code_elimination_pass");
 }
 
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 4] = [
+fn run_slot_to_reg_pass(func: &mut IrFunc) {
+    crate::slot2reg::slot_to_reg(func);
+    debug_verify(func, "slot_to_reg");
+}
+
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 5] = [
+    DefaultPassSpec {
+        name: "slot_to_reg",
+        description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
+        run: run_slot_to_reg_pass,
+    },
     DefaultPassSpec {
         name: "bounds_check_coalescing",
         description: "Coalesce redundant BoundsCheck chains in cursor pipelines.",

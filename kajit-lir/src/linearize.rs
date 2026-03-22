@@ -711,6 +711,9 @@ impl<'a> Linearizer<'a> {
             IrOp::SimdWhitespaceSkip => {
                 self.emit_node(node, LinearOp::SimdWhitespaceSkip);
             }
+            IrOp::Nop => {
+                // No-op; skip.
+            }
         }
     }
 
@@ -778,15 +781,24 @@ impl<'a> Linearizer<'a> {
             // Linearize the branch body.
             self.linearize_region(region_id);
 
-            // Emit copies for region results → gamma output vregs.
-            self.emit_gamma_exit_copies(node_id, region_id, data_output_count);
+            // Skip exit copies and merge branch if the branch ends with an error exit
+            // (unreachable code after error_exit causes regalloc issues).
+            let ends_with_error = self
+                .ops
+                .last()
+                .is_some_and(|op| matches!(op, LinearOp::ErrorExit { .. }));
 
-            // Branch to merge (skip for last branch — it falls through).
-            if branch_idx < branch_count - 1 {
-                self.emit(
-                    Some(self.func.regions[region_id].debug_scope),
-                    LinearOp::Branch(merge_label),
-                );
+            if !ends_with_error {
+                // Emit copies for region results → gamma output vregs.
+                self.emit_gamma_exit_copies(node_id, region_id, data_output_count);
+
+                // Branch to merge (skip for last branch — it falls through).
+                if branch_idx < branch_count - 1 {
+                    self.emit(
+                        Some(self.func.regions[region_id].debug_scope),
+                        LinearOp::Branch(merge_label),
+                    );
+                }
             }
         }
 

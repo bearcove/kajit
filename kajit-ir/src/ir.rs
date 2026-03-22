@@ -764,6 +764,10 @@ pub enum IrOp {
     /// Skip whitespace bytes using SIMD.
     /// Inputs: [StateCursor]. Outputs: [StateCursor].
     SimdWhitespaceSkip,
+
+    /// No-op placeholder for removed nodes (used during optimization passes).
+    /// Inputs: []. Outputs: [].
+    Nop,
 }
 
 // ─── Effect classification ──────────────────────────────────────────────────
@@ -857,6 +861,9 @@ impl IrOp {
 
             // Barrier ops
             IrOp::CallIntrinsic { .. } => (Effect::Barrier, None),
+
+            // No-op (removed by optimization)
+            IrOp::Nop => (Effect::Pure, Some(0)),
         };
 
         IrOpMetadata {
@@ -2596,6 +2603,7 @@ impl IrFunc {
             IrOp::ErrorExit { code } => write!(f, "ErrorExit({code:?})"),
             IrOp::SimdStringScan => write!(f, "SimdStringScan"),
             IrOp::SimdWhitespaceSkip => write!(f, "SimdWhitespaceSkip"),
+            IrOp::Nop => write!(f, "Nop"),
         }
     }
 
