@@ -840,6 +840,7 @@ name = "kajit-lir"
 version = "0.1.0"
 dependencies = [
  "kajit-ir",
+ "kajit-ir-text",
 ]
 
 [[package]]

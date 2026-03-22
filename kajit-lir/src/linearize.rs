@@ -2223,4 +2223,105 @@ mod tests {
             "semantic debug value should stay attached to the write op",
         );
     }
+
+    #[test]
+    fn linearize_theta_gamma_passthrough_after_slot2reg() {
+        // Theta with gamma inside, one branch doesn't modify the slot.
+        // After slot2reg, the slot becomes a loop-carried variable.
+        let input = r#"
+lambda @0 (shape: "test") {
+  region {
+    args: [%cs, %os]
+    n0 = Const(0x0) [] -> [v0]
+    n1 = WriteToSlot(0) [v0, %cs:arg] -> [%cs]
+    n14 = theta [%cs:n1, %os:arg] {
+      region {
+        args: [%cs, %os]
+        n2 = ReadFromSlot(0) [%cs:arg] -> [v1, %cs]
+        n3 = Const(0x4) [] -> [v2]
+        n4 = CmpNe [v1, v2] -> [v3]
+        n11 = gamma [
+          pred: v3
+          in0: %cs:n2
+          in1: %os:arg
+        ] {
+          branch 0:
+            region {
+              args: [%cs, %os]
+              n5 = ReadFromSlot(0) [%cs:arg] -> [v4, %cs]
+              n6 = Const(0x1) [] -> [v5]
+              n7 = Add [v4, v5] -> [v6]
+              n8 = WriteToSlot(0) [v6, %cs:n5] -> [%cs]
+              results: [%cs:n8, %os:arg]
+            }
+          branch 1:
+            region {
+              args: [%cs, %os]
+              results: [%cs:arg, %os:arg]
+            }
+        } -> [%cs, %os]
+        n12 = Const(0x0) [] -> [v7]
+        results: [v7, %cs:n11, %os:n11]
+      }
+    } -> [%cs, %os]
+    n13 = ReadFromSlot(0) [%cs:n14] -> [v8, %cs]
+    n15 = WriteToField(offset=0, W4) [v8, %os:n14] -> [%os]
+    results: [%cs:n13, %os:n15]
+  }
+}
+"#;
+        let registry = kajit_ir::IntrinsicRegistry::empty();
+        let mut func = kajit_ir_text::parse_ir(input, &registry).unwrap();
+        kajit_ir::slot2reg::slot_to_reg(&mut func);
+        let _ir = linearize(&mut func);
+    }
+
+    #[test]
+    fn linearize_theta_shared_predicate_and_loopvar() {
+        // Theta where a gamma output is used both as predicate AND as a
+        // loop-carried variable result — the pattern from the real array
+        // decoder that triggers v_N from v_N in regalloc2.
+        let input = r#"
+lambda @0 (shape: "test") {
+  region {
+    args: [%cs, %os]
+    n0 = Const(0x0) [] -> [v0]
+    n1 = Const(0x1) [] -> [v1]
+    n10 = theta [v0, v1, %cs:arg, %os:arg] {
+      region {
+        args: [arg0, arg1, %cs, %os]
+        n2 = Const(0x4) [] -> [v2]
+        n3 = CmpNe [arg0, v2] -> [v3]
+        n8 = gamma [
+          pred: v3
+          in0: arg0
+          in1: arg1
+          in2: %cs:arg
+          in3: %os:arg
+        ] {
+          branch 0:
+            region {
+              args: [arg0, arg1, %cs, %os]
+              n4 = Const(0x1) [] -> [v4]
+              n5 = Add [arg0, v4] -> [v5]
+              results: [v5, arg1, %cs:arg, %os:arg]
+            }
+          branch 1:
+            region {
+              args: [arg0, arg1, %cs, %os]
+              results: [arg0, arg1, %cs:arg, %os:arg]
+            }
+        } -> [v6, v7, %cs, %os]
+        results: [v7, v6, v7, %cs:n8, %os:n8]
+      }
+    } -> [v8, v9, %cs, %os]
+    n9 = WriteToField(offset=0, W4) [v8, %os:n10] -> [%os]
+    results: [%cs:n10, %os:n9]
+  }
+}
+"#;
+        let registry = kajit_ir::IntrinsicRegistry::empty();
+        let mut func = kajit_ir_text::parse_ir(input, &registry).unwrap();
+        let _ir = linearize(&mut func);
+    }
 }

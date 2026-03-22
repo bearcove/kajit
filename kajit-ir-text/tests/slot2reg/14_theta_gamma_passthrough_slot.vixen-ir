@@ -1,0 +1,40 @@
+lambda @0 (shape: "test") {
+  region {
+    args: [%cs, %os]
+    n0 = Const(0x0) [] -> [v0]
+    n1 = WriteToSlot(0) [v0, %cs:arg] -> [%cs]
+    n14 = theta [%cs:n1, %os:arg] {
+      region {
+        args: [%cs, %os]
+        n2 = ReadFromSlot(0) [%cs:arg] -> [v1, %cs]
+        n3 = Const(0x4) [] -> [v2]
+        n4 = CmpNe [v1, v2] -> [v3]
+        n11 = gamma [
+          pred: v3
+          in0: %cs:n2
+          in1: %os:arg
+        ] {
+          branch 0:
+            region {
+              args: [%cs, %os]
+              n5 = ReadFromSlot(0) [%cs:arg] -> [v4, %cs]
+              n6 = Const(0x1) [] -> [v5]
+              n7 = Add [v4, v5] -> [v6]
+              n8 = WriteToSlot(0) [v6, %cs:n5] -> [%cs]
+              results: [%cs:n8, %os:arg]
+            }
+          branch 1:
+            region {
+              args: [%cs, %os]
+              results: [%cs:arg, %os:arg]
+            }
+        } -> [%cs, %os]
+        n12 = Const(0x0) [] -> [v7]
+        results: [v7, %cs:n11, %os:n11]
+      }
+    } -> [%cs, %os]
+    n13 = ReadFromSlot(0) [%cs:n14] -> [v8, %cs]
+    n15 = WriteToField(offset=0, W4) [v8, %os:n14] -> [%os]
+    results: [%cs:n13, %os:n15]
+  }
+}

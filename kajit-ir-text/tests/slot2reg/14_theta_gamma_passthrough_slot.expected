@@ -1,0 +1,46 @@
+state_domains {
+  d0 = cursor
+  d1 = output
+}
+scopes {
+  s0 = lambda_body(@0)
+  s1 = theta_body parent s0
+  s2 = gamma_branch(0) parent s1
+  s3 = gamma_branch(1) parent s1
+}
+lambda @0 @s0 (shape: "test") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 = Const(0x0) [] -> [v0]
+    n12 = theta [v0, %cs:arg, %os:arg] {
+      region @s1 {
+        args: [arg0, %cs, %os]
+        n4 = Const(0x4) [] -> [v2]
+        n5 = CmpNe [arg0, v2] -> [v3]
+        n10 = gamma [
+          pred: v3
+          in0: arg0
+          in1: %cs:arg
+          in2: %os:arg
+        ] {
+          branch 0:
+            region @s2 {
+              args: [arg0, %cs, %os]
+              n7 = Const(0x1) [] -> [v5]
+              n8 = Add [arg0, v5] -> [v6]
+              results: [v6, %cs:arg, %os:arg]
+            }
+          branch 1:
+            region @s3 {
+              args: [arg0, %cs, %os]
+              results: [arg0, %cs:arg, %os:arg]
+            }
+        } -> [v9, %cs, %os]
+        n11 = Const(0x0) [] -> [v7]
+        results: [v7, v9, %cs:n10, %os:n10]
+      }
+    } -> [v10, %cs, %os]
+    n14 = WriteToField(offset=0, W4) [v10, %os:n12] -> [%os]
+    results: [%cs:n12, %os:n14]
+  }
+}

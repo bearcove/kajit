@@ -10,3 +10,6 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 kajit-ir = { path = "../kajit-ir" }
+
+[dev-dependencies]
+kajit-ir-text = { path = "../kajit-ir-text" }
