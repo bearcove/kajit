@@ -444,6 +444,11 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .then_ignore(just(")"))
             .map(AstOp::Const),
         just("CmpNe").to(AstOp::Resolved(IrOp::CmpNe)),
+        just("CmpEq").to(AstOp::Resolved(IrOp::CmpEq)),
+        just("CmpLt").to(AstOp::Resolved(IrOp::CmpLt)),
+        just("CmpLe").to(AstOp::Resolved(IrOp::CmpLe)),
+        just("CmpGt").to(AstOp::Resolved(IrOp::CmpGt)),
+        just("CmpGe").to(AstOp::Resolved(IrOp::CmpGe)),
         just("Add").to(AstOp::Resolved(IrOp::Add)),
         just("Sub").to(AstOp::Resolved(IrOp::Sub)),
         just("Mul").to(AstOp::Resolved(IrOp::Mul)),
@@ -480,6 +485,7 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(error_code())
             .then_ignore(just(")"))
             .map(|c| AstOp::Resolved(IrOp::ErrorExit { code: c })),
+        just("SaveInputEnd").to(AstOp::Resolved(IrOp::SaveInputEnd)),
         just("SimdStringScan").to(AstOp::Resolved(IrOp::SimdStringScan)),
         just("SimdWhitespaceSkip").to(AstOp::Resolved(IrOp::SimdWhitespaceSkip)),
     ));
@@ -674,6 +680,14 @@ fn lambda<'src>() -> impl Parser<'src, &'src str, AstLambda, Extra<'src>> + Clon
                     just("\"")
                         .ignore_then(any().filter(|c: &char| *c != '"').repeated().to_slice())
                         .then_ignore(just("\"")),
+                )
+                .then_ignore(
+                    just(",")
+                        .then(ws())
+                        .then(just("output_size:"))
+                        .then(ws())
+                        .then(uint32())
+                        .or_not(),
                 )
                 .then_ignore(just(")")),
         )
@@ -1254,18 +1268,19 @@ fn resolve_node(
                 .collect::<Result<_, _>>()?;
 
             // Theta invariant checks: textual IR must follow builder semantics.
-            // inputs: [loop_vars..., %cs, %os]
-            // body args: [loop_vars..., %cs, %os]
-            // body results: [pred, loop_vars..., %cs, %os]
-            // outputs: [loop_vars..., %cs, %os]
-            if resolved_inputs.len() < 2 {
+            // inputs: [loop_vars..., state_domains...]
+            // body args: [loop_vars..., state_domains...]
+            // body results: [pred, loop_vars..., state_domains...]
+            // outputs: [loop_vars..., state_domains...]
+            let state_count = func.state_domains.len();
+            if resolved_inputs.len() < state_count {
                 return Err(ParseError {
-                    message: format!("theta n{id} must have at least %cs/%os inputs"),
+                    message: format!("theta n{id} must have at least {state_count} state inputs"),
                 });
             }
-            if resolved_outputs.len() < 2 {
+            if resolved_outputs.len() < state_count {
                 return Err(ParseError {
-                    message: format!("theta n{id} must have at least %cs/%os outputs"),
+                    message: format!("theta n{id} must have at least {state_count} state outputs"),
                 });
             }
 
@@ -1289,42 +1304,39 @@ fn resolve_node(
                 });
             }
 
-            let in_last = resolved_inputs.len() - 1;
-            let out_last = resolved_outputs.len() - 1;
-            let body_arg_last = body_region.args.len() - 1;
-            let body_res_last = body_region.results.len() - 1;
-
-            let body_arg_second_last_kind =
-                func.region_args[body_region.args[body_arg_last - 1]].kind;
-            let body_arg_last_kind = func.region_args[body_region.args[body_arg_last]].kind;
-            let body_res_second_last_kind =
-                func.region_results[body_region.results[body_res_last - 1]].kind;
-            let body_res_last_kind = func.region_results[body_region.results[body_res_last]].kind;
-            let body_res_first_kind = func.region_results[body_region.results[0]].kind;
-
-            if resolved_inputs[in_last - 1].kind != CURSOR_STATE_PORT
-                || resolved_inputs[in_last].kind != OUTPUT_STATE_PORT
-                || body_arg_second_last_kind != CURSOR_STATE_PORT
-                || body_arg_last_kind != OUTPUT_STATE_PORT
-                || resolved_outputs[out_last - 1].kind != CURSOR_STATE_PORT
-                || resolved_outputs[out_last].kind != OUTPUT_STATE_PORT
-                || body_res_second_last_kind != CURSOR_STATE_PORT
-                || body_res_last_kind != OUTPUT_STATE_PORT
-            {
-                return Err(ParseError {
-                    message: format!(
-                        "theta n{id} must thread %cs/%os as trailing inputs/args/results/outputs"
-                    ),
-                });
+            // Check trailing state domains on inputs/outputs/args/results.
+            let in_len = resolved_inputs.len();
+            let out_len = resolved_outputs.len();
+            let body_arg_count = body_region.args.len();
+            let body_res_count = body_region.results.len();
+            for s in 0..state_count {
+                let in_kind = resolved_inputs[in_len - state_count + s].kind;
+                let out_kind = resolved_outputs[out_len - state_count + s].kind;
+                let arg_kind =
+                    func.region_args[body_region.args[body_arg_count - state_count + s]].kind;
+                let res_kind =
+                    func.region_results[body_region.results[body_res_count - state_count + s]].kind;
+                if in_kind == PortKind::Data
+                    || out_kind == PortKind::Data
+                    || arg_kind == PortKind::Data
+                    || res_kind == PortKind::Data
+                {
+                    return Err(ParseError {
+                        message: format!(
+                            "theta n{id} trailing state domain {s} must be state ports, not data"
+                        ),
+                    });
+                }
             }
 
+            let body_res_first_kind = func.region_results[body_region.results[0]].kind;
             if body_res_first_kind != PortKind::Data {
                 return Err(ParseError {
                     message: format!("theta n{id} first body result must be predicate data"),
                 });
             }
 
-            let loop_var_count = resolved_inputs.len() - 2;
+            let loop_var_count = resolved_inputs.len() - state_count;
             for i in 0..loop_var_count {
                 let body_arg_i_kind = func.region_args[body_region.args[i]].kind;
                 let body_res_i_kind = func.region_results[body_region.results[i + 1]].kind;

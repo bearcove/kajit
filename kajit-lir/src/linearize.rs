@@ -2277,6 +2277,43 @@ lambda @0 (shape: "test") {
     }
 
     #[test]
+    fn linearize_real_array_u32_4_after_slot2reg() {
+        let result = std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(linearize_real_array_u32_4_impl)
+            .unwrap()
+            .join()
+            .unwrap();
+        if let Err(msg) = result {
+            panic!("{msg}");
+        }
+    }
+
+    fn linearize_real_array_u32_4_impl() -> Result<(), String> {
+        let input = include_str!("../tests/array_u32_4_after_slot2reg.vixen-ir");
+        let registry = kajit_ir::IntrinsicRegistry::empty();
+        let mut func =
+            kajit_ir_text::parse_ir(input, &registry).map_err(|e| format!("parse failed: {e}"))?;
+        let ir = linearize(&mut func);
+        let mut self_copies = vec![];
+        for (i, op) in ir.ops.iter().enumerate() {
+            if let LinearOp::Copy { dst, src } = op {
+                if dst == src {
+                    self_copies.push(format!(
+                        "  op[{i}]: Copy v{} -> v{}",
+                        src.index(),
+                        dst.index()
+                    ));
+                }
+            }
+        }
+        if !self_copies.is_empty() {
+            return Err(format!("self-copies found:\n{}", self_copies.join("\n")));
+        }
+        Ok(())
+    }
+
+    #[test]
     fn linearize_theta_shared_predicate_and_loopvar() {
         // Theta where a gamma output is used both as predicate AND as a
         // loop-carried variable result — the pattern from the real array
