@@ -594,6 +594,7 @@ dependencies = [
  "insta",
  "itoa",
  "kajit-emit",
+ "kajit-format",
  "kajit-hir",
  "kajit-hir-text",
  "kajit-ir",
@@ -620,6 +621,13 @@ name = "kajit-emit"
 version = "0.1.0"
 dependencies = [
  "proptest",
+]
+
+[[package]]
+name = "kajit-format"
+version = "0.1.0"
+dependencies = [
+ "facet",
 ]
 
 [[package]]

@@ -26,6 +26,7 @@ kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
 kajit-emit = { path = "../kajit-emit" }
+kajit-format = { path = "../kajit-format" }
 kajit-hir = { path = "../kajit-hir" }
 kajit-json = { path = "../kajit-json" }
 

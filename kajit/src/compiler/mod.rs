@@ -9,15 +9,10 @@ pub(crate) use shape_utils::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use facet::{
-    ConstParamKind, Def, EnumRepr, Facet, KnownPointer, ListDef, OptionDef, PointerDef, ScalarType,
-    Shape, Type, UserType,
-};
+use facet::{Def, EnumRepr, Facet, ListDef, OptionDef, ScalarType, Shape, Type, UserType};
 use kajit_hir as hir;
 
-use crate::format::{
-    Decoder, FieldEmitInfo, HIRLoweringKind, SkippedFieldInfo, VariantEmitInfo, VariantKind,
-};
+use crate::format::{Decoder, FieldEmitInfo, HIRLoweringKind, SkippedFieldInfo};
 use crate::intrinsics;
 use crate::ir::{RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;

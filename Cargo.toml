@@ -2,6 +2,7 @@
 members = [
   "kajit",
   "kajit-emit",
+  "kajit-format",
   "kajit-hir",
   "kajit-json",
   "kajit-hir-text",
