@@ -1,0 +1,28 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "scratch_summary") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = Const(0xf) [] -> [v0]
+    n2 = WriteToSlot(1) [v0, %cs:arg] -> [%cs]
+    n3 = ReadFromSlot(1) [%cs:n2] -> [v1, %cs]
+    n4 = Const(0x3) [] -> [v2]
+    n5 = And [v1, v2] -> [v3]
+    n6 = WriteToSlot(2) [v3, %cs:n3] -> [%cs]
+    n7 = ReadFromSlot(1) [%cs:n6] -> [v4, %cs]
+    n8 = WriteToField(offset=0, W4) [v4, %os:arg] -> [%os]
+    n9 = ReadFromSlot(2) [%cs:n7] -> [v5, %cs]
+    n10 = WriteToField(offset=4, W4) [v5, %os:n8] -> [%os]
+    results: [%cs:n9, %os:n10, %s2:arg]
+  }
+}

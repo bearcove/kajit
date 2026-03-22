@@ -1,0 +1,40 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "dynamic_destination_summary") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = Const(0x1) [] -> [v0]
+    n2 = WriteToSlot(1) [v0, %cs:arg] -> [%cs]
+    n3 = Const(0x5) [] -> [v1]
+    n4 = WriteToField(offset=0, W4) [v1, %os:arg] -> [%os]
+    n5 = ReadFromSlot(1) [%cs:n2] -> [v2, %cs]
+    n6 = SaveOutPtr [%os:n4] -> [v3, %os]
+    n7 = Const(0x4) [] -> [v4]
+    n8 = Mul [v2, v4] -> [v5]
+    n9 = Add [v3, v5] -> [v6]
+    n10 = Const(0x7) [] -> [v7]
+    n11 = StoreToAddr(W4) [v6, v7, %s2:arg] -> [%s2]
+    n12 = Const(0xb) [] -> [v8]
+    n13 = WriteToField(offset=8, W4) [v8, %os:n6] -> [%os]
+    n14 = Const(0xd) [] -> [v9]
+    n15 = WriteToField(offset=12, W4) [v9, %os:n13] -> [%os]
+    n16 = ReadFromSlot(1) [%cs:n5] -> [v10, %cs]
+    n17 = SaveOutPtr [%os:n15] -> [v11, %os]
+    n18 = Const(0x4) [] -> [v12]
+    n19 = Mul [v10, v12] -> [v13]
+    n20 = Add [v11, v13] -> [v14]
+    n21 = LoadFromAddr(W4) [v14, %s2:n11] -> [v15, %s2]
+    n22 = WriteToField(offset=16, W4) [v15, %os:n17] -> [%os]
+    results: [%cs:n16, %os:n22, %s2:n21]
+  }
+}

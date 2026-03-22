@@ -1,0 +1,216 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+  s1 = theta_body parent s0
+  s2 = gamma_branch(0) parent s1
+  s3 = gamma_branch(1) parent s1
+  s4 = gamma_branch(0) parent s3
+  s5 = gamma_branch(1) parent s3
+  s6 = gamma_branch(0) parent s5
+  s7 = gamma_branch(1) parent s5
+  s8 = gamma_branch(0) parent s1
+  s9 = gamma_branch(1) parent s1
+  s10 = gamma_branch(0) parent s1
+  s11 = gamma_branch(1) parent s1
+  s12 = gamma_branch(0) parent s11
+  s13 = gamma_branch(1) parent s11
+  s14 = gamma_branch(0) parent s13
+  s15 = gamma_branch(1) parent s13
+  s16 = gamma_branch(0) parent s1
+  s17 = gamma_branch(1) parent s1
+}
+lambda @0 @s0 (shape: "loop_break_continue") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = Const(0x0) [] -> [v0]
+    n2 = WriteToSlot(1) [v0, %cs:arg] -> [%cs]
+    n3 = Const(0x0) [] -> [v1]
+    n4 = WriteToSlot(2) [v1, %cs:n2] -> [%cs]
+    n46 = theta [%cs:n4, %os:arg, %s2:arg] {
+      region @s1 {
+        args: [%cs, %os, %s2]
+        n5 = Const(0x1) [] -> [v2]
+        n6 = WriteToSlot(3) [v2, %cs:arg] -> [%cs]
+        n7 = WriteToSlot(4) [v2, %cs:n6] -> [%cs]
+        n8 = ReadFromSlot(3) [%cs:n7] -> [v3, %cs]
+        n18 = gamma [
+          pred: v3
+          in0: %cs:n8
+          in1: %os:arg
+          in2: %s2:arg
+        ] {
+          branch 0:
+            region @s2 {
+              args: [%cs, %os, %s2]
+              results: [%cs:arg, %os:arg, %s2:arg]
+            }
+          branch 1:
+            region @s3 {
+              args: [%cs, %os, %s2]
+              n9 = ReadFromSlot(1) [%cs:arg] -> [v4, %cs]
+              n10 = Const(0x5) [] -> [v5]
+              n11 = CmpEq [v4, v5] -> [v6]
+              n17 = gamma [
+                pred: v6
+                in0: %cs:n9
+                in1: %os:arg
+                in2: %s2:arg
+              ] {
+                branch 0:
+                  region @s4 {
+                    args: [%cs, %os, %s2]
+                    results: [%cs:arg, %os:arg, %s2:arg]
+                  }
+                branch 1:
+                  region @s5 {
+                    args: [%cs, %os, %s2]
+                    n12 = ReadFromSlot(3) [%cs:arg] -> [v7, %cs]
+                    n16 = gamma [
+                      pred: v7
+                      in0: %cs:n12
+                      in1: %os:arg
+                      in2: %s2:arg
+                    ] {
+                      branch 0:
+                        region @s6 {
+                          args: [%cs, %os, %s2]
+                          results: [%cs:arg, %os:arg, %s2:arg]
+                        }
+                      branch 1:
+                        region @s7 {
+                          args: [%cs, %os, %s2]
+                          n13 = Const(0x0) [] -> [v8]
+                          n14 = WriteToSlot(3) [v8, %cs:arg] -> [%cs]
+                          n15 = WriteToSlot(4) [v8, %cs:n14] -> [%cs]
+                          results: [%cs:n15, %os:arg, %s2:arg]
+                        }
+                    } -> [%cs, %os, %s2]
+                    results: [%cs:n16, %os:n16, %s2:n16]
+                  }
+              } -> [%cs, %os, %s2]
+              results: [%cs:n17, %os:n17, %s2:n17]
+            }
+        } -> [%cs, %os, %s2]
+        n19 = ReadFromSlot(3) [%cs:n18] -> [v9, %cs]
+        n24 = gamma [
+          pred: v9
+          in0: %cs:n19
+          in1: %os:n18
+          in2: %s2:n18
+        ] {
+          branch 0:
+            region @s8 {
+              args: [%cs, %os, %s2]
+              results: [%cs:arg, %os:arg, %s2:arg]
+            }
+          branch 1:
+            region @s9 {
+              args: [%cs, %os, %s2]
+              n20 = ReadFromSlot(1) [%cs:arg] -> [v10, %cs]
+              n21 = Const(0x1) [] -> [v11]
+              n22 = Add [v10, v11] -> [v12]
+              n23 = WriteToSlot(1) [v12, %cs:n20] -> [%cs]
+              results: [%cs:n23, %os:arg, %s2:arg]
+            }
+        } -> [%cs, %os, %s2]
+        n25 = ReadFromSlot(3) [%cs:n24] -> [v13, %cs]
+        n38 = gamma [
+          pred: v13
+          in0: %cs:n25
+          in1: %os:n24
+          in2: %s2:n24
+        ] {
+          branch 0:
+            region @s10 {
+              args: [%cs, %os, %s2]
+              results: [%cs:arg, %os:arg, %s2:arg]
+            }
+          branch 1:
+            region @s11 {
+              args: [%cs, %os, %s2]
+              n26 = ReadFromSlot(1) [%cs:arg] -> [v14, %cs]
+              n27 = Const(0x1) [] -> [v15]
+              n28 = And [v14, v15] -> [v16]
+              n29 = Const(0x0) [] -> [v17]
+              n30 = CmpEq [v16, v17] -> [v18]
+              n37 = gamma [
+                pred: v18
+                in0: %cs:n26
+                in1: %os:arg
+                in2: %s2:arg
+              ] {
+                branch 0:
+                  region @s12 {
+                    args: [%cs, %os, %s2]
+                    results: [%cs:arg, %os:arg, %s2:arg]
+                  }
+                branch 1:
+                  region @s13 {
+                    args: [%cs, %os, %s2]
+                    n31 = ReadFromSlot(3) [%cs:arg] -> [v19, %cs]
+                    n36 = gamma [
+                      pred: v19
+                      in0: %cs:n31
+                      in1: %os:arg
+                      in2: %s2:arg
+                    ] {
+                      branch 0:
+                        region @s14 {
+                          args: [%cs, %os, %s2]
+                          results: [%cs:arg, %os:arg, %s2:arg]
+                        }
+                      branch 1:
+                        region @s15 {
+                          args: [%cs, %os, %s2]
+                          n32 = Const(0x0) [] -> [v20]
+                          n33 = Const(0x1) [] -> [v21]
+                          n34 = WriteToSlot(3) [v20, %cs:arg] -> [%cs]
+                          n35 = WriteToSlot(4) [v21, %cs:n34] -> [%cs]
+                          results: [%cs:n35, %os:arg, %s2:arg]
+                        }
+                    } -> [%cs, %os, %s2]
+                    results: [%cs:n36, %os:n36, %s2:n36]
+                  }
+              } -> [%cs, %os, %s2]
+              results: [%cs:n37, %os:n37, %s2:n37]
+            }
+        } -> [%cs, %os, %s2]
+        n39 = ReadFromSlot(3) [%cs:n38] -> [v22, %cs]
+        n44 = gamma [
+          pred: v22
+          in0: %cs:n39
+          in1: %os:n38
+          in2: %s2:n38
+        ] {
+          branch 0:
+            region @s16 {
+              args: [%cs, %os, %s2]
+              results: [%cs:arg, %os:arg, %s2:arg]
+            }
+          branch 1:
+            region @s17 {
+              args: [%cs, %os, %s2]
+              n40 = ReadFromSlot(2) [%cs:arg] -> [v23, %cs]
+              n41 = ReadFromSlot(1) [%cs:n40] -> [v24, %cs]
+              n42 = Add [v23, v24] -> [v25]
+              n43 = WriteToSlot(2) [v25, %cs:n41] -> [%cs]
+              results: [%cs:n43, %os:arg, %s2:arg]
+            }
+        } -> [%cs, %os, %s2]
+        n45 = ReadFromSlot(4) [%cs:n44] -> [v26, %cs]
+        results: [v26, %cs:n45, %os:n44, %s2:n44]
+      }
+    } -> [%cs, %os, %s2]
+    n47 = ReadFromSlot(2) [%cs:n46] -> [v27, %cs]
+    n48 = WriteToField(offset=0, W4) [v27, %os:n46] -> [%os]
+    results: [%cs:n47, %os:n48, %s2:n46]
+  }
+}

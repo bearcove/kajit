@@ -1,0 +1,34 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "dynamic_index_summary") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = Const(0x2) [] -> [v0]
+    n2 = WriteToSlot(5) [v0, %cs:arg] -> [%cs]
+    n3 = ReadFromSlot(5) [%cs:n2] -> [v1, %cs]
+    n4 = SlotAddr(1) [] -> [v2]
+    n5 = Const(0x8) [] -> [v3]
+    n6 = Mul [v1, v3] -> [v4]
+    n7 = Add [v2, v4] -> [v5]
+    n8 = Const(0x2a) [] -> [v6]
+    n9 = StoreToAddr(W4) [v5, v6, %s2:arg] -> [%s2]
+    n10 = ReadFromSlot(5) [%cs:n3] -> [v7, %cs]
+    n11 = SlotAddr(1) [] -> [v8]
+    n12 = Const(0x8) [] -> [v9]
+    n13 = Mul [v7, v9] -> [v10]
+    n14 = Add [v8, v10] -> [v11]
+    n15 = LoadFromAddr(W8) [v11, %s2:n9] -> [v12, %s2]
+    n16 = WriteToField(offset=0, W8) [v12, %os:arg] -> [%os]
+    results: [%cs:n10, %os:n16, %s2:n15]
+  }
+}

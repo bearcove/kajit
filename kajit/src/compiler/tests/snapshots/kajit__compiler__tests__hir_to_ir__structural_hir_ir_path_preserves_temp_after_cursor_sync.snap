@@ -1,0 +1,35 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "temp_after_cursor_sync") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = SaveCursor [%cs:arg] -> [v0, %cs]
+    n2 = SaveInputEnd [%cs:n1] -> [v1, %cs]
+    n3 = Sub [v1, v0] -> [v2]
+    n4 = Const(0x0) [] -> [v3]
+    n5 = WriteToSlot(0) [v0, %cs:n2] -> [%cs]
+    n6 = WriteToSlot(1) [v2, %cs:n5] -> [%cs]
+    n7 = WriteToSlot(2) [v3, %cs:n6] -> [%cs]
+    n8 = ReadFromSlot(0) [%cs:n7] -> [v4, %cs]
+    n9 = LoadFromAddr(W1) [v4, %s2:arg] -> [v5, %s2]
+    n10 = WriteToSlot(3) [v5, %cs:n8] -> [%cs]
+    n11 = Const(0x1) [] -> [v6]
+    n12 = WriteToSlot(2) [v6, %cs:n10] -> [%cs]
+    n13 = ReadFromSlot(0) [%cs:n12] -> [v7, %cs]
+    n14 = Add [v7, v6] -> [v8]
+    n15 = RestoreCursor [v8, %cs:n13] -> [%cs]
+    n16 = ReadFromSlot(3) [%cs:n15] -> [v9, %cs]
+    n17 = WriteToField(offset=0, W4) [v9, %os:arg] -> [%os]
+    results: [%cs:n16, %os:n17, %s2:n9]
+  }
+}

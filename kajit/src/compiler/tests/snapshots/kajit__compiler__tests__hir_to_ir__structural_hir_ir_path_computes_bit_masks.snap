@@ -1,0 +1,46 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "mask_summary") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = Const(0xf) [] -> [v0]
+    n2 = WriteToSlot(1) [v0, %cs:arg] -> [%cs]
+    n3 = ReadFromSlot(1) [%cs:n2] -> [v1, %cs]
+    n4 = Const(0xb) [] -> [v2]
+    n5 = And [v1, v2] -> [v3]
+    n6 = WriteToSlot(2) [v3, %cs:n3] -> [%cs]
+    n7 = ReadFromSlot(2) [%cs:n6] -> [v4, %cs]
+    n8 = Const(0x1) [] -> [v5]
+    n9 = Shr [v4, v5] -> [v6]
+    n10 = WriteToSlot(3) [v6, %cs:n7] -> [%cs]
+    n11 = ReadFromSlot(2) [%cs:n10] -> [v7, %cs]
+    n12 = Const(0x3) [] -> [v8]
+    n13 = Xor [v7, v8] -> [v9]
+    n14 = WriteToSlot(4) [v9, %cs:n11] -> [%cs]
+    n15 = Const(0x1) [] -> [v10]
+    n16 = Const(0x3) [] -> [v11]
+    n17 = Shl [v10, v11] -> [v12]
+    n18 = Const(0x1) [] -> [v13]
+    n19 = Or [v12, v13] -> [v14]
+    n20 = WriteToSlot(5) [v14, %cs:n14] -> [%cs]
+    n21 = ReadFromSlot(2) [%cs:n20] -> [v15, %cs]
+    n22 = WriteToField(offset=0, W4) [v15, %os:arg] -> [%os]
+    n23 = ReadFromSlot(3) [%cs:n21] -> [v16, %cs]
+    n24 = WriteToField(offset=4, W4) [v16, %os:n22] -> [%os]
+    n25 = ReadFromSlot(4) [%cs:n23] -> [v17, %cs]
+    n26 = WriteToField(offset=8, W4) [v17, %os:n24] -> [%os]
+    n27 = ReadFromSlot(5) [%cs:n25] -> [v18, %cs]
+    n28 = WriteToField(offset=12, W4) [v18, %os:n26] -> [%os]
+    results: [%cs:n27, %os:n28, %s2:arg]
+  }
+}
