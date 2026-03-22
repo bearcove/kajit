@@ -10,8 +10,8 @@ hir_module {
   stores [
   ]
   types [
-    type t0 "ConstantNumber" = struct {
-      "value": u32
+    type t0 "ConstantNumber" size=4 = struct {
+      "value": u32 @0
     }
   ]
   callables [
@@ -41,9 +41,11 @@ hir_module {
     )
     .expect("HIR text should parse");
 
-    let ir = build_structural_hir_ir(<ConstantNumber>::SHAPE, &module);
-    let registry = symbol_registry_for_shape(<ConstantNumber>::SHAPE);
-    insta::assert_snapshot!(format!("{}", ir.display_with_registry(&registry)));
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
 }
 
 #[test]

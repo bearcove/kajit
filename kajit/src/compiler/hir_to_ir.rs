@@ -60,6 +60,15 @@ impl<'a> StructuralHirIrLowerer<'a> {
         function: &'a hir::Function,
         root_shape: &'static Shape,
     ) -> Self {
+        Self::new_with_optional_shape(rb, module, function, Some(root_shape))
+    }
+
+    fn new_with_optional_shape(
+        rb: &mut RegionBuilder<'_>,
+        module: &'a hir::Module,
+        function: &'a hir::Function,
+        root_shape: Option<&'static Shape>,
+    ) -> Self {
         let cursor_local = function
             .params
             .iter()
@@ -88,7 +97,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
             Self::initialize_cursor_shadow(rb, module, cursor_local, &local_slots, &local_types);
         let mut option_defs = Vec::new();
         let mut vec_offsets = std::collections::HashMap::new();
-        Self::collect_shape_defs(root_shape, &mut option_defs, &mut vec_offsets);
+        if let Some(shape) = root_shape {
+            Self::collect_shape_defs(shape, &mut option_defs, &mut vec_offsets);
+        }
         Self {
             module,
             option_defs,
@@ -1969,6 +1980,20 @@ pub(crate) fn build_structural_hir_ir(
     shape: &'static Shape,
     module: &hir::Module,
 ) -> crate::ir::IrFunc {
+    build_structural_hir_ir_impl(module, Some(shape))
+}
+
+/// Lower HIR to IR without any facet Shape. All layout info must come from
+/// HIR annotations. Panics if the lowerer encounters Option or Vec types
+/// without init_fn/offset annotations in the HIR.
+pub(crate) fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
+    build_structural_hir_ir_impl(module, None)
+}
+
+fn build_structural_hir_ir_impl(
+    module: &hir::Module,
+    shape: Option<&'static Shape>,
+) -> crate::ir::IrFunc {
     let (_, function) = module
         .functions
         .iter()
@@ -1984,11 +2009,13 @@ pub(crate) fn build_structural_hir_ir(
         .expect("structural HIR function should have a destination param")
         .ty;
 
-    let mut builder = crate::ir::IrBuilder::new(shape.type_identifier);
+    let label = shape.map(|s| s.type_identifier).unwrap_or(&function.name);
+    let mut builder = crate::ir::IrBuilder::new(label);
     let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();
-        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function, shape);
+        let lowerer =
+            StructuralHirIrLowerer::new_with_optional_shape(&mut rb, module, function, shape);
         lowerer.lower_block(&mut rb, &function.body.statements, dest_local, dest_ty);
         rb.set_results(&[]);
     }
