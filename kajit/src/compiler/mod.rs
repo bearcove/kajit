@@ -8,7 +8,7 @@ pub(crate) use shape_utils::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use facet::{Def, Facet, OptionDef, ScalarType, Shape, Type, UserType};
+use facet::{Def, OptionDef, ScalarType, Shape, Type, UserType};
 use kajit_hir as hir;
 
 use crate::format::{DecoderKind, FieldEmitInfo, SkippedFieldInfo};

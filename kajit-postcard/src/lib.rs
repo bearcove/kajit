@@ -323,7 +323,7 @@ impl PostcardHirLowerer {
             kind: hir::TypeDefKind::Struct {
                 fields: fields.into_iter().map(|(_, field)| field).collect(),
             },
-            size: None,
+            size: Some(core::mem::size_of::<String>() as u32),
             transparent: false,
         });
         self.string_raw_type = Some(type_id);
@@ -342,16 +342,16 @@ impl PostcardHirLowerer {
                     hir::FieldDef {
                         name: "lo".to_owned(),
                         ty: hir::Type::u(64),
-                        offset: None,
+                        offset: Some(0),
                     },
                     hir::FieldDef {
                         name: "hi".to_owned(),
                         ty: hir::Type::u(64),
-                        offset: None,
+                        offset: Some(8),
                     },
                 ],
             },
-            size: None,
+            size: Some(16),
             transparent: false,
         });
         self.bits128_raw_type = Some(type_id);

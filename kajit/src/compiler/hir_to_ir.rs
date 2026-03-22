@@ -14,6 +14,12 @@ struct StructuralLocalStorage {
 
 struct StructuralHirIrLowerer<'a> {
     module: &'a hir::Module,
+    /// Cached Option vtable defs discovered from the Shape tree.
+    /// Each entry pairs the OptionDef with its inner type's Shape for matching.
+    option_defs: Vec<(&'static Shape, OptionDef)>,
+    /// Cached Vec offsets discovered from the Shape tree, keyed by
+    /// the type_identifier of the shape that contained the ListDef.
+    vec_offsets: std::collections::HashMap<&'static str, crate::malum::VecOffsets>,
     cursor_local: hir::LocalId,
     local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
@@ -23,7 +29,9 @@ struct StructuralHirIrLowerer<'a> {
 
 enum ResolvedStructuralPlace<'a> {
     Destination {
-        shape: &'static Shape,
+        /// The HIR type at this destination position.
+        ty: &'a hir::Type,
+        /// Byte offset from the output base pointer.
         offset: usize,
     },
     Local {
@@ -35,7 +43,8 @@ enum ResolvedStructuralPlace<'a> {
 
 enum ResolvedDynamicIndex<'a> {
     Destination {
-        shape: &'static Shape,
+        /// The HIR type at this destination position.
+        ty: &'a hir::Type,
         addr: crate::ir::PortSource,
     },
     Local {
@@ -49,6 +58,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         module: &'a hir::Module,
         function: &'a hir::Function,
+        root_shape: &'static Shape,
     ) -> Self {
         let cursor_local = function
             .params
@@ -76,8 +86,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
         let (cursor_bytes_ptr_slot, _cursor_bytes_len_slot, _cursor_pos_slot) =
             Self::initialize_cursor_shadow(rb, module, cursor_local, &local_slots, &local_types);
+        let mut option_defs = Vec::new();
+        let mut vec_offsets = std::collections::HashMap::new();
+        Self::collect_shape_defs(root_shape, &mut option_defs, &mut vec_offsets);
         Self {
             module,
+            option_defs,
+            vec_offsets,
             cursor_local,
             local_slots,
             local_types,
@@ -209,10 +224,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         statements: &[hir::Stmt],
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
         for stmt in statements {
-            self.lower_stmt(rb, stmt, dest_local, dest_shape);
+            self.lower_stmt(rb, stmt, dest_local, dest_ty);
         }
     }
 
@@ -221,17 +236,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         stmt: &hir::Stmt,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
         match &stmt.kind {
             hir::StmtKind::Init { place, value } | hir::StmtKind::Assign { place, value } => {
-                self.lower_assign_like(rb, place, value, dest_local, dest_shape);
+                self.lower_assign_like(rb, place, value, dest_local, dest_ty);
             }
-            hir::StmtKind::Expr(expr) => self.lower_effect_expr(rb, expr, dest_local, dest_shape),
+            hir::StmtKind::Expr(expr) => self.lower_effect_expr(rb, expr, dest_local, dest_ty),
             hir::StmtKind::Fail { code } => rb.error_exit(*code),
             hir::StmtKind::Store { addr, width, value } => {
-                let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_shape);
-                let value = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_ty);
+                let value = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
                 rb.store_to_addr(addr, value, self.ir_width_for_memory_width(*width));
             }
             hir::StmtKind::If {
@@ -239,25 +254,21 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 then_block,
                 else_block,
             } => {
-                let predicate = self.lower_scalar_expr(rb, condition, dest_local, dest_shape);
+                let predicate = self.lower_scalar_expr(rb, condition, dest_local, dest_ty);
                 let else_block = else_block
                     .as_ref()
                     .expect("structural HIR subset requires else");
                 let _ = rb.gamma(predicate, &[], 2, |branch_idx, branch| {
                     match branch_idx {
-                        0 => {
-                            self.lower_block(branch, &else_block.statements, dest_local, dest_shape)
-                        }
-                        1 => {
-                            self.lower_block(branch, &then_block.statements, dest_local, dest_shape)
-                        }
+                        0 => self.lower_block(branch, &else_block.statements, dest_local, dest_ty),
+                        1 => self.lower_block(branch, &then_block.statements, dest_local, dest_ty),
                         _ => unreachable!(),
                     }
                     branch.set_results(&[]);
                 });
             }
             hir::StmtKind::Match { scrutinee, arms } => {
-                let predicate = self.lower_scalar_expr(rb, scrutinee, dest_local, dest_shape);
+                let predicate = self.lower_scalar_expr(rb, scrutinee, dest_local, dest_ty);
                 for (expected, arm) in arms.iter().enumerate() {
                     let hir::Pattern::Integer(value) = arm.pattern else {
                         panic!("structural HIR subset only supports integer match patterns");
@@ -272,7 +283,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         branch,
                         &arms[branch_idx].body.statements,
                         dest_local,
-                        dest_shape,
+                        dest_ty,
                     );
                     branch.set_results(&[]);
                 });
@@ -288,7 +299,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         body_rb,
                         &body.statements,
                         dest_local,
-                        dest_shape,
+                        dest_ty,
                         active_slot,
                         continue_slot,
                     );
@@ -306,12 +317,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         statements: &[hir::Stmt],
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
         active_slot: crate::ir::SlotId,
         continue_slot: crate::ir::SlotId,
     ) {
         for stmt in statements {
-            self.lower_loop_stmt(rb, stmt, dest_local, dest_shape, active_slot, continue_slot);
+            self.lower_loop_stmt(rb, stmt, dest_local, dest_ty, active_slot, continue_slot);
         }
     }
 
@@ -320,7 +331,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         stmt: &hir::Stmt,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
         active_slot: crate::ir::SlotId,
         continue_slot: crate::ir::SlotId,
     ) {
@@ -341,7 +352,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 then_block,
                 else_block,
             } => {
-                let predicate = self.lower_scalar_expr(guard_rb, condition, dest_local, dest_shape);
+                let predicate = self.lower_scalar_expr(guard_rb, condition, dest_local, dest_ty);
                 let else_block = else_block
                     .as_ref()
                     .expect("structural HIR loop subset requires else");
@@ -351,7 +362,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             branch,
                             &else_block.statements,
                             dest_local,
-                            dest_shape,
+                            dest_ty,
                             active_slot,
                             continue_slot,
                         ),
@@ -359,7 +370,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             branch,
                             &then_block.statements,
                             dest_local,
-                            dest_shape,
+                            dest_ty,
                             active_slot,
                             continue_slot,
                         ),
@@ -369,7 +380,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 });
             }
             hir::StmtKind::Match { scrutinee, arms } => {
-                let predicate = self.lower_scalar_expr(guard_rb, scrutinee, dest_local, dest_shape);
+                let predicate = self.lower_scalar_expr(guard_rb, scrutinee, dest_local, dest_ty);
                 for (expected, arm) in arms.iter().enumerate() {
                     let hir::Pattern::Integer(value) = arm.pattern else {
                         panic!("structural HIR loop subset only supports integer match patterns");
@@ -384,7 +395,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         branch,
                         &arms[branch_idx].body.statements,
                         dest_local,
-                        dest_shape,
+                        dest_ty,
                         active_slot,
                         continue_slot,
                     );
@@ -402,7 +413,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         body_rb,
                         &body.statements,
                         dest_local,
-                        dest_shape,
+                        dest_ty,
                         nested_active_slot,
                         nested_continue_slot,
                     );
@@ -413,7 +424,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::StmtKind::Return(_) => {
                 panic!("structural HIR loops do not support return in loop bodies yet");
             }
-            _ => self.lower_stmt(guard_rb, stmt, dest_local, dest_shape),
+            _ => self.lower_stmt(guard_rb, stmt, dest_local, dest_ty),
         });
     }
 
@@ -438,10 +449,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         expr: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
         match expr {
-            hir::Expr::Call(call) => self.lower_effect_call(rb, call, dest_local, dest_shape),
+            hir::Expr::Call(call) => self.lower_effect_call(rb, call, dest_local, dest_ty),
             other => panic!("unsupported structural HIR effect expression: {other:?}"),
         }
     }
@@ -452,9 +463,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
         place: &hir::Place,
         value: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
-        self.lower_place_write(rb, place, value, dest_local, dest_shape);
+        self.lower_place_write(rb, place, value, dest_local, dest_ty);
     }
 
     fn lower_place_write(
@@ -463,7 +474,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         place: &hir::Place,
         value: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
         if let hir::Place::Index { base, index } = place
             && !matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_)))
@@ -472,18 +483,18 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 && Self::slot_count_for_type(self.module, self.local_types[local]) > 1
             {
                 self.lower_dynamic_index_write_from_local(
-                    rb, base, index, *local, dest_local, dest_shape,
+                    rb, base, index, *local, dest_local, dest_ty,
                 );
             } else {
-                self.lower_dynamic_index_write(rb, base, index, value, dest_local, dest_shape);
+                self.lower_dynamic_index_write(rb, base, index, value, dest_local, dest_ty);
             }
             return;
         }
-        let resolved = self.resolve_place(place, dest_local, dest_shape);
+        let resolved = self.resolve_place(place, dest_local, dest_ty);
         match value {
             hir::Expr::Local(local) => match resolved {
-                ResolvedStructuralPlace::Destination { shape, offset } => {
-                    self.copy_local_into_shape_offset(rb, *local, shape, offset);
+                ResolvedStructuralPlace::Destination { ty, offset } => {
+                    self.copy_local_into_dest_offset(rb, *local, ty, offset);
                 }
                 ResolvedStructuralPlace::Local {
                     ty,
@@ -496,9 +507,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Expr::Call(call) => {
                 if self.is_vec_from_raw_parts(call) {
                     match resolved {
-                        ResolvedStructuralPlace::Destination { shape, offset } => {
+                        ResolvedStructuralPlace::Destination { ty, offset } => {
                             self.lower_vec_from_raw_parts_at_offset(
-                                rb, call, shape, offset, dest_local, dest_shape,
+                                rb, call, ty, offset, dest_local, dest_ty,
                             );
                         }
                         ResolvedStructuralPlace::Local { .. } => {
@@ -507,10 +518,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     }
                     return;
                 }
-                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
                 match resolved {
-                    ResolvedStructuralPlace::Destination { shape, offset } => {
-                        let width = self.scalar_width_for_shape(shape);
+                    ResolvedStructuralPlace::Destination { ty, offset } => {
+                        let width = self.scalar_width_for_hir_type(ty);
                         rb.write_to_field(scalar, offset as u32, width);
                     }
                     ResolvedStructuralPlace::Local {
@@ -529,15 +540,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 }
             }
             hir::Expr::Str { data, len } => match resolved {
-                ResolvedStructuralPlace::Destination { shape, offset } => {
-                    assert_eq!(
-                        shape.scalar_type(),
-                        Some(ScalarType::Str),
-                        "str materialization requires a str destination, got {}",
-                        shape.type_identifier
+                ResolvedStructuralPlace::Destination { ty, offset } => {
+                    assert!(
+                        matches!(ty, hir::Type::Str { .. }),
+                        "str materialization requires a str destination, got {ty:?}"
                     );
-                    let data = self.lower_scalar_expr(rb, data, dest_local, dest_shape);
-                    let len = self.lower_scalar_expr(rb, len, dest_local, dest_shape);
+                    let data = self.lower_scalar_expr(rb, data, dest_local, dest_ty);
+                    let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
                     rb.write_to_field(data, offset as u32, crate::ir::Width::W8);
                     rb.write_to_field(len, (offset + 8) as u32, crate::ir::Width::W8);
                 }
@@ -550,8 +559,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         matches!(ty, hir::Type::Str { .. }),
                         "str materialization requires a local str type, got {ty:?}"
                     );
-                    let data = self.lower_scalar_expr(rb, data, dest_local, dest_shape);
-                    let len = self.lower_scalar_expr(rb, len, dest_local, dest_shape);
+                    let data = self.lower_scalar_expr(rb, data, dest_local, dest_ty);
+                    let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
                     rb.write_to_slot(Self::slot_at(storage, slot_offset), data);
                     rb.write_to_slot(Self::slot_at(storage, slot_offset + 1), len);
                 }
@@ -559,43 +568,76 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Expr::Variant {
                 variant, fields, ..
             } => match resolved {
-                ResolvedStructuralPlace::Destination { shape, offset } => {
-                    if let Some(opt_def) = get_option_def(shape) {
-                        self.lower_option_variant_write(rb, offset, *opt_def, variant, fields);
+                ResolvedStructuralPlace::Destination { ty, offset } => {
+                    let hir::Type::Named { def, .. } = ty else {
+                        panic!("variant init must target a named enum type, got {ty:?}");
+                    };
+                    let type_def = &self.module.type_defs[*def];
+                    let hir::TypeDefKind::Enum {
+                        variants: hir_variants,
+                        discriminant_width,
+                    } = &type_def.kind
+                    else {
+                        panic!(
+                            "variant init must target an enum type def, got {}",
+                            type_def.name
+                        );
+                    };
+                    // Check if this is an Option-like type (has None and Some variants)
+                    if self.is_option_like_enum(hir_variants) {
+                        self.lower_option_variant_write_hir(rb, offset, ty, variant, fields);
                         return;
                     }
-                    let Type::User(UserType::Enum(enum_type)) = &shape.ty else {
-                        panic!("variant init must target an enum place");
-                    };
-                    let variant_info = collect_variants(enum_type)
-                        .into_iter()
-                        .find(|candidate| candidate.name == variant.as_str())
-                        .unwrap_or_else(|| panic!("missing enum variant {variant}"));
-                    let disc_width =
-                        ir_width_from_disc_size(discriminant_size(enum_type.enum_repr));
-                    let disc = variant_info
-                        .rust_discriminant
-                        .try_into()
-                        .expect("enum discriminant must fit in u64");
+                    let hir_variant = hir_variants
+                        .iter()
+                        .find(|v| v.name == variant.as_str())
+                        .unwrap_or_else(|| {
+                            panic!("missing enum variant {variant} in {}", type_def.name)
+                        });
+                    let disc_width_val = discriminant_width.unwrap_or(1);
+                    let disc_ir_width = ir_width_from_disc_size(disc_width_val);
+                    // Get discriminant: use annotation, or fall back to variant index
+                    let disc: u64 = hir_variant
+                        .discriminant
+                        .map(|d| d.try_into().expect("enum discriminant must fit in u64"))
+                        .unwrap_or_else(|| {
+                            hir_variants
+                                .iter()
+                                .position(|v| v.name == variant.as_str())
+                                .expect("variant must exist") as u64
+                        });
                     let value = rb.const_val(disc);
-                    rb.write_to_field(value, offset as u32, disc_width);
-                    for field in &variant_info.fields {
+                    rb.write_to_field(value, offset as u32, disc_ir_width);
+                    for hir_field in &hir_variant.fields {
                         let (_, expr) = fields
                             .iter()
-                            .find(|(name, _)| name == field.name)
+                            .find(|(name, _)| name == &hir_field.name)
                             .unwrap_or_else(|| {
                                 panic!(
                                     "missing enum payload field {} for variant {variant}",
-                                    field.name
+                                    hir_field.name
                                 )
                             });
-                        self.lower_value_into_shape_offset(
+                        let field_offset =
+                            hir_field.offset.map(|o| o as usize).unwrap_or_else(|| {
+                                // Compute from discriminant width + preceding field sizes
+                                let disc_bytes = disc_width_val as usize;
+                                let mut running = disc_bytes;
+                                for f in &hir_variant.fields {
+                                    if f.name == hir_field.name {
+                                        return running;
+                                    }
+                                    running += self.hir_type_size(&f.ty);
+                                }
+                                disc_bytes
+                            });
+                        self.lower_value_into_dest_offset(
                             rb,
-                            field.shape,
-                            offset + field.offset,
+                            &hir_field.ty,
+                            offset + field_offset,
                             expr,
                             dest_local,
-                            dest_shape,
+                            dest_ty,
                         );
                     }
                 }
@@ -604,17 +646,15 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 }
             },
             hir::Expr::Index { .. } => match resolved {
-                ResolvedStructuralPlace::Destination { shape, offset } => {
-                    self.lower_value_into_shape_offset(
-                        rb, shape, offset, value, dest_local, dest_shape,
-                    );
+                ResolvedStructuralPlace::Destination { ty, offset } => {
+                    self.lower_value_into_dest_offset(rb, ty, offset, value, dest_local, dest_ty);
                 }
                 ResolvedStructuralPlace::Local {
                     ty,
                     storage,
                     slot_offset,
                 } => {
-                    let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                    let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
                     assert_eq!(
                         Self::slot_count_for_type(self.module, ty),
                         1,
@@ -625,10 +665,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
             },
             hir::Expr::Literal(hir::Literal::Unit) => {}
             _ => {
-                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+                let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
                 match resolved {
-                    ResolvedStructuralPlace::Destination { shape, offset } => {
-                        let width = self.scalar_width_for_shape(shape);
+                    ResolvedStructuralPlace::Destination { ty, offset } => {
+                        let width = self.scalar_width_for_hir_type(ty);
                         rb.write_to_field(scalar, offset as u32, width);
                     }
                     ResolvedStructuralPlace::Local {
@@ -764,27 +804,25 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
-    fn lower_value_into_shape_offset(
+    fn lower_value_into_dest_offset(
         &self,
         rb: &mut RegionBuilder<'_>,
-        shape: &'static Shape,
+        ty: &'a hir::Type,
         offset: usize,
         expr: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
         match expr {
             hir::Expr::Call(call) if self.is_vec_from_raw_parts(call) => {
-                self.lower_vec_from_raw_parts_at_offset(
-                    rb, call, shape, offset, dest_local, dest_shape,
-                );
+                self.lower_vec_from_raw_parts_at_offset(rb, call, ty, offset, dest_local, dest_ty);
             }
             hir::Expr::Call(_) => {
-                let scalar = self.lower_scalar_expr(rb, expr, dest_local, dest_shape);
-                let width = self.scalar_width_for_shape(shape);
+                let scalar = self.lower_scalar_expr(rb, expr, dest_local, dest_ty);
+                let width = self.scalar_width_for_hir_type(ty);
                 rb.write_to_field(scalar, offset as u32, width);
             }
-            hir::Expr::Local(local) => self.copy_local_into_shape_offset(rb, *local, shape, offset),
+            hir::Expr::Local(local) => self.copy_local_into_dest_offset(rb, *local, ty, offset),
             hir::Expr::Index { base, index } => {
                 let base = self.expr_to_place(base);
                 if matches!(&**index, hir::Expr::Literal(hir::Literal::Integer(_))) {
@@ -792,14 +830,14 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         base: Box::new(base),
                         index: index.clone(),
                     };
-                    match self.resolve_place(&place, dest_local, dest_shape) {
+                    match self.resolve_place(&place, dest_local, dest_ty) {
                         ResolvedStructuralPlace::Destination {
-                            shape: source_shape,
+                            ty: source_ty,
                             offset: source_offset,
                         } => {
-                            self.copy_shape_bytes_to_shape_offset(
+                            self.copy_dest_bytes_to_dest_offset(
                                 rb,
-                                source_shape,
+                                source_ty,
                                 source_offset,
                                 offset,
                             );
@@ -823,7 +861,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     }
                 } else {
                     self.copy_dynamic_index_into_shape_offset(
-                        rb, &base, index, offset, dest_local, dest_shape,
+                        rb, &base, index, offset, dest_local, dest_ty,
                     );
                 }
             }
@@ -834,46 +872,38 @@ impl<'a> StructuralHirIrLowerer<'a> {
             }
             hir::Expr::Literal(hir::Literal::Integer(value)) => {
                 let value = rb.const_val(*value);
-                let width = self.scalar_width_for_shape(shape);
+                let width = self.scalar_width_for_hir_type(ty);
                 rb.write_to_field(value, offset as u32, width);
             }
             hir::Expr::Str { data, len } => {
-                assert_eq!(
-                    shape.scalar_type(),
-                    Some(ScalarType::Str),
-                    "str materialization requires a str destination, got {}",
-                    shape.type_identifier
+                assert!(
+                    matches!(ty, hir::Type::Str { .. }),
+                    "str materialization requires a str destination, got {ty:?}"
                 );
-                let data = self.lower_scalar_expr(rb, data, dest_local, dest_shape);
-                let len = self.lower_scalar_expr(rb, len, dest_local, dest_shape);
+                let data = self.lower_scalar_expr(rb, data, dest_local, dest_ty);
+                let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
                 rb.write_to_field(data, offset as u32, crate::ir::Width::W8);
                 rb.write_to_field(len, (offset + 8) as u32, crate::ir::Width::W8);
             }
             hir::Expr::Variant {
                 variant, fields, ..
             } => {
-                if let Some(opt_def) = get_option_def(shape) {
-                    self.lower_option_variant_write(rb, offset, *opt_def, variant, fields);
-                } else {
-                    panic!("nested non-Option variant payloads are not supported yet");
-                }
+                self.lower_nested_variant_write(
+                    rb, offset, ty, variant, fields, dest_local, dest_ty,
+                );
             }
             other => panic!("unsupported structural payload expression: {other:?}"),
         }
     }
 
-    fn copy_shape_bytes_to_shape_offset(
+    fn copy_dest_bytes_to_dest_offset(
         &self,
         rb: &mut RegionBuilder<'_>,
-        source_shape: &'static Shape,
+        source_ty: &hir::Type,
         source_offset: usize,
         target_offset: usize,
     ) {
-        let size = source_shape
-            .layout
-            .sized_layout()
-            .expect("indexed destination element must be Sized")
-            .size();
+        let size = self.hir_type_size(source_ty);
         let full_words = size / 8;
         let remainder = size % 8;
         for word_index in 0..full_words {
@@ -899,28 +929,23 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
-    fn copy_local_into_shape_offset(
+    fn copy_local_into_dest_offset(
         &self,
         rb: &mut RegionBuilder<'_>,
         local: hir::LocalId,
-        shape: &'static Shape,
+        ty: &hir::Type,
         offset: usize,
     ) {
         let storage = self.local_slots[&local];
-        if let Some(st) = shape.scalar_type()
-            && !is_string_like_scalar(st)
-        {
+        // For simple scalar types (non-string-like), just copy one slot
+        if self.is_simple_scalar_hir_type(ty) {
             let value = rb.read_from_slot(storage.base_slot);
-            let width = self.scalar_width_for_shape(shape);
+            let width = self.scalar_width_for_hir_type(ty);
             rb.write_to_field(value, offset as u32, width);
             return;
         }
 
-        let size = shape
-            .layout
-            .sized_layout()
-            .expect("structural local copy requires Sized layout")
-            .size();
+        let size = self.hir_type_size(ty);
         let full_slots = size / 8;
         let remainder = size % 8;
 
@@ -955,24 +980,39 @@ impl<'a> StructuralHirIrLowerer<'a> {
         &self,
         rb: &mut RegionBuilder<'_>,
         call: &hir::CallExpr,
-        shape: &'static Shape,
+        ty: &hir::Type,
         offset: usize,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
-        let Def::List(list_def) = &shape.def else {
-            panic!("runtime.vec_from_raw_parts requires a list destination");
+        // Try to get ptr/len/cap offsets from the HIR type def
+        let (ptr_offset, len_offset, cap_offset) = if let hir::Type::Named { def, .. } = ty {
+            let type_def = &self.module.type_defs[*def];
+            if let hir::TypeDefKind::Struct { fields } = &type_def.kind {
+                let find =
+                    |name: &str| -> Option<u32> { fields.iter().find(|f| f.name == name)?.offset };
+                if let (Some(p), Some(l), Some(c)) = (find("ptr"), find("len"), find("cap")) {
+                    (p, l, c)
+                } else {
+                    self.lookup_vec_offsets(&type_def.name)
+                }
+            } else {
+                self.lookup_vec_offsets_any()
+            }
+        } else {
+            // Not a named type — look up from Shape-based cache
+            self.lookup_vec_offsets_any()
         };
+
         assert_eq!(
             call.args.len(),
             4,
             "runtime.vec_from_raw_parts expects ptr, len, cap, align"
         );
-        let ptr = self.lower_scalar_expr(rb, &call.args[0], dest_local, dest_shape);
-        let len = self.lower_scalar_expr(rb, &call.args[1], dest_local, dest_shape);
-        let cap = self.lower_scalar_expr(rb, &call.args[2], dest_local, dest_shape);
-        let align = self.lower_scalar_expr(rb, &call.args[3], dest_local, dest_shape);
-        let offsets = crate::malum::discover_vec_offsets(list_def, shape);
+        let ptr = self.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
+        let len = self.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let cap = self.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
+        let align = self.lower_scalar_expr(rb, &call.args[3], dest_local, dest_ty);
         let usize_width = if core::mem::size_of::<usize>() == 8 {
             crate::ir::Width::W8
         } else {
@@ -987,9 +1027,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 1 => ptr,
                 _ => unreachable!(),
             };
-            branch.write_to_field(ptr_value, (offset as u32) + offsets.ptr_offset, usize_width);
-            branch.write_to_field(len, (offset as u32) + offsets.len_offset, usize_width);
-            branch.write_to_field(cap, (offset as u32) + offsets.cap_offset, usize_width);
+            branch.write_to_field(ptr_value, (offset as u32) + ptr_offset, usize_width);
+            branch.write_to_field(len, (offset as u32) + len_offset, usize_width);
+            branch.write_to_field(cap, (offset as u32) + cap_offset, usize_width);
             branch.set_results(&[]);
         });
     }
@@ -999,7 +1039,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         expr: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) -> crate::ir::PortSource {
         match expr {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
@@ -1009,25 +1049,25 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 rb.read_from_slot(slot)
             }
             hir::Expr::Load { addr, width } => {
-                let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_shape);
+                let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_ty);
                 rb.load_from_addr(addr, self.ir_width_for_memory_width(*width))
             }
             hir::Expr::SliceData { value } => {
-                self.lower_view_component(rb, value, 0, dest_local, dest_shape)
+                self.lower_view_component(rb, value, 0, dest_local, dest_ty)
             }
             hir::Expr::SliceLen { value } => {
-                self.lower_view_component(rb, value, 1, dest_local, dest_shape)
+                self.lower_view_component(rb, value, 1, dest_local, dest_ty)
             }
             hir::Expr::Field { .. } | hir::Expr::Index { .. } => {
                 let place = self.expr_to_place(expr);
                 if let hir::Place::Index { base, index } = &place
                     && !matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_)))
                 {
-                    return self.lower_dynamic_index_read(rb, base, index, dest_local, dest_shape);
+                    return self.lower_dynamic_index_read(rb, base, index, dest_local, dest_ty);
                 }
-                match self.resolve_place(&place, dest_local, dest_shape) {
-                    ResolvedStructuralPlace::Destination { shape, offset } => {
-                        let width = self.scalar_width_for_shape(shape);
+                match self.resolve_place(&place, dest_local, dest_ty) {
+                    ResolvedStructuralPlace::Destination { ty, offset } => {
+                        let width = self.scalar_width_for_hir_type(ty);
                         rb.read_from_field(offset as u32, width)
                     }
                     ResolvedStructuralPlace::Local {
@@ -1045,8 +1085,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 }
             }
             hir::Expr::Binary { op, lhs, rhs } => {
-                let lhs = self.lower_scalar_expr(rb, lhs, dest_local, dest_shape);
-                let rhs = self.lower_scalar_expr(rb, rhs, dest_local, dest_shape);
+                let lhs = self.lower_scalar_expr(rb, lhs, dest_local, dest_ty);
+                let rhs = self.lower_scalar_expr(rb, rhs, dest_local, dest_ty);
                 let ir_op = match op {
                     hir::BinaryOp::Add => crate::ir::IrOp::Add,
                     hir::BinaryOp::Sub => crate::ir::IrOp::Sub,
@@ -1068,7 +1108,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 };
                 rb.binop(ir_op, lhs, rhs)
             }
-            hir::Expr::Call(call) => self.lower_scalar_call_expr(rb, call, dest_local, dest_shape),
+            hir::Expr::Call(call) => self.lower_scalar_call_expr(rb, call, dest_local, dest_ty),
             other => panic!("unsupported structural HIR scalar expression: {other:?}"),
         }
     }
@@ -1078,12 +1118,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         call: &hir::CallExpr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) -> crate::ir::PortSource {
         let args = call
             .args
             .iter()
-            .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_shape))
+            .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
         let func = match self.callable_name(call) {
             "runtime.alloc_persistent" => {
@@ -1103,12 +1143,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         call: &hir::CallExpr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
         let args = call
             .args
             .iter()
-            .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_shape))
+            .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
         let func = match self.callable_name(call) {
             "runtime.validate_utf8_range" => {
@@ -1140,10 +1180,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
         value: &hir::Expr,
         word_index: usize,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) -> crate::ir::PortSource {
         let place = self.expr_to_place(value);
-        match self.resolve_place(&place, dest_local, dest_shape) {
+        match self.resolve_place(&place, dest_local, dest_ty) {
             ResolvedStructuralPlace::Local {
                 ty,
                 storage,
@@ -1155,17 +1195,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 );
                 rb.read_from_slot(Self::slot_at(storage, slot_offset + word_index))
             }
-            ResolvedStructuralPlace::Destination { shape, offset } => {
-                let width = crate::ir::Width::W8;
-                match shape.scalar_type() {
-                    Some(ScalarType::Str) => {
-                        rb.read_from_field((offset + word_index * 8) as u32, width)
-                    }
-                    _ => panic!(
-                        "slice_data/slice_len require a slice-like destination, got {}",
-                        shape.type_identifier
-                    ),
-                }
+            ResolvedStructuralPlace::Destination { ty, offset } => {
+                assert!(
+                    matches!(ty, hir::Type::Str { .. } | hir::Type::Slice { .. }),
+                    "slice_data/slice_len require a slice-like destination, got {ty:?}"
+                );
+                rb.read_from_field((offset + word_index * 8) as u32, crate::ir::Width::W8)
             }
         }
     }
@@ -1206,12 +1241,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
         base: &hir::Place,
         index: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) -> crate::ir::PortSource {
-        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_ty);
         match resolved {
-            ResolvedDynamicIndex::Destination { shape, addr } => {
-                let width = self.scalar_width_for_shape(shape);
+            ResolvedDynamicIndex::Destination { ty, addr } => {
+                let width = self.scalar_width_for_hir_type(ty);
                 rb.load_from_addr(addr, width)
             }
             ResolvedDynamicIndex::Local { ty, addr } => {
@@ -1228,13 +1263,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
         index: &hir::Expr,
         value: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
-        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
-        let value = self.lower_scalar_expr(rb, value, dest_local, dest_shape);
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_ty);
+        let value = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
         match resolved {
-            ResolvedDynamicIndex::Destination { shape, addr } => {
-                let width = self.scalar_width_for_shape(shape);
+            ResolvedDynamicIndex::Destination { ty, addr } => {
+                let width = self.scalar_width_for_hir_type(ty);
                 rb.store_to_addr(addr, value, width);
             }
             ResolvedDynamicIndex::Local { ty, addr } => {
@@ -1251,9 +1286,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
         index: &hir::Expr,
         local: hir::LocalId,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
-        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_ty);
         let storage = self.local_slots[&local];
         let slot_count = Self::slot_count_for_type(self.module, self.local_types[&local]);
         let base_addr = match resolved {
@@ -1279,16 +1314,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
         index: &hir::Expr,
         target_offset: usize,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) {
-        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_shape);
+        let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_ty);
         match resolved {
-            ResolvedDynamicIndex::Destination { shape, addr } => {
-                let size = shape
-                    .layout
-                    .sized_layout()
-                    .expect("dynamic indexed destination element must be Sized")
-                    .size();
+            ResolvedDynamicIndex::Destination { ty, addr } => {
+                let size = self.hir_type_size(ty);
                 let full_words = size / 8;
                 let remainder = size % 8;
                 for word_index in 0..full_words {
@@ -1339,32 +1370,24 @@ impl<'a> StructuralHirIrLowerer<'a> {
         base: &hir::Place,
         index: &hir::Expr,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) -> ResolvedDynamicIndex<'a> {
-        let index = self.lower_scalar_expr(rb, index, dest_local, dest_shape);
-        match self.resolve_place(base, dest_local, dest_shape) {
-            ResolvedStructuralPlace::Destination { shape, offset } => {
-                let Def::Array(array_def) = &shape.def else {
+        let index = self.lower_scalar_expr(rb, index, dest_local, dest_ty);
+        match self.resolve_place(base, dest_local, dest_ty) {
+            ResolvedStructuralPlace::Destination { ty, offset } => {
+                let hir::Type::Array { element, .. } = ty else {
                     panic!(
-                        "dynamic indexed structural HIR place requires an array destination, got {}",
-                        shape.type_identifier
+                        "dynamic indexed structural HIR place requires an array destination, got {ty:?}"
                     );
                 };
-                let elem_layout = array_def
-                    .t
-                    .layout
-                    .sized_layout()
-                    .expect("array element must be Sized");
+                let elem_size = self.hir_type_size(element);
                 let mut base_addr = rb.save_out_ptr();
                 if offset != 0 {
                     let offset_val = rb.const_val(offset as u64);
                     base_addr = rb.binop(crate::ir::IrOp::Add, base_addr, offset_val);
                 }
-                let addr = self.add_scaled_index(rb, base_addr, index, elem_layout.size());
-                ResolvedDynamicIndex::Destination {
-                    shape: array_def.t,
-                    addr,
-                }
+                let addr = self.add_scaled_index(rb, base_addr, index, elem_size);
+                ResolvedDynamicIndex::Destination { ty: element, addr }
             }
             ResolvedStructuralPlace::Local {
                 ty,
@@ -1392,13 +1415,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
         &self,
         place: &hir::Place,
         dest_local: hir::LocalId,
-        dest_shape: &'static Shape,
+        dest_ty: &'a hir::Type,
     ) -> ResolvedStructuralPlace<'a> {
         match place {
             hir::Place::Local(local) => {
                 if *local == dest_local {
                     ResolvedStructuralPlace::Destination {
-                        shape: dest_shape,
+                        ty: dest_ty,
                         offset: 0,
                     }
                 } else {
@@ -1410,54 +1433,59 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 }
             }
             hir::Place::Field { base, field } => {
-                match self.resolve_place(base, dest_local, dest_shape) {
-                    ResolvedStructuralPlace::Destination { shape, offset } => {
-                        let mut shape = shape;
+                match self.resolve_place(base, dest_local, dest_ty) {
+                    ResolvedStructuralPlace::Destination { ty, offset } => {
+                        let mut ty = ty;
                         let mut offset = offset;
-                        while shape.is_transparent() {
-                            let (fields, skipped) = collect_fields(shape);
-                            assert!(
-                                skipped.is_empty() && fields.len() == 1,
+                        // Unwrap transparent newtypes
+                        loop {
+                            let hir::Type::Named { def, .. } = ty else {
+                                break;
+                            };
+                            let type_def = &self.module.type_defs[*def];
+                            if !type_def.transparent {
+                                break;
+                            }
+                            let hir::TypeDefKind::Struct { fields } = &type_def.kind else {
+                                break;
+                            };
+                            assert_eq!(
+                                fields.len(),
+                                1,
                                 "structural HIR subset requires transparent wrappers to lower to one field"
                             );
-                            let field_info = &fields[0];
-                            shape = field_info.shape;
-                            offset += field_info.offset;
+                            let f = &fields[0];
+                            offset += f.offset.map(|o| o as usize).unwrap_or(0);
+                            ty = &f.ty;
                         }
-                        if matches!(
-                            shape.scalar_type(),
-                            Some(ScalarType::U128 | ScalarType::I128)
-                        ) {
-                            let field_offset = match field.as_str() {
-                                "lo" => 0,
-                                "hi" => 8,
-                                _ => panic!(
-                                    "missing raw128 field {field} while lowering structural HIR place for {}",
-                                    shape.type_identifier
-                                ),
-                            };
-                            return ResolvedStructuralPlace::Destination {
-                                shape: u64::SHAPE,
-                                offset: offset + field_offset,
-                            };
-                        }
-                        let (fields, skipped) = collect_fields(shape);
-                        assert!(
-                            skipped.is_empty(),
-                            "structural HIR subset does not support skipped/defaulted fields"
-                        );
-                        let field_info = fields
-                            .into_iter()
+                        // For Bits128Raw-like types (lo/hi u64 fields), fall through
+                        // to normal struct field resolution — the field's own HIR type
+                        // will be used for width.
+                        let hir::Type::Named { def, .. } = ty else {
+                            panic!(
+                                "destination field place requires a named struct type, got {ty:?} for field {field}"
+                            );
+                        };
+                        let type_def = &self.module.type_defs[*def];
+                        let hir::TypeDefKind::Struct { fields } = &type_def.kind else {
+                            panic!(
+                                "destination field place requires a struct type def for {}",
+                                type_def.name
+                            );
+                        };
+                        let field_offset = self.find_field_byte_offset(fields, field);
+                        let field_def = fields
+                            .iter()
                             .find(|candidate| candidate.name == field.as_str())
                             .unwrap_or_else(|| {
                                 panic!(
                                     "missing field {field} while lowering structural HIR place for {}",
-                                    shape.type_identifier
+                                    type_def.name
                                 )
                             });
                         ResolvedStructuralPlace::Destination {
-                            shape: field_info.shape,
-                            offset: offset + field_info.offset,
+                            ty: &field_def.ty,
+                            offset: offset + field_offset,
                         }
                     }
                     ResolvedStructuralPlace::Local {
@@ -1502,28 +1530,21 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     panic!("structural HIR array indices must be integer literals");
                 };
                 let index = usize::try_from(*index).expect("array index must fit in usize");
-                match self.resolve_place(base, dest_local, dest_shape) {
-                    ResolvedStructuralPlace::Destination { shape, offset } => {
-                        let Def::Array(array_def) = &shape.def else {
+                match self.resolve_place(base, dest_local, dest_ty) {
+                    ResolvedStructuralPlace::Destination { ty, offset } => {
+                        let hir::Type::Array { element, len } = ty else {
                             panic!(
-                                "indexed structural HIR place requires an array base, got {}",
-                                shape.type_identifier
+                                "indexed structural HIR destination requires an array type, got {ty:?}"
                             );
                         };
                         assert!(
-                            index < array_def.n,
-                            "array index {index} out of bounds for {}",
-                            shape.type_identifier
+                            index < *len,
+                            "array index {index} out of bounds for array of len {len}"
                         );
-                        let elem_layout = array_def
-                            .t
-                            .layout
-                            .sized_layout()
-                            .expect("array element must be Sized");
-                        let stride = elem_layout.size();
+                        let elem_size = self.hir_type_size(element);
                         ResolvedStructuralPlace::Destination {
-                            shape: array_def.t,
-                            offset: offset + index * stride,
+                            ty: element,
+                            offset: offset + index * elem_size,
                         }
                     }
                     ResolvedStructuralPlace::Local {
@@ -1550,29 +1571,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
-    fn scalar_width_for_shape(&self, shape: &'static Shape) -> crate::ir::Width {
-        match shape.scalar_type() {
-            Some(ScalarType::Bool | ScalarType::U8 | ScalarType::I8) => crate::ir::Width::W1,
-            Some(ScalarType::U16 | ScalarType::I16) => crate::ir::Width::W2,
-            Some(ScalarType::U32 | ScalarType::I32 | ScalarType::F32 | ScalarType::Char) => {
-                crate::ir::Width::W4
-            }
-            Some(
-                ScalarType::U64
-                | ScalarType::I64
-                | ScalarType::USize
-                | ScalarType::ISize
-                | ScalarType::U128
-                | ScalarType::I128
-                | ScalarType::F64,
-            ) => crate::ir::Width::W8,
-            _ => panic!(
-                "unsupported structural HIR scalar width for {}",
-                shape.type_identifier
-            ),
-        }
-    }
-
     fn scalar_width_for_hir_type(&self, ty: &hir::Type) -> crate::ir::Width {
         match ty {
             hir::Type::Bool => crate::ir::Width::W1,
@@ -1596,6 +1594,372 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::MemoryWidth::W8 => crate::ir::Width::W8,
         }
     }
+
+    /// Returns true if the HIR type is a simple scalar (non-string-like, non-compound).
+    fn is_simple_scalar_hir_type(&self, ty: &hir::Type) -> bool {
+        matches!(
+            ty,
+            hir::Type::Bool
+                | hir::Type::Integer(_)
+                | hir::Type::Address { .. }
+                | hir::Type::Handle { .. }
+        )
+    }
+
+    /// Returns the byte size of an HIR type by looking up type def annotations,
+    /// or computing it from the type structure when annotations are absent.
+    fn hir_type_size(&self, ty: &hir::Type) -> usize {
+        match ty {
+            hir::Type::Unit => 0,
+            hir::Type::Bool => 1,
+            hir::Type::Integer(kind) => (kind.bits as usize) / 8,
+            hir::Type::Address { .. } => core::mem::size_of::<usize>(),
+            hir::Type::Handle { .. } => core::mem::size_of::<usize>(),
+            hir::Type::Str { .. } | hir::Type::Slice { .. } => core::mem::size_of::<usize>() * 2,
+            hir::Type::Array { element, len } => self.hir_type_size(element) * len,
+            hir::Type::Named { def, .. } => {
+                let type_def = &self.module.type_defs[*def];
+                if let Some(size) = type_def.size {
+                    return size as usize;
+                }
+                // Fallback: compute size from fields/variants
+                self.compute_type_def_size(type_def)
+            }
+        }
+    }
+
+    /// Compute the size of a type def from its fields when no size annotation exists.
+    fn compute_type_def_size(&self, type_def: &hir::TypeDef) -> usize {
+        match &type_def.kind {
+            hir::TypeDefKind::Struct { fields } => {
+                // If fields have offsets, use offset + size of last field
+                let mut max_end = 0usize;
+                for field in fields {
+                    if let Some(offset) = field.offset {
+                        let field_size = self.hir_type_size(&field.ty);
+                        max_end = max_end.max(offset as usize + field_size);
+                    } else {
+                        // No offset annotation — sum field sizes (no padding)
+                        max_end += self.hir_type_size(&field.ty);
+                    }
+                }
+                max_end
+            }
+            hir::TypeDefKind::Enum {
+                variants,
+                discriminant_width,
+            } => {
+                let disc_size = discriminant_width.unwrap_or(1) as usize;
+                let max_payload = variants
+                    .iter()
+                    .map(|variant| {
+                        variant
+                            .fields
+                            .iter()
+                            .map(|f| {
+                                if let Some(offset) = f.offset {
+                                    offset as usize + self.hir_type_size(&f.ty)
+                                } else {
+                                    self.hir_type_size(&f.ty)
+                                }
+                            })
+                            .max()
+                            .unwrap_or(0)
+                    })
+                    .max()
+                    .unwrap_or(0);
+                disc_size + max_payload
+            }
+        }
+    }
+
+    /// Find the byte offset of a named field within a struct's fields.
+    /// Uses the field's `offset` annotation if present, otherwise computes
+    /// from preceding field sizes (packed layout).
+    fn find_field_byte_offset(&self, fields: &[hir::FieldDef], field_name: &str) -> usize {
+        // If the target field has an explicit offset, use it
+        for f in fields {
+            if f.name == field_name {
+                if let Some(offset) = f.offset {
+                    return offset as usize;
+                }
+            }
+        }
+        // Fallback: compute offset by summing sizes of preceding fields
+        let mut running_offset = 0usize;
+        for f in fields {
+            if f.name == field_name {
+                return running_offset;
+            }
+            running_offset += self.hir_type_size(&f.ty);
+        }
+        panic!("field {field_name} not found in struct fields");
+    }
+
+    /// Look up Vec offsets by matching a type name against cached Shape-based offsets.
+    fn lookup_vec_offsets(&self, type_name: &str) -> (u32, u32, u32) {
+        for (type_id, offsets) in &self.vec_offsets {
+            if type_id.contains(type_name) {
+                return (offsets.ptr_offset, offsets.len_offset, offsets.cap_offset);
+            }
+        }
+        // Use the first available vec offsets (there's usually only one Vec type)
+        self.lookup_vec_offsets_any()
+    }
+
+    /// Return any cached Vec offsets (for when the HIR type doesn't identify the Vec).
+    fn lookup_vec_offsets_any(&self) -> (u32, u32, u32) {
+        if let Some(offsets) = self.vec_offsets.values().next() {
+            (offsets.ptr_offset, offsets.len_offset, offsets.cap_offset)
+        } else {
+            // Ultimate fallback if no Vec shapes were found
+            (0, 8, 16)
+        }
+    }
+
+    /// Check if an HIR type matches a Shape by comparing structural properties.
+    fn hir_type_matches_shape(&self, ty: &hir::Type, shape: &'static Shape) -> bool {
+        match ty {
+            hir::Type::Bool => shape.scalar_type() == Some(ScalarType::Bool),
+            hir::Type::Unit => shape.scalar_type() == Some(ScalarType::Unit),
+            hir::Type::Integer(kind) => match (kind.bits, kind.signedness) {
+                (8, hir::Signedness::Unsigned) => shape.scalar_type() == Some(ScalarType::U8),
+                (8, hir::Signedness::Signed) => shape.scalar_type() == Some(ScalarType::I8),
+                (16, hir::Signedness::Unsigned) => shape.scalar_type() == Some(ScalarType::U16),
+                (16, hir::Signedness::Signed) => shape.scalar_type() == Some(ScalarType::I16),
+                (32, hir::Signedness::Unsigned) => {
+                    matches!(
+                        shape.scalar_type(),
+                        Some(ScalarType::U32 | ScalarType::Char | ScalarType::F32)
+                    )
+                }
+                (32, hir::Signedness::Signed) => shape.scalar_type() == Some(ScalarType::I32),
+                (64, hir::Signedness::Unsigned) => {
+                    matches!(
+                        shape.scalar_type(),
+                        Some(ScalarType::U64 | ScalarType::USize | ScalarType::F64)
+                    )
+                }
+                (64, hir::Signedness::Signed) => {
+                    matches!(
+                        shape.scalar_type(),
+                        Some(ScalarType::I64 | ScalarType::ISize)
+                    )
+                }
+                _ => false,
+            },
+            hir::Type::Str { .. } => matches!(
+                shape.scalar_type(),
+                Some(ScalarType::Str | ScalarType::CowStr)
+            ),
+            hir::Type::Named { def, .. } => {
+                let type_def = &self.module.type_defs[*def];
+                // Direct name match
+                if shape.type_identifier == type_def.name {
+                    return true;
+                }
+                // Special case: HostStringRaw maps to String scalar type
+                if type_def.name == "HostStringRaw" {
+                    return shape.scalar_type() == Some(ScalarType::String);
+                }
+                // Special case: Bits128Raw maps to U128/I128
+                if type_def.name == "Bits128Raw" {
+                    return matches!(
+                        shape.scalar_type(),
+                        Some(ScalarType::U128 | ScalarType::I128)
+                    );
+                }
+                // Match by comparing the byte sizes
+                if let Some(size) = type_def.size {
+                    if let Ok(layout) = shape.layout.sized_layout() {
+                        return layout.size() == size as usize;
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Check if an enum's variants match the Option pattern (None + Some).
+    fn is_option_like_enum(&self, variants: &[hir::VariantDef]) -> bool {
+        variants.len() == 2
+            && variants.iter().any(|v| v.name == "None")
+            && variants.iter().any(|v| v.name == "Some")
+    }
+
+    /// Recursively walk a Shape tree collecting OptionDef and VecOffsets entries.
+    fn collect_shape_defs(
+        shape: &'static Shape,
+        option_map: &mut Vec<(&'static Shape, OptionDef)>,
+        vec_map: &mut std::collections::HashMap<&'static str, crate::malum::VecOffsets>,
+    ) {
+        if let Some(opt_def) = get_option_def(shape) {
+            option_map.push((shape, *opt_def));
+        }
+        // Recurse into sub-shapes
+        match &shape.def {
+            Def::Scalar => {}
+            Def::List(list_def) => {
+                vec_map
+                    .entry(shape.type_identifier)
+                    .or_insert_with(|| crate::malum::discover_vec_offsets(list_def, shape));
+                Self::collect_shape_defs(list_def.t, option_map, vec_map);
+            }
+            Def::Array(array_def) => {
+                Self::collect_shape_defs(array_def.t, option_map, vec_map);
+            }
+            Def::Option(opt_def) => {
+                Self::collect_shape_defs(opt_def.t, option_map, vec_map);
+            }
+            _ => {
+                if let Type::User(UserType::Struct(struct_type)) = &shape.ty {
+                    for field in struct_type.fields {
+                        Self::collect_shape_defs(field.shape.get(), option_map, vec_map);
+                    }
+                } else if let Type::User(UserType::Enum(enum_type)) = &shape.ty {
+                    for variant in enum_type.variants {
+                        for field in variant.data.fields {
+                            Self::collect_shape_defs(field.shape.get(), option_map, vec_map);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Look up the OptionDef for an HIR type by matching the inner payload type
+    /// against the collected Shape-based option defs.
+    fn find_option_def(&self, ty: &hir::Type) -> Option<OptionDef> {
+        let hir::Type::Named { def, .. } = ty else {
+            return None;
+        };
+        let type_def = &self.module.type_defs[*def];
+        let hir::TypeDefKind::Enum { variants, .. } = &type_def.kind else {
+            return None;
+        };
+        // Get the "Some" variant's payload type to match against Shape inner types
+        let some_variant = variants.iter().find(|v| v.name == "Some")?;
+        let payload_ty = some_variant.fields.first().map(|f| &f.ty);
+
+        // If there's only one option def, use it
+        if self.option_defs.len() == 1 {
+            return Some(self.option_defs[0].1);
+        }
+
+        // Match by comparing the inner type's Shape type_identifier
+        // against the HIR payload type
+        if let Some(payload_ty) = payload_ty {
+            for (_shape, opt_def) in &self.option_defs {
+                if self.hir_type_matches_shape(payload_ty, opt_def.t) {
+                    return Some(*opt_def);
+                }
+            }
+        } else {
+            // Unit payload (Option<()>) — match by shape name
+            for (_shape, opt_def) in &self.option_defs {
+                if opt_def.t.type_identifier == "()" {
+                    return Some(*opt_def);
+                }
+            }
+        }
+
+        // Last resort: use the first one
+        self.option_defs.first().map(|(_, def)| *def)
+    }
+
+    /// Lower an Option-like variant write using the HIR type info
+    /// with Shape-based vtable for init_none/init_some function pointers.
+    fn lower_option_variant_write_hir(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        offset: usize,
+        ty: &hir::Type,
+        variant: &str,
+        fields: &[(String, hir::Expr)],
+    ) {
+        let opt_def = self.find_option_def(ty).unwrap_or_else(|| {
+            let hir::Type::Named { def, .. } = ty else {
+                panic!("Option variant write requires a Named type, got {ty:?}");
+            };
+            let type_def = &self.module.type_defs[*def];
+            let available: Vec<_> = self
+                .option_defs
+                .iter()
+                .map(|(s, _)| s.type_identifier)
+                .collect();
+            panic!(
+                "Option variant write requires OptionDef from Shape tree, \
+                 but none found for HIR type '{}' (available: {available:?})",
+                type_def.name
+            )
+        });
+        self.lower_option_variant_write(rb, offset, opt_def, variant, fields);
+    }
+
+    /// Lower a nested variant write (e.g. variant payload containing another variant).
+    fn lower_nested_variant_write(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        offset: usize,
+        ty: &'a hir::Type,
+        variant: &str,
+        fields: &[(String, hir::Expr)],
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) {
+        let hir::Type::Named { def, .. } = ty else {
+            panic!("nested variant write requires a named enum type, got {ty:?}");
+        };
+        let type_def = &self.module.type_defs[*def];
+        let hir::TypeDefKind::Enum {
+            variants,
+            discriminant_width,
+        } = &type_def.kind
+        else {
+            panic!(
+                "nested variant write requires an enum type def, got {}",
+                type_def.name
+            );
+        };
+        if self.is_option_like_enum(variants) {
+            self.lower_option_variant_write_hir(rb, offset, ty, variant, fields);
+            return;
+        }
+        let hir_variant = variants
+            .iter()
+            .find(|v| v.name == variant)
+            .unwrap_or_else(|| panic!("missing enum variant {variant} in {}", type_def.name));
+        let disc_width_val = discriminant_width.expect("enum must have discriminant_width");
+        let disc_ir_width = ir_width_from_disc_size(disc_width_val);
+        let disc: u64 = hir_variant
+            .discriminant
+            .expect("enum variant must have discriminant")
+            .try_into()
+            .expect("enum discriminant must fit in u64");
+        let value = rb.const_val(disc);
+        rb.write_to_field(value, offset as u32, disc_ir_width);
+        for hir_field in &hir_variant.fields {
+            let (_, expr) = fields
+                .iter()
+                .find(|(name, _)| name == &hir_field.name)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing enum payload field {} for variant {variant}",
+                        hir_field.name
+                    )
+                });
+            let field_offset = hir_field.offset.expect("variant field must have offset") as usize;
+            self.lower_value_into_dest_offset(
+                rb,
+                &hir_field.ty,
+                offset + field_offset,
+                expr,
+                dest_local,
+                dest_ty,
+            );
+        }
+    }
 }
 
 pub(crate) fn build_structural_hir_ir(
@@ -1612,12 +1976,17 @@ pub(crate) fn build_structural_hir_ir(
         .map(|param| param.local)
         .expect("structural HIR function should have a destination param");
 
+    let dest_ty = &function
+        .destination_param()
+        .expect("structural HIR function should have a destination param")
+        .ty;
+
     let mut builder = crate::ir::IrBuilder::new(shape);
     let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();
-        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function);
-        lowerer.lower_block(&mut rb, &function.body.statements, dest_local, shape);
+        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function, shape);
+        lowerer.lower_block(&mut rb, &function.body.statements, dest_local, dest_ty);
         rb.set_results(&[]);
     }
     builder.finish()

@@ -2138,22 +2138,22 @@ fn structural_hir_ir_path_decodes_if_and_match() {
                 hir::VariantDef {
                     name: "Cat".to_owned(),
                     fields: vec![],
-                    discriminant: None,
+                    discriminant: Some(0),
                 },
                 hir::VariantDef {
                     name: "Dog".to_owned(),
                     fields: vec![],
-                    discriminant: None,
+                    discriminant: Some(1),
                 },
                 hir::VariantDef {
                     name: "Parrot".to_owned(),
                     fields: vec![],
-                    discriminant: None,
+                    discriminant: Some(2),
                 },
             ],
-            discriminant_width: None,
+            discriminant_width: Some(1),
         },
-        size: None,
+        size: Some(core::mem::size_of::<UnitAnimal>() as u32),
         transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
@@ -2164,16 +2164,16 @@ fn structural_hir_ir_path_decodes_if_and_match() {
                 hir::FieldDef {
                     name: "animal".to_owned(),
                     ty: hir::Type::named(animal_def, Vec::new()),
-                    offset: None,
+                    offset: Some(core::mem::offset_of!(BranchyAnimal, animal) as u32),
                 },
                 hir::FieldDef {
                     name: "value".to_owned(),
                     ty: hir::Type::u(32),
-                    offset: None,
+                    offset: Some(core::mem::offset_of!(BranchyAnimal, value) as u32),
                 },
             ],
         },
-        size: None,
+        size: Some(core::mem::size_of::<BranchyAnimal>() as u32),
         transparent: false,
     });
 
