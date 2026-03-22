@@ -2329,9 +2329,9 @@ fn is_encodable_logical_imm(value: u64) -> bool {
     // Common varint masks - these are all encodable as bitmasks
     matches!(
         value,
-        0x1 | 0x3 | 0x7 | 0xf | 0x1f | 0x3f | 0x7f | 0xff |     // 1-8 consecutive 1s
-        0x80 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 |          // single bits
-        0xffff | 0xff00 | 0xf0 | 0x0f // other common masks
+        0x1 | 0x3 | 0x7 | 0xf | 0x1f | 0x3f | 0x7f | 0xff | // 1-8 consecutive 1s
+            0x80 | 0x100 | 0x200 | 0x400 | 0x800 | 0x1000 | // single bits
+            0xffff | 0xff00 | 0xf0 // other common masks
     )
 }
 
@@ -3105,5 +3105,274 @@ mod tests {
             Some(extra_scope)
         );
         assert_eq!(program.vreg_debug_scope(value_vreg), Some(root_scope));
+    }
+
+    // ─── Optimization pass tests ───────────────────────────────────────────
+
+    /// Helper to build a single-block function for optimization tests.
+    fn single_block_func(insts: Vec<Inst>) -> Function {
+        let inst_ids: Vec<InstId> = insts.iter().map(|i| i.id).collect();
+        Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId(0),
+                params: Vec::new(),
+                insts: inst_ids,
+                term: TermId(0),
+                preds: Vec::new(),
+                succs: Vec::new(),
+            }],
+            edges: Vec::new(),
+            insts,
+            terms: vec![Terminator::Return],
+        }
+    }
+
+    fn make_const(id: u32, dst: u32, value: u64) -> Inst {
+        Inst {
+            id: InstId(id),
+            op: LinearOp::Const { dst: v(dst), value },
+            operands: vec![Operand {
+                vreg: v(dst),
+                kind: OperandKind::Def,
+                class: RegClass::Gpr,
+                fixed: None,
+            }],
+            clobbers: Clobbers::default(),
+        }
+    }
+
+    fn make_copy(id: u32, dst: u32, src: u32) -> Inst {
+        Inst {
+            id: InstId(id),
+            op: LinearOp::Copy {
+                dst: v(dst),
+                src: v(src),
+            },
+            operands: vec![
+                Operand {
+                    vreg: v(dst),
+                    kind: OperandKind::Def,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                },
+                Operand {
+                    vreg: v(src),
+                    kind: OperandKind::Use,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                },
+            ],
+            clobbers: Clobbers::default(),
+        }
+    }
+
+    fn make_binop(id: u32, dst: u32, lhs: u32, rhs: u32, op: kajit_lir::BinOpKind) -> Inst {
+        Inst {
+            id: InstId(id),
+            op: LinearOp::BinOp {
+                dst: v(dst),
+                lhs: v(lhs),
+                rhs: v(rhs),
+                op,
+            },
+            operands: vec![
+                Operand {
+                    vreg: v(dst),
+                    kind: OperandKind::Def,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                },
+                Operand {
+                    vreg: v(lhs),
+                    kind: OperandKind::Use,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                },
+                Operand {
+                    vreg: v(rhs),
+                    kind: OperandKind::Use,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                },
+            ],
+            clobbers: Clobbers::default(),
+        }
+    }
+
+    #[test]
+    fn copy_propagation_rewrites_uses_to_source() {
+        // v0 = const 42
+        // v1 = copy v0
+        // v2 = add v1, v1
+        // After copy prop: v2 = add v0, v0
+        let mut func = single_block_func(vec![
+            make_const(0, 0, 42),
+            make_copy(1, 1, 0),
+            make_binop(2, 2, 1, 1, kajit_lir::BinOpKind::Add),
+        ]);
+
+        copy_propagation_in_function(&mut func);
+
+        // Check that the add now uses v0 directly
+        match &func.insts[2].op {
+            LinearOp::BinOp { lhs, rhs, .. } => {
+                assert_eq!(lhs.index(), 0, "lhs should be rewritten to v0");
+                assert_eq!(rhs.index(), 0, "rhs should be rewritten to v0");
+            }
+            other => panic!("expected BinOp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn copy_propagation_follows_copy_chains() {
+        // v0 = const 42
+        // v1 = copy v0
+        // v2 = copy v1
+        // v3 = add v2, v2
+        // After copy prop: v3 = add v0, v0
+        let mut func = single_block_func(vec![
+            make_const(0, 0, 42),
+            make_copy(1, 1, 0),
+            make_copy(2, 2, 1),
+            make_binop(3, 3, 2, 2, kajit_lir::BinOpKind::Add),
+        ]);
+
+        copy_propagation_in_function(&mut func);
+
+        match &func.insts[3].op {
+            LinearOp::BinOp { lhs, rhs, .. } => {
+                assert_eq!(lhs.index(), 0, "lhs should follow chain to v0");
+                assert_eq!(rhs.index(), 0, "rhs should follow chain to v0");
+            }
+            other => panic!("expected BinOp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn dead_code_elimination_removes_unused_consts() {
+        // v0 = const 42  (unused)
+        // v1 = const 99  (used by return, simulated by keeping it)
+        let mut program = Program {
+            vreg_count: 2,
+            slot_count: 0,
+            funcs: vec![single_block_func(vec![
+                make_const(0, 0, 42),
+                make_const(1, 1, 99),
+            ])],
+            debug: Default::default(),
+        };
+
+        // Mark v1 as used by adding it to data_results
+        program.funcs[0].data_results = vec![v(1)];
+
+        dead_code_elimination(&mut program);
+
+        // v0 should be removed, v1 kept
+        let func = &program.funcs[0];
+        assert_eq!(
+            func.blocks[0].insts.len(),
+            1,
+            "should have 1 inst after DCE"
+        );
+        match &func.insts[func.blocks[0].insts[0].index()].op {
+            LinearOp::Const { dst, value } => {
+                assert_eq!(dst.index(), 1, "remaining const should be v1");
+                assert_eq!(*value, 99);
+            }
+            other => panic!("expected Const, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn local_cse_eliminates_duplicate_consts() {
+        // v0 = const 42
+        // v1 = const 42  (duplicate)
+        // v2 = add v0, v1
+        // After CSE: v1 = copy v0, v2 = add v0, v1
+        let mut program = Program {
+            vreg_count: 3,
+            slot_count: 0,
+            funcs: vec![single_block_func(vec![
+                make_const(0, 0, 42),
+                make_const(1, 1, 42),
+                make_binop(2, 2, 0, 1, kajit_lir::BinOpKind::Add),
+            ])],
+            debug: Default::default(),
+        };
+
+        local_cse(&mut program);
+
+        // Second const should become a copy
+        let func = &program.funcs[0];
+        match &func.insts[1].op {
+            LinearOp::Copy { dst, src } => {
+                assert_eq!(dst.index(), 1);
+                assert_eq!(src.index(), 0, "should copy from first const");
+            }
+            other => panic!("expected Copy after CSE, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cse_then_copy_prop_then_dce_eliminates_redundant_consts() {
+        // Test the full pipeline on a single block:
+        // v0 = const 42
+        // v1 = const 42  (duplicate)
+        // v2 = add v0, v1
+        //
+        // After CSE: v1 = copy v0
+        // After copy prop: v2 = add v0, v0
+        // After DCE: v1 removed (dead copy)
+        let mut program = Program {
+            vreg_count: 3,
+            slot_count: 0,
+            funcs: vec![single_block_func(vec![
+                make_const(0, 0, 42),
+                make_const(1, 1, 42),
+                make_binop(2, 2, 0, 1, kajit_lir::BinOpKind::Add),
+            ])],
+            debug: Default::default(),
+        };
+
+        // Mark v2 as used (result)
+        program.funcs[0].data_results = vec![v(2)];
+
+        // Run full pipeline
+        local_cse(&mut program);
+        copy_propagation(&mut program);
+        dead_code_elimination(&mut program);
+
+        let func = &program.funcs[0];
+
+        // Should only have 2 instructions: const and add
+        assert_eq!(
+            func.blocks[0].insts.len(),
+            2,
+            "should have const + add after pipeline, got {} insts",
+            func.blocks[0].insts.len()
+        );
+
+        // First should be const
+        match &func.insts[func.blocks[0].insts[0].index()].op {
+            LinearOp::Const { dst, value } => {
+                assert_eq!(dst.index(), 0);
+                assert_eq!(*value, 42);
+            }
+            other => panic!("expected Const, got {:?}", other),
+        }
+
+        // Second should be add using v0 for both operands
+        match &func.insts[func.blocks[0].insts[1].index()].op {
+            LinearOp::BinOp { lhs, rhs, .. } => {
+                assert_eq!(lhs.index(), 0, "lhs should use v0");
+                assert_eq!(rhs.index(), 0, "rhs should use v0 after copy prop");
+            }
+            other => panic!("expected BinOp, got {:?}", other),
+        }
     }
 }
