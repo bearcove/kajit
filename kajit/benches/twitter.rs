@@ -297,7 +297,7 @@ fn main() {
     });
 
     let kajit_decoder = match catch_unwind(AssertUnwindSafe(|| {
-        kajit::compile_decoder(Twitter::SHAPE, &kajit::json::KajitJson)
+        kajit::compile_decoder(Twitter::SHAPE, kajit::DecoderKind::Json)
     })) {
         Ok(decoder) => Some(Arc::new(decoder)),
         Err(payload) => {

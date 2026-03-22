@@ -36,7 +36,7 @@ fn compile_and_run_from_ir_text_snapshot_u32() {
 #[test]
 #[ignore = "pre-existing: CFG-MIR text format changed"]
 fn compile_and_run_from_cfg_mir_text_with_named_intrinsics_u32() {
-    let cfg_text = kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, &kajit::json::KajitJson);
+    let cfg_text = kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, kajit::DecoderKind::Json);
     assert!(
         cfg_text.contains("@kajit_json_read_u32"),
         "expected named intrinsic in CFG-MIR text, got:\n{cfg_text}"
@@ -67,8 +67,7 @@ fn deserialize_from_ir_text_helper_u32() {
 #[test]
 #[ignore = "pre-existing: CFG-MIR parse error"]
 fn deserialize_from_cfg_mir_text_helper_u32() {
-    let cfg_text =
-        kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, &kajit::postcard::KajitPostcard);
+    let cfg_text = kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, kajit::DecoderKind::Postcard);
 
     let out: u32 = kajit::deserialize_from_cfg_mir_text(&cfg_text, &[0xac, 0x02])
         .expect("decode should succeed");
@@ -79,7 +78,7 @@ fn deserialize_from_cfg_mir_text_helper_u32() {
 #[ignore = "json struct HIR lowering not implemented yet"]
 fn deserialize_from_ir_text_with_named_json_key_ptr_const() {
     let (ir_text, _) =
-        kajit::debug_ir_and_cfg_mir_text(JsonFieldStruct::SHAPE, &kajit::json::KajitJson);
+        kajit::debug_ir_and_cfg_mir_text(JsonFieldStruct::SHAPE, kajit::DecoderKind::Json);
     assert!(
         ir_text.contains("@json_key_ptr.78"),
         "expected named JSON key pointer const in IR text, got:\n{ir_text}"
@@ -101,7 +100,7 @@ fn deserialize_from_ir_text_with_named_json_key_ptr_const() {
 #[ignore = "pre-existing: CFG-MIR parse error"]
 fn deserialize_from_cfg_mir_text_with_named_option_init_const() {
     let cfg_text =
-        kajit::debug_cfg_mir_text(PostcardOptionStruct::SHAPE, &kajit::postcard::KajitPostcard);
+        kajit::debug_cfg_mir_text(PostcardOptionStruct::SHAPE, kajit::DecoderKind::Postcard);
     assert!(
         cfg_text.contains("@option_init_none.") || cfg_text.contains("@option_init_some."),
         "expected named option init const in CFG-MIR text, got:\n{cfg_text}"
@@ -117,9 +116,9 @@ fn deserialize_from_cfg_mir_text_with_named_option_init_const() {
 #[ignore = "pre-existing: insta snapshot mismatch"]
 fn emission_trace_snapshot_captures_backend_lowering_path() {
     let trace =
-        kajit::emission_trace_text(PostcardOptionStruct::SHAPE, &kajit::postcard::KajitPostcard);
+        kajit::emission_trace_text(PostcardOptionStruct::SHAPE, kajit::DecoderKind::Postcard);
     let edits =
-        kajit::regalloc_edits_text(PostcardOptionStruct::SHAPE, &kajit::postcard::KajitPostcard);
+        kajit::regalloc_edits_text(PostcardOptionStruct::SHAPE, kajit::DecoderKind::Postcard);
 
     assert!(
         trace.contains("branch_if") || trace.contains("branch_if_zero"),

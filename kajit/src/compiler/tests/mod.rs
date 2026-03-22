@@ -726,7 +726,7 @@ fn json_hir_models_root_u64_without_reader_calls() {
 
 #[test]
 fn compile_decoder_prefers_hir_for_supported_json_root_u32() {
-    let decoder = crate::compile_decoder(<u32>::SHAPE, &crate::json::KajitJson);
+    let decoder = crate::compile_decoder(<u32>::SHAPE, crate::DecoderKind::Json);
     let listing = decoder.cfg_mir_line_text_by_line.join("\n");
 
     assert!(
@@ -778,7 +778,7 @@ fn postcard_hir_models_owned_output_strings() {
 
 #[test]
 fn compile_decoder_prefers_hir_for_supported_postcard_bool_field() {
-    let decoder = crate::compile_decoder(<BoolHeader>::SHAPE, &crate::postcard::KajitPostcard);
+    let decoder = crate::compile_decoder(<BoolHeader>::SHAPE, crate::DecoderKind::Postcard);
     let listing = decoder.cfg_mir_line_text_by_line.join("\n");
 
     assert!(
@@ -4871,7 +4871,7 @@ fn json_bool_true_false_matches_post_regalloc_simulation() {
 
     let value = Bools { a: true, b: false };
     let input = serde_json::to_vec(&value).expect("serialize json input");
-    let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, &crate::json::KajitJson);
+    let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, crate::DecoderKind::Json);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
@@ -4899,7 +4899,7 @@ fn json_bool_true_false_without_backend_edit_emission() {
     let value = Bools { a: true, b: false };
     let input = serde_json::to_vec(&value).expect("serialize json input");
     let expected: Bools = serde_json::from_slice(&input).expect("decode reference json");
-    let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, &crate::json::KajitJson);
+    let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, crate::DecoderKind::Json);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
@@ -4936,12 +4936,12 @@ fn json_bool_true_false_with_backend_edit_emission() {
     let value = Bools { a: true, b: false };
     let input = serde_json::to_vec(&value).expect("serialize json input");
     let expected: Bools = serde_json::from_slice(&input).expect("decode reference json");
-    let decoder = crate::compile_decoder(<Bools>::SHAPE, &crate::json::KajitJson);
+    let decoder = crate::compile_decoder(<Bools>::SHAPE, crate::DecoderKind::Json);
     let got = crate::from_str::<Bools>(&decoder, core::str::from_utf8(&input).unwrap())
         .expect("json bool decoder should execute with backend edits");
     assert_eq!(got, expected);
     assert!(
-        crate::regalloc_edit_count(<Bools>::SHAPE, &crate::json::KajitJson) > 0,
+        crate::regalloc_edit_count(<Bools>::SHAPE, crate::DecoderKind::Json) > 0,
         "expected this regression test to exercise backend edit emission"
     );
 }

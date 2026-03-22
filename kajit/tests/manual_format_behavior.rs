@@ -16,7 +16,7 @@ struct CowFriend<'a> {
 #[test]
 fn postcard_borrowed_str_zero_copy() {
     let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-    let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, &kajit::postcard::KajitPostcard);
+    let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, kajit::DecoderKind::Postcard);
     let result: BorrowedFriend<'_> = kajit::deserialize(&deser, &input).unwrap();
     assert_eq!(result.age, 42);
     assert_eq!(result.name, "Alice");
@@ -27,7 +27,7 @@ fn postcard_borrowed_str_zero_copy() {
 #[ignore = "postcard Cow field HIR lowering not implemented yet"]
 fn postcard_cow_str_borrowed_zero_copy() {
     let input = [0x2A, 0x05, b'A', b'l', b'i', b'c', b'e'];
-    let deser = kajit::compile_decoder(CowFriend::SHAPE, &kajit::postcard::KajitPostcard);
+    let deser = kajit::compile_decoder(CowFriend::SHAPE, kajit::DecoderKind::Postcard);
     let result: CowFriend<'_> = kajit::deserialize(&deser, &input).unwrap();
     assert_eq!(result.age, 42);
     assert!(matches!(result.name, Cow::Borrowed("Alice")));
@@ -38,7 +38,7 @@ fn postcard_cow_str_borrowed_zero_copy() {
 fn json_borrowed_str_zero_copy_fast_path() {
     let input = br#"{"age":42,"name":"Alice"}"#;
     let name_start = input.windows(5).position(|w| w == b"Alice").unwrap();
-    let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, &kajit::json::KajitJson);
+    let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, kajit::DecoderKind::Json);
     let result: BorrowedFriend<'_> = kajit::deserialize(&deser, input).unwrap();
     assert_eq!(result.age, 42);
     assert_eq!(result.name, "Alice");
@@ -51,7 +51,7 @@ fn json_borrowed_str_zero_copy_fast_path() {
 #[ignore = "json struct HIR lowering not implemented yet"]
 fn json_borrowed_str_escape_is_error() {
     let input = br#"{"age":42,"name":"A\nB"}"#;
-    let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, &kajit::json::KajitJson);
+    let deser = kajit::compile_decoder(BorrowedFriend::SHAPE, kajit::DecoderKind::Json);
     let err = kajit::deserialize::<BorrowedFriend<'_>>(&deser, input).unwrap_err();
     assert_eq!(err.code, kajit::context::ErrorCode::InvalidEscapeSequence);
 }
@@ -60,7 +60,7 @@ fn json_borrowed_str_escape_is_error() {
 #[ignore = "json struct HIR lowering not implemented yet"]
 fn json_cow_str_fast_path_borrowed() {
     let input = br#"{"age":42,"name":"Alice"}"#;
-    let deser = kajit::compile_decoder(CowFriend::SHAPE, &kajit::json::KajitJson);
+    let deser = kajit::compile_decoder(CowFriend::SHAPE, kajit::DecoderKind::Json);
     let result: CowFriend<'_> = kajit::deserialize(&deser, input).unwrap();
     assert_eq!(result.age, 42);
     assert!(matches!(result.name, Cow::Borrowed("Alice")));
@@ -70,7 +70,7 @@ fn json_cow_str_fast_path_borrowed() {
 #[ignore = "json struct HIR lowering not implemented yet"]
 fn json_cow_str_escape_slow_path_owned() {
     let input = br#"{"age":42,"name":"A\nB"}"#;
-    let deser = kajit::compile_decoder(CowFriend::SHAPE, &kajit::json::KajitJson);
+    let deser = kajit::compile_decoder(CowFriend::SHAPE, kajit::DecoderKind::Json);
     let result: CowFriend<'_> = kajit::deserialize(&deser, input).unwrap();
     assert_eq!(result.age, 42);
     assert!(matches!(result.name, Cow::Owned(ref s) if s == "A\nB"));
@@ -116,7 +116,7 @@ fn json_f64_edge_cases() {
         (br#"{"x":	1.0}"#, 1.0),
     ];
 
-    let deser = kajit::compile_decoder(F::SHAPE, &kajit::json::KajitJson);
+    let deser = kajit::compile_decoder(F::SHAPE, kajit::DecoderKind::Json);
     for (input, expected) in cases {
         let result: F = kajit::deserialize(&deser, input).unwrap();
         assert_eq!(
@@ -144,7 +144,7 @@ fn json_f64_canada_roundtrip() {
     let mut json_bytes = Vec::new();
     brotli::BrotliDecompress(&mut std::io::Cursor::new(compressed), &mut json_bytes).unwrap();
 
-    let deser = kajit::compile_decoder(Coord::SHAPE, &kajit::json::KajitJson);
+    let deser = kajit::compile_decoder(Coord::SHAPE, kajit::DecoderKind::Json);
 
     let mut mismatches = 0;
     let mut total = 0;

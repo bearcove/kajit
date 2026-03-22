@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use facet::{Def, Facet, OptionDef, ScalarType, Shape, Type, UserType};
 use kajit_hir as hir;
 
-use crate::format::{Decoder, FieldEmitInfo, HIRLoweringKind, SkippedFieldInfo};
+use crate::format::{DecoderKind, FieldEmitInfo, SkippedFieldInfo};
 use crate::intrinsics;
 use crate::ir::{RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;
@@ -115,66 +115,64 @@ fn materialize_backend_result(
 }
 
 /// Compile a deserializer through RVSDG + linearization + backend adapter.
-pub fn compile_decoder(shape: &'static Shape, decoder: &dyn Decoder) -> CompiledDecoder {
+pub fn compile_decoder(shape: &'static Shape, kind: DecoderKind) -> CompiledDecoder {
     let pipeline_opts = PipelineOptions::from_env();
-    compile_decoder_with_options(shape, decoder, &pipeline_opts)
+    compile_decoder_with_options(shape, kind, &pipeline_opts)
 }
 
 // r[impl compiler.opts.api]
 pub fn compile_decoder_with_options(
     shape: &'static Shape,
-    decoder: &dyn Decoder,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> CompiledDecoder {
-    match decoder.hir_lowering_kind() {
-        Some(HIRLoweringKind::Json) if supports_json_decoder_hir(shape) => {
-            return compile_json_decoder_via_hir_with_options(shape, pipeline_opts.clone());
+    match kind {
+        DecoderKind::Json if supports_json_decoder_hir(shape) => {
+            compile_json_decoder_via_hir_with_options(shape, pipeline_opts.clone())
         }
-        Some(HIRLoweringKind::Postcard) if supports_postcard_decoder_hir(shape) => {
-            return compile_postcard_decoder_via_hir_with_options(shape, pipeline_opts.clone());
+        DecoderKind::Postcard if supports_postcard_decoder_hir(shape) => {
+            compile_postcard_decoder_via_hir_with_options(shape, pipeline_opts.clone())
         }
-        _ => {}
+        _ => {
+            panic!(
+                "unsupported shape for {kind:?} HIR: {}",
+                shape.type_identifier,
+            );
+        }
     }
-
-    // Non-HIR path is deprecated - all shapes should go through HIR
-    panic!(
-        "non-HIR compilation path is disabled: shape={} decoder={:?}",
-        shape.type_identifier,
-        decoder.hir_lowering_kind()
-    );
 }
 
 // r[impl ir.regalloc.regressions]
 /// Build IR + linear form and run regalloc over it, returning total edit count.
 ///
 /// This is a full-pipeline diagnostic helper, not a lightweight metric.
-pub fn regalloc_edit_count(shape: &'static Shape, ir_decoder: &dyn Decoder) -> usize {
+pub fn regalloc_edit_count(shape: &'static Shape, kind: DecoderKind) -> usize {
     let pipeline_opts = PipelineOptions::from_env();
-    regalloc_edit_count_with_options(shape, ir_decoder, &pipeline_opts)
+    regalloc_edit_count_with_options(shape, kind, &pipeline_opts)
 }
 
 /// Build IR + linear form and run regalloc, returning a detailed edits dump.
-pub fn regalloc_edits_text(shape: &'static Shape, ir_decoder: &dyn Decoder) -> String {
+pub fn regalloc_edits_text(shape: &'static Shape, kind: DecoderKind) -> String {
     let pipeline_opts = PipelineOptions::from_env();
-    regalloc_edits_text_with_options(shape, ir_decoder, &pipeline_opts)
+    regalloc_edits_text_with_options(shape, kind, &pipeline_opts)
 }
 
 /// Build IR + linear form, compile through the backend, and return a deterministic emission trace.
-pub fn emission_trace_text(shape: &'static Shape, ir_decoder: &dyn Decoder) -> String {
+pub fn emission_trace_text(shape: &'static Shape, kind: DecoderKind) -> String {
     let pipeline_opts = PipelineOptions::from_env();
-    emission_trace_text_with_options(shape, ir_decoder, &pipeline_opts)
+    emission_trace_text_with_options(shape, kind, &pipeline_opts)
 }
 
 // r[impl compiler.opts.api]
 pub fn regalloc_edit_count_with_options(
     shape: &'static Shape,
-    ir_decoder: &dyn Decoder,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> usize {
     if !pipeline_opts.resolve_regalloc(true) {
         return 0;
     }
-    let mut func = build_decoder_ir_via_hir(shape, ir_decoder);
+    let mut func = build_decoder_ir_via_hir(shape, kind);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
@@ -186,10 +184,10 @@ pub fn regalloc_edit_count_with_options(
 // r[impl compiler.opts.api]
 pub fn emission_trace_text_with_options(
     shape: &'static Shape,
-    ir_decoder: &dyn Decoder,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> String {
-    let decoder = compile_decoder_with_options(shape, ir_decoder, pipeline_opts);
+    let decoder = compile_decoder_with_options(shape, kind, pipeline_opts);
     decoder
         .emission_trace_text()
         .unwrap_or_else(|err| panic!("failed to format emission trace: {err:?}"))
@@ -198,10 +196,10 @@ pub fn emission_trace_text_with_options(
 /// Same as [`regalloc_edits_text`], but with explicit pipeline options.
 pub fn regalloc_edits_text_with_options(
     shape: &'static Shape,
-    ir_decoder: &dyn Decoder,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> String {
-    let mut func = build_decoder_ir_via_hir(shape, ir_decoder);
+    let mut func = build_decoder_ir_via_hir(shape, kind);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
@@ -264,28 +262,19 @@ fn format_allocated_regalloc_edits(alloc: &crate::regalloc_engine::AllocatedCfgP
     out
 }
 
-/// Build decoder IR through HIR when supported, panicking if the non-HIR path would be used.
-///
-/// This ensures debug/diagnostic paths match the actual compile path.
+/// Build decoder IR through HIR.
 pub(crate) fn build_decoder_ir_via_hir(
     shape: &'static Shape,
-    ir_decoder: &dyn Decoder,
+    kind: DecoderKind,
 ) -> crate::ir::IrFunc {
-    match ir_decoder.hir_lowering_kind() {
-        Some(HIRLoweringKind::Json) if supports_json_decoder_hir(shape) => {
+    match kind {
+        DecoderKind::Json => {
             let module = build_json_decoder_hir(shape);
             build_structural_hir_ir(shape, &module)
         }
-        Some(HIRLoweringKind::Postcard) if supports_postcard_decoder_hir(shape) => {
+        DecoderKind::Postcard => {
             let module = build_postcard_decoder_hir(shape);
             build_structural_hir_ir(shape, &module)
-        }
-        _ => {
-            panic!(
-                "non-HIR path is disabled: shape={} decoder={:?}",
-                shape.type_identifier,
-                ir_decoder.hir_lowering_kind()
-            );
         }
     }
 }

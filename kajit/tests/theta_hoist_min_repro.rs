@@ -52,7 +52,7 @@ fn decode_json_with_opts<T>(input: &[u8], opts: &kajit::PipelineOptions) -> T
 where
     for<'a> T: Facet<'a> + DeserializeOwned,
 {
-    let decoder = kajit::compile_decoder_with_options(T::SHAPE, &kajit::json::KajitJson, opts);
+    let decoder = kajit::compile_decoder_with_options(T::SHAPE, kajit::DecoderKind::Json, opts);
     kajit::deserialize::<T>(&decoder, input).expect("decode should succeed")
 }
 

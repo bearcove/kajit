@@ -160,7 +160,7 @@ fn main() {
     });
 
     let kajit_decoder = match catch_unwind(AssertUnwindSafe(|| {
-        kajit::compile_decoder(CitmCatalog::SHAPE, &kajit::json::KajitJson)
+        kajit::compile_decoder(CitmCatalog::SHAPE, kajit::DecoderKind::Json)
     })) {
         Ok(decoder) => Some(Arc::new(decoder)),
         Err(payload) => {

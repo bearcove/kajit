@@ -2,11 +2,18 @@
 
 use facet::StructKind;
 
-/// Which HIR lowering frontend to use.
+/// Wire format kind — determines which HIR frontend and runtime behavior to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HIRLoweringKind {
+pub enum DecoderKind {
     Json,
     Postcard,
+}
+
+impl DecoderKind {
+    /// Whether `from_str` can safely enable trusted UTF-8 mode for this format.
+    pub fn supports_trusted_utf8_input(self) -> bool {
+        matches!(self, DecoderKind::Json)
+    }
 }
 
 /// Resolved default information for a field.

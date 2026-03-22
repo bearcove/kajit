@@ -71,7 +71,7 @@ static CANADA_STR: LazyLock<String> =
 // =============================================================================
 
 static KAJIT_CANADA: LazyLock<kajit::compiler::CompiledDecoder> =
-    LazyLock::new(|| kajit::compile_decoder(FeatureCollection::SHAPE, &kajit::json::KajitJson));
+    LazyLock::new(|| kajit::compile_decoder(FeatureCollection::SHAPE, kajit::DecoderKind::Json));
 
 // =============================================================================
 // Benchmarks

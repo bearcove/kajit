@@ -15,83 +15,73 @@ pub mod ir_passes;
 pub mod jit_debug;
 pub mod jit_dwarf;
 pub mod jit_f64;
-pub mod json;
 pub mod json_intrinsics;
 pub mod linearize;
 pub mod malum;
 pub mod pipeline_opts;
-pub mod postcard;
 mod pow10tab;
 pub mod regalloc_engine;
 pub mod solver;
 
 use compiler::CompiledDecoder;
 use context::{DeserContext, ErrorCode};
+pub use format::DecoderKind;
 pub use pipeline_opts::PipelineOptions;
 
 /// Compile a deserializer for the given shape and format.
-pub fn compile_decoder(
-    shape: &'static facet::Shape,
-    decoder: &dyn format::Decoder,
-) -> CompiledDecoder {
-    compiler::compile_decoder(shape, decoder)
+pub fn compile_decoder(shape: &'static facet::Shape, kind: DecoderKind) -> CompiledDecoder {
+    compiler::compile_decoder(shape, kind)
 }
 
 /// Compile a deserializer with explicit pipeline options.
 pub fn compile_decoder_with_options(
     shape: &'static facet::Shape,
-    decoder: &dyn format::Decoder,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> CompiledDecoder {
-    compiler::compile_decoder_with_options(shape, decoder, pipeline_opts)
+    compiler::compile_decoder_with_options(shape, kind, pipeline_opts)
 }
 
 /// Return the number of regalloc edit instructions produced by IR lowering.
-pub fn regalloc_edit_count<F: format::Decoder>(shape: &'static facet::Shape, decoder: &F) -> usize {
-    compiler::regalloc_edit_count(shape, decoder)
+pub fn regalloc_edit_count(shape: &'static facet::Shape, kind: DecoderKind) -> usize {
+    compiler::regalloc_edit_count(shape, kind)
 }
 
 /// Return the number of regalloc edit instructions produced by IR lowering with explicit options.
-pub fn regalloc_edit_count_with_options<F: format::Decoder>(
+pub fn regalloc_edit_count_with_options(
     shape: &'static facet::Shape,
-    decoder: &F,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> usize {
-    compiler::regalloc_edit_count_with_options(shape, decoder, pipeline_opts)
+    compiler::regalloc_edit_count_with_options(shape, kind, pipeline_opts)
 }
 
 /// Return a detailed regalloc edits dump for the compiled decoder pipeline.
-pub fn regalloc_edits_text<F: format::Decoder>(
-    shape: &'static facet::Shape,
-    decoder: &F,
-) -> String {
-    compiler::regalloc_edits_text(shape, decoder)
+pub fn regalloc_edits_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
+    compiler::regalloc_edits_text(shape, kind)
 }
 
 /// Return a detailed regalloc edits dump with explicit pipeline options.
-pub fn regalloc_edits_text_with_options<F: format::Decoder>(
+pub fn regalloc_edits_text_with_options(
     shape: &'static facet::Shape,
-    decoder: &F,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> String {
-    compiler::regalloc_edits_text_with_options(shape, decoder, pipeline_opts)
+    compiler::regalloc_edits_text_with_options(shape, kind, pipeline_opts)
 }
 
 /// Return a deterministic machine-emission trace annotated with CFG-MIR provenance.
-pub fn emission_trace_text<F: format::Decoder>(
-    shape: &'static facet::Shape,
-    decoder: &F,
-) -> String {
-    compiler::emission_trace_text(shape, decoder)
+pub fn emission_trace_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
+    compiler::emission_trace_text(shape, kind)
 }
 
 /// Return a deterministic emission trace with explicit pipeline options.
-pub fn emission_trace_text_with_options<F: format::Decoder>(
+pub fn emission_trace_text_with_options(
     shape: &'static facet::Shape,
-    decoder: &F,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> String {
-    compiler::emission_trace_text_with_options(shape, decoder, pipeline_opts)
+    compiler::emission_trace_text_with_options(shape, kind, pipeline_opts)
 }
 
 /// Compile a deserializer from already-linearized IR.
@@ -166,16 +156,15 @@ pub fn deserialize_from_cfg_mir_text<'input, T: facet::Facet<'input>>(
 /// Build decoder IR (after default pre-regalloc passes) and return textual RVSDG + CFG-MIR dumps.
 ///
 /// Intended for snapshot tests and debugging.
-/// Routes through HIR when the decoder/shape supports it, matching the compile path.
 pub fn debug_ir_and_cfg_mir_text(
     shape: &'static facet::Shape,
-    ir_decoder: &dyn format::Decoder,
+    kind: DecoderKind,
 ) -> (String, String) {
-    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
+    let mut func = compiler::build_decoder_ir_via_hir(shape, kind);
     compiler::run_default_passes_from_env(&mut func);
     let registry = symbol_registry_for_shape(shape);
     let ir_text = format!("{}", func.display_with_registry(&registry));
-    let cfg = debug_cfg_mir(shape, ir_decoder);
+    let cfg = debug_cfg_mir(shape, kind);
     let cfg_text = format!("{}", cfg.display_with_registry(&registry));
     (ir_text, cfg_text)
 }
@@ -183,11 +172,8 @@ pub fn debug_ir_and_cfg_mir_text(
 /// Build decoder IR (after default pre-regalloc passes) and return a canonical CFG-MIR dump.
 ///
 /// This renderer is intended for interactive debugging and LLM-assisted analysis.
-pub fn debug_cfg_mir_text(
-    shape: &'static facet::Shape,
-    ir_decoder: &dyn format::Decoder,
-) -> String {
-    let cfg = debug_cfg_mir(shape, ir_decoder);
+pub fn debug_cfg_mir_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
+    let cfg = debug_cfg_mir(shape, kind);
     let registry = symbol_registry_for_shape(shape);
     format!("{}", cfg.display_with_registry(&registry))
 }
@@ -196,13 +182,11 @@ pub fn debug_cfg_mir_text(
 ///
 /// This preserves real intrinsic function pointers and is intended for
 /// in-process debugging tools (e.g. differential checking).
-///
-/// Routes through HIR when the decoder/shape supports it, matching the compile path.
 pub fn debug_cfg_mir(
     shape: &'static facet::Shape,
-    ir_decoder: &dyn format::Decoder,
+    kind: DecoderKind,
 ) -> regalloc_engine::cfg_mir::Program {
-    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
+    let mut func = compiler::build_decoder_ir_via_hir(shape, kind);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
     regalloc_engine::cfg_mir::lower_and_optimize(&linear)
@@ -238,12 +222,11 @@ pub fn debug_json_hir_text(shape: &'static facet::Shape) -> String {
 
 /// Build HIR for a decoder and render it in canonical text form.
 ///
-/// Dispatches to the appropriate HIR builder based on the decoder's format.
-pub fn debug_hir_text(shape: &'static facet::Shape, decoder: &dyn format::Decoder) -> String {
-    match decoder.hir_lowering_kind() {
-        Some(format::HIRLoweringKind::Postcard) => debug_postcard_hir_text(shape),
-        Some(format::HIRLoweringKind::Json) => debug_json_hir_text(shape),
-        None => "(no HIR path for this decoder)".to_string(),
+/// Dispatches to the appropriate HIR builder based on the decoder kind.
+pub fn debug_hir_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
+    match kind {
+        DecoderKind::Postcard => debug_postcard_hir_text(shape),
+        DecoderKind::Json => debug_json_hir_text(shape),
     }
 }
 
@@ -284,27 +267,16 @@ pub fn compile_postcard_decoder_via_structural_hir(
     compiler::compile_postcard_decoder_via_hir_with_options(shape, PipelineOptions::from_env())
 }
 
-/// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
-///
-/// Intended for snapshot tests and debugging.
-/// Routes through HIR when the decoder/shape supports it, matching the compile path.
-pub fn debug_linear_ir(
-    shape: &'static facet::Shape,
-    ir_decoder: &dyn format::Decoder,
-) -> linearize::LinearIr {
-    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
+/// Build decoder IR (after default pre-regalloc passes) and return the Linear IR.
+pub fn debug_linear_ir(shape: &'static facet::Shape, kind: DecoderKind) -> linearize::LinearIr {
+    let mut func = compiler::build_decoder_ir_via_hir(shape, kind);
     compiler::run_default_passes_from_env(&mut func);
     linearize::linearize(&mut func)
 }
 
 /// Build decoder IR (after default pre-regalloc passes) and return textual Linear IR dump.
-///
-/// Intended for snapshot tests and debugging.
-pub fn debug_linear_ir_text(
-    shape: &'static facet::Shape,
-    ir_decoder: &dyn format::Decoder,
-) -> String {
-    let linear = debug_linear_ir(shape, ir_decoder);
+pub fn debug_linear_ir_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
+    let linear = debug_linear_ir(shape, kind);
     let registry = symbol_registry_for_shape(shape);
     format!("{}", linear.display_with_registry(&registry))
 }
@@ -314,20 +286,19 @@ pub fn debug_linear_ir_text(
 /// The first entry is always `("initial", ir_before_passes)`.
 pub fn debug_ir_opt_timeline_text(
     shape: &'static facet::Shape,
-    ir_decoder: &dyn format::Decoder,
+    kind: DecoderKind,
 ) -> Vec<(String, String)> {
     let pipeline_opts = PipelineOptions::from_env();
-    debug_ir_opt_timeline_text_with_options(shape, ir_decoder, &pipeline_opts)
+    debug_ir_opt_timeline_text_with_options(shape, kind, &pipeline_opts)
 }
 
 /// Same as [`debug_ir_opt_timeline_text`], but with explicit pipeline options.
-/// Routes through HIR when the decoder/shape supports it, matching the compile path.
 pub fn debug_ir_opt_timeline_text_with_options(
     shape: &'static facet::Shape,
-    ir_decoder: &dyn format::Decoder,
+    kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> Vec<(String, String)> {
-    let mut func = compiler::build_decoder_ir_via_hir(shape, ir_decoder);
+    let mut func = compiler::build_decoder_ir_via_hir(shape, kind);
     let registry = symbol_registry_for_shape(shape);
     let mut checkpoints = vec![(
         "initial".to_string(),

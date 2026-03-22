@@ -1780,7 +1780,7 @@ fn panic_cases() -> Vec<PanicCase> {
                 inner: Collider,
             }
 
-            kajit::compile_decoder(HasCollision::SHAPE, &kajit::json::KajitJson);
+            kajit::compile_decoder(HasCollision::SHAPE, kajit::DecoderKind::Json);
         },
     }]
 }
@@ -1859,7 +1859,7 @@ pub(crate) fn render_bench_file() -> String {
             if enable_json_kajit {
                 let json_decoder =
                     match catch_unwind(AssertUnwindSafe(|| {
-                        kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson)
+                        kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json)
                     })) {
                         Ok(decoder) => Some(Arc::new(decoder)),
                         Err(payload) => {
@@ -1936,7 +1936,7 @@ pub(crate) fn render_bench_file() -> String {
             if enable_postcard_kajit {
                 let postcard_decoder =
                     match catch_unwind(AssertUnwindSafe(|| {
-                        kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard)
+                        kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
                     })) {
                         Ok(decoder) => Some(Arc::new(decoder)),
                         Err(payload) => {
@@ -2064,7 +2064,7 @@ pub(crate) fn render_test_file() -> String {
                         #ignore_attr
                         fn #test_name() {
                             let value = #value;
-                            assert_codegen_rvsdg_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
+                            assert_codegen_rvsdg_snapshot("json", #case_name, kajit::DecoderKind::Json, &value);
                         }
                     }
                 })
@@ -2094,7 +2094,7 @@ pub(crate) fn render_test_file() -> String {
                         #ignore_attr
                         fn #test_name() {
                             let value = #value;
-                            assert_codegen_ra_mir_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
+                            assert_codegen_ra_mir_snapshot("json", #case_name, kajit::DecoderKind::Json, &value);
                         }
                     }
                 })
@@ -2124,7 +2124,7 @@ pub(crate) fn render_test_file() -> String {
                         #ignore_attr
                         fn #test_name() {
                             let value = #value;
-                            assert_codegen_edits_snapshot("json", #case_name, &kajit::json::KajitJson, &value);
+                            assert_codegen_edits_snapshot("json", #case_name, kajit::DecoderKind::Json, &value);
                         }
                     }
                 })
@@ -2176,7 +2176,7 @@ pub(crate) fn render_test_file() -> String {
                         #ignore_attr
                         fn #test_name() {
                             let value = #value;
-                            assert_codegen_rvsdg_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
+                            assert_codegen_rvsdg_snapshot("postcard", #case_name, kajit::DecoderKind::Postcard, &value);
                         }
                     }
                 })
@@ -2206,7 +2206,7 @@ pub(crate) fn render_test_file() -> String {
                         #ignore_attr
                         fn #test_name() {
                             let value = #value;
-                            assert_codegen_ra_mir_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
+                            assert_codegen_ra_mir_snapshot("postcard", #case_name, kajit::DecoderKind::Postcard, &value);
                         }
                     }
                 })
@@ -2236,7 +2236,7 @@ pub(crate) fn render_test_file() -> String {
                         #ignore_attr
                         fn #test_name() {
                             let value = #value;
-                            assert_codegen_edits_snapshot("postcard", #case_name, &kajit::postcard::KajitPostcard, &value);
+                            assert_codegen_edits_snapshot("postcard", #case_name, kajit::DecoderKind::Postcard, &value);
                         }
                     }
                 })
@@ -2409,17 +2409,16 @@ pub(crate) fn render_test_file() -> String {
             println!("KAJIT_CASE_INPUT_HEX={hex}");
         }
 
-        fn maybe_print_case_cfg_mir<T, D>(decoder: &D)
+        fn maybe_print_case_cfg_mir<T>(kind: kajit::DecoderKind)
         where
             for<'input> T: Facet<'input>,
-            D: kajit::format::Decoder,
         {
             if std::env::var_os(PRINT_CFG_MIR_ENV).is_none() {
                 return;
             }
 
             println!("KAJIT_CASE_CFG_MIR_BEGIN");
-            println!("{}", kajit::debug_cfg_mir_text(T::SHAPE, decoder));
+            println!("{}", kajit::debug_cfg_mir_text(T::SHAPE, kind));
             println!("KAJIT_CASE_CFG_MIR_END");
         }
 
@@ -2609,7 +2608,7 @@ pub(crate) fn render_test_file() -> String {
         {
             let encoded = serde_json::to_string(&value).unwrap();
             maybe_print_case_input(encoded.as_bytes());
-            maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
             if maybe_debug_case_cfg_mir::<T>(encoded.as_bytes()) {
                 return;
             }
@@ -2618,10 +2617,10 @@ pub(crate) fn render_test_file() -> String {
             }
             let expected: T = serde_json::from_str(&encoded).unwrap();
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
             let case = runtime_case_name();
             if dumps_enabled_for_case("json", &case) {
-                let artifacts = codegen_artifacts::<T, _>(&kajit::json::KajitJson);
+                let artifacts = codegen_artifacts::<T>(kajit::DecoderKind::Json);
                 maybe_dump_codegen_artifacts("json", &case, &artifacts);
             }
             let got: T = kajit::from_str(&decoder, &encoded).unwrap();
@@ -2634,7 +2633,7 @@ pub(crate) fn render_test_file() -> String {
         {
             let encoded = ::postcard::to_allocvec(&value).unwrap();
             maybe_print_case_input(&encoded);
-            maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Postcard);
             if maybe_debug_case_cfg_mir::<T>(&encoded) {
                 return;
             }
@@ -2643,10 +2642,10 @@ pub(crate) fn render_test_file() -> String {
             }
             let expected: T = ::postcard::from_bytes(&encoded).unwrap();
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
             let case = runtime_case_name();
             if dumps_enabled_for_case("postcard", &case) {
-                let artifacts = codegen_artifacts::<T, _>(&kajit::postcard::KajitPostcard);
+                let artifacts = codegen_artifacts::<T>(kajit::DecoderKind::Postcard);
                 maybe_dump_codegen_artifacts("postcard", &case, &artifacts);
             }
             let got: T = kajit::deserialize(&decoder, &encoded).unwrap();
@@ -2658,7 +2657,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
         {
             maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
             if maybe_debug_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2666,7 +2665,7 @@ pub(crate) fn render_test_file() -> String {
                 return;
             }
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
             let got: T = kajit::deserialize(&decoder, input).unwrap();
             assert_eq!(got, expected);
         }
@@ -2676,7 +2675,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input>,
         {
             maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
             if maybe_debug_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2684,7 +2683,7 @@ pub(crate) fn render_test_file() -> String {
                 return;
             }
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
             let out = kajit::deserialize::<T>(&decoder, input);
             assert!(out.is_err(), "expected json decode failure");
         }
@@ -2694,7 +2693,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input>,
         {
             maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T, _>(&kajit::json::KajitJson);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
             if maybe_debug_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2702,7 +2701,7 @@ pub(crate) fn render_test_file() -> String {
                 return;
             }
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
             let out = kajit::deserialize::<T>(&decoder, input);
             let err = match out {
                 Ok(_) => panic!("expected json decode failure"),
@@ -2716,7 +2715,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
         {
             maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Postcard);
             if maybe_debug_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2724,7 +2723,7 @@ pub(crate) fn render_test_file() -> String {
                 return;
             }
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let got: T = kajit::from_str(&decoder, input).unwrap();
             assert_eq!(got, expected);
@@ -2736,7 +2735,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input>,
         {
             maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Postcard);
             if maybe_debug_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2744,7 +2743,7 @@ pub(crate) fn render_test_file() -> String {
                 return;
             }
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let out = kajit::from_str::<T>(&decoder, input);
             assert!(out.is_err(), "expected postcard decode failure");
@@ -2755,7 +2754,7 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input>,
         {
             maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T, _>(&kajit::postcard::KajitPostcard);
+            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Postcard);
             if maybe_debug_case_cfg_mir::<T>(input) {
                 return;
             }
@@ -2763,7 +2762,7 @@ pub(crate) fn render_test_file() -> String {
                 return;
             }
             maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
             let input = core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
             let out = kajit::from_str::<T>(&decoder, input);
             let err = match out {
@@ -2778,9 +2777,9 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug + Arbitrary + 'static,
         {
             maybe_wait_for_debugger();
-            let json_decoder = kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson);
+            let json_decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
             let postcard_decoder =
-                kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard);
+                kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
             let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {
                 cases: 64,
                 ..proptest::test_runner::Config::default()
@@ -2818,19 +2817,18 @@ pub(crate) fn render_test_file() -> String {
             opt_timeline: Vec<(String, String)>,
         }
 
-        fn codegen_artifacts<T, F>(decoder: &F) -> CodegenArtifacts
+        fn codegen_artifacts<T>(kind: kajit::DecoderKind) -> CodegenArtifacts
         where
             for<'input> T: Facet<'input>,
-            F: kajit::format::Decoder,
         {
             let shape = T::SHAPE;
-            let hir_text = kajit::debug_hir_text(shape, decoder);
-            let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, decoder);
-            let linear_text = kajit::debug_linear_ir_text(shape, decoder);
-            let edits = kajit::regalloc_edit_count(shape, decoder);
-            let edits_text = kajit::regalloc_edits_text(shape, decoder);
-            let emission_text = kajit::emission_trace_text(shape, decoder);
-            let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, decoder);
+            let hir_text = kajit::debug_hir_text(shape, kind);
+            let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
+            let linear_text = kajit::debug_linear_ir_text(shape, kind);
+            let edits = kajit::regalloc_edit_count(shape, kind);
+            let edits_text = kajit::regalloc_edits_text(shape, kind);
+            let emission_text = kajit::emission_trace_text(shape, kind);
+            let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, kind);
             CodegenArtifacts {
                 hir_text,
                 ir_text,
@@ -2993,7 +2991,7 @@ pub(crate) fn render_test_file() -> String {
 
             #[test]
             fn vec_scalar_large_hotpath_asserts() {
-                let artifacts = codegen_artifacts::<ScalarVec, _>(&kajit::postcard::KajitPostcard);
+                let artifacts = codegen_artifacts::<ScalarVec>(kajit::DecoderKind::Postcard);
 
                 assert!(
                     artifacts.ir_text.contains("theta") || artifacts.ir_text.contains("apply @"),

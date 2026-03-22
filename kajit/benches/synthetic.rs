@@ -398,7 +398,7 @@ fn register_bench_case<T>(
     });
     if enable_json_kajit {
         let json_decoder = match catch_unwind(AssertUnwindSafe(|| {
-            kajit::compile_decoder(T::SHAPE, &kajit::json::KajitJson)
+            kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json)
         })) {
             Ok(decoder) => Some(Arc::new(decoder)),
             Err(payload) => {
@@ -469,7 +469,7 @@ fn register_bench_case<T>(
     });
     if enable_postcard_kajit {
         let postcard_decoder = match catch_unwind(AssertUnwindSafe(|| {
-            kajit::compile_decoder(T::SHAPE, &kajit::postcard::KajitPostcard)
+            kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
         })) {
             Ok(decoder) => Some(Arc::new(decoder)),
             Err(payload) => {
