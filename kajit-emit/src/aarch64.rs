@@ -750,6 +750,144 @@ pub fn encode_sub_reg(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, Em
     Ok((width.sf() << 31) | 0x4B00_0000 | (rm << 16) | (rn << 5) | rd)
 }
 
+/// Encode an ARM64 logical immediate value.
+/// Returns (N, immr, imms) if the value is encodable, None otherwise.
+///
+/// ARM64 logical immediates encode bitmasks of consecutive 1s that repeat.
+/// The element size can be 2, 4, 8, 16, 32, or 64 bits.
+fn encode_logical_imm_params(value: u64, is_64bit: bool) -> Option<(u32, u32, u32)> {
+    // All-zeros and all-ones are not encodable
+    if value == 0 {
+        return None;
+    }
+
+    let reg_size = if is_64bit { 64u32 } else { 32u32 };
+
+    // For 32-bit, the value must fit in 32 bits and we replicate it
+    let value = if is_64bit {
+        value
+    } else {
+        if (value >> 32) != 0 && (value >> 32) != (value & 0xFFFF_FFFF) {
+            return None;
+        }
+        // Replicate 32-bit pattern to 64-bit for uniform handling
+        let lo = value & 0xFFFF_FFFF;
+        lo | (lo << 32)
+    };
+
+    if value == u64::MAX {
+        return None;
+    }
+
+    // Find the smallest element size where the pattern repeats
+    let mut element_size = reg_size;
+    let mut element_mask = u64::MAX;
+
+    // Try progressively smaller element sizes
+    for size in [32u32, 16, 8, 4, 2] {
+        if size > reg_size {
+            continue;
+        }
+        let mask = (1u64 << size) - 1;
+        let element = value & mask;
+
+        // Check if this element repeats across the register
+        let mut repeats = true;
+        let mut pos = size;
+        while pos < 64 {
+            if ((value >> pos) & mask) != element {
+                repeats = false;
+                break;
+            }
+            pos += size;
+        }
+
+        if repeats {
+            element_size = size;
+            element_mask = mask;
+        }
+    }
+
+    // Extract the element pattern
+    let element = value & element_mask;
+
+    // A valid logical immediate element has a contiguous run of 1s (possibly wrapped)
+    // Find the rotation and run length
+
+    // Rotate the element to find a canonical form with 1s at the bottom
+    let mut rotated = element;
+    let mut rotation = 0u32;
+
+    // Find where the run of 1s starts (rotate until bit 0 is 1 and highest bit is 0)
+    // We want the form: 0...0 1...1
+    for r in 0..element_size {
+        let rot = element.rotate_right(r);
+        // Check if this rotation has 1s at bottom and 0s at top
+        let ones = rot.trailing_ones();
+        if ones > 0 && ones < element_size && (rot >> ones) == 0 {
+            rotated = rot;
+            rotation = r;
+            break;
+        }
+        // Also check for all-ones element (not valid for logical imm)
+        if rot == element_mask {
+            return None;
+        }
+    }
+
+    // Count consecutive 1s from the bottom
+    let ones_count = rotated.trailing_ones();
+    if ones_count == 0 || ones_count >= element_size {
+        return None;
+    }
+
+    // Verify the rest is all zeros
+    if (rotated >> ones_count) != 0 {
+        return None;
+    }
+
+    // Encode N, immr, imms
+    let n: u32;
+    let imms: u32;
+
+    if element_size == 64 {
+        n = 1;
+        imms = ones_count - 1;
+    } else {
+        n = 0;
+        // imms encodes both element size and run length
+        // The top bits of imms (inverted) encode element size:
+        // 32-bit: 0xxxxx (bit 5 = 0)
+        // 16-bit: 10xxxx (bits 5:4 = 10)
+        // 8-bit:  110xxx (bits 5:3 = 110)
+        // 4-bit:  1110xx (bits 5:2 = 1110)
+        // 2-bit:  11110x (bits 5:1 = 11110)
+        let size_encoding = match element_size {
+            32 => 0b00_0000,
+            16 => 0b10_0000,
+            8 => 0b11_0000,
+            4 => 0b11_1000,
+            2 => 0b11_1100,
+            _ => return None,
+        };
+        imms = size_encoding | (ones_count - 1);
+    }
+
+    // immr is the rotation amount within the element
+    let immr = if rotation == 0 {
+        0
+    } else {
+        element_size - rotation
+    };
+
+    // For 32-bit width, N must be 0
+    if !is_64bit && n != 0 {
+        return None;
+    }
+
+    Some((n, immr, imms))
+}
+
 fn encode_add_sub_imm(
     width: Width,
     rd: Reg,
@@ -1099,32 +1237,14 @@ pub fn encode_lsl_imm(width: Width, rd: Reg, rn: Reg, shift: u8) -> Result<u32, 
 pub fn encode_and_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, EmitError> {
     let rd = check_reg(rd);
     let rn = check_reg(rn);
-    if imm == 0 || !imm.is_power_of_two() {
-        return Err(EmitError::InvalidImmediate {
+    let is_64bit = width == Width::X64;
+
+    let (n, immr, imms) =
+        encode_logical_imm_params(imm, is_64bit).ok_or_else(|| EmitError::InvalidImmediate {
             instruction: "and imm",
             value: imm as i64,
-        });
-    }
-    let width_bits = match width {
-        Width::W32 => 32u32,
-        Width::X64 => 64u32,
-    };
-    let bit = imm.trailing_zeros();
-    if bit >= width_bits {
-        return Err(EmitError::InvalidImmediate {
-            instruction: "and imm",
-            value: imm as i64,
-        });
-    }
-    if width == Width::W32 && (imm >> 32) != 0 {
-        return Err(EmitError::InvalidImmediate {
-            instruction: "and imm",
-            value: imm as i64,
-        });
-    }
-    let n = if width == Width::X64 { 1u32 } else { 0u32 };
-    let immr = (width_bits - bit) % width_bits;
-    let imms = 0u32;
+        })?;
+
     let base = match width {
         Width::W32 => 0x1200_0000u32,
         Width::X64 => 0x9200_0000u32,
@@ -1135,35 +1255,35 @@ pub fn encode_and_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, E
 pub fn encode_orr_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, EmitError> {
     let rd = check_reg(rd);
     let rn = check_reg(rn);
-    if imm == 0 || !imm.is_power_of_two() {
-        return Err(EmitError::InvalidImmediate {
+    let is_64bit = width == Width::X64;
+
+    let (n, immr, imms) =
+        encode_logical_imm_params(imm, is_64bit).ok_or_else(|| EmitError::InvalidImmediate {
             instruction: "orr imm",
             value: imm as i64,
-        });
-    }
-    let width_bits = match width {
-        Width::W32 => 32u32,
-        Width::X64 => 64u32,
-    };
-    let bit = imm.trailing_zeros();
-    if bit >= width_bits {
-        return Err(EmitError::InvalidImmediate {
-            instruction: "orr imm",
-            value: imm as i64,
-        });
-    }
-    if width == Width::W32 && (imm >> 32) != 0 {
-        return Err(EmitError::InvalidImmediate {
-            instruction: "orr imm",
-            value: imm as i64,
-        });
-    }
-    let n = if width == Width::X64 { 1u32 } else { 0u32 };
-    let immr = (width_bits - bit) % width_bits;
-    let imms = 0u32;
+        })?;
+
     let base = match width {
         Width::W32 => 0x3200_0000u32,
         Width::X64 => 0xB200_0000u32,
+    };
+    Ok(base | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd)
+}
+
+pub fn encode_eor_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let is_64bit = width == Width::X64;
+
+    let (n, immr, imms) =
+        encode_logical_imm_params(imm, is_64bit).ok_or_else(|| EmitError::InvalidImmediate {
+            instruction: "eor imm",
+            value: imm as i64,
+        })?;
+
+    let base = match width {
+        Width::W32 => 0x5200_0000u32,
+        Width::X64 => 0xD200_0000u32,
     };
     Ok(base | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd)
 }
@@ -1697,6 +1817,43 @@ mod tests {
         let w = encode_orr_imm(Width::X64, Reg::X13, Reg::X13, 2).unwrap();
         assert_eq!(w & 0x1f, 13);
         assert_eq!((w >> 5) & 0x1f, 13);
+    }
+
+    #[test]
+    fn logical_imm_bitmasks() {
+        // 0x7f = 7 consecutive 1s (0111_1111)
+        let w = encode_and_imm(Width::X64, Reg::X9, Reg::X10, 0x7f).unwrap();
+        assert_eq!(w & 0x1f, 9); // rd
+        assert_eq!((w >> 5) & 0x1f, 10); // rn
+
+        // 0xff = 8 consecutive 1s
+        assert!(encode_and_imm(Width::X64, Reg::X9, Reg::X10, 0xff).is_ok());
+
+        // 0x1f = 5 consecutive 1s
+        assert!(encode_and_imm(Width::X64, Reg::X9, Reg::X10, 0x1f).is_ok());
+
+        // 0xffff = 16 consecutive 1s
+        assert!(encode_and_imm(Width::X64, Reg::X9, Reg::X10, 0xffff).is_ok());
+
+        // 0xff00 = 8 consecutive 1s shifted
+        assert!(encode_and_imm(Width::X64, Reg::X9, Reg::X10, 0xff00).is_ok());
+
+        // ORR with bitmasks
+        assert!(encode_orr_imm(Width::X64, Reg::X9, Reg::X10, 0x7f).is_ok());
+        assert!(encode_orr_imm(Width::X64, Reg::X9, Reg::X10, 0xff).is_ok());
+
+        // EOR with bitmasks
+        assert!(encode_eor_imm(Width::X64, Reg::X9, Reg::X10, 0x7f).is_ok());
+
+        // 32-bit width
+        assert!(encode_and_imm(Width::W32, Reg::X9, Reg::X10, 0x7f).is_ok());
+        assert!(encode_and_imm(Width::W32, Reg::X9, Reg::X10, 0xff).is_ok());
+
+        // Invalid: all zeros
+        assert!(encode_and_imm(Width::X64, Reg::X9, Reg::X10, 0).is_err());
+
+        // Invalid: all ones
+        assert!(encode_and_imm(Width::X64, Reg::X9, Reg::X10, u64::MAX).is_err());
     }
 
     #[test]

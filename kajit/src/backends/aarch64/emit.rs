@@ -334,9 +334,26 @@ impl Lowerer {
             let rhs_r = rhs_reg.hw_enc() as u8;
             let dst_r = dst_reg.hw_enc() as u8;
 
+            // Check if rhs is a known constant for immediate encoding
+            let rhs_const = self.const_of(rhs);
+
             let handled = match kind {
                 BinOpKind::Add => {
-                    if dst_r == lhs_r {
+                    // Try immediate encoding first (12-bit, 0-4095)
+                    if let Some(c) = rhs_const
+                        && c <= 4095
+                    {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_add_imm(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                                c as u16,
+                                false,
+                            )
+                            .expect("add imm"),
+                        );
+                    } else if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
                             aarch64::encode_add_reg(
                                 aarch64::Width::X64,
@@ -378,7 +395,22 @@ impl Lowerer {
                     true
                 }
                 BinOpKind::Sub => {
-                    if dst_r == lhs_r {
+                    // Try immediate encoding first (12-bit, 0-4095)
+                    if let Some(c) = rhs_const
+                        && c <= 4095
+                    {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_sub_imm(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                                c as u16,
+                                false,
+                            )
+                            .expect("sub imm"),
+                        );
+                        true
+                    } else if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
                             aarch64::encode_sub_reg(
                                 aarch64::Width::X64,
@@ -455,7 +487,17 @@ impl Lowerer {
                     true
                 }
                 BinOpKind::And => {
-                    if dst_r == lhs_r {
+                    // Try logical immediate encoding first
+                    if let Some(c) = rhs_const
+                        && let Ok(word) = aarch64::encode_and_imm(
+                            aarch64::Width::X64,
+                            Reg::from_raw(dst_r),
+                            Reg::from_raw(lhs_r),
+                            c,
+                        )
+                    {
+                        self.ectx.emit.emit_word(word);
+                    } else if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
                             aarch64::encode_and_reg(
                                 aarch64::Width::X64,
@@ -503,7 +545,17 @@ impl Lowerer {
                     true
                 }
                 BinOpKind::Or => {
-                    if dst_r == lhs_r {
+                    // Try logical immediate encoding first
+                    if let Some(c) = rhs_const
+                        && let Ok(word) = aarch64::encode_orr_imm(
+                            aarch64::Width::X64,
+                            Reg::from_raw(dst_r),
+                            Reg::from_raw(lhs_r),
+                            c,
+                        )
+                    {
+                        self.ectx.emit.emit_word(word);
+                    } else if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
                             aarch64::encode_orr_reg(
                                 aarch64::Width::X64,
@@ -551,7 +603,17 @@ impl Lowerer {
                     true
                 }
                 BinOpKind::Xor => {
-                    if dst_r == lhs_r {
+                    // Try logical immediate encoding first
+                    if let Some(c) = rhs_const
+                        && let Ok(word) = aarch64::encode_eor_imm(
+                            aarch64::Width::X64,
+                            Reg::from_raw(dst_r),
+                            Reg::from_raw(lhs_r),
+                            c,
+                        )
+                    {
+                        self.ectx.emit.emit_word(word);
+                    } else if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
                             aarch64::encode_eor_reg(
                                 aarch64::Width::X64,
@@ -599,7 +661,21 @@ impl Lowerer {
                     true
                 }
                 BinOpKind::Shr => {
-                    if dst_r == lhs_r {
+                    // Try immediate encoding first (shift amount 0-63)
+                    if let Some(c) = rhs_const
+                        && c <= 63
+                    {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_lsr_imm(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                                c as u8,
+                            )
+                            .expect("lsr imm"),
+                        );
+                        true
+                    } else if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
                             aarch64::encode_lsr_reg(
                                 aarch64::Width::X64,
@@ -634,7 +710,22 @@ impl Lowerer {
                     }
                 }
                 BinOpKind::Shl => {
-                    if dst_r == lhs_r {
+                    // Try immediate encoding first (shift amount 1-63, not 0)
+                    if let Some(c) = rhs_const
+                        && c >= 1
+                        && c <= 63
+                    {
+                        self.ectx.emit.emit_word(
+                            aarch64::encode_lsl_imm(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                                c as u8,
+                            )
+                            .expect("lsl imm"),
+                        );
+                        true
+                    } else if dst_r == lhs_r {
                         self.ectx.emit.emit_word(
                             aarch64::encode_lsl_reg(
                                 aarch64::Width::X64,
