@@ -120,6 +120,9 @@ fn fmt_variant_def(
     if let Some(disc) = variant.discriminant {
         write!(f, " = {disc}")?;
     }
+    if let Some(init_fn) = variant.init_fn {
+        write!(f, " init_fn=0x{init_fn:x}")?;
+    }
     write!(f, " ")?;
     if variant.fields.is_empty() {
         writeln!(f, "{{}}")

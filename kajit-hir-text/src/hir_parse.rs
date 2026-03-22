@@ -318,8 +318,15 @@ fn type_def<'src>() -> impl Parser<'src, &'src str, ParsedTypeDef, Extra<'src>> 
         .or_not()
         .map(|opt| opt.flatten());
 
+    let variant_init_fn = token("init_fn=")
+        .ignore_then(uint64())
+        .map(Some)
+        .or_not()
+        .map(|opt| opt.flatten());
+
     let variant = quoted_string()
         .then(variant_discriminant)
+        .then(variant_init_fn)
         .then(token("{").ignore_then(field_defs()).then_ignore(token("}")));
 
     token("type")
@@ -347,10 +354,11 @@ fn type_def<'src>() -> impl Parser<'src, &'src str, ParsedTypeDef, Extra<'src>> 
                         TypeDefKind::Enum {
                             variants: variants
                                 .into_iter()
-                                .map(|((name, discriminant), fields)| VariantDef {
+                                .map(|(((name, discriminant), init_fn), fields)| VariantDef {
                                     name,
                                     fields,
                                     discriminant,
+                                    init_fn,
                                 })
                                 .collect(),
                             discriminant_width: dw,
@@ -1161,6 +1169,7 @@ mod tests {
                         name: "None".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                     VariantDef {
                         name: "Some".to_owned(),
@@ -1170,6 +1179,7 @@ mod tests {
                             offset: None,
                         }],
                         discriminant: None,
+                        init_fn: None,
                     },
                 ],
                 discriminant_width: None,
@@ -1606,6 +1616,7 @@ hir_module {
                         offset: None,
                     }],
                     discriminant: None,
+                    init_fn: None,
                 }],
                 discriminant_width: None,
             },
@@ -1778,11 +1789,13 @@ hir_module {
                         name: "Lib".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                 ],
                 discriminant_width: None,

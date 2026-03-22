@@ -221,6 +221,7 @@ impl PostcardHirLowerer {
                         name: "None".to_owned(),
                         fields: Vec::new(),
                         discriminant: None,
+                        init_fn: Some(opt_def.vtable.init_none as *const () as usize as u64),
                     },
                     hir::VariantDef {
                         name: "Some".to_owned(),
@@ -230,6 +231,7 @@ impl PostcardHirLowerer {
                             offset: None,
                         }],
                         discriminant: None,
+                        init_fn: Some(opt_def.vtable.init_some as *const () as usize as u64),
                     },
                 ],
                 discriminant_width: None,
@@ -268,6 +270,7 @@ impl PostcardHirLowerer {
                                 })
                                 .collect(),
                             discriminant: Some(variant.rust_discriminant),
+                            init_fn: None,
                         })
                         .collect(),
                     discriminant_width: Some(discriminant_size(enum_type.enum_repr)),

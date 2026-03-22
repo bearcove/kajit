@@ -1013,6 +1013,9 @@ pub struct VariantDef {
     pub fields: Vec<FieldDef>,
     /// Rust discriminant value for this variant.
     pub discriminant: Option<i64>,
+    /// Runtime initialization function pointer for this variant.
+    /// Used by Option-like enums: None variant carries init_none, Some carries init_some.
+    pub init_fn: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1796,6 +1799,7 @@ mod tests {
                             offset: None,
                         }],
                         discriminant: None,
+                        init_fn: None,
                     },
                     VariantDef {
                         name: "Err".to_owned(),
@@ -1805,6 +1809,7 @@ mod tests {
                             offset: None,
                         }],
                         discriminant: None,
+                        init_fn: None,
                     },
                 ],
                 discriminant_width: None,
@@ -1987,11 +1992,13 @@ mod tests {
                         name: "Lib".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                 ],
                 discriminant_width: None,
@@ -2152,11 +2159,13 @@ mod tests {
                         name: "Lib".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                 ],
                 discriminant_width: None,
@@ -2321,11 +2330,13 @@ mod tests {
                         name: "Lib".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                 ],
                 discriminant_width: None,
@@ -2500,11 +2511,13 @@ mod tests {
                         name: "Lib".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
                         discriminant: None,
+                        init_fn: None,
                     },
                 ],
                 discriminant_width: None,

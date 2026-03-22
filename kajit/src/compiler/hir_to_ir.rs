@@ -739,71 +739,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         )
     }
 
-    fn lower_option_variant_write(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        offset: usize,
-        opt_def: OptionDef,
-        variant: &str,
-        fields: &[(String, hir::Expr)],
-    ) {
-        let offset = offset as u32;
-        match variant {
-            "None" => {
-                assert!(
-                    fields.is_empty(),
-                    "Option::None should not carry payload fields"
-                );
-                let init_fn = rb.const_val(opt_def.vtable.init_none as *const () as usize as u64);
-                rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_option_init_none_ctx as *const () as usize,
-                    ),
-                    &[init_fn],
-                    offset,
-                    false,
-                );
-            }
-            "Some" => {
-                assert_eq!(
-                    fields.len(),
-                    1,
-                    "Option::Some should carry exactly one payload field"
-                );
-                let payload_ptr = match &fields[0].1 {
-                    hir::Expr::Local(local) => rb.slot_addr(self.local_slots[local].base_slot),
-                    hir::Expr::Literal(hir::Literal::Unit) => {
-                        let slot = rb.alloc_slot();
-                        rb.slot_addr(slot)
-                    }
-                    hir::Expr::Literal(hir::Literal::Bool(value)) => {
-                        let slot = rb.alloc_slot();
-                        let value = rb.const_val(u64::from(*value));
-                        rb.write_to_slot(slot, value);
-                        rb.slot_addr(slot)
-                    }
-                    hir::Expr::Literal(hir::Literal::Integer(value)) => {
-                        let slot = rb.alloc_slot();
-                        let value = rb.const_val(*value);
-                        rb.write_to_slot(slot, value);
-                        rb.slot_addr(slot)
-                    }
-                    other => panic!("unsupported structural Option payload: {other:?}"),
-                };
-                let init_fn = rb.const_val(opt_def.vtable.init_some as *const () as usize as u64);
-                rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_option_init_some_ctx as *const () as usize,
-                    ),
-                    &[init_fn, payload_ptr],
-                    offset,
-                    false,
-                );
-            }
-            other => panic!("unsupported structural Option variant {other}"),
-        }
-    }
-
     fn lower_value_into_dest_offset(
         &self,
         rb: &mut RegionBuilder<'_>,
@@ -1868,8 +1803,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         self.option_defs.first().map(|(_, def)| *def)
     }
 
-    /// Lower an Option-like variant write using the HIR type info
-    /// with Shape-based vtable for init_none/init_some function pointers.
+    /// Lower an Option-like variant write using init_fn from HIR variant annotations.
     fn lower_option_variant_write_hir(
         &self,
         rb: &mut RegionBuilder<'_>,
@@ -1878,23 +1812,92 @@ impl<'a> StructuralHirIrLowerer<'a> {
         variant: &str,
         fields: &[(String, hir::Expr)],
     ) {
-        let opt_def = self.find_option_def(ty).unwrap_or_else(|| {
-            let hir::Type::Named { def, .. } = ty else {
-                panic!("Option variant write requires a Named type, got {ty:?}");
-            };
-            let type_def = &self.module.type_defs[*def];
-            let available: Vec<_> = self
-                .option_defs
-                .iter()
-                .map(|(s, _)| s.type_identifier)
-                .collect();
-            panic!(
-                "Option variant write requires OptionDef from Shape tree, \
-                 but none found for HIR type '{}' (available: {available:?})",
-                type_def.name
-            )
-        });
-        self.lower_option_variant_write(rb, offset, opt_def, variant, fields);
+        let hir::Type::Named { def, .. } = ty else {
+            panic!("Option variant write requires a Named type, got {ty:?}");
+        };
+        let type_def = &self.module.type_defs[*def];
+        let hir::TypeDefKind::Enum { variants, .. } = &type_def.kind else {
+            panic!("Option variant write requires an Enum type def");
+        };
+        let variant_def = variants
+            .iter()
+            .find(|v| v.name == variant)
+            .unwrap_or_else(|| panic!("missing Option variant {variant}"));
+
+        // Try to get init_fn from the HIR annotation first, fall back to Shape cache.
+        let init_fn_ptr = if let Some(ptr) = variant_def.init_fn {
+            ptr
+        } else {
+            // Fallback: look up from cached OptionDef (Shape-based).
+            let opt_def = self.find_option_def(ty).unwrap_or_else(|| {
+                panic!(
+                    "Option variant '{variant}' on '{}' has no init_fn annotation \
+                     and no OptionDef found in Shape cache",
+                    type_def.name
+                )
+            });
+            match variant {
+                "None" => opt_def.vtable.init_none as *const () as usize as u64,
+                "Some" => opt_def.vtable.init_some as *const () as usize as u64,
+                _ => panic!("unsupported Option variant {variant}"),
+            }
+        };
+
+        let offset = offset as u32;
+        match variant {
+            "None" => {
+                assert!(
+                    fields.is_empty(),
+                    "Option::None should not carry payload fields"
+                );
+                let init_fn = rb.const_val(init_fn_ptr);
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_option_init_none_ctx as *const () as usize,
+                    ),
+                    &[init_fn],
+                    offset,
+                    false,
+                );
+            }
+            "Some" => {
+                assert_eq!(
+                    fields.len(),
+                    1,
+                    "Option::Some should carry exactly one payload field"
+                );
+                let payload_ptr = match &fields[0].1 {
+                    hir::Expr::Local(local) => rb.slot_addr(self.local_slots[local].base_slot),
+                    hir::Expr::Literal(hir::Literal::Unit) => {
+                        let slot = rb.alloc_slot();
+                        rb.slot_addr(slot)
+                    }
+                    hir::Expr::Literal(hir::Literal::Bool(value)) => {
+                        let slot = rb.alloc_slot();
+                        let value = rb.const_val(u64::from(*value));
+                        rb.write_to_slot(slot, value);
+                        rb.slot_addr(slot)
+                    }
+                    hir::Expr::Literal(hir::Literal::Integer(value)) => {
+                        let slot = rb.alloc_slot();
+                        let value = rb.const_val(*value);
+                        rb.write_to_slot(slot, value);
+                        rb.slot_addr(slot)
+                    }
+                    other => panic!("unsupported structural Option payload: {other:?}"),
+                };
+                let init_fn = rb.const_val(init_fn_ptr);
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_option_init_some_ctx as *const () as usize,
+                    ),
+                    &[init_fn, payload_ptr],
+                    offset,
+                    false,
+                );
+            }
+            other => panic!("unsupported structural Option variant {other}"),
+        }
     }
 
     /// Lower a nested variant write (e.g. variant payload containing another variant).
