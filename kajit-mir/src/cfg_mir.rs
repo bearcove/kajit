@@ -1720,14 +1720,79 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
 /// ensuring consistent behavior between compilation and debug/test paths.
 pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
-    rematerialize_constants(&mut cfg);
-    local_cse(&mut cfg);
-    global_value_numbering(&mut cfg);
-    copy_propagation(&mut cfg);
-    fuse_compare_zero_branch(&mut cfg);
-    eliminate_immediate_only_const_defs(&mut cfg);
-    dead_code_elimination(&mut cfg);
+    let opts = CfgOptOptions::from_env();
+    if opts.enabled("remat") {
+        rematerialize_constants(&mut cfg);
+    }
+    if opts.enabled("cse") {
+        local_cse(&mut cfg);
+    }
+    if opts.enabled("gvn") {
+        global_value_numbering(&mut cfg);
+    }
+    if opts.enabled("copyprop") {
+        copy_propagation(&mut cfg);
+    }
+    if opts.enabled("fuse_cmpz") {
+        fuse_compare_zero_branch(&mut cfg);
+    }
+    if opts.enabled("elim_imm") {
+        eliminate_immediate_only_const_defs(&mut cfg);
+    }
+    if opts.enabled("dce") {
+        dead_code_elimination(&mut cfg);
+    }
     cfg
+}
+
+/// Controls which CFG-MIR optimization passes run.
+///
+/// Set `KAJIT_CFG_OPTS` to a comma-separated list of `+name` or `-name` tokens.
+/// Use `-all` to disable everything, then selectively re-enable with `+name`.
+///
+/// Pass names: `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`.
+///
+/// Examples:
+///   `KAJIT_CFG_OPTS=-all`           — disable all CFG opts
+///   `KAJIT_CFG_OPTS=-all,+copyprop` — only copy propagation
+///   `KAJIT_CFG_OPTS=-dce,-copyprop` — everything except DCE and copyprop
+struct CfgOptOptions {
+    default_enabled: bool,
+    overrides: std::collections::HashMap<String, bool>,
+}
+
+impl CfgOptOptions {
+    fn from_env() -> Self {
+        let raw = std::env::var("KAJIT_CFG_OPTS").unwrap_or_default();
+        let mut opts = Self {
+            default_enabled: true,
+            overrides: std::collections::HashMap::new(),
+        };
+        for token in raw.split(',') {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+            let (enabled, name) = match token.as_bytes()[0] {
+                b'+' => (true, &token[1..]),
+                b'-' => (false, &token[1..]),
+                _ => (true, token),
+            };
+            if name == "all" {
+                opts.default_enabled = enabled;
+            } else {
+                opts.overrides.insert(name.to_owned(), enabled);
+            }
+        }
+        opts
+    }
+
+    fn enabled(&self, name: &str) -> bool {
+        self.overrides
+            .get(name)
+            .copied()
+            .unwrap_or(self.default_enabled)
+    }
 }
 
 /// Fuse compare-with-zero followed by conditional branch into a direct branch.
