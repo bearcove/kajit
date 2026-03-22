@@ -1353,6 +1353,7 @@ fn postcard_structural_hir_ir_path_decodes_option_borrowed_field() {
 }
 
 mod hir_to_ir;
+mod integration;
 
 #[test]
 fn postcard_structural_hir_ir_path_decodes_scalar_arrays() {
