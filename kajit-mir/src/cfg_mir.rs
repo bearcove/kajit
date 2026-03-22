@@ -1710,9 +1710,7 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
     rematerialize_constants(&mut cfg);
     local_cse(&mut cfg);
-    // TODO: GVN pass implemented but disabled - regalloc errors on enum tests
-    // need to investigate why canonical vreg definitions aren't reaching uses
-    // global_value_numbering(&mut cfg);
+    global_value_numbering(&mut cfg);
     copy_propagation(&mut cfg);
     eliminate_immediate_only_const_defs(&mut cfg);
     dead_code_elimination(&mut cfg);
@@ -3119,10 +3117,6 @@ impl ScopedValueTable {
         self.scopes.push(HashMap::new());
     }
 
-    fn pop_scope(&mut self) {
-        self.scopes.pop();
-    }
-
     fn lookup(&self, key: &ValueKey) -> Option<VReg> {
         for scope in self.scopes.iter().rev() {
             if let Some(&vreg) = scope.get(key) {
@@ -3154,38 +3148,30 @@ fn global_value_numbering_in_function(func: &mut Function) {
         return;
     }
 
-    let dom_tree = DomTree::compute(func);
-    let mut table = ScopedValueTable::new();
-    let mut rewrite_map: HashMap<VReg, VReg> = HashMap::new();
-    let mut dead_insts: HashSet<InstId> = HashSet::new();
-    let mut visited_blocks: HashSet<BlockId> = HashSet::new();
+    // For now, we do per-block value numbering. True cross-block GVN would require
+    // ensuring the canonical vreg is live at the use site (via block params/edges).
+    // Local CSE already handles constants, so focus on BinOp/UnaryOp/SlotAddr/CallPure.
+    //
+    // Within each block, we can safely convert redundant computations to copies
+    // because the canonical vreg is defined earlier in the same block.
 
-    // DFS the dominator tree
-    fn visit(
-        block_id: BlockId,
-        func: &Function,
-        dom_tree: &DomTree,
-        table: &mut ScopedValueTable,
-        rewrite_map: &mut HashMap<VReg, VReg>,
-        dead_insts: &mut HashSet<InstId>,
-        visited_blocks: &mut HashSet<BlockId>,
-    ) {
-        visited_blocks.insert(block_id);
+    for block in &func.blocks {
+        let mut table = ScopedValueTable::new();
         table.push_scope();
 
-        let block = &func.blocks[block_id.index()];
+        // Map from InstId -> canonical VReg (instructions to convert to copies)
+        let mut convert_to_copy: Vec<(InstId, VReg)> = Vec::new();
 
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
 
-            if let Some(key) = make_value_key(&inst.op, rewrite_map) {
+            if let Some(key) = make_value_key_simple(&inst.op) {
                 if let Some(canonical) = table.lookup(&key) {
-                    // Found redundant computation - mark for rewrite
+                    // Found redundant computation - convert to copy
                     if let Some(dst) = get_def_vreg(&inst.op) {
-                        // Don't create self-mappings - that would eliminate def but keep uses pointing to it
+                        // Don't create self-copies
                         if dst != canonical {
-                            rewrite_map.insert(dst, canonical);
-                            dead_insts.insert(inst_id);
+                            convert_to_copy.push((inst_id, canonical));
                         }
                     }
                 } else {
@@ -3197,121 +3183,56 @@ fn global_value_numbering_in_function(func: &mut Function) {
             }
         }
 
-        // Visit dominated children
-        for &child in &dom_tree.children[block_id.index()] {
-            visit(
-                child,
-                func,
-                dom_tree,
-                table,
-                rewrite_map,
-                dead_insts,
-                visited_blocks,
-            );
-        }
-
-        table.pop_scope();
-    }
-
-    visit(
-        func.entry,
-        func,
-        &dom_tree,
-        &mut table,
-        &mut rewrite_map,
-        &mut dead_insts,
-        &mut visited_blocks,
-    );
-
-    // Verify all blocks were visited - if not, there's a bug in dominator tree
-    assert_eq!(
-        visited_blocks.len(),
-        func.blocks.len(),
-        "GVN: dominator tree traversal missed {} blocks (visited {}, total {})",
-        func.blocks.len() - visited_blocks.len(),
-        visited_blocks.len(),
-        func.blocks.len()
-    );
-    // Close rewrite_map transitively and break cycles.
-    // If we have A -> B and B -> C, we want A -> C.
-    // If we have A -> B and B -> A, we want to remove one (keep A alive).
-    let mut closed_map: HashMap<VReg, VReg> = HashMap::new();
-    for (&src, _) in &rewrite_map {
-        let mut current = src;
-        let mut visited = HashSet::new();
-        visited.insert(current);
-
-        while let Some(&next) = rewrite_map.get(&current) {
-            if visited.contains(&next) {
-                // Cycle detected - stop here, current is the canonical
-                break;
+        // Convert redundant instructions to copies
+        for (inst_id, canonical) in convert_to_copy {
+            let inst = &mut func.insts[inst_id.index()];
+            if let Some(dst) = get_def_vreg(&inst.op) {
+                inst.op = LinearOp::Copy {
+                    dst,
+                    src: canonical,
+                };
+                // Update operands: one Use of canonical, one Def of dst
+                inst.operands = vec![
+                    Operand {
+                        vreg: canonical,
+                        kind: OperandKind::Use,
+                        class: RegClass::Gpr,
+                        fixed: None,
+                    },
+                    Operand {
+                        vreg: dst,
+                        kind: OperandKind::Def,
+                        class: RegClass::Gpr,
+                        fixed: None,
+                    },
+                ];
             }
-            visited.insert(next);
-            current = next;
         }
-
-        if current != src {
-            closed_map.insert(src, current);
-        }
-    }
-
-    // Update dead_insts: only keep instructions whose dst is in closed_map
-    // (meaning they are truly redundant, not part of a kept cycle)
-    dead_insts.retain(|inst_id| {
-        if let Some(dst) = get_def_vreg(&func.insts[inst_id.index()].op) {
-            closed_map.contains_key(&dst)
-        } else {
-            true
-        }
-    });
-
-    // Apply rewrites to all operands
-    apply_rewrites(func, &closed_map);
-
-    // Remove dead instructions from blocks
-    for block in &mut func.blocks {
-        block.insts.retain(|id| !dead_insts.contains(id));
     }
 }
 
-/// Create a ValueKey for an instruction, canonicalizing operands through rewrite_map.
-fn make_value_key(op: &LinearOp, rewrite_map: &HashMap<VReg, VReg>) -> Option<ValueKey> {
-    // Follow transitive chains: if v1 -> v2 -> v3, then canon(v1) = v3
-    // Limit iterations to avoid infinite loops on cycles
-    fn canon(v: VReg, map: &HashMap<VReg, VReg>) -> VReg {
-        let mut current = v;
-        for _ in 0..100 {
-            match map.get(&current) {
-                Some(&next) if next != current => current = next,
-                _ => break,
-            }
-        }
-        current
-    }
-
+/// Create a ValueKey for an instruction (simple version without canonicalization).
+/// This is safe for the copy-conversion approach: we only deduplicate identical expressions.
+fn make_value_key_simple(op: &LinearOp) -> Option<ValueKey> {
     match op {
         LinearOp::Const { value, .. } => Some(ValueKey::Const(*value)),
 
         LinearOp::BinOp { op, lhs, rhs, .. } => Some(ValueKey::BinOp {
             op: *op,
-            lhs: canon(*lhs, rewrite_map),
-            rhs: canon(*rhs, rewrite_map),
+            lhs: *lhs,
+            rhs: *rhs,
         }),
 
-        LinearOp::UnaryOp { op, src, .. } => Some(ValueKey::UnaryOp {
-            op: *op,
-            src: canon(*src, rewrite_map),
-        }),
+        LinearOp::UnaryOp { op, src, .. } => Some(ValueKey::UnaryOp { op: *op, src: *src }),
 
-        // Don't value-number Copy - it's handled by copy_propagation and creates
-        // complex chains that can become self-referential. Focus on Const/BinOp.
+        // Don't value-number Copy - it's handled by copy_propagation
         LinearOp::Copy { .. } => None,
 
         LinearOp::SlotAddr { slot, .. } => Some(ValueKey::SlotAddr(*slot)),
 
         LinearOp::CallPure { func, args, .. } => Some(ValueKey::CallPure {
             func: *func,
-            args: args.iter().map(|v| canon(*v, rewrite_map)).collect(),
+            args: args.clone(),
         }),
 
         // Side-effecting operations cannot be value-numbered
@@ -3329,111 +3250,6 @@ fn get_def_vreg(op: &LinearOp) -> Option<VReg> {
         | LinearOp::SlotAddr { dst, .. }
         | LinearOp::CallPure { dst, .. } => Some(*dst),
         _ => None,
-    }
-}
-
-/// Apply rewrite map to all vreg uses in the function.
-fn apply_rewrites(func: &mut Function, rewrite_map: &HashMap<VReg, VReg>) {
-    if rewrite_map.is_empty() {
-        return;
-    }
-
-    // Follow transitive chains: if v1 -> v2 -> v3, then canon(v1) = v3
-    // Limit iterations to avoid infinite loops on cycles
-    fn canon(v: VReg, map: &HashMap<VReg, VReg>) -> VReg {
-        let mut current = v;
-        for _ in 0..100 {
-            match map.get(&current) {
-                Some(&next) if next != current => current = next,
-                _ => break,
-            }
-        }
-        current
-    }
-
-    // Rewrite instruction operands
-    for inst in &mut func.insts {
-        match &mut inst.op {
-            LinearOp::BinOp { lhs, rhs, .. } => {
-                *lhs = canon(*lhs, rewrite_map);
-                *rhs = canon(*rhs, rewrite_map);
-            }
-            LinearOp::UnaryOp { src, .. } => {
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::Copy { src, .. } => {
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::WriteToField { src, .. } => {
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::StoreToAddr { addr, src, .. } => {
-                *addr = canon(*addr, rewrite_map);
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::LoadFromAddr { addr, .. } => {
-                *addr = canon(*addr, rewrite_map);
-            }
-            LinearOp::WriteToSlot { src, .. } => {
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::AdvanceCursorBy { src } => {
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::RestoreCursor { src } => {
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::SetOutPtr { src } => {
-                *src = canon(*src, rewrite_map);
-            }
-            LinearOp::CallIntrinsic { args, .. } => {
-                for arg in args {
-                    *arg = canon(*arg, rewrite_map);
-                }
-            }
-            LinearOp::CallPure { args, .. } => {
-                for arg in args {
-                    *arg = canon(*arg, rewrite_map);
-                }
-            }
-            LinearOp::CallLambda { args, .. } => {
-                for arg in args {
-                    *arg = canon(*arg, rewrite_map);
-                }
-            }
-            LinearOp::SimdStringScan { pos, kind } => {
-                *pos = canon(*pos, rewrite_map);
-                *kind = canon(*kind, rewrite_map);
-            }
-            _ => {}
-        }
-
-        // Also rewrite operands vec
-        for operand in &mut inst.operands {
-            if operand.kind == OperandKind::Use {
-                operand.vreg = canon(operand.vreg, rewrite_map);
-            }
-        }
-    }
-
-    // Rewrite terminators
-    for term in &mut func.terms {
-        match term {
-            Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
-                *cond = canon(*cond, rewrite_map);
-            }
-            Terminator::JumpTable { predicate, .. } => {
-                *predicate = canon(*predicate, rewrite_map);
-            }
-            _ => {}
-        }
-    }
-
-    // Rewrite edge arguments
-    for edge in &mut func.edges {
-        for arg in &mut edge.args {
-            arg.source = canon(arg.source, rewrite_map);
-        }
     }
 }
 
@@ -4200,33 +4016,38 @@ mod tests {
     }
 
     #[test]
-    fn gvn_eliminates_duplicate_const_in_single_block() {
+    fn gvn_converts_duplicate_const_to_copy() {
         // v0 = const 42
         // v1 = const 42  <- redundant
-        // After GVN: v1 eliminated, uses rewritten to v0
+        // After GVN: v1 = copy v0
         let mut func = single_block_func(vec![make_const(0, 0, 42), make_const(1, 1, 42)]);
 
         global_value_numbering_in_function(&mut func);
 
+        // Both instructions should still exist
         assert_eq!(
             func.blocks[0].insts.len(),
-            1,
-            "one const should be eliminated"
+            2,
+            "both instructions should remain"
         );
-        assert_eq!(
-            func.blocks[0].insts[0],
-            InstId(0),
-            "first const should survive"
-        );
+
+        // Second should be converted to copy
+        match &func.insts[1].op {
+            LinearOp::Copy { dst, src } => {
+                assert_eq!(dst.index(), 1, "dst should be v1");
+                assert_eq!(src.index(), 0, "src should be v0");
+            }
+            other => panic!("expected Copy, got {:?}", other),
+        }
     }
 
     #[test]
-    fn gvn_eliminates_redundant_binop() {
+    fn gvn_converts_redundant_binop_to_copy() {
         // v0 = const 1
         // v1 = const 2
         // v2 = add v0, v1
         // v3 = add v0, v1  <- redundant
-        // After GVN: v3 eliminated
+        // After GVN: v3 = copy v2
         let mut func = single_block_func(vec![
             make_const(0, 0, 1),
             make_const(1, 1, 2),
@@ -4236,19 +4057,28 @@ mod tests {
 
         global_value_numbering_in_function(&mut func);
 
+        // All 4 instructions should remain
         assert_eq!(
             func.blocks[0].insts.len(),
-            3,
-            "redundant add should be eliminated"
+            4,
+            "all instructions should remain"
         );
+
+        // Fourth should be converted to copy
+        match &func.insts[3].op {
+            LinearOp::Copy { dst, src } => {
+                assert_eq!(dst.index(), 3, "dst should be v3");
+                assert_eq!(src.index(), 2, "src should be v2");
+            }
+            other => panic!("expected Copy, got {:?}", other),
+        }
     }
 
     #[test]
-    fn gvn_rewrites_uses_to_canonical() {
+    fn gvn_preserves_uses_after_copy_conversion() {
         // v0 = const 42
-        // v1 = const 42  <- redundant, should map to v0
-        // v2 = add v1, v1
-        // After GVN: v2 = add v0, v0
+        // v1 = const 42  <- converted to copy
+        // v2 = add v1, v1  <- uses remain as v1 (copy prop will handle later)
         let mut func = single_block_func(vec![
             make_const(0, 0, 42),
             make_const(1, 1, 42),
@@ -4257,21 +4087,21 @@ mod tests {
 
         global_value_numbering_in_function(&mut func);
 
-        // Check that add now uses v0
+        // Check that add still uses v1 (copy propagation handles rewriting)
         match &func.insts[2].op {
             LinearOp::BinOp { lhs, rhs, .. } => {
-                assert_eq!(lhs.index(), 0, "lhs should be rewritten to v0");
-                assert_eq!(rhs.index(), 0, "rhs should be rewritten to v0");
+                assert_eq!(lhs.index(), 1, "lhs should still be v1");
+                assert_eq!(rhs.index(), 1, "rhs should still be v1");
             }
             other => panic!("expected BinOp, got {:?}", other),
         }
     }
 
     #[test]
-    fn gvn_across_dominated_blocks() {
+    fn gvn_per_block_no_cross_block() {
         // b0: v0 = const 42; branch to b1
-        // b1: v1 = const 42  <- redundant, b0 dominates b1
-        // After GVN: v1 eliminated
+        // b1: v1 = const 42  <- NOT eliminated (cross-block GVN disabled)
+        // Per-block GVN only affects instructions within the same block.
         let mut func = Function {
             id: FunctionId(0),
             lambda_id: LambdaId::new(0),
@@ -4308,12 +4138,20 @@ mod tests {
 
         global_value_numbering_in_function(&mut func);
 
+        // Both blocks keep their const (no cross-block optimization)
         assert_eq!(func.blocks[0].insts.len(), 1, "b0 keeps its const");
         assert_eq!(
             func.blocks[1].insts.len(),
-            0,
-            "b1's redundant const should be eliminated"
+            1,
+            "b1 keeps its const (per-block GVN only)"
         );
+        // b1's instruction should still be a Const, not a Copy
+        match &func.insts[1].op {
+            LinearOp::Const { value, .. } => {
+                assert_eq!(*value, 42);
+            }
+            other => panic!("expected Const, got {:?}", other),
+        }
     }
 
     #[test]
