@@ -1,9 +1,9 @@
 use kajit_hir_text::parse_hir;
 use serde::Serialize;
 
-use super::postcard_hir::PostcardHirLowerer;
 use super::*;
 use facet::Facet;
+use kajit_postcard::PostcardHirLowerer;
 
 #[derive(Facet)]
 struct Wrapper<T> {

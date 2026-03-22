@@ -7,8 +7,8 @@ use super::*;
 
 // Re-export everything from kajit-format's shape_utils.
 pub(super) use kajit_format::{
-    collect_variants, discriminant_size, get_option_def, get_pointer_def,
-    instantiated_shape_symbol_key, is_string_like_scalar, is_unit,
+    collect_variants, discriminant_size, get_option_def, instantiated_shape_symbol_key,
+    is_string_like_scalar,
 };
 
 /// Collect fields using kajit's intrinsic trampolines for default resolution.

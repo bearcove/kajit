@@ -6,6 +6,7 @@ members = [
   "kajit-hir",
   "kajit-json",
   "kajit-malum",
+  "kajit-postcard",
   "kajit-hir-text",
   "kajit-ir",
   "kajit-ir-text",

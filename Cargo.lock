@@ -604,6 +604,7 @@ dependencies = [
  "kajit-malum",
  "kajit-mir",
  "kajit-mir-text",
+ "kajit-postcard",
  "libc",
  "postcard",
  "proptest",
@@ -719,6 +720,16 @@ dependencies = [
  "kajit-ir",
  "kajit-lir",
  "kajit-mir",
+]
+
+[[package]]
+name = "kajit-postcard"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kajit-format",
+ "kajit-hir",
+ "kajit-malum",
 ]
 
 [[package]]

@@ -1,8 +1,26 @@
-//! Postcard HIR generation — builds hir::Module from facet Shape for postcard format.
+//! Postcard HIR generation — builds `hir::Module` from facet `Shape` for postcard format.
 
-use super::*;
+use std::collections::HashMap;
 
-pub(crate) struct PostcardHirLowerer {
+use facet::{Def, EnumRepr, ListDef, ScalarType, Shape, Type, UserType};
+use kajit_format::{
+    collect_variants, get_option_def, get_pointer_def, is_unit, FieldEmitInfo, SkippedFieldInfo,
+};
+use kajit_hir as hir;
+
+/// Wrapper around `kajit_format::collect_fields` using no-op default resolvers.
+///
+/// Postcard HIR generation asserts that no fields have defaults or are skipped,
+/// so the resolvers are never actually invoked.
+fn collect_fields(
+    shape: &'static Shape,
+) -> (Vec<FieldEmitInfo>, Vec<SkippedFieldInfo>) {
+    kajit_format::collect_fields(shape, |_| None, |_| {
+        panic!("postcard HIR does not support custom defaults")
+    })
+}
+
+pub struct PostcardHirLowerer {
     module: hir::Module,
     input_region: hir::RegionId,
     cursor_type: hir::TypeDefId,
@@ -10,13 +28,13 @@ pub(crate) struct PostcardHirLowerer {
     bits128_raw_type: Option<hir::TypeDefId>,
     type_defs_by_shape: HashMap<*const Shape, hir::TypeDefId>,
     callables_by_name: HashMap<&'static str, hir::CallableId>,
-    pub(crate) locals: Vec<hir::LocalDecl>,
+    pub locals: Vec<hir::LocalDecl>,
     next_local: u32,
     next_stmt: u32,
 }
 
 impl PostcardHirLowerer {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         let mut module = hir::Module::new();
         let input_region = module.add_region("input");
         let cursor_type = module.add_type_def(hir::TypeDef {
@@ -62,7 +80,7 @@ impl PostcardHirLowerer {
         id
     }
 
-    pub(crate) fn next_stmt_id(&mut self) -> hir::StmtId {
+    pub fn next_stmt_id(&mut self) -> hir::StmtId {
         let id = hir::StmtId::new(self.next_stmt);
         self.next_stmt += 1;
         id
@@ -161,7 +179,7 @@ impl PostcardHirLowerer {
         self.type_defs_by_shape.insert(key, type_id);
 
         let kind = if let Def::List(list_def) = &shape.def {
-            let offsets = crate::malum::discover_vec_offsets(list_def, shape);
+            let offsets = kajit_malum::discover_vec_offsets(list_def, shape);
             let mut fields = vec![
                 (
                     offsets.ptr_offset,
@@ -269,7 +287,7 @@ impl PostcardHirLowerer {
         if let Some(existing) = self.string_raw_type {
             return existing;
         }
-        let offsets = crate::malum::discover_string_offsets();
+        let offsets = kajit_malum::discover_string_offsets();
         let mut fields = vec![
             (
                 offsets.ptr_offset,
@@ -1880,7 +1898,7 @@ impl PostcardHirLowerer {
                     return;
                 }
                 ScalarType::String => {
-                    let offsets = crate::malum::discover_string_offsets();
+                    let offsets = kajit_malum::discover_string_offsets();
                     for (offset, field) in [
                         (offsets.ptr_offset as usize, "ptr"),
                         (offsets.len_offset as usize, "len"),
@@ -2376,7 +2394,7 @@ impl PostcardHirLowerer {
         );
     }
 
-    pub(crate) fn lower_shape_into_place(
+    pub fn lower_shape_into_place(
         &mut self,
         statements: &mut Vec<hir::Stmt>,
         cursor_local: hir::LocalId,
@@ -2711,7 +2729,7 @@ impl PostcardHirLowerer {
     }
 }
 
-pub(crate) fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
+pub fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
     let mut lowerer = PostcardHirLowerer::new();
     let root_type = lowerer.lower_type(shape);
     let cursor_local = lowerer.next_local();
@@ -2769,7 +2787,7 @@ pub(crate) fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
 
     lowerer.finish()
 }
-pub(crate) fn supports_postcard_decoder_hir(shape: &'static Shape) -> bool {
+pub fn supports_postcard_decoder_hir(shape: &'static Shape) -> bool {
     fn fields_are_supported(shape: &'static Shape) -> bool {
         let (fields, skipped) = collect_fields(shape);
         skipped.is_empty()
