@@ -2332,8 +2332,6 @@ pub fn eliminate_immediate_only_const_defs(program: &mut Program) {
 }
 
 fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
-    use kajit_lir::BinOpKind;
-
     // Step 1: Build map of const vreg -> value
     let mut const_values: HashMap<VReg, u64> = HashMap::new();
     for inst in &func.insts {
