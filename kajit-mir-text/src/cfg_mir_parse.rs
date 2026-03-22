@@ -177,9 +177,12 @@ enum AstOp {
     Advance(u32),
     AdvanceBy,
     SaveCursor,
+    SaveInputEnd,
     RestoreCursor,
     Store(u32, Width),
     Load(u32, Width),
+    StoreAddr(Width),
+    LoadAddr(Width),
     SaveOutPtr,
     SetOutPtr,
     SlotAddr(u32),
@@ -228,6 +231,14 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .then(width())
             .then_ignore(just("])"))
             .map(|(o, w)| AstOp::Load(o, w)),
+        just("store_addr([")
+            .ignore_then(width())
+            .then_ignore(just("])"))
+            .map(AstOp::StoreAddr),
+        just("load_addr([")
+            .ignore_then(width())
+            .then_ignore(just("])"))
+            .map(AstOp::LoadAddr),
         just("slot_addr(")
             .ignore_then(uint32())
             .then_ignore(just(")"))
@@ -272,6 +283,11 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
         just("Shl").to(AstOp::BinOp(BinOpKind::Shl)),
         just("Xor").to(AstOp::BinOp(BinOpKind::Xor)),
         just("CmpNe").to(AstOp::BinOp(BinOpKind::CmpNe)),
+        just("CmpEq").to(AstOp::BinOp(BinOpKind::CmpEq)),
+        just("CmpLt").to(AstOp::BinOp(BinOpKind::CmpLt)),
+        just("CmpLe").to(AstOp::BinOp(BinOpKind::CmpLe)),
+        just("CmpGt").to(AstOp::BinOp(BinOpKind::CmpGt)),
+        just("CmpGe").to(AstOp::BinOp(BinOpKind::CmpGe)),
     ));
 
     let unaryops = choice((
@@ -290,6 +306,7 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
         just("peek_byte").to(AstOp::PeekByte),
         just("advance_by").to(AstOp::AdvanceBy),
         just("save_cursor").to(AstOp::SaveCursor),
+        just("save_input_end").to(AstOp::SaveInputEnd),
         just("restore_cursor").to(AstOp::RestoreCursor),
         just("save_out_ptr").to(AstOp::SaveOutPtr),
         just("set_out_ptr").to(AstOp::SetOutPtr),
@@ -849,14 +866,16 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
                 message: format!("inst i{} unary op missing src", ast.id.0),
             })?,
         },
-        AstOp::Copy => LinearOp::Copy {
-            dst: dst.ok_or_else(|| ParseError {
-                message: format!("inst i{} copy missing dst", ast.id.0),
-            })?,
-            src: src.ok_or_else(|| ParseError {
-                message: format!("inst i{} copy missing src", ast.id.0),
-            })?,
-        },
+        AstOp::Copy => {
+            match (dst, src) {
+                (Some(d), Some(s)) => LinearOp::Copy { dst: d, src: s },
+                // Dead copy with no operands — emit as identity nop
+                _ => LinearOp::Copy {
+                    dst: VReg::new(0),
+                    src: VReg::new(0),
+                },
+            }
+        }
         AstOp::BoundsCheck(count) => LinearOp::BoundsCheck { count: *count },
         AstOp::ReadBytes(count) => LinearOp::ReadBytes {
             dst: dst.ok_or_else(|| ParseError {
@@ -880,10 +899,47 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
                 message: format!("inst i{} save_cursor missing dst", ast.id.0),
             })?,
         },
+        AstOp::SaveInputEnd => LinearOp::SaveInputEnd {
+            dst: dst.ok_or_else(|| ParseError {
+                message: format!("inst i{} save_input_end missing dst", ast.id.0),
+            })?,
+        },
         AstOp::RestoreCursor => LinearOp::RestoreCursor {
             src: src.ok_or_else(|| ParseError {
                 message: format!("inst i{} restore_cursor missing src", ast.id.0),
             })?,
+        },
+        AstOp::StoreAddr(width) => {
+            let addr = ast
+                .body
+                .uses
+                .first()
+                .map(|(v, _, _)| *v)
+                .ok_or_else(|| ParseError {
+                    message: format!("inst i{} store_addr missing addr operand", ast.id.0),
+                })?;
+            let src_val = ast
+                .body
+                .uses
+                .get(1)
+                .map(|(v, _, _)| *v)
+                .ok_or_else(|| ParseError {
+                    message: format!("inst i{} store_addr missing src operand", ast.id.0),
+                })?;
+            LinearOp::StoreToAddr {
+                addr,
+                src: src_val,
+                width: *width,
+            }
+        }
+        AstOp::LoadAddr(width) => LinearOp::LoadFromAddr {
+            dst: dst.ok_or_else(|| ParseError {
+                message: format!("inst i{} load_addr missing dst", ast.id.0),
+            })?,
+            addr: src.ok_or_else(|| ParseError {
+                message: format!("inst i{} load_addr missing src (addr)", ast.id.0),
+            })?,
+            width: *width,
         },
         AstOp::Store(offset, width) => LinearOp::WriteToField {
             src: src.ok_or_else(|| ParseError {
