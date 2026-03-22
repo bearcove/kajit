@@ -2866,3 +2866,23 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         }
     }
 }
+
+#[test]
+fn postcard_option_scalar_matches_differential_harness() {
+    let module = build_postcard_decoder_hir(<MaybeCount>::SHAPE);
+    let mut func = build_structural_hir_ir(<MaybeCount>::SHAPE, &module);
+    run_default_passes_from_env(&mut func);
+    let linear = crate::linearize::linearize(&mut func);
+    let output_size = std::mem::size_of::<MaybeCount>();
+    let report = crate::differential_check_linear_ir_vs_jit_with_output_size(
+        &linear,
+        &[1, 42], // Some(42) in postcard
+        output_size,
+    )
+    .expect("differential harness should execute option decoder");
+    assert!(
+        report.is_match(),
+        "interpreter vs JIT mismatch for option Some(42): {:?}",
+        report.mismatch
+    );
+}
