@@ -1044,7 +1044,7 @@ impl TempTermBlock {
 fn is_terminator(op: &LinearOp) -> bool {
     matches!(
         op,
-        LinearOp::Branch(_)
+        LinearOp::Branch { .. }
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. }
@@ -1170,7 +1170,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::AdvanceCursor { .. }
         | LinearOp::SimdWhitespaceSkip => {}
         LinearOp::Label(_)
-        | LinearOp::Branch(_)
+        | LinearOp::Branch { .. }
         | LinearOp::BranchIf { .. }
         | LinearOp::BranchIfZero { .. }
         | LinearOp::JumpTable { .. }
@@ -1352,7 +1352,7 @@ fn lower_function(
             let op_scope = op_scopes.get(cursor).copied().flatten();
             let op_value = op_values.get(cursor).copied().flatten();
             match ops[cursor].clone() {
-                LinearOp::Branch(target) => {
+                LinearOp::Branch { target, .. } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }
@@ -1363,7 +1363,7 @@ fn lower_function(
                     cursor += 1;
                     break;
                 }
-                LinearOp::BranchIf { cond, target } => {
+                LinearOp::BranchIf { cond, target, .. } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }
@@ -1374,7 +1374,7 @@ fn lower_function(
                     cursor += 1;
                     break;
                 }
-                LinearOp::BranchIfZero { cond, target } => {
+                LinearOp::BranchIfZero { cond, target, .. } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }

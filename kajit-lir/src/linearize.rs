@@ -167,16 +167,26 @@ pub enum LinearOp {
 
     // ── Control flow ──
     Label(LabelId),
-    Branch(LabelId),
-    /// Branch if condition is nonzero.
+    /// Unconditional branch. `args` are source vregs passed to the target
+    /// block's params (positional, matching `block_params` order).
+    Branch {
+        target: LabelId,
+        args: Vec<VReg>,
+    },
+    /// Branch if condition is nonzero. `args` / `fallthrough_args` are source
+    /// vregs for the taken / fallthrough block params respectively.
     BranchIf {
         cond: VReg,
         target: LabelId,
+        args: Vec<VReg>,
+        fallthrough_args: Vec<VReg>,
     },
-    /// Branch if condition is zero.
+    /// Branch if condition is zero. Same arg semantics as BranchIf.
     BranchIfZero {
         cond: VReg,
         target: LabelId,
+        args: Vec<VReg>,
+        fallthrough_args: Vec<VReg>,
     },
     /// Jump table: jump to `labels[predicate]`, or to `default` if out of range.
     JumpTable {
@@ -752,9 +762,17 @@ impl<'a> Linearizer<'a> {
                 LinearOp::BranchIfZero {
                     cond: predicate,
                     target: branch_labels[0],
+                    args: vec![],
+                    fallthrough_args: vec![],
                 },
             );
-            self.emit(Some(node.debug_scope), LinearOp::Branch(branch_labels[1]));
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::Branch {
+                    target: branch_labels[1],
+                    args: vec![],
+                },
+            );
         } else {
             // General case: jump table
             self.emit(
@@ -799,7 +817,10 @@ impl<'a> Linearizer<'a> {
                 if branch_idx < branch_count - 1 {
                     self.emit(
                         Some(self.func.regions[region_id].debug_scope),
-                        LinearOp::Branch(merge_label),
+                        LinearOp::Branch {
+                            target: merge_label,
+                            args: vec![],
+                        },
                     );
                 }
             }
@@ -971,6 +992,8 @@ impl<'a> Linearizer<'a> {
             LinearOp::BranchIf {
                 cond: predicate_vreg,
                 target: loop_top,
+                args: vec![],
+                fallthrough_args: vec![],
             },
         );
 
@@ -1077,7 +1100,7 @@ struct LinearBlock {
 fn is_block_terminator(op: &LinearOp) -> bool {
     matches!(
         op,
-        LinearOp::Branch(_)
+        LinearOp::Branch { .. }
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. }
@@ -1118,7 +1141,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
-        | LinearOp::Branch(_)
+        | LinearOp::Branch { .. }
         | LinearOp::ErrorExit { .. }
         | LinearOp::SimdWhitespaceSkip
         | LinearOp::FuncStart { .. } => Vec::new(),
@@ -1154,7 +1177,7 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         | LinearOp::StoreToAddr { .. }
         | LinearOp::WriteToSlot { .. }
         | LinearOp::Label(_)
-        | LinearOp::Branch(_)
+        | LinearOp::Branch { .. }
         | LinearOp::BranchIf { .. }
         | LinearOp::BranchIfZero { .. }
         | LinearOp::JumpTable { .. }
@@ -1230,7 +1253,7 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
-        | LinearOp::Branch(_)
+        | LinearOp::Branch { .. }
         | LinearOp::ErrorExit { .. }
         | LinearOp::SimdWhitespaceSkip
         | LinearOp::FuncStart { .. }
@@ -1278,7 +1301,7 @@ fn build_blocks(ops: &[LinearOp]) -> Vec<LinearBlock> {
         let mut succs = Vec::new();
         let term = &ops[blocks[bi].end - 1];
         match term {
-            LinearOp::Branch(label) => {
+            LinearOp::Branch { target: label, .. } => {
                 succs.push(
                     *label_to_block
                         .get(label)
@@ -1786,13 +1809,13 @@ fn fmt_op(
             }
             write!(f, ")")
         }
-        LinearOp::Branch(target) => write!(f, "br L{}", target.index()),
-        LinearOp::BranchIf { cond, target } => {
+        LinearOp::Branch { target, .. } => write!(f, "br L{}", target.index()),
+        LinearOp::BranchIf { cond, target, .. } => {
             write!(f, "br_if ")?;
             fmt_vreg(f, *cond)?;
             write!(f, " L{}", target.index())
         }
-        LinearOp::BranchIfZero { cond, target } => {
+        LinearOp::BranchIfZero { cond, target, .. } => {
             write!(f, "br_zero ")?;
             fmt_vreg(f, *cond)?;
             write!(f, " L{}", target.index())

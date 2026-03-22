@@ -744,7 +744,7 @@ impl Lowerer {
             LinearOp::FuncStart { .. }
             | LinearOp::FuncEnd
             | LinearOp::Label(_)
-            | LinearOp::Branch(_)
+            | LinearOp::Branch { .. }
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. } => {
