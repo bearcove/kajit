@@ -768,6 +768,11 @@ pub enum IrOp {
     /// No-op placeholder for removed nodes (used during optimization passes).
     /// Inputs: []. Outputs: [].
     Nop,
+
+    /// Identity copy — passes input through unchanged.
+    /// Used by slot2reg to break self-referential theta loop vars.
+    /// Inputs: [Data]. Outputs: [Data].
+    Identity,
 }
 
 // ─── Effect classification ──────────────────────────────────────────────────
@@ -864,6 +869,7 @@ impl IrOp {
 
             // No-op (removed by optimization)
             IrOp::Nop => (Effect::Pure, Some(0)),
+            IrOp::Identity => (Effect::Pure, Some(0)),
         };
 
         IrOpMetadata {
@@ -2604,6 +2610,7 @@ impl IrFunc {
             IrOp::SimdStringScan => write!(f, "SimdStringScan"),
             IrOp::SimdWhitespaceSkip => write!(f, "SimdWhitespaceSkip"),
             IrOp::Nop => write!(f, "Nop"),
+            IrOp::Identity => write!(f, "Identity"),
         }
     }
 

@@ -1,0 +1,27 @@
+---
+source: kajit-ir-text/src/slot2reg_tests.rs
+expression: ir
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+}
+scopes {
+  s0 = lambda_body(@0)
+  s1 = theta_body parent s0
+}
+lambda @0 @s0 (shape: "test") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 = Const(0x2a) [] -> [v0]
+    n6 = theta [v0, %cs:arg, %os:arg] {
+      region @s1 {
+        args: [arg0, %cs, %os]
+        n4 = WriteToField(offset=0, W4) [arg0, %os:arg] -> [%os]
+        n5 = Const(0x0) [] -> [v2]
+        results: [v2, arg0, %cs:arg, %os:n4]
+      }
+    } -> [v3, %cs, %os]
+    results: [%cs:n6, %os:n6]
+  }
+}

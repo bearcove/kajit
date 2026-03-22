@@ -1,0 +1,40 @@
+---
+source: kajit-ir-text/src/slot2reg_tests.rs
+expression: ir
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+}
+scopes {
+  s0 = lambda_body(@0)
+  s1 = gamma_branch(0) parent s0
+  s2 = gamma_branch(1) parent s0
+}
+lambda @0 @s0 (shape: "test") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 = Const(0x0) [] -> [v0]
+    n3 = Const(0x0) [] -> [v1]
+    n6 = gamma [
+      pred: v1
+      in0: v0
+      in1: %cs:arg
+      in2: %os:arg
+    ] {
+      branch 0:
+        region @s1 {
+          args: [arg0, %cs, %os]
+          results: [arg0, %cs:arg, %os:arg]
+        }
+      branch 1:
+        region @s2 {
+          args: [arg0, %cs, %os]
+          n4 = Const(0x63) [] -> [v2]
+          results: [v2, %cs:arg, %os:arg]
+        }
+    } -> [v4, %cs, %os]
+    n8 = WriteToField(offset=0, W4) [v4, %os:n6] -> [%os]
+    results: [%cs:n6, %os:n8]
+  }
+}

@@ -714,6 +714,12 @@ impl<'a> Linearizer<'a> {
             IrOp::Nop => {
                 // No-op; skip.
             }
+            IrOp::Identity => {
+                let dst = node.outputs[0].vreg.expect("identity must have vreg");
+                let src = self.resolve_vreg(node.inputs[0].source);
+                self.record_vreg_scope(dst, node.outputs[0].debug_scope);
+                self.emit_node(node, LinearOp::Copy { dst, src });
+            }
         }
     }
 
@@ -781,12 +787,9 @@ impl<'a> Linearizer<'a> {
             // Linearize the branch body.
             self.linearize_region(region_id);
 
-            // Skip exit copies and merge branch if the branch ends with an error exit
-            // (unreachable code after error_exit causes regalloc issues).
-            let ends_with_error = self
-                .ops
-                .last()
-                .is_some_and(|op| matches!(op, LinearOp::ErrorExit { .. }));
+            // Skip exit copies and merge branch if the branch contains an error exit
+            // (code after error_exit is unreachable and causes regalloc issues).
+            let ends_with_error = self.region_is_error_only(region_id);
 
             if !ends_with_error {
                 // Emit copies for region results → gamma output vregs.
@@ -803,6 +806,28 @@ impl<'a> Linearizer<'a> {
         }
 
         self.emit(Some(node.debug_scope), LinearOp::Label(merge_label));
+    }
+
+    /// Check if a region's ONLY code path is an error exit (no normal return).
+    /// A region is error-only if it directly contains ErrorExit and no gamma/theta
+    /// nodes (which would provide alternative code paths).
+    fn region_is_error_only(&self, region_id: RegionId) -> bool {
+        let region = &self.func.regions[region_id];
+        let has_error = region.nodes.iter().any(|&nid| {
+            matches!(
+                &self.func.nodes[nid].kind,
+                NodeKind::Simple(IrOp::ErrorExit { .. })
+            )
+        });
+        let has_structural = region.nodes.iter().any(|&nid| {
+            matches!(
+                &self.func.nodes[nid].kind,
+                NodeKind::Gamma { .. } | NodeKind::Theta { .. }
+            )
+        });
+        // If the region has an error exit and no structural nodes (gamma/theta),
+        // it's purely an error path.
+        has_error && !has_structural
     }
 
     /// Emit Copy ops for passthrough data inputs entering a gamma branch region.
@@ -918,14 +943,16 @@ impl<'a> Linearizer<'a> {
 
         // Emit copies for body results → body region args (feedback).
         // Results[1..1+loop_var_count] → args[0..loop_var_count]
+        // NOTE: We must emit copies even when src == dst on loop back-edges
+        // so that regalloc2 sees the block parameter definition. Without this,
+        // promoted loop-carried slots that don't change produce self-referential
+        // block params that regalloc2 can't handle.
         for i in 0..loop_var_count {
             let result = &self.func.region_results[body_region.results[i + 1]]; // +1 to skip predicate
             if result.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(result.source);
                 let arg = &self.func.region_args[body_region.args[i]];
-                if let Some(dst_vreg) = arg.vreg
-                    && src_vreg != dst_vreg
-                {
+                if let Some(dst_vreg) = arg.vreg {
                     self.emit(
                         Some(body_region.debug_scope),
                         LinearOp::Copy {

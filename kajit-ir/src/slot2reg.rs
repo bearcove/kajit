@@ -7,31 +7,30 @@
 //!
 //! This is analogous to LLVM's mem2reg pass (alloca → SSA promotion).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::{
     InputPort, IrFunc, IrOp, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
     RegionArg, RegionArgRef, RegionId, RegionResult, SlotId,
 };
 
+/// Pre-computed slot access information for each region.
+/// Maps region → set of slots accessed anywhere in that region's sub-tree.
+type SlotAccessMap = HashMap<RegionId, BTreeSet<SlotId>>;
+
 /// Run the slot-to-register promotion pass.
 pub fn slot_to_reg(func: &mut IrFunc) {
-    // TODO: disabled — passes verification and simple scalars, but complex
-    // cases produce wrong output due to over-aggressive slot threading.
-    // The fix: thread only slots that are ACCESSED in sub-regions (not all known slots),
-    // but ensure proper scoping by replacing parent-scope values with region args.
-    let _ = func;
-    return;
-
-    #[allow(unreachable_code)]
     let all_slots = collect_all_slots(func);
     if all_slots.is_empty() {
         return;
     }
 
+    // Pre-compute slot accesses for every region BEFORE we start modifying the IR.
+    let slot_access = precompute_slot_access(func);
+
     let lambda_body = find_lambda_body(func);
     let initial_values: BTreeMap<SlotId, PortSource> = BTreeMap::new();
-    promote_region(func, lambda_body, &all_slots, initial_values);
+    promote_region(func, lambda_body, &all_slots, &slot_access, initial_values);
 }
 
 fn collect_all_slots(func: &IrFunc) -> BTreeSet<SlotId> {
@@ -57,12 +56,68 @@ fn find_lambda_body(func: &IrFunc) -> RegionId {
     panic!("no lambda found in IR");
 }
 
+/// Pre-compute, for each region, the set of slots accessed anywhere in its sub-tree.
+/// This is done once before any modifications so it's stable.
+fn precompute_slot_access(func: &IrFunc) -> SlotAccessMap {
+    let mut map: SlotAccessMap = HashMap::new();
+    // Process all regions. For each, collect direct slot ops + recurse into sub-regions.
+    let region_ids: Vec<RegionId> = func.regions.iter().map(|(id, _)| id).collect();
+    for &region_id in &region_ids {
+        if !map.contains_key(&region_id) {
+            compute_region_slots(func, region_id, &mut map);
+        }
+    }
+    map
+}
+
+fn compute_region_slots(
+    func: &IrFunc,
+    region_id: RegionId,
+    map: &mut SlotAccessMap,
+) -> BTreeSet<SlotId> {
+    let mut slots = BTreeSet::new();
+    for &node_id in &func.regions[region_id].nodes {
+        match &func.nodes[node_id].kind {
+            NodeKind::Simple(IrOp::WriteToSlot { slot })
+            | NodeKind::Simple(IrOp::ReadFromSlot { slot }) => {
+                slots.insert(*slot);
+            }
+            NodeKind::Gamma { regions } => {
+                for &sub_region in regions {
+                    if !map.contains_key(&sub_region) {
+                        compute_region_slots(func, sub_region, map);
+                    }
+                    slots.extend(map[&sub_region].iter());
+                }
+            }
+            NodeKind::Theta { body } => {
+                let body = *body;
+                if !map.contains_key(&body) {
+                    compute_region_slots(func, body, map);
+                }
+                slots.extend(map[&body].iter());
+            }
+            NodeKind::Lambda { body, .. } => {
+                let body = *body;
+                if !map.contains_key(&body) {
+                    compute_region_slots(func, body, map);
+                }
+                slots.extend(map[&body].iter());
+            }
+            _ => {}
+        }
+    }
+    map.insert(region_id, slots.clone());
+    slots
+}
+
 /// Process a region: walk nodes in order, tracking slot values.
 /// Returns the final slot values at the end of the region.
 fn promote_region(
     func: &mut IrFunc,
     region: RegionId,
     all_slots: &BTreeSet<SlotId>,
+    slot_access: &SlotAccessMap,
     mut slot_values: BTreeMap<SlotId, PortSource>,
 ) -> BTreeMap<SlotId, PortSource> {
     let nodes: Vec<NodeId> = func.regions[region].nodes.clone();
@@ -103,8 +158,19 @@ fn promote_region(
             }
             NodeKind::Gamma { regions } => {
                 let regions_clone = regions.clone();
-                // Thread ALL known slots through every gamma to maintain correct scoping.
-                let slots_to_thread: Vec<SlotId> = slot_values.keys().copied().collect();
+
+                // Use PRE-COMPUTED slot accesses — not live node lists.
+                let mut needed_slots = BTreeSet::new();
+                for &branch_region in &regions_clone {
+                    if let Some(accessed) = slot_access.get(&branch_region) {
+                        needed_slots.extend(accessed.iter());
+                    }
+                }
+                let slots_to_thread: Vec<SlotId> =
+                    needed_slots.intersection(all_slots).copied().collect();
+
+                // Ensure all needed slots have initial values.
+                ensure_slot_defaults(func, region, &slots_to_thread, &mut slot_values, node_id);
 
                 if !slots_to_thread.is_empty() {
                     promote_gamma(
@@ -113,18 +179,31 @@ fn promote_region(
                         &regions_clone,
                         &slots_to_thread,
                         all_slots,
+                        slot_access,
                         &mut slot_values,
                     );
                 } else {
                     for &branch_region in &regions_clone {
-                        promote_region(func, branch_region, all_slots, slot_values.clone());
+                        promote_region(
+                            func,
+                            branch_region,
+                            all_slots,
+                            slot_access,
+                            slot_values.clone(),
+                        );
                     }
                 }
             }
             NodeKind::Theta { body } => {
                 let body = *body;
-                // Thread ALL known slots through the theta.
-                let slots_to_thread: Vec<SlotId> = slot_values.keys().copied().collect();
+
+                // Use PRE-COMPUTED slot accesses.
+                let needed_slots = slot_access.get(&body).cloned().unwrap_or_default();
+                let slots_to_thread: Vec<SlotId> =
+                    needed_slots.intersection(all_slots).copied().collect();
+
+                // Ensure all needed slots have initial values.
+                ensure_slot_defaults(func, region, &slots_to_thread, &mut slot_values, node_id);
 
                 if !slots_to_thread.is_empty() {
                     promote_theta(
@@ -133,10 +212,11 @@ fn promote_region(
                         body,
                         &slots_to_thread,
                         all_slots,
+                        slot_access,
                         &mut slot_values,
                     );
                 } else {
-                    promote_region(func, body, all_slots, slot_values.clone());
+                    promote_region(func, body, all_slots, slot_access, slot_values.clone());
                 }
             }
             _ => {}
@@ -152,7 +232,7 @@ fn promote_region(
 }
 
 /// For any slot in `needed` that doesn't yet have a value in `slot_values`,
-/// create a const(0) node in `region` before `before_node` and set it as the initial value.
+/// create a const(0) node in `region` before `before_node`.
 fn ensure_slot_defaults(
     func: &mut IrFunc,
     region: RegionId,
@@ -191,28 +271,6 @@ fn ensure_slot_defaults(
     }
 }
 
-fn slots_accessed_recursively(func: &IrFunc, regions: &[RegionId]) -> BTreeSet<SlotId> {
-    let mut slots = BTreeSet::new();
-    let mut stack: Vec<RegionId> = regions.to_vec();
-    while let Some(region) = stack.pop() {
-        for &node_id in &func.regions[region].nodes {
-            match &func.nodes[node_id].kind {
-                NodeKind::Simple(IrOp::WriteToSlot { slot })
-                | NodeKind::Simple(IrOp::ReadFromSlot { slot }) => {
-                    slots.insert(*slot);
-                }
-                NodeKind::Gamma {
-                    regions: sub_regions,
-                } => stack.extend(sub_regions),
-                NodeKind::Theta { body } => stack.push(*body),
-                NodeKind::Lambda { body, .. } => stack.push(*body),
-                _ => {}
-            }
-        }
-    }
-    slots
-}
-
 /// Insert a data output on `node_id` before the state outputs, and update all
 /// existing references to the shifted state outputs.
 fn insert_data_output(func: &mut IrFunc, node_id: NodeId, debug_scope: crate::DebugScopeId) -> u16 {
@@ -228,9 +286,7 @@ fn insert_data_output(func: &mut IrFunc, node_id: NodeId, debug_scope: crate::De
         },
     );
 
-    // All existing references to outputs at index >= insert_idx need to be shifted by +1.
     shift_output_refs(func, node_id, insert_idx as u16);
-
     insert_idx as u16
 }
 
@@ -304,11 +360,13 @@ fn promote_gamma(
     branch_regions: &[RegionId],
     slots_to_thread: &[SlotId],
     all_slots: &BTreeSet<SlotId>,
+    slot_access: &SlotAccessMap,
     slot_values: &mut BTreeMap<SlotId, PortSource>,
 ) {
     let debug_scope = func.nodes[node_id].debug_scope;
+    let state_count = func.state_domains.len();
 
-    // Phase 1: Add inputs, region args for all slots.
+    // Phase 1: Add inputs and region args for all slots to thread.
     for &slot in slots_to_thread {
         let incoming_value = slot_values[&slot];
         insert_data_input(func, node_id, incoming_value);
@@ -317,15 +375,12 @@ fn promote_gamma(
         }
     }
 
-    // Phase 2: Recurse into each branch with slot values from region args.
-    // Track the region arg sources for each branch and slot.
+    // Phase 2: Recurse into each branch with strict scoping.
     let mut branch_arg_sources: Vec<BTreeMap<SlotId, PortSource>> = Vec::new();
     let mut branch_final_values: Vec<BTreeMap<SlotId, PortSource>> = Vec::new();
-    let state_count = func.state_domains.len();
 
     for &branch_region in branch_regions {
-        // Only carry slot values that we set up as region args for this branch.
-        // Parent-scope values are NOT valid inside child regions.
+        // Strict scoping: only region args are valid inside the child region.
         let mut branch_slots = BTreeMap::new();
         let mut arg_sources = BTreeMap::new();
         let data_arg_count = func.regions[branch_region].args.len() - state_count;
@@ -339,7 +394,7 @@ fn promote_gamma(
             branch_slots.insert(slot, arg_source);
             arg_sources.insert(slot, arg_source);
         }
-        let final_vals = promote_region(func, branch_region, all_slots, branch_slots);
+        let final_vals = promote_region(func, branch_region, all_slots, slot_access, branch_slots);
         branch_arg_sources.push(arg_sources);
         branch_final_values.push(final_vals);
     }
@@ -347,8 +402,7 @@ fn promote_gamma(
     // Phase 3: Add results and outputs for each slot.
     for &slot in slots_to_thread {
         for (branch_idx, &branch_region) in branch_regions.iter().enumerate() {
-            // Use the branch's final value, or fall back to the branch's region arg
-            // (NOT the parent scope value — that would be invalid cross-scope reference).
+            // Fall back to the branch's region arg (not parent scope).
             let final_value = branch_final_values[branch_idx]
                 .get(&slot)
                 .copied()
@@ -373,13 +427,12 @@ fn promote_theta(
     body: RegionId,
     slots_to_thread: &[SlotId],
     all_slots: &BTreeSet<SlotId>,
+    slot_access: &SlotAccessMap,
     slot_values: &mut BTreeMap<SlotId, PortSource>,
 ) {
     let debug_scope = func.nodes[node_id].debug_scope;
-    let state_count = func.state_domains.len();
 
     // Phase 1: Add inputs and region args for all slots.
-    // Only carry slot values we explicitly set up as region args.
     let mut body_slot_values = BTreeMap::new();
     let mut body_arg_sources: BTreeMap<SlotId, PortSource> = BTreeMap::new();
     for &slot in slots_to_thread {
@@ -391,12 +444,10 @@ fn promote_theta(
     }
 
     // Phase 2: Recurse into body.
-    let final_body_values = promote_region(func, body, all_slots, body_slot_values);
+    let final_body_values = promote_region(func, body, all_slots, slot_access, body_slot_values);
 
     // Phase 3: Add results and outputs for each slot.
     for &slot in slots_to_thread {
-        // Use the body's final value, or fall back to the body's region arg
-        // (NOT the parent scope value).
         let final_value = final_body_values
             .get(&slot)
             .copied()
