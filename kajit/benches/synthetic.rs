@@ -537,7 +537,7 @@ fn main() {
             age: 42,
             name: "Alice".into(),
         },
-        true,
+        false,
         true,
     );
     register_bench_case(
@@ -551,7 +551,7 @@ fn main() {
                 zip: 97201,
             },
         },
-        true,
+        false,
         true,
     );
     register_bench_case(
@@ -564,7 +564,7 @@ fn main() {
             },
             z: 3,
         },
-        true,
+        false,
         true,
     );
     register_bench_case(
@@ -584,7 +584,7 @@ fn main() {
             a_i128: -170141183460469231731687303715884105728i128,
             a_isize: -123_456isize,
         },
-        true,
+        false,
         false,
     );
     register_bench_case(
@@ -609,14 +609,14 @@ fn main() {
             a_char: 'ß',
             a_name: "hello".into(),
         },
-        true,
+        false,
         false,
     );
     register_bench_case(
         &mut v,
         "bool_true_false",
         Bools { a: true, b: false },
-        true,
+        false,
         true,
     );
     register_bench_case(
@@ -630,16 +630,16 @@ fn main() {
             i16_min: -32768,
             i32_min: -2147483648,
         },
-        true,
+        false,
         false,
     );
-    register_bench_case(&mut v, "scalar_u16", 0u16, true, true);
-    register_bench_case(&mut v, "scalar_u32", 0u32, true, true);
-    register_bench_case(&mut v, "scalar_u64", 0u64, true, true);
-    register_bench_case(&mut v, "scalar_i16", i16::MIN, true, true);
-    register_bench_case(&mut v, "scalar_i32", i32::MIN, true, true);
-    register_bench_case(&mut v, "scalar_i64", i64::MIN, true, true);
-    register_bench_case(&mut v, "bool_field", BoolField { value: true }, true, true);
+    register_bench_case(&mut v, "scalar_u16", 0u16, false, true);
+    register_bench_case(&mut v, "scalar_u32", 0u32, false, true);
+    register_bench_case(&mut v, "scalar_u64", 0u64, false, true);
+    register_bench_case(&mut v, "scalar_i16", i16::MIN, false, true);
+    register_bench_case(&mut v, "scalar_i32", i32::MIN, false, true);
+    register_bench_case(&mut v, "scalar_i64", i64::MIN, false, true);
+    register_bench_case(&mut v, "bool_field", BoolField { value: true }, false, true);
     register_bench_case(&mut v, "enum_external", Animal::Cat, false, true);
     register_bench_case(
         &mut v,
@@ -664,15 +664,8 @@ fn main() {
     register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32), false, true);
     register_bench_case(
         &mut v,
-        "array_smallval_u32_4",
+        "array_u32_4",
         [10u32, 20u32, 30u32, 40u32],
-        false,
-        true,
-    );
-    register_bench_case(
-        &mut v,
-        "array_bigval_u32_4",
-        [100_000u32, 200_000u32, 300_000u32, 400_000u32],
         false,
         true,
     );
@@ -855,7 +848,7 @@ fn main() {
         &mut v,
         "deny_unknown_fields",
         Strict { x: 10, y: 20 },
-        true,
+        false,
         true,
     );
     register_bench_case(
@@ -868,12 +861,12 @@ fn main() {
         false,
         false,
     );
-    register_bench_case(&mut v, "transparent_scalar", Wrapper(42), true, true);
+    register_bench_case(&mut v, "transparent_scalar", Wrapper(42), false, true);
     register_bench_case(
         &mut v,
         "transparent_string",
         StringWrapper("hello".into()),
-        true,
+        false,
         true,
     );
     register_bench_case(
@@ -883,7 +876,7 @@ fn main() {
             age: 25,
             name: "Eve".into(),
         }),
-        true,
+        false,
         true,
     );
     register_bench_case(
@@ -899,7 +892,7 @@ fn main() {
                 zip: 98101,
             },
         },
-        true,
+        false,
         true,
     );
     harness::run_benchmarks(v);

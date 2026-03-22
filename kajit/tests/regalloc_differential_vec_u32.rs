@@ -7,6 +7,7 @@ struct Nums {
 }
 
 #[test]
+#[ignore = "non-HIR path disabled"]
 fn postcard_vec_u32_v0_regalloc_differential_runs() {
     let value = Nums {
         vals: vec![1, 2, 3],
@@ -40,6 +41,7 @@ fn postcard_vec_u32_v0_regalloc_differential_runs() {
 }
 
 #[test]
+#[ignore = "non-HIR path disabled"]
 fn postcard_vec_u32_v0_linear_49_has_term_cond_alloc() {
     let value = Nums {
         vals: vec![1, 2, 3],
