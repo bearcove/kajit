@@ -465,7 +465,9 @@ fn promote_theta(
     }
 }
 
-/// Replace all uses of a node output within a specific region (not recursive).
+/// Replace all uses of a node output within a region and all descendant regions.
+/// This is needed because gamma/theta sub-regions can directly reference
+/// parent-scope node outputs (not just through passthrough/loop-vars).
 fn replace_uses_in_region(func: &mut IrFunc, region: RegionId, from: OutputRef, to: PortSource) {
     let from_source = PortSource::Node(from);
     if from_source == to {
@@ -478,6 +480,20 @@ fn replace_uses_in_region(func: &mut IrFunc, region: RegionId, from: OutputRef, 
             if input.source == from_source {
                 input.source = to;
             }
+        }
+        // Recurse into sub-regions of structural nodes.
+        match &func.nodes[nid].kind {
+            NodeKind::Gamma { regions } => {
+                let sub_regions: Vec<RegionId> = regions.clone();
+                for sub_region in sub_regions {
+                    replace_uses_in_region(func, sub_region, from, to);
+                }
+            }
+            NodeKind::Theta { body } => {
+                let body = *body;
+                replace_uses_in_region(func, body, from, to);
+            }
+            _ => {}
         }
     }
 

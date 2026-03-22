@@ -466,3 +466,42 @@ lambda @0 (shape: "test") {
     );
     insta::assert_snapshot!(ir);
 }
+
+// ── 13. ReadFromSlot output used directly inside gamma branch (cross-scope) ──
+
+#[test]
+fn slot_read_output_used_in_gamma_branch() {
+    let ir = run_slot2reg(
+        r#"
+lambda @0 (shape: "test") {
+  region {
+    args: [%cs, %os]
+    n0 = Const(0x2a) [] -> [v0]
+    n1 = WriteToSlot(0) [v0, %cs:arg] -> [%cs]
+    n2 = ReadFromSlot(0) [%cs:n1] -> [v1, %cs]
+    n3 = Const(0x0) [] -> [v2]
+    n8 = gamma [
+      pred: v2
+      in0: %cs:n2
+      in1: %os:arg
+    ] {
+      branch 0:
+        region {
+          args: [%cs, %os]
+          n4 = WriteToField(offset=0, W4) [v1, %os:arg] -> [%os]
+          results: [%cs:arg, %os:n4]
+        }
+      branch 1:
+        region {
+          args: [%cs, %os]
+          n5 = WriteToField(offset=0, W4) [v1, %os:arg] -> [%os]
+          results: [%cs:arg, %os:n5]
+        }
+    } -> [%cs, %os]
+    results: [%cs:n8, %os:n8]
+  }
+}
+"#,
+    );
+    insta::assert_snapshot!(ir);
+}
