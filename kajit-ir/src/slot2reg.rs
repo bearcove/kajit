@@ -447,11 +447,38 @@ fn promote_theta(
     let final_body_values = promote_region(func, body, all_slots, slot_access, body_slot_values);
 
     // Phase 3: Add results and outputs for each slot.
+    let body_debug_scope = func.regions[body].debug_scope;
     for &slot in slots_to_thread {
-        let final_value = final_body_values
-            .get(&slot)
-            .copied()
-            .unwrap_or_else(|| body_arg_sources[&slot]);
+        let body_arg = body_arg_sources[&slot];
+        let mut final_value = final_body_values.get(&slot).copied().unwrap_or(body_arg);
+
+        // If the slot wasn't modified in the body, the result would reference the
+        // same region arg — creating a self-copy (v_N from v_N) that regalloc2
+        // can't handle. Insert an Identity node to break the cycle.
+        if final_value == body_arg {
+            let vreg = func.fresh_vreg();
+            let identity_node = func.nodes.push(crate::Node {
+                region: body,
+                debug_scope: body_debug_scope,
+                debug_value: None,
+                inputs: vec![InputPort {
+                    kind: PortKind::Data,
+                    source: body_arg,
+                }],
+                outputs: vec![OutputPort {
+                    kind: PortKind::Data,
+                    vreg: Some(vreg),
+                    debug_scope: body_debug_scope,
+                }],
+                kind: NodeKind::Simple(IrOp::Identity),
+            });
+            func.regions[body].nodes.push(identity_node);
+            final_value = PortSource::Node(OutputRef {
+                node: identity_node,
+                index: 0,
+            });
+        }
+
         insert_data_region_result(func, body, final_value);
 
         let output_idx = insert_data_output(func, node_id, debug_scope);

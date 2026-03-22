@@ -19,9 +19,10 @@ lambda @0 @s0 (shape: "test") {
         args: [arg0, %cs, %os]
         n4 = WriteToField(offset=0, W4) [arg0, %os:arg] -> [%os]
         n5 = Const(0x0) [] -> [v2]
-        results: [v2, arg0, %cs:arg, %os:n4]
+        n7 = Identity [arg0] -> [v3]
+        results: [v2, v3, %cs:arg, %os:n4]
       }
-    } -> [v3, %cs, %os]
+    } -> [v4, %cs, %os]
     results: [%cs:n6, %os:n6]
   }
 }
