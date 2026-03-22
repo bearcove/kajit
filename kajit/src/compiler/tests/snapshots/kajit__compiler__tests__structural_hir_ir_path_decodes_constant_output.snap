@@ -1,0 +1,20 @@
+---
+source: kajit/src/compiler/tests/mod.rs
+expression: "format!(\"{}\", ir.display_with_registry(&registry))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "ConstantNumber") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = Const(0x2a) [] -> [v0]
+    n2 = WriteToField(offset=0, W4) [v0, %os:arg] -> [%os]
+    results: [%cs:arg, %os:n2, %s2:arg]
+  }
+}

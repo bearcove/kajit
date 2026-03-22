@@ -10,7 +10,6 @@ use crate::ir_backend::{
     BackendCodeRange, BackendDebugInfo, BackendOpDebugInfo, LinearBackendResult,
 };
 use crate::linearize::{BinOpKind, LinearOp, UnaryOpKind};
-use crate::recipe::{Op, Recipe};
 use crate::regalloc_engine::{AllocatedCfgProgram, cfg_mir};
 
 mod alloc;
@@ -440,12 +439,9 @@ impl Lowerer {
         self.const_vregs.fill(None);
     }
 
-    pub(super) fn emit_recipe_ops(&mut self, ops: Vec<Op>) {
+    pub(super) fn emit_bounds_check(&mut self, count: u32) {
         self.flush_all_vregs();
-        self.ectx.emit_recipe(&Recipe {
-            ops,
-            label_count: 0,
-        });
+        self.ectx.emit_bounds_check(count);
     }
 
     pub(super) fn current_alloc(&self, operand_index: usize) -> Allocation {
@@ -639,7 +635,7 @@ impl Lowerer {
             LinearOp::UnaryOp { op, dst, src } => self.emit_unary(*op, *dst, *src),
 
             LinearOp::BoundsCheck { count } => {
-                self.emit_recipe_ops(vec![Op::BoundsCheck { count: *count }]);
+                self.emit_bounds_check(*count);
             }
             LinearOp::ReadBytes { dst, count } => self.emit_read_bytes(*dst, *count),
             LinearOp::PeekByte { dst } => self.emit_peek_byte(*dst),

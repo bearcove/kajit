@@ -724,6 +724,52 @@ impl EmitCtx {
         self.emit.bind_label(ok_label).expect("bind");
     }
 
+    /// Emit a bounds check: verify that at least `count` bytes remain in the
+    /// input buffer. Branches to the error exit with UnexpectedEof on failure.
+    pub fn emit_bounds_check(&mut self, count: u32) {
+        let eof_label = self.emit.new_label();
+        if count == 1 {
+            self.emit.emit_word(
+                aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
+            );
+            self.emit
+                .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
+                .expect("b.hs");
+        } else {
+            self.emit.emit_word(
+                aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X20, Reg::X19)
+                    .expect("sub"),
+            );
+            self.emit.emit_word(
+                aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X9, count as u16, false)
+                    .expect("cmp"),
+            );
+            self.emit
+                .emit_b_cond_label(aarch64::Condition::Lo, eof_label)
+                .expect("b.lo");
+        }
+        // EOF error path
+        let past_eof = self.emit.new_label();
+        self.emit.emit_b_label(past_eof).expect("b");
+        self.emit.bind_label(eof_label).expect("bind eof");
+        self.emit.emit_word(
+            aarch64::encode_movz(
+                aarch64::Width::X64,
+                Reg::X9,
+                ErrorCode::UnexpectedEof as u16,
+                0,
+            )
+            .expect("movz"),
+        );
+        self.emit.emit_word(
+            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+                .expect("str"),
+        );
+        let error_exit = self.error_exit;
+        self.emit.emit_b_label(error_exit).expect("b");
+        self.emit.bind_label(past_eof).expect("bind past_eof");
+    }
+
     // ── Inline scalar reads (recipe-based) ─────────────────────────────
 
     pub fn emit_inline_read_byte(&mut self, offset: u32) {

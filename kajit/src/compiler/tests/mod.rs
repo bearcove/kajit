@@ -1347,67 +1347,48 @@ fn postcard_structural_hir_ir_path_decodes_option_borrowed_field() {
 
 #[test]
 fn structural_hir_ir_path_decodes_constant_output() {
-    let mut module = hir::Module::new();
-    let root_def = module.add_type_def(hir::TypeDef {
-        name: <ConstantNumber>::SHAPE.type_identifier.to_owned(),
-        generic_params: vec![],
-        kind: hir::TypeDefKind::Struct {
-            fields: vec![hir::FieldDef {
-                name: "value".to_owned(),
-                ty: hir::Type::u(32),
-            }],
-        },
-    });
-    module.add_function(hir::Function {
-        name: "const_number".to_owned(),
-        region_params: vec![],
-        store_params: vec![],
-        params: vec![
-            hir::Parameter {
-                local: hir::LocalId::new(0),
-                name: "cursor".to_owned(),
-                ty: hir::Type::u(64),
-                kind: hir::LocalKind::Param,
-            },
-            hir::Parameter {
-                local: hir::LocalId::new(1),
-                name: "out".to_owned(),
-                ty: hir::Type::named(root_def, Vec::new()),
-                kind: hir::LocalKind::Destination,
-            },
-        ],
-        locals: vec![],
-        return_type: hir::Type::unit(),
-        scopes: vec![hir::Scope {
-            id: hir::ScopeId::new(0),
-            parent: None,
-            comment: Some("constant structural HIR".to_owned()),
-        }],
-        body: hir::Block {
-            scope: hir::ScopeId::new(0),
-            statements: vec![
-                hir::Stmt {
-                    id: hir::StmtId::new(0),
-                    kind: hir::StmtKind::Init {
-                        place: hir::Place::Field {
-                            base: Box::new(hir::Place::Local(hir::LocalId::new(1))),
-                            field: "value".to_owned(),
-                        },
-                        value: hir::Expr::Literal(hir::Literal::Integer(42)),
-                    },
-                },
-                hir::Stmt {
-                    id: hir::StmtId::new(1),
-                    kind: hir::StmtKind::Return(None),
-                },
-            ],
-        },
-    });
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions [
+  ]
+  stores [
+  ]
+  types [
+    type t0 "ConstantNumber" = struct {
+      "value": u32
+    }
+  ]
+  callables [
+  ]
+  functions [
+    function f0 "const_number" {
+      regions []
+      stores []
+      params [
+        l0 param "cursor": u64
+        l1 destination "out": t0
+      ]
+      locals [
+      ]
+      return unit
+      scopes [
+        scope sc0 parent none comment "constant structural HIR"
+      ]
+      body @sc0 {
+        stmt0: init field(l1, "value") = 0x2a
+        stmt1: return
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
 
-    let decoder = compile_structural_hir_decoder(<ConstantNumber>::SHAPE, &module);
-    let value = crate::deserialize::<ConstantNumber>(&decoder, &[])
-        .expect("structural HIR decoder should ignore input and write a constant");
-    assert_eq!(value, ConstantNumber { value: 42 });
+    let ir = build_structural_hir_ir(<ConstantNumber>::SHAPE, &module);
+    let registry = symbol_registry_for_shape(<ConstantNumber>::SHAPE);
+    insta::assert_snapshot!(format!("{}", ir.display_with_registry(&registry)));
 }
 
 #[test]

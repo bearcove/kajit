@@ -217,7 +217,7 @@ impl Lowerer {
     }
 
     pub(super) fn emit_read_bytes(&mut self, dst: crate::ir::VReg, count: u32) {
-        self.emit_recipe_ops(vec![Op::BoundsCheck { count }]);
+        self.emit_bounds_check(count);
         match count {
             1 => self
                 .ectx
@@ -251,7 +251,7 @@ impl Lowerer {
     }
 
     pub(super) fn emit_peek_byte(&mut self, dst: crate::ir::VReg) {
-        self.emit_recipe_ops(vec![Op::BoundsCheck { count: 1 }]);
+        self.emit_bounds_check(1);
         self.ectx
             .emit
             .emit_with(|buf| {

@@ -764,6 +764,7 @@ const DUMP_STAGES_ENV: &str = "KAJIT_DUMP_STAGES";
 const DUMP_FILTER_ENV: &str = "KAJIT_DUMP_FILTER";
 const DUMP_DIR_ENV: &str = "KAJIT_DUMP_DIR";
 struct CodegenArtifacts {
+    hir_text: String,
     ir_text: String,
     linear_text: String,
     cfg_text: String,
@@ -778,6 +779,7 @@ where
     F: kajit::format::Decoder,
 {
     let shape = T::SHAPE;
+    let hir_text = kajit::debug_hir_text(shape, decoder);
     let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, decoder);
     let linear_text = kajit::debug_linear_ir_text(shape, decoder);
     let edits = kajit::regalloc_edit_count(shape, decoder);
@@ -785,6 +787,7 @@ where
     let emission_text = kajit::emission_trace_text(shape, decoder);
     let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, decoder);
     CodegenArtifacts {
+        hir_text,
         ir_text,
         linear_text,
         cfg_text,
@@ -870,6 +873,9 @@ fn dump_stage(format_label: &str, case: &str, stage: &str, content: &str) {
 fn maybe_dump_codegen_artifacts(format_label: &str, case: &str, artifacts: &CodegenArtifacts) {
     if !dumps_enabled_for_case(format_label, case) {
         return;
+    }
+    if should_dump_stage("hir") {
+        dump_stage(format_label, case, "hir", &artifacts.hir_text);
     }
     if should_dump_stage("ir") {
         dump_stage(format_label, case, "ir", &artifacts.ir_text);
