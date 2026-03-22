@@ -259,7 +259,7 @@ impl fmt::Display for Width {
 }
 
 /// An intrinsic function pointer, wrapped for type safety.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IntrinsicFn(pub usize);
 
 impl fmt::Debug for IntrinsicFn {

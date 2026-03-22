@@ -1710,6 +1710,7 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
     rematerialize_constants(&mut cfg);
     local_cse(&mut cfg);
+    global_value_numbering(&mut cfg);
     copy_propagation(&mut cfg);
     eliminate_immediate_only_const_defs(&mut cfg);
     dead_code_elimination(&mut cfg);
@@ -2923,6 +2924,513 @@ fn local_cse_in_function(func: &mut Function) {
     }
 }
 
+// ============================================================================
+// Global Value Numbering (GVN)
+// ============================================================================
+
+/// Dominator tree for a function's CFG.
+#[derive(Debug, Clone)]
+pub struct DomTree {
+    /// Immediate dominator for each block. Entry block has None.
+    pub idom: Vec<Option<BlockId>>,
+    /// Children in the dominator tree (blocks immediately dominated by this one).
+    pub children: Vec<Vec<BlockId>>,
+}
+
+impl DomTree {
+    /// Compute the dominator tree using iterative dataflow.
+    pub fn compute(func: &Function) -> Self {
+        let n = func.blocks.len();
+        if n == 0 {
+            return DomTree {
+                idom: Vec::new(),
+                children: Vec::new(),
+            };
+        }
+
+        // Initialize: entry dominates itself, others undefined
+        let mut idom: Vec<Option<BlockId>> = vec![None; n];
+        let entry_idx = func.entry.index();
+
+        // Build predecessor map from edges
+        let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+        for edge in &func.edges {
+            let to_idx = edge.to.index();
+            if to_idx < n {
+                preds[to_idx].push(edge.from);
+            }
+        }
+
+        // Compute reverse postorder for iteration efficiency
+        let rpo = Self::reverse_postorder(func);
+        let mut rpo_index: Vec<usize> = vec![usize::MAX; n];
+        for (i, &block_id) in rpo.iter().enumerate() {
+            rpo_index[block_id.index()] = i;
+        }
+
+        // Iterative dominator computation
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for &block_id in &rpo {
+                let b = block_id.index();
+                if b == entry_idx {
+                    continue;
+                }
+
+                // Find first processed predecessor
+                let mut new_idom: Option<BlockId> = None;
+                for &pred in &preds[b] {
+                    let p = pred.index();
+                    if rpo_index[p] < rpo_index[b] || idom[p].is_some() || p == entry_idx {
+                        if new_idom.is_none() {
+                            new_idom = Some(pred);
+                        } else {
+                            // Intersect
+                            new_idom = Some(Self::intersect(
+                                new_idom.unwrap(),
+                                pred,
+                                &idom,
+                                &rpo_index,
+                                entry_idx,
+                            ));
+                        }
+                    }
+                }
+
+                if new_idom != idom[b] {
+                    idom[b] = new_idom;
+                    changed = true;
+                }
+            }
+        }
+
+        // Build children map
+        let mut children: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+        for (b, dom) in idom.iter().enumerate() {
+            if let Some(d) = dom {
+                children[d.index()].push(BlockId(b as u32));
+            }
+        }
+
+        DomTree { idom, children }
+    }
+
+    fn reverse_postorder(func: &Function) -> Vec<BlockId> {
+        let n = func.blocks.len();
+        let mut visited = vec![false; n];
+        let mut postorder = Vec::with_capacity(n);
+
+        // Build successor map
+        let mut succs: Vec<Vec<BlockId>> = vec![Vec::new(); n];
+        for edge in &func.edges {
+            let from_idx = edge.from.index();
+            if from_idx < n {
+                succs[from_idx].push(edge.to);
+            }
+        }
+
+        fn dfs(
+            block: BlockId,
+            succs: &[Vec<BlockId>],
+            visited: &mut [bool],
+            postorder: &mut Vec<BlockId>,
+        ) {
+            let b = block.index();
+            if visited[b] {
+                return;
+            }
+            visited[b] = true;
+            for &succ in &succs[b] {
+                dfs(succ, succs, visited, postorder);
+            }
+            postorder.push(block);
+        }
+
+        dfs(func.entry, &succs, &mut visited, &mut postorder);
+        postorder.reverse();
+        postorder
+    }
+
+    fn intersect(
+        mut b1: BlockId,
+        mut b2: BlockId,
+        idom: &[Option<BlockId>],
+        rpo_index: &[usize],
+        entry_idx: usize,
+    ) -> BlockId {
+        while b1 != b2 {
+            while rpo_index[b1.index()] > rpo_index[b2.index()] {
+                if b1.index() == entry_idx {
+                    break;
+                }
+                b1 = idom[b1.index()].unwrap_or(b1);
+            }
+            while rpo_index[b2.index()] > rpo_index[b1.index()] {
+                if b2.index() == entry_idx {
+                    break;
+                }
+                b2 = idom[b2.index()].unwrap_or(b2);
+            }
+        }
+        b1
+    }
+}
+
+/// Hashable key for value numbering expressions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ValueKey {
+    Const(u64),
+    BinOp {
+        op: kajit_lir::BinOpKind,
+        lhs: VReg,
+        rhs: VReg,
+    },
+    UnaryOp {
+        op: kajit_lir::UnaryOpKind,
+        src: VReg,
+    },
+    SlotAddr(kajit_ir::SlotId),
+    CallPure {
+        func: IntrinsicFn,
+        args: Vec<VReg>,
+    },
+}
+
+/// Scoped hash table for dominator-tree-ordered value numbering.
+struct ScopedValueTable {
+    scopes: Vec<HashMap<ValueKey, VReg>>,
+}
+
+impl ScopedValueTable {
+    fn new() -> Self {
+        ScopedValueTable {
+            scopes: vec![HashMap::new()],
+        }
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn lookup(&self, key: &ValueKey) -> Option<VReg> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(&vreg) = scope.get(key) {
+                return Some(vreg);
+            }
+        }
+        None
+    }
+
+    fn insert(&mut self, key: ValueKey, vreg: VReg) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(key, vreg);
+        }
+    }
+}
+
+/// Global Value Numbering: eliminates redundant computations across blocks.
+///
+/// Uses dominator tree to ensure that when we reference a canonical value,
+/// it is guaranteed to dominate (be available at) the current block.
+pub fn global_value_numbering(program: &mut Program) {
+    for func in &mut program.funcs {
+        global_value_numbering_in_function(func);
+    }
+}
+
+fn global_value_numbering_in_function(func: &mut Function) {
+    if func.blocks.is_empty() {
+        return;
+    }
+
+    let dom_tree = DomTree::compute(func);
+    let mut table = ScopedValueTable::new();
+    let mut rewrite_map: HashMap<VReg, VReg> = HashMap::new();
+    let mut dead_insts: HashSet<InstId> = HashSet::new();
+    let mut visited_blocks: HashSet<BlockId> = HashSet::new();
+
+    // DFS the dominator tree
+    fn visit(
+        block_id: BlockId,
+        func: &Function,
+        dom_tree: &DomTree,
+        table: &mut ScopedValueTable,
+        rewrite_map: &mut HashMap<VReg, VReg>,
+        dead_insts: &mut HashSet<InstId>,
+        visited_blocks: &mut HashSet<BlockId>,
+    ) {
+        visited_blocks.insert(block_id);
+        table.push_scope();
+
+        let block = &func.blocks[block_id.index()];
+
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.index()];
+
+            if let Some(key) = make_value_key(&inst.op, rewrite_map) {
+                if let Some(canonical) = table.lookup(&key) {
+                    // Found redundant computation - mark for rewrite
+                    if let Some(dst) = get_def_vreg(&inst.op) {
+                        // Don't create self-mappings - that would eliminate def but keep uses pointing to it
+                        if dst != canonical {
+                            rewrite_map.insert(dst, canonical);
+                            dead_insts.insert(inst_id);
+                        }
+                    }
+                } else {
+                    // First time seeing this value
+                    if let Some(dst) = get_def_vreg(&inst.op) {
+                        table.insert(key, dst);
+                    }
+                }
+            }
+        }
+
+        // Visit dominated children
+        for &child in &dom_tree.children[block_id.index()] {
+            visit(
+                child,
+                func,
+                dom_tree,
+                table,
+                rewrite_map,
+                dead_insts,
+                visited_blocks,
+            );
+        }
+
+        table.pop_scope();
+    }
+
+    visit(
+        func.entry,
+        func,
+        &dom_tree,
+        &mut table,
+        &mut rewrite_map,
+        &mut dead_insts,
+        &mut visited_blocks,
+    );
+
+    // Verify all blocks were visited - if not, there's a bug in dominator tree
+    assert_eq!(
+        visited_blocks.len(),
+        func.blocks.len(),
+        "GVN: dominator tree traversal missed {} blocks (visited {}, total {})",
+        func.blocks.len() - visited_blocks.len(),
+        visited_blocks.len(),
+        func.blocks.len()
+    );
+    // Close rewrite_map transitively and break cycles.
+    // If we have A -> B and B -> C, we want A -> C.
+    // If we have A -> B and B -> A, we want to remove one (keep A alive).
+    let mut closed_map: HashMap<VReg, VReg> = HashMap::new();
+    for (&src, _) in &rewrite_map {
+        let mut current = src;
+        let mut visited = HashSet::new();
+        visited.insert(current);
+
+        while let Some(&next) = rewrite_map.get(&current) {
+            if visited.contains(&next) {
+                // Cycle detected - stop here, current is the canonical
+                break;
+            }
+            visited.insert(next);
+            current = next;
+        }
+
+        if current != src {
+            closed_map.insert(src, current);
+        }
+    }
+
+    // Update dead_insts: only keep instructions whose dst is in closed_map
+    // (meaning they are truly redundant, not part of a kept cycle)
+    dead_insts.retain(|inst_id| {
+        if let Some(dst) = get_def_vreg(&func.insts[inst_id.index()].op) {
+            closed_map.contains_key(&dst)
+        } else {
+            true
+        }
+    });
+
+    // Apply rewrites to all operands
+    apply_rewrites(func, &closed_map);
+
+    // Remove dead instructions from blocks
+    for block in &mut func.blocks {
+        block.insts.retain(|id| !dead_insts.contains(id));
+    }
+}
+
+/// Create a ValueKey for an instruction, canonicalizing operands through rewrite_map.
+fn make_value_key(op: &LinearOp, rewrite_map: &HashMap<VReg, VReg>) -> Option<ValueKey> {
+    // Follow transitive chains: if v1 -> v2 -> v3, then canon(v1) = v3
+    // Limit iterations to avoid infinite loops on cycles
+    fn canon(v: VReg, map: &HashMap<VReg, VReg>) -> VReg {
+        let mut current = v;
+        for _ in 0..100 {
+            match map.get(&current) {
+                Some(&next) if next != current => current = next,
+                _ => break,
+            }
+        }
+        current
+    }
+
+    match op {
+        LinearOp::Const { value, .. } => Some(ValueKey::Const(*value)),
+
+        LinearOp::BinOp { op, lhs, rhs, .. } => Some(ValueKey::BinOp {
+            op: *op,
+            lhs: canon(*lhs, rewrite_map),
+            rhs: canon(*rhs, rewrite_map),
+        }),
+
+        LinearOp::UnaryOp { op, src, .. } => Some(ValueKey::UnaryOp {
+            op: *op,
+            src: canon(*src, rewrite_map),
+        }),
+
+        // Don't value-number Copy - it's handled by copy_propagation and creates
+        // complex chains that can become self-referential. Focus on Const/BinOp.
+        LinearOp::Copy { .. } => None,
+
+        LinearOp::SlotAddr { slot, .. } => Some(ValueKey::SlotAddr(*slot)),
+
+        LinearOp::CallPure { func, args, .. } => Some(ValueKey::CallPure {
+            func: *func,
+            args: args.iter().map(|v| canon(*v, rewrite_map)).collect(),
+        }),
+
+        // Side-effecting operations cannot be value-numbered
+        _ => None,
+    }
+}
+
+/// Get the destination vreg defined by an instruction.
+fn get_def_vreg(op: &LinearOp) -> Option<VReg> {
+    match op {
+        LinearOp::Const { dst, .. }
+        | LinearOp::BinOp { dst, .. }
+        | LinearOp::UnaryOp { dst, .. }
+        | LinearOp::Copy { dst, .. }
+        | LinearOp::SlotAddr { dst, .. }
+        | LinearOp::CallPure { dst, .. } => Some(*dst),
+        _ => None,
+    }
+}
+
+/// Apply rewrite map to all vreg uses in the function.
+fn apply_rewrites(func: &mut Function, rewrite_map: &HashMap<VReg, VReg>) {
+    if rewrite_map.is_empty() {
+        return;
+    }
+
+    // Follow transitive chains: if v1 -> v2 -> v3, then canon(v1) = v3
+    // Limit iterations to avoid infinite loops on cycles
+    fn canon(v: VReg, map: &HashMap<VReg, VReg>) -> VReg {
+        let mut current = v;
+        for _ in 0..100 {
+            match map.get(&current) {
+                Some(&next) if next != current => current = next,
+                _ => break,
+            }
+        }
+        current
+    }
+
+    // Rewrite instruction operands
+    for inst in &mut func.insts {
+        match &mut inst.op {
+            LinearOp::BinOp { lhs, rhs, .. } => {
+                *lhs = canon(*lhs, rewrite_map);
+                *rhs = canon(*rhs, rewrite_map);
+            }
+            LinearOp::UnaryOp { src, .. } => {
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::Copy { src, .. } => {
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::WriteToField { src, .. } => {
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::StoreToAddr { addr, src, .. } => {
+                *addr = canon(*addr, rewrite_map);
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::LoadFromAddr { addr, .. } => {
+                *addr = canon(*addr, rewrite_map);
+            }
+            LinearOp::WriteToSlot { src, .. } => {
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::AdvanceCursorBy { src } => {
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::RestoreCursor { src } => {
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::SetOutPtr { src } => {
+                *src = canon(*src, rewrite_map);
+            }
+            LinearOp::CallIntrinsic { args, .. } => {
+                for arg in args {
+                    *arg = canon(*arg, rewrite_map);
+                }
+            }
+            LinearOp::CallPure { args, .. } => {
+                for arg in args {
+                    *arg = canon(*arg, rewrite_map);
+                }
+            }
+            LinearOp::CallLambda { args, .. } => {
+                for arg in args {
+                    *arg = canon(*arg, rewrite_map);
+                }
+            }
+            LinearOp::SimdStringScan { pos, kind } => {
+                *pos = canon(*pos, rewrite_map);
+                *kind = canon(*kind, rewrite_map);
+            }
+            _ => {}
+        }
+
+        // Also rewrite operands vec
+        for operand in &mut inst.operands {
+            if operand.kind == OperandKind::Use {
+                operand.vreg = canon(operand.vreg, rewrite_map);
+            }
+        }
+    }
+
+    // Rewrite terminators
+    for term in &mut func.terms {
+        match term {
+            Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                *cond = canon(*cond, rewrite_map);
+            }
+            Terminator::JumpTable { predicate, .. } => {
+                *predicate = canon(*predicate, rewrite_map);
+            }
+            _ => {}
+        }
+    }
+
+    // Rewrite edge arguments
+    for edge in &mut func.edges {
+        for arg in &mut edge.args {
+            arg.source = canon(arg.source, rewrite_map);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3507,5 +4015,394 @@ mod tests {
             insts_before,
             insts_after
         );
+    }
+
+    // ========================================================================
+    // GVN Tests
+    // ========================================================================
+
+    #[test]
+    fn dom_tree_single_block() {
+        let func = single_block_func(vec![make_const(0, 0, 42)]);
+        let dom_tree = DomTree::compute(&func);
+
+        assert_eq!(dom_tree.idom.len(), 1);
+        assert_eq!(dom_tree.idom[0], None, "entry block has no dominator");
+        assert!(
+            dom_tree.children[0].is_empty(),
+            "entry has no dominated children"
+        );
+    }
+
+    #[test]
+    fn dom_tree_linear_chain() {
+        // b0 -> b1 -> b2
+        let func = Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(0),
+                    preds: Vec::new(),
+                    succs: vec![EdgeId(0)],
+                },
+                Block {
+                    id: BlockId(1),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(1),
+                    preds: vec![EdgeId(0)],
+                    succs: vec![EdgeId(1)],
+                },
+                Block {
+                    id: BlockId(2),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(2),
+                    preds: vec![EdgeId(1)],
+                    succs: Vec::new(),
+                },
+            ],
+            edges: vec![
+                Edge {
+                    id: EdgeId(0),
+                    from: BlockId(0),
+                    to: BlockId(1),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(1),
+                    from: BlockId(1),
+                    to: BlockId(2),
+                    args: Vec::new(),
+                },
+            ],
+            insts: Vec::new(),
+            terms: vec![
+                Terminator::Branch { edge: EdgeId(0) },
+                Terminator::Branch { edge: EdgeId(1) },
+                Terminator::Return,
+            ],
+        };
+
+        let dom_tree = DomTree::compute(&func);
+
+        assert_eq!(dom_tree.idom[0], None, "b0 is entry");
+        assert_eq!(dom_tree.idom[1], Some(BlockId(0)), "b0 dominates b1");
+        assert_eq!(dom_tree.idom[2], Some(BlockId(1)), "b1 dominates b2");
+    }
+
+    #[test]
+    fn dom_tree_diamond() {
+        // b0 -> b1 -> b3
+        //    \> b2 /
+        let func = Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    params: Vec::new(),
+                    insts: vec![InstId(0)],
+                    term: TermId(0),
+                    preds: Vec::new(),
+                    succs: vec![EdgeId(0), EdgeId(1)],
+                },
+                Block {
+                    id: BlockId(1),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(1),
+                    preds: vec![EdgeId(0)],
+                    succs: vec![EdgeId(2)],
+                },
+                Block {
+                    id: BlockId(2),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(2),
+                    preds: vec![EdgeId(1)],
+                    succs: vec![EdgeId(3)],
+                },
+                Block {
+                    id: BlockId(3),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(3),
+                    preds: vec![EdgeId(2), EdgeId(3)],
+                    succs: Vec::new(),
+                },
+            ],
+            edges: vec![
+                Edge {
+                    id: EdgeId(0),
+                    from: BlockId(0),
+                    to: BlockId(1),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(1),
+                    from: BlockId(0),
+                    to: BlockId(2),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(2),
+                    from: BlockId(1),
+                    to: BlockId(3),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(3),
+                    from: BlockId(2),
+                    to: BlockId(3),
+                    args: Vec::new(),
+                },
+            ],
+            insts: vec![make_const(0, 0, 42)],
+            terms: vec![
+                Terminator::BranchIf {
+                    cond: v(0),
+                    taken: EdgeId(0),
+                    fallthrough: EdgeId(1),
+                },
+                Terminator::Branch { edge: EdgeId(2) },
+                Terminator::Branch { edge: EdgeId(3) },
+                Terminator::Return,
+            ],
+        };
+
+        let dom_tree = DomTree::compute(&func);
+
+        assert_eq!(dom_tree.idom[0], None);
+        assert_eq!(dom_tree.idom[1], Some(BlockId(0)), "b0 dominates b1");
+        assert_eq!(dom_tree.idom[2], Some(BlockId(0)), "b0 dominates b2");
+        assert_eq!(
+            dom_tree.idom[3],
+            Some(BlockId(0)),
+            "b0 dominates b3 (join point)"
+        );
+    }
+
+    #[test]
+    fn gvn_eliminates_duplicate_const_in_single_block() {
+        // v0 = const 42
+        // v1 = const 42  <- redundant
+        // After GVN: v1 eliminated, uses rewritten to v0
+        let mut func = single_block_func(vec![make_const(0, 0, 42), make_const(1, 1, 42)]);
+
+        global_value_numbering_in_function(&mut func);
+
+        assert_eq!(
+            func.blocks[0].insts.len(),
+            1,
+            "one const should be eliminated"
+        );
+        assert_eq!(
+            func.blocks[0].insts[0],
+            InstId(0),
+            "first const should survive"
+        );
+    }
+
+    #[test]
+    fn gvn_eliminates_redundant_binop() {
+        // v0 = const 1
+        // v1 = const 2
+        // v2 = add v0, v1
+        // v3 = add v0, v1  <- redundant
+        // After GVN: v3 eliminated
+        let mut func = single_block_func(vec![
+            make_const(0, 0, 1),
+            make_const(1, 1, 2),
+            make_binop(2, 2, 0, 1, kajit_lir::BinOpKind::Add),
+            make_binop(3, 3, 0, 1, kajit_lir::BinOpKind::Add),
+        ]);
+
+        global_value_numbering_in_function(&mut func);
+
+        assert_eq!(
+            func.blocks[0].insts.len(),
+            3,
+            "redundant add should be eliminated"
+        );
+    }
+
+    #[test]
+    fn gvn_rewrites_uses_to_canonical() {
+        // v0 = const 42
+        // v1 = const 42  <- redundant, should map to v0
+        // v2 = add v1, v1
+        // After GVN: v2 = add v0, v0
+        let mut func = single_block_func(vec![
+            make_const(0, 0, 42),
+            make_const(1, 1, 42),
+            make_binop(2, 2, 1, 1, kajit_lir::BinOpKind::Add),
+        ]);
+
+        global_value_numbering_in_function(&mut func);
+
+        // Check that add now uses v0
+        match &func.insts[2].op {
+            LinearOp::BinOp { lhs, rhs, .. } => {
+                assert_eq!(lhs.index(), 0, "lhs should be rewritten to v0");
+                assert_eq!(rhs.index(), 0, "rhs should be rewritten to v0");
+            }
+            other => panic!("expected BinOp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn gvn_across_dominated_blocks() {
+        // b0: v0 = const 42; branch to b1
+        // b1: v1 = const 42  <- redundant, b0 dominates b1
+        // After GVN: v1 eliminated
+        let mut func = Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    params: Vec::new(),
+                    insts: vec![InstId(0)],
+                    term: TermId(0),
+                    preds: Vec::new(),
+                    succs: vec![EdgeId(0)],
+                },
+                Block {
+                    id: BlockId(1),
+                    params: Vec::new(),
+                    insts: vec![InstId(1)],
+                    term: TermId(1),
+                    preds: vec![EdgeId(0)],
+                    succs: Vec::new(),
+                },
+            ],
+            edges: vec![Edge {
+                id: EdgeId(0),
+                from: BlockId(0),
+                to: BlockId(1),
+                args: Vec::new(),
+            }],
+            insts: vec![make_const(0, 0, 42), make_const(1, 1, 42)],
+            terms: vec![Terminator::Branch { edge: EdgeId(0) }, Terminator::Return],
+        };
+
+        global_value_numbering_in_function(&mut func);
+
+        assert_eq!(func.blocks[0].insts.len(), 1, "b0 keeps its const");
+        assert_eq!(
+            func.blocks[1].insts.len(),
+            0,
+            "b1's redundant const should be eliminated"
+        );
+    }
+
+    #[test]
+    fn gvn_does_not_eliminate_across_non_dominating_blocks() {
+        // Diamond: b0 branches to b1 or b2, both merge at b3
+        // b1: v1 = const 42
+        // b2: v2 = const 42
+        // Neither dominates the other, so both should survive
+        let mut func = Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: Vec::new(),
+            data_results: Vec::new(),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    params: Vec::new(),
+                    insts: vec![InstId(0)], // cond
+                    term: TermId(0),
+                    preds: Vec::new(),
+                    succs: vec![EdgeId(0), EdgeId(1)],
+                },
+                Block {
+                    id: BlockId(1),
+                    params: Vec::new(),
+                    insts: vec![InstId(1)], // const 42
+                    term: TermId(1),
+                    preds: vec![EdgeId(0)],
+                    succs: vec![EdgeId(2)],
+                },
+                Block {
+                    id: BlockId(2),
+                    params: Vec::new(),
+                    insts: vec![InstId(2)], // const 42
+                    term: TermId(2),
+                    preds: vec![EdgeId(1)],
+                    succs: vec![EdgeId(3)],
+                },
+                Block {
+                    id: BlockId(3),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(3),
+                    preds: vec![EdgeId(2), EdgeId(3)],
+                    succs: Vec::new(),
+                },
+            ],
+            edges: vec![
+                Edge {
+                    id: EdgeId(0),
+                    from: BlockId(0),
+                    to: BlockId(1),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(1),
+                    from: BlockId(0),
+                    to: BlockId(2),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(2),
+                    from: BlockId(1),
+                    to: BlockId(3),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(3),
+                    from: BlockId(2),
+                    to: BlockId(3),
+                    args: Vec::new(),
+                },
+            ],
+            insts: vec![
+                make_const(0, 0, 1), // condition
+                make_const(1, 1, 42),
+                make_const(2, 2, 42),
+            ],
+            terms: vec![
+                Terminator::BranchIf {
+                    cond: v(0),
+                    taken: EdgeId(0),
+                    fallthrough: EdgeId(1),
+                },
+                Terminator::Branch { edge: EdgeId(2) },
+                Terminator::Branch { edge: EdgeId(3) },
+                Terminator::Return,
+            ],
+        };
+
+        global_value_numbering_in_function(&mut func);
+
+        // Both b1 and b2 should keep their const 42 since neither dominates the other
+        assert_eq!(func.blocks[1].insts.len(), 1, "b1 keeps its const");
+        assert_eq!(func.blocks[2].insts.len(), 1, "b2 keeps its const");
     }
 }
