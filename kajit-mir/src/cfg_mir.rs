@@ -1712,9 +1712,143 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     local_cse(&mut cfg);
     global_value_numbering(&mut cfg);
     copy_propagation(&mut cfg);
+    fuse_compare_zero_branch(&mut cfg);
     eliminate_immediate_only_const_defs(&mut cfg);
     dead_code_elimination(&mut cfg);
     cfg
+}
+
+/// Fuse compare-with-zero followed by conditional branch into a direct branch.
+///
+/// Transforms patterns like:
+///   v1 = CmpNe v0, const(0)
+///   BranchIfZero v1 -> taken, fallthrough
+/// Into:
+///   BranchIfZero v0 -> taken, fallthrough
+///
+/// And:
+///   v1 = CmpEq v0, const(0)
+///   BranchIfZero v1 -> taken, fallthrough
+/// Into:
+///   BranchIf v0 -> taken, fallthrough
+///
+/// This enables the backend to emit cbz/cbnz directly on the original value
+/// instead of: cmp + cset + cbz.
+pub fn fuse_compare_zero_branch(program: &mut Program) {
+    for func in &mut program.funcs {
+        fuse_compare_zero_branch_in_function(func);
+    }
+}
+
+fn fuse_compare_zero_branch_in_function(func: &mut Function) {
+    use kajit_lir::BinOpKind;
+
+    // Step 1: Build map of const vreg -> value
+    let mut const_values: HashMap<VReg, u64> = HashMap::new();
+    for inst in &func.insts {
+        if let LinearOp::Const { dst, value } = &inst.op {
+            const_values.insert(*dst, *value);
+        }
+    }
+
+    // Step 2: Find compare-with-zero instructions
+    // Map: result vreg -> (comparison_kind, non_zero_operand)
+    #[derive(Clone, Copy)]
+    struct CompareZeroInfo {
+        kind: BinOpKind, // CmpEq or CmpNe
+        operand: VReg,   // the non-zero operand
+    }
+
+    let mut compare_zero_map: HashMap<VReg, CompareZeroInfo> = HashMap::new();
+
+    for inst in &func.insts {
+        if let LinearOp::BinOp { op, dst, lhs, rhs } = &inst.op {
+            if *op == BinOpKind::CmpEq || *op == BinOpKind::CmpNe {
+                // Check if one operand is const(0)
+                let lhs_is_zero = const_values.get(lhs) == Some(&0);
+                let rhs_is_zero = const_values.get(rhs) == Some(&0);
+
+                if lhs_is_zero && !rhs_is_zero {
+                    compare_zero_map.insert(
+                        *dst,
+                        CompareZeroInfo {
+                            kind: *op,
+                            operand: *rhs,
+                        },
+                    );
+                } else if rhs_is_zero && !lhs_is_zero {
+                    compare_zero_map.insert(
+                        *dst,
+                        CompareZeroInfo {
+                            kind: *op,
+                            operand: *lhs,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    if compare_zero_map.is_empty() {
+        return;
+    }
+
+    // Step 3: Transform BranchIfZero/BranchIf terminators
+    for term in &mut func.terms {
+        match term {
+            Terminator::BranchIfZero {
+                cond,
+                taken,
+                fallthrough,
+            } => {
+                if let Some(info) = compare_zero_map.get(cond) {
+                    // BranchIfZero on (v != 0) -> branch if v == 0 -> BranchIfZero v
+                    // BranchIfZero on (v == 0) -> branch if v != 0 -> BranchIf v
+                    match info.kind {
+                        BinOpKind::CmpNe => {
+                            // (v != 0) == 0 means v == 0, keep BranchIfZero
+                            *cond = info.operand;
+                        }
+                        BinOpKind::CmpEq => {
+                            // (v == 0) == 0 means v != 0, flip to BranchIf
+                            *term = Terminator::BranchIf {
+                                cond: info.operand,
+                                taken: *taken,
+                                fallthrough: *fallthrough,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Terminator::BranchIf {
+                cond,
+                taken,
+                fallthrough,
+            } => {
+                if let Some(info) = compare_zero_map.get(cond) {
+                    // BranchIf on (v != 0) -> branch if v != 0 -> BranchIf v
+                    // BranchIf on (v == 0) -> branch if v == 0 -> BranchIfZero v
+                    match info.kind {
+                        BinOpKind::CmpNe => {
+                            // (v != 0) != 0 means v != 0, keep BranchIf
+                            *cond = info.operand;
+                        }
+                        BinOpKind::CmpEq => {
+                            // (v == 0) != 0 means v == 0, flip to BranchIfZero
+                            *term = Terminator::BranchIfZero {
+                                cond: info.operand,
+                                taken: *taken,
+                                fallthrough: *fallthrough,
+                            };
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// that needs them, eliminating the need to pass them through edges.
@@ -4420,5 +4554,238 @@ mod tests {
             func.insts[2].operands.iter().all(|op| op.vreg != v(1)),
             "BinOp should not have v1 in operands"
         );
+    }
+
+    #[test]
+    fn fuse_compare_zero_branch_cmpne() {
+        // Test CmpNe with zero followed by BranchIfZero:
+        // v0 = const 0
+        // v1 = some_value (from data_arg)
+        // v2 = CmpNe v1, v0
+        // BranchIfZero v2 -> taken, fallthrough
+        //
+        // After fusion, BranchIfZero should use v1 directly (not v2)
+        use kajit_lir::BinOpKind;
+
+        let mut func = Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: vec![v(1)],
+            data_results: Vec::new(),
+            blocks: vec![
+                Block {
+                    id: BlockId(0),
+                    params: Vec::new(),
+                    insts: vec![InstId(0), InstId(1)],
+                    term: TermId(0),
+                    preds: Vec::new(),
+                    succs: vec![EdgeId(0), EdgeId(1)],
+                },
+                Block {
+                    id: BlockId(1),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(1),
+                    preds: vec![EdgeId(0)],
+                    succs: Vec::new(),
+                },
+                Block {
+                    id: BlockId(2),
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: TermId(2),
+                    preds: vec![EdgeId(1)],
+                    succs: Vec::new(),
+                },
+            ],
+            edges: vec![
+                Edge {
+                    id: EdgeId(0),
+                    from: BlockId(0),
+                    to: BlockId(1),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(1),
+                    from: BlockId(0),
+                    to: BlockId(2),
+                    args: Vec::new(),
+                },
+            ],
+            insts: vec![
+                Inst {
+                    id: InstId(0),
+                    op: LinearOp::Const {
+                        dst: v(0),
+                        value: 0,
+                    },
+                    operands: vec![Operand {
+                        vreg: v(0),
+                        kind: OperandKind::Def,
+                        class: RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: Clobbers::default(),
+                },
+                Inst {
+                    id: InstId(1),
+                    op: LinearOp::BinOp {
+                        op: BinOpKind::CmpNe,
+                        dst: v(2),
+                        lhs: v(1),
+                        rhs: v(0),
+                    },
+                    operands: vec![
+                        Operand {
+                            vreg: v(1),
+                            kind: OperandKind::Use,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                        Operand {
+                            vreg: v(0),
+                            kind: OperandKind::Use,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                        Operand {
+                            vreg: v(2),
+                            kind: OperandKind::Def,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                    ],
+                    clobbers: Clobbers::default(),
+                },
+            ],
+            terms: vec![
+                Terminator::BranchIfZero {
+                    cond: v(2),
+                    taken: EdgeId(0),
+                    fallthrough: EdgeId(1),
+                },
+                Terminator::Return,
+                Terminator::Return,
+            ],
+        };
+
+        fuse_compare_zero_branch_in_function(&mut func);
+
+        // BranchIfZero should now use v1 directly instead of v2
+        match &func.terms[0] {
+            Terminator::BranchIfZero { cond, .. } => {
+                assert_eq!(
+                    cond.index(),
+                    1,
+                    "BranchIfZero should use v1 (the original value) after fusion"
+                );
+            }
+            other => panic!("expected BranchIfZero, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn fuse_compare_zero_branch_cmpeq_flips_to_branch_if() {
+        // Test CmpEq with zero followed by BranchIfZero:
+        // v0 = const 0
+        // v1 = some_value
+        // v2 = CmpEq v1, v0
+        // BranchIfZero v2 -> taken, fallthrough
+        //
+        // After fusion: BranchIf v1 -> taken, fallthrough
+        // (because "branch if (v1 == 0) is zero" = "branch if v1 != 0")
+        use kajit_lir::BinOpKind;
+
+        let mut func = Function {
+            id: FunctionId(0),
+            lambda_id: LambdaId::new(0),
+            entry: BlockId(0),
+            data_args: vec![v(1)],
+            data_results: Vec::new(),
+            blocks: vec![Block {
+                id: BlockId(0),
+                params: Vec::new(),
+                insts: vec![InstId(0), InstId(1)],
+                term: TermId(0),
+                preds: Vec::new(),
+                succs: vec![EdgeId(0), EdgeId(1)],
+            }],
+            edges: vec![
+                Edge {
+                    id: EdgeId(0),
+                    from: BlockId(0),
+                    to: BlockId(0),
+                    args: Vec::new(),
+                },
+                Edge {
+                    id: EdgeId(1),
+                    from: BlockId(0),
+                    to: BlockId(0),
+                    args: Vec::new(),
+                },
+            ],
+            insts: vec![
+                Inst {
+                    id: InstId(0),
+                    op: LinearOp::Const {
+                        dst: v(0),
+                        value: 0,
+                    },
+                    operands: vec![Operand {
+                        vreg: v(0),
+                        kind: OperandKind::Def,
+                        class: RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: Clobbers::default(),
+                },
+                Inst {
+                    id: InstId(1),
+                    op: LinearOp::BinOp {
+                        op: BinOpKind::CmpEq,
+                        dst: v(2),
+                        lhs: v(1),
+                        rhs: v(0),
+                    },
+                    operands: vec![
+                        Operand {
+                            vreg: v(1),
+                            kind: OperandKind::Use,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                        Operand {
+                            vreg: v(0),
+                            kind: OperandKind::Use,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                        Operand {
+                            vreg: v(2),
+                            kind: OperandKind::Def,
+                            class: RegClass::Gpr,
+                            fixed: None,
+                        },
+                    ],
+                    clobbers: Clobbers::default(),
+                },
+            ],
+            terms: vec![Terminator::BranchIfZero {
+                cond: v(2),
+                taken: EdgeId(0),
+                fallthrough: EdgeId(1),
+            }],
+        };
+
+        fuse_compare_zero_branch_in_function(&mut func);
+
+        // BranchIfZero should be flipped to BranchIf with v1
+        match &func.terms[0] {
+            Terminator::BranchIf { cond, .. } => {
+                assert_eq!(cond.index(), 1, "BranchIf should use v1 after fusion");
+            }
+            other => panic!("expected BranchIf after CmpEq fusion, got {:?}", other),
+        }
     }
 }
