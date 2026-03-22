@@ -1296,8 +1296,8 @@ mod tests {
 
     #[test]
     fn inlines_simple_apply() {
-        let mut builder = IrBuilder::new("u32");
-        let child = builder.create_lambda("u8");
+        let mut builder = IrBuilder::new("u32", 0);
+        let child = builder.create_lambda("u8", 0);
         {
             let mut rb = builder.lambda_region(child);
             rb.bounds_check(1);
@@ -1333,7 +1333,7 @@ mod tests {
 
     #[test]
     fn does_not_inline_recursive_backedge() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let _ = rb.apply(LambdaId::new(0), &[], 0);
@@ -1354,7 +1354,7 @@ mod tests {
 
     #[test]
     fn replace_output_use_rewrites_region_results() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         let expected_output = {
             let mut rb = builder.root_region();
             let old = rb.const_val(1);
@@ -1391,8 +1391,8 @@ mod tests {
 
     #[test]
     fn dce_removes_dead_pure_nodes_after_inlining() {
-        let mut builder = IrBuilder::new("u8");
-        let child = builder.create_lambda("u8");
+        let mut builder = IrBuilder::new("u8", 0);
+        let child = builder.create_lambda("u8", 0);
         {
             let mut rb = builder.lambda_region(child);
             let one = rb.const_val(1);
@@ -1419,7 +1419,7 @@ mod tests {
     // r[verify ir.passes.pre-regalloc.loop-invariants]
     #[test]
     fn hoists_theta_invariant_setup_consts_out_of_body() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let init_count = rb.const_val(3);
@@ -1513,7 +1513,7 @@ mod tests {
             _ => false,
         };
 
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let init_count = rb.const_val(4);
@@ -1598,7 +1598,7 @@ mod tests {
             _ => false,
         };
 
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let init_count = rb.const_val(4);
@@ -1665,7 +1665,7 @@ mod tests {
         // This test verifies that constants used by non-hoistable ops are still
         // hoisted, but via threading as theta arguments rather than being left
         // inside the body.
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let init_acc = rb.const_val(0);
@@ -1746,7 +1746,7 @@ mod tests {
 
     #[test]
     fn theta_hoist_preserves_original_debug_scope_provenance() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let init_count = rb.const_val(3);

@@ -1191,26 +1191,23 @@ fn postcard_hir_models_payload_enums() {
 }
 
 #[test]
+fn postcard_hir_scalar_array_u32_4() {
+    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
+    insta::assert_snapshot!(module.to_string());
+}
+
+#[test]
 fn postcard_hir_models_arrays() {
     let module = build_postcard_decoder_hir(<BorrowedArrayHolder<'static>>::SHAPE);
     let (_, function) = module.functions.iter().next().unwrap();
 
-    let array_inits = function
+    // Array elements should be decoded in a loop, not unrolled
+    let has_loop = function
         .body
         .statements
         .iter()
-        .filter_map(|stmt| match &stmt.kind {
-            hir::StmtKind::Init {
-                place: hir::Place::Index { .. },
-                value,
-            } => Some(value),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(array_inits.len(), 2);
-    for value in array_inits {
-        assert!(matches!(value, hir::Expr::Str { .. } | hir::Expr::Local(_)));
-    }
+        .any(|stmt| matches!(stmt.kind, hir::StmtKind::Loop { .. }));
+    assert!(has_loop, "array decoding should use a loop");
     assert!(
         module.callable_named("postcard.read_str").is_none(),
         "borrowed array lowering should not use postcard.read_str"
@@ -1432,8 +1429,13 @@ fn postcard_structural_hir_ir_path_decodes_enum_in_struct_field() {
 fn postcard_structural_hir_array_path_matches_jit_differential_harness() {
     let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
     let linear = crate::linearize::linearize(&mut func);
-    let report = crate::differential_check_linear_ir_vs_jit(&linear, &[1, 2, 3, 4])
-        .expect("differential harness should execute structural HIR postcard array decoder");
+    let output_size = std::mem::size_of::<ScalarArrayHolder>();
+    let report = crate::differential_check_linear_ir_vs_jit_with_output_size(
+        &linear,
+        &[1, 2, 3, 4],
+        output_size,
+    )
+    .expect("differential harness should execute structural HIR postcard array decoder");
     assert!(
         report.is_match(),
         "unexpected differential mismatch: {:?}",
@@ -1684,6 +1686,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
+        output_size: 0,
         blocks: vec![crate::regalloc_engine::cfg_mir::Block {
             id: block_id,
             params: Vec::new(),
@@ -1902,6 +1905,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         entry: entry_block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
+        output_size: 0,
         blocks: vec![
             crate::regalloc_engine::cfg_mir::Block {
                 id: entry_block_id,
@@ -2116,6 +2120,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
+        output_size: 0,
         blocks: vec![crate::regalloc_engine::cfg_mir::Block {
             id: block_id,
             params: Vec::new(),
@@ -2346,6 +2351,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
+        output_size: 0,
         blocks: vec![crate::regalloc_engine::cfg_mir::Block {
             id: block_id,
             params: Vec::new(),
@@ -2520,6 +2526,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
+        output_size: 0,
         blocks: vec![crate::regalloc_engine::cfg_mir::Block {
             id: block_id,
             params: Vec::new(),
@@ -2652,6 +2659,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
+        output_size: 0,
         blocks: vec![crate::regalloc_engine::cfg_mir::Block {
             id: block_id,
             params: Vec::new(),

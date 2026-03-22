@@ -2435,13 +2435,79 @@ impl PostcardHirLowerer {
         }
 
         if let Def::Array(array_def) = &shape.def {
-            for index in 0..array_def.n {
-                let elem_place = hir::Place::Index {
-                    base: Box::new(place.clone()),
-                    index: Box::new(hir::Expr::Literal(hir::Literal::Integer(index as u64))),
-                };
-                self.lower_shape_into_place(statements, cursor_local, elem_place, array_def.t);
-            }
+            let counter_local = self.alloc_local(
+                format!("array_idx_{}", self.locals.len()),
+                hir::Type::u(64),
+                hir::LocalKind::Temp,
+            );
+            let scope = hir::ScopeId::new(0);
+
+            // init counter = 0
+            statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Init {
+                    place: hir::Place::Local(counter_local),
+                    value: hir::Expr::Literal(hir::Literal::Integer(0)),
+                },
+            });
+
+            // loop { if counter >= N { break } ... counter += 1 }
+            let mut body_stmts = Vec::new();
+
+            // break condition: if counter >= array_len { break }
+            body_stmts.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::If {
+                    condition: hir::Expr::Binary {
+                        op: hir::BinaryOp::Ge,
+                        lhs: Box::new(hir::Expr::Local(counter_local)),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(
+                            array_def.n as u64,
+                        ))),
+                    },
+                    then_block: hir::Block {
+                        scope,
+                        statements: vec![hir::Stmt {
+                            id: self.next_stmt_id(),
+                            kind: hir::StmtKind::Break,
+                        }],
+                    },
+                    else_block: Some(hir::Block {
+                        scope,
+                        statements: Vec::new(),
+                    }),
+                },
+            });
+
+            // decode element at place[counter]
+            let elem_place = hir::Place::Index {
+                base: Box::new(place.clone()),
+                index: Box::new(hir::Expr::Local(counter_local)),
+            };
+            self.lower_shape_into_place(&mut body_stmts, cursor_local, elem_place, array_def.t);
+
+            // counter += 1
+            body_stmts.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Assign {
+                    place: hir::Place::Local(counter_local),
+                    value: hir::Expr::Binary {
+                        op: hir::BinaryOp::Add,
+                        lhs: Box::new(hir::Expr::Local(counter_local)),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                    },
+                },
+            });
+
+            statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Loop {
+                    body: hir::Block {
+                        scope,
+                        statements: body_stmts,
+                    },
+                },
+            });
             return;
         }
 

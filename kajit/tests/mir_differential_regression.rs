@@ -20,7 +20,7 @@ fn snapshot_body(snapshot: &'static str) -> &'static str {
 }
 
 fn infer_output_size(linear: &LinearIr) -> usize {
-    linear
+    let from_fields = linear
         .ops
         .iter()
         .filter_map(|op| match op {
@@ -31,7 +31,16 @@ fn infer_output_size(linear: &LinearIr) -> usize {
             _ => None,
         })
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let from_func_start = linear
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            LinearOp::FuncStart { output_size, .. } => Some(*output_size),
+            _ => None,
+        })
+        .unwrap_or(0);
+    from_fields.max(from_func_start)
 }
 
 fn format_bytes(bytes: &[u8]) -> String {

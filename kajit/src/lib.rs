@@ -517,7 +517,8 @@ impl From<kajit_mir::RegallocEngineError> for DifferentialHarnessError {
 }
 
 pub fn infer_linear_ir_output_size(ir: &linearize::LinearIr) -> usize {
-    ir.ops
+    let from_fields = ir
+        .ops
         .iter()
         .filter_map(|op| match op {
             linearize::LinearOp::WriteToField { offset, width, .. }
@@ -527,7 +528,16 @@ pub fn infer_linear_ir_output_size(ir: &linearize::LinearIr) -> usize {
             _ => None,
         })
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    let from_func_start = ir
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            linearize::LinearOp::FuncStart { output_size, .. } => Some(*output_size),
+            _ => None,
+        })
+        .unwrap_or(0);
+    from_fields.max(from_func_start)
 }
 
 fn normalize_simulation_outcome(

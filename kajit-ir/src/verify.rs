@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn verify_accepts_builder_ir() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(1);
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_topological_violations() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let c = rb.const_val(7);
@@ -691,7 +691,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_state_forks() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(1);
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn verify_allows_error_exit_branch_passthrough_state() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(1);
@@ -736,7 +736,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_multiple_error_exit_sinks_from_same_state() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             rb.error_exit(crate::ErrorCode::MissingRequiredField);
@@ -753,7 +753,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_unknown_state_domains() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             rb.set_results(&[]);

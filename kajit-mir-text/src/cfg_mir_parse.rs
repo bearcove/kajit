@@ -784,6 +784,7 @@ fn resolve_function(ast: AstFunc, registry: &IntrinsicRegistry) -> Result<Functi
         entry: ast.entry,
         data_args,
         data_results,
+        output_size: 0,
         blocks,
         edges,
         insts,
@@ -1015,7 +1016,7 @@ cfg_program vregs=1 slots=0 {
 
     #[test]
     fn round_trip_cfg_mir_text() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1046,7 +1047,7 @@ cfg_program vregs=1 slots=0 {
             IntrinsicFn(test_intrinsic as *const () as usize),
         );
 
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let func = registry

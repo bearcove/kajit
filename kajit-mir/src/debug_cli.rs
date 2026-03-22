@@ -346,6 +346,7 @@ mod tests {
                 entry: cfg_mir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: vec![v(0)],
+                output_size: 0,
                 blocks: vec![block],
                 edges: Vec::new(),
                 insts: vec![

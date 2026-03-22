@@ -201,6 +201,9 @@ pub enum LinearOp {
     FuncStart {
         lambda_id: LambdaId,
         label: String,
+        /// Minimum output buffer size in bytes. Used by the interpreter/simulator
+        /// to allocate the output buffer when static inference from WriteToField is insufficient.
+        output_size: usize,
         data_args: Vec<VReg>,
         data_results: Vec<VReg>,
     },
@@ -474,9 +477,10 @@ impl<'a> Linearizer<'a> {
             NodeKindRef::Lambda {
                 body,
                 label,
+                output_size,
                 lambda_id,
             } => {
-                self.linearize_lambda(body, label, lambda_id);
+                self.linearize_lambda(body, label, output_size, lambda_id);
             }
             NodeKindRef::Apply { target } => self.linearize_apply(node_id, target),
         }
@@ -957,7 +961,13 @@ impl<'a> Linearizer<'a> {
 
     // ─── Lambda ──────────────────────────────────────────────────────
 
-    fn linearize_lambda(&mut self, body: RegionId, label: &str, lambda_id: LambdaId) {
+    fn linearize_lambda(
+        &mut self,
+        body: RegionId,
+        label: &str,
+        output_size: usize,
+        lambda_id: LambdaId,
+    ) {
         let region = &self.func.regions[body];
         let data_args: Vec<VReg> = region
             .args
@@ -981,6 +991,7 @@ impl<'a> Linearizer<'a> {
             LinearOp::FuncStart {
                 lambda_id,
                 label: label.to_owned(),
+                output_size,
                 data_args,
                 data_results,
             },
@@ -1444,6 +1455,7 @@ enum NodeKindRef<'a> {
     Lambda {
         body: RegionId,
         label: &'a str,
+        output_size: usize,
         lambda_id: LambdaId,
     },
     Apply {
@@ -1461,10 +1473,12 @@ fn clone_node_kind(kind: &NodeKind) -> NodeKindRef<'_> {
         NodeKind::Lambda {
             body,
             label,
+            output_size,
             lambda_id,
         } => NodeKindRef::Lambda {
             body: *body,
             label,
+            output_size: *output_size,
             lambda_id: *lambda_id,
         },
         NodeKind::Apply { target } => NodeKindRef::Apply { target: *target },
@@ -1851,7 +1865,7 @@ mod tests {
     #[test]
     fn linearize_simple_chain() {
         // BoundsCheck(4) → ReadBytes(4) → WriteToField(offset=0, W4)
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1880,7 +1894,7 @@ mod tests {
 
     #[test]
     fn linearize_preserves_debug_scope_provenance() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         let (const_node, output_index, root_scope) = {
             let mut rb = builder.root_region();
             let value = rb.const_val(42);
@@ -1927,7 +1941,7 @@ mod tests {
         // Gamma with predicate, 2 branches:
         //   branch 0: const 42 → result
         //   branch 1: const 99 → result
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(0);
@@ -1968,7 +1982,7 @@ mod tests {
         // Theta: count down from 5 to 0.
         // loop_var = counter
         // body: counter - 1, predicate = counter > 0
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let init_count = rb.const_val(5);
@@ -2003,7 +2017,7 @@ mod tests {
 
         unsafe extern "C" fn dummy_intrinsic(_ctx: *mut core::ffi::c_void) {}
 
-        let mut builder = IrBuilder::new("bool");
+        let mut builder = IrBuilder::new("bool", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(1);
@@ -2027,7 +2041,7 @@ mod tests {
 
     #[test]
     fn linearize_display() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -2070,6 +2084,7 @@ mod tests {
             LinearOp::FuncStart {
                 lambda_id: LambdaId::new(0),
                 label: "u32".into(),
+                output_size: 0,
                 data_args: vec![],
                 data_results: vec![],
             },
@@ -2108,6 +2123,7 @@ mod tests {
             LinearOp::FuncStart {
                 lambda_id: LambdaId::new(0),
                 label: "u32".into(),
+                output_size: 0,
                 data_args: vec![],
                 data_results: vec![v1],
             },
@@ -2137,6 +2153,7 @@ mod tests {
             LinearOp::FuncStart {
                 lambda_id: LambdaId::new(0),
                 label: "u32".into(),
+                output_size: 0,
                 data_args: vec![],
                 data_results: vec![],
             },

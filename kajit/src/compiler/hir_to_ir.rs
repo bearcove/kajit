@@ -496,6 +496,19 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 self.lower_dynamic_index_write_from_local(
                     rb, base, index, *local, dest_local, dest_ty,
                 );
+            } else if let hir::Expr::Str { data, len } = value {
+                // Str is two 8-byte values: (data_ptr, len) — write both at the dynamic address
+                let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_ty);
+                let base_addr = match resolved {
+                    ResolvedDynamicIndex::Destination { addr, .. }
+                    | ResolvedDynamicIndex::Local { addr, .. } => addr,
+                };
+                let data = self.lower_scalar_expr(rb, data, dest_local, dest_ty);
+                let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
+                rb.store_to_addr(base_addr, data, crate::ir::Width::W8);
+                let len_addr =
+                    self.add_byte_offset(rb, base_addr, crate::ir::SLOT_ADDR_STRIDE_BYTES);
+                rb.store_to_addr(len_addr, len, crate::ir::Width::W8);
             } else {
                 self.lower_dynamic_index_write(rb, base, index, value, dest_local, dest_ty);
             }
@@ -2010,7 +2023,11 @@ fn build_structural_hir_ir_impl(
         .ty;
 
     let label = shape.map(|s| s.type_identifier).unwrap_or(&function.name);
-    let mut builder = crate::ir::IrBuilder::new(label);
+    let output_size = shape
+        .and_then(|s| s.layout.sized_layout().ok())
+        .map(|l| l.size())
+        .unwrap_or(0);
+    let mut builder = crate::ir::IrBuilder::new(label, output_size);
     let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();

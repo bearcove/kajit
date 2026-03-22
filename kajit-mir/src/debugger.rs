@@ -544,7 +544,8 @@ fn build_block_index(func: &cfg_mir::Function) -> HashMap<cfg_mir::BlockId, usiz
 }
 
 fn infer_output_size(func: &cfg_mir::Function) -> usize {
-    func.blocks
+    let from_fields = func
+        .blocks
         .iter()
         .flat_map(|block| block.insts.iter())
         .filter_map(|inst_id| {
@@ -558,7 +559,8 @@ fn infer_output_size(func: &cfg_mir::Function) -> usize {
             }
         })
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    from_fields.max(func.output_size)
 }
 
 fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
@@ -628,6 +630,7 @@ mod tests {
                 entry: cfg_mir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
+                output_size: 0,
                 blocks: vec![b0],
                 edges: Vec::new(),
                 insts: vec![
@@ -671,6 +674,7 @@ mod tests {
                 entry: cfg_mir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
+                output_size: 0,
                 blocks: vec![b0],
                 edges: Vec::new(),
                 insts: vec![test_inst(0, LinearOp::BoundsCheck { count: 1 })],

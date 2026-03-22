@@ -163,6 +163,8 @@ pub struct Function {
     pub entry: BlockId,
     pub data_args: Vec<VReg>,
     pub data_results: Vec<VReg>,
+    /// Minimum output buffer size in bytes.
+    pub output_size: usize,
     pub blocks: Vec<Block>,
     pub edges: Vec<Edge>,
     pub insts: Vec<Inst>,
@@ -1272,6 +1274,7 @@ fn lower_function(
     lambda_id: LambdaId,
     data_args: Vec<VReg>,
     data_results: Vec<VReg>,
+    output_size: usize,
     ops: &[LinearOp],
     op_scopes: &[Option<DebugScopeId>],
     op_values: &[Option<DebugValueId>],
@@ -1289,6 +1292,7 @@ fn lower_function(
                 entry: BlockId(0),
                 data_args,
                 data_results,
+                output_size: 0,
                 blocks: vec![Block {
                     id: BlockId(0),
                     params: Vec::new(),
@@ -1609,6 +1613,7 @@ fn lower_function(
             entry: BlockId(0),
             data_args,
             data_results,
+            output_size,
             blocks,
             edges,
             insts,
@@ -1626,13 +1631,19 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
     let mut op_values = HashMap::<(LambdaId, OpId), DebugValueId>::new();
     let mut cursor = 0usize;
     while cursor < ir.ops.len() {
-        let (lambda_id, data_args, data_results) = match &ir.ops[cursor] {
+        let (lambda_id, data_args, data_results, output_size) = match &ir.ops[cursor] {
             LinearOp::FuncStart {
                 lambda_id,
                 data_args,
                 data_results,
+                output_size,
                 ..
-            } => (*lambda_id, data_args.clone(), data_results.clone()),
+            } => (
+                *lambda_id,
+                data_args.clone(),
+                data_results.clone(),
+                *output_size,
+            ),
             other => panic!("expected FuncStart at op {cursor}, got {other:?}"),
         };
 
@@ -1666,6 +1677,7 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
             lambda_id,
             data_args,
             data_results,
+            output_size,
             body,
             body_scopes,
             body_values,
@@ -3449,6 +3461,7 @@ mod tests {
             entry: BlockId(0),
             data_args: Vec::new(),
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![Block {
                 id: BlockId(0),
                 params: Vec::new(),
@@ -3515,7 +3528,7 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_produces_valid_cfg_program() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -3535,7 +3548,7 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_models_gamma_join_block_params() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(0);
@@ -3575,7 +3588,7 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_preserves_debug_scope_provenance() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         let (const_node, output_index, root_scope) = {
             let mut rb = builder.root_region();
             let value = rb.const_val(42);
@@ -3623,6 +3636,7 @@ mod tests {
             entry: BlockId(0),
             data_args: Vec::new(),
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![Block {
                 id: BlockId(0),
                 params: Vec::new(),
@@ -3891,6 +3905,7 @@ mod tests {
             entry: BlockId(0),
             data_args: Vec::new(),
             data_results: vec![v(1)], // v1 is used as result
+            output_size: 0,
             blocks: vec![
                 Block {
                     id: BlockId(0),
@@ -4044,6 +4059,7 @@ mod tests {
             entry: BlockId(0),
             data_args: Vec::new(),
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![
                 Block {
                     id: BlockId(0),
@@ -4109,6 +4125,7 @@ mod tests {
             entry: BlockId(0),
             data_args: Vec::new(),
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![
                 Block {
                     id: BlockId(0),
@@ -4287,6 +4304,7 @@ mod tests {
             entry: BlockId(0),
             data_args: Vec::new(),
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![
                 Block {
                     id: BlockId(0),
@@ -4345,6 +4363,7 @@ mod tests {
             entry: BlockId(0),
             data_args: Vec::new(),
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![
                 Block {
                     id: BlockId(0),
@@ -4567,6 +4586,7 @@ mod tests {
             entry: BlockId(0),
             data_args: vec![v(1)],
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![
                 Block {
                     id: BlockId(0),
@@ -4697,6 +4717,7 @@ mod tests {
             entry: BlockId(0),
             data_args: vec![v(1)],
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![Block {
                 id: BlockId(0),
                 params: Vec::new(),

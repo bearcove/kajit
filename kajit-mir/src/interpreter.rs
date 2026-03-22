@@ -2030,7 +2030,8 @@ fn infer_program_output_size(program: &cfg_mir::Program) -> usize {
 }
 
 fn infer_output_size(func: &cfg_mir::Function) -> usize {
-    func.blocks
+    let from_fields = func
+        .blocks
         .iter()
         .flat_map(|block| block.insts.iter())
         .filter_map(|inst_id| {
@@ -2043,7 +2044,8 @@ fn infer_output_size(func: &cfg_mir::Function) -> usize {
             }
         })
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    from_fields.max(func.output_size)
 }
 
 fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
@@ -2211,6 +2213,7 @@ mod tests {
                 entry: cfg_mir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: vec![v(0)],
+                output_size: 0,
                 blocks: vec![b0],
                 edges: Vec::new(),
                 insts: vec![
@@ -2271,6 +2274,7 @@ mod tests {
                 entry: cfg_mir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: vec![v(1)],
+                output_size: 0,
                 blocks: vec![b0, b1, b2],
                 edges: vec![
                     cfg_mir::Edge {

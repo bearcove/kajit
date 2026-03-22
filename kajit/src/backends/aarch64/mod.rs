@@ -1126,7 +1126,7 @@ mod tests {
             $(
                 #[test]
                 fn $name() {
-                    let mut builder = IrBuilder::new(stringify!($out_ty));
+                    let mut builder = IrBuilder::new(stringify!($out_ty), 0);
                     {
                         let mut $rb = builder.root_region();
                         $build
@@ -1208,7 +1208,7 @@ mod tests {
 
     #[test]
     fn linear_backend_reads_u32_from_cursor() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1231,7 +1231,7 @@ mod tests {
             300
         }
 
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let v = rb
@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn linear_backend_bounds_check_sets_eof() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1269,7 +1269,7 @@ mod tests {
 
     #[test]
     fn linear_backend_two_way_gamma_branch() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(1);
@@ -1292,7 +1292,7 @@ mod tests {
 
     #[test]
     fn linear_backend_jump_table_gamma_branch() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(2);
@@ -1329,7 +1329,7 @@ mod tests {
             a + b + c
         }
 
-        let mut builder = IrBuilder::new("u64");
+        let mut builder = IrBuilder::new("u64", 0);
         {
             let mut rb = builder.root_region();
             let a = rb.const_val(11);
@@ -1361,7 +1361,7 @@ mod tests {
             unsafe { *out = x * 10 + y };
         }
 
-        let mut builder = IrBuilder::new("u64");
+        let mut builder = IrBuilder::new("u64", 0);
         {
             let mut rb = builder.root_region();
             let x = rb.const_val(9);
@@ -1386,8 +1386,8 @@ mod tests {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn linear_backend_call_lambda_with_data_args_and_results() {
-        let mut builder = IrBuilder::new("u64");
-        let child = builder.create_lambda_with_data_args("u64", 1);
+        let mut builder = IrBuilder::new("u64", 0);
+        let child = builder.create_lambda_with_data_args("u64", 0, 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];

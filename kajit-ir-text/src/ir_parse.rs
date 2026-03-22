@@ -817,6 +817,7 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
             kind: NodeKind::Lambda {
                 body: placeholder_body,
                 label: lambda_label,
+                output_size: 0,
                 lambda_id,
             },
         });
@@ -855,6 +856,7 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
         func.nodes[node_id].kind = NodeKind::Lambda {
             body: body_region_id,
             label,
+            output_size: 0,
             lambda_id,
         };
     }
@@ -1687,7 +1689,7 @@ lambda @0 (shape: "u8") {
     #[test]
     fn round_trip_simple() {
         // Build IR programmatically.
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1711,7 +1713,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn round_trip_gamma() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(0);
@@ -1741,7 +1743,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn round_trip_theta() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let init = rb.const_val(5);
@@ -1857,7 +1859,7 @@ lambda @0 (shape: "u8") {
     #[test]
     fn round_trip_all_ops() {
         // Test round-tripping all simple ops.
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
 
@@ -1925,7 +1927,7 @@ lambda @0 (shape: "u8") {
             IntrinsicFn(test_intrinsic as *const () as usize),
         );
 
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(1);
@@ -1991,7 +1993,7 @@ lambda @0 @s0 (shape: "u8") {
 
     #[test]
     fn round_trip_preserves_scoped_node_and_output_annotations() {
-        let mut builder = IrBuilder::new("u8");
+        let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
             let value = rb.const_val(42);

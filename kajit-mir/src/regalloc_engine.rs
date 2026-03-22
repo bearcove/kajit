@@ -2019,7 +2019,8 @@ fn execute_sim_linear_op(
 }
 
 fn infer_output_size_for_cfg_function(func: &cfg_mir::Function) -> usize {
-    func.insts
+    let from_fields = func
+        .insts
         .iter()
         .filter_map(|inst| match &inst.op {
             LinearOp::WriteToField { offset, width, .. }
@@ -2029,7 +2030,8 @@ fn infer_output_size_for_cfg_function(func: &cfg_mir::Function) -> usize {
             _ => None,
         })
         .max()
-        .unwrap_or(0)
+        .unwrap_or(0);
+    from_fields.max(func.output_size)
 }
 
 fn infer_output_size_for_cfg_program(program: &cfg_mir::Program) -> usize {
@@ -2948,7 +2950,7 @@ mod tests {
     use kajit_lir::linearize;
 
     fn build_stress_ir() -> kajit_ir::IrFunc {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let mut acc = rb.const_val(0_u64);
@@ -2982,7 +2984,7 @@ mod tests {
 
     #[test]
     fn regalloc2_allocates_cfg_mir_gamma_theta_program() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(1);
@@ -3053,7 +3055,7 @@ mod tests {
     // r[verify ir.regalloc.engine]
     #[test]
     fn regalloc2_allocates_gamma_and_theta_programs() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(1);
@@ -3187,7 +3189,7 @@ lambda @0 (shape: "u8") {
             a + b + c
         }
 
-        let mut builder = IrBuilder::new("u64");
+        let mut builder = IrBuilder::new("u64", 0);
         {
             let mut rb = builder.root_region();
             let a = rb.const_val(11);
@@ -3267,6 +3269,7 @@ lambda @0 (shape: "u8") {
             entry: crate::cfg_mir::BlockId::new(0),
             data_args: Vec::new(),
             data_results: Vec::new(),
+            output_size: 0,
             blocks: vec![
                 crate::cfg_mir::Block {
                     id: crate::cfg_mir::BlockId::new(0),
@@ -3407,7 +3410,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn post_regalloc_simulation_matches_interpreter_for_simple_decoder() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -3435,7 +3438,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn differential_checker_matches_for_simple_decoder() {
-        let mut builder = IrBuilder::new("u32");
+        let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -3459,8 +3462,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn differential_checker_matches_for_call_lambda_data_result() {
-        let mut builder = IrBuilder::new("u64");
-        let child = builder.create_lambda_with_data_args("u64", 1);
+        let mut builder = IrBuilder::new("u64", 0);
+        let child = builder.create_lambda_with_data_args("u64", 0, 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];
@@ -3490,8 +3493,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_materializes_lambda_return_result_allocs() {
-        let mut builder = IrBuilder::new("u64");
-        let child = builder.create_lambda_with_data_args("u64", 1);
+        let mut builder = IrBuilder::new("u64", 0);
+        let child = builder.create_lambda_with_data_args("u64", 0, 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];
@@ -3525,8 +3528,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_assigns_call_lambda_abi_operands() {
-        let mut builder = IrBuilder::new("u64");
-        let child = builder.create_lambda_with_data_args("u64", 1);
+        let mut builder = IrBuilder::new("u64", 0);
+        let child = builder.create_lambda_with_data_args("u64", 0, 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];
@@ -3587,8 +3590,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_wires_lambda_data_arg_from_abi_register() {
-        let mut builder = IrBuilder::new("u64");
-        let child = builder.create_lambda_with_data_args("u64", 1);
+        let mut builder = IrBuilder::new("u64", 0);
+        let child = builder.create_lambda_with_data_args("u64", 0, 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];

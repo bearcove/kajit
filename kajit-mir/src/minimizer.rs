@@ -547,6 +547,7 @@ fn rebuild_function_without_block(
         entry: block_map[func.entry.index()]?,
         data_args: func.data_args.clone(),
         data_results: func.data_results.clone(),
+        output_size: func.output_size,
         blocks: new_blocks,
         edges: new_edges,
         insts: new_insts,
@@ -727,6 +728,7 @@ mod tests {
                 entry: cfg_mir::BlockId::new(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
+                output_size: 0,
                 blocks: vec![
                     cfg_mir::Block {
                         id: cfg_mir::BlockId::new(0),
@@ -791,6 +793,7 @@ mod tests {
                 entry: cfg_mir::BlockId::new(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
+                output_size: 0,
                 blocks: vec![
                     cfg_mir::Block {
                         id: cfg_mir::BlockId::new(0),
@@ -853,6 +856,7 @@ mod tests {
                 entry: cfg_mir::BlockId::new(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
+                output_size: 0,
                 blocks: vec![
                     cfg_mir::Block {
                         id: cfg_mir::BlockId::new(0),
