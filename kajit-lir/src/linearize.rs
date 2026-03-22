@@ -167,26 +167,26 @@ pub enum LinearOp {
 
     // ── Control flow ──
     Label(LabelId),
-    /// Unconditional branch. `args` are source vregs passed to the target
-    /// block's params (positional, matching `block_params` order).
+    /// Unconditional branch. `phi_args` carry explicit (source → target_param)
+    /// mappings for phi data flow; vregs not listed flow through unchanged.
     Branch {
         target: LabelId,
-        args: Vec<VReg>,
+        phi_args: Vec<(VReg, VReg)>,
     },
-    /// Branch if condition is nonzero. `args` / `fallthrough_args` are source
-    /// vregs for the taken / fallthrough block params respectively.
+    /// Branch if condition is nonzero. `phi_args` / `fallthrough_phi_args`
+    /// carry (source, target_param) for the taken / fallthrough edges.
     BranchIf {
         cond: VReg,
         target: LabelId,
-        args: Vec<VReg>,
-        fallthrough_args: Vec<VReg>,
+        phi_args: Vec<(VReg, VReg)>,
+        fallthrough_phi_args: Vec<(VReg, VReg)>,
     },
-    /// Branch if condition is zero. Same arg semantics as BranchIf.
+    /// Branch if condition is zero. Same semantics as BranchIf.
     BranchIfZero {
         cond: VReg,
         target: LabelId,
-        args: Vec<VReg>,
-        fallthrough_args: Vec<VReg>,
+        phi_args: Vec<(VReg, VReg)>,
+        fallthrough_phi_args: Vec<(VReg, VReg)>,
     },
     /// Jump table: jump to `labels[predicate]`, or to `default` if out of range.
     JumpTable {
@@ -762,15 +762,15 @@ impl<'a> Linearizer<'a> {
                 LinearOp::BranchIfZero {
                     cond: predicate,
                     target: branch_labels[0],
-                    args: vec![],
-                    fallthrough_args: vec![],
+                    phi_args: vec![],
+                    fallthrough_phi_args: vec![],
                 },
             );
             self.emit(
                 Some(node.debug_scope),
                 LinearOp::Branch {
                     target: branch_labels[1],
-                    args: vec![],
+                    phi_args: vec![],
                 },
             );
         } else {
@@ -819,7 +819,7 @@ impl<'a> Linearizer<'a> {
                         Some(self.func.regions[region_id].debug_scope),
                         LinearOp::Branch {
                             target: merge_label,
-                            args: vec![],
+                            phi_args: vec![],
                         },
                     );
                 }
@@ -928,30 +928,32 @@ impl<'a> Linearizer<'a> {
         let total_inputs = node.inputs.len();
         let loop_var_count = total_inputs - state_count;
 
-        // Emit copies for initial loop var values → body region args.
+        // Collect initial phi args: (source=init_value, target=body_arg_vreg).
+        // These replace the old "initial copies" — the Branch to the loop header
+        // carries the initial values explicitly.
+        let mut entry_phi_args = Vec::new();
         for i in 0..loop_var_count {
             let input = &node.inputs[i];
             if input.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(input.source);
                 let arg = &self.func.region_args[body_region.args[i]];
-                if let Some(dst_vreg) = arg.vreg
-                    && src_vreg != dst_vreg
-                {
-                    self.emit(
-                        Some(body_region.debug_scope),
-                        LinearOp::Copy {
-                            dst: dst_vreg,
-                            src: src_vreg,
-                        },
-                    );
+                if let Some(dst_vreg) = arg.vreg {
                     self.record_vreg_scope(dst_vreg, body_region.debug_scope);
+                    entry_phi_args.push((src_vreg, dst_vreg));
                 }
             }
         }
 
-        // Loop top label.
+        // Loop top label — body arg vregs are block params here (one def each).
         let loop_top = self.fresh_label();
         let loop_exit = self.fresh_label();
+        self.emit(
+            Some(body_region.debug_scope),
+            LinearOp::Branch {
+                target: loop_top,
+                phi_args: entry_phi_args,
+            },
+        );
         self.emit(Some(body_region.debug_scope), LinearOp::Label(loop_top));
 
         // Linearize the body.
@@ -962,63 +964,57 @@ impl<'a> Linearizer<'a> {
         let predicate_result = &self.func.region_results[body_region.results[0]];
         let predicate_vreg = self.resolve_vreg(predicate_result.source);
 
-        // Emit copies for body results → body region args (feedback).
-        // Results[1..1+loop_var_count] → args[0..loop_var_count]
-        // NOTE: We must emit copies even when src == dst on loop back-edges
-        // so that regalloc2 sees the block parameter definition. Without this,
-        // promoted loop-carried slots that don't change produce self-referential
-        // block params that regalloc2 can't handle.
+        // Collect feedback phi args: (source=result_vreg, target=body_arg_vreg).
+        // These replace the old "feedback copies" — the back-edge BranchIf carries
+        // the feedback values explicitly. No Copy instruction redefines the body
+        // arg vregs, preserving SSA (one def per vreg at the block param).
+        let mut feedback_phi_args = Vec::new();
         for i in 0..loop_var_count {
             let result = &self.func.region_results[body_region.results[i + 1]]; // +1 to skip predicate
             if result.kind == PortKind::Data {
                 let src_vreg = self.resolve_vreg(result.source);
                 let arg = &self.func.region_args[body_region.args[i]];
                 if let Some(dst_vreg) = arg.vreg {
+                    feedback_phi_args.push((src_vreg, dst_vreg));
+                }
+            }
+        }
+
+        // Emit exit copies BEFORE the BranchIf — these copy from the body result
+        // vregs (not body arg vregs) to the theta output vregs. They execute every
+        // iteration but are only live on the exit path.
+        for i in 0..loop_var_count {
+            let result = &self.func.region_results[body_region.results[i + 1]];
+            if result.kind == PortKind::Data {
+                let src_vreg = self.resolve_vreg(result.source);
+                if let Some(dst_vreg) = node.outputs[i].vreg
+                    && src_vreg != dst_vreg
+                {
+                    self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
                     self.emit(
-                        Some(body_region.debug_scope),
+                        Some(node.outputs[i].debug_scope),
                         LinearOp::Copy {
                             dst: dst_vreg,
                             src: src_vreg,
                         },
                     );
-                    self.record_vreg_scope(dst_vreg, body_region.debug_scope);
                 }
             }
         }
 
         // Branch back to loop top if predicate is nonzero.
+        // The back-edge carries feedback values as phi args.
         self.emit(
             Some(body_region.debug_scope),
             LinearOp::BranchIf {
                 cond: predicate_vreg,
                 target: loop_top,
-                args: vec![],
-                fallthrough_args: vec![],
+                phi_args: feedback_phi_args,
+                fallthrough_phi_args: vec![],
             },
         );
 
         self.emit(Some(node.debug_scope), LinearOp::Label(loop_exit));
-
-        // Emit copies for final loop var values → theta output vregs.
-        // After the loop exits, the body's region args hold the final values
-        // (or the body results, depending on convention). We use body args
-        // since the feedback copies already wrote there.
-        for i in 0..loop_var_count {
-            let arg = &self.func.region_args[body_region.args[i]];
-            if let Some(src_vreg) = arg.vreg
-                && let Some(dst_vreg) = node.outputs[i].vreg
-                && src_vreg != dst_vreg
-            {
-                self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
-                self.emit(
-                    Some(node.outputs[i].debug_scope),
-                    LinearOp::Copy {
-                        dst: dst_vreg,
-                        src: src_vreg,
-                    },
-                );
-            }
-        }
     }
 
     // ─── Lambda ──────────────────────────────────────────────────────

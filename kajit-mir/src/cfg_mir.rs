@@ -966,14 +966,21 @@ fn fmt_terminator(f: &mut fmt::Formatter<'_>, term: &Terminator) -> fmt::Result 
 enum TempTermLabel {
     Return,
     ErrorExit(ErrorCode),
-    Branch(LabelId),
+    Branch {
+        target: LabelId,
+        phi_args: Vec<(VReg, VReg)>,
+    },
     BranchIf {
         cond: VReg,
         target: LabelId,
+        phi_args: Vec<(VReg, VReg)>,
+        fallthrough_phi_args: Vec<(VReg, VReg)>,
     },
     BranchIfZero {
         cond: VReg,
         target: LabelId,
+        phi_args: Vec<(VReg, VReg)>,
+        fallthrough_phi_args: Vec<(VReg, VReg)>,
     },
     JumpTable {
         predicate: VReg,
@@ -989,16 +996,21 @@ enum TempTermBlock {
     ErrorExit(ErrorCode),
     Branch {
         target: BlockId,
+        phi_args: Vec<(VReg, VReg)>,
     },
     BranchIf {
         cond: VReg,
         target: BlockId,
         fallthrough: BlockId,
+        phi_args: Vec<(VReg, VReg)>,
+        fallthrough_phi_args: Vec<(VReg, VReg)>,
     },
     BranchIfZero {
         cond: VReg,
         target: BlockId,
         fallthrough: BlockId,
+        phi_args: Vec<(VReg, VReg)>,
+        fallthrough_phi_args: Vec<(VReg, VReg)>,
     },
     JumpTable {
         predicate: VReg,
@@ -1009,10 +1021,55 @@ enum TempTermBlock {
 
 impl TempTermBlock {
     fn uses(&self) -> Vec<VReg> {
+        let mut out = Vec::new();
         match self {
-            Self::BranchIf { cond, .. } | Self::BranchIfZero { cond, .. } => vec![*cond],
-            Self::JumpTable { predicate, .. } => vec![*predicate],
-            Self::Return | Self::ErrorExit(_) | Self::Branch { .. } => Vec::new(),
+            Self::Branch { phi_args, .. } => {
+                out.extend(phi_args.iter().map(|(src, _)| *src));
+            }
+            Self::BranchIf {
+                cond,
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            }
+            | Self::BranchIfZero {
+                cond,
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            } => {
+                out.push(*cond);
+                out.extend(phi_args.iter().map(|(src, _)| *src));
+                out.extend(fallthrough_phi_args.iter().map(|(src, _)| *src));
+            }
+            Self::JumpTable { predicate, .. } => out.push(*predicate),
+            Self::Return | Self::ErrorExit(_) => {}
+        }
+        out
+    }
+
+    /// Get phi args for a specific successor (by index in successors() order).
+    fn phi_args_for_successor(&self, succ_idx: usize) -> &[(VReg, VReg)] {
+        match self {
+            Self::Branch { phi_args, .. } => {
+                assert_eq!(succ_idx, 0);
+                phi_args
+            }
+            Self::BranchIf {
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            }
+            | Self::BranchIfZero {
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            } => match succ_idx {
+                0 => phi_args,
+                1 => fallthrough_phi_args,
+                _ => panic!("BranchIf has only 2 successors"),
+            },
+            _ => &[],
         }
     }
 
@@ -1197,24 +1254,42 @@ fn resolve_term_labels(
     match term {
         TempTermLabel::Return => TempTermBlock::Return,
         TempTermLabel::ErrorExit(code) => TempTermBlock::ErrorExit(*code),
-        TempTermLabel::Branch(label) => TempTermBlock::Branch {
+        TempTermLabel::Branch {
+            target: label,
+            phi_args,
+        } => TempTermBlock::Branch {
             target: *labels
                 .get(label)
                 .unwrap_or_else(|| panic!("unknown label target: {label:?}")),
+            phi_args: phi_args.clone(),
         },
-        TempTermLabel::BranchIf { cond, target } => TempTermBlock::BranchIf {
+        TempTermLabel::BranchIf {
+            cond,
+            target,
+            phi_args,
+            fallthrough_phi_args,
+        } => TempTermBlock::BranchIf {
             cond: *cond,
             target: *labels
                 .get(target)
                 .unwrap_or_else(|| panic!("unknown label target: {target:?}")),
             fallthrough: next.expect("BranchIf must have fallthrough block"),
+            phi_args: phi_args.clone(),
+            fallthrough_phi_args: fallthrough_phi_args.clone(),
         },
-        TempTermLabel::BranchIfZero { cond, target } => TempTermBlock::BranchIfZero {
+        TempTermLabel::BranchIfZero {
+            cond,
+            target,
+            phi_args,
+            fallthrough_phi_args,
+        } => TempTermBlock::BranchIfZero {
             cond: *cond,
             target: *labels
                 .get(target)
                 .unwrap_or_else(|| panic!("unknown label target: {target:?}")),
             fallthrough: next.expect("BranchIfZero must have fallthrough block"),
+            phi_args: phi_args.clone(),
+            fallthrough_phi_args: fallthrough_phi_args.clone(),
         },
         TempTermLabel::JumpTable {
             predicate,
@@ -1236,6 +1311,7 @@ fn resolve_term_labels(
         },
         TempTermLabel::Fallthrough(next_idx) => TempTermBlock::Branch {
             target: BlockId(*next_idx as u32),
+            phi_args: vec![],
         },
     }
 }
@@ -1352,36 +1428,56 @@ fn lower_function(
             let op_scope = op_scopes.get(cursor).copied().flatten();
             let op_value = op_values.get(cursor).copied().flatten();
             match ops[cursor].clone() {
-                LinearOp::Branch { target, .. } => {
+                LinearOp::Branch { target, phi_args } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }
                     if let Some(debug_value) = op_value {
                         lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
                     }
-                    term = Some(TempTermLabel::Branch(target));
+                    term = Some(TempTermLabel::Branch { target, phi_args });
                     cursor += 1;
                     break;
                 }
-                LinearOp::BranchIf { cond, target, .. } => {
+                LinearOp::BranchIf {
+                    cond,
+                    target,
+                    phi_args,
+                    fallthrough_phi_args,
+                } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }
                     if let Some(debug_value) = op_value {
                         lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
                     }
-                    term = Some(TempTermLabel::BranchIf { cond, target });
+                    term = Some(TempTermLabel::BranchIf {
+                        cond,
+                        target,
+                        phi_args,
+                        fallthrough_phi_args,
+                    });
                     cursor += 1;
                     break;
                 }
-                LinearOp::BranchIfZero { cond, target, .. } => {
+                LinearOp::BranchIfZero {
+                    cond,
+                    target,
+                    phi_args,
+                    fallthrough_phi_args,
+                } => {
                     if let Some(scope) = op_scope {
                         lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
                     }
                     if let Some(debug_value) = op_value {
                         lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
                     }
-                    term = Some(TempTermLabel::BranchIfZero { cond, target });
+                    term = Some(TempTermLabel::BranchIfZero {
+                        cond,
+                        target,
+                        phi_args,
+                        fallthrough_phi_args,
+                    });
                     cursor += 1;
                     break;
                 }
@@ -1530,21 +1626,27 @@ fn lower_function(
 
     let mut edges = Vec::<Edge>::new();
     for from in 0..blocks.len() {
-        for to in block_terms[from].successors() {
+        let successors = block_terms[from].successors();
+        for (succ_idx, to) in successors.iter().enumerate() {
             let edge_id = EdgeId(edges.len() as u32);
+            // Build a map from phi_args: target_param → source_vreg.
+            let phi = block_terms[from].phi_args_for_successor(succ_idx);
+            let phi_map: HashMap<VReg, VReg> = phi.iter().map(|&(src, tgt)| (tgt, src)).collect();
+            // For each block param, use the phi source if provided,
+            // otherwise the vreg flows through unchanged (source == target).
             let args = blocks[to.index()]
                 .params
                 .iter()
                 .copied()
-                .map(|target| EdgeArg {
-                    target,
-                    source: target,
+                .map(|target| {
+                    let source = phi_map.get(&target).copied().unwrap_or(target);
+                    EdgeArg { target, source }
                 })
                 .collect();
             edges.push(Edge {
                 id: edge_id,
                 from: BlockId(from as u32),
-                to,
+                to: *to,
                 args,
             });
             blocks[from].succs.push(edge_id);
