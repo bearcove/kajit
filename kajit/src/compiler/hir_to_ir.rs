@@ -176,7 +176,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     .map(|field| Self::slot_count_for_type(module, &field.ty))
                     .sum::<usize>()
                     .max(1),
-                hir::TypeDefKind::Enum { variants } => {
+                hir::TypeDefKind::Enum { variants, .. } => {
                     let payload_slots = variants
                         .iter()
                         .map(|variant| {

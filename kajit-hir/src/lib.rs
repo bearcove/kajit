@@ -980,24 +980,39 @@ pub struct TypeDef {
     pub name: String,
     pub generic_params: Vec<GenericParam>,
     pub kind: TypeDefKind,
+    /// Total byte size of this type's in-memory representation.
+    /// Populated by the frontend from facet Shape layout info.
+    pub size: Option<u32>,
+    /// Whether this type is a transparent newtype wrapper.
+    pub transparent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeDefKind {
-    Struct { fields: Vec<FieldDef> },
-    Enum { variants: Vec<VariantDef> },
+    Struct {
+        fields: Vec<FieldDef>,
+    },
+    Enum {
+        variants: Vec<VariantDef>,
+        /// Byte width of the discriminant field (1, 2, 4, or 8).
+        discriminant_width: Option<u32>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldDef {
     pub name: String,
     pub ty: Type,
+    /// Byte offset of this field within the parent struct/variant.
+    pub offset: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariantDef {
     pub name: String,
     pub fields: Vec<FieldDef>,
+    /// Rust discriminant value for this variant.
+    pub discriminant: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1550,8 +1565,11 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "name".to_owned(),
                     ty: Type::str(r_input),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
 
         let header_input = Type::named(header, vec![GenericArg::Region(r_input)]);
@@ -1574,13 +1592,17 @@ mod tests {
                     FieldDef {
                         name: "bytes".to_owned(),
                         ty: Type::slice(r_input, Type::u(8)),
+                        offset: None,
                     },
                     FieldDef {
                         name: "pos".to_owned(),
                         ty: Type::u(64),
+                        offset: None,
                     },
                 ],
             },
+            size: None,
+            transparent: false,
         });
         let header = module.add_type_def(TypeDef {
             name: "Header".to_owned(),
@@ -1591,8 +1613,11 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "name".to_owned(),
                     ty: Type::str(r_input),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
 
         let function = Function {
@@ -1655,8 +1680,11 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "label".to_owned(),
                     ty: Type::slice(r_tmp, Type::u(8)),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
 
         let decode_header = module.add_callable(CallableSpec {
@@ -1749,8 +1777,11 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "code".to_owned(),
                     ty: Type::u(32),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let result_u32 = module.add_type_def(TypeDef {
             name: "ResultU32".to_owned(),
@@ -1762,17 +1793,24 @@ mod tests {
                         fields: vec![FieldDef {
                             name: "value".to_owned(),
                             ty: Type::u(32),
+                            offset: None,
                         }],
+                        discriminant: None,
                     },
                     VariantDef {
                         name: "Err".to_owned(),
                         fields: vec![FieldDef {
                             name: "error".to_owned(),
                             ty: Type::named(parse_error, Vec::new()),
+                            offset: None,
                         }],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
 
         let function = Function {
@@ -1895,36 +1933,50 @@ mod tests {
             name: "String".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let node = module.add_type_def(TypeDef {
             name: "Node".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let edge = module.add_type_def(TypeDef {
             name: "Edge".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let fact = module.add_type_def(TypeDef {
             name: "Fact".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_graph = module.add_type_def(TypeDef {
             name: "CrateGraph".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_node = module.add_type_def(TypeDef {
             name: "CrateNode".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_id = module.add_type_def(TypeDef {
             name: "CrateId".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_type = module.add_type_def(TypeDef {
             name: "CrateType".to_owned(),
@@ -1934,13 +1986,18 @@ mod tests {
                     VariantDef {
                         name: "Lib".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
 
         let callables = module.install_vixen_core_callables(&VixenCoreTypes {
@@ -2029,6 +2086,8 @@ mod tests {
             name: "String".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let node = module.add_type_def(TypeDef {
             name: "Node".to_owned(),
@@ -2037,28 +2096,39 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "label".to_owned(),
                     ty: Type::named(string, Vec::new()),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let edge = module.add_type_def(TypeDef {
             name: "Edge".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let fact = module.add_type_def(TypeDef {
             name: "Fact".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_graph = module.add_type_def(TypeDef {
             name: "CrateGraph".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_node = module.add_type_def(TypeDef {
             name: "CrateNode".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_id = module.add_type_def(TypeDef {
             name: "CrateId".to_owned(),
@@ -2067,8 +2137,11 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "value".to_owned(),
                     ty: Type::named(string, Vec::new()),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let crate_type = module.add_type_def(TypeDef {
             name: "CrateType".to_owned(),
@@ -2078,13 +2151,18 @@ mod tests {
                     VariantDef {
                         name: "Lib".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
 
         let callables = module.install_vixen_core_callables(&VixenCoreTypes {
@@ -2177,6 +2255,8 @@ mod tests {
             name: "String".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let node = module.add_type_def(TypeDef {
             name: "Node".to_owned(),
@@ -2185,28 +2265,39 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "label".to_owned(),
                     ty: Type::named(string, Vec::new()),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let edge = module.add_type_def(TypeDef {
             name: "Edge".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let fact = module.add_type_def(TypeDef {
             name: "Fact".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_graph = module.add_type_def(TypeDef {
             name: "CrateGraph".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_node = module.add_type_def(TypeDef {
             name: "CrateNode".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_id = module.add_type_def(TypeDef {
             name: "CrateId".to_owned(),
@@ -2215,8 +2306,11 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "value".to_owned(),
                     ty: Type::named(string, Vec::new()),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let crate_type = module.add_type_def(TypeDef {
             name: "CrateType".to_owned(),
@@ -2226,13 +2320,18 @@ mod tests {
                     VariantDef {
                         name: "Lib".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
 
         let callables = module.install_vixen_core_callables(&VixenCoreTypes {
@@ -2347,36 +2446,50 @@ mod tests {
             name: "String".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let node = module.add_type_def(TypeDef {
             name: "Node".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let edge = module.add_type_def(TypeDef {
             name: "Edge".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let fact = module.add_type_def(TypeDef {
             name: "Fact".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_graph = module.add_type_def(TypeDef {
             name: "CrateGraph".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_node = module.add_type_def(TypeDef {
             name: "CrateNode".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_id = module.add_type_def(TypeDef {
             name: "CrateId".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_type = module.add_type_def(TypeDef {
             name: "CrateType".to_owned(),
@@ -2386,13 +2499,18 @@ mod tests {
                     VariantDef {
                         name: "Lib".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
 
         let callables = module.install_vixen_core_callables(&VixenCoreTypes {
@@ -2614,13 +2732,17 @@ mod tests {
                     FieldDef {
                         name: "bytes".to_owned(),
                         ty: Type::slice(r0, Type::u(8)),
+                        offset: None,
                     },
                     FieldDef {
                         name: "pos".to_owned(),
                         ty: Type::u(64),
+                        offset: None,
                     },
                 ],
             },
+            size: None,
+            transparent: false,
         });
         module.add_function(Function {
             name: "slice_demo".to_owned(),

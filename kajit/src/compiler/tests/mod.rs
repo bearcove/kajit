@@ -213,13 +213,17 @@ fn build_structural_json_bool_module() -> hir::Module {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <BoolHeader>::SHAPE.type_identifier.to_owned(),
@@ -228,8 +232,11 @@ fn build_structural_json_bool_module() -> hir::Module {
             fields: vec![hir::FieldDef {
                 name: "value".to_owned(),
                 ty: hir::Type::bool(),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     let cursor_local = hir::LocalId::new(0);
@@ -935,7 +942,7 @@ fn postcard_hir_models_option_borrowed_fields() {
         *payload_local
     );
 
-    let hir::TypeDefKind::Enum { variants } = &module.type_defs[*def].kind else {
+    let hir::TypeDefKind::Enum { variants, .. } = &module.type_defs[*def].kind else {
         panic!("expected Option HIR enum type");
     };
     assert_eq!(variants[0].name, "None");

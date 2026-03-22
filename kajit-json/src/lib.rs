@@ -31,13 +31,17 @@ fn build_json_root_bool_decoder_hir(shape: &'static Shape) -> hir::Module {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     let cursor_local = hir::LocalId::new(0);
@@ -370,13 +374,17 @@ fn build_json_root_u32_decoder_hir(shape: &'static Shape) -> hir::Module {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     let cursor_local = hir::LocalId::new(0);
@@ -798,13 +806,17 @@ fn build_json_root_u64_decoder_hir(shape: &'static Shape) -> hir::Module {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     let cursor_local = hir::LocalId::new(0);

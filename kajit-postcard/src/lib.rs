@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use facet::{Def, EnumRepr, ListDef, ScalarType, Shape, Type, UserType};
 use kajit_format::{
-    collect_variants, get_option_def, get_pointer_def, is_unit, FieldEmitInfo, SkippedFieldInfo,
+    FieldEmitInfo, SkippedFieldInfo, collect_variants, get_option_def, get_pointer_def, is_unit,
 };
 use kajit_hir as hir;
 
@@ -12,12 +12,12 @@ use kajit_hir as hir;
 ///
 /// Postcard HIR generation asserts that no fields have defaults or are skipped,
 /// so the resolvers are never actually invoked.
-fn collect_fields(
-    shape: &'static Shape,
-) -> (Vec<FieldEmitInfo>, Vec<SkippedFieldInfo>) {
-    kajit_format::collect_fields(shape, |_| None, |_| {
-        panic!("postcard HIR does not support custom defaults")
-    })
+fn collect_fields(shape: &'static Shape) -> (Vec<FieldEmitInfo>, Vec<SkippedFieldInfo>) {
+    kajit_format::collect_fields(
+        shape,
+        |_| None,
+        |_| panic!("postcard HIR does not support custom defaults"),
+    )
 }
 
 pub struct PostcardHirLowerer {
@@ -47,13 +47,17 @@ impl PostcardHirLowerer {
                     hir::FieldDef {
                         name: "bytes".to_owned(),
                         ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                        offset: None,
                     },
                     hir::FieldDef {
                         name: "pos".to_owned(),
                         ty: hir::Type::u(64),
+                        offset: None,
                     },
                 ],
             },
+            size: None,
+            transparent: false,
         });
 
         Self {
@@ -174,6 +178,8 @@ impl PostcardHirLowerer {
             name: shape.type_identifier.to_owned(),
             generic_params,
             kind: hir::TypeDefKind::Struct { fields: Vec::new() },
+            size: None,
+            transparent: false,
         };
         let type_id = self.module.add_type_def(type_def);
         self.type_defs_by_shape.insert(key, type_id);
@@ -186,6 +192,7 @@ impl PostcardHirLowerer {
                     hir::FieldDef {
                         name: "ptr".to_owned(),
                         ty: hir::Type::persistent_addr(),
+                        offset: None,
                     },
                 ),
                 (
@@ -193,6 +200,7 @@ impl PostcardHirLowerer {
                     hir::FieldDef {
                         name: "len".to_owned(),
                         ty: hir::Type::u(64),
+                        offset: None,
                     },
                 ),
                 (
@@ -200,6 +208,7 @@ impl PostcardHirLowerer {
                     hir::FieldDef {
                         name: "cap".to_owned(),
                         ty: hir::Type::u(64),
+                        offset: None,
                     },
                 ),
             ];
@@ -219,6 +228,7 @@ impl PostcardHirLowerer {
                     .map(|field| hir::FieldDef {
                         name: field.name.to_owned(),
                         ty: self.lower_type(field.shape),
+                        offset: None,
                     })
                     .collect(),
             }
@@ -228,15 +238,19 @@ impl PostcardHirLowerer {
                     hir::VariantDef {
                         name: "None".to_owned(),
                         fields: Vec::new(),
+                        discriminant: None,
                     },
                     hir::VariantDef {
                         name: "Some".to_owned(),
                         fields: vec![hir::FieldDef {
                             name: "value".to_owned(),
                             ty: self.lower_type(opt_def.t),
+                            offset: None,
                         }],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             }
         } else {
             match &shape.ty {
@@ -252,6 +266,7 @@ impl PostcardHirLowerer {
                             .map(|field| hir::FieldDef {
                                 name: field.name.to_owned(),
                                 ty: self.lower_type(field.shape),
+                                offset: None,
                             })
                             .collect(),
                     }
@@ -267,10 +282,13 @@ impl PostcardHirLowerer {
                                 .map(|field| hir::FieldDef {
                                     name: field.name.to_owned(),
                                     ty: self.lower_type(field.shape),
+                                    offset: None,
                                 })
                                 .collect(),
+                            discriminant: None,
                         })
                         .collect(),
+                    discriminant_width: None,
                 },
                 _ => panic!(
                     "postcard HIR prototype only supports struct-like composite roots for now: {}",
@@ -294,6 +312,7 @@ impl PostcardHirLowerer {
                 hir::FieldDef {
                     name: "ptr".to_owned(),
                     ty: hir::Type::persistent_addr(),
+                    offset: None,
                 },
             ),
             (
@@ -301,6 +320,7 @@ impl PostcardHirLowerer {
                 hir::FieldDef {
                     name: "len".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ),
             (
@@ -308,6 +328,7 @@ impl PostcardHirLowerer {
                 hir::FieldDef {
                     name: "cap".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ),
         ];
@@ -318,6 +339,8 @@ impl PostcardHirLowerer {
             kind: hir::TypeDefKind::Struct {
                 fields: fields.into_iter().map(|(_, field)| field).collect(),
             },
+            size: None,
+            transparent: false,
         });
         self.string_raw_type = Some(type_id);
         type_id
@@ -335,13 +358,17 @@ impl PostcardHirLowerer {
                     hir::FieldDef {
                         name: "lo".to_owned(),
                         ty: hir::Type::u(64),
+                        offset: None,
                     },
                     hir::FieldDef {
                         name: "hi".to_owned(),
                         ty: hir::Type::u(64),
+                        offset: None,
                     },
                 ],
             },
+            size: None,
+            transparent: false,
         });
         self.bits128_raw_type = Some(type_id);
         type_id

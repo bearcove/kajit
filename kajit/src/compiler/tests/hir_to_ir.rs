@@ -56,8 +56,11 @@ fn structural_hir_ir_path_preserves_local_scalar_across_empty_else_if() {
             fields: vec![hir::FieldDef {
                 name: "value".to_owned(),
                 ty: hir::Type::u(32),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -164,8 +167,11 @@ fn structural_hir_ir_path_executes_unrolled_varint_shape() {
             fields: vec![hir::FieldDef {
                 name: "values".to_owned(),
                 ty: hir::Type::array(hir::Type::u(32), 4),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     let mut locals = Vec::new();
@@ -337,13 +343,17 @@ fn structural_hir_ir_path_reads_bytes_via_cursor_shadow() {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <ScalarArrayHolder>::SHAPE.type_identifier.to_owned(),
@@ -352,8 +362,11 @@ fn structural_hir_ir_path_reads_bytes_via_cursor_shadow() {
             fields: vec![hir::FieldDef {
                 name: "values".to_owned(),
                 ty: hir::Type::array(hir::Type::u(32), 4),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     let mut statements = Vec::new();
@@ -582,13 +595,17 @@ fn structural_hir_ir_path_executes_cursor_shadow_varint_array() {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <ScalarArrayHolder>::SHAPE.type_identifier.to_owned(),
@@ -597,8 +614,11 @@ fn structural_hir_ir_path_executes_cursor_shadow_varint_array() {
             fields: vec![hir::FieldDef {
                 name: "values".to_owned(),
                 ty: hir::Type::array(hir::Type::u(32), 4),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     let mut locals = Vec::new();
@@ -821,13 +841,17 @@ fn structural_hir_ir_path_executes_cursor_shadow_range_checked_varint_array() {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <ScalarArrayHolder>::SHAPE.type_identifier.to_owned(),
@@ -836,8 +860,11 @@ fn structural_hir_ir_path_executes_cursor_shadow_range_checked_varint_array() {
             fields: vec![hir::FieldDef {
                 name: "values".to_owned(),
                 ty: hir::Type::array(hir::Type::u(32), 4),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     let mut locals = Vec::new();
@@ -1090,13 +1117,17 @@ fn structural_hir_ir_path_executes_exact_postcard_varint_array_shape() {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <ScalarArrayHolder>::SHAPE.type_identifier.to_owned(),
@@ -1105,8 +1136,11 @@ fn structural_hir_ir_path_executes_exact_postcard_varint_array_shape() {
             fields: vec![hir::FieldDef {
                 name: "values".to_owned(),
                 ty: hir::Type::array(hir::Type::u(32), 4),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     let mut lowerer = PostcardHirLowerer::new();
@@ -1184,13 +1218,17 @@ fn structural_hir_ir_path_preserves_temp_after_cursor_sync() {
                 hir::FieldDef {
                     name: "bytes".to_owned(),
                     ty: hir::Type::slice(input_region, hir::Type::u(8)),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "pos".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <ConstantNumber>::SHAPE.type_identifier.to_owned(),
@@ -1199,8 +1237,11 @@ fn structural_hir_ir_path_preserves_temp_after_cursor_sync() {
             fields: vec![hir::FieldDef {
                 name: "value".to_owned(),
                 ty: hir::Type::u(32),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -1296,13 +1337,17 @@ fn structural_hir_ir_path_builds_persistent_buffer_kernel() {
                 hir::FieldDef {
                     name: "ptr".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "len".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let runtime = module.install_runtime_memory_callables();
     module.add_function(hir::Function {
@@ -1455,8 +1500,11 @@ fn structural_hir_ir_path_materializes_vec_from_raw_parts() {
             fields: vec![hir::FieldDef {
                 name: "values".to_owned(),
                 ty: hir::Type::u(64),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
     let runtime = module.install_runtime_memory_callables();
     module.add_function(hir::Function {
@@ -1730,8 +1778,11 @@ fn structural_hir_ir_path_materializes_empty_vec_from_raw_parts() {
             fields: vec![hir::FieldDef {
                 name: "values".to_owned(),
                 ty: hir::Type::u(64),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
     let runtime = module.install_runtime_memory_callables();
     module.add_function(hir::Function {
@@ -1804,8 +1855,11 @@ fn structural_hir_ir_path_loads_from_persistent_buffer() {
             fields: vec![hir::FieldDef {
                 name: "value".to_owned(),
                 ty: hir::Type::u(32),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
     let runtime = module.install_runtime_memory_callables();
     module.add_function(hir::Function {
@@ -1899,8 +1953,11 @@ fn structural_hir_ir_path_executes_loop_break_and_continue() {
             fields: vec![hir::FieldDef {
                 name: "value".to_owned(),
                 ty: hir::Type::u(32),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -2081,17 +2138,23 @@ fn structural_hir_ir_path_decodes_if_and_match() {
                 hir::VariantDef {
                     name: "Cat".to_owned(),
                     fields: vec![],
+                    discriminant: None,
                 },
                 hir::VariantDef {
                     name: "Dog".to_owned(),
                     fields: vec![],
+                    discriminant: None,
                 },
                 hir::VariantDef {
                     name: "Parrot".to_owned(),
                     fields: vec![],
+                    discriminant: None,
                 },
             ],
+            discriminant_width: None,
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <BranchyAnimal>::SHAPE.type_identifier.to_owned(),
@@ -2101,13 +2164,17 @@ fn structural_hir_ir_path_decodes_if_and_match() {
                 hir::FieldDef {
                     name: "animal".to_owned(),
                     ty: hir::Type::named(animal_def, Vec::new()),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "value".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -2280,21 +2347,27 @@ fn structural_hir_ir_path_computes_bit_masks() {
                 hir::FieldDef {
                     name: "masked".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "shifted".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "toggled".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "combined".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -2484,13 +2557,17 @@ fn structural_hir_ir_path_updates_local_scratch_struct_fields() {
                 hir::FieldDef {
                     name: "mask".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "done".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <ScratchSummary>::SHAPE.type_identifier.to_owned(),
@@ -2500,13 +2577,17 @@ fn structural_hir_ir_path_updates_local_scratch_struct_fields() {
                 hir::FieldDef {
                     name: "mask".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "done".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -2625,8 +2706,11 @@ fn structural_hir_ir_path_updates_dynamic_local_array_elements() {
             fields: vec![hir::FieldDef {
                 name: "selected".to_owned(),
                 ty: hir::Type::u(32),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -2727,13 +2811,17 @@ fn structural_hir_ir_path_updates_dynamic_destination_array_elements() {
                 hir::FieldDef {
                     name: "values".to_owned(),
                     ty: hir::Type::array(hir::Type::u(32), 4),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "selected".to_owned(),
                     ty: hir::Type::u(32),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -2875,13 +2963,17 @@ fn structural_hir_ir_path_reads_dynamic_local_aggregate_elements() {
                 hir::FieldDef {
                     name: "lo".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "hi".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <DynamicAggregateSummary>::SHAPE.type_identifier.to_owned(),
@@ -2890,8 +2982,11 @@ fn structural_hir_ir_path_reads_dynamic_local_aggregate_elements() {
             fields: vec![hir::FieldDef {
                 name: "pair".to_owned(),
                 ty: hir::Type::named(pair_def, Vec::new()),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -3037,13 +3132,17 @@ fn structural_hir_ir_path_writes_dynamic_local_aggregate_elements() {
                 hir::FieldDef {
                     name: "lo".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "hi".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <DynamicAggregateSummary>::SHAPE.type_identifier.to_owned(),
@@ -3052,8 +3151,11 @@ fn structural_hir_ir_path_writes_dynamic_local_aggregate_elements() {
             fields: vec![hir::FieldDef {
                 name: "pair".to_owned(),
                 ty: hir::Type::named(pair_def, Vec::new()),
+                offset: None,
             }],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {
@@ -3183,13 +3285,17 @@ fn structural_hir_ir_path_writes_dynamic_destination_aggregate_elements() {
                 hir::FieldDef {
                     name: "lo".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "hi".to_owned(),
                     ty: hir::Type::u(64),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
     let root_def = module.add_type_def(hir::TypeDef {
         name: <DynamicAggregateDestinationSummary>::SHAPE
@@ -3201,13 +3307,17 @@ fn structural_hir_ir_path_writes_dynamic_destination_aggregate_elements() {
                 hir::FieldDef {
                     name: "pairs".to_owned(),
                     ty: hir::Type::array(hir::Type::named(pair_def, Vec::new()), 2),
+                    offset: None,
                 },
                 hir::FieldDef {
                     name: "selected".to_owned(),
                     ty: hir::Type::named(pair_def, Vec::new()),
+                    offset: None,
                 },
             ],
         },
+        size: None,
+        transparent: false,
     });
 
     module.add_function(hir::Function {

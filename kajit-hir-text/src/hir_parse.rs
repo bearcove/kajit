@@ -272,7 +272,11 @@ fn field_defs<'src>() -> impl Parser<'src, &'src str, Vec<FieldDef>, Extra<'src>
     quoted_string()
         .then_ignore(token(":"))
         .then(ty())
-        .map(|(name, ty)| FieldDef { name, ty })
+        .map(|(name, ty)| FieldDef {
+            name,
+            ty,
+            offset: None,
+        })
         .repeated()
         .collect()
 }
@@ -298,8 +302,13 @@ fn type_def<'src>() -> impl Parser<'src, &'src str, ParsedTypeDef, Extra<'src>> 
                     TypeDefKind::Enum {
                         variants: variants
                             .into_iter()
-                            .map(|(name, fields)| VariantDef { name, fields })
+                            .map(|(name, fields)| VariantDef {
+                                name,
+                                fields,
+                                discriminant: None,
+                            })
                             .collect(),
+                        discriminant_width: None,
                     }
                 }))
                 .then_ignore(token("}")),
@@ -310,6 +319,8 @@ fn type_def<'src>() -> impl Parser<'src, &'src str, ParsedTypeDef, Extra<'src>> 
                 name,
                 generic_params,
                 kind,
+                size: None,
+                transparent: false,
             },
         })
 }
@@ -1079,13 +1090,17 @@ mod tests {
                     FieldDef {
                         name: "bytes".to_owned(),
                         ty: Type::slice(r_input, Type::u(8)),
+                        offset: None,
                     },
                     FieldDef {
                         name: "pos".to_owned(),
                         ty: Type::u(64),
+                        offset: None,
                     },
                 ],
             },
+            size: None,
+            transparent: false,
         });
         let opt_str = module.add_type_def(TypeDef {
             name: "core::option::Option<&str>".to_owned(),
@@ -1097,16 +1112,22 @@ mod tests {
                     VariantDef {
                         name: "None".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                     VariantDef {
                         name: "Some".to_owned(),
                         fields: vec![FieldDef {
                             name: "value".to_owned(),
                             ty: Type::str(r_input),
+                            offset: None,
                         }],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
         let record = module.add_type_def(TypeDef {
             name: "MaybeBorrowedName".to_owned(),
@@ -1117,8 +1138,11 @@ mod tests {
                 fields: vec![FieldDef {
                     name: "name".to_owned(),
                     ty: Type::named(opt_str, vec![GenericArg::Region(r_input)]),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let read_tag = module.add_callable(CallableSpec {
             kind: CallableKind::Builtin,
@@ -1531,9 +1555,14 @@ hir_module {
                     fields: vec![FieldDef {
                         name: "value".to_owned(),
                         ty: Type::u(32),
+                        offset: None,
                     }],
+                    discriminant: None,
                 }],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
         module.add_function(Function {
             name: "demo".to_owned(),
@@ -1635,6 +1664,8 @@ hir_module {
             name: "String".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let node = module.add_type_def(TypeDef {
             name: "Node".to_owned(),
@@ -1643,28 +1674,39 @@ hir_module {
                 fields: vec![FieldDef {
                     name: "label".to_owned(),
                     ty: Type::named(string, Vec::new()),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let edge = module.add_type_def(TypeDef {
             name: "Edge".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let fact = module.add_type_def(TypeDef {
             name: "Fact".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_graph = module.add_type_def(TypeDef {
             name: "CrateGraph".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_node = module.add_type_def(TypeDef {
             name: "CrateNode".to_owned(),
             generic_params: vec![],
             kind: TypeDefKind::Struct { fields: vec![] },
+            size: None,
+            transparent: false,
         });
         let crate_id = module.add_type_def(TypeDef {
             name: "CrateId".to_owned(),
@@ -1673,8 +1715,11 @@ hir_module {
                 fields: vec![FieldDef {
                     name: "value".to_owned(),
                     ty: Type::named(string, Vec::new()),
+                    offset: None,
                 }],
             },
+            size: None,
+            transparent: false,
         });
         let crate_type = module.add_type_def(TypeDef {
             name: "CrateType".to_owned(),
@@ -1684,13 +1729,18 @@ hir_module {
                     VariantDef {
                         name: "Lib".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                     VariantDef {
                         name: "Bin".to_owned(),
                         fields: vec![],
+                        discriminant: None,
                     },
                 ],
+                discriminant_width: None,
             },
+            size: None,
+            transparent: false,
         });
 
         module.install_vixen_core_callables(&VixenCoreTypes {

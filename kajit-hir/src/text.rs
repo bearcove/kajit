@@ -81,7 +81,7 @@ fn fmt_type_def(
             }
             writeln!(f, "{pad}}}")
         }
-        TypeDefKind::Enum { variants } => {
+        TypeDefKind::Enum { variants, .. } => {
             writeln!(f, " = enum {{")?;
             for variant in variants {
                 fmt_variant_def(module, variant, f, indent + 1)?;
