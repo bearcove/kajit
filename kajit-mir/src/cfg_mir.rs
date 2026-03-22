@@ -1710,7 +1710,8 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
     rematerialize_constants(&mut cfg);
     local_cse(&mut cfg);
-    // TODO: GVN disabled - breaks some enum tests with regalloc errors
+    // TODO: GVN pass implemented but disabled - regalloc errors on enum tests
+    // need to investigate why canonical vreg definitions aren't reaching uses
     // global_value_numbering(&mut cfg);
     copy_propagation(&mut cfg);
     eliminate_immediate_only_const_defs(&mut cfg);
