@@ -1725,6 +1725,7 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
 /// - Removes unnecessary edge argument traffic
 pub fn rematerialize_constants(program: &mut Program) {
     // Build a map of VReg -> constant value for all constants in the program
+    // Start with values from Const instructions
     let mut const_values: HashMap<VReg, u64> = HashMap::new();
     for func in &program.funcs {
         for inst in &func.insts {
@@ -1736,6 +1737,57 @@ pub fn rematerialize_constants(program: &mut Program) {
 
     if const_values.is_empty() {
         return;
+    }
+
+    // Propagate const values through block params: if a block param receives
+    // the same constant value from ALL incoming edges, it's also a constant.
+    // This handles loop back edges that pass through constants unchanged.
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for func in &program.funcs {
+            for block in &func.blocks {
+                if block.params.is_empty() || block.preds.is_empty() {
+                    continue;
+                }
+                for (param_idx, &param_vreg) in block.params.iter().enumerate() {
+                    // Skip if already known as const
+                    if const_values.contains_key(&param_vreg) {
+                        continue;
+                    }
+                    // Check if all incoming edges provide the same constant
+                    let mut all_same_const: Option<u64> = None;
+                    let mut is_uniform_const = true;
+                    for &pred_edge_id in &block.preds {
+                        let edge = &func.edges[pred_edge_id.index()];
+                        if param_idx >= edge.args.len() {
+                            is_uniform_const = false;
+                            break;
+                        }
+                        let source_vreg = edge.args[param_idx].source;
+                        if let Some(&const_val) = const_values.get(&source_vreg) {
+                            match all_same_const {
+                                None => all_same_const = Some(const_val),
+                                Some(v) if v == const_val => {}
+                                Some(_) => {
+                                    is_uniform_const = false;
+                                    break;
+                                }
+                            }
+                        } else {
+                            is_uniform_const = false;
+                            break;
+                        }
+                    }
+                    if is_uniform_const {
+                        if let Some(const_val) = all_same_const {
+                            const_values.insert(param_vreg, const_val);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     let debug = std::env::var("KAJIT_DEBUG_REMAT").is_ok();
@@ -1938,6 +1990,88 @@ fn rematerialize_constants_in_function(
             }
         }
     }
+
+    // Phase 2: Rematerialize constants used directly across blocks (not via params).
+    // For each non-entry block, find uses of vregs that are:
+    // - Known constants (in const_values)
+    // - NOT defined BEFORE this use in the block (respecting program order)
+    // Insert a local Const instruction at block start for each such vreg.
+    // Since allow_multiple_vreg_defs() is true, this creates a valid multi-def pattern.
+    for block_idx in 0..func.blocks.len() {
+        let block = &func.blocks[block_idx];
+        if block.id == func.entry {
+            continue;
+        }
+
+        // Process instructions in order, tracking defs as we go
+        // Block params are defined at entry
+        let mut defs_so_far: HashSet<VReg> = block.params.iter().copied().collect();
+        let mut consts_to_insert: HashSet<VReg> = HashSet::new();
+
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.index()];
+
+            // First check uses (before adding this inst's defs)
+            for op in &inst.operands {
+                if op.kind == OperandKind::Use
+                    && !defs_so_far.contains(&op.vreg)
+                    && const_values.contains_key(&op.vreg)
+                {
+                    consts_to_insert.insert(op.vreg);
+                }
+            }
+
+            // Then add this instruction's defs
+            for op in &inst.operands {
+                if op.kind == OperandKind::Def {
+                    defs_so_far.insert(op.vreg);
+                }
+            }
+        }
+
+        if consts_to_insert.is_empty() {
+            continue;
+        }
+
+        if debug {
+            eprintln!(
+                "[remat] b{}: inserting {} local consts for cross-block uses",
+                block.id.0,
+                consts_to_insert.len()
+            );
+        }
+
+        // Insert Const instructions at block start (in stable order)
+        let mut sorted_consts: Vec<_> = consts_to_insert.into_iter().collect();
+        sorted_consts.sort_by_key(|v| v.index());
+
+        let mut new_insts = Vec::new();
+        for vreg in sorted_consts {
+            let const_val = const_values[&vreg];
+            let inst_id = InstId(func.insts.len() as u32);
+            func.insts.push(Inst {
+                id: inst_id,
+                op: LinearOp::Const {
+                    dst: vreg,
+                    value: const_val,
+                },
+                operands: vec![Operand {
+                    vreg,
+                    kind: OperandKind::Def,
+                    class: RegClass::Gpr,
+                    fixed: None,
+                }],
+                clobbers: Clobbers::default(),
+            });
+            new_insts.push(inst_id);
+        }
+
+        // Insert at block start
+        let block = &mut func.blocks[block_idx];
+        for inst_id in new_insts.into_iter().rev() {
+            block.insts.insert(0, inst_id);
+        }
+    }
 }
 
 /// Dead code elimination for CFG-MIR.
@@ -1953,137 +2087,46 @@ pub fn dead_code_elimination(program: &mut Program) {
 
 fn dead_code_elimination_in_function(func: &mut Function) {
     let debug = std::env::var("KAJIT_DEBUG_DCE").is_ok();
-    // Iterate until no more changes (some dead code may only become visible
-    // after other dead code is removed)
+
+    // Iterate until no more changes
     let mut iteration = 0;
     loop {
         iteration += 1;
-        // Collect which instructions are actually live (referenced by blocks)
-        let live_insts: HashSet<InstId> = func
-            .blocks
-            .iter()
-            .flat_map(|b| b.insts.iter().copied())
-            .collect();
+
+        // Build analysis structures in one pass over blocks
+        let analysis = build_use_def_analysis(func);
+
         if debug && iteration == 1 {
             eprintln!(
-                "[dce] func f{} has {} live insts",
+                "[dce] func f{}: {} vregs with external uses, {} vregs with local defs",
                 func.id.0,
-                live_insts.len()
+                analysis.external_uses.len(),
+                analysis.local_defs.len()
             );
         }
 
-        // Collect all used vregs
-        let mut used_vregs: HashSet<VReg> = HashSet::new();
-
-        // Uses from instruction operands (inputs) - only from live instructions
-        // Track which vregs have been defined so far in each block (order-aware)
-        // We need to track two things:
-        // 1. external_uses: vregs used that come from outside this block (for cross-block DCE)
-        // 2. all uses: any vreg used (to keep local definitions alive)
-        let mut external_uses: HashSet<VReg> = HashSet::new();
+        // Find instructions to remove
+        let mut insts_to_remove: HashSet<InstId> = HashSet::new();
 
         for block in &func.blocks {
-            // Block params are defined at entry
-            let mut defs_so_far: HashSet<VReg> = block.params.iter().copied().collect();
+            let is_entry = block.id == func.entry;
 
             for &inst_id in &block.insts {
-                if !live_insts.contains(&inst_id) {
+                let inst = &func.insts[inst_id.index()];
+                if !is_pure_instruction(&inst.op) {
                     continue;
                 }
-                let inst = &func.insts[inst_id.index()];
 
-                // First, check uses - they see defs from BEFORE this instruction
-                for operand in &inst.operands {
-                    if operand.kind == OperandKind::Use {
-                        // ALL uses keep definitions alive
-                        used_vregs.insert(operand.vreg);
-
-                        // But only external uses matter for cross-block analysis
-                        if !defs_so_far.contains(&operand.vreg) {
-                            if debug && operand.vreg.index() == 37 {
-                                eprintln!("[dce] v37 used by inst i{} (external)", inst_id.0);
-                            }
-                            external_uses.insert(operand.vreg);
-                        }
-                    }
-                }
-
-                // Then, add this instruction's defs
-                for operand in &inst.operands {
-                    if operand.kind == OperandKind::Def {
-                        defs_so_far.insert(operand.vreg);
-                    }
-                }
-            }
-        }
-
-        // Collect which instructions are in the entry block
-        let entry_block_insts: HashSet<InstId> = func
-            .blocks
-            .get(func.entry.index())
-            .map(|b| b.insts.iter().copied().collect())
-            .unwrap_or_default();
-
-        // Uses from terminators
-        for term in &func.terms {
-            match term {
-                Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
-                    used_vregs.insert(*cond);
-                }
-                Terminator::JumpTable { predicate, .. } => {
-                    used_vregs.insert(*predicate);
-                }
-                Terminator::Return | Terminator::ErrorExit { .. } | Terminator::Branch { .. } => {}
-            }
-        }
-
-        // Uses from edge arguments (source vregs that flow into target blocks)
-        for edge in &func.edges {
-            for arg in &edge.args {
-                used_vregs.insert(arg.source);
-            }
-        }
-
-        // Uses from data_results (function return values)
-        for &vreg in &func.data_results {
-            used_vregs.insert(vreg);
-        }
-
-        // Find instructions to remove: those that define vregs that are never used
-        // and have no side effects (only consider live instructions)
-        let mut insts_to_remove: HashSet<InstId> = HashSet::new();
-        for inst in &func.insts {
-            if !live_insts.contains(&inst.id) {
-                continue;
-            }
-            if is_pure_instruction(&inst.op) {
                 // Check if all defs are unused
                 let all_defs_unused = inst.operands.iter().all(|op| {
                     if op.kind != OperandKind::Def {
                         return true;
                     }
-                    // A def is unused if:
-                    // 1. It's not in used_vregs at all, OR
-                    // 2. It's in entry block AND not in external_uses (meaning all uses
-                    //    are satisfied by local redefinitions in other blocks)
-                    if !used_vregs.contains(&op.vreg) {
-                        return true;
-                    }
-                    // TODO: For entry block defs, we could check if all uses are satisfied
-                    // by local redefinitions in other blocks. For now, keep it simple.
-                    false
+                    is_def_unused(func, &analysis, op.vreg, block.id, is_entry)
                 });
+
                 if all_defs_unused {
                     insts_to_remove.insert(inst.id);
-                } else if debug
-                    && matches!(&inst.op, LinearOp::Const { dst, .. } if dst.index() == 37)
-                {
-                    // Debug: show why v37 const is considered used
-                    let is_external = external_uses.contains(&VReg::new(37));
-                    eprintln!(
-                        "[dce] const i{} v37 is used (external={})",
-                        inst.id.0, is_external
-                    );
                 }
             }
         }
@@ -2101,57 +2144,183 @@ fn dead_code_elimination_in_function(func: &mut Function) {
                 iteration,
                 insts_to_remove.len()
             );
-            // Show first few removed consts
-            let mut shown = 0;
-            for &inst_id in &insts_to_remove {
-                let inst = &func.insts[inst_id.index()];
-                if let LinearOp::Const { dst, .. } = &inst.op {
-                    if shown < 5 {
-                        eprintln!("[dce]   removing const i{} v{}", inst_id.0, dst.index());
-                        shown += 1;
-                    }
-                }
-            }
         }
 
         // Remove dead instructions from blocks
         for block in &mut func.blocks {
             block.insts.retain(|id| !insts_to_remove.contains(id));
         }
-
-        // Note: We leave func.insts intact to keep InstIds stable.
-        // Orphaned instructions in the arena are harmless.
     }
 }
 
-/// Check if a vreg is used by any instruction after `def_inst` in the entry block,
-/// OR by any edge arg flowing out of the entry block.
-fn is_used_later_in_entry_block(func: &Function, def_inst: InstId, vreg: VReg) -> bool {
-    let entry_block = &func.blocks[func.entry.index()];
-    let mut seen_def = false;
-    for &inst_id in &entry_block.insts {
-        if inst_id == def_inst {
-            seen_def = true;
-            continue;
+/// Analysis results for use-def relationships
+struct UseDefAnalysis {
+    /// For each vreg: blocks that use it BEFORE any local def (external uses)
+    external_uses: HashMap<VReg, HashSet<BlockId>>,
+    /// For each vreg: blocks that define it locally
+    local_defs: HashMap<VReg, HashSet<BlockId>>,
+    /// Vregs used by edge arguments
+    edge_arg_uses: HashSet<VReg>,
+    /// Vregs used by terminators
+    terminator_uses: HashSet<VReg>,
+    /// Vregs that are function results
+    result_uses: HashSet<VReg>,
+}
+
+fn build_use_def_analysis(func: &Function) -> UseDefAnalysis {
+    let mut external_uses: HashMap<VReg, HashSet<BlockId>> = HashMap::new();
+    let mut local_defs: HashMap<VReg, HashSet<BlockId>> = HashMap::new();
+
+    // Analyze each block
+    for block in &func.blocks {
+        // Block params are local defs
+        for &param in &block.params {
+            local_defs.entry(param).or_default().insert(block.id);
         }
-        if seen_def {
+
+        // Track defs seen so far in this block (for determining external vs local uses)
+        let mut defs_in_block: HashSet<VReg> = block.params.iter().copied().collect();
+
+        for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
+
+            // Check uses first (before adding this instruction's defs)
+            for op in &inst.operands {
+                if op.kind == OperandKind::Use && !defs_in_block.contains(&op.vreg) {
+                    // This is an external use - vreg not defined in this block before this point
+                    external_uses.entry(op.vreg).or_default().insert(block.id);
+                }
+            }
+
+            // Then record defs
+            for op in &inst.operands {
+                if op.kind == OperandKind::Def {
+                    defs_in_block.insert(op.vreg);
+                    local_defs.entry(op.vreg).or_default().insert(block.id);
+                }
+            }
+        }
+    }
+
+    // Collect edge argument uses
+    let mut edge_arg_uses: HashSet<VReg> = HashSet::new();
+    for edge in &func.edges {
+        for arg in &edge.args {
+            edge_arg_uses.insert(arg.source);
+        }
+    }
+
+    // Collect terminator uses
+    let mut terminator_uses: HashSet<VReg> = HashSet::new();
+    for term in &func.terms {
+        match term {
+            Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                terminator_uses.insert(*cond);
+            }
+            Terminator::JumpTable { predicate, .. } => {
+                terminator_uses.insert(*predicate);
+            }
+            Terminator::Return | Terminator::ErrorExit { .. } | Terminator::Branch { .. } => {}
+        }
+    }
+
+    // Collect result uses
+    let result_uses: HashSet<VReg> = func.data_results.iter().copied().collect();
+
+    UseDefAnalysis {
+        external_uses,
+        local_defs,
+        edge_arg_uses,
+        terminator_uses,
+        result_uses,
+    }
+}
+
+/// Check if a def of `vreg` in `def_block` is unused
+fn is_def_unused(
+    func: &Function,
+    analysis: &UseDefAnalysis,
+    vreg: VReg,
+    def_block: BlockId,
+    is_entry_block: bool,
+) -> bool {
+    // If it's a function result, it's used
+    if analysis.result_uses.contains(&vreg) {
+        return false;
+    }
+
+    // If it's used by an edge arg, it's used
+    if analysis.edge_arg_uses.contains(&vreg) {
+        return false;
+    }
+
+    // If it's used by a terminator, it's used
+    if analysis.terminator_uses.contains(&vreg) {
+        return false;
+    }
+
+    // Get blocks that have external uses of this vreg
+    let use_blocks = analysis.external_uses.get(&vreg);
+
+    // If no external uses anywhere, def is unused (for cross-block purposes)
+    // But we still need to check local uses within the same block
+    if use_blocks.is_none() || use_blocks.unwrap().is_empty() {
+        // Check if there are local uses in the def block itself
+        // (uses after the def in the same block)
+        return !has_local_use_after_def(func, vreg, def_block);
+    }
+
+    let use_blocks = use_blocks.unwrap();
+
+    // For entry block defs: they're unused if every block that uses the vreg
+    // (externally) also has a local def that shadows the entry def
+    if is_entry_block {
+        let def_blocks = analysis.local_defs.get(&vreg);
+        if let Some(def_blocks) = def_blocks {
+            // Entry def is unused if all use_blocks are also in def_blocks
+            // (meaning each using block has its own local def)
+            let all_uses_shadowed = use_blocks.iter().all(|use_block| {
+                // The use block has a local def (which shadows the entry def)
+                def_blocks.contains(use_block)
+            });
+            if all_uses_shadowed {
+                // Also check no local use in entry block itself
+                return !has_local_use_after_def(func, vreg, def_block);
+            }
+        }
+    }
+
+    // There are external uses not satisfied by local defs
+    false
+}
+
+/// Check if there's a use of `vreg` in `block` after its definition
+fn has_local_use_after_def(func: &Function, vreg: VReg, block_id: BlockId) -> bool {
+    let block = &func.blocks[block_id.index()];
+
+    // Find where vreg is defined in this block, then check for uses after
+    let mut found_def = false;
+    for &inst_id in &block.insts {
+        let inst = &func.insts[inst_id.index()];
+
+        if found_def {
+            // Check if this instruction uses vreg
             for op in &inst.operands {
                 if op.kind == OperandKind::Use && op.vreg == vreg {
                     return true;
                 }
             }
         }
-    }
-    // Also check edge args from successor edges
-    for &edge_id in &entry_block.succs {
-        let edge = &func.edges[edge_id.index()];
-        for arg in &edge.args {
-            if arg.source == vreg {
-                return true;
+
+        // Check if this instruction defines vreg
+        for op in &inst.operands {
+            if op.kind == OperandKind::Def && op.vreg == vreg {
+                found_def = true;
+                break;
             }
         }
     }
+
     false
 }
 
