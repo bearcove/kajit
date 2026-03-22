@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn compile_linear_ir_records_backend_op_ranges() {
-        let mut builder = IrBuilder::new(<u32 as Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             let value = rb.const_val(42);

@@ -15,4 +15,3 @@ kajit-mir = { path = "../kajit-mir" }
 chumsky = "1.0.0-alpha.8"
 
 [dev-dependencies]
-facet = { git = "https://github.com/facet-rs/facet", branch = "main" }

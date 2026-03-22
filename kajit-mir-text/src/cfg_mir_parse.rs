@@ -994,10 +994,6 @@ mod tests {
     use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, Width};
     use kajit_lir::linearize;
 
-    fn test_shape() -> &'static facet::Shape {
-        <u8 as facet::Facet>::SHAPE
-    }
-
     #[test]
     fn parse_simple_cfg_program() {
         let input = r#"
@@ -1019,7 +1015,7 @@ cfg_program vregs=1 slots=0 {
 
     #[test]
     fn round_trip_cfg_mir_text() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1050,7 +1046,7 @@ cfg_program vregs=1 slots=0 {
             IntrinsicFn(test_intrinsic as *const () as usize),
         );
 
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
             let func = registry

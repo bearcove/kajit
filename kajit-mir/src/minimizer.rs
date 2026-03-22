@@ -629,12 +629,8 @@ mod tests {
 
     fn postcard_u32_cfg_program() -> cfg_mir::Program {
         let registry = IntrinsicRegistry::new();
-        let mut ir_func = parse_ir(
-            snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT),
-            <u32 as Facet>::SHAPE,
-            &registry,
-        )
-        .expect("RVSDG snapshot should parse");
+        let mut ir_func = parse_ir(snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT), &registry)
+            .expect("RVSDG snapshot should parse");
         let linear = kajit_lir::linearize(&mut ir_func);
         cfg_mir::lower_linear_ir(&linear)
     }

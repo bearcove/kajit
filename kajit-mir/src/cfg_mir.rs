@@ -3515,7 +3515,7 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_produces_valid_cfg_program() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -3535,7 +3535,7 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_models_gamma_join_block_params() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(0);
@@ -3575,7 +3575,7 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_preserves_debug_scope_provenance() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         let (const_node, output_index, root_scope) = {
             let mut rb = builder.root_region();
             let value = rb.const_val(42);

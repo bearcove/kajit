@@ -566,7 +566,8 @@ pub enum NodeKind {
     /// A function definition containing a single body region.
     Lambda {
         body: RegionId,
-        shape: &'static facet::Shape,
+        /// Debug label for the type this lambda decodes (e.g. "MyStruct").
+        label: String,
         lambda_id: LambdaId,
     },
 
@@ -1019,8 +1020,8 @@ pub struct IrBuilder {
 }
 
 impl IrBuilder {
-    /// Create a new builder for a shape's IR function.
-    pub fn new(shape: &'static facet::Shape) -> Self {
+    /// Create a new builder for an IR function with the given debug label.
+    pub fn new(label: impl Into<String>) -> Self {
         let mut func = IrFunc {
             nodes: Arena::new(),
             regions: Arena::new(),
@@ -1072,7 +1073,7 @@ impl IrBuilder {
             outputs: Vec::new(),
             kind: NodeKind::Lambda {
                 body,
-                shape,
+                label: label.into(),
                 lambda_id,
             },
         });
@@ -1112,14 +1113,14 @@ impl IrBuilder {
     }
 
     /// Create a new lambda and return its ID.
-    pub fn create_lambda(&mut self, shape: &'static facet::Shape) -> LambdaId {
-        self.create_lambda_with_data_args(shape, 0)
+    pub fn create_lambda(&mut self, label: impl Into<String>) -> LambdaId {
+        self.create_lambda_with_data_args(label, 0)
     }
 
     /// Create a new lambda with `data_arg_count` leading data args.
     pub fn create_lambda_with_data_args(
         &mut self,
-        shape: &'static facet::Shape,
+        label: impl Into<String>,
         data_arg_count: usize,
     ) -> LambdaId {
         let lambda_id = LambdaId::new(self.func.lambdas.len() as u32);
@@ -1158,7 +1159,7 @@ impl IrBuilder {
             outputs: Vec::new(),
             kind: NodeKind::Lambda {
                 body,
-                shape,
+                label: label.into(),
                 lambda_id,
             },
         });
@@ -2357,12 +2358,12 @@ impl IrFunc {
         match &node.kind {
             NodeKind::Lambda {
                 body,
-                shape,
+                label,
                 lambda_id,
             } => {
                 write!(f, "{pad}lambda @{} ", lambda_id.index())?;
                 self.fmt_scope_ref(f, node.debug_scope)?;
-                writeln!(f, " (shape: {:?}) {{", shape.type_identifier,)?;
+                writeln!(f, " (shape: {label:?}) {{")?;
                 self.fmt_region(f, *body, indent + 1, registry)?;
                 writeln!(f, "{pad}}}")?;
             }
@@ -2751,8 +2752,8 @@ mod tests {
     use super::*;
 
     // A dummy shape for testing — we just need any valid &'static Shape.
-    fn test_shape() -> &'static facet::Shape {
-        <u8 as facet::Facet>::SHAPE
+    fn test_label() -> &'static str {
+        "u8"
     }
 
     #[test]
@@ -2788,7 +2789,7 @@ mod tests {
     fn linear_chain_state_threading() {
         // Build: bounds_check(4) -> read_bytes(4) -> write_to_field(0, W4)
         // Verify that each cursor op's input is the previous one's output.
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new(test_label());
 
         let body = builder.func.root_body();
         let initial_cs = PortSource::RegionArg(RegionArgRef {
@@ -2932,7 +2933,7 @@ mod tests {
 
     #[test]
     fn gamma_two_branches() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new(test_label());
 
         {
             let mut rb = builder.root_region();
@@ -2987,7 +2988,7 @@ mod tests {
 
     #[test]
     fn theta_counted_loop() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new(test_label());
 
         {
             let mut rb = builder.root_region();
@@ -3038,7 +3039,7 @@ mod tests {
 
     #[test]
     fn debug_scopes_track_structured_region_nesting() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new(test_label());
 
         {
             let mut rb = builder.root_region();
@@ -3083,7 +3084,7 @@ mod tests {
 
     #[test]
     fn debug_scope_provenance_is_stored_on_nodes_and_outputs() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new(test_label());
 
         let (const_node, output_ref, region_scope) = {
             let mut rb = builder.root_region();
@@ -3104,7 +3105,7 @@ mod tests {
 
     #[test]
     fn display_linear_chain() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new(test_label());
 
         {
             let mut rb = builder.root_region();

@@ -27,8 +27,7 @@ fn snapshot_body(snapshot: &'static str) -> &'static str {
 fn compile_and_run_from_ir_text_snapshot_u32() {
     let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
     let registry = kajit::known_intrinsic_registry();
-    let decoder =
-        kajit::compile_decoder_from_ir_text(ir_text, <u32 as Facet>::SHAPE, &registry, false);
+    let decoder = kajit::compile_decoder_from_ir_text(ir_text, &registry, false);
     let out: u32 = kajit::deserialize(&decoder, &[0x2a]).expect("decode should succeed");
     assert_eq!(out, 42);
 }
@@ -53,14 +52,8 @@ fn compile_and_run_from_cfg_mir_text_with_named_intrinsics_u32() {
 fn deserialize_from_ir_text_helper_u32() {
     let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
     let registry = kajit::known_intrinsic_registry();
-    let out: u32 = kajit::deserialize_from_ir_text(
-        ir_text,
-        <u32 as Facet>::SHAPE,
-        &registry,
-        false,
-        &[0x80, 0x01],
-    )
-    .expect("decode should succeed");
+    let out: u32 = kajit::deserialize_from_ir_text(ir_text, &registry, false, &[0x80, 0x01])
+        .expect("decode should succeed");
     assert_eq!(out, 128);
 }
 
@@ -85,14 +78,9 @@ fn deserialize_from_ir_text_with_named_json_key_ptr_const() {
     );
 
     let registry = kajit::symbol_registry_for_shape(JsonFieldStruct::SHAPE);
-    let out: JsonFieldStruct = kajit::deserialize_from_ir_text(
-        &ir_text,
-        JsonFieldStruct::SHAPE,
-        &registry,
-        false,
-        br#"{"x":42}"#,
-    )
-    .expect("decode should succeed");
+    let out: JsonFieldStruct =
+        kajit::deserialize_from_ir_text(&ir_text, &registry, false, br#"{"x":42}"#)
+            .expect("decode should succeed");
     assert_eq!(out, JsonFieldStruct { x: 42 });
 }
 

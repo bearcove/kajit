@@ -200,7 +200,7 @@ pub enum LinearOp {
     // ── Function structure ──
     FuncStart {
         lambda_id: LambdaId,
-        shape: &'static facet::Shape,
+        label: String,
         data_args: Vec<VReg>,
         data_results: Vec<VReg>,
     },
@@ -473,10 +473,10 @@ impl<'a> Linearizer<'a> {
             NodeKindRef::Theta { body } => self.linearize_theta(node_id, body),
             NodeKindRef::Lambda {
                 body,
-                shape,
+                label,
                 lambda_id,
             } => {
-                self.linearize_lambda(body, shape, lambda_id);
+                self.linearize_lambda(body, label, lambda_id);
             }
             NodeKindRef::Apply { target } => self.linearize_apply(node_id, target),
         }
@@ -957,12 +957,7 @@ impl<'a> Linearizer<'a> {
 
     // ─── Lambda ──────────────────────────────────────────────────────
 
-    fn linearize_lambda(
-        &mut self,
-        body: RegionId,
-        shape: &'static facet::Shape,
-        lambda_id: LambdaId,
-    ) {
+    fn linearize_lambda(&mut self, body: RegionId, label: &str, lambda_id: LambdaId) {
         let region = &self.func.regions[body];
         let data_args: Vec<VReg> = region
             .args
@@ -985,7 +980,7 @@ impl<'a> Linearizer<'a> {
             Some(region.debug_scope),
             LinearOp::FuncStart {
                 lambda_id,
-                shape,
+                label: label.to_owned(),
                 data_args,
                 data_results,
             },
@@ -1448,7 +1443,7 @@ enum NodeKindRef<'a> {
     },
     Lambda {
         body: RegionId,
-        shape: &'static facet::Shape,
+        label: &'a str,
         lambda_id: LambdaId,
     },
     Apply {
@@ -1465,11 +1460,11 @@ fn clone_node_kind(kind: &NodeKind) -> NodeKindRef<'_> {
         NodeKind::Theta { body } => NodeKindRef::Theta { body: *body },
         NodeKind::Lambda {
             body,
-            shape,
+            label,
             lambda_id,
         } => NodeKindRef::Lambda {
             body: *body,
-            shape,
+            label,
             lambda_id: *lambda_id,
         },
         NodeKind::Apply { target } => NodeKindRef::Apply { target: *target },
@@ -1577,14 +1572,9 @@ impl<'a> fmt::Display for LinearIrDisplay<'a> {
                     writeln!(f, "L{}:", label.index())?;
                 }
                 LinearOp::FuncStart {
-                    lambda_id, shape, ..
+                    lambda_id, label, ..
                 } => {
-                    writeln!(
-                        f,
-                        "func λ{} ({}):",
-                        lambda_id.index(),
-                        shape.type_identifier
-                    )?;
+                    writeln!(f, "func λ{} ({label}):", lambda_id.index())?;
                 }
                 LinearOp::FuncEnd => {
                     writeln!(f, "end")?;
@@ -1861,7 +1851,7 @@ mod tests {
     #[test]
     fn linearize_simple_chain() {
         // BoundsCheck(4) → ReadBytes(4) → WriteToField(offset=0, W4)
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1890,7 +1880,7 @@ mod tests {
 
     #[test]
     fn linearize_preserves_debug_scope_provenance() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         let (const_node, output_index, root_scope) = {
             let mut rb = builder.root_region();
             let value = rb.const_val(42);
@@ -1937,7 +1927,7 @@ mod tests {
         // Gamma with predicate, 2 branches:
         //   branch 0: const 42 → result
         //   branch 1: const 99 → result
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(0);
@@ -1978,7 +1968,7 @@ mod tests {
         // Theta: count down from 5 to 0.
         // loop_var = counter
         // body: counter - 1, predicate = counter > 0
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             let init_count = rb.const_val(5);
@@ -2013,7 +2003,7 @@ mod tests {
 
         unsafe extern "C" fn dummy_intrinsic(_ctx: *mut core::ffi::c_void) {}
 
-        let mut builder = IrBuilder::new(<bool as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("bool");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(1);
@@ -2037,7 +2027,7 @@ mod tests {
 
     #[test]
     fn linearize_display() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -2079,7 +2069,7 @@ mod tests {
         let mut ops = vec![
             LinearOp::FuncStart {
                 lambda_id: LambdaId::new(0),
-                shape: <u32 as facet::Facet>::SHAPE,
+                label: "u32".into(),
                 data_args: vec![],
                 data_results: vec![],
             },
@@ -2117,7 +2107,7 @@ mod tests {
         let mut ops = vec![
             LinearOp::FuncStart {
                 lambda_id: LambdaId::new(0),
-                shape: <u32 as facet::Facet>::SHAPE,
+                label: "u32".into(),
                 data_args: vec![],
                 data_results: vec![v1],
             },
@@ -2146,7 +2136,7 @@ mod tests {
         let mut ops = vec![
             LinearOp::FuncStart {
                 lambda_id: LambdaId::new(0),
-                shape: <u32 as facet::Facet>::SHAPE,
+                label: "u32".into(),
                 data_args: vec![],
                 data_results: vec![],
             },

@@ -1984,7 +1984,7 @@ pub(crate) fn build_structural_hir_ir(
         .expect("structural HIR function should have a destination param")
         .ty;
 
-    let mut builder = crate::ir::IrBuilder::new(shape);
+    let mut builder = crate::ir::IrBuilder::new(shape.type_identifier);
     let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();

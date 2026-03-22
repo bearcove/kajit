@@ -2948,7 +2948,7 @@ mod tests {
     use kajit_lir::linearize;
 
     fn build_stress_ir() -> kajit_ir::IrFunc {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             let mut acc = rb.const_val(0_u64);
@@ -2982,7 +2982,7 @@ mod tests {
 
     #[test]
     fn regalloc2_allocates_cfg_mir_gamma_theta_program() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(1);
@@ -3053,7 +3053,7 @@ mod tests {
     // r[verify ir.regalloc.engine]
     #[test]
     fn regalloc2_allocates_gamma_and_theta_programs() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(1);
@@ -3112,8 +3112,7 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let mut func =
-            parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
+        let mut func = parse_ir(input, &registry).expect("fixture should parse");
         let lin = linearize(&mut func);
         let cfg = crate::cfg_mir::lower_linear_ir(&lin);
         let _alloc = allocate_cfg_program(&cfg).unwrap_or_else(|e| {
@@ -3150,8 +3149,7 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let mut func =
-            parse_ir(input, <u8 as Facet>::SHAPE, &registry).expect("fixture should parse");
+        let mut func = parse_ir(input, &registry).expect("fixture should parse");
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
         let cfg = crate::cfg_mir::lower_linear_ir(&lin);
@@ -3189,7 +3187,7 @@ lambda @0 (shape: "u8") {
             a + b + c
         }
 
-        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u64");
         {
             let mut rb = builder.root_region();
             let a = rb.const_val(11);
@@ -3409,7 +3407,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn post_regalloc_simulation_matches_interpreter_for_simple_decoder() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -3437,7 +3435,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn differential_checker_matches_for_simple_decoder() {
-        let mut builder = IrBuilder::new(<u32 as facet::Facet>::SHAPE);
+        let mut builder = IrBuilder::new("u32");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -3461,8 +3459,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn differential_checker_matches_for_call_lambda_data_result() {
-        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
-        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        let mut builder = IrBuilder::new("u64");
+        let child = builder.create_lambda_with_data_args("u64", 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];
@@ -3492,8 +3490,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_materializes_lambda_return_result_allocs() {
-        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
-        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        let mut builder = IrBuilder::new("u64");
+        let child = builder.create_lambda_with_data_args("u64", 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];
@@ -3527,8 +3525,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_assigns_call_lambda_abi_operands() {
-        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
-        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        let mut builder = IrBuilder::new("u64");
+        let child = builder.create_lambda_with_data_args("u64", 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];
@@ -3589,8 +3587,8 @@ lambda @0 (shape: "u8") {
     #[test]
     #[ignore = "non-HIR path disabled"]
     fn allocate_cfg_program_wires_lambda_data_arg_from_abi_register() {
-        let mut builder = IrBuilder::new(<u64 as facet::Facet>::SHAPE);
-        let child = builder.create_lambda_with_data_args(<u64 as facet::Facet>::SHAPE, 1);
+        let mut builder = IrBuilder::new("u64");
+        let child = builder.create_lambda_with_data_args("u64", 1);
         {
             let mut rb = builder.lambda_region(child);
             let arg = rb.region_args(1)[0];

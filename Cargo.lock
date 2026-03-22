@@ -652,7 +652,6 @@ dependencies = [
 name = "kajit-ir"
 version = "0.1.0"
 dependencies = [
- "facet",
  "kajit-ir-text",
 ]
 
@@ -678,7 +677,6 @@ dependencies = [
 name = "kajit-lir"
 version = "0.1.0"
 dependencies = [
- "facet",
  "kajit-ir",
 ]
 
@@ -718,7 +716,6 @@ name = "kajit-mir-text"
 version = "0.1.0"
 dependencies = [
  "chumsky",
- "facet",
  "kajit-ir",
  "kajit-lir",
  "kajit-mir",

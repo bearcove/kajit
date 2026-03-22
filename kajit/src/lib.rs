@@ -101,11 +101,10 @@ pub fn compile_decoder_linear_ir(
 /// IR snapshot, edit it down to a minimal reproducer, and re-run.
 pub fn compile_decoder_from_ir_text(
     ir_text: &str,
-    shape: &'static facet::Shape,
     registry: &ir::IntrinsicRegistry,
     with_passes: bool,
 ) -> CompiledDecoder {
-    let mut func = ir_parse::parse_ir(ir_text, shape, registry).expect("IR text should parse");
+    let mut func = ir_parse::parse_ir(ir_text, registry).expect("IR text should parse");
     if with_passes {
         compiler::run_default_passes_from_env(&mut func);
     }
@@ -134,12 +133,11 @@ pub fn compile_decoder_from_cfg_mir_text(
 /// Compile from IR text and immediately deserialize one input.
 pub fn deserialize_from_ir_text<'input, T: facet::Facet<'input>>(
     ir_text: &str,
-    shape: &'static facet::Shape,
     registry: &ir::IntrinsicRegistry,
     with_passes: bool,
     input: &'input [u8],
 ) -> Result<T, DeserError> {
-    let decoder = compile_decoder_from_ir_text(ir_text, shape, registry, with_passes);
+    let decoder = compile_decoder_from_ir_text(ir_text, registry, with_passes);
     deserialize(&decoder, input)
 }
 
@@ -670,8 +668,7 @@ mod differential_tests {
     fn differential_harness_matches_postcard_u32_linear_ir_snapshot() {
         let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
         let registry = ir::IntrinsicRegistry::new();
-        let mut ir_func =
-            ir_parse::parse_ir(ir_text, <u32 as Facet>::SHAPE, &registry).expect("valid RVSDG");
+        let mut ir_func = ir_parse::parse_ir(ir_text, &registry).expect("valid RVSDG");
         let linear = linearize::linearize(&mut ir_func);
         let report =
             differential_check_linear_ir_vs_jit(&linear, &[0x2a]).expect("harness should execute");

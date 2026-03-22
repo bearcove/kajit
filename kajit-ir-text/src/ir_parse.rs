@@ -727,15 +727,8 @@ impl std::error::Error for ParseError {}
 
 /// Parse an RVSDG text format into an `IrFunc`.
 ///
-/// The `shape` parameter provides the `&'static Shape` for the root lambda.
-/// For test fixtures, use `<u8 as facet::Facet>::SHAPE` as a dummy.
-///
 /// The `registry` resolves `@name` intrinsic references to `IntrinsicFn` values.
-pub fn parse_ir(
-    input: &str,
-    shape: &'static facet::Shape,
-    registry: &IntrinsicRegistry,
-) -> Result<IrFunc, ParseError> {
+pub fn parse_ir(input: &str, registry: &IntrinsicRegistry) -> Result<IrFunc, ParseError> {
     let result = program().parse(input);
 
     let lambdas = result.into_result().map_err(|errs| {
@@ -745,15 +738,11 @@ pub fn parse_ir(
         }
     })?;
 
-    resolve(lambdas, shape, registry)
+    resolve(lambdas, registry)
 }
 
 /// Resolve AST references into a concrete `IrFunc`.
-fn resolve(
-    program: AstProgram,
-    shape: &'static facet::Shape,
-    registry: &IntrinsicRegistry,
-) -> Result<IrFunc, ParseError> {
+fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, ParseError> {
     let mut func = IrFunc {
         nodes: Arena::new(),
         regions: Arena::new(),
@@ -809,7 +798,7 @@ fn resolve(
     let mut lambda_node_ids = Vec::new();
     for ast_lambda in &program.lambdas {
         let lambda_id = LambdaId::new(ast_lambda.id);
-        let lambda_shape = shape; // non-root lambdas also get same shape for now
+        let lambda_label = ast_lambda.shape.clone();
         let debug_scope = match ast_lambda.node_scope {
             Some(scope) => lookup_scope(&func, scope)?,
             None if program.scopes.is_empty() && lambda_id.index() == 0 => func.root_debug_scope,
@@ -827,7 +816,7 @@ fn resolve(
             outputs: Vec::new(),
             kind: NodeKind::Lambda {
                 body: placeholder_body,
-                shape: lambda_shape,
+                label: lambda_label,
                 lambda_id,
             },
         });
@@ -862,9 +851,10 @@ fn resolve(
         )?;
 
         // Patch the lambda node's body region.
+        let label = ast_lambda.shape.clone();
         func.nodes[node_id].kind = NodeKind::Lambda {
             body: body_region_id,
-            shape,
+            label,
             lambda_id,
         };
     }
@@ -1605,7 +1595,7 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let func = parse_ir(input, test_shape(), &registry).unwrap();
+        let func = parse_ir(input, &registry).unwrap();
 
         // Verify structure.
         assert_eq!(func.lambdas.len(), 1);
@@ -1633,7 +1623,7 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let func = parse_ir(input, test_shape(), &registry).unwrap();
+        let func = parse_ir(input, &registry).unwrap();
 
         let root_body = func.root_body();
         let region = &func.regions[root_body];
@@ -1679,7 +1669,7 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let func = parse_ir(input, test_shape(), &registry).unwrap();
+        let func = parse_ir(input, &registry).unwrap();
 
         let root_body = func.root_body();
         let region = &func.regions[root_body];
@@ -1697,7 +1687,7 @@ lambda @0 (shape: "u8") {
     #[test]
     fn round_trip_simple() {
         // Build IR programmatically.
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(4);
@@ -1710,7 +1700,7 @@ lambda @0 (shape: "u8") {
         // Display → parse → display, check equality.
         let registry = IntrinsicRegistry::empty();
         let text1 = format!("{}", func.display_with_registry(&registry));
-        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let func2 = parse_ir(&text1, &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
         assert_eq!(
@@ -1721,7 +1711,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn round_trip_gamma() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
             let pred = rb.const_val(0);
@@ -1740,7 +1730,7 @@ lambda @0 (shape: "u8") {
 
         let registry = IntrinsicRegistry::empty();
         let text1 = format!("{}", func.display_with_registry(&registry));
-        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let func2 = parse_ir(&text1, &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
         assert_eq!(
@@ -1751,7 +1741,7 @@ lambda @0 (shape: "u8") {
 
     #[test]
     fn round_trip_theta() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
             let init = rb.const_val(5);
@@ -1769,7 +1759,7 @@ lambda @0 (shape: "u8") {
 
         let registry = IntrinsicRegistry::empty();
         let text1 = format!("{}", func.display_with_registry(&registry));
-        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let func2 = parse_ir(&text1, &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
         assert_eq!(
@@ -1796,12 +1786,12 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let func = parse_ir(input, test_shape(), &registry).unwrap();
+        let func = parse_ir(input, &registry).unwrap();
         assert_eq!(func.state_domains.len(), 3);
         assert_eq!(func.state_domains[StateDomainId::new(2)].name, "planner");
 
         let text1 = format!("{}", func.display_with_registry(&registry));
-        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let func2 = parse_ir(&text1, &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
         assert_eq!(
@@ -1822,7 +1812,7 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let err = match parse_ir(input, test_shape(), &registry) {
+        let err = match parse_ir(input, &registry) {
             Ok(_) => panic!("expected parse error"),
             Err(err) => err,
         };
@@ -1843,7 +1833,7 @@ lambda @0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let result = parse_ir(input, test_shape(), &registry);
+        let result = parse_ir(input, &registry);
         let err = match result {
             Err(e) => e,
             Ok(_) => panic!("expected error for unknown intrinsic"),
@@ -1860,14 +1850,14 @@ lambda @0 (shape: "u8") {
         let input = "this is not valid IR at all";
 
         let registry = IntrinsicRegistry::empty();
-        let result = parse_ir(input, test_shape(), &registry);
+        let result = parse_ir(input, &registry);
         assert!(result.is_err());
     }
 
     #[test]
     fn round_trip_all_ops() {
         // Test round-tripping all simple ops.
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
 
@@ -1916,7 +1906,7 @@ lambda @0 (shape: "u8") {
 
         let registry = IntrinsicRegistry::empty();
         let text1 = format!("{}", func.display_with_registry(&registry));
-        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let func2 = parse_ir(&text1, &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
         assert_eq!(
@@ -1935,7 +1925,7 @@ lambda @0 (shape: "u8") {
             IntrinsicFn(test_intrinsic as *const () as usize),
         );
 
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
             rb.bounds_check(1);
@@ -1953,7 +1943,7 @@ lambda @0 (shape: "u8") {
             "display should use @name, got:\n{text1}"
         );
 
-        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let func2 = parse_ir(&text1, &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
         assert_eq!(
@@ -1983,7 +1973,7 @@ lambda @0 @s0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let func = parse_ir(input, test_shape(), &registry).unwrap();
+        let func = parse_ir(input, &registry).unwrap();
 
         let root_body = func.root_body();
         assert_eq!(func.regions[root_body].debug_scope, DebugScopeId::new(0));
@@ -2001,7 +1991,7 @@ lambda @0 @s0 (shape: "u8") {
 
     #[test]
     fn round_trip_preserves_scoped_node_and_output_annotations() {
-        let mut builder = IrBuilder::new(test_shape());
+        let mut builder = IrBuilder::new("u8");
         {
             let mut rb = builder.root_region();
             let value = rb.const_val(42);
@@ -2020,7 +2010,7 @@ lambda @0 @s0 (shape: "u8") {
 
         let registry = IntrinsicRegistry::empty();
         let text1 = format!("{}", func.display_with_registry(&registry));
-        let func2 = parse_ir(&text1, test_shape(), &registry).unwrap();
+        let func2 = parse_ir(&text1, &registry).unwrap();
         let text2 = format!("{}", func2.display_with_registry(&registry));
 
         assert_eq!(text1, text2);
@@ -2050,7 +2040,7 @@ lambda @0 @s0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let err = match parse_ir(input, test_shape(), &registry) {
+        let err = match parse_ir(input, &registry) {
             Ok(_) => panic!("expected unknown scope reference error"),
             Err(err) => err,
         };
@@ -2073,7 +2063,7 @@ lambda @0 @s0 (shape: "u8") {
 "#;
 
         let registry = IntrinsicRegistry::empty();
-        let err = match parse_ir(input, test_shape(), &registry) {
+        let err = match parse_ir(input, &registry) {
             Ok(_) => panic!("expected sparse scope ID error"),
             Err(err) => err,
         };

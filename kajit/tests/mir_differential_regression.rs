@@ -101,8 +101,8 @@ impl DifferentialHarness {
     fn from_snapshot(snapshot: &'static str, shape: &'static facet::Shape) -> Self {
         let ir_text = snapshot_body(snapshot);
         let registry = kajit::ir::IntrinsicRegistry::new();
-        let mut ir_func = kajit::ir_parse::parse_ir(ir_text, shape, &registry)
-            .expect("RVSDG snapshot should parse");
+        let mut ir_func =
+            kajit::ir_parse::parse_ir(ir_text, &registry).expect("RVSDG snapshot should parse");
         let linear = kajit::linearize::linearize(&mut ir_func);
         let output_size = infer_output_size(&linear);
         let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear);

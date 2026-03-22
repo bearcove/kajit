@@ -283,22 +283,36 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
     shape: &'static Shape,
     pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
+    let registry = symbol_registry_for_shape(shape);
     let module = build_postcard_decoder_hir(shape);
     let mut func = build_structural_hir_ir(shape, &module);
     run_configured_default_passes(&mut func, &pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
-    compile_linear_ir_decoder_with_options(&linear, false, pipeline_opts)
+    compile_linear_ir_decoder_with_options(
+        &linear,
+        false,
+        pipeline_opts,
+        Some(&registry),
+        Some(shape),
+    )
 }
 
 pub(crate) fn compile_json_decoder_via_hir_with_options(
     shape: &'static Shape,
     pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
+    let registry = symbol_registry_for_shape(shape);
     let module = build_json_decoder_hir(shape);
     let mut func = build_structural_hir_ir(shape, &module);
     run_configured_default_passes(&mut func, &pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
-    compile_linear_ir_decoder_with_options(&linear, true, pipeline_opts)
+    compile_linear_ir_decoder_with_options(
+        &linear,
+        true,
+        pipeline_opts,
+        Some(&registry),
+        Some(shape),
+    )
 }
 
 pub(crate) fn run_default_passes_from_env(func: &mut crate::ir::IrFunc) {
@@ -378,7 +392,13 @@ pub fn compile_linear_ir_decoder(
     ir: &crate::linearize::LinearIr,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
-    compile_linear_ir_decoder_with_options(ir, trusted_utf8_input, PipelineOptions::from_env())
+    compile_linear_ir_decoder_with_options(
+        ir,
+        trusted_utf8_input,
+        PipelineOptions::from_env(),
+        None,
+        None,
+    )
 }
 
 /// Compile a deserializer directly from CFG-MIR.
@@ -409,6 +429,8 @@ fn compile_linear_ir_decoder_with_options(
     ir: &crate::linearize::LinearIr,
     trusted_utf8_input: bool,
     pipeline_opts: PipelineOptions,
+    registry: Option<&crate::ir::IntrinsicRegistry>,
+    root_shape: Option<&'static Shape>,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
@@ -434,39 +456,18 @@ fn compile_linear_ir_decoder_with_options(
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
-    let root_shape = ir.ops.iter().find_map(|op| match op {
+    let listing = build_cfg_mir_listing(&cfg_program, registry);
+    let root_label = ir.ops.iter().find_map(|op| match op {
         crate::linearize::LinearOp::FuncStart {
-            lambda_id, shape, ..
-        } if lambda_id.index() == 0 => Some(*shape),
+            lambda_id, label, ..
+        } if lambda_id.index() == 0 => Some(label.as_str()),
         _ => None,
     });
-    let registry = root_shape.map(symbol_registry_for_shape);
-    let listing = build_cfg_mir_listing(&cfg_program, registry.as_ref());
-    let root_display_name = ir
-        .ops
-        .iter()
-        .find_map(|op| match op {
-            crate::linearize::LinearOp::FuncStart {
-                lambda_id, shape, ..
-            } if lambda_id.index() == 0 => {
-                Some(format!("kajit::decode::{}", shape.type_identifier))
-            }
-            _ => None,
-        })
+    let root_display_name = root_label
+        .map(|l| format!("kajit::decode::{l}"))
         .unwrap_or_else(|| "kajit::decode::<ir-root>".to_string());
-    let root_mangled_name = ir
-        .ops
-        .iter()
-        .find_map(|op| match op {
-            crate::linearize::LinearOp::FuncStart {
-                lambda_id, shape, ..
-            } if lambda_id.index() == 0 => Some(crate::jit_debug::rust_v0_mangle(&[
-                "kajit",
-                "decode",
-                shape.type_identifier,
-            ])),
-            _ => None,
-        })
+    let root_mangled_name = root_label
+        .map(|l| crate::jit_debug::rust_v0_mangle(&["kajit", "decode", l]))
         .unwrap_or_else(|| crate::jit_debug::rust_v0_mangle(&["kajit", "decode", "ir_root"]));
     let symbol = crate::jit_debug::JitSymbolEntry {
         name: root_mangled_name,
