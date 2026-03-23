@@ -20,39 +20,43 @@ impl Lowerer {
         let p3 = ((value >> 48) & 0xFFFF) as u32;
         self.ectx
             .emit
-            .emit_word(aarch64::encode_movz(aarch64::Width::X64, rd, p0 as u16, 0).expect("movz"));
+            .emit_movz_imm(aarch64::Width::X64, rd, p0 as u16, 0)
+            .expect("movz");
         if p1 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, rd, p1 as u16, 16).expect("movk"),
-            );
+            self.ectx
+                .emit
+                .emit_movk_imm(aarch64::Width::X64, rd, p1 as u16, 16)
+                .expect("movk");
         }
         if p2 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, rd, p2 as u16, 32).expect("movk"),
-            );
+            self.ectx
+                .emit
+                .emit_movk_imm(aarch64::Width::X64, rd, p2 as u16, 32)
+                .expect("movk");
         }
         if p3 != 0 {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::X64, rd, p3 as u16, 48).expect("movk"),
-            );
+            self.ectx
+                .emit
+                .emit_movk_imm(aarch64::Width::X64, rd, p3 as u16, 48)
+                .expect("movk");
         }
     }
 
     fn emit_add_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
         if imm <= 0x0fff {
-            self.ectx.emit.emit_word(
-                aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, imm as u16, false)
-                    .expect("add"),
-            );
+            self.ectx
+                .emit
+                .emit_add_imm(aarch64::Width::X64, rd, rn, imm as u16, false)
+                .expect("add");
             return;
         }
         if (imm & 0x0fff) == 0 {
             let shifted = imm >> 12;
             if shifted <= 0x0fff {
-                self.ectx.emit.emit_word(
-                    aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, shifted as u16, true)
-                        .expect("add"),
-                );
+                self.ectx
+                    .emit
+                    .emit_add_imm(aarch64::Width::X64, rd, rn, shifted as u16, true)
+                    .expect("add");
                 return;
             }
         }
@@ -60,7 +64,8 @@ impl Lowerer {
         self.emit_load_u64_reg(scratch, imm as u64);
         self.ectx
             .emit
-            .emit_word(aarch64::encode_add_reg(aarch64::Width::X64, rd, rn, scratch).expect("add"));
+            .emit_add_reg(aarch64::Width::X64, rd, rn, scratch)
+            .expect("add");
     }
 
     pub(super) fn emit_stack_addr(&mut self, rd: Reg, off: u32) {
@@ -68,27 +73,27 @@ impl Lowerer {
     }
 
     pub(super) fn emit_stack_load(&mut self, width: aarch64::Width, rd: Reg, off: u32) {
-        if let Ok(word) = aarch64::encode_ldr_imm(width, rd, Reg::SP, off) {
-            self.ectx.emit.emit_word(word);
+        if self.ectx.emit.emit_ldr_imm(width, rd, Reg::SP, off).is_ok() {
             return;
         }
         let addr_reg = self.scratch_reg_avoiding(rd, None);
         self.emit_stack_addr(addr_reg, off);
         self.ectx
             .emit
-            .emit_word(aarch64::encode_ldr_imm(width, rd, addr_reg, 0).expect("ldr"));
+            .emit_ldr_imm(width, rd, addr_reg, 0)
+            .expect("ldr");
     }
 
     pub(super) fn emit_stack_store(&mut self, width: aarch64::Width, rs: Reg, off: u32) {
-        if let Ok(word) = aarch64::encode_str_imm(width, rs, Reg::SP, off) {
-            self.ectx.emit.emit_word(word);
+        if self.ectx.emit.emit_str_imm(width, rs, Reg::SP, off).is_ok() {
             return;
         }
         let addr_reg = self.scratch_reg_avoiding(rs, None);
         self.emit_stack_addr(addr_reg, off);
         self.ectx
             .emit
-            .emit_word(aarch64::encode_str_imm(width, rs, addr_reg, 0).expect("str"));
+            .emit_str_imm(width, rs, addr_reg, 0)
+            .expect("str");
     }
 
     pub(super) fn emit_mov_x9_from_preg(&mut self, preg: regalloc2::PReg) -> bool {
@@ -99,9 +104,10 @@ impl Lowerer {
         if r == 9 {
             return true;
         }
-        self.ectx.emit.emit_word(
-            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::from_raw(r)).expect("mov"),
-        );
+        self.ectx
+            .emit
+            .emit_mov_reg(aarch64::Width::X64, Reg::X9, Reg::from_raw(r))
+            .expect("mov");
         true
     }
 
@@ -113,9 +119,10 @@ impl Lowerer {
         if r == 9 {
             return true;
         }
-        self.ectx.emit.emit_word(
-            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::from_raw(r), Reg::X9).expect("mov"),
-        );
+        self.ectx
+            .emit
+            .emit_mov_reg(aarch64::Width::X64, Reg::from_raw(r), Reg::X9)
+            .expect("mov");
         true
     }
 
@@ -128,14 +135,14 @@ impl Lowerer {
         }
         let from_r = from.hw_enc() as u8;
         let to_r = to.hw_enc() as u8;
-        self.ectx.emit.emit_word(
-            aarch64::encode_mov_reg(
+        self.ectx
+            .emit
+            .emit_mov_reg(
                 aarch64::Width::X64,
                 Reg::from_raw(to_r),
                 Reg::from_raw(from_r),
             )
-            .expect("mov"),
-        );
+            .expect("mov");
         true
     }
 
@@ -183,10 +190,10 @@ impl Lowerer {
             );
             let r = reg.hw_enc() as u8;
             if r != 10 {
-                self.ectx.emit.emit_word(
-                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X10, Reg::from_raw(r))
-                        .expect("mov"),
-                );
+                self.ectx
+                    .emit
+                    .emit_mov_reg(aarch64::Width::X64, Reg::X10, Reg::from_raw(r))
+                    .expect("mov");
             }
             return;
         }
@@ -281,13 +288,15 @@ impl Lowerer {
     pub(super) fn emit_load_u32_w10(&mut self, value: u32) {
         let lo = value & 0xFFFF;
         let hi = (value >> 16) & 0xFFFF;
-        self.ectx.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::W32, Reg::X10, lo as u16, 0).expect("movz"),
-        );
+        self.ectx
+            .emit
+            .emit_movz_imm(aarch64::Width::W32, Reg::X10, lo as u16, 0)
+            .expect("movz");
         if value > 0xFFFF {
-            self.ectx.emit.emit_word(
-                aarch64::encode_movk(aarch64::Width::W32, Reg::X10, hi as u16, 16).expect("movk"),
-            );
+            self.ectx
+                .emit
+                .emit_movk_imm(aarch64::Width::W32, Reg::X10, hi as u16, 16)
+                .expect("movk");
         }
     }
 

@@ -695,22 +695,24 @@ impl Lowerer {
             LinearOp::AdvanceCursor { count } => self.ectx.emit_advance_cursor_by(*count),
             LinearOp::AdvanceCursorBy { src } => {
                 self.emit_load_use_x9(*src, 0);
-                self.ectx.emit.emit_word(
-                    aarch64::encode_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X9)
-                        .expect("add"),
-                );
+                self.ectx
+                    .emit
+                    .emit_add_reg(aarch64::Width::X64, Reg::X19, Reg::X19, Reg::X9)
+                    .expect("add");
             }
             LinearOp::SaveCursor { dst } => {
-                self.ectx.emit.emit_word(
-                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X19).expect("mov"),
-                );
+                self.ectx
+                    .emit
+                    .emit_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X19)
+                    .expect("mov");
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, None);
             }
             LinearOp::SaveInputEnd { dst } => {
-                self.ectx.emit.emit_word(
-                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X20).expect("mov"),
-                );
+                self.ectx
+                    .emit
+                    .emit_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X20)
+                    .expect("mov");
                 self.emit_store_def_x9(*dst, 0);
                 self.set_const(*dst, None);
             }
@@ -720,20 +722,20 @@ impl Lowerer {
                     && let Some(reg) = alloc.as_reg()
                     && reg.class() == regalloc2::RegClass::Int
                 {
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_mov_reg(
+                    self.ectx
+                        .emit
+                        .emit_mov_reg(
                             aarch64::Width::X64,
                             Reg::X19,
                             Reg::from_raw(reg.hw_enc() as u8),
                         )
-                        .expect("mov"),
-                    );
+                        .expect("mov");
                 } else {
                     self.emit_load_use_x9(*src, 0);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X19, Reg::X9)
-                            .expect("mov"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_mov_reg(aarch64::Width::X64, Reg::X19, Reg::X9)
+                        .expect("mov");
                 }
             }
 

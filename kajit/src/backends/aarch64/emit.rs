@@ -9,19 +9,23 @@ impl Lowerer {
             Width::W1 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X21, offset).expect("ldrb")),
+                .emit_ldrb_imm(Reg::X9, Reg::X21, offset)
+                .expect("ldrb"),
             Width::W2 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_ldrh_imm(Reg::X9, Reg::X21, offset).expect("ldrh")),
-            Width::W4 => self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X21, offset)
-                    .expect("ldr"),
-            ),
-            Width::W8 => self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X21, offset)
-                    .expect("ldr"),
-            ),
+                .emit_ldrh_imm(Reg::X9, Reg::X21, offset)
+                .expect("ldrh"),
+            Width::W4 => self
+                .ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X21, offset)
+                .expect("ldr"),
+            Width::W8 => self
+                .ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X21, offset)
+                .expect("ldr"),
         }
         self.emit_store_def_x9(dst, 0);
         self.set_const(dst, None);
@@ -33,19 +37,23 @@ impl Lowerer {
             Width::W1 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_strb_imm(Reg::X9, Reg::X21, offset).expect("strb")),
+                .emit_strb_imm(Reg::X9, Reg::X21, offset)
+                .expect("strb"),
             Width::W2 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_strh_imm(Reg::X9, Reg::X21, offset).expect("strh")),
-            Width::W4 => self.ectx.emit.emit_word(
-                aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X21, offset)
-                    .expect("str"),
-            ),
-            Width::W8 => self.ectx.emit.emit_word(
-                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, offset)
-                    .expect("str"),
-            ),
+                .emit_strh_imm(Reg::X9, Reg::X21, offset)
+                .expect("strh"),
+            Width::W4 => self
+                .ectx
+                .emit
+                .emit_str_imm(aarch64::Width::W32, Reg::X9, Reg::X21, offset)
+                .expect("str"),
+            Width::W8 => self
+                .ectx
+                .emit
+                .emit_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, offset)
+                .expect("str"),
         }
     }
 
@@ -83,17 +91,23 @@ impl Lowerer {
             Width::W1 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_strb_imm(Reg::X9, Reg::X10, 0).expect("strb")),
+                .emit_strb_imm(Reg::X9, Reg::X10, 0)
+                .expect("strb"),
             Width::W2 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_strh_imm(Reg::X9, Reg::X10, 0).expect("strh")),
-            Width::W4 => self.ectx.emit.emit_word(
-                aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0).expect("str"),
-            ),
-            Width::W8 => self.ectx.emit.emit_word(
-                aarch64::encode_str_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0).expect("str"),
-            ),
+                .emit_strh_imm(Reg::X9, Reg::X10, 0)
+                .expect("strh"),
+            Width::W4 => self
+                .ectx
+                .emit
+                .emit_str_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0)
+                .expect("str"),
+            Width::W8 => self
+                .ectx
+                .emit
+                .emit_str_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0)
+                .expect("str"),
         }
     }
 
@@ -115,20 +129,18 @@ impl Lowerer {
             let base = Reg::from_raw(ar.hw_enc() as u8);
             let dest = Reg::from_raw(dr.hw_enc() as u8);
             match width {
-                Width::W1 => self
+                Width::W1 => self.ectx.emit.emit_ldrb_imm(dest, base, 0).expect("ldrb"),
+                Width::W2 => self.ectx.emit.emit_ldrh_imm(dest, base, 0).expect("ldrh"),
+                Width::W4 => self
                     .ectx
                     .emit
-                    .emit_word(aarch64::encode_ldrb_imm(dest, base, 0).expect("ldrb")),
-                Width::W2 => self
+                    .emit_ldr_imm(aarch64::Width::W32, dest, base, 0)
+                    .expect("ldr"),
+                Width::W8 => self
                     .ectx
                     .emit
-                    .emit_word(aarch64::encode_ldrh_imm(dest, base, 0).expect("ldrh")),
-                Width::W4 => self.ectx.emit.emit_word(
-                    aarch64::encode_ldr_imm(aarch64::Width::W32, dest, base, 0).expect("ldr"),
-                ),
-                Width::W8 => self.ectx.emit.emit_word(
-                    aarch64::encode_ldr_imm(aarch64::Width::X64, dest, base, 0).expect("ldr"),
-                ),
+                    .emit_ldr_imm(aarch64::Width::X64, dest, base, 0)
+                    .expect("ldr"),
             }
             self.set_const(dst, None);
             return;
@@ -140,17 +152,23 @@ impl Lowerer {
             Width::W1 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X10, 0).expect("ldrb")),
+                .emit_ldrb_imm(Reg::X9, Reg::X10, 0)
+                .expect("ldrb"),
             Width::W2 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_ldrh_imm(Reg::X9, Reg::X10, 0).expect("ldrh")),
-            Width::W4 => self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0).expect("ldr"),
-            ),
-            Width::W8 => self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0).expect("ldr"),
-            ),
+                .emit_ldrh_imm(Reg::X9, Reg::X10, 0)
+                .expect("ldrh"),
+            Width::W4 => self
+                .ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X10, 0)
+                .expect("ldr"),
+            Width::W8 => self
+                .ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X10, 0)
+                .expect("ldr"),
         }
         self.emit_store_def_x9(dst, 1);
         self.set_const(dst, None);
@@ -162,17 +180,23 @@ impl Lowerer {
             1 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb")),
+                .emit_ldrb_imm(Reg::X9, Reg::X19, 0)
+                .expect("ldrb"),
             2 => self
                 .ectx
                 .emit
-                .emit_word(aarch64::encode_ldrh_imm(Reg::X9, Reg::X19, 0).expect("ldrh")),
-            4 => self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X19, 0).expect("ldr"),
-            ),
-            8 => self.ectx.emit.emit_word(
-                aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X19, 0).expect("ldr"),
-            ),
+                .emit_ldrh_imm(Reg::X9, Reg::X19, 0)
+                .expect("ldrh"),
+            4 => self
+                .ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X19, 0)
+                .expect("ldr"),
+            8 => self
+                .ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::X64, Reg::X9, Reg::X19, 0)
+                .expect("ldr"),
             _ => panic!("unsupported ReadBytes count: {count}"),
         }
         self.emit_store_def_x9(dst, 0);
@@ -184,7 +208,8 @@ impl Lowerer {
         self.emit_bounds_check(1);
         self.ectx
             .emit
-            .emit_word(aarch64::encode_ldrb_imm(Reg::X9, Reg::X19, 0).expect("ldrb"));
+            .emit_ldrb_imm(Reg::X9, Reg::X19, 0)
+            .expect("ldrb");
         self.emit_store_def_x9(dst, 0);
         self.set_const(dst, None);
     }
@@ -261,10 +286,10 @@ impl Lowerer {
                         );
                     } else {
                         self.emit_load_u64_x10(c);
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::X10)
-                                .expect("cmp"),
-                        );
+                        self.ectx
+                            .emit
+                            .emit_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::X10)
+                            .expect("cmp");
                     }
                 }
                 (Some(lhs_reg), None, None, Some(rhs_reg), None) => {
@@ -306,10 +331,10 @@ impl Lowerer {
                     let rhs_off = self.spill_off(rhs_stack);
                     self.emit_stack_load(aarch64::Width::X64, Reg::X9, lhs_off);
                     self.emit_stack_load(aarch64::Width::X64, Reg::X10, rhs_off);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::X10)
-                            .expect("cmp"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_cmp_reg(aarch64::Width::X64, Reg::X9, Reg::X10)
+                        .expect("cmp");
                 }
                 _ => panic!("unexpected none allocation for compare operands"),
             }
@@ -777,10 +802,10 @@ impl Lowerer {
                     );
                 } else {
                     self.emit_load_use_x10_vreg(rhs);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_add_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
-                            .expect("add"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_add_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                        .expect("add");
                 }
             }
             BinOpKind::Sub => {
@@ -799,18 +824,18 @@ impl Lowerer {
                     );
                 } else {
                     self.emit_load_use_x10_vreg(rhs);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
-                            .expect("sub"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                        .expect("sub");
                 }
             }
             BinOpKind::Mul => {
                 self.emit_load_use_x10_vreg(rhs);
-                self.ectx.emit.emit_word(
-                    aarch64::encode_mul(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
-                        .expect("mul"),
-                );
+                self.ectx
+                    .emit
+                    .emit_mul_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                    .expect("mul");
             }
             BinOpKind::And => {
                 // Track power-of-2 masks for potential tbz/tbnz optimization
@@ -886,32 +911,32 @@ impl Lowerer {
                 if let Some(c) = rhs_const
                     && c <= 63
                 {
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c as u8)
-                            .expect("lsr"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_lsr_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c as u8)
+                        .expect("lsr");
                 } else {
                     self.emit_load_use_x10_vreg(rhs);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_lsr_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
-                            .expect("lsr"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_lsr_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                        .expect("lsr");
                 }
             }
             BinOpKind::Shl => {
                 if let Some(c) = rhs_const
                     && c <= 63
                 {
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_lsl_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c as u8)
-                            .expect("lsl"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_lsl_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c as u8)
+                        .expect("lsl");
                 } else {
                     self.emit_load_use_x10_vreg(rhs);
-                    self.ectx.emit.emit_word(
-                        aarch64::encode_lsl_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
-                            .expect("lsl"),
-                    );
+                    self.ectx
+                        .emit
+                        .emit_lsl_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                        .expect("lsl");
                 }
             }
         }
@@ -928,17 +953,18 @@ impl Lowerer {
         self.emit_load_use_x9_vreg(src);
         match kind {
             UnaryOpKind::ZigzagDecode { wide: true } => {
-                self.ectx.emit.emit_word(
-                    aarch64::encode_lsr_imm(aarch64::Width::X64, Reg::X10, Reg::X9, 1)
-                        .expect("lsr"),
-                );
-                self.ectx.emit.emit_word(
-                    aarch64::encode_and_imm(aarch64::Width::X64, Reg::X16, Reg::X9, 1)
-                        .expect("and"),
-                );
-                self.ectx.emit.emit_word(
-                    aarch64::encode_neg(aarch64::Width::X64, Reg::X16, Reg::X16).expect("neg"),
-                );
+                self.ectx
+                    .emit
+                    .emit_lsr_imm(aarch64::Width::X64, Reg::X10, Reg::X9, 1)
+                    .expect("lsr");
+                self.ectx
+                    .emit
+                    .emit_and_imm(aarch64::Width::X64, Reg::X16, Reg::X9, 1)
+                    .expect("and");
+                self.ectx
+                    .emit
+                    .emit_neg_reg(aarch64::Width::X64, Reg::X16, Reg::X16)
+                    .expect("neg");
                 self.ectx.emit.emit_word(
                     aarch64::encode_eor_reg(
                         aarch64::Width::X64,
@@ -1128,10 +1154,10 @@ impl Lowerer {
             let idx = index as u32;
             if let Some(r) = pred_reg {
                 self.emit_load_u32_w10(idx);
-                self.ectx.emit.emit_word(
-                    aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::from_raw(r), Reg::X10)
-                        .expect("cmp"),
-                );
+                self.ectx
+                    .emit
+                    .emit_cmp_reg(aarch64::Width::X64, Reg::from_raw(r), Reg::X10)
+                    .expect("cmp");
                 self.ectx
                     .emit
                     .emit_b_cond_label(Condition::Eq, target)

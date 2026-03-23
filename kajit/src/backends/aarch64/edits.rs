@@ -22,14 +22,14 @@ impl Lowerer {
                 }
                 let from_r = from_reg.hw_enc() as u8;
                 let to_r = to_reg.hw_enc() as u8;
-                self.ectx.emit.emit_word(
-                    aarch64::encode_mov_reg(
+                self.ectx
+                    .emit
+                    .emit_mov_reg(
                         aarch64::Width::X64,
                         Reg::from_raw(to_r),
                         Reg::from_raw(from_r),
                     )
-                    .expect("mov"),
-                );
+                    .expect("mov");
             }
             (Some(from_reg), None, None, Some(to_stack)) => {
                 let off = self.spill_off(to_stack);

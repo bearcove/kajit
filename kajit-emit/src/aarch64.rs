@@ -655,6 +655,7 @@ impl Emitter {
         rd: Reg,
         rn: Reg,
         imm: u16,
+        shift: bool,
     ) -> Result<(), EmitError> {
         self.capture(crate::aarch64_asm::Instruction::AddImm {
             width,
@@ -662,7 +663,7 @@ impl Emitter {
             rn,
             imm: imm as u32,
         });
-        self.emit_word(encode_add_imm(width, rd, rn, imm, false)?);
+        self.emit_word(encode_add_imm(width, rd, rn, imm, shift)?);
         Ok(())
     }
 
@@ -672,6 +673,7 @@ impl Emitter {
         rd: Reg,
         rn: Reg,
         imm: u16,
+        shift: bool,
     ) -> Result<(), EmitError> {
         self.capture(crate::aarch64_asm::Instruction::SubImm {
             width,
@@ -679,7 +681,7 @@ impl Emitter {
             rn,
             imm: imm as u32,
         });
-        self.emit_word(encode_sub_imm(width, rd, rn, imm, false)?);
+        self.emit_word(encode_sub_imm(width, rd, rn, imm, shift)?);
         Ok(())
     }
 
