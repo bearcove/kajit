@@ -16,6 +16,7 @@ pub struct SourceMapEntry {
 pub type SourceMap = Vec<SourceMapEntry>;
 
 pub mod aarch64;
+pub mod aarch64_asm;
 pub mod x64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
