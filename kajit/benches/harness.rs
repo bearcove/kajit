@@ -42,16 +42,17 @@ impl Runner {
 
     /// Run the measurement lifecycle: warmup → calibrate → measure → stats.
     pub fn run<F: Fn()>(&self, f: F) {
-        // Phase 1: Warmup — 50ms or 200 iters for cache/branch-predictor warming.
-        // JIT compilation already happened in LazyLock before we get here.
-        let warmup_deadline = Instant::now() + Duration::from_millis(50);
+        // Phase 1: Warmup — 200ms minimum to stabilize CPU frequency scaling.
+        // Also run at least 1000 iterations to warm caches and branch predictors.
+        let warmup_deadline = Instant::now() + Duration::from_millis(200);
         let mut warmup_iters = 0u64;
-        while Instant::now() < warmup_deadline && warmup_iters < 200 {
+        while Instant::now() < warmup_deadline || warmup_iters < 1000 {
             black_box(&f)();
             warmup_iters += 1;
         }
 
-        // Phase 2: Calibrate — find iters_per_sample so each sample takes ≥500µs.
+        // Phase 2: Calibrate — find iters_per_sample so each sample takes ≥1ms.
+        // Longer samples reduce timer overhead and improve stability.
         let mut iters_per_sample = 1usize;
         loop {
             let start = Instant::now();
@@ -59,16 +60,19 @@ impl Runner {
                 black_box(&f)();
             }
             let elapsed = start.elapsed();
-            if elapsed >= Duration::from_micros(500) || iters_per_sample >= 1_000_000 {
+            if elapsed >= Duration::from_micros(1000) || iters_per_sample >= 10_000_000 {
                 break;
             }
             iters_per_sample *= 2;
         }
 
-        // Phase 3: Collect 51 samples (odd count for exact median).
-        let num_samples = 51;
-        let mut durations = Vec::with_capacity(num_samples);
-        for _ in 0..num_samples {
+        // Phase 3: Collect samples with initial discard + outlier detection.
+        // Collect 10 discard + 100 measurement samples.
+        let discard_samples = 10;
+        let num_samples = 100;
+        let mut durations = Vec::with_capacity(discard_samples + num_samples);
+
+        for _ in 0..(discard_samples + num_samples) {
             let start = Instant::now();
             for _ in 0..iters_per_sample {
                 black_box(&f)();
@@ -76,20 +80,36 @@ impl Runner {
             durations.push(start.elapsed());
         }
 
-        // Phase 4: Compute per-iteration nanoseconds.
+        // Discard first samples (might be unstable after warmup)
+        let durations = &durations[discard_samples..];
+
+        // Phase 4: Compute per-iteration nanoseconds and detect outliers.
         let mut per_iter_ns: Vec<f64> = durations
             .iter()
             .map(|d| d.as_nanos() as f64 / iters_per_sample as f64)
             .collect();
         per_iter_ns.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
+        // Remove outliers using IQR method (1.5x IQR beyond Q1/Q3)
+        let q1 = percentile(&per_iter_ns, 25.0);
+        let q3 = percentile(&per_iter_ns, 75.0);
+        let iqr = q3 - q1;
+        let lower_bound = q1 - 1.5 * iqr;
+        let upper_bound = q3 + 1.5 * iqr;
+
+        let per_iter_ns: Vec<f64> = per_iter_ns
+            .into_iter()
+            .filter(|&x| x >= lower_bound && x <= upper_bound)
+            .collect();
+
+        let actual_samples = per_iter_ns.len();
         *self.results.borrow_mut() = Some(BenchResult {
             median_ns: percentile(&per_iter_ns, 50.0),
             p5_ns: percentile(&per_iter_ns, 5.0),
             p95_ns: percentile(&per_iter_ns, 95.0),
             min_ns: per_iter_ns[0],
             max_ns: per_iter_ns[per_iter_ns.len() - 1],
-            samples: num_samples,
+            samples: actual_samples,
             iters_per_sample,
         });
     }
