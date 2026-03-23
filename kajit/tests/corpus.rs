@@ -3,6 +3,12 @@ use facet::Facet;
 use proptest::arbitrary::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+#[cfg(target_arch = "aarch64")]
+use yaxpeax_arm::armv8::a64::InstDecoder;
+#[cfg(target_arch = "x86_64")]
+use yaxpeax_x86::amd64::InstDecoder;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
     age: u32,
@@ -367,6 +373,7 @@ const DEBUG_CFG_MIR_VREG_ENV: &str = "KAJIT_DEBUG_CFG_MIR_VREG";
 const DEBUG_CFG_MIR_BLOCK_ENV: &str = "KAJIT_DEBUG_CFG_MIR_BLOCK";
 const DEBUG_CFG_MIR_LAMBDA_ENV: &str = "KAJIT_DEBUG_CFG_MIR_LAMBDA";
 const WAIT_FOR_DEBUGGER_ENV: &str = "KAJIT_WAIT_FOR_DEBUGGER";
+const SHOW_ASM_ENV: &str = "KAJIT_SHOW_ASM";
 fn maybe_print_case_input(input: &[u8]) {
     if std::env::var_os(PRINT_INPUT_HEX_ENV).is_none() {
         return;
@@ -554,6 +561,130 @@ fn maybe_wait_for_debugger() {
     panic!("{WAIT_FOR_DEBUGGER_ENV} is only supported on unix targets");
     eprintln!("debugger/resumer continued pid={pid} test={test_name}");
 }
+#[cfg(target_arch = "aarch64")]
+fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
+    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+    use yaxpeax_arm::armv8::a64::InstDecoder;
+    let decoder = InstDecoder::default();
+    let mut reader = U8Reader::new(code);
+    let mut insts = Vec::new();
+    let mut offset = 0usize;
+    while offset + 4 <= code.len() {
+        match decoder.decode(&mut reader) {
+            Ok(inst) => {
+                let addr = base_addr + offset;
+                insts.push(format!("{addr:016x}:  {inst}"));
+            }
+            Err(_) => break,
+        }
+        offset += 4;
+    }
+    insts
+}
+#[cfg(target_arch = "x86_64")]
+fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
+    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+    use yaxpeax_x86::amd64::InstDecoder;
+    let decoder = InstDecoder::default();
+    let mut reader = U8Reader::new(code);
+    let mut insts = Vec::new();
+    let mut offset = 0usize;
+    while offset < code.len() {
+        match decoder.decode(&mut reader) {
+            Ok(inst) => {
+                let len = inst.len().to_const() as usize;
+                if len == 0 {
+                    break;
+                }
+                let addr = base_addr + offset;
+                insts.push(format!("{addr:016x}:  {inst}"));
+                offset += len;
+            }
+            Err(_) => break,
+        }
+    }
+    insts
+}
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+fn disassemble_code(_code: &[u8], _base_addr: usize) -> Vec<String> {
+    vec!["(disassembly not supported on this architecture)".to_string()]
+}
+fn maybe_show_postcard_asm<T>(encoded: &[u8]) -> bool
+where
+    for<'input> T: Facet<'input> + serde::de::DeserializeOwned,
+{
+    if std::env::var_os(SHOW_ASM_ENV).is_none() {
+        return false;
+    }
+    let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
+    let code = decoder.code();
+    let entry = decoder.entry_offset();
+    let base_addr = code.as_ptr() as usize;
+    println!(
+        "=== KAJIT JIT CODE ({} bytes, entry at +{entry:#x}) ===",
+        code.len()
+    );
+    for line in disassemble_code(&code[entry..], base_addr + entry) {
+        println!("{line}");
+    }
+    #[inline(never)]
+    fn serde_postcard_deser<U: serde::de::DeserializeOwned>(data: &[u8]) -> U {
+        ::postcard::from_bytes(data).unwrap()
+    }
+    let serde_fn_ptr = serde_postcard_deser::<T> as *const u8;
+    let serde_code = unsafe { std::slice::from_raw_parts(serde_fn_ptr, 4096) };
+    println!();
+    println!(
+        "=== SERDE POSTCARD CODE (showing first ~4KB from {:p}) ===",
+        serde_fn_ptr
+    );
+    let mut lines = disassemble_code(serde_code, serde_fn_ptr as usize);
+    if let Some(ret_idx) = lines.iter().position(|l| l.contains("ret")) {
+        lines.truncate(ret_idx + 1);
+    }
+    for line in &lines {
+        println!("{line}");
+    }
+    panic!("KAJIT_SHOW_ASM: printed disassembly above");
+}
+fn maybe_show_json_asm<T>(encoded: &str) -> bool
+where
+    for<'input> T: Facet<'input> + serde::de::DeserializeOwned,
+{
+    if std::env::var_os(SHOW_ASM_ENV).is_none() {
+        return false;
+    }
+    let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
+    let code = decoder.code();
+    let entry = decoder.entry_offset();
+    let base_addr = code.as_ptr() as usize;
+    println!(
+        "=== KAJIT JIT CODE ({} bytes, entry at +{entry:#x}) ===",
+        code.len()
+    );
+    for line in disassemble_code(&code[entry..], base_addr + entry) {
+        println!("{line}");
+    }
+    #[inline(never)]
+    fn serde_json_deser<U: serde::de::DeserializeOwned>(data: &str) -> U {
+        serde_json::from_str(data).unwrap()
+    }
+    let serde_fn_ptr = serde_json_deser::<T> as *const u8;
+    let serde_code = unsafe { std::slice::from_raw_parts(serde_fn_ptr, 4096) };
+    println!();
+    println!(
+        "=== SERDE JSON CODE (showing first ~4KB from {:p}) ===",
+        serde_fn_ptr
+    );
+    let mut lines = disassemble_code(serde_code, serde_fn_ptr as usize);
+    if let Some(ret_idx) = lines.iter().position(|l| l.contains("ret")) {
+        lines.truncate(ret_idx + 1);
+    }
+    for line in &lines {
+        println!("{line}");
+    }
+    panic!("KAJIT_SHOW_ASM: printed disassembly above");
+}
 fn assert_json_case<T>(value: T)
 where
     for<'input> T: Facet<'input>
@@ -569,6 +700,9 @@ where
         return;
     }
     if maybe_minimize_case_cfg_mir::<T>(encoded.as_bytes()) {
+        return;
+    }
+    if maybe_show_json_asm::<T>(&encoded) {
         return;
     }
     let expected: T = serde_json::from_str(&encoded).unwrap();
@@ -597,6 +731,9 @@ where
         return;
     }
     if maybe_minimize_case_cfg_mir::<T>(&encoded) {
+        return;
+    }
+    if maybe_show_postcard_asm::<T>(&encoded) {
         return;
     }
     let expected: T = ::postcard::from_bytes(&encoded).unwrap();

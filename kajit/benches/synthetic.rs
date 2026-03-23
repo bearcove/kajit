@@ -383,6 +383,39 @@ fn register_bench_case<T>(
     if !harness::matches_filter(group) {
         return;
     }
+    if harness::is_list_mode() {
+        let json_prefix = format!("{group}/json");
+        let postcard_prefix = format!("{group}/postcard");
+        v.push(harness::Bench {
+            name: format!("{json_prefix}/serde_deser"),
+            func: Box::new(|_| {}),
+        });
+        if enable_json_kajit {
+            v.push(harness::Bench {
+                name: format!("{json_prefix}/kajit_deser"),
+                func: Box::new(|_| {}),
+            });
+        }
+        v.push(harness::Bench {
+            name: format!("{json_prefix}/serde_ser"),
+            func: Box::new(|_| {}),
+        });
+        v.push(harness::Bench {
+            name: format!("{postcard_prefix}/serde_deser"),
+            func: Box::new(|_| {}),
+        });
+        if enable_postcard_kajit {
+            v.push(harness::Bench {
+                name: format!("{postcard_prefix}/kajit_deser"),
+                func: Box::new(|_| {}),
+            });
+        }
+        v.push(harness::Bench {
+            name: format!("{postcard_prefix}/serde_ser"),
+            func: Box::new(|_| {}),
+        });
+        return;
+    }
     let json_data = Arc::new(serde_json::to_string(&value).unwrap());
     let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
     let value = Arc::new(value);

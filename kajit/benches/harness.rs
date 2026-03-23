@@ -102,6 +102,14 @@ fn percentile(sorted: &[f64], pct: f64) -> f64 {
 
 /// Run all benchmarks, applying CLI filter if present.
 pub fn run_benchmarks(benchmarks: Vec<Bench>) {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--list") {
+        for b in &benchmarks {
+            println!("{}", b.name);
+        }
+        return;
+    }
+
     let filter = parse_filter();
 
     let filtered: Vec<&Bench> = benchmarks
@@ -175,11 +183,18 @@ pub fn run_benchmarks(benchmarks: Vec<Bench>) {
 }
 
 /// Returns true if the given bench name matches the CLI filter (or no filter is set).
+/// Matches bidirectionally: either name contains filter OR filter contains name.
+/// This allows filtering by group ("scalar_u32") or full path ("scalar_u32/postcard/kajit_deser").
 pub fn matches_filter(name: &str) -> bool {
     match parse_filter() {
-        Some(f) => name.contains(f.as_str()),
+        Some(f) => name.contains(f.as_str()) || f.contains(name),
         None => true,
     }
+}
+
+/// Returns true if `--list` was passed on the command line.
+pub fn is_list_mode() -> bool {
+    std::env::args().any(|a| a == "--list")
 }
 
 fn parse_filter() -> Option<String> {

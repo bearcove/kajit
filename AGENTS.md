@@ -50,6 +50,43 @@ Regenerate with `cargo xtask gen`.
 
 Always run tests after making code changes. Run at least the tests directly covering changed code before reporting completion.
 
+## Benchmarks
+
+Benchmarks use a custom harness (not criterion/divan). Output is NDJSON to stdout, human-readable to stderr.
+
+```bash
+# List all available benchmarks
+cargo bench -p kajit --bench synthetic -- --list
+
+# Run all synthetic benchmarks
+cargo bench -p kajit --bench synthetic
+
+# Filter by substring match on bench name
+cargo bench -p kajit --bench synthetic -- scalar_u32/postcard
+
+# Real-world JSON datasets
+cargo bench -p kajit --bench canada
+cargo bench -p kajit --bench twitter
+cargo bench -p kajit --bench citm_catalog
+```
+
+**Naming convention:** `<case>/<format>/<impl>_<op>`
+
+For example, `scalar_u32/postcard` runs:
+- `scalar_u32/postcard/serde_deser` — postcard via serde
+- `scalar_u32/postcard/kajit_deser` — postcard via kajit JIT
+- `scalar_u32/postcard/serde_ser` — serialization baseline
+
+**Key files:**
+- `kajit/benches/harness.rs` — custom benchmark harness (warmup, calibration, percentiles)
+- `kajit/benches/synthetic.rs` — generated cases (from `xtask/src/cases.rs`)
+
+**Common cases:**
+- `scalar_u32`, `scalar_u64`, `scalar_i32`, etc. — single varint values
+- `flat_struct`, `nested_struct`, `deep_struct` — struct nesting
+- `vec_scalar_small`, `vec_scalar_large` — vectors of primitives
+- `option_u32`, `option_string`, `option_struct` — optional fields
+
 ## Debugging
 
 Full reference: `docs/pipeline-debugging.md`
@@ -115,6 +152,20 @@ from the test process working directory (often the crate directory), so use an
 absolute path if you want dumps in a specific workspace location.
 
 Dump files are named `<format>__<case>__<arch>__<stage>.txt`.
+
+### Comparing serde vs kajit disassembly
+
+Show side-by-side disassembly of both serde and kajit JIT code for any corpus test:
+
+```bash
+KAJIT_SHOW_ASM=1 cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v0)'
+```
+
+This prints:
+- Kajit JIT disassembly (using yaxpeax)
+- Serde deserialize function disassembly (via `#[inline(never)]` wrapper)
+
+The test panics after printing to ensure output is visible.
 
 Use `opts` stage to see RVSDG snapshots between each optimization pass.
 
