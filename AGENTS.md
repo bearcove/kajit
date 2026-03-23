@@ -91,6 +91,47 @@ For example, `scalar_u32/postcard` runs:
 
 Full reference: `docs/pipeline-debugging.md`
 
+### Quick Start: Common Workflows
+
+**Compare assembly for different types (e.g., u32 vs i32):**
+```bash
+# Dump emit stage for both types
+KAJIT_DUMP_STAGES=emit,cfg KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3) or test(=postcard::scalar_i32_v3)'
+
+# Compare the assembly
+diff /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__emit.txt /tmp/kajit-dump/postcard__scalar_i32_v3__aarch64__emit.txt
+
+# Compare the CFG-MIR
+diff /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__cfg.txt /tmp/kajit-dump/postcard__scalar_i32_v3__aarch64__cfg.txt
+```
+
+**Investigate performance regression:**
+```bash
+# Dump all stages for a specific case
+KAJIT_DUMP_STAGES=all KAJIT_DUMP_FILTER=postcard::scalar_u32 KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+
+# Files created: postcard__scalar_u32_v3__aarch64__{hir,ir,linear,cfg,emit}.txt
+```
+
+**Try a manual optimization (edit assembly by hand):**
+```bash
+# 1. Dump the emit stage
+KAJIT_DUMP_STAGES=emit KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+
+# 2. Copy to .alt.vixen-asm and edit by hand
+cp /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__emit.txt postcard__scalar_u32_v3__aarch64__emit.alt.vixen-asm
+# Edit the file: remove redundant moves, reorder instructions, etc.
+
+# 3. Run test again - it will use your edited assembly
+cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+```
+
+**Compare serde vs kajit optimized assembly:**
+```bash
+# Run in release mode with LTO (shows fully optimized serde code)
+cargo bench -p kajit --bench synthetic -- --dump-asm scalar_u32/postcard
+```
+
 ### Differential Harness (first step)
 
 For regalloc/backend failures, run differential harnesses before dumps/LLDB.
@@ -171,6 +212,47 @@ KAJIT_SHOW_ASM=1 cargo nextest run -p kajit --test corpus -E 'test(=postcard::sc
 ```
 
 Use `opts` stage to see RVSDG snapshots between each optimization pass.
+
+### Manual assembly editing (.alt.vixen-asm)
+
+Test assembly optimizations by hand-editing dumps and having them reassembled:
+
+**Workflow:**
+1. **Dump the emit stage** to get the current assembly:
+   ```bash
+   KAJIT_DUMP_STAGES=emit KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+   # Creates: /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__emit.txt
+   ```
+
+2. **Copy to `.alt.vixen-asm` in the working directory**:
+   ```bash
+   cp /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__emit.txt postcard__scalar_u32_v3__aarch64__emit.alt.vixen-asm
+   ```
+
+3. **Edit the assembly** by hand:
+   - Remove redundant `mov` instructions
+   - Reorder instructions to improve ILP
+   - Try different register allocations
+   - Test peephole optimizations
+
+   The format is the same as the emit dump: each line has address, source location, hex bytes, and disassembly.
+
+4. **Run the test again** — it will automatically use your edited assembly:
+   ```bash
+   cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+   ```
+
+   The test harness detects `.alt.vixen-asm` files, reassembles them, and uses the modified code instead of JIT-generated code.
+
+**Use cases:**
+- **Prototyping optimizations**: Test if removing certain instructions actually improves performance before implementing the optimization in the compiler
+- **Debugging codegen**: Simplify generated code to isolate which instructions cause failures
+- **Benchmarking**: Compare hand-optimized assembly against compiler output to measure optimization headroom
+
+**Important:**
+- The `.alt.vixen-asm` file must be in the **test process working directory** (usually the crate root, not /tmp)
+- File name must exactly match the dump file pattern: `<format>__<case>__<arch>__emit.alt.vixen-asm`
+- Preflight validation ensures the assembly parses correctly before execution
 
 ### CFG-MIR text format
 
