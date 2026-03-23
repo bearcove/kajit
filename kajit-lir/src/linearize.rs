@@ -754,15 +754,46 @@ impl<'a> Linearizer<'a> {
         let branch_labels: Vec<LabelId> = (0..branch_count).map(|_| self.fresh_label()).collect();
         let merge_label = self.fresh_label();
 
+        // Determine the data output count from the gamma node.
+        let data_output_count = node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        // Collect entry phi_args for each branch: (source=gamma_input, target=branch_region_arg).
+        let state_count = self.func.state_domains.len();
+        let passthrough_count = node.inputs.len() - 1 - state_count;
+        let mut branch_entry_phis: Vec<Vec<(VReg, VReg)>> = Vec::new();
+        for &region_id in regions.iter() {
+            let region = &self.func.regions[region_id];
+            let mut phis = Vec::new();
+            for i in 0..passthrough_count {
+                let src_input = &node.inputs[i + 1]; // +1 to skip predicate
+                if src_input.kind == PortKind::Data {
+                    let src_vreg = self.resolve_vreg(src_input.source);
+                    let arg = &self.func.region_args[region.args[i]];
+                    if let Some(dst_vreg) = arg.vreg {
+                        self.record_vreg_scope(dst_vreg, region.debug_scope);
+                        if src_vreg != dst_vreg {
+                            phis.push((src_vreg, dst_vreg));
+                        }
+                    }
+                }
+            }
+            branch_entry_phis.push(phis);
+        }
+
         // Emit JumpTable if > 2 branches, or BranchIfZero for 2-branch case.
         if branch_count == 2 {
             // predicate==0 → branch 0, predicate!=0 → branch 1
+            // BranchIfZero: taken=branch 0 (phi_args), fallthrough=next instruction (branch 1's Branch)
             self.emit(
                 Some(node.debug_scope),
                 LinearOp::BranchIfZero {
                     cond: predicate,
                     target: branch_labels[0],
-                    phi_args: vec![],
+                    phi_args: branch_entry_phis[0].clone(),
                     fallthrough_phi_args: vec![],
                 },
             );
@@ -770,11 +801,11 @@ impl<'a> Linearizer<'a> {
                 Some(node.debug_scope),
                 LinearOp::Branch {
                     target: branch_labels[1],
-                    phi_args: vec![],
+                    phi_args: branch_entry_phis[1].clone(),
                 },
             );
         } else {
-            // General case: jump table
+            // General case: jump table — entry phis not supported yet, emit as copies.
             self.emit(
                 Some(node.debug_scope),
                 LinearOp::JumpTable {
@@ -785,13 +816,6 @@ impl<'a> Linearizer<'a> {
             );
         }
 
-        // Determine the data output count from the gamma node.
-        let data_output_count = node
-            .outputs
-            .iter()
-            .filter(|o| o.kind == PortKind::Data)
-            .count();
-
         // Emit each branch.
         for (branch_idx, &region_id) in regions.iter().enumerate() {
             self.emit(
@@ -799,30 +823,45 @@ impl<'a> Linearizer<'a> {
                 LinearOp::Label(branch_labels[branch_idx]),
             );
 
-            // Emit copies for passthrough inputs → region args.
-            self.emit_gamma_entry_copies(node, region_id);
+            // For jump table (>2 branches), emit entry copies since JumpTable
+            // can't carry phi_args yet.
+            if branch_count > 2 {
+                self.emit_gamma_entry_copies(node, region_id);
+            }
 
             // Linearize the branch body.
             self.linearize_region(region_id);
 
-            // Skip exit copies and merge branch if the branch contains an error exit
+            // Skip exit and merge branch if the branch contains an error exit
             // (code after error_exit is unreachable and causes regalloc issues).
             let ends_with_error = self.region_is_error_only(region_id);
 
             if !ends_with_error {
-                // Emit copies for region results → gamma output vregs.
-                self.emit_gamma_exit_copies(node_id, region_id, data_output_count);
-
-                // Branch to merge (skip for last branch — it falls through).
-                if branch_idx < branch_count - 1 {
-                    self.emit(
-                        Some(self.func.regions[region_id].debug_scope),
-                        LinearOp::Branch {
-                            target: merge_label,
-                            phi_args: vec![],
-                        },
-                    );
+                // Collect exit phi_args: (source=branch_result, target=gamma_output).
+                let region = &self.func.regions[region_id];
+                let mut exit_phis = Vec::new();
+                for i in 0..data_output_count {
+                    let result = &self.func.region_results[region.results[i]];
+                    if result.kind == PortKind::Data {
+                        let src_vreg = self.resolve_vreg(result.source);
+                        let dst_vreg = node.outputs[i]
+                            .vreg
+                            .expect("gamma data output must have vreg");
+                        if src_vreg != dst_vreg {
+                            self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
+                            exit_phis.push((src_vreg, dst_vreg));
+                        }
+                    }
                 }
+
+                // Always emit Branch to merge (even for last branch) to carry phi_args.
+                self.emit(
+                    Some(self.func.regions[region_id].debug_scope),
+                    LinearOp::Branch {
+                        target: merge_label,
+                        phi_args: exit_phis,
+                    },
+                );
             }
         }
 
