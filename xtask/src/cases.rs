@@ -1832,7 +1832,7 @@ pub(crate) fn render_bench_file() -> String {
 
         #types
 
-        fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+        fn panic_payload_to_string(payload: &Box<dyn std::any::Any + Send>) -> String {
             if let Some(msg) = payload.downcast_ref::<&str>() {
                 (*msg).to_owned()
             } else if let Some(msg) = payload.downcast_ref::<String>() {
@@ -1911,7 +1911,7 @@ pub(crate) fn render_bench_file() -> String {
             enable_postcard_kajit: bool,
         )
         where
-            for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
+            for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static + PartialEq + std::fmt::Debug,
         {
             // Skip entirely if no bench name for this group could match the CLI filter.
             if !harness::matches_filter(group) {
@@ -1998,7 +1998,7 @@ pub(crate) fn render_bench_file() -> String {
                         Err(payload) => {
                             eprintln!(
                                 "skipping {json_prefix}/kajit/deser: compile unsupported ({})",
-                                panic_payload_to_string(payload)
+                                panic_payload_to_string(&payload)
                             );
                             None
                         }
@@ -2037,7 +2037,7 @@ pub(crate) fn render_bench_file() -> String {
                         Err(payload) => {
                             eprintln!(
                                 "skipping {json_prefix}/kajit/deser: preflight panic ({})",
-                                panic_payload_to_string(payload)
+                                panic_payload_to_string(&payload)
                             );
                         }
                     }
@@ -2075,16 +2075,18 @@ pub(crate) fn render_bench_file() -> String {
                         Err(payload) => {
                             eprintln!(
                                 "skipping {postcard_prefix}/kajit/deser: compile unsupported ({})",
-                                panic_payload_to_string(payload)
+                                panic_payload_to_string(&payload)
                             );
                             None
                         }
                     };
 
                 if let Some(decoder) = postcard_decoder {
-                    match catch_unwind(AssertUnwindSafe(|| {
+                    let kajit_preflight_result = catch_unwind(AssertUnwindSafe(|| {
                         kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
-                    })) {
+                    }));
+
+                    match &kajit_preflight_result {
                         Ok(Ok(_)) => {
                             v.push(harness::Bench {
                                 name: format!("{postcard_prefix}/kajit/deser"),
@@ -2118,64 +2120,79 @@ pub(crate) fn render_bench_file() -> String {
                             );
                         }
                     }
-                }
 
-                // Check for hand-optimized .alt variant
-                #[cfg(target_arch = "aarch64")]
-                if kajit::alt_asm::has_alt_asm(group, "postcard") {
-                    let registry = kajit::ir::IntrinsicRegistry::new();
-                    match kajit::alt_asm::load_alt_decoder(group, "postcard", &registry) {
-                        Some(alt_decoder) => {
-                            let alt_decoder = Arc::new(alt_decoder);
-                            match catch_unwind(AssertUnwindSafe(|| {
-                                let func = alt_decoder.func();
-                                let mut out = std::mem::MaybeUninit::<T>::uninit();
-                                let mut ctx = kajit::context::DeserContext::new(&postcard_data[..]);
-                                unsafe {
-                                    func(out.as_mut_ptr() as *mut u8, &mut ctx);
-                                }
-                                if ctx.error.code != 0 {
-                                    return Err(format!("decode error code: {}", ctx.error.code));
-                                }
-                                Ok(unsafe { out.assume_init() })
-                            })) {
-                                Ok(Ok(_)) => {
-                                    v.push(harness::Bench {
-                                        name: format!("{postcard_prefix}/kajit.alt/deser"),
-                                        func: Box::new({
-                                            let data = Arc::clone(&postcard_data);
-                                            let alt_decoder = Arc::clone(&alt_decoder);
-                                            move |runner| {
-                                                let func = alt_decoder.func();
-                                                runner.run(|| {
-                                                    let mut out = std::mem::MaybeUninit::<T>::uninit();
-                                                    let mut ctx = kajit::context::DeserContext::new(black_box(&data[..]));
-                                                    unsafe {
-                                                        func(out.as_mut_ptr() as *mut u8, &mut ctx);
-                                                    }
-                                                    black_box(unsafe { out.assume_init() });
-                                                });
+                    // Check for hand-optimized .alt variant
+                    #[cfg(target_arch = "aarch64")]
+                    if kajit::alt_asm::has_alt_asm(group, "postcard") {
+                        let registry = kajit::ir::IntrinsicRegistry::new();
+                        match kajit::alt_asm::load_alt_decoder(group, "postcard", &registry) {
+                            Some(alt_decoder) => {
+                                let alt_decoder = Arc::new(alt_decoder);
+                                let alt_preflight_result = catch_unwind(AssertUnwindSafe(|| {
+                                    let func = alt_decoder.func();
+                                    let mut out = std::mem::MaybeUninit::<T>::uninit();
+                                    let mut ctx = kajit::context::DeserContext::new(&postcard_data[..]);
+                                    unsafe {
+                                        func(out.as_mut_ptr() as *mut u8, &mut ctx);
+                                    }
+                                    if ctx.error.code != 0 {
+                                        return Err(format!("decode error code: {}", ctx.error.code));
+                                    }
+                                    Ok(unsafe { out.assume_init() })
+                                }));
+
+                                match alt_preflight_result {
+                                    Ok(Ok(alt_result)) => {
+                                        // Validate .alt produces same output as original JIT
+                                        if let Ok(Ok(jit_result)) = &kajit_preflight_result {
+                                            if jit_result != &alt_result {
+                                                panic!(
+                                                    "{postcard_prefix}/kajit.alt/deser: preflight validation failed - output differs from original JIT\nExpected: {jit_result:?}\nActual: {alt_result:?}"
+                                                );
                                             }
-                                        }),
-                                    });
-                                }
-                                Ok(Err(err)) => {
-                                    eprintln!(
-                                        "skipping {postcard_prefix}/kajit.alt/deser: preflight decode failed ({err})"
-                                    );
-                                }
-                                Err(payload) => {
-                                    eprintln!(
-                                        "skipping {postcard_prefix}/kajit.alt/deser: preflight panic ({})",
-                                        panic_payload_to_string(payload)
-                                    );
+
+                                            v.push(harness::Bench {
+                                                name: format!("{postcard_prefix}/kajit.alt/deser"),
+                                                func: Box::new({
+                                                    let data = Arc::clone(&postcard_data);
+                                                    let alt_decoder = Arc::clone(&alt_decoder);
+                                                    move |runner| {
+                                                        let func = alt_decoder.func();
+                                                        runner.run(|| {
+                                                            let mut out = std::mem::MaybeUninit::<T>::uninit();
+                                                            let mut ctx = kajit::context::DeserContext::new(black_box(&data[..]));
+                                                            unsafe {
+                                                                func(out.as_mut_ptr() as *mut u8, &mut ctx);
+                                                            }
+                                                            black_box(unsafe { out.assume_init() });
+                                                        });
+                                                    }
+                                                }),
+                                            });
+                                        } else {
+                                            eprintln!(
+                                                "skipping {postcard_prefix}/kajit.alt/deser: original JIT preflight failed"
+                                            );
+                                        }
+                                    }
+                                    Ok(Err(err)) => {
+                                        eprintln!(
+                                            "skipping {postcard_prefix}/kajit.alt/deser: preflight decode failed ({err})"
+                                        );
+                                    }
+                                    Err(payload) => {
+                                        eprintln!(
+                                            "skipping {postcard_prefix}/kajit.alt/deser: preflight panic ({})",
+                                            panic_payload_to_string(&payload)
+                                        );
+                                    }
                                 }
                             }
-                        }
-                        None => {
-                            eprintln!(
-                                "skipping {postcard_prefix}/kajit.alt/deser: failed to load/assemble .alt.vixen-asm"
-                            );
+                            None => {
+                                eprintln!(
+                                    "skipping {postcard_prefix}/kajit.alt/deser: failed to load/assemble .alt.vixen-asm"
+                                );
+                            }
                         }
                     }
                 }
