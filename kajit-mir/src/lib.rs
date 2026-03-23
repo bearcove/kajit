@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod cfg_mir;
 
 mod debug_cli;
