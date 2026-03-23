@@ -168,6 +168,11 @@ fn run_dead_code_elimination_pass(func: &mut IrFunc) {
     debug_verify(func, "dead_code_elimination_pass");
 }
 
+fn run_simplify_trivial_gammas_pass(func: &mut IrFunc) {
+    crate::simplify_gamma::simplify_trivial_gammas(func);
+    debug_verify(func, "simplify_trivial_gammas");
+}
+
 fn run_slot_to_reg_pass(func: &mut IrFunc) {
     if std::env::var("DUMP_SLOT2REG").is_ok() {
         let registry = crate::IntrinsicRegistry::empty();
@@ -187,11 +192,16 @@ fn run_slot_to_reg_pass(func: &mut IrFunc) {
     debug_verify(func, "slot_to_reg");
 }
 
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 5] = [
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 6] = [
     DefaultPassSpec {
         name: "slot_to_reg",
         description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
         run: run_slot_to_reg_pass,
+    },
+    DefaultPassSpec {
+        name: "simplify_trivial_gammas",
+        description: "Remove gamma nodes where all branches produce identical passthrough results.",
+        run: run_simplify_trivial_gammas_pass,
     },
     DefaultPassSpec {
         name: "bounds_check_coalescing",

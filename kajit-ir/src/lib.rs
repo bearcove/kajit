@@ -1,6 +1,7 @@
 mod error;
 mod ir;
 mod ir_passes;
+pub mod simplify_gamma;
 pub mod slot2reg;
 mod verify;
 
