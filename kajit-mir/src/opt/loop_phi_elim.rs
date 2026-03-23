@@ -73,6 +73,24 @@ fn eliminate_invariant_phis_in_header(
     // For each parameter, check if it's loop-invariant
     let mut invariant_params: HashMap<usize, VReg> = HashMap::new();
 
+    if debug {
+        eprintln!("[loop_phi_elim] analyzing {} parameters:", params.len());
+        for (idx, &vreg) in params.iter().enumerate() {
+            eprintln!("  param {} = v{}", idx, vreg.index());
+        }
+        eprintln!("[loop_phi_elim] {} incoming edges:", incoming_edges.len());
+        for &edge_id in &incoming_edges {
+            let edge = &func.edges[edge_id.index()];
+            eprintln!(
+                "  edge e{} (b{} -> b{}): {} args",
+                edge_id.index(),
+                edge.from.index(),
+                edge.to.index(),
+                edge.args.len()
+            );
+        }
+    }
+
     for (param_idx, &param_vreg) in params.iter().enumerate() {
         // Collect all values assigned to this parameter from incoming edges
         let mut incoming_values: Vec<VReg> = Vec::new();
@@ -83,6 +101,16 @@ fn eliminate_invariant_phis_in_header(
                 incoming_values.push(edge.args[param_idx].source);
             } else {
                 // Edge doesn't provide this parameter - not invariant
+                if debug {
+                    eprintln!(
+                        "  param {} (v{}): edge e{} missing args (has {}, need {})",
+                        param_idx,
+                        param_vreg.index(),
+                        edge_id.index(),
+                        edge.args.len(),
+                        param_idx + 1
+                    );
+                }
                 incoming_values.clear();
                 break;
             }
@@ -98,16 +126,49 @@ fn eliminate_invariant_phis_in_header(
             v == first_value || v == param_vreg // Self-reference is OK
         });
 
+        if debug {
+            eprintln!(
+                "  param {} (v{}): values = {:?}, all_same = {}, first = v{}",
+                param_idx,
+                param_vreg.index(),
+                incoming_values
+                    .iter()
+                    .map(|v| format!("v{}", v.index()))
+                    .collect::<Vec<_>>(),
+                all_same,
+                first_value.index()
+            );
+        }
+
         if all_same && first_value != param_vreg {
             // This parameter is loop-invariant!
             // Verify that the invariant value dominates the header
             if let Some(def_block) = find_def_block(func, first_value) {
-                if dom.dominates(def_block, header) {
+                let dominates = dom.dominates(def_block, header);
+                if debug {
+                    eprintln!(
+                        "    -> invariant! v{} defined in b{}, dominates = {}",
+                        first_value.index(),
+                        def_block.index(),
+                        dominates
+                    );
+                }
+                if dominates {
                     invariant_params.insert(param_idx, first_value);
                 }
             } else {
+                if debug {
+                    eprintln!(
+                        "    -> invariant! v{} (function arg or unknown, assuming dominance)",
+                        first_value.index()
+                    );
+                }
                 // Function argument or unknown def - assume it dominates
                 invariant_params.insert(param_idx, first_value);
+            }
+        } else if all_same {
+            if debug {
+                eprintln!("    -> self-reference (param == first_value), not eliminated");
             }
         }
     }

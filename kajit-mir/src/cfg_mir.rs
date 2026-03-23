@@ -1819,11 +1819,12 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     if opts.enabled("dce") {
         dead_code_elimination(&mut cfg);
     }
-    // TODO: merge_blocks needs actual implementation (currently just counts)
-    // Found: b2 can merge into b4 in scalar_u32
-    // if opts.enabled("merge_blocks") {
-    //     merge_empty_blocks(&mut cfg);
-    // }
+    if opts.enabled("merge_blocks") {
+        for func in &mut cfg.funcs {
+            crate::opt::block_merge::merge_empty_blocks(func);
+            // Note: unreachable blocks are left in place, will be cleaned up by later passes
+        }
+    }
     // TODO: simplify_trivial_phis needs more work to maintain SSA
     // The basic idea is sound (found 32 trivial phis in scalar_u32)
     // but removing them breaks SSA when replacement doesn't dominate uses
