@@ -6,3 +6,4 @@
 //! - `defuse`: def-use chains for value flow analysis
 
 pub mod dominance;
+pub mod loops;
