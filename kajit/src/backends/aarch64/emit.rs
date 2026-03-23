@@ -103,6 +103,38 @@ impl Lowerer {
         addr: crate::ir::VReg,
         width: Width,
     ) {
+        // Try to use allocated registers directly to avoid scratch copies
+        let addr_alloc = self.alloc_for_vreg(addr);
+        let dst_alloc = self.alloc_for_vreg(dst);
+        let addr_reg = addr_alloc.and_then(|a| a.as_reg());
+        let dst_reg = dst_alloc.and_then(|a| a.as_reg());
+        if let (Some(ar), Some(dr)) = (addr_reg, dst_reg)
+            && ar.class() == regalloc2::RegClass::Int
+            && dr.class() == regalloc2::RegClass::Int
+        {
+            let base = Reg::from_raw(ar.hw_enc() as u8);
+            let dest = Reg::from_raw(dr.hw_enc() as u8);
+            match width {
+                Width::W1 => self
+                    .ectx
+                    .emit
+                    .emit_word(aarch64::encode_ldrb_imm(dest, base, 0).expect("ldrb")),
+                Width::W2 => self
+                    .ectx
+                    .emit
+                    .emit_word(aarch64::encode_ldrh_imm(dest, base, 0).expect("ldrh")),
+                Width::W4 => self.ectx.emit.emit_word(
+                    aarch64::encode_ldr_imm(aarch64::Width::W32, dest, base, 0).expect("ldr"),
+                ),
+                Width::W8 => self.ectx.emit.emit_word(
+                    aarch64::encode_ldr_imm(aarch64::Width::X64, dest, base, 0).expect("ldr"),
+                ),
+            }
+            self.set_const(dst, None);
+            return;
+        }
+
+        // Fallback: use scratch registers
         self.emit_load_use_x10(addr, 0);
         match width {
             Width::W1 => self
@@ -385,30 +417,13 @@ impl Lowerer {
                             )
                             .expect("add"),
                         );
-                    } else if dst_r == rhs_r {
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_add_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(lhs_r),
-                            )
-                            .expect("add"),
-                        );
                     } else {
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_mov_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(lhs_r),
-                            )
-                            .expect("mov"),
-                        );
+                        // add is a three-operand instruction, all distinct regs are fine
                         self.ectx.emit.emit_word(
                             aarch64::encode_add_reg(
                                 aarch64::Width::X64,
                                 Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
                                 Reg::from_raw(rhs_r),
                             )
                             .expect("add"),
@@ -432,38 +447,18 @@ impl Lowerer {
                             .expect("sub imm"),
                         );
                         true
-                    } else if dst_r == lhs_r {
+                    } else {
+                        // sub is a three-operand instruction, all distinct regs are fine
                         self.ectx.emit.emit_word(
                             aarch64::encode_sub_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(rhs_r),
-                            )
-                            .expect("sub"),
-                        );
-                        true
-                    } else if dst_r != rhs_r {
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_mov_reg(
                                 aarch64::Width::X64,
                                 Reg::from_raw(dst_r),
                                 Reg::from_raw(lhs_r),
-                            )
-                            .expect("mov"),
-                        );
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_sub_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
                                 Reg::from_raw(rhs_r),
                             )
                             .expect("sub"),
                         );
                         true
-                    } else {
-                        false
                     }
                 }
                 BinOpKind::Mul => {
@@ -477,30 +472,13 @@ impl Lowerer {
                             )
                             .expect("mul"),
                         );
-                    } else if dst_r == rhs_r {
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_mul(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(lhs_r),
-                            )
-                            .expect("mul"),
-                        );
                     } else {
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_mov_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(lhs_r),
-                            )
-                            .expect("mov"),
-                        );
+                        // mul is a three-operand instruction, all distinct regs are fine
                         self.ectx.emit.emit_word(
                             aarch64::encode_mul(
                                 aarch64::Width::X64,
                                 Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
                                 Reg::from_raw(rhs_r),
                             )
                             .expect("mul"),
@@ -712,38 +690,18 @@ impl Lowerer {
                             .expect("lsr imm"),
                         );
                         true
-                    } else if dst_r == lhs_r {
+                    } else {
+                        // lsr is a three-operand instruction, all distinct regs are fine
                         self.ectx.emit.emit_word(
                             aarch64::encode_lsr_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(rhs_r),
-                            )
-                            .expect("lsr"),
-                        );
-                        true
-                    } else if dst_r != rhs_r {
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_mov_reg(
                                 aarch64::Width::X64,
                                 Reg::from_raw(dst_r),
                                 Reg::from_raw(lhs_r),
-                            )
-                            .expect("mov"),
-                        );
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_lsr_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
                                 Reg::from_raw(rhs_r),
                             )
                             .expect("lsr"),
                         );
                         true
-                    } else {
-                        false
                     }
                 }
                 BinOpKind::Shl => {
@@ -772,27 +730,19 @@ impl Lowerer {
                             .expect("lsl"),
                         );
                         true
-                    } else if dst_r != rhs_r {
-                        self.ectx.emit.emit_word(
-                            aarch64::encode_mov_reg(
-                                aarch64::Width::X64,
-                                Reg::from_raw(dst_r),
-                                Reg::from_raw(lhs_r),
-                            )
-                            .expect("mov"),
-                        );
+                    } else {
+                        // dst != lhs, but lsl reads both operands before writing dst,
+                        // so dst == rhs is safe
                         self.ectx.emit.emit_word(
                             aarch64::encode_lsl_reg(
                                 aarch64::Width::X64,
                                 Reg::from_raw(dst_r),
-                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
                                 Reg::from_raw(rhs_r),
                             )
                             .expect("lsl"),
                         );
                         true
-                    } else {
-                        false
                     }
                 }
                 BinOpKind::CmpEq

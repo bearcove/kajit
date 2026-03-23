@@ -659,8 +659,17 @@ impl Lowerer {
                     self.set_const(*dst, Some(*value));
                     return;
                 }
-                self.emit_load_u64_x9(*value);
-                self.emit_store_def_x9(*dst, 0);
+                // Load directly into allocated register when possible
+                let dst_alloc = self.alloc_for_vreg(*dst);
+                if let Some(alloc) = dst_alloc
+                    && let Some(reg) = alloc.as_reg()
+                    && reg.class() == regalloc2::RegClass::Int
+                {
+                    self.emit_load_u64_reg(Reg::from_raw(reg.hw_enc() as u8), *value);
+                } else {
+                    self.emit_load_u64_x9(*value);
+                    self.emit_store_def_x9(*dst, 0);
+                }
                 self.set_const(*dst, Some(*value));
             }
             LinearOp::Copy { dst, src } => {
@@ -706,10 +715,26 @@ impl Lowerer {
                 self.set_const(*dst, None);
             }
             LinearOp::RestoreCursor { src } => {
-                self.emit_load_use_x9(*src, 0);
-                self.ectx.emit.emit_word(
-                    aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X19, Reg::X9).expect("mov"),
-                );
+                // Use allocated register directly if available
+                if let Some(alloc) = self.alloc_for_vreg(*src)
+                    && let Some(reg) = alloc.as_reg()
+                    && reg.class() == regalloc2::RegClass::Int
+                {
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_mov_reg(
+                            aarch64::Width::X64,
+                            Reg::X19,
+                            Reg::from_raw(reg.hw_enc() as u8),
+                        )
+                        .expect("mov"),
+                    );
+                } else {
+                    self.emit_load_use_x9(*src, 0);
+                    self.ectx.emit.emit_word(
+                        aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X19, Reg::X9)
+                            .expect("mov"),
+                    );
+                }
             }
 
             LinearOp::WriteToField { src, offset, width } => {
