@@ -1566,120 +1566,26 @@ fn lower_function(
         block_terms.push(resolve_term_labels(label_term, &labels, next));
     }
 
-    let debug_phi = std::env::var_os("KAJIT_DEBUG_PHI").is_some();
-    let mut use_sets = vec![vec![false; vreg_count as usize]; blocks.len()];
-    let mut def_sets = vec![vec![false; vreg_count as usize]; blocks.len()];
-
-    // 1. Phi-arg targets are block-param defs at the successor. Mark them
-    //    BEFORE collect_use_def so instructions that use these vregs see the
-    //    def and don't get added to use_set (which would make them live-in).
+    // Block params come from phi_args, NOT from liveness. In SSA with block
+    // params, only actual phi join points are block params. Live-through values
+    // cross block boundaries normally without becoming params.
+    //
+    // For each block, collect phi_arg targets from ALL incoming edges.
+    let mut block_param_sets = vec![Vec::<VReg>::new(); blocks.len()];
     for (bi, term) in block_terms.iter().enumerate() {
         let successors = term.successors();
         for (succ_idx, succ) in successors.iter().enumerate() {
-            for &(src, tgt) in term.phi_args_for_successor(succ_idx) {
-                if (tgt.index()) < vreg_count as usize {
-                    def_sets[succ.index()][tgt.index()] = true;
-                    if debug_phi {
-                        eprintln!(
-                            "  phi_def: b{bi}→b{}: v{} (from v{})",
-                            succ.index(),
-                            tgt.index(),
-                            src.index()
-                        );
-                    }
+            for &(_src, tgt) in term.phi_args_for_successor(succ_idx) {
+                let params = &mut block_param_sets[succ.index()];
+                if !params.contains(&tgt) {
+                    params.push(tgt);
                 }
             }
-        }
-    }
-
-    // 2. Entry block: function args are defs.
-    if let Some(entry_defs) = def_sets.first_mut() {
-        for &arg in &data_args {
-            entry_defs[arg.index()] = true;
-        }
-    }
-
-    // 3. Collect instruction uses/defs (respects pre-seeded defs from above).
-    for (idx, block) in blocks.iter().enumerate() {
-        collect_use_def(
-            block,
-            &insts,
-            &block_terms[idx],
-            &mut use_sets[idx],
-            &mut def_sets[idx],
-        );
-    }
-
-    // Run liveness in two passes:
-    // Pass 1: compute live_in to determine block params
-    // Pass 2: add block params as defs (they ARE defs in SSA), re-run liveness
-    let run_liveness =
-        |def_sets: &[Vec<bool>], use_sets: &[Vec<bool>], block_terms: &[TempTermBlock]| {
-            let n = def_sets[0].len();
-            let mut live_in = vec![vec![false; n]; def_sets.len()];
-            let mut live_out = vec![vec![false; n]; def_sets.len()];
-            loop {
-                let mut changed = false;
-                for bi in (0..def_sets.len()).rev() {
-                    let mut out = vec![false; n];
-                    for succ in block_terms[bi].successors() {
-                        for (idx, live) in live_in[succ.index()].iter().enumerate() {
-                            out[idx] |= *live;
-                        }
-                    }
-                    let mut inn = use_sets[bi].clone();
-                    for idx in 0..n {
-                        inn[idx] |= out[idx] && !def_sets[bi][idx];
-                    }
-                    if out != live_out[bi] || inn != live_in[bi] {
-                        live_out[bi] = out;
-                        live_in[bi] = inn;
-                        changed = true;
-                    }
-                }
-                if !changed {
-                    break;
-                }
-            }
-            live_in
-        };
-
-    // Pass 1: initial liveness to discover block params.
-    let live_in_pass1 = run_liveness(&def_sets, &use_sets, &block_terms);
-
-    // Add block params (from pass 1) as defs in their respective blocks.
-    for bi in 1..blocks.len() {
-        for (idx, &live) in live_in_pass1[bi].iter().enumerate() {
-            if live {
-                def_sets[bi][idx] = true;
-            }
-        }
-    }
-
-    // Pass 2: re-run liveness with block params as defs.
-    let live_in = run_liveness(&def_sets, &use_sets, &block_terms);
-
-    if debug_phi {
-        let entry_live: Vec<usize> = live_in[0]
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &l)| if l { Some(i) } else { None })
-            .collect();
-        if !entry_live.is_empty() {
-            eprintln!("  WARN: live_in at entry after pass2: {entry_live:?}");
         }
     }
 
     for bi in 0..blocks.len() {
-        if bi == 0 {
-            blocks[bi].params.clear();
-            continue;
-        }
-        blocks[bi].params = live_in[bi]
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, live)| live.then_some(VReg::new(idx as u32)))
-            .collect();
+        blocks[bi].params = block_param_sets[bi].clone();
     }
 
     let mut edges = Vec::<Edge>::new();

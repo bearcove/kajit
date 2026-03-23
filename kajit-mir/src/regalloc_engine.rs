@@ -426,6 +426,7 @@ fn lower_term_uses_cfg(term: &cfg_mir::Terminator) -> Vec<kajit_ir::VReg> {
 
 fn split_critical_edges_cfg(
     func: &cfg_mir::Function,
+    num_vregs: &mut usize,
 ) -> Result<(Vec<WorkBlock>, Vec<Option<EdgeBlockInfo>>), RegallocEngineError> {
     let schedule = func
         .derive_schedule()
@@ -514,7 +515,17 @@ fn split_critical_edges_cfg(
             let to_params = blocks[to].params.clone();
             let edge_block_term_linear_index = blocks[from].term_linear_op_index;
             let cfg_edge_id = func.blocks[from].succs[succ_idx];
-            let edge_succ_args = to_params.clone();
+            // Allocate fresh vregs for the edge block's params (SSA: one def per vreg).
+            let edge_params: Vec<kajit_ir::VReg> = to_params
+                .iter()
+                .map(|_| {
+                    let v = kajit_ir::VReg::new(*num_vregs as u32);
+                    *num_vregs += 1;
+                    v
+                })
+                .collect();
+            // Edge block passes its fresh params to the successor's original params.
+            let edge_succ_args = edge_params.clone();
             let edge_block = WorkBlock {
                 raw_insts: Vec::new(),
                 raw_inst_op_ids: Vec::new(),
@@ -525,7 +536,7 @@ fn split_critical_edges_cfg(
                 term_uses: Vec::new(),
                 succs: vec![to],
                 preds: vec![from],
-                params: to_params,
+                params: edge_params,
                 succ_args: vec![edge_succ_args],
             };
             let edge_id = blocks.len();
@@ -726,8 +737,11 @@ impl AdapterFunction {
         }
     }
 
-    fn from_cfg(func: &cfg_mir::Function, num_vregs: usize) -> Result<Self, RegallocEngineError> {
-        let (blocks, edge_infos) = split_critical_edges_cfg(func)?;
+    fn from_cfg(
+        func: &cfg_mir::Function,
+        mut num_vregs: usize,
+    ) -> Result<Self, RegallocEngineError> {
+        let (blocks, edge_infos) = split_critical_edges_cfg(func, &mut num_vregs)?;
         Ok(Self::from_work_blocks(
             &func.data_args,
             &func.data_results,
