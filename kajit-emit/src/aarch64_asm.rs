@@ -204,6 +204,18 @@ pub enum Instruction {
         rn: Reg,
         rm: Reg,
     },
+    AsrImm {
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        shift: u8,
+    },
+    AsrReg {
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    },
 
     // Move
     MovReg {
@@ -512,6 +524,29 @@ impl std::fmt::Display for Instruction {
                 write!(
                     f,
                     "lsr {}, {}, {}",
+                    reg_name(*rd, *width),
+                    reg_name(*rn, *width),
+                    reg_name(*rm, *width)
+                )
+            }
+            Instruction::AsrImm {
+                width,
+                rd,
+                rn,
+                shift,
+            } => {
+                write!(
+                    f,
+                    "asr {}, {}, #{}",
+                    reg_name(*rd, *width),
+                    reg_name(*rn, *width),
+                    shift
+                )
+            }
+            Instruction::AsrReg { width, rd, rn, rm } => {
+                write!(
+                    f,
+                    "asr {}, {}, {}",
                     reg_name(*rd, *width),
                     reg_name(*rn, *width),
                     reg_name(*rm, *width)

@@ -585,6 +585,14 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
                 lhs.wrapping_shr(rhs as u32)
             }
         }
+        BinOpKind::Sar => {
+            if rhs >= 64 {
+                // Arithmetic shift by 64+ bits fills with sign bit
+                ((lhs as i64) >> 63) as u64
+            } else {
+                ((lhs as i64).wrapping_shr(rhs as u32)) as u64
+            }
+        }
         BinOpKind::CmpEq => u64::from(lhs == rhs),
         BinOpKind::CmpNe => u64::from(lhs != rhs),
         BinOpKind::CmpLt => u64::from(lhs < rhs),

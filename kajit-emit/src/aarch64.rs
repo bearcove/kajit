@@ -851,6 +851,35 @@ impl Emitter {
         Ok(())
     }
 
+    pub fn emit_asr_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        shift: u8,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::AsrImm {
+            width,
+            rd,
+            rn,
+            shift,
+        });
+        self.emit_word(encode_asr_imm(width, rd, rn, shift)?);
+        Ok(())
+    }
+
+    pub fn emit_asr_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::AsrReg { width, rd, rn, rm });
+        self.emit_word(encode_asr_reg(width, rd, rn, rm)?);
+        Ok(())
+    }
+
     pub fn emit_neg_reg(&mut self, width: Width, rd: Reg, rm: Reg) -> Result<(), EmitError> {
         self.capture(crate::aarch64_asm::Instruction::NegReg { width, rd, rm });
         self.emit_word(encode_neg(width, rd, rm)?);
@@ -1696,6 +1725,13 @@ pub fn encode_asr_imm(width: Width, rd: Reg, rn: Reg, shift: u8) -> Result<u32, 
     };
     let imms = max_shift as u32;
     Ok(base | ((shift as u32) << 16) | (imms << 10) | (rn << 5) | rd)
+}
+
+pub fn encode_asr_reg(width: Width, rd: Reg, rn: Reg, rm: Reg) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let rm = check_reg(rm);
+    Ok((width.sf() << 31) | 0x1AC0_2800 | (rm << 16) | (rn << 5) | rd)
 }
 
 pub fn encode_lsr_imm(width: Width, rd: Reg, rn: Reg, shift: u8) -> Result<u32, EmitError> {

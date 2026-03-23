@@ -2136,25 +2136,27 @@ impl PostcardHirLowerer {
         if !zigzag {
             return acc;
         }
+        // ZigZag decoding: (n >> 1) ^ (-(n & 1))
+        // Optimized to: (n >> 1) ^ ((n << 63) sar 63)
+        // This uses arithmetic shift right to sign-extend the LSB to all 64 bits.
         let shifted = hir::Expr::Binary {
             op: hir::BinaryOp::Shr,
             lhs: Box::new(acc.clone()),
             rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
         };
-        let sign = hir::Expr::Binary {
-            op: hir::BinaryOp::BitAnd,
-            lhs: Box::new(acc),
-            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
-        };
-        let neg_sign = hir::Expr::Binary {
-            op: hir::BinaryOp::Sub,
-            lhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
-            rhs: Box::new(sign),
+        let sign_extended = hir::Expr::Binary {
+            op: hir::BinaryOp::Sar,
+            lhs: Box::new(hir::Expr::Binary {
+                op: hir::BinaryOp::Shl,
+                lhs: Box::new(acc),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(63))),
+            }),
+            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(63))),
         };
         hir::Expr::Binary {
             op: hir::BinaryOp::Xor,
             lhs: Box::new(shifted),
-            rhs: Box::new(neg_sign),
+            rhs: Box::new(sign_extended),
         }
     }
 

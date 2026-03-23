@@ -788,6 +788,7 @@ impl fmt::Display for ExprDisplay<'_> {
                     BinaryOp::Xor => "xor",
                     BinaryOp::Shl => "shl",
                     BinaryOp::Shr => "shr",
+                    BinaryOp::Sar => "sar",
                     BinaryOp::Eq => "eq",
                     BinaryOp::Ne => "ne",
                     BinaryOp::Lt => "lt",

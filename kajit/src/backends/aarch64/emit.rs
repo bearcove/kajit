@@ -736,6 +736,35 @@ impl Lowerer<'_> {
                         true
                     }
                 }
+                BinOpKind::Sar => {
+                    // Try immediate encoding first (shift amount 0-63)
+                    if let Some(c) = rhs_const
+                        && c <= 63
+                    {
+                        self.ectx
+                            .emit
+                            .emit_asr_imm(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                                c as u8,
+                            )
+                            .expect("asr imm");
+                        true
+                    } else {
+                        // asr is a three-operand instruction, all distinct regs are fine
+                        self.ectx
+                            .emit
+                            .emit_asr_reg(
+                                aarch64::Width::X64,
+                                Reg::from_raw(dst_r),
+                                Reg::from_raw(lhs_r),
+                                Reg::from_raw(rhs_r),
+                            )
+                            .expect("asr");
+                        true
+                    }
+                }
                 BinOpKind::Shl => {
                     // Try immediate encoding first (shift amount 1-63, not 0)
                     if let Some(c) = rhs_const
@@ -898,6 +927,22 @@ impl Lowerer<'_> {
                         .emit
                         .emit_lsr_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
                         .expect("lsr");
+                }
+            }
+            BinOpKind::Sar => {
+                if let Some(c) = rhs_const
+                    && c <= 63
+                {
+                    self.ectx
+                        .emit
+                        .emit_asr_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c as u8)
+                        .expect("asr");
+                } else {
+                    self.emit_load_use_x10_vreg(rhs);
+                    self.ectx
+                        .emit
+                        .emit_asr_reg(aarch64::Width::X64, Reg::X9, Reg::X9, Reg::X10)
+                        .expect("asr");
                 }
             }
             BinOpKind::Shl => {

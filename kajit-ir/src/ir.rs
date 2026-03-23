@@ -700,6 +700,10 @@ pub enum IrOp {
     /// Inputs: [Data, Data]. Outputs: [Data].
     Shl,
 
+    /// Arithmetic right shift (sign-extending).
+    /// Inputs: [Data, Data]. Outputs: [Data].
+    Sar,
+
     /// Bitwise XOR.
     /// Inputs: [Data, Data]. Outputs: [Data].
     Xor,
@@ -832,6 +836,7 @@ impl IrOp {
             | IrOp::Or
             | IrOp::Shr
             | IrOp::Shl
+            | IrOp::Sar
             | IrOp::Xor
             | IrOp::CmpEq
             | IrOp::CmpNe
@@ -2590,6 +2595,7 @@ impl IrFunc {
             IrOp::Or => write!(f, "Or"),
             IrOp::Shr => write!(f, "Shr"),
             IrOp::Shl => write!(f, "Shl"),
+            IrOp::Sar => write!(f, "Sar"),
             IrOp::Xor => write!(f, "Xor"),
             IrOp::CmpEq => write!(f, "CmpEq"),
             IrOp::CmpNe => write!(f, "CmpNe"),

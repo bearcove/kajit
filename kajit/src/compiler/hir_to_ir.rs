@@ -1096,6 +1096,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     hir::BinaryOp::Xor => crate::ir::IrOp::Xor,
                     hir::BinaryOp::Shl => crate::ir::IrOp::Shl,
                     hir::BinaryOp::Shr => crate::ir::IrOp::Shr,
+                    hir::BinaryOp::Sar => crate::ir::IrOp::Sar,
                     hir::BinaryOp::Eq => crate::ir::IrOp::CmpEq,
                     hir::BinaryOp::And => crate::ir::IrOp::And,
                     hir::BinaryOp::Or => crate::ir::IrOp::Or,

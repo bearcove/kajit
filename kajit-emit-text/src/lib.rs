@@ -408,6 +408,27 @@ fn instruction<'src>() -> impl Parser<'src, &'src str, Instruction, Extra<'src>>
         .then(register())
         .map(|(((rd, width), (rn, _)), (rm, _))| Instruction::LsrReg { width, rd, rn, rm });
 
+    let asr_imm = just("asr ")
+        .ignore_then(register())
+        .then_ignore(token(","))
+        .then(register())
+        .then_ignore(token(","))
+        .then(immediate().map(|i| i as u8))
+        .map(|(((rd, width), (rn, _)), shift)| Instruction::AsrImm {
+            width,
+            rd,
+            rn,
+            shift,
+        });
+
+    let asr_reg = just("asr ")
+        .ignore_then(register())
+        .then_ignore(token(","))
+        .then(register())
+        .then_ignore(token(","))
+        .then(register())
+        .map(|(((rd, width), (rn, _)), (rm, _))| Instruction::AsrReg { width, rd, rn, rm });
+
     // Load/Store
     let ldr = just("ldr ")
         .ignore_then(register())
@@ -500,7 +521,11 @@ fn instruction<'src>() -> impl Parser<'src, &'src str, Instruction, Extra<'src>>
         eor_imm.or(eor_reg),
     ));
 
-    let shifts = choice((lsl_imm.or(lsl_reg), lsr_imm.or(lsr_reg)));
+    let shifts = choice((
+        lsl_imm.or(lsl_reg),
+        lsr_imm.or(lsr_reg),
+        asr_imm.or(asr_reg),
+    ));
 
     let stp = just("stp ")
         .ignore_then(register())
@@ -775,6 +800,17 @@ fn emit_instruction(
             .map_err(map_err),
         Instruction::LsrReg { width, rd, rn, rm } => {
             emitter.emit_lsr_reg(*width, *rd, *rn, *rm).map_err(map_err)
+        }
+        Instruction::AsrImm {
+            width,
+            rd,
+            rn,
+            shift,
+        } => emitter
+            .emit_asr_imm(*width, *rd, *rn, *shift)
+            .map_err(map_err),
+        Instruction::AsrReg { width, rd, rn, rm } => {
+            emitter.emit_asr_reg(*width, *rd, *rn, *rm).map_err(map_err)
         }
         Instruction::LdrImm {
             width,

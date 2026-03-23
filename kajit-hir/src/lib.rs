@@ -908,7 +908,8 @@ impl Module {
                 | BinaryOp::BitOr
                 | BinaryOp::Xor
                 | BinaryOp::Shl
-                | BinaryOp::Shr => self.vixen_expr_type(lhs, local_types),
+                | BinaryOp::Shr
+                | BinaryOp::Sar => self.vixen_expr_type(lhs, local_types),
             },
             VixenTypedExpr::Call { callee, .. } => {
                 let callable = self.resolve_vixen_callable(callee)?;
@@ -1317,6 +1318,7 @@ pub enum BinaryOp {
     Xor,
     Shl,
     Shr,
+    Sar, // Arithmetic shift right (sign-extending)
     Eq,
     Ne,
     Lt,
