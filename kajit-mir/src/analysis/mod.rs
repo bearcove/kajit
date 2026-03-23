@@ -5,5 +5,6 @@
 //! - `loops`: loop detection and loop nesting
 //! - `defuse`: def-use chains for value flow analysis
 
+pub mod defuse;
 pub mod dominance;
 pub mod loops;
