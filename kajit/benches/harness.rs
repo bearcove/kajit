@@ -197,6 +197,11 @@ pub fn is_list_mode() -> bool {
     std::env::args().any(|a| a == "--list")
 }
 
+/// Returns true if `--dump-asm` was passed on the command line.
+pub fn is_dump_asm_mode() -> bool {
+    std::env::args().any(|a| a == "--dump-asm")
+}
+
 fn parse_filter() -> Option<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     for i in 0..args.len() {

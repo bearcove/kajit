@@ -1823,6 +1823,12 @@ pub(crate) fn render_bench_file() -> String {
         use std::hint::black_box;
         use std::panic::{catch_unwind, AssertUnwindSafe};
         use std::sync::Arc;
+        #[cfg(target_arch = "aarch64")]
+        use yaxpeax_arm::armv8::a64::InstDecoder;
+        #[cfg(target_arch = "x86_64")]
+        use yaxpeax_x86::amd64::InstDecoder;
+        #[allow(unused_imports)]
+        use yaxpeax_arch::{Decoder, U8Reader, LengthedInstruction};
 
         #types
 
@@ -1834,6 +1840,67 @@ pub(crate) fn render_bench_file() -> String {
             } else {
                 "non-string panic payload".to_owned()
             }
+        }
+
+        #[cfg(target_arch = "aarch64")]
+        fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
+            use yaxpeax_arch::{Decoder, U8Reader};
+            use yaxpeax_arm::armv8::a64::InstDecoder;
+
+            let decoder = InstDecoder::default();
+            let mut reader = U8Reader::new(code);
+            let mut insts = Vec::new();
+            let mut offset = 0usize;
+            while offset + 4 <= code.len() {
+                match decoder.decode(&mut reader) {
+                    Ok(inst) => {
+                        let addr = base_addr + offset;
+                        insts.push(format!("{addr:012x}:  {inst}"));
+                    }
+                    Err(_) => break,
+                }
+                offset += 4;
+            }
+            insts
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
+            use yaxpeax_arch::{Decoder, U8Reader, LengthedInstruction};
+            use yaxpeax_x86::amd64::InstDecoder;
+
+            let decoder = InstDecoder::default();
+            let mut reader = U8Reader::new(code);
+            let mut insts = Vec::new();
+            let mut offset = 0usize;
+            while offset < code.len() {
+                match decoder.decode(&mut reader) {
+                    Ok(inst) => {
+                        let len = inst.len().to_const() as usize;
+                        if len == 0 {
+                            break;
+                        }
+                        let addr = base_addr + offset;
+                        insts.push(format!("{addr:012x}:  {inst}"));
+                        offset += len;
+                    }
+                    Err(_) => break,
+                }
+            }
+            insts
+        }
+
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
+        fn disassemble_code(_code: &[u8], _base_addr: usize) -> Vec<String> {
+            vec!["(disassembly not supported on this architecture)".to_string()]
+        }
+
+        fn disassemble_until_ret(code: &[u8], base_addr: usize) -> Vec<String> {
+            let mut lines = disassemble_code(code, base_addr);
+            if let Some(ret_idx) = lines.iter().position(|l| l.contains("ret")) {
+                lines.truncate(ret_idx + 1);
+            }
+            lines
         }
 
         fn register_bench_case<T>(
@@ -1865,6 +1932,42 @@ pub(crate) fn render_bench_file() -> String {
                     v.push(harness::Bench { name: format!("{postcard_prefix}/kajit_deser"), func: Box::new(|_| {}) });
                 }
                 v.push(harness::Bench { name: format!("{postcard_prefix}/serde_ser"), func: Box::new(|_| {}) });
+                return;
+            }
+
+            if harness::is_dump_asm_mode() {
+                let postcard_prefix = format!("{group}/postcard");
+
+                // Postcard: serde disassembly
+                #[inline(never)]
+                fn serde_postcard_deser<U: serde::de::DeserializeOwned>(data: &[u8]) -> U {
+                    ::postcard::from_bytes(data).unwrap()
+                }
+                let serde_fn_ptr = serde_postcard_deser::<T> as *const u8;
+
+                println!("=== {postcard_prefix}/serde_deser ===");
+                println!("serde function at {:p}", serde_fn_ptr);
+                let serde_code = unsafe { std::slice::from_raw_parts(serde_fn_ptr, 4096) };
+                for line in disassemble_until_ret(serde_code, serde_fn_ptr as usize) {
+                    println!("{line}");
+                }
+                println!();
+
+                // Postcard: kajit disassembly
+                if enable_postcard_kajit {
+                    if let Ok(decoder) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
+                    })) {
+                        let code = decoder.code();
+                        let entry = decoder.entry_offset();
+                        let base = code.as_ptr() as usize;
+                        println!("=== {postcard_prefix}/kajit_deser ({} bytes) ===", code.len());
+                        for line in disassemble_code(&code[entry..], base + entry) {
+                            println!("{line}");
+                        }
+                        println!();
+                    }
+                }
                 return;
             }
 

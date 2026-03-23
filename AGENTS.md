@@ -155,17 +155,20 @@ Dump files are named `<format>__<case>__<arch>__<stage>.txt`.
 
 ### Comparing serde vs kajit disassembly
 
-Show side-by-side disassembly of both serde and kajit JIT code for any corpus test:
+Compare optimized disassembly of serde vs kajit for any benchmark case:
 
+```bash
+cargo bench -p kajit --bench synthetic -- --dump-asm scalar_u32
+```
+
+This runs in release mode with LTO, so serde code is fully inlined. Output shows both:
+- `scalar_u32/postcard/serde_deser` — serde's optimized decode
+- `scalar_u32/postcard/kajit_deser` — kajit JIT code
+
+For corpus tests (debug mode, less useful):
 ```bash
 KAJIT_SHOW_ASM=1 cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v0)'
 ```
-
-This prints:
-- Kajit JIT disassembly (using yaxpeax)
-- Serde deserialize function disassembly (via `#[inline(never)]` wrapper)
-
-The test panics after printing to ensure output is visible.
 
 Use `opts` stage to see RVSDG snapshots between each optimization pass.
 
