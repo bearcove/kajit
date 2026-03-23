@@ -41,7 +41,9 @@ bench *args:
 
 # Run all benchmarks and generate bench_report/index.html
 bench-report *args:
-    cargo bench {{ args }} | cargo run --example bench_report
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo bench -p kajit --bench synthetic {{args}} 2>/dev/null | cargo run --quiet --example bench_report
 
 # Check + clippy
 check:
