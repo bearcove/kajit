@@ -174,6 +174,14 @@ pub fn run_benchmarks(benchmarks: Vec<Bench>) {
     }
 }
 
+/// Returns true if the given bench name matches the CLI filter (or no filter is set).
+pub fn matches_filter(name: &str) -> bool {
+    match parse_filter() {
+        Some(f) => name.contains(f.as_str()),
+        None => true,
+    }
+}
+
 fn parse_filter() -> Option<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     for i in 0..args.len() {

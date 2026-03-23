@@ -1846,6 +1846,11 @@ pub(crate) fn render_bench_file() -> String {
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
         {
+            // Skip entirely if no bench name for this group could match the CLI filter.
+            if !harness::matches_filter(group) {
+                return;
+            }
+
             let json_data = Arc::new(serde_json::to_string(&value).unwrap());
             let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
             let value = Arc::new(value);

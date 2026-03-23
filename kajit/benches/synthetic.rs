@@ -380,6 +380,9 @@ fn register_bench_case<T>(
 ) where
     for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + 'static,
 {
+    if !harness::matches_filter(group) {
+        return;
+    }
     let json_data = Arc::new(serde_json::to_string(&value).unwrap());
     let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
     let value = Arc::new(value);
@@ -410,7 +413,6 @@ fn register_bench_case<T>(
             }
         };
         if let Some(decoder) = json_decoder {
-            eprintln!("  preflight {json_prefix}/kajit_deser...");
             match catch_unwind(AssertUnwindSafe(|| {
                 kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
             })) {
@@ -482,7 +484,6 @@ fn register_bench_case<T>(
             }
         };
         if let Some(decoder) = postcard_decoder {
-            eprintln!("  preflight {postcard_prefix}/kajit_deser...");
             match catch_unwind(AssertUnwindSafe(|| {
                 kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
             })) {
