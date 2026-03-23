@@ -1,10 +1,12 @@
 //! Simplify gamma nodes.
 //!
-//! Two optimizations:
+//! Three optimizations:
 //! 1. **All-passthrough elimination**: If every branch produces the same
 //!    passthrough results, the gamma is a no-op and can be removed.
 //! 2. **Constant predicate folding**: If the gamma's predicate is a known
 //!    constant, inline the selected branch and discard the others.
+//! 3. **Empty branch coalescing**: If a branch is empty (no nodes, all results
+//!    are passthroughs), try to simplify the control flow.
 
 use std::collections::HashMap;
 
@@ -12,13 +14,17 @@ use crate::{ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, Region
 
 /// Entry point: simplify gamma nodes until fixed point.
 pub fn simplify_trivial_gammas(func: &mut IrFunc) {
+    let debug = std::env::var("KAJIT_DEBUG_GAMMA").is_ok();
+    let mut total_eliminated = 0;
+
     loop {
         let region_ids: Vec<RegionId> = func.regions.iter().map(|(rid, _)| rid).collect();
         let mut changed = false;
 
         for rid in region_ids {
-            if simplify_in_region(func, rid) {
+            if simplify_in_region(func, rid, debug) {
                 changed = true;
+                total_eliminated += 1;
                 break; // restart after mutation
             }
         }
@@ -27,10 +33,14 @@ pub fn simplify_trivial_gammas(func: &mut IrFunc) {
             break;
         }
     }
+
+    if debug && total_eliminated > 0 {
+        eprintln!("[simplify_gamma] eliminated {} gammas", total_eliminated);
+    }
 }
 
 /// Try to simplify one gamma in `region_id`. Returns true if a change was made.
-fn simplify_in_region(func: &mut IrFunc, region_id: RegionId) -> bool {
+fn simplify_in_region(func: &mut IrFunc, region_id: RegionId, debug: bool) -> bool {
     let nodes = func.regions[region_id].nodes.clone();
 
     for &node_id in &nodes {
@@ -41,11 +51,28 @@ fn simplify_in_region(func: &mut IrFunc, region_id: RegionId) -> bool {
 
         // Try constant predicate folding first (higher impact).
         if fold_constant_predicate(func, region_id, node_id, &regions) {
+            if debug {
+                eprintln!(
+                    "[simplify_gamma] folded constant predicate in gamma n{}",
+                    node_id.index()
+                );
+            }
             return true;
         }
 
         // Try all-passthrough elimination.
         if eliminate_all_passthrough(func, region_id, node_id, &regions) {
+            if debug {
+                eprintln!(
+                    "[simplify_gamma] eliminated all-passthrough gamma n{}",
+                    node_id.index()
+                );
+            }
+            return true;
+        }
+
+        // Try empty branch coalescing.
+        if coalesce_empty_branch(func, region_id, node_id, &regions, debug) {
             return true;
         }
     }
@@ -244,6 +271,57 @@ fn branches_have_side_effects(func: &IrFunc, regions: &[RegionId]) -> bool {
             }
         }
     }
+    false
+}
+
+/// Try to simplify gammas where one or more branches are empty (no nodes).
+/// Returns true if a simplification was made.
+fn coalesce_empty_branch(
+    func: &IrFunc,
+    _parent_region: RegionId,
+    gamma_node: NodeId,
+    branch_regions: &[RegionId],
+    debug: bool,
+) -> bool {
+    // Check which branches are empty (no nodes)
+    let mut empty_branches = Vec::new();
+    let mut non_empty_branches = Vec::new();
+
+    for (idx, &branch_region) in branch_regions.iter().enumerate() {
+        if func.regions[branch_region].nodes.is_empty() {
+            empty_branches.push(idx);
+        } else {
+            non_empty_branches.push(idx);
+        }
+    }
+
+    // Debug logging to understand patterns
+    if debug && !empty_branches.is_empty() {
+        eprintln!(
+            "[simplify_gamma] gamma n{}: {} branches, {} empty, {} non-empty",
+            gamma_node.index(),
+            branch_regions.len(),
+            empty_branches.len(),
+            non_empty_branches.len()
+        );
+
+        // Check if empty branches are passthrough
+        for &idx in &empty_branches {
+            let region = branch_regions[idx];
+            let args = &func.regions[region].args;
+            let results = &func.regions[region].results;
+            let all_passthrough = results.iter().enumerate().all(|(result_idx, &result_id)| {
+                match func.region_results[result_id].source {
+                    PortSource::RegionArg(arg_ref) => args.get(result_idx) == Some(&arg_ref.arg),
+                    _ => false,
+                }
+            });
+            eprintln!("  branch {} empty, passthrough={}", idx, all_passthrough);
+        }
+    }
+
+    // TODO: Actually implement optimizations for empty branches
+    // For now, just report patterns so we can see what's happening
     false
 }
 
