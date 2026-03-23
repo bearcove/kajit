@@ -509,6 +509,21 @@ impl Lowerer {
                     true
                 }
                 BinOpKind::And => {
+                    // Track power-of-2 masks for potential tbz/tbnz optimization
+                    if let Some(c) = rhs_const
+                        && c.is_power_of_two()
+                    {
+                        self.set_masked_value(
+                            dst,
+                            Some(super::MaskedValueInfo {
+                                src: lhs,
+                                bit: c.trailing_zeros() as u8,
+                            }),
+                        );
+                    } else {
+                        self.set_masked_value(dst, None);
+                    }
+
                     // Try logical immediate encoding first
                     if let Some(c) = rhs_const
                         && let Ok(word) = aarch64::encode_and_imm(
@@ -848,6 +863,21 @@ impl Lowerer {
                 );
             }
             BinOpKind::And => {
+                // Track power-of-2 masks for potential tbz/tbnz optimization
+                if let Some(c) = rhs_const
+                    && c.is_power_of_two()
+                {
+                    self.set_masked_value(
+                        dst,
+                        Some(super::MaskedValueInfo {
+                            src: lhs,
+                            bit: c.trailing_zeros() as u8,
+                        }),
+                    );
+                } else {
+                    self.set_masked_value(dst, None);
+                }
+
                 if let Some(c) = rhs_const
                     && let Ok(word) =
                         aarch64::encode_and_imm(aarch64::Width::X64, Reg::X9, Reg::X9, c)
@@ -1016,6 +1046,52 @@ impl Lowerer {
     }
 
     pub(super) fn emit_branch_if(&mut self, cond: crate::ir::VReg, target: LabelId, invert: bool) {
+        // Check if we can use tbz/tbnz optimization for masked values
+        if let Some(masked) = self.masked_value_of(cond) {
+            // In no-edit mode, load the source vreg and use tbz/tbnz directly
+            // This eliminates the And instruction that created the masked value
+            if self.no_edit_mode() {
+                let src_alloc = self.canonical_alloc_for_vreg(masked.src);
+                if let Some(slot) = src_alloc.as_stack() {
+                    let off = self.spill_off(slot);
+                    self.emit_stack_load(aarch64::Width::X64, Reg::X9, off);
+                    // invert=true means branch_if_zero, so we want tbz (branch if bit is zero)
+                    // invert=false means branch_if, so we want tbnz (branch if bit is non-zero)
+                    if invert {
+                        self.ectx
+                            .emit
+                            .emit_tbz_label(Reg::X9, masked.bit, target)
+                            .expect("tbz");
+                    } else {
+                        self.ectx
+                            .emit
+                            .emit_tbnz_label(Reg::X9, masked.bit, target)
+                            .expect("tbnz");
+                    }
+                    return;
+                }
+            }
+            // In edit mode with regalloc, check if source vreg has a current allocation
+            // This would happen if src is also an operand of the branch (unusual but possible)
+            if let Some(src_alloc) = self.alloc_for_vreg(masked.src) {
+                if let Some(reg) = src_alloc.as_reg() {
+                    let r = reg.hw_enc() as u8;
+                    if invert {
+                        self.ectx
+                            .emit
+                            .emit_tbz_label(Reg::from_raw(r), masked.bit, target)
+                            .expect("tbz");
+                    } else {
+                        self.ectx
+                            .emit
+                            .emit_tbnz_label(Reg::from_raw(r), masked.bit, target)
+                            .expect("tbnz");
+                    }
+                    return;
+                }
+            }
+        }
+
         let alloc = self
             .alloc_for_vreg(cond)
             .expect("branch_if cond should have allocation");

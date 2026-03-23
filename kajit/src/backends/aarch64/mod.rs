@@ -42,6 +42,26 @@ pub(crate) struct EdgeTrampoline {
     pub(crate) source_location: kajit_emit::SourceLocation,
 }
 
+/// Tracks a bit test pattern: `(src & (1 << bit)) == 0` or `!= 0`
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct BitTestInfo {
+    /// The source vreg being tested
+    pub(crate) src: crate::ir::VReg,
+    /// The bit position (0-63)
+    pub(crate) bit: u8,
+    /// true if this is `== 0` (use tbz), false if `!= 0` (use tbnz)
+    pub(crate) test_zero: bool,
+}
+
+/// Tracks a masked value: `src & mask` where mask is a power of 2
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct MaskedValueInfo {
+    /// The source vreg
+    pub(crate) src: crate::ir::VReg,
+    /// The bit position of the single set bit in the mask
+    pub(crate) bit: u8,
+}
+
 pub(crate) struct Lowerer {
     pub(crate) ectx: EmitCtx,
     pub(crate) block_labels: BTreeMap<(u32, u32), LabelId>,
@@ -51,6 +71,10 @@ pub(crate) struct Lowerer {
     pub(crate) entry: Option<u32>,
     pub(crate) current_func: Option<FunctionCtx>,
     pub(crate) const_vregs: Vec<Option<u64>>,
+    /// Tracks vregs that are the result of `src & (1 << bit)`
+    pub(crate) masked_vregs: Vec<Option<MaskedValueInfo>>,
+    /// Tracks vregs that are the result of bit test comparisons
+    pub(crate) bit_test_vregs: Vec<Option<BitTestInfo>>,
     pub(crate) edits_by_lambda: BTreeMap<u32, LambdaEditMap>,
     pub(crate) edge_edits_by_lambda: BTreeMap<u32, LambdaEdgeEditMap>,
     pub(crate) forward_branch_blocks: BTreeMap<(u32, u32), u32>,
@@ -376,6 +400,8 @@ impl Lowerer {
             entry: None,
             current_func: None,
             const_vregs: vec![None; program.vreg_count as usize],
+            masked_vregs: vec![None; program.vreg_count as usize],
+            bit_test_vregs: vec![None; program.vreg_count as usize],
             edits_by_lambda,
             edge_edits_by_lambda,
             forward_branch_blocks,
@@ -437,6 +463,8 @@ impl Lowerer {
 
     pub(super) fn flush_all_vregs_and_consts(&mut self) {
         self.const_vregs.fill(None);
+        self.masked_vregs.fill(None);
+        self.bit_test_vregs.fill(None);
     }
 
     pub(super) fn emit_bounds_check(&mut self, count: u32) {
@@ -598,6 +626,22 @@ impl Lowerer {
 
     pub(super) fn set_const(&mut self, v: crate::ir::VReg, value: Option<u64>) {
         self.const_vregs[v.index()] = value;
+    }
+
+    pub(super) fn masked_value_of(&self, v: crate::ir::VReg) -> Option<MaskedValueInfo> {
+        self.masked_vregs[v.index()]
+    }
+
+    pub(super) fn set_masked_value(&mut self, v: crate::ir::VReg, info: Option<MaskedValueInfo>) {
+        self.masked_vregs[v.index()] = info;
+    }
+
+    pub(super) fn bit_test_of(&self, v: crate::ir::VReg) -> Option<BitTestInfo> {
+        self.bit_test_vregs[v.index()]
+    }
+
+    pub(super) fn set_bit_test(&mut self, v: crate::ir::VReg, info: Option<BitTestInfo>) {
+        self.bit_test_vregs[v.index()] = info;
     }
 
     fn emit_inst(&mut self, inst: &cfg_mir::Inst) {
