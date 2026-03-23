@@ -349,8 +349,8 @@ impl std::fmt::Display for Instruction {
                 write!(
                     f,
                     "add {}, {}, #{}",
-                    reg_name(*rd, *width),
-                    reg_name(*rn, *width),
+                    reg_name_or_sp(*rd, *width),
+                    reg_name_or_sp(*rn, *width),
                     imm
                 )
             }
@@ -358,8 +358,8 @@ impl std::fmt::Display for Instruction {
                 write!(
                     f,
                     "sub {}, {}, #{}",
-                    reg_name(*rd, *width),
-                    reg_name(*rn, *width),
+                    reg_name_or_sp(*rd, *width),
+                    reg_name_or_sp(*rn, *width),
                     imm
                 )
             }
@@ -581,14 +581,14 @@ impl std::fmt::Display for Instruction {
                         f,
                         "ldr {}, [{}]",
                         reg_name(*rt, *width),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
                         f,
                         "ldr {}, [{}, #{}]",
                         reg_name(*rt, *width),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -599,14 +599,14 @@ impl std::fmt::Display for Instruction {
                         f,
                         "ldrb {}, [{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
                         f,
                         "ldrb {}, [{}, #{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -617,14 +617,14 @@ impl std::fmt::Display for Instruction {
                         f,
                         "ldrh {}, [{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
                         f,
                         "ldrh {}, [{}, #{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -640,14 +640,14 @@ impl std::fmt::Display for Instruction {
                         f,
                         "str {}, [{}]",
                         reg_name(*rt, *width),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
                         f,
                         "str {}, [{}, #{}]",
                         reg_name(*rt, *width),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -658,14 +658,14 @@ impl std::fmt::Display for Instruction {
                         f,
                         "strb {}, [{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
                         f,
                         "strb {}, [{}, #{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -676,14 +676,14 @@ impl std::fmt::Display for Instruction {
                         f,
                         "strh {}, [{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
                         f,
                         "strh {}, [{}, #{}]",
                         reg_name(*rt, Width::W32),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -701,7 +701,7 @@ impl std::fmt::Display for Instruction {
                         "stp {}, {}, [{}]",
                         reg_name(*rt1, *width),
                         reg_name(*rt2, *width),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
@@ -709,7 +709,7 @@ impl std::fmt::Display for Instruction {
                         "stp {}, {}, [{}, #{}]",
                         reg_name(*rt1, *width),
                         reg_name(*rt2, *width),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -727,7 +727,7 @@ impl std::fmt::Display for Instruction {
                         "ldp {}, {}, [{}]",
                         reg_name(*rt1, *width),
                         reg_name(*rt2, *width),
-                        reg_name(*rn, Width::X64)
+                        reg_name_or_sp(*rn, Width::X64)
                     )
                 } else {
                     write!(
@@ -735,7 +735,7 @@ impl std::fmt::Display for Instruction {
                         "ldp {}, {}, [{}, #{}]",
                         reg_name(*rt1, *width),
                         reg_name(*rt2, *width),
-                        reg_name(*rn, Width::X64),
+                        reg_name_or_sp(*rn, Width::X64),
                         offset
                     )
                 }
@@ -770,7 +770,7 @@ impl std::fmt::Display for Instruction {
             // Branches
             Instruction::B { target } => write!(f, "b {}", target),
             Instruction::Bl { target } => write!(f, "bl {}", target),
-            Instruction::Blr { rn } => write!(f, "blr {}", reg_name(*rn, Width::X64)),
+            Instruction::Blr { rn } => write!(f, "blr {}", reg_name_or_sp(*rn, Width::X64)),
             Instruction::Ret => write!(f, "ret"),
             Instruction::Cbz { width, rt, target } => {
                 write!(f, "cbz {}, {}", reg_name(*rt, *width), target)
@@ -818,6 +818,28 @@ fn reg_name(reg: Reg, width: Width) -> String {
         Width::X64 => {
             if num == 31 {
                 "xzr".to_string()
+            } else {
+                format!("x{}", num)
+            }
+        }
+    }
+}
+
+/// Format register name, treating register 31 as SP instead of XZR.
+/// Used for instructions where register 31 refers to the stack pointer.
+fn reg_name_or_sp(reg: Reg, width: Width) -> String {
+    let num = reg.raw();
+    match width {
+        Width::W32 => {
+            if num == 31 {
+                "wsp".to_string()
+            } else {
+                format!("w{}", num)
+            }
+        }
+        Width::X64 => {
+            if num == 31 {
+                "sp".to_string()
             } else {
                 format!("x{}", num)
             }
