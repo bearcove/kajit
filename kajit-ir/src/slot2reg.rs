@@ -35,14 +35,23 @@ pub fn slot_to_reg(func: &mut IrFunc) {
 
 fn collect_all_slots(func: &IrFunc) -> BTreeSet<SlotId> {
     let mut slots = BTreeSet::new();
+    let mut address_taken = BTreeSet::new();
     for (_nid, node) in func.nodes.iter() {
         match &node.kind {
             NodeKind::Simple(IrOp::WriteToSlot { slot })
             | NodeKind::Simple(IrOp::ReadFromSlot { slot }) => {
                 slots.insert(*slot);
             }
+            NodeKind::Simple(IrOp::SlotAddr { slot }) => {
+                // This slot's address escapes — it must stay in memory.
+                address_taken.insert(*slot);
+            }
             _ => {}
         }
+    }
+    // Exclude address-taken slots from promotion.
+    for slot in &address_taken {
+        slots.remove(slot);
     }
     slots
 }
@@ -127,6 +136,10 @@ fn promote_region(
         match &func.nodes[node_id].kind {
             NodeKind::Simple(IrOp::ReadFromSlot { slot }) => {
                 let slot = *slot;
+                if !all_slots.contains(&slot) {
+                    // Slot is not promotable (e.g. address-taken) — skip.
+                    continue;
+                }
                 if let Some(&current_val) = slot_values.get(&slot) {
                     let data_output = OutputRef {
                         node: node_id,
@@ -145,6 +158,10 @@ fn promote_region(
             }
             NodeKind::Simple(IrOp::WriteToSlot { slot }) => {
                 let slot = *slot;
+                if !all_slots.contains(&slot) {
+                    // Slot is not promotable (e.g. address-taken) — skip.
+                    continue;
+                }
                 let written_value = func.nodes[node_id].inputs[0].source;
                 let incoming_state = func.nodes[node_id].inputs[1].source;
                 let state_output = OutputRef {
