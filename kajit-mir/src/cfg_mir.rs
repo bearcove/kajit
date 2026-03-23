@@ -466,15 +466,16 @@ impl Function {
                 defs_available.insert(param);
             }
 
-            // Also, vregs defined in dominating blocks are available
-            // For simplicity, we assume entry block defs are available everywhere
-            // (a more precise analysis would compute dominators)
-            if block.id != self.entry {
-                let entry_block = &self.blocks[self.entry.index()];
-                for &param in &entry_block.params {
+            // In SSA, a def in any dominating block is available. For a sound
+            // but simple check, collect ALL defs across the entire function —
+            // this won't catch use-before-def within a single block or
+            // non-dominating def issues, but it prevents false positives from
+            // the old entry-block-only heuristic.
+            for other_block in &self.blocks {
+                for &param in &other_block.params {
                     defs_available.insert(param);
                 }
-                for &inst_id in &entry_block.insts {
+                for &inst_id in &other_block.insts {
                     let inst = &self.insts[inst_id.index()];
                     for op in &inst.operands {
                         if op.kind == OperandKind::Def {

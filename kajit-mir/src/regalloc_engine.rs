@@ -164,19 +164,65 @@ struct AdapterFunction {
 }
 
 impl AdapterFunction {
-    fn dump_debug(&self, cfg_func: &cfg_mir::Function) {
+    fn dump_regalloc2_view(&self) {
         use regalloc2::Function;
-        eprintln!("=== Adapter: lambda @{} ===", cfg_func.lambda_id.index());
-        eprintln!("  num_vregs: {}", self.num_vregs);
-        for (bi, block) in self.blocks.iter().enumerate() {
+        eprintln!("=== regalloc2 Function view ===");
+        eprintln!(
+            "num_blocks={} num_insts={} num_vregs={}",
+            self.num_blocks(),
+            self.num_insts(),
+            self.num_vregs()
+        );
+        for bi in 0..self.num_blocks() {
             let b = regalloc2::Block::new(bi);
+            let range = self.block_insns(b);
             let params: Vec<usize> = self.block_params(b).iter().map(|v| v.vreg()).collect();
-            eprintln!("  block {bi}: params={params:?}");
-            for (si, succ_args) in block.succ_args.iter().enumerate() {
-                let args: Vec<usize> = succ_args.iter().map(|v| v.vreg()).collect();
-                if !args.is_empty() || true {
-                    let succ = block.succs.get(si).map(|b| b.index()).unwrap_or(9999);
-                    eprintln!("    succ[{si}] → b{succ}: branch_args={args:?}");
+            let succs: Vec<usize> = self.block_succs(b).iter().map(|b| b.index()).collect();
+            let preds: Vec<usize> = self.block_preds(b).iter().map(|b| b.index()).collect();
+            eprintln!(
+                "  block b{bi} params={params:?} preds={preds:?} succs={succs:?} insts=i{}..i{}",
+                range.first().index(),
+                range.last().index()
+            );
+            for ii in range.iter() {
+                let is_branch = self.is_branch(ii);
+                let is_ret = self.is_ret(ii);
+                let ops: Vec<String> = self
+                    .inst_operands(ii)
+                    .iter()
+                    .map(|op| {
+                        let kind = match op.kind() {
+                            regalloc2::OperandKind::Use => "use",
+                            regalloc2::OperandKind::Def => "def",
+                        };
+                        let pos = match op.pos() {
+                            regalloc2::OperandPos::Early => "early",
+                            regalloc2::OperandPos::Late => "late",
+                        };
+                        format!("v{}:{kind}:{pos}", op.vreg().vreg())
+                    })
+                    .collect();
+                let mut extra = String::new();
+                if is_branch {
+                    extra.push_str(" [branch]");
+                }
+                if is_ret {
+                    extra.push_str(" [ret]");
+                }
+                eprintln!("    i{}: {}{extra}", ii.index(), ops.join(", "));
+            }
+            // branch_blockparams for each successor
+            {
+                let last_inst = range.last();
+                if self.is_branch(last_inst) {
+                    for (si, succ) in succs.iter().enumerate() {
+                        let args: Vec<usize> = self
+                            .branch_blockparams(b, last_inst, si)
+                            .iter()
+                            .map(|v| v.vreg())
+                            .collect();
+                        eprintln!("    → b{succ} branch_blockparams={args:?}");
+                    }
                 }
             }
         }
@@ -828,10 +874,19 @@ fn allocate_cfg_function(
     options: &RegallocOptions,
 ) -> Result<AllocatedCfgFunction, RegallocEngineError> {
     let adapter = AdapterFunction::from_cfg(func, vreg_count)?;
-    if std::env::var_os("KAJIT_DUMP_ADAPTER").is_some() {
-        adapter.dump_debug(func);
+    let dump = std::env::var_os("KAJIT_DUMP_ADAPTER").is_some();
+    if dump {
+        adapter.dump_regalloc2_view();
     }
-    let out = regalloc2::run(&adapter, env, options)?;
+    let out = match regalloc2::run(&adapter, env, options) {
+        Ok(out) => out,
+        Err(e) => {
+            if dump {
+                eprintln!("regalloc2 FAILED: {e}");
+            }
+            return Err(e.into());
+        }
+    };
 
     #[cfg(debug_assertions)]
     {
