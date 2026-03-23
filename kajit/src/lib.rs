@@ -84,6 +84,12 @@ pub fn emission_trace_text_with_options(
     compiler::emission_trace_text_with_options(shape, kind, pipeline_opts)
 }
 
+/// Return ARM64 assembly text (captured instructions before encoding).
+#[cfg(target_arch = "aarch64")]
+pub fn assembly_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
+    compiler::assembly_text(shape, kind)
+}
+
 /// Compile a deserializer from already-linearized IR.
 pub fn compile_decoder_linear_ir(
     ir: &linearize::LinearIr,

@@ -34,6 +34,7 @@ impl EmitCtx {
     fn new_with_base(extra_stack: u32, base_frame: u32) -> Self {
         let frame_size = (base_frame + extra_stack + 15) & !15;
         let mut emit = Emitter::new();
+        emit.enable_capture(); // Capture assembly instructions for dump/parse workflow
         let error_exit = emit.new_label();
 
         EmitCtx {
@@ -344,7 +345,14 @@ impl EmitCtx {
     /// Commit and finalize the assembler, returning the executable buffer.
     ///
     /// All functions must have been completed with `end_func` before calling this.
-    pub fn finalize(self) -> aarch64::FinalizedEmission {
-        self.emit.finalize().expect("failed to finalize assembly")
+    pub fn finalize(
+        mut self,
+    ) -> (
+        aarch64::FinalizedEmission,
+        Option<kajit_emit::aarch64_asm::Program>,
+    ) {
+        let asm_program = self.emit.take_captured_program();
+        let buf = self.emit.finalize().expect("failed to finalize assembly");
+        (buf, asm_program)
     }
 }

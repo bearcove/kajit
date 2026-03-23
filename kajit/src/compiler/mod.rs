@@ -33,6 +33,8 @@ pub struct CompiledDecoder {
     func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
+    #[cfg(target_arch = "aarch64")]
+    asm_program: Option<kajit_emit::aarch64_asm::Program>,
 }
 
 impl CompiledDecoder {
@@ -76,6 +78,12 @@ impl CompiledDecoder {
             &self.cfg_mir_line_text_by_line,
         ))
     }
+
+    /// ARM64 assembly text (captured instructions before encoding).
+    #[cfg(target_arch = "aarch64")]
+    pub fn assembly_text(&self) -> Option<String> {
+        self.asm_program.as_ref().map(|p| format!("{}", p))
+    }
 }
 
 pub(crate) const DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED: bool = true;
@@ -88,14 +96,22 @@ pub(crate) fn materialize_backend_result(
     usize,
     Option<kajit_emit::SourceMap>,
     Option<crate::ir_backend::BackendDebugInfo>,
+    Option<kajit_emit::aarch64_asm::Program>,
 ) {
     let crate::ir_backend::LinearBackendResult {
         buf,
         entry,
         source_map,
         backend_debug_info,
+        asm_program,
     } = result;
-    (buf, entry as usize, source_map, backend_debug_info)
+    (
+        buf,
+        entry as usize,
+        source_map,
+        backend_debug_info,
+        asm_program,
+    )
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -163,6 +179,25 @@ pub fn regalloc_edits_text(shape: &'static Shape, kind: DecoderKind) -> String {
 pub fn emission_trace_text(shape: &'static Shape, kind: DecoderKind) -> String {
     let pipeline_opts = PipelineOptions::from_env();
     emission_trace_text_with_options(shape, kind, &pipeline_opts)
+}
+
+/// Build a decoder and return ARM64 assembly text.
+#[cfg(target_arch = "aarch64")]
+pub fn assembly_text(shape: &'static Shape, kind: DecoderKind) -> String {
+    let pipeline_opts = PipelineOptions::from_env();
+    assembly_text_with_options(shape, kind, &pipeline_opts)
+}
+
+#[cfg(target_arch = "aarch64")]
+pub fn assembly_text_with_options(
+    shape: &'static Shape,
+    kind: DecoderKind,
+    pipeline_opts: &PipelineOptions,
+) -> String {
+    let decoder = compile_decoder_with_options(shape, kind, pipeline_opts);
+    decoder.assembly_text().unwrap_or_else(|| {
+        panic!("assembly capture not available (should always be enabled on aarch64)")
+    })
 }
 
 // r[impl compiler.opts.api]
@@ -449,7 +484,7 @@ fn compile_linear_ir_decoder_with_options(
         no_regalloc_alloc_for_cfg_program(&cfg_program)
     };
 
-    let (buf, entry, source_map, backend_debug_info) = {
+    let (buf, entry, source_map, backend_debug_info, asm_program) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
             ir,
             &cfg_program,
@@ -517,6 +552,8 @@ fn compile_linear_ir_decoder_with_options(
         func,
         trusted_utf8_input,
         _jit_registration: Some(registration),
+        #[cfg(target_arch = "aarch64")]
+        asm_program,
     }
 }
 
@@ -545,7 +582,7 @@ fn compile_cfg_mir_decoder_with_options(
         slot_count: cfg_program.slot_count,
         debug: Default::default(),
     };
-    let (buf, entry, source_map, backend_debug_info) = {
+    let (buf, entry, source_map, backend_debug_info, asm_program) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
             &shim_linear,
             cfg_program,
@@ -604,6 +641,8 @@ fn compile_cfg_mir_decoder_with_options(
         func,
         trusted_utf8_input,
         _jit_registration: Some(registration),
+        #[cfg(target_arch = "aarch64")]
+        asm_program,
     }
 }
 

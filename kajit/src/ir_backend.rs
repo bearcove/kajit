@@ -34,6 +34,7 @@ pub struct LinearBackendResult {
     pub entry: u32,
     pub source_map: Option<kajit_emit::SourceMap>,
     pub backend_debug_info: Option<BackendDebugInfo>,
+    pub asm_program: Option<kajit_emit::aarch64_asm::Program>,
 }
 
 pub fn compile_linear_ir(ir: &LinearIr) -> LinearBackendResult {

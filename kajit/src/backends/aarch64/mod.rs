@@ -1050,13 +1050,14 @@ impl Lowerer {
         self.emit_edge_trampolines();
 
         let entry = self.entry.expect("missing root FuncStart for lambda 0");
-        let buf = self.ectx.finalize();
+        let (buf, asm_program) = self.ectx.finalize();
         let source_map = Some(buf.source_map.clone());
         LinearBackendResult {
             buf,
             entry,
             source_map,
             backend_debug_info: Some(self.backend_debug_info),
+            asm_program,
         }
     }
 }

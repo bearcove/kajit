@@ -908,6 +908,8 @@ struct CodegenArtifacts {
     edits_text: String,
     emission_text: String,
     opt_timeline: Vec<(String, String)>,
+    #[cfg(target_arch = "aarch64")]
+    asm_text: String,
 }
 fn codegen_artifacts<T>(kind: kajit::DecoderKind) -> CodegenArtifacts
 where
@@ -921,6 +923,8 @@ where
     let edits_text = kajit::regalloc_edits_text(shape, kind);
     let emission_text = kajit::emission_trace_text(shape, kind);
     let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, kind);
+    #[cfg(target_arch = "aarch64")]
+    let asm_text = kajit::assembly_text(shape, kind);
     CodegenArtifacts {
         hir_text,
         ir_text,
@@ -930,6 +934,8 @@ where
         edits_text,
         emission_text,
         opt_timeline,
+        #[cfg(target_arch = "aarch64")]
+        asm_text,
     }
 }
 fn runtime_case_name() -> String {
@@ -1026,6 +1032,10 @@ fn maybe_dump_codegen_artifacts(format_label: &str, case: &str, artifacts: &Code
     }
     if should_dump_stage("emit") {
         dump_stage(format_label, case, "emit", &artifacts.emission_text);
+    }
+    #[cfg(target_arch = "aarch64")]
+    if should_dump_stage("asm") {
+        dump_stage(format_label, case, "asm", &artifacts.asm_text);
     }
     if should_dump_stage("opts") {
         for (index, (pass_name, ir_text)) in artifacts.opt_timeline.iter().enumerate() {
