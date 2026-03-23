@@ -1,9 +1,15 @@
+use facet::Facet;
+use facet::Shape;
+use facet_testhelpers::test;
+use kajit_hir as hir;
 use kajit_hir_text::parse_hir;
+use kajit_postcard::PostcardHirLowerer;
 use serde::Serialize;
 
-use super::*;
-use facet::Facet;
-use kajit_postcard::PostcardHirLowerer;
+use super::{
+    CompiledDecoder, build_json_decoder_hir, build_postcard_decoder_hir, build_structural_hir_ir,
+    compile_linear_ir_decoder, run_default_passes_from_env,
+};
 
 #[derive(Facet)]
 struct Wrapper<T> {

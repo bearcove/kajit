@@ -1,4 +1,13 @@
-use super::*;
+use facet::Facet;
+use facet::Shape;
+use facet_testhelpers::test;
+use kajit_hir as hir;
+use kajit_hir_text::parse_hir;
+
+use super::{
+    build_structural_hir_ir, compile_linear_ir_decoder, compile_structural_hir_decoder,
+    run_default_passes_from_env,
+};
 
 #[test]
 fn structural_hir_ir_path_executes_unrolled_varint_shape() {
