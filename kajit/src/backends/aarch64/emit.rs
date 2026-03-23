@@ -32,27 +32,45 @@ impl Lowerer<'_> {
     }
 
     pub(super) fn emit_write_to_field(&mut self, src: crate::ir::VReg, offset: u32, width: Width) {
-        self.emit_load_use_x9_vreg(src);
+        // Use the allocated register directly to avoid unnecessary movs
+        let alloc = self
+            .alloc_for_vreg(src)
+            .expect("emit_write_to_field: src should have allocation");
+
+        let src_reg = if let Some(preg) = alloc.as_reg() {
+            // Value is in a register - use it directly!
+            assert_eq!(
+                preg.class(),
+                regalloc2::RegClass::Int,
+                "store source must be in integer register"
+            );
+            Reg::from_raw(preg.hw_enc() as u8)
+        } else {
+            // Value is spilled - load into x9
+            self.emit_load_x9_from_allocation(alloc);
+            Reg::X9
+        };
+
         match width {
             Width::W1 => self
                 .ectx
                 .emit
-                .emit_strb_imm(Reg::X9, Reg::X21, offset)
+                .emit_strb_imm(src_reg, Reg::X21, offset)
                 .expect("strb"),
             Width::W2 => self
                 .ectx
                 .emit
-                .emit_strh_imm(Reg::X9, Reg::X21, offset)
+                .emit_strh_imm(src_reg, Reg::X21, offset)
                 .expect("strh"),
             Width::W4 => self
                 .ectx
                 .emit
-                .emit_str_imm(aarch64::Width::W32, Reg::X9, Reg::X21, offset)
+                .emit_str_imm(aarch64::Width::W32, src_reg, Reg::X21, offset)
                 .expect("str"),
             Width::W8 => self
                 .ectx
                 .emit
-                .emit_str_imm(aarch64::Width::X64, Reg::X9, Reg::X21, offset)
+                .emit_str_imm(aarch64::Width::X64, src_reg, Reg::X21, offset)
                 .expect("str"),
         }
     }
