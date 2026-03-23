@@ -355,7 +355,7 @@ fn inst_body<'src>() -> impl Parser<'src, &'src str, AstInstBody, Extra<'src>> +
 
 fn edge_arg<'src>() -> impl Parser<'src, &'src str, EdgeArg, Extra<'src>> + Clone {
     let mapped = vreg()
-        .then_ignore(just("=>"))
+        .then_ignore(just("=>").padded_by(hws()))
         .then(vreg())
         .map(|(target, source)| EdgeArg { target, source });
     let identity = vreg().map(|v| EdgeArg {
@@ -363,6 +363,11 @@ fn edge_arg<'src>() -> impl Parser<'src, &'src str, EdgeArg, Extra<'src>> + Clon
         source: v,
     });
     mapped.or(identity)
+}
+
+/// Parse vreg with optional :gpr/:simd suffix (for terminator operands)
+fn vreg_relaxed<'src>() -> impl Parser<'src, &'src str, VReg, Extra<'src>> + Clone {
+    vreg().then_ignore(just(":").then(choice((just("gpr"), just("simd")))).or_not())
 }
 
 fn vreg_list<'src>() -> impl Parser<'src, &'src str, Vec<VReg>, Extra<'src>> + Clone {
@@ -431,8 +436,8 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, Terminator, Extra<'src>> +
         .ignore_then(edge_id())
         .map(|edge| Terminator::Branch { edge });
     let branch_if = just("branch_if ")
-        .ignore_then(vreg())
-        .then_ignore(just(" -> "))
+        .ignore_then(vreg_relaxed())
+        .then_ignore(just(" -> ").padded_by(hws()))
         .then(edge_id())
         .then_ignore(just(", fallthrough "))
         .then(edge_id())
@@ -442,8 +447,8 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, Terminator, Extra<'src>> +
             fallthrough,
         });
     let branch_if_zero = just("branch_if_zero ")
-        .ignore_then(vreg())
-        .then_ignore(just(" -> "))
+        .ignore_then(vreg_relaxed())
+        .then_ignore(just(" -> ").padded_by(hws()))
         .then(edge_id())
         .then_ignore(just(", fallthrough "))
         .then(edge_id())
@@ -453,7 +458,7 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, Terminator, Extra<'src>> +
             fallthrough,
         });
     let jump_table = just("jump_table ")
-        .ignore_then(vreg())
+        .ignore_then(vreg_relaxed())
         .then_ignore(just(" ["))
         .then(edge_id().separated_by(just(", ")).collect::<Vec<_>>())
         .then_ignore(just("], default "))
