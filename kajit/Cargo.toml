@@ -26,6 +26,7 @@ kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
 kajit-emit = { path = "../kajit-emit" }
+kajit-emit-text = { path = "../kajit-emit-text" }
 kajit-format = { path = "../kajit-format" }
 kajit-hir = { path = "../kajit-hir" }
 kajit-json = { path = "../kajit-json" }
@@ -34,6 +35,7 @@ kajit-postcard = { path = "../kajit-postcard" }
 
 [dev-dependencies]
 kajit-hir-text = { path = "../kajit-hir-text" }
+kajit-emit-text = { path = "../kajit-emit-text" }
 libc = "0.2"
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }

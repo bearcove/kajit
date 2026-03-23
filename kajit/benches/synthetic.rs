@@ -448,31 +448,31 @@ fn register_bench_case<T>(
         let json_prefix = format!("{group}/json");
         let postcard_prefix = format!("{group}/postcard");
         v.push(harness::Bench {
-            name: format!("{json_prefix}/serde_deser"),
+            name: format!("{json_prefix}/serde/deser"),
             func: Box::new(|_| {}),
         });
         if enable_json_kajit {
             v.push(harness::Bench {
-                name: format!("{json_prefix}/kajit_deser"),
+                name: format!("{json_prefix}/kajit/deser"),
                 func: Box::new(|_| {}),
             });
         }
         v.push(harness::Bench {
-            name: format!("{json_prefix}/serde_ser"),
+            name: format!("{json_prefix}/serde/ser"),
             func: Box::new(|_| {}),
         });
         v.push(harness::Bench {
-            name: format!("{postcard_prefix}/serde_deser"),
+            name: format!("{postcard_prefix}/serde/deser"),
             func: Box::new(|_| {}),
         });
         if enable_postcard_kajit {
             v.push(harness::Bench {
-                name: format!("{postcard_prefix}/kajit_deser"),
+                name: format!("{postcard_prefix}/kajit/deser"),
                 func: Box::new(|_| {}),
             });
         }
         v.push(harness::Bench {
-            name: format!("{postcard_prefix}/serde_ser"),
+            name: format!("{postcard_prefix}/serde/ser"),
             func: Box::new(|_| {}),
         });
         return;
@@ -484,7 +484,7 @@ fn register_bench_case<T>(
             ::postcard::from_bytes(data).unwrap()
         }
         let serde_fn_ptr = serde_postcard_deser::<T> as *const u8;
-        println!("=== {postcard_prefix}/serde_deser ===");
+        println!("=== {postcard_prefix}/serde/deser ===");
         println!("serde function at {:p}", serde_fn_ptr);
         let serde_code = unsafe { std::slice::from_raw_parts(serde_fn_ptr, 4096) };
         for line in disassemble_until_ret(serde_code, serde_fn_ptr as usize) {
@@ -499,7 +499,7 @@ fn register_bench_case<T>(
                 let entry = decoder.entry_offset();
                 let base = code.as_ptr() as usize;
                 println!(
-                    "=== {postcard_prefix}/kajit_deser ({} bytes) ===",
+                    "=== {postcard_prefix}/kajit/deser ({} bytes) ===",
                     code.len()
                 );
                 for line in disassemble_code(&code[entry..], base + entry) {
@@ -516,7 +516,7 @@ fn register_bench_case<T>(
     let json_prefix = format!("{group}/json");
     let postcard_prefix = format!("{group}/postcard");
     v.push(harness::Bench {
-        name: format!("{json_prefix}/serde_deser"),
+        name: format!("{json_prefix}/serde/deser"),
         func: Box::new({
             let data = Arc::clone(&json_data);
             move |runner| {
@@ -533,7 +533,7 @@ fn register_bench_case<T>(
             Ok(decoder) => Some(Arc::new(decoder)),
             Err(payload) => {
                 eprintln!(
-                    "skipping {json_prefix}/kajit_deser: compile unsupported ({})",
+                    "skipping {json_prefix}/kajit/deser: compile unsupported ({})",
                     panic_payload_to_string(payload)
                 );
                 None
@@ -545,7 +545,7 @@ fn register_bench_case<T>(
             })) {
                 Ok(Ok(_)) => {
                     v.push(harness::Bench {
-                        name: format!("{json_prefix}/kajit_deser"),
+                        name: format!("{json_prefix}/kajit/deser"),
                         func: Box::new({
                             let data = Arc::clone(&json_data);
                             let decoder = Arc::clone(&decoder);
@@ -563,12 +563,12 @@ fn register_bench_case<T>(
                 }
                 Ok(Err(err)) => {
                     eprintln!(
-                        "skipping {json_prefix}/kajit_deser: preflight decode failed ({err:?})"
+                        "skipping {json_prefix}/kajit/deser: preflight decode failed ({err:?})"
                     );
                 }
                 Err(payload) => {
                     eprintln!(
-                        "skipping {json_prefix}/kajit_deser: preflight panic ({})",
+                        "skipping {json_prefix}/kajit/deser: preflight panic ({})",
                         panic_payload_to_string(payload)
                     );
                 }
@@ -576,7 +576,7 @@ fn register_bench_case<T>(
         }
     }
     v.push(harness::Bench {
-        name: format!("{json_prefix}/serde_ser"),
+        name: format!("{json_prefix}/serde/ser"),
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
@@ -587,7 +587,7 @@ fn register_bench_case<T>(
         }),
     });
     v.push(harness::Bench {
-        name: format!("{postcard_prefix}/serde_deser"),
+        name: format!("{postcard_prefix}/serde/deser"),
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             move |runner| {
@@ -604,7 +604,7 @@ fn register_bench_case<T>(
             Ok(decoder) => Some(Arc::new(decoder)),
             Err(payload) => {
                 eprintln!(
-                    "skipping {postcard_prefix}/kajit_deser: compile unsupported ({})",
+                    "skipping {postcard_prefix}/kajit/deser: compile unsupported ({})",
                     panic_payload_to_string(payload)
                 );
                 None
@@ -616,7 +616,7 @@ fn register_bench_case<T>(
             })) {
                 Ok(Ok(_)) => {
                     v.push(harness::Bench {
-                        name: format!("{postcard_prefix}/kajit_deser"),
+                        name: format!("{postcard_prefix}/kajit/deser"),
                         func: Box::new({
                             let data = Arc::clone(&postcard_data);
                             let decoder = Arc::clone(&decoder);
@@ -634,12 +634,12 @@ fn register_bench_case<T>(
                 }
                 Ok(Err(err)) => {
                     eprintln!(
-                        "skipping {postcard_prefix}/kajit_deser: preflight decode failed ({err:?})"
+                        "skipping {postcard_prefix}/kajit/deser: preflight decode failed ({err:?})"
                     );
                 }
                 Err(payload) => {
                     eprintln!(
-                        "skipping {postcard_prefix}/kajit_deser: preflight panic ({})",
+                        "skipping {postcard_prefix}/kajit/deser: preflight panic ({})",
                         panic_payload_to_string(payload)
                     );
                 }
@@ -647,7 +647,7 @@ fn register_bench_case<T>(
         }
     }
     v.push(harness::Bench {
-        name: format!("{postcard_prefix}/serde_ser"),
+        name: format!("{postcard_prefix}/serde/ser"),
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {

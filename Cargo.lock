@@ -832,6 +832,7 @@ dependencies = [
  "insta",
  "itoa",
  "kajit-emit",
+ "kajit-emit-text",
  "kajit-format",
  "kajit-hir",
  "kajit-hir-text",

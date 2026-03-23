@@ -1116,8 +1116,9 @@ fn postcard_structural_hir_array_path_without_backend_edit_emission() {
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate structural HIR postcard array cfg");
-    let result =
-        crate::ir_backend::compile_linear_ir_with_alloc_and_mode(&linear, &cfg, &alloc, false);
+    let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
+        &linear, &cfg, &alloc, false, None,
+    );
     let (buf, entry, _source_map, _backend_debug_info) = materialize_backend_result(result);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
@@ -1206,8 +1207,9 @@ fn json_bool_true_false_without_backend_edit_emission() {
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate json bool cfg");
-    let result =
-        crate::ir_backend::compile_linear_ir_with_alloc_and_mode(&linear, &cfg, &alloc, false);
+    let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
+        &linear, &cfg, &alloc, false, None,
+    );
     let (buf, entry, _source_map, _backend_debug_info) = materialize_backend_result(result);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };

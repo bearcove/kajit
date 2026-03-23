@@ -1,5 +1,6 @@
 #![allow(clippy::approx_constant)]
 
+pub mod alt_asm;
 pub(crate) mod arch;
 pub mod backends;
 pub mod compiler;

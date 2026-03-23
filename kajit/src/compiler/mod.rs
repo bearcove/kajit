@@ -490,6 +490,7 @@ fn compile_linear_ir_decoder_with_options(
             &cfg_program,
             &regalloc_alloc,
             apply_regalloc_edits,
+            registry,
         );
         materialize_backend_result(result)
     };
@@ -588,6 +589,7 @@ fn compile_cfg_mir_decoder_with_options(
             cfg_program,
             &regalloc_alloc,
             apply_regalloc_edits,
+            registry,
         );
         materialize_backend_result(result)
     };

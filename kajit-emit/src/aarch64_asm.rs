@@ -78,7 +78,7 @@ mod tests {
 }
 
 /// A label identifier for branch targets
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Label(pub u32);
 
 impl std::fmt::Display for Label {

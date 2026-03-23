@@ -49,7 +49,7 @@ pub fn compile_linear_ir_with_alloc(
     cfg_program: &cfg_mir::Program,
     alloc: &AllocatedCfgProgram,
 ) -> LinearBackendResult {
-    compile_linear_ir_with_alloc_and_mode(ir, cfg_program, alloc, true)
+    compile_linear_ir_with_alloc_and_mode(ir, cfg_program, alloc, true, None)
 }
 
 pub fn compile_linear_ir_with_alloc_and_mode(
@@ -57,6 +57,7 @@ pub fn compile_linear_ir_with_alloc_and_mode(
     cfg_program: &cfg_mir::Program,
     alloc: &AllocatedCfgProgram,
     apply_regalloc_edits: bool,
+    intrinsic_registry: Option<&crate::ir::IntrinsicRegistry>,
 ) -> LinearBackendResult {
     let max_spillslots = alloc
         .functions
@@ -67,15 +68,19 @@ pub fn compile_linear_ir_with_alloc_and_mode(
 
     #[cfg(target_arch = "x86_64")]
     {
-        let _ = (ir, max_spillslots, apply_regalloc_edits);
+        let _ = (ir, max_spillslots, apply_regalloc_edits, intrinsic_registry);
         crate::backends::x86_64::compile(cfg_program, alloc)
     }
 
     #[cfg(target_arch = "aarch64")]
     {
         let _ = (ir, max_spillslots); // aarch64 backend reads from ra_mir directly
-        // TODO: Thread intrinsic_registry through from top-level compile functions
-        crate::backends::aarch64::compile(cfg_program, alloc, apply_regalloc_edits, None)
+        crate::backends::aarch64::compile(
+            cfg_program,
+            alloc,
+            apply_regalloc_edits,
+            intrinsic_registry,
+        )
     }
 }
 
@@ -101,7 +106,8 @@ mod tests {
         let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
             .unwrap_or_else(|err| panic!("regalloc2 allocation failed in test: {err}"));
 
-        let result = compile_linear_ir_with_alloc_and_mode(&linear, &cfg_program, &alloc, true);
+        let result =
+            compile_linear_ir_with_alloc_and_mode(&linear, &cfg_program, &alloc, true, None);
         let backend_debug_info = result
             .backend_debug_info
             .expect("backend debug info should be present");
