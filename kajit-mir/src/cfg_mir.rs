@@ -2364,11 +2364,358 @@ fn rematerialize_constants_in_function(
 ///   v3 = Add(v1, v1)
 pub fn copy_propagation(program: &mut Program) {
     for func in &mut program.funcs {
-        copy_propagation_in_function(func);
+        global_copy_propagation(func);
     }
 }
 
-fn copy_propagation_in_function(func: &mut Function) {
+/// Global (inter-block) copy propagation using dataflow analysis.
+///
+/// This pass propagates copies across block boundaries by:
+/// 1. Building a map of all copies in the function
+/// 2. Computing which vregs are available at each program point
+/// 3. Rewriting uses to the ultimate source when safe
+fn global_copy_propagation(func: &mut Function) {
+    // Step 1: Build global copy map: dst -> src
+    let mut copy_map: HashMap<VReg, VReg> = HashMap::new();
+    for block in &func.blocks {
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.index()];
+            if let LinearOp::Copy { dst, src } = &inst.op {
+                copy_map.insert(*dst, *src);
+            }
+        }
+    }
+
+    if copy_map.is_empty() {
+        return;
+    }
+
+    // Step 2: Build vreg definition map: which block defines each vreg
+    let mut vreg_def_block: HashMap<VReg, BlockId> = HashMap::new();
+
+    for block in &func.blocks {
+        // Block parameters are defined by this block
+        for &param in &block.params {
+            vreg_def_block.insert(param, block.id);
+        }
+
+        // Instruction defs
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.index()];
+            for operand in &inst.operands {
+                if operand.kind == OperandKind::Def {
+                    vreg_def_block.insert(operand.vreg, block.id);
+                }
+            }
+        }
+    }
+
+    // Step 3: Compute dominators
+    let idom = compute_dominators(func);
+
+    // Helper: resolve copy chains to ultimate source
+    let get_ultimate_source = |mut v: VReg| -> VReg {
+        let mut visited = std::collections::HashSet::new();
+        while let Some(&src) = copy_map.get(&v) {
+            if v == src || !visited.insert(v) {
+                break; // Self-copy or cycle
+            }
+            v = src;
+        }
+        v
+    };
+
+    // Step 4: Precompute intra-block def positions for each block
+    let mut block_vreg_def_idx: HashMap<(BlockId, VReg), usize> = HashMap::new();
+
+    for block in &func.blocks {
+        let block_id = block.id;
+
+        // Block params are defined at index 0
+        for &param in &block.params {
+            block_vreg_def_idx.insert((block_id, param), 0);
+        }
+
+        // Instruction defs
+        for (idx, &inst_id) in block.insts.iter().enumerate() {
+            let inst = &func.insts[inst_id.index()];
+            for operand in &inst.operands {
+                if operand.kind == OperandKind::Def {
+                    block_vreg_def_idx.insert((block_id, operand.vreg), idx + 1);
+                }
+            }
+        }
+    }
+
+    // Helper: check if vreg is available at given instruction in given block
+    let is_available_at_inst = |vreg: VReg, block_id: BlockId, inst_idx: usize| -> bool {
+        if let Some(&def_block) = vreg_def_block.get(&vreg) {
+            if def_block != block_id {
+                // Cross-block: check if def_block dominates block_id
+                dominates(&idom, def_block, block_id)
+            } else {
+                // Same block: check that def comes before use
+                if let Some(&def_idx) = block_vreg_def_idx.get(&(block_id, vreg)) {
+                    def_idx < inst_idx
+                } else {
+                    false
+                }
+            }
+        } else {
+            false
+        }
+    };
+
+    // Step 5: Rewrite all uses of copy destinations to their ultimate sources
+    for block in &func.blocks {
+        let block_id = block.id;
+
+        // Rewrite instruction uses
+        for (idx, &inst_id) in block.insts.iter().enumerate() {
+            let inst_idx = idx + 1; // Instructions are 1-indexed (0 is block params)
+            let inst = &mut func.insts[inst_id.index()];
+            let mut changed = false;
+
+            // Closure to rewrite a single vreg use
+            let mut rewrite_use = |v: &mut VReg| -> bool {
+                let ultimate = get_ultimate_source(*v);
+                if ultimate != *v && is_available_at_inst(ultimate, block_id, inst_idx) {
+                    *v = ultimate;
+                    true
+                } else {
+                    false
+                }
+            };
+
+            // Rewrite all uses in the instruction op
+            match &mut inst.op {
+                LinearOp::Copy { src, .. } => {
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::BinOp { lhs, rhs, .. } => {
+                    changed |= rewrite_use(lhs);
+                    changed |= rewrite_use(rhs);
+                }
+                LinearOp::UnaryOp { src, .. } => {
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::WriteToSlot { src, .. } => {
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::WriteToField { src, .. } => {
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::StoreToAddr { addr, src, .. } => {
+                    changed |= rewrite_use(addr);
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::LoadFromAddr { addr, .. } => {
+                    changed |= rewrite_use(addr);
+                }
+                LinearOp::AdvanceCursorBy { src } => {
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::RestoreCursor { src } => {
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::SetOutPtr { src } => {
+                    changed |= rewrite_use(src);
+                }
+                LinearOp::BranchIf { cond, .. } | LinearOp::BranchIfZero { cond, .. } => {
+                    changed |= rewrite_use(cond);
+                }
+                LinearOp::JumpTable { predicate, .. } => {
+                    changed |= rewrite_use(predicate);
+                }
+                LinearOp::CallIntrinsic { args, .. }
+                | LinearOp::CallPure { args, .. }
+                | LinearOp::CallLambda { args, .. } => {
+                    for arg in args.iter_mut() {
+                        changed |= rewrite_use(arg);
+                    }
+                }
+                LinearOp::SimdStringScan { pos, kind } => {
+                    changed |= rewrite_use(pos);
+                    changed |= rewrite_use(kind);
+                }
+                _ => {}
+            }
+
+            // Update operands to match
+            if changed {
+                for operand in &mut inst.operands {
+                    if operand.kind == OperandKind::Use {
+                        let ultimate = get_ultimate_source(operand.vreg);
+                        if ultimate != operand.vreg
+                            && is_available_at_inst(ultimate, block_id, inst_idx)
+                        {
+                            operand.vreg = ultimate;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Rewrite terminator uses
+        let term_idx = block.insts.len() + 1; // Terminator comes after all instructions
+        let term = &mut func.terms[block.term.index()];
+
+        let mut rewrite_term_use = |v: &mut VReg| {
+            let ultimate = get_ultimate_source(*v);
+            if ultimate != *v && is_available_at_inst(ultimate, block_id, term_idx) {
+                *v = ultimate;
+            }
+        };
+
+        match term {
+            Terminator::BranchIf { cond, .. } => {
+                rewrite_term_use(cond);
+            }
+            Terminator::BranchIfZero { cond, .. } => {
+                rewrite_term_use(cond);
+            }
+            Terminator::JumpTable { predicate, .. } => {
+                rewrite_term_use(predicate);
+            }
+            _ => {}
+        }
+
+        // Rewrite edge arg sources
+        for &edge_id in &block.succs {
+            let edge = &mut func.edges[edge_id.index()];
+            for arg in &mut edge.args {
+                let ultimate = get_ultimate_source(arg.source);
+                if ultimate != arg.source && is_available_at_inst(ultimate, block_id, term_idx) {
+                    arg.source = ultimate;
+                }
+            }
+        }
+    }
+}
+
+/// Compute reverse postorder traversal of the CFG
+fn compute_rpo(func: &Function) -> Vec<BlockId> {
+    let mut visited = std::collections::HashSet::new();
+    let mut postorder = Vec::new();
+
+    fn dfs(
+        func: &Function,
+        block_id: BlockId,
+        visited: &mut std::collections::HashSet<BlockId>,
+        postorder: &mut Vec<BlockId>,
+    ) {
+        if !visited.insert(block_id) {
+            return;
+        }
+
+        let block = &func.blocks[block_id.index()];
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            dfs(func, edge.to, visited, postorder);
+        }
+
+        postorder.push(block_id);
+    }
+
+    dfs(func, func.entry, &mut visited, &mut postorder);
+    postorder.reverse();
+    postorder
+}
+
+/// Compute dominators using Cooper-Harvey-Kennedy algorithm.
+/// Returns a map from each block to its immediate dominator (idom).
+/// The entry block has no idom (maps to None).
+fn compute_dominators(func: &Function) -> HashMap<BlockId, Option<BlockId>> {
+    let rpo = compute_rpo(func);
+    let mut rpo_index: HashMap<BlockId, usize> = HashMap::new();
+    for (idx, &block_id) in rpo.iter().enumerate() {
+        rpo_index.insert(block_id, idx);
+    }
+
+    // Build predecessor map
+    let mut preds: HashMap<BlockId, Vec<BlockId>> = HashMap::new();
+    for block in &func.blocks {
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            preds.entry(edge.to).or_default().push(block.id);
+        }
+    }
+
+    // Initialize: entry has no idom, others are undefined
+    let mut idom: HashMap<BlockId, Option<BlockId>> = HashMap::new();
+    idom.insert(func.entry, None);
+
+    // Iterative fixed-point computation
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block_id in &rpo {
+            if block_id == func.entry {
+                continue;
+            }
+
+            // Find the first processed predecessor
+            let block_preds = preds.get(&block_id);
+            let mut new_idom = None;
+
+            if let Some(pred_list) = block_preds {
+                for &pred in pred_list {
+                    if idom.contains_key(&pred) {
+                        new_idom = match new_idom {
+                            None => Some(pred),
+                            Some(current) => {
+                                // Intersect current and pred
+                                let mut finger1 = current;
+                                let mut finger2 = pred;
+                                while finger1 != finger2 {
+                                    while rpo_index[&finger1] > rpo_index[&finger2] {
+                                        finger1 = idom[&finger1].expect("idom should be set");
+                                    }
+                                    while rpo_index[&finger2] > rpo_index[&finger1] {
+                                        finger2 = idom[&finger2].expect("idom should be set");
+                                    }
+                                }
+                                Some(finger1)
+                            }
+                        };
+                    }
+                }
+            }
+
+            // Update if changed
+            if idom.get(&block_id) != Some(&new_idom) {
+                idom.insert(block_id, new_idom);
+                changed = true;
+            }
+        }
+    }
+
+    idom
+}
+
+/// Check if block `a` dominates block `b` using the idom map.
+fn dominates(idom: &HashMap<BlockId, Option<BlockId>>, a: BlockId, b: BlockId) -> bool {
+    if a == b {
+        return true;
+    }
+
+    // Walk up the dominator tree from b until we find a or reach the entry
+    let mut current = b;
+    loop {
+        match idom.get(&current) {
+            Some(Some(parent)) => {
+                if *parent == a {
+                    return true;
+                }
+                current = *parent;
+            }
+            _ => return false, // Reached entry or undefined
+        }
+    }
+}
+
+fn copy_propagation_in_function_OLD_INTRA_BLOCK_ONLY(func: &mut Function) {
+    // OLD IMPLEMENTATION - kept for reference, not used
     // Process each block independently to avoid cross-block data flow issues.
     // We track when each vreg is defined within the block to avoid use-before-def.
 
@@ -3876,7 +4223,7 @@ mod tests {
             make_binop(2, 2, 1, 1, kajit_lir::BinOpKind::Add),
         ]);
 
-        copy_propagation_in_function(&mut func);
+        global_copy_propagation(&mut func);
 
         // Check that the add now uses v0 directly
         match &func.insts[2].op {
@@ -3902,7 +4249,7 @@ mod tests {
             make_binop(3, 3, 2, 2, kajit_lir::BinOpKind::Add),
         ]);
 
-        copy_propagation_in_function(&mut func);
+        global_copy_propagation(&mut func);
 
         match &func.insts[3].op {
             LinearOp::BinOp { lhs, rhs, .. } => {
