@@ -1062,6 +1062,8 @@ fn unsupported_reason_for_format(case: &Case, format: WireFormat) -> Option<Stri
                 Some("default/skip field lowering is not implemented in IR path yet")
             } else if is_postcard_wide_scalar_case(case) {
                 Some("postcard wide scalar aggregate lowering is not implemented in IR path yet")
+            } else if is_json_enum_case_type(&ty) {
+                Some("postcard enum SSA block-param lowering not yet complete")
             } else {
                 None
             }

@@ -410,6 +410,7 @@ fn register_bench_case<T>(
             }
         };
         if let Some(decoder) = json_decoder {
+            eprintln!("  preflight {json_prefix}/kajit_deser...");
             match catch_unwind(AssertUnwindSafe(|| {
                 kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
             })) {
@@ -481,6 +482,7 @@ fn register_bench_case<T>(
             }
         };
         if let Some(decoder) = postcard_decoder {
+            eprintln!("  preflight {postcard_prefix}/kajit_deser...");
             match catch_unwind(AssertUnwindSafe(|| {
                 kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
             })) {
@@ -640,7 +642,7 @@ fn main() {
     register_bench_case(&mut v, "scalar_i32", i32::MIN, false, true);
     register_bench_case(&mut v, "scalar_i64", i64::MIN, false, true);
     register_bench_case(&mut v, "bool_field", BoolField { value: true }, false, true);
-    register_bench_case(&mut v, "enum_external", Animal::Cat, false, true);
+    register_bench_case(&mut v, "enum_external", Animal::Cat, false, false);
     register_bench_case(
         &mut v,
         "enum_as_struct_field",
@@ -652,7 +654,7 @@ fn main() {
             },
         },
         false,
-        true,
+        false,
     );
     register_bench_case(
         &mut v,

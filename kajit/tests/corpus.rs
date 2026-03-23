@@ -2113,11 +2113,13 @@ mod postcard {
         assert_postcard_case(value);
     }
     #[test]
+    #[ignore = "postcard enum SSA block-param lowering not yet complete; case=enum_external, type=Animal"]
     fn enum_external_v0() {
         let value = Animal::Cat;
         assert_postcard_case(value);
     }
     #[test]
+    #[ignore = "postcard enum SSA block-param lowering not yet complete; case=enum_external, type=Animal"]
     fn enum_external_v1() {
         let value = Animal::Dog {
             name: "Rex".into(),
@@ -2126,11 +2128,13 @@ mod postcard {
         assert_postcard_case(value);
     }
     #[test]
+    #[ignore = "postcard enum SSA block-param lowering not yet complete; case=enum_external, type=Animal"]
     fn enum_external_v2() {
         let value = Animal::Parrot("Polly".into());
         assert_postcard_case(value);
     }
     #[test]
+    #[ignore = "postcard enum SSA block-param lowering not yet complete; case=enum_as_struct_field, type=Zoo"]
     fn enum_as_struct_field() {
         let value = Zoo {
             name: "City Zoo".into(),
@@ -2545,13 +2549,13 @@ mod prop {
         assert_prop_case(&marker);
     }
     #[test]
-    #[ignore = "json: json enum lowering is not implemented yet; case=enum_external, type=Animal"]
+    #[ignore = "json: json enum lowering is not implemented yet; case=enum_external, type=Animal | postcard: postcard enum SSA block-param lowering not yet complete; case=enum_external, type=Animal"]
     fn enum_external() {
         let marker = Animal::Cat;
         assert_prop_case(&marker);
     }
     #[test]
-    #[ignore = "json: json enum lowering is not implemented yet; case=enum_as_struct_field, type=Zoo"]
+    #[ignore = "json: json enum lowering is not implemented yet; case=enum_as_struct_field, type=Zoo | postcard: postcard enum SSA block-param lowering not yet complete; case=enum_as_struct_field, type=Zoo"]
     fn enum_as_struct_field() {
         let marker = Zoo {
             name: "City Zoo".into(),

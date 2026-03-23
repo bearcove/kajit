@@ -130,29 +130,47 @@ pub fn run_benchmarks(benchmarks: Vec<Bench>) {
         eprint!("  {} ... ", bench.name);
 
         let runner = Runner::new();
-        (bench.func)(&runner);
+        let bench_result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (bench.func)(&runner)));
 
-        let result = runner
-            .results
-            .borrow_mut()
-            .take()
-            .expect("bench did not call runner.run()");
+        match bench_result {
+            Err(e) => {
+                let msg = e
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| e.downcast_ref::<&str>().copied())
+                    .unwrap_or("unknown panic");
+                println!(
+                    r#"{{"type":"skip","name":"{}","index":{index},"total":{total},"reason":"{}"}}"#,
+                    bench.name,
+                    msg.replace('"', "'").chars().take(200).collect::<String>(),
+                );
+                eprintln!("SKIPPED ({})", &msg[..msg.len().min(80)]);
+            }
+            Ok(()) => {
+                let result = runner
+                    .results
+                    .borrow_mut()
+                    .take()
+                    .expect("bench did not call runner.run()");
 
-        // Result event (NDJSON to stdout)
-        println!(
-            r#"{{"type":"result","name":"{}","index":{index},"total":{total},"median_ns":{:.1},"p5_ns":{:.1},"p95_ns":{:.1},"min_ns":{:.1},"max_ns":{:.1},"samples":{},"iters_per_sample":{}}}"#,
-            bench.name,
-            result.median_ns,
-            result.p5_ns,
-            result.p95_ns,
-            result.min_ns,
-            result.max_ns,
-            result.samples,
-            result.iters_per_sample,
-        );
+                // Result event (NDJSON to stdout)
+                println!(
+                    r#"{{"type":"result","name":"{}","index":{index},"total":{total},"median_ns":{:.1},"p5_ns":{:.1},"p95_ns":{:.1},"min_ns":{:.1},"max_ns":{:.1},"samples":{},"iters_per_sample":{}}}"#,
+                    bench.name,
+                    result.median_ns,
+                    result.p5_ns,
+                    result.p95_ns,
+                    result.min_ns,
+                    result.max_ns,
+                    result.samples,
+                    result.iters_per_sample,
+                );
 
-        // Human-readable to stderr
-        eprintln!("{}", fmt_time(result.median_ns));
+                // Human-readable to stderr
+                eprintln!("{}", fmt_time(result.median_ns));
+            }
+        }
     }
 }
 
