@@ -81,7 +81,7 @@ impl CompiledDecoder {
 pub(crate) const DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED: bool = true;
 
 #[cfg(target_arch = "aarch64")]
-fn materialize_backend_result(
+pub(crate) fn materialize_backend_result(
     result: crate::ir_backend::LinearBackendResult,
 ) -> (
     kajit_emit::aarch64::FinalizedEmission,
@@ -99,7 +99,7 @@ fn materialize_backend_result(
 }
 
 #[cfg(target_arch = "x86_64")]
-fn materialize_backend_result(
+pub(crate) fn materialize_backend_result(
     result: crate::ir_backend::LinearBackendResult,
 ) -> (
     kajit_emit::x64::FinalizedEmission,
@@ -218,7 +218,9 @@ pub fn regalloc_edits_text_with_options(
     format_allocated_regalloc_edits(&alloc)
 }
 
-fn format_allocated_regalloc_edits(alloc: &crate::regalloc_engine::AllocatedCfgProgram) -> String {
+pub(crate) fn format_allocated_regalloc_edits(
+    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+) -> String {
     let mut out = String::new();
     let total_pp_edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
     let total_edge_edits: usize = alloc.functions.iter().map(|f| f.edge_edits.len()).sum();

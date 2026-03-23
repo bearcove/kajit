@@ -1,14 +1,19 @@
 use facet::Facet;
 use facet::Shape;
 use facet_testhelpers::test;
+use kajit_format::instantiated_shape_symbol_key;
 use kajit_hir as hir;
 use kajit_hir_text::parse_hir;
-use kajit_postcard::PostcardHirLowerer;
 use serde::Serialize;
 
 use super::{
-    CompiledDecoder, build_json_decoder_hir, build_postcard_decoder_hir, build_structural_hir_ir,
-    compile_linear_ir_decoder, run_default_passes_from_env,
+    CompiledDecoder, build_decoder_ir_via_hir, build_jit_debug_info_from_source_map,
+    build_json_decoder_hir, build_postcard_decoder_hir, build_postcard_decoder_ir_via_hir,
+    build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
+    cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, compile_linear_ir_decoder,
+    deser_dwarf_variables, dwarf_expr_for_out_field, format_allocated_regalloc_edits,
+    jit_dwarf_target_arch, lower_hir_module, materialize_backend_result,
+    run_default_passes_from_env,
 };
 
 #[derive(Facet)]
@@ -111,18 +116,18 @@ struct ConstantNumber {
 }
 
 #[derive(Debug, PartialEq, Eq, Facet)]
-struct ScalarNumber {
-    value: u32,
+pub(crate) struct ScalarNumber {
+    pub(crate) value: u32,
 }
 
 #[derive(Debug, PartialEq, Eq, Facet)]
-struct BoolHeader {
-    value: bool,
+pub(crate) struct BoolHeader {
+    pub(crate) value: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Facet)]
-struct ScalarArrayHolder {
-    values: [u32; 4],
+pub(crate) struct ScalarArrayHolder {
+    pub(crate) values: [u32; 4],
 }
 
 #[derive(Debug, PartialEq, Eq, Facet)]
@@ -162,13 +167,13 @@ struct DynamicDestinationSummary {
 }
 
 #[derive(Debug, PartialEq, Eq, Facet)]
-struct PersistentBufferSummary {
-    ptr: usize,
-    len: usize,
+pub(crate) struct PersistentBufferSummary {
+    pub(crate) ptr: usize,
+    pub(crate) len: usize,
 }
 
 #[derive(Debug, PartialEq, Eq, Facet)]
-struct VecHolder {
+pub(crate) struct VecHolder {
     values: Vec<u32>,
 }
 
@@ -189,7 +194,10 @@ struct DynamicAggregateDestinationSummary {
     selected: Pair,
 }
 
-fn compile_structural_hir_decoder(shape: &'static Shape, module: &hir::Module) -> CompiledDecoder {
+pub(crate) fn compile_structural_hir_decoder(
+    shape: &'static Shape,
+    module: &hir::Module,
+) -> CompiledDecoder {
     let mut func = build_structural_hir_ir(shape, module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
@@ -199,370 +207,6 @@ fn compile_structural_hir_decoder(shape: &'static Shape, module: &hir::Module) -
 fn compile_postcard_decoder_via_structural_hir(shape: &'static Shape) -> CompiledDecoder {
     let module = build_postcard_decoder_hir(shape);
     compile_structural_hir_decoder(shape, &module)
-}
-
-fn compile_json_decoder_via_structural_hir(shape: &'static Shape) -> CompiledDecoder {
-    let module = build_json_decoder_hir(shape);
-    compile_structural_hir_decoder(shape, &module)
-}
-
-fn build_structural_json_bool_module() -> hir::Module {
-    let mut module = hir::Module::new();
-    let input_region = module.add_region("input");
-    let cursor_def = module.add_type_def(hir::TypeDef {
-        name: "Cursor".to_owned(),
-        generic_params: vec![hir::GenericParam::Region {
-            name: "r_input".to_owned(),
-        }],
-        kind: hir::TypeDefKind::Struct {
-            fields: vec![
-                hir::FieldDef {
-                    name: "bytes".to_owned(),
-                    ty: hir::Type::slice(input_region, hir::Type::u(8)),
-                    offset: None,
-                },
-                hir::FieldDef {
-                    name: "pos".to_owned(),
-                    ty: hir::Type::u(64),
-                    offset: None,
-                },
-            ],
-        },
-        size: None,
-        transparent: false,
-    });
-    let root_def = module.add_type_def(hir::TypeDef {
-        name: <BoolHeader>::SHAPE.type_identifier.to_owned(),
-        generic_params: vec![],
-        kind: hir::TypeDefKind::Struct {
-            fields: vec![hir::FieldDef {
-                name: "value".to_owned(),
-                ty: hir::Type::bool(),
-                offset: None,
-            }],
-        },
-        size: None,
-        transparent: false,
-    });
-
-    let cursor_local = hir::LocalId::new(0);
-    let out_local = hir::LocalId::new(1);
-    let byte_local = hir::LocalId::new(2);
-
-    let cursor_bytes = || hir::Expr::Field {
-        base: Box::new(hir::Expr::Local(cursor_local)),
-        field: "bytes".to_owned(),
-    };
-    let cursor_pos = || hir::Expr::Field {
-        base: Box::new(hir::Expr::Local(cursor_local)),
-        field: "pos".to_owned(),
-    };
-    let byte_at_cursor = || hir::Expr::Load {
-        addr: Box::new(hir::Expr::Binary {
-            op: hir::BinaryOp::Add,
-            lhs: Box::new(hir::Expr::SliceData {
-                value: Box::new(cursor_bytes()),
-            }),
-            rhs: Box::new(cursor_pos()),
-        }),
-        width: hir::MemoryWidth::W1,
-    };
-    let advance_cursor_stmt = |stmt_id: u32, delta: u64| hir::Stmt {
-        id: hir::StmtId::new(stmt_id),
-        kind: hir::StmtKind::Assign {
-            place: hir::Place::Field {
-                base: Box::new(hir::Place::Local(cursor_local)),
-                field: "pos".to_owned(),
-            },
-            value: hir::Expr::Binary {
-                op: hir::BinaryOp::Add,
-                lhs: Box::new(cursor_pos()),
-                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(delta))),
-            },
-        },
-    };
-    let cursor_bounds_if =
-        |stmt_id: u32, need: u64, fail_stmt: u32, error: hir::ErrorCode| -> hir::Stmt {
-            hir::Stmt {
-                id: hir::StmtId::new(stmt_id),
-                kind: hir::StmtKind::If {
-                    condition: hir::Expr::Binary {
-                        op: hir::BinaryOp::Gt,
-                        lhs: Box::new(hir::Expr::Binary {
-                            op: hir::BinaryOp::Add,
-                            lhs: Box::new(cursor_pos()),
-                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(need))),
-                        }),
-                        rhs: Box::new(hir::Expr::SliceLen {
-                            value: Box::new(cursor_bytes()),
-                        }),
-                    },
-                    then_block: hir::Block {
-                        scope: hir::ScopeId::new(0),
-                        statements: vec![hir::Stmt {
-                            id: hir::StmtId::new(fail_stmt),
-                            kind: hir::StmtKind::Fail { code: error },
-                        }],
-                    },
-                    else_block: Some(hir::Block {
-                        scope: hir::ScopeId::new(0),
-                        statements: Vec::new(),
-                    }),
-                },
-            }
-        };
-    let matches_ascii = |text: &[u8], start_stmt: &mut u32| -> Vec<hir::Stmt> {
-        let mut statements = Vec::new();
-        for (index, expected) in text.iter().copied().enumerate() {
-            let mismatch_stmt = *start_stmt;
-            *start_stmt += 2;
-            statements.push(hir::Stmt {
-                id: hir::StmtId::new(mismatch_stmt),
-                kind: hir::StmtKind::If {
-                    condition: hir::Expr::Binary {
-                        op: hir::BinaryOp::Ne,
-                        lhs: Box::new(hir::Expr::Load {
-                            addr: Box::new(hir::Expr::Binary {
-                                op: hir::BinaryOp::Add,
-                                lhs: Box::new(hir::Expr::SliceData {
-                                    value: Box::new(cursor_bytes()),
-                                }),
-                                rhs: Box::new(hir::Expr::Binary {
-                                    op: hir::BinaryOp::Add,
-                                    lhs: Box::new(cursor_pos()),
-                                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(
-                                        index as u64,
-                                    ))),
-                                }),
-                            }),
-                            width: hir::MemoryWidth::W1,
-                        }),
-                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(expected as u64))),
-                    },
-                    then_block: hir::Block {
-                        scope: hir::ScopeId::new(0),
-                        statements: vec![hir::Stmt {
-                            id: hir::StmtId::new(mismatch_stmt + 1),
-                            kind: hir::StmtKind::Fail {
-                                code: hir::ErrorCode::InvalidBool,
-                            },
-                        }],
-                    },
-                    else_block: Some(hir::Block {
-                        scope: hir::ScopeId::new(0),
-                        statements: Vec::new(),
-                    }),
-                },
-            });
-        }
-        statements
-    };
-
-    module.add_function(hir::Function {
-        name: "json_bool".to_owned(),
-        region_params: vec![input_region],
-        store_params: vec![],
-        params: vec![
-            hir::Parameter {
-                local: cursor_local,
-                name: "cursor".to_owned(),
-                ty: hir::Type::named(cursor_def, vec![hir::GenericArg::Region(input_region)]),
-                kind: hir::LocalKind::Param,
-            },
-            hir::Parameter {
-                local: out_local,
-                name: "out".to_owned(),
-                ty: hir::Type::named(root_def, Vec::new()),
-                kind: hir::LocalKind::Destination,
-            },
-        ],
-        locals: vec![hir::LocalDecl {
-            local: byte_local,
-            name: "byte".to_owned(),
-            ty: hir::Type::u(8),
-            kind: hir::LocalKind::Temp,
-        }],
-        return_type: hir::Type::unit(),
-        scopes: vec![hir::Scope {
-            id: hir::ScopeId::new(0),
-            parent: None,
-            comment: Some("structural JSON bool parser".to_owned()),
-        }],
-        body: hir::Block {
-            scope: hir::ScopeId::new(0),
-            statements: vec![
-                hir::Stmt {
-                    id: hir::StmtId::new(0),
-                    kind: hir::StmtKind::Loop {
-                        body: hir::Block {
-                            scope: hir::ScopeId::new(0),
-                            statements: vec![
-                                cursor_bounds_if(1, 1, 2, hir::ErrorCode::UnexpectedEof),
-                                hir::Stmt {
-                                    id: hir::StmtId::new(3),
-                                    kind: hir::StmtKind::Assign {
-                                        place: hir::Place::Local(byte_local),
-                                        value: byte_at_cursor(),
-                                    },
-                                },
-                                hir::Stmt {
-                                    id: hir::StmtId::new(4),
-                                    kind: hir::StmtKind::If {
-                                        condition: hir::Expr::Binary {
-                                            op: hir::BinaryOp::Or,
-                                            lhs: Box::new(hir::Expr::Binary {
-                                                op: hir::BinaryOp::Eq,
-                                                lhs: Box::new(hir::Expr::Local(byte_local)),
-                                                rhs: Box::new(hir::Expr::Literal(
-                                                    hir::Literal::Integer(b' ' as u64),
-                                                )),
-                                            }),
-                                            rhs: Box::new(hir::Expr::Binary {
-                                                op: hir::BinaryOp::Or,
-                                                lhs: Box::new(hir::Expr::Binary {
-                                                    op: hir::BinaryOp::Eq,
-                                                    lhs: Box::new(hir::Expr::Local(byte_local)),
-                                                    rhs: Box::new(hir::Expr::Literal(
-                                                        hir::Literal::Integer(b'\n' as u64),
-                                                    )),
-                                                }),
-                                                rhs: Box::new(hir::Expr::Binary {
-                                                    op: hir::BinaryOp::Or,
-                                                    lhs: Box::new(hir::Expr::Binary {
-                                                        op: hir::BinaryOp::Eq,
-                                                        lhs: Box::new(hir::Expr::Local(byte_local)),
-                                                        rhs: Box::new(hir::Expr::Literal(
-                                                            hir::Literal::Integer(b'\r' as u64),
-                                                        )),
-                                                    }),
-                                                    rhs: Box::new(hir::Expr::Binary {
-                                                        op: hir::BinaryOp::Eq,
-                                                        lhs: Box::new(hir::Expr::Local(byte_local)),
-                                                        rhs: Box::new(hir::Expr::Literal(
-                                                            hir::Literal::Integer(b'\t' as u64),
-                                                        )),
-                                                    }),
-                                                }),
-                                            }),
-                                        },
-                                        then_block: hir::Block {
-                                            scope: hir::ScopeId::new(0),
-                                            statements: vec![
-                                                advance_cursor_stmt(5, 1),
-                                                hir::Stmt {
-                                                    id: hir::StmtId::new(6),
-                                                    kind: hir::StmtKind::Continue,
-                                                },
-                                            ],
-                                        },
-                                        else_block: Some(hir::Block {
-                                            scope: hir::ScopeId::new(0),
-                                            statements: vec![hir::Stmt {
-                                                id: hir::StmtId::new(7),
-                                                kind: hir::StmtKind::Break,
-                                            }],
-                                        }),
-                                    },
-                                },
-                            ],
-                        },
-                    },
-                },
-                hir::Stmt {
-                    id: hir::StmtId::new(8),
-                    kind: hir::StmtKind::If {
-                        condition: hir::Expr::Binary {
-                            op: hir::BinaryOp::Eq,
-                            lhs: Box::new(byte_at_cursor()),
-                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(b't' as u64))),
-                        },
-                        then_block: {
-                            let mut statements =
-                                vec![cursor_bounds_if(9, 4, 10, hir::ErrorCode::UnexpectedEof)];
-                            let mut next_stmt = 11;
-                            statements.extend(matches_ascii(b"true", &mut next_stmt));
-                            statements.push(advance_cursor_stmt(next_stmt, 4));
-                            statements.push(hir::Stmt {
-                                id: hir::StmtId::new(next_stmt + 1),
-                                kind: hir::StmtKind::Init {
-                                    place: hir::Place::Field {
-                                        base: Box::new(hir::Place::Local(out_local)),
-                                        field: "value".to_owned(),
-                                    },
-                                    value: hir::Expr::Literal(hir::Literal::Bool(true)),
-                                },
-                            });
-                            statements.push(hir::Stmt {
-                                id: hir::StmtId::new(next_stmt + 2),
-                                kind: hir::StmtKind::Return(None),
-                            });
-                            hir::Block {
-                                scope: hir::ScopeId::new(0),
-                                statements,
-                            }
-                        },
-                        else_block: Some(hir::Block {
-                            scope: hir::ScopeId::new(0),
-                            statements: vec![hir::Stmt {
-                                id: hir::StmtId::new(17),
-                                kind: hir::StmtKind::If {
-                                    condition: hir::Expr::Binary {
-                                        op: hir::BinaryOp::Eq,
-                                        lhs: Box::new(byte_at_cursor()),
-                                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(
-                                            b'f' as u64,
-                                        ))),
-                                    },
-                                    then_block: {
-                                        let mut statements = vec![cursor_bounds_if(
-                                            18,
-                                            5,
-                                            19,
-                                            hir::ErrorCode::UnexpectedEof,
-                                        )];
-                                        let mut next_stmt = 20;
-                                        statements.extend(matches_ascii(b"false", &mut next_stmt));
-                                        statements.push(advance_cursor_stmt(next_stmt, 5));
-                                        statements.push(hir::Stmt {
-                                            id: hir::StmtId::new(next_stmt + 1),
-                                            kind: hir::StmtKind::Init {
-                                                place: hir::Place::Field {
-                                                    base: Box::new(hir::Place::Local(out_local)),
-                                                    field: "value".to_owned(),
-                                                },
-                                                value: hir::Expr::Literal(hir::Literal::Bool(
-                                                    false,
-                                                )),
-                                            },
-                                        });
-                                        statements.push(hir::Stmt {
-                                            id: hir::StmtId::new(next_stmt + 2),
-                                            kind: hir::StmtKind::Return(None),
-                                        });
-                                        hir::Block {
-                                            scope: hir::ScopeId::new(0),
-                                            statements,
-                                        }
-                                    },
-                                    else_block: Some(hir::Block {
-                                        scope: hir::ScopeId::new(0),
-                                        statements: vec![hir::Stmt {
-                                            id: hir::StmtId::new(28),
-                                            kind: hir::StmtKind::Fail {
-                                                code: hir::ErrorCode::InvalidBool,
-                                            },
-                                        }],
-                                    }),
-                                },
-                            }],
-                        }),
-                    },
-                },
-            ],
-        },
-    });
-
-    module
 }
 
 #[test]
@@ -1356,7 +1000,6 @@ fn postcard_structural_hir_ir_path_decodes_option_borrowed_field() {
 }
 
 mod hir_to_ir;
-mod integration;
 
 #[test]
 fn postcard_structural_hir_ir_path_decodes_scalar_arrays() {
