@@ -762,6 +762,8 @@ impl<'a> Linearizer<'a> {
             .count();
 
         // Collect entry phi_args for each branch: (source=gamma_input, target=branch_region_arg).
+        // Include even self-referential phis (src == dst) since slot2reg can make
+        // gamma inputs and region args share the same vreg.
         let state_count = self.func.state_domains.len();
         let passthrough_count = node.inputs.len() - 1 - state_count;
         let mut branch_entry_phis: Vec<Vec<(VReg, VReg)>> = Vec::new();
@@ -775,9 +777,7 @@ impl<'a> Linearizer<'a> {
                     let arg = &self.func.region_args[region.args[i]];
                     if let Some(dst_vreg) = arg.vreg {
                         self.record_vreg_scope(dst_vreg, region.debug_scope);
-                        if src_vreg != dst_vreg {
-                            phis.push((src_vreg, dst_vreg));
-                        }
+                        phis.push((src_vreg, dst_vreg));
                     }
                 }
             }
