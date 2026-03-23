@@ -1809,6 +1809,12 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     if opts.enabled("dce") {
         dead_code_elimination(&mut cfg);
     }
+    // TODO: simplify_trivial_phis needs more work to maintain SSA
+    // The basic idea is sound (found 32 trivial phis in scalar_u32)
+    // but removing them breaks SSA when replacement doesn't dominate uses
+    // if opts.enabled("simplify_phis") {
+    //     simplify_trivial_phis(&mut cfg);
+    // }
     cfg
 }
 
@@ -1817,7 +1823,7 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
 /// Set `KAJIT_CFG_OPTS` to a comma-separated list of `+name` or `-name` tokens.
 /// Use `-all` to disable everything, then selectively re-enable with `+name`.
 ///
-/// Pass names: `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`.
+/// Pass names: `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`, `simplify_phis`.
 ///
 /// Examples:
 ///   `KAJIT_CFG_OPTS=-all`           — disable all CFG opts
@@ -3929,6 +3935,169 @@ fn get_def_vreg(op: &LinearOp) -> Option<VReg> {
         | LinearOp::SlotAddr { dst, .. }
         | LinearOp::CallPure { dst, .. } => Some(*dst),
         _ => None,
+    }
+}
+
+/// Simplifies trivial phi nodes where all incoming values are identical.
+///
+/// A phi node (block parameter) is trivial if all incoming edges provide
+/// the same value for that parameter. In this case, we can replace all
+/// uses of the parameter with that common value.
+///
+/// Example:
+/// ```text
+/// block b1 params=[v10, v11]:
+///   edge e0: b0 -> b1 [v10=>v5, v11=>v3]
+///   edge e1: b2 -> b1 [v10=>v5, v11=>v3]
+/// ```
+/// Both v10 and v11 are trivial - v10 is always v5, v11 is always v3.
+/// We rewrite all uses of v10 to v5 and v11 to v3, then DCE removes them.
+pub fn simplify_trivial_phis(program: &mut Program) {
+    for func in &mut program.funcs {
+        simplify_trivial_phis_in_function(func);
+    }
+}
+
+fn simplify_trivial_phis_in_function(func: &mut Function) {
+    let debug = std::env::var("KAJIT_DEBUG_PHI").is_ok();
+
+    // For each block, identify which parameters are trivial and should be removed
+    // Map: BlockId -> Vec<(param_index, param_vreg, replacement_vreg)>
+    let mut trivial_params_per_block: HashMap<BlockId, Vec<(usize, VReg, VReg)>> = HashMap::new();
+
+    for block in &func.blocks {
+        if block.params.is_empty() {
+            continue;
+        }
+
+        let mut trivial_params = Vec::new();
+
+        // For each parameter, check if all incoming edges provide the same value
+        for (param_idx, &param_vreg) in block.params.iter().enumerate() {
+            let mut common_value: Option<VReg> = None;
+            let mut is_trivial = true;
+
+            for &pred_edge_id in &block.preds {
+                let edge = &func.edges[pred_edge_id.index()];
+
+                if param_idx >= edge.args.len() {
+                    is_trivial = false;
+                    break;
+                }
+                let incoming_value = edge.args[param_idx].source;
+
+                match common_value {
+                    None => common_value = Some(incoming_value),
+                    Some(cv) if cv == incoming_value => {}
+                    Some(cv) if cv == param_vreg => {
+                        // Self-reference phi, use the incoming value
+                        common_value = Some(incoming_value);
+                    }
+                    _ => {
+                        is_trivial = false;
+                        break;
+                    }
+                }
+            }
+
+            if is_trivial {
+                if let Some(replacement) = common_value {
+                    if replacement != param_vreg {
+                        trivial_params.push((param_idx, param_vreg, replacement));
+                    }
+                }
+            }
+        }
+
+        if !trivial_params.is_empty() {
+            trivial_params_per_block.insert(block.id, trivial_params);
+        }
+    }
+
+    if trivial_params_per_block.is_empty() {
+        return;
+    }
+
+    let total_trivial: usize = trivial_params_per_block.values().map(|v| v.len()).sum();
+    if debug {
+        eprintln!(
+            "[simplify_phis] func f{}: found {} trivial phis across {} blocks",
+            func.id.0,
+            total_trivial,
+            trivial_params_per_block.len()
+        );
+    }
+
+    // Build global phi -> replacement map for rewriting uses
+    let mut phi_replacements: HashMap<VReg, VReg> = HashMap::new();
+    for trivial_params in trivial_params_per_block.values() {
+        for &(_, param_vreg, replacement) in trivial_params {
+            phi_replacements.insert(param_vreg, replacement);
+        }
+    }
+
+    // Rewrite all uses of trivial phis
+    let mut rewrite_vreg = |v: &mut VReg| {
+        if let Some(&replacement) = phi_replacements.get(v) {
+            *v = replacement;
+        }
+    };
+
+    // Rewrite instruction uses
+    for block in &func.blocks {
+        for &inst_id in &block.insts {
+            let inst = &mut func.insts[inst_id.index()];
+            for operand in &mut inst.operands {
+                if operand.kind == OperandKind::Use {
+                    rewrite_vreg(&mut operand.vreg);
+                }
+            }
+        }
+    }
+
+    // Rewrite terminator uses
+    for block in &func.blocks {
+        let term = &mut func.terms[block.term.index()];
+        match term {
+            Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                rewrite_vreg(cond);
+            }
+            Terminator::JumpTable { predicate, .. } => {
+                rewrite_vreg(predicate);
+            }
+            _ => {}
+        }
+    }
+
+    // Rewrite function data results
+    for result in &mut func.data_results {
+        rewrite_vreg(result);
+    }
+
+    // Now remove trivial parameters from blocks and update edge arguments
+    // Process in reverse index order to keep indices valid during removal
+    for (block_id, mut trivial_params) in trivial_params_per_block {
+        // Sort by index descending so we remove from end to beginning
+        trivial_params.sort_by(|a, b| b.0.cmp(&a.0));
+
+        // Remove parameters from block
+        for &(param_idx, _, _) in &trivial_params {
+            func.blocks[block_id.index()].params.remove(param_idx);
+        }
+
+        // Remove corresponding edge arguments from all predecessor edges
+        for &pred_edge_id in &func.blocks[block_id.index()].preds.clone() {
+            let edge = &mut func.edges[pred_edge_id.index()];
+            for &(param_idx, _, _) in &trivial_params {
+                if param_idx < edge.args.len() {
+                    edge.args.remove(param_idx);
+                }
+            }
+        }
+    }
+
+    if debug {
+        eprintln!("[simplify_phis] func f{}: cleanup complete", func.id.0);
     }
 }
 
