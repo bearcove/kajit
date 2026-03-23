@@ -332,12 +332,56 @@ impl<'a> StructuralHirIrLowerer<'a> {
         active_slot: crate::ir::SlotId,
         continue_slot: crate::ir::SlotId,
     ) {
-        for stmt in statements {
-            self.lower_loop_stmt(rb, stmt, dest_local, dest_ty, active_slot, continue_slot);
+        // Batch consecutive non-control-flow statements into single guards.
+        // Control-flow statements (Break, Continue, If, Match, Loop) need
+        // individual guards because they can change `active_slot`.
+        let mut i = 0;
+        while i < statements.len() {
+            // Find run of non-control-flow statements
+            let start = i;
+            while i < statements.len() && !Self::is_loop_control_flow(&statements[i]) {
+                i += 1;
+            }
+
+            // Lower the batch (if any) in one guard
+            if start < i {
+                self.with_active_guard(rb, active_slot, |guard_rb| {
+                    for stmt in &statements[start..i] {
+                        self.lower_stmt(guard_rb, stmt, dest_local, dest_ty);
+                    }
+                });
+            }
+
+            // Lower the control-flow statement (if any) in its own guard
+            if i < statements.len() {
+                self.lower_loop_control_flow_stmt(
+                    rb,
+                    &statements[i],
+                    dest_local,
+                    dest_ty,
+                    active_slot,
+                    continue_slot,
+                );
+                i += 1;
+            }
         }
     }
 
-    fn lower_loop_stmt(
+    /// Returns true if this statement is control flow that can change `active_slot`.
+    fn is_loop_control_flow(stmt: &hir::Stmt) -> bool {
+        matches!(
+            stmt.kind,
+            hir::StmtKind::Break
+                | hir::StmtKind::Continue
+                | hir::StmtKind::If { .. }
+                | hir::StmtKind::Match { .. }
+                | hir::StmtKind::Loop { .. }
+        )
+    }
+
+    /// Lower a control-flow statement inside a loop body.
+    /// These need individual guards because they can change `active_slot`.
+    fn lower_loop_control_flow_stmt(
         &self,
         rb: &mut RegionBuilder<'_>,
         stmt: &hir::Stmt,
@@ -432,10 +476,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     body_rb.set_results(&[predicate]);
                 });
             }
-            hir::StmtKind::Return(_) => {
-                panic!("structural HIR loops do not support return in loop bodies yet");
-            }
-            _ => self.lower_stmt(guard_rb, stmt, dest_local, dest_ty),
+            other => panic!("is_loop_control_flow returned true for non-control-flow: {other:?}"),
         });
     }
 
