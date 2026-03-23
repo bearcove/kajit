@@ -345,11 +345,41 @@ pub struct Emitter {
     last_recorded_location: Option<SourceLocation>,
     labels: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
+    /// Optional instruction capture for assembly dump/parse
+    captured_instructions: Option<Vec<crate::aarch64_asm::Item>>,
 }
 
 impl Emitter {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Enable instruction capture for assembly dump/parse workflow
+    pub fn enable_capture(&mut self) {
+        self.captured_instructions = Some(Vec::new());
+    }
+
+    /// Get captured instructions and labels
+    pub fn take_captured_program(&mut self) -> Option<crate::aarch64_asm::Program> {
+        self.captured_instructions
+            .take()
+            .map(|items| crate::aarch64_asm::Program { items })
+    }
+
+    /// Capture an instruction (if capture is enabled)
+    fn capture(&mut self, inst: crate::aarch64_asm::Instruction) {
+        if let Some(ref mut captured) = self.captured_instructions {
+            captured.push(crate::aarch64_asm::Item::Instruction(inst));
+        }
+    }
+
+    /// Capture a label (if capture is enabled)
+    fn capture_label(&mut self, label: LabelId) {
+        if let Some(ref mut captured) = self.captured_instructions {
+            captured.push(crate::aarch64_asm::Item::Label(crate::aarch64_asm::Label(
+                label.0,
+            )));
+        }
     }
 
     pub fn current_offset(&self) -> u32 {
@@ -400,6 +430,7 @@ impl Emitter {
             });
         }
         *slot = Some(current_offset);
+        self.capture_label(label);
         Ok(())
     }
 
@@ -409,6 +440,9 @@ impl Emitter {
     }
 
     pub fn emit_b_label(&mut self, label: LabelId) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::B {
+            target: crate::aarch64_asm::Label(label.0),
+        });
         self.emit_word(encode_b(0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -419,6 +453,9 @@ impl Emitter {
     }
 
     pub fn emit_bl_label(&mut self, label: LabelId) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Bl {
+            target: crate::aarch64_asm::Label(label.0),
+        });
         self.emit_word(encode_bl(0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -434,6 +471,11 @@ impl Emitter {
         rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Cbz {
+            width,
+            rt,
+            target: crate::aarch64_asm::Label(label.0),
+        });
         self.emit_word(encode_cbz(width, rt, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -449,6 +491,11 @@ impl Emitter {
         rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Cbnz {
+            width,
+            rt,
+            target: crate::aarch64_asm::Label(label.0),
+        });
         self.emit_word(encode_cbnz(width, rt, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -459,6 +506,11 @@ impl Emitter {
     }
 
     pub fn emit_tbz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Tbz {
+            rt,
+            bit,
+            target: crate::aarch64_asm::Label(label.0),
+        });
         self.emit_word(encode_tbz(rt, bit, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -469,6 +521,11 @@ impl Emitter {
     }
 
     pub fn emit_tbnz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Tbnz {
+            rt,
+            bit,
+            target: crate::aarch64_asm::Label(label.0),
+        });
         self.emit_word(encode_tbnz(rt, bit, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -479,12 +536,380 @@ impl Emitter {
     }
 
     pub fn emit_b_cond_label(&mut self, cond: Condition, label: LabelId) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::BCond {
+            cond,
+            target: crate::aarch64_asm::Label(label.0),
+        });
         self.emit_word(encode_b_cond(cond, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
             label,
             kind: FixupKind::Imm19,
         });
+        Ok(())
+    }
+
+    // Non-branch instruction wrappers that capture + emit
+
+    pub fn emit_mov_reg(&mut self, width: Width, rd: Reg, rm: Reg) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::MovReg { width, rd, rm });
+        self.emit_word(encode_mov_reg(width, rd, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_movz_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        imm: u16,
+        shift: u8,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::MovzImm {
+            width,
+            rd,
+            imm,
+            shift,
+        });
+        self.emit_word(encode_movz(width, rd, imm, shift)?);
+        Ok(())
+    }
+
+    pub fn emit_movk_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        imm: u16,
+        shift: u8,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::MovkImm {
+            width,
+            rd,
+            imm,
+            shift,
+        });
+        self.emit_word(encode_movk(width, rd, imm, shift)?);
+        Ok(())
+    }
+
+    pub fn emit_ldr_imm(
+        &mut self,
+        width: Width,
+        rt: Reg,
+        rn: Reg,
+        offset: u32,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::LdrImm {
+            width,
+            rt,
+            rn,
+            offset,
+        });
+        self.emit_word(encode_ldr_imm(width, rt, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_ldrb_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::LdrbImm { rt, rn, offset });
+        self.emit_word(encode_ldrb_imm(rt, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_ldrh_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::LdrhImm { rt, rn, offset });
+        self.emit_word(encode_ldrh_imm(rt, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_str_imm(
+        &mut self,
+        width: Width,
+        rt: Reg,
+        rn: Reg,
+        offset: u32,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::StrImm {
+            width,
+            rt,
+            rn,
+            offset,
+        });
+        self.emit_word(encode_str_imm(width, rt, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_strb_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::StrbImm { rt, rn, offset });
+        self.emit_word(encode_strb_imm(rt, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_strh_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::StrhImm { rt, rn, offset });
+        self.emit_word(encode_strh_imm(rt, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_add_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        imm: u16,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::AddImm {
+            width,
+            rd,
+            rn,
+            imm: imm as u32,
+        });
+        self.emit_word(encode_add_imm(width, rd, rn, imm, false)?);
+        Ok(())
+    }
+
+    pub fn emit_sub_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        imm: u16,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::SubImm {
+            width,
+            rd,
+            rn,
+            imm: imm as u32,
+        });
+        self.emit_word(encode_sub_imm(width, rd, rn, imm, false)?);
+        Ok(())
+    }
+
+    pub fn emit_add_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::AddReg { width, rd, rn, rm });
+        self.emit_word(encode_add_reg(width, rd, rn, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_sub_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::SubReg { width, rd, rn, rm });
+        self.emit_word(encode_sub_reg(width, rd, rn, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_and_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::AndReg { width, rd, rn, rm });
+        self.emit_word(encode_and_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
+        Ok(())
+    }
+
+    pub fn emit_orr_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::OrrReg { width, rd, rn, rm });
+        self.emit_word(encode_orr_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
+        Ok(())
+    }
+
+    pub fn emit_ret(&mut self) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Ret);
+        self.emit_word(encode_ret(Reg::X30)?); // X30 is the link register
+        Ok(())
+    }
+
+    pub fn emit_nop(&mut self) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Nop);
+        self.emit_word(encode_nop()?);
+        Ok(())
+    }
+
+    pub fn emit_eor_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::EorReg { width, rd, rn, rm });
+        self.emit_word(encode_eor_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
+        Ok(())
+    }
+
+    pub fn emit_and_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        imm: u64,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::AndImm { width, rd, rn, imm });
+        self.emit_word(encode_and_imm(width, rd, rn, imm)?);
+        Ok(())
+    }
+
+    pub fn emit_orr_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        imm: u64,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::OrrImm { width, rd, rn, imm });
+        self.emit_word(encode_orr_imm(width, rd, rn, imm)?);
+        Ok(())
+    }
+
+    pub fn emit_eor_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        imm: u64,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::EorImm { width, rd, rn, imm });
+        self.emit_word(encode_eor_imm(width, rd, rn, imm)?);
+        Ok(())
+    }
+
+    pub fn emit_lsl_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        shift: u8,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::LslImm {
+            width,
+            rd,
+            rn,
+            shift,
+        });
+        self.emit_word(encode_lsl_imm(width, rd, rn, shift)?);
+        Ok(())
+    }
+
+    pub fn emit_lsr_imm(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        shift: u8,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::LsrImm {
+            width,
+            rd,
+            rn,
+            shift,
+        });
+        self.emit_word(encode_lsr_imm(width, rd, rn, shift)?);
+        Ok(())
+    }
+
+    pub fn emit_lsl_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::LslReg { width, rd, rn, rm });
+        self.emit_word(encode_lsl_reg(width, rd, rn, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_lsr_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::LsrReg { width, rd, rn, rm });
+        self.emit_word(encode_lsr_reg(width, rd, rn, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_neg_reg(&mut self, width: Width, rd: Reg, rm: Reg) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::NegReg { width, rd, rm });
+        self.emit_word(encode_neg(width, rd, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_cmp_reg(&mut self, width: Width, rn: Reg, rm: Reg) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::CmpReg { width, rn, rm });
+        self.emit_word(encode_cmp_reg(width, rn, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_cmp_imm(&mut self, width: Width, rn: Reg, imm: u16) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::CmpImm {
+            width,
+            rn,
+            imm: imm as u32,
+        });
+        self.emit_word(encode_cmp_imm(width, rn, imm, false)?);
+        Ok(())
+    }
+
+    pub fn emit_mul_reg(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        rm: Reg,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::MulReg { width, rd, rn, rm });
+        self.emit_word(encode_mul(width, rd, rn, rm)?);
+        Ok(())
+    }
+
+    pub fn emit_cset(&mut self, width: Width, rd: Reg, cond: Condition) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Cset { width, rd, cond });
+        self.emit_word(encode_cset(width, rd, cond)?);
+        Ok(())
+    }
+
+    pub fn emit_sxtb(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Sxtb { width, rd, rn });
+        self.emit_word(encode_sxtb(rd, rn)?);
+        Ok(())
+    }
+
+    pub fn emit_sxth(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Sxth { width, rd, rn });
+        self.emit_word(encode_sxth(rd, rn)?);
+        Ok(())
+    }
+
+    pub fn emit_sxtw(&mut self, rd: Reg, rn: Reg) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Sxtw { rd, rn });
+        self.emit_word(encode_sxtw(rd, rn)?);
+        Ok(())
+    }
+
+    pub fn emit_blr(&mut self, rn: Reg) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Blr { rn });
+        self.emit_word(encode_blr(rn)?);
         Ok(())
     }
 
@@ -1442,6 +1867,10 @@ pub fn encode_blr(rn: Reg) -> Result<u32, EmitError> {
     Ok(0xD63F_0000 | (rn << 5))
 }
 
+pub fn encode_nop() -> Result<u32, EmitError> {
+    Ok(0xD503_201F)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2383,5 +2812,44 @@ mod tests {
         emitter.bind_label(label).unwrap();
         let err = emitter.bind_label(label).unwrap_err();
         assert!(matches!(err, EmitError::LabelAlreadyBound { .. }));
+    }
+
+    #[test]
+    fn emitter_captures_instructions() {
+        let mut emitter = Emitter::new();
+        emitter.enable_capture();
+
+        let label0 = emitter.new_label();
+        let label1 = emitter.new_label();
+
+        emitter.bind_label(label0).unwrap();
+        emitter.emit_movz_imm(Width::X64, Reg::X0, 0x42, 0).unwrap();
+        emitter
+            .emit_add_imm(Width::X64, Reg::X1, Reg::X0, 7)
+            .unwrap();
+        emitter
+            .emit_ldr_imm(Width::W32, Reg::X2, Reg::X1, 0)
+            .unwrap();
+        emitter.emit_cbz_label(Width::X64, Reg::X2, label1).unwrap();
+        emitter.emit_ret().unwrap();
+        emitter.bind_label(label1).unwrap();
+        emitter.emit_mov_reg(Width::X64, Reg::X0, Reg::X2).unwrap();
+        emitter.emit_b_label(label0).unwrap();
+
+        let program = emitter.take_captured_program().unwrap();
+        assert_eq!(program.items.len(), 9);
+
+        // Verify we can format it
+        let formatted = format!("{}", program);
+        println!("{}", formatted);
+        assert!(formatted.contains(".L0:"));
+        assert!(formatted.contains(".L1:"));
+        assert!(formatted.contains("movz x0, #0x42"));
+        assert!(formatted.contains("add x1, x0, #7"));
+        assert!(formatted.contains("ldr w2, [x1]"));
+        assert!(formatted.contains("cbz x2, .L1"));
+        assert!(formatted.contains("ret"));
+        assert!(formatted.contains("mov x0, x2"));
+        assert!(formatted.contains("b .L0"));
     }
 }

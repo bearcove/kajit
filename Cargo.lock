@@ -864,6 +864,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kajit-emit-text"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "kajit-emit",
+]
+
+[[package]]
 name = "kajit-format"
 version = "0.1.0"
 dependencies = [
