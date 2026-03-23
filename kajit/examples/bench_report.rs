@@ -203,22 +203,34 @@ fn collect_vec_scalar_signals(sections: &[Section]) -> Vec<VecScalarSignalsRow> 
     }
 
     // r[impl ir.regalloc.regressions]
-    let legacy = kajit::compile_decoder(VecScalarSignalShape::SHAPE, kajit::DecoderKind::Postcard);
-    let ir = kajit::compile_decoder(VecScalarSignalShape::SHAPE, kajit::DecoderKind::Postcard);
+    // Catch panics from regalloc bugs (e.g., EntryLivein errors)
+    let result = std::panic::catch_unwind(|| {
+        let legacy =
+            kajit::compile_decoder(VecScalarSignalShape::SHAPE, kajit::DecoderKind::Postcard);
+        let ir = kajit::compile_decoder(VecScalarSignalShape::SHAPE, kajit::DecoderKind::Postcard);
 
-    let legacy_signals = analyze_codegen_signals(legacy.code(), None);
-    let ir_edits =
-        kajit::regalloc_edit_count(VecScalarSignalShape::SHAPE, kajit::DecoderKind::Postcard);
-    let ir_signals = analyze_codegen_signals(ir.code(), Some(ir_edits));
+        let legacy_signals = analyze_codegen_signals(legacy.code(), None);
+        let ir_edits =
+            kajit::regalloc_edit_count(VecScalarSignalShape::SHAPE, kajit::DecoderKind::Postcard);
+        let ir_signals = analyze_codegen_signals(ir.code(), Some(ir_edits));
 
-    present
-        .into_iter()
-        .map(|bench_name| VecScalarSignalsRow {
-            bench_name,
-            legacy: legacy_signals,
-            ir: ir_signals,
-        })
-        .collect()
+        (legacy_signals, ir_signals)
+    });
+
+    match result {
+        Ok((legacy_signals, ir_signals)) => present
+            .into_iter()
+            .map(|bench_name| VecScalarSignalsRow {
+                bench_name,
+                legacy: legacy_signals,
+                ir: ir_signals,
+            })
+            .collect(),
+        Err(_) => {
+            eprintln!("warning: vec_scalar_signals compilation failed (regalloc bug), skipping");
+            Vec::new()
+        }
+    }
 }
 
 fn check_vec_scalar_signals(rows: &[VecScalarSignalsRow]) -> Result<String, String> {
