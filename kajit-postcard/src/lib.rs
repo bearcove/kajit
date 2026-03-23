@@ -2264,18 +2264,22 @@ impl PostcardHirLowerer {
         bits: u32,
         zigzag: bool,
         acc_local: hir::LocalId,
-        byte_index: u64,
     ) {
-        self.push_cursor_bounds_check(statements, cursor_local, 1, hir::ErrorCode::UnexpectedEof);
+        let max_bytes = Self::postcard_varint_max_bytes(bits);
 
-        let pos = self.cursor_pos_expr(cursor_local);
-        let addr = hir::Expr::Binary {
-            op: hir::BinaryOp::Add,
-            lhs: Box::new(hir::Expr::SliceData {
-                value: Box::new(self.cursor_bytes_expr(cursor_local)),
-            }),
-            rhs: Box::new(pos.clone()),
-        };
+        // byte_index tracks which byte we're on (0..max_bytes)
+        let byte_index_local = self.alloc_local(
+            format!("varint_index_{}", self.locals.len()),
+            hir::Type::u(64),
+            hir::LocalKind::Temp,
+        );
+        self.push_init(
+            statements,
+            hir::Place::Local(byte_index_local),
+            hir::Expr::Literal(hir::Literal::Integer(0)),
+        );
+
+        // raw_byte holds the current byte being processed
         let raw_local = self.alloc_local(
             format!("varint_byte_{}", self.locals.len()),
             hir::Type::u(8),
@@ -2284,12 +2288,41 @@ impl PostcardHirLowerer {
         self.push_init(
             statements,
             hir::Place::Local(raw_local),
-            hir::Expr::Load {
-                addr: Box::new(addr),
-                width: hir::MemoryWidth::W1,
-            },
+            hir::Expr::Literal(hir::Literal::Integer(0)),
         );
-        statements.push(hir::Stmt {
+
+        let mut loop_body = Vec::new();
+
+        // bounds check: pos + 1 > len → fail
+        self.push_cursor_bounds_check(
+            &mut loop_body,
+            cursor_local,
+            1,
+            hir::ErrorCode::UnexpectedEof,
+        );
+
+        // load byte from cursor
+        let pos = self.cursor_pos_expr(cursor_local);
+        let addr = hir::Expr::Binary {
+            op: hir::BinaryOp::Add,
+            lhs: Box::new(hir::Expr::SliceData {
+                value: Box::new(self.cursor_bytes_expr(cursor_local)),
+            }),
+            rhs: Box::new(pos.clone()),
+        };
+        loop_body.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Local(raw_local),
+                value: hir::Expr::Load {
+                    addr: Box::new(addr),
+                    width: hir::MemoryWidth::W1,
+                },
+            },
+        });
+
+        // pos++
+        loop_body.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Assign {
                 place: hir::Place::Field {
@@ -2304,21 +2337,23 @@ impl PostcardHirLowerer {
             },
         });
 
+        // acc |= (byte & 0x7f) << (byte_index * 7)
         let low = hir::Expr::Binary {
             op: hir::BinaryOp::BitAnd,
             lhs: Box::new(hir::Expr::Local(raw_local)),
             rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x7f))),
         };
-        let part = if byte_index == 0 {
-            low
-        } else {
-            hir::Expr::Binary {
-                op: hir::BinaryOp::Shl,
-                lhs: Box::new(low),
-                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(byte_index * 7))),
-            }
+        let shift = hir::Expr::Binary {
+            op: hir::BinaryOp::Mul,
+            lhs: Box::new(hir::Expr::Local(byte_index_local)),
+            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(7))),
         };
-        statements.push(hir::Stmt {
+        let part = hir::Expr::Binary {
+            op: hir::BinaryOp::Shl,
+            lhs: Box::new(low),
+            rhs: Box::new(shift),
+        };
+        loop_body.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Assign {
                 place: hir::Place::Local(acc_local),
@@ -2330,42 +2365,88 @@ impl PostcardHirLowerer {
             },
         });
 
-        let max_bytes = Self::postcard_varint_max_bytes(bits);
-        let then_block = if byte_index + 1 == max_bytes {
-            hir::Block {
-                scope: hir::ScopeId::new(0),
-                statements: vec![hir::Stmt {
-                    id: self.next_stmt_id(),
-                    kind: hir::StmtKind::Fail {
-                        code: hir::ErrorCode::InvalidVarint,
+        // byte_index++
+        loop_body.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Local(byte_index_local),
+                value: hir::Expr::Binary {
+                    op: hir::BinaryOp::Add,
+                    lhs: Box::new(hir::Expr::Local(byte_index_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                },
+            },
+        });
+
+        // if !(byte & 0x80) { ... } - no continuation bit means we're done
+        // For 64-bit: if byte_index == max_bytes, check for extra bits in last byte
+        let no_cont_body = if bits == 64 {
+            // if byte_index == max_bytes && (byte & 0x7e) != 0 { fail InvalidVarint }
+            // else { break }
+            vec![hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::If {
+                    condition: hir::Expr::Binary {
+                        op: hir::BinaryOp::Eq,
+                        lhs: Box::new(hir::Expr::Local(byte_index_local)),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(max_bytes))),
                     },
-                }],
-            }
+                    then_block: hir::Block {
+                        scope: hir::ScopeId::new(0),
+                        statements: vec![hir::Stmt {
+                            id: self.next_stmt_id(),
+                            kind: hir::StmtKind::If {
+                                condition: hir::Expr::Binary {
+                                    op: hir::BinaryOp::Ne,
+                                    lhs: Box::new(hir::Expr::Binary {
+                                        op: hir::BinaryOp::BitAnd,
+                                        lhs: Box::new(hir::Expr::Local(raw_local)),
+                                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(
+                                            0x7e,
+                                        ))),
+                                    }),
+                                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                                },
+                                then_block: hir::Block {
+                                    scope: hir::ScopeId::new(0),
+                                    statements: vec![hir::Stmt {
+                                        id: self.next_stmt_id(),
+                                        kind: hir::StmtKind::Fail {
+                                            code: hir::ErrorCode::InvalidVarint,
+                                        },
+                                    }],
+                                },
+                                else_block: Some(hir::Block {
+                                    scope: hir::ScopeId::new(0),
+                                    statements: vec![hir::Stmt {
+                                        id: self.next_stmt_id(),
+                                        kind: hir::StmtKind::Break,
+                                    }],
+                                }),
+                            },
+                        }],
+                    },
+                    else_block: Some(hir::Block {
+                        scope: hir::ScopeId::new(0),
+                        statements: vec![hir::Stmt {
+                            id: self.next_stmt_id(),
+                            kind: hir::StmtKind::Break,
+                        }],
+                    }),
+                },
+            }]
         } else {
-            let mut block = hir::Block {
-                scope: hir::ScopeId::new(0),
-                statements: Vec::new(),
-            };
-            self.lower_postcard_varint_step(
-                &mut block.statements,
-                cursor_local,
-                place.clone(),
-                bits,
-                zigzag,
-                acc_local,
-                byte_index + 1,
-            );
-            block
+            vec![hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Break,
+            }]
         };
-        let else_block =
-            Some(self.postcard_varint_finish_block(
-                place, bits, zigzag, acc_local, byte_index, raw_local,
-            ));
-        statements.push(hir::Stmt {
+
+        loop_body.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::If {
                 condition: hir::Expr::Binary {
-                    op: hir::BinaryOp::Ne,
+                    op: hir::BinaryOp::Eq,
                     lhs: Box::new(hir::Expr::Binary {
                         op: hir::BinaryOp::BitAnd,
                         lhs: Box::new(hir::Expr::Local(raw_local)),
@@ -2373,10 +2454,93 @@ impl PostcardHirLowerer {
                     }),
                     rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
                 },
-                then_block,
-                else_block,
+                then_block: hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: no_cont_body,
+                },
+                else_block: Some(hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: Vec::new(),
+                }),
             },
         });
+
+        // if byte_index == max_bytes { fail InvalidVarint } - can't continue past max
+        loop_body.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::If {
+                condition: hir::Expr::Binary {
+                    op: hir::BinaryOp::Eq,
+                    lhs: Box::new(hir::Expr::Local(byte_index_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(max_bytes))),
+                },
+                then_block: hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: vec![hir::Stmt {
+                        id: self.next_stmt_id(),
+                        kind: hir::StmtKind::Fail {
+                            code: hir::ErrorCode::InvalidVarint,
+                        },
+                    }],
+                },
+                else_block: Some(hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: Vec::new(),
+                }),
+            },
+        });
+
+        // Push the loop
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Loop {
+                body: hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: loop_body,
+                },
+            },
+        });
+
+        // After loop: overflow checks for <64-bit types
+        // (64-bit extra bits check is done inside the loop when exiting)
+
+        // For <64-bit: if acc >> bits != 0 { fail NumberOutOfRange }
+        if bits < 64 {
+            statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::If {
+                    condition: hir::Expr::Binary {
+                        op: hir::BinaryOp::Ne,
+                        lhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::Shr,
+                            lhs: Box::new(hir::Expr::Local(acc_local)),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(bits as u64))),
+                        }),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                    },
+                    then_block: hir::Block {
+                        scope: hir::ScopeId::new(0),
+                        statements: vec![hir::Stmt {
+                            id: self.next_stmt_id(),
+                            kind: hir::StmtKind::Fail {
+                                code: hir::ErrorCode::NumberOutOfRange,
+                            },
+                        }],
+                    },
+                    else_block: Some(hir::Block {
+                        scope: hir::ScopeId::new(0),
+                        statements: Vec::new(),
+                    }),
+                },
+            });
+        }
+
+        // Store result
+        self.push_init(
+            statements,
+            place,
+            self.postcard_varint_finish_expr(acc_local, zigzag),
+        );
     }
 
     fn lower_postcard_varint_into_place(
@@ -2397,15 +2561,7 @@ impl PostcardHirLowerer {
             hir::Place::Local(acc_local),
             hir::Expr::Literal(hir::Literal::Integer(0)),
         );
-        self.lower_postcard_varint_step(
-            statements,
-            cursor_local,
-            place,
-            bits,
-            zigzag,
-            acc_local,
-            0,
-        );
+        self.lower_postcard_varint_step(statements, cursor_local, place, bits, zigzag, acc_local);
     }
 
     pub fn lower_shape_into_place(

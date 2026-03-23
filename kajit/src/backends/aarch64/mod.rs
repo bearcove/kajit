@@ -885,6 +885,15 @@ impl Lowerer {
                 }
             }
 
+            // Also track copies of consts (needed for immediate-only const copies)
+            for inst in &func.insts {
+                if let kajit_lir::LinearOp::Copy { dst, src } = &inst.op {
+                    if let Some(value) = self.const_vregs[src.index()] {
+                        self.const_vregs[dst.index()] = Some(value);
+                    }
+                }
+            }
+
             let label = self.lambda_labels[func.lambda_id.index()];
             self.ectx.bind_label(label);
             self.ectx.set_source_location(kajit_emit::SourceLocation {
