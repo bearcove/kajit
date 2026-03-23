@@ -838,6 +838,10 @@ impl<'a> Linearizer<'a> {
 
             if !ends_with_error {
                 // Collect exit phi_args: (source=branch_result, target=gamma_output).
+                // Note: we must include phi_args even when src == dst, because after
+                // slot2reg promotion the same vreg may be used as both the branch
+                // result and the gamma output. Without the phi_arg, the vreg would
+                // be undefined at the merge point.
                 let region = &self.func.regions[region_id];
                 let mut exit_phis = Vec::new();
                 for i in 0..data_output_count {
@@ -847,10 +851,8 @@ impl<'a> Linearizer<'a> {
                         let dst_vreg = node.outputs[i]
                             .vreg
                             .expect("gamma data output must have vreg");
-                        if src_vreg != dst_vreg {
-                            self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
-                            exit_phis.push((src_vreg, dst_vreg));
-                        }
+                        self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
+                        exit_phis.push((src_vreg, dst_vreg));
                     }
                 }
 
