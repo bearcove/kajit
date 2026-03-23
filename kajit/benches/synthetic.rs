@@ -645,6 +645,66 @@ fn register_bench_case<T>(
                 }
             }
         }
+        #[cfg(target_arch = "aarch64")]
+        if kajit::alt_asm::has_alt_asm(group, "postcard") {
+            let registry = kajit::ir::IntrinsicRegistry::new();
+            match kajit::alt_asm::load_alt_decoder(group, "postcard", &registry) {
+                Some(alt_decoder) => {
+                    let alt_decoder = Arc::new(alt_decoder);
+                    match catch_unwind(AssertUnwindSafe(|| {
+                        let func = alt_decoder.func();
+                        let mut out = std::mem::MaybeUninit::<T>::uninit();
+                        let mut ctx = kajit::context::DeserContext::new(&postcard_data[..]);
+                        unsafe {
+                            func(out.as_mut_ptr() as *mut u8, &mut ctx);
+                        }
+                        if ctx.error.code != 0 {
+                            return Err(format!("decode error code: {}", ctx.error.code));
+                        }
+                        Ok(unsafe { out.assume_init() })
+                    })) {
+                        Ok(Ok(_)) => {
+                            v.push(harness::Bench {
+                                name: format!("{postcard_prefix}/kajit.alt/deser"),
+                                func: Box::new({
+                                    let data = Arc::clone(&postcard_data);
+                                    let alt_decoder = Arc::clone(&alt_decoder);
+                                    move |runner| {
+                                        let func = alt_decoder.func();
+                                        runner.run(|| {
+                                            let mut out = std::mem::MaybeUninit::<T>::uninit();
+                                            let mut ctx = kajit::context::DeserContext::new(
+                                                black_box(&data[..]),
+                                            );
+                                            unsafe {
+                                                func(out.as_mut_ptr() as *mut u8, &mut ctx);
+                                            }
+                                            black_box(unsafe { out.assume_init() });
+                                        });
+                                    }
+                                }),
+                            });
+                        }
+                        Ok(Err(err)) => {
+                            eprintln!(
+                                "skipping {postcard_prefix}/kajit.alt/deser: preflight decode failed ({err})"
+                            );
+                        }
+                        Err(payload) => {
+                            eprintln!(
+                                "skipping {postcard_prefix}/kajit.alt/deser: preflight panic ({})",
+                                panic_payload_to_string(payload)
+                            );
+                        }
+                    }
+                }
+                None => {
+                    eprintln!(
+                        "skipping {postcard_prefix}/kajit.alt/deser: failed to load/assemble .alt.vixen-asm"
+                    );
+                }
+            }
+        }
     }
     v.push(harness::Bench {
         name: format!("{postcard_prefix}/serde/ser"),

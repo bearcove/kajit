@@ -347,6 +347,11 @@ impl IntrinsicRegistry {
             .map(|(_, f)| *f)
     }
 
+    /// Look up the 64-bit address for a function name.
+    pub fn address_of_name(&self, name: &str) -> Option<u64> {
+        self.func_by_name(name).map(|f| f.0 as u64)
+    }
+
     /// Look up the name for a named constant.
     pub fn const_name_of(&self, value: u64) -> Option<&str> {
         self.const_entries
