@@ -1,5 +1,4 @@
 #[test]
-#[ignore = "WIP: regalloc SSA error"]
 fn simple_cfg_parse() {
     let cfg_text = r#"
 cfg_program vregs=5 slots=0 {

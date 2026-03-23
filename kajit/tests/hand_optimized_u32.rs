@@ -2,10 +2,9 @@
 // This is an unrolled version with minimal blocks (16 blocks vs 43 in generated version)
 
 #[test]
-#[ignore = "WIP: regalloc issue with block parameters"]
 fn hand_optimized_u32_varint() {
     let cfg_text = r#"
-cfg_program vregs=60 slots=0 {
+cfg_program vregs=150 slots=0 {
   cfg_func @0 f0 entry=b0 {
     data_args: []
     data_results: []
@@ -22,9 +21,9 @@ cfg_program vregs=60 slots=0 {
     block b9 params=[] insts=[i44, i45] term=t9 preds=[e15] succs=[e17, e18]
     block b10 params=[] insts=[i46, i47, i48, i49, i50, i51, i52, i53] term=t10 preds=[e18] succs=[e19, e20]
     block b11 params=[] insts=[] term=t11 preds=[e20] succs=[]
-    block b12 params=[v53] insts=[i54, i55, i56, i57] term=t12 preds=[e4, e8, e12, e16, e19] succs=[e21, e22]
+    block b12 params=[v100] insts=[i54, i55, i56, i57] term=t12 preds=[e4, e8, e12, e16, e19] succs=[e21, e22]
     block b13 params=[] insts=[] term=t13 preds=[e21] succs=[]
-    block b14 params=[] insts=[i58] term=t14 preds=[e22] succs=[]
+    block b14 params=[v101] insts=[i58] term=t14 preds=[e22] succs=[]
     block b15 params=[] insts=[] term=t15 preds=[e2, e5, e9, e13, e17] succs=[]
 
     inst i0: v0:gpr = save_cursor
@@ -93,11 +92,11 @@ cfg_program vregs=60 slots=0 {
     inst i53: v48:gpr = And v42:gpr, v11:gpr
 
     inst i54: v49:gpr = const(0x20)
-    inst i55: v50:gpr = Shr v53:gpr, v49:gpr
+    inst i55: v50:gpr = Shr v100:gpr, v49:gpr
     inst i56: v51:gpr = const(0x0)
     inst i57: v52:gpr = CmpNe v50:gpr, v51:gpr
 
-    inst i58: store([0:W4]) v53:gpr
+    inst i58: store([0:W4]) v101:gpr
 
     term t0: branch e0
     term t1: branch_if v6 -> e2, fallthrough e1
@@ -120,25 +119,25 @@ cfg_program vregs=60 slots=0 {
     edge e1: b1 -> b2 []
     edge e2: b1 -> b15 []
     edge e3: b2 -> b3 []
-    edge e4: b2 -> b12 [v53=>v10]
+    edge e4: b2 -> b12 [v100=>v10]
     edge e5: b3 -> b15 []
     edge e6: b3 -> b4 []
     edge e7: b4 -> b5 []
-    edge e8: b4 -> b12 [v53=>v20]
+    edge e8: b4 -> b12 [v100=>v20]
     edge e9: b5 -> b15 []
     edge e10: b5 -> b6 []
     edge e11: b6 -> b7 []
-    edge e12: b6 -> b12 [v53=>v29]
+    edge e12: b6 -> b12 [v100=>v29]
     edge e13: b7 -> b15 []
     edge e14: b7 -> b8 []
     edge e15: b8 -> b9 []
-    edge e16: b8 -> b12 [v53=>v38]
+    edge e16: b8 -> b12 [v100=>v38]
     edge e17: b9 -> b15 []
     edge e18: b9 -> b10 []
-    edge e19: b10 -> b12 [v53=>v47]
+    edge e19: b10 -> b12 [v100=>v47]
     edge e20: b10 -> b11 []
     edge e21: b12 -> b13 []
-    edge e22: b12 -> b14 []
+    edge e22: b12 -> b14 [v101=>v100]
   }
 }
 "#;

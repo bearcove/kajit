@@ -437,7 +437,7 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, Terminator, Extra<'src>> +
         .map(|edge| Terminator::Branch { edge });
     let branch_if = just("branch_if ")
         .ignore_then(vreg_relaxed())
-        .then_ignore(just(" -> ").padded_by(hws()))
+        .then_ignore(just(" -> "))
         .then(edge_id())
         .then_ignore(just(", fallthrough "))
         .then(edge_id())
@@ -448,7 +448,7 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, Terminator, Extra<'src>> +
         });
     let branch_if_zero = just("branch_if_zero ")
         .ignore_then(vreg_relaxed())
-        .then_ignore(just(" -> ").padded_by(hws()))
+        .then_ignore(just(" -> "))
         .then(edge_id())
         .then_ignore(just(", fallthrough "))
         .then(edge_id())
