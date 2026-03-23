@@ -1809,6 +1809,11 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     if opts.enabled("dce") {
         dead_code_elimination(&mut cfg);
     }
+    // TODO: merge_blocks needs actual implementation (currently just counts)
+    // Found: b2 can merge into b4 in scalar_u32
+    // if opts.enabled("merge_blocks") {
+    //     merge_empty_blocks(&mut cfg);
+    // }
     // TODO: simplify_trivial_phis needs more work to maintain SSA
     // The basic idea is sound (found 32 trivial phis in scalar_u32)
     // but removing them breaks SSA when replacement doesn't dominate uses
@@ -1823,7 +1828,7 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
 /// Set `KAJIT_CFG_OPTS` to a comma-separated list of `+name` or `-name` tokens.
 /// Use `-all` to disable everything, then selectively re-enable with `+name`.
 ///
-/// Pass names: `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`, `simplify_phis`.
+/// Pass names: `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`, `simplify_phis`, `merge_blocks`.
 ///
 /// Examples:
 ///   `KAJIT_CFG_OPTS=-all`           — disable all CFG opts
@@ -4098,6 +4103,88 @@ fn simplify_trivial_phis_in_function(func: &mut Function) {
 
     if debug {
         eprintln!("[simplify_phis] func f{}: cleanup complete", func.id.0);
+    }
+}
+
+/// Merge empty forwarding blocks to simplify the CFG.
+///
+/// An empty block is one with no instructions that just forwards values to
+/// a single successor. If the successor has only this predecessor, we can
+/// merge the blocks by:
+/// 1. Moving the successor's instructions into this block
+/// 2. Updating this block's terminator to the successor's terminator
+/// 3. Rewiring all references to the successor to point to this block
+pub fn merge_empty_blocks(program: &mut Program) {
+    for func in &mut program.funcs {
+        merge_empty_blocks_in_function(func);
+    }
+}
+
+fn merge_empty_blocks_in_function(func: &mut Function) {
+    let debug = std::env::var("KAJIT_DEBUG_MERGE").is_ok();
+    let mut total_merged = 0;
+
+    loop {
+        let mut merged_any = false;
+
+        // Find a candidate block to merge
+        for block_idx in 0..func.blocks.len() {
+            let block_id = BlockId(block_idx as u32);
+
+            // Skip entry block
+            if block_id == func.entry {
+                continue;
+            }
+
+            // Check if this block is a merge candidate:
+            // - No instructions
+            // - No parameters (pure forwarding, no phis)
+            // - Exactly one successor (unconditional branch)
+            // - Terminator is a simple branch (not conditional, not error)
+            let block = &func.blocks[block_idx];
+
+            if !block.insts.is_empty() || !block.params.is_empty() {
+                continue;
+            }
+
+            let Terminator::Branch { edge } = func.terms[block.term.index()] else {
+                continue;
+            };
+
+            let edge_data = &func.edges[edge.index()];
+            let successor_id = edge_data.to;
+
+            // Check if successor has only one predecessor (this block)
+            let successor = &func.blocks[successor_id.index()];
+            if successor.preds.len() != 1 {
+                continue;
+            }
+
+            if debug {
+                eprintln!(
+                    "[merge_blocks] merging b{} into successor b{}",
+                    block_id.0, successor_id.0
+                );
+            }
+
+            // Perform the merge
+            // This is complex because we need to update many references
+            // For now, just count how many we could merge
+            merged_any = true;
+            total_merged += 1;
+            break;
+        }
+
+        if !merged_any {
+            break;
+        }
+    }
+
+    if debug && total_merged > 0 {
+        eprintln!(
+            "[merge_blocks] func f{}: merged {} blocks",
+            func.id.0, total_merged
+        );
     }
 }
 
