@@ -446,6 +446,16 @@ fn organize_entries(entries: &[(Vec<String>, f64, f64, f64)]) -> Vec<Section> {
 
     for (path, median_ns, p5_ns, p95_ns) in entries {
         let (section_label, group_name, row_name) = match path.len() {
+            4 => {
+                // case/format/impl/op → section="format op", group="case", row="impl"
+                // e.g., scalar_u32/postcard/kajit/deser → "postcard deser", "scalar_u32", "kajit"
+                let direction = &path[3]; // "deser" or "ser"
+                (
+                    format!("{} {direction}", path[1]),
+                    path[0].clone(),
+                    path[2].clone(),
+                )
+            }
             3 => {
                 let direction = if path[2].ends_with("_ser") {
                     "ser"

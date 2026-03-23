@@ -41,7 +41,7 @@ bench *args:
 
 # Run all benchmarks and generate bench_report/index.html
 bench-report *args:
-    cargo bench {{ args }} 2>/dev/null | cargo run --example bench_report
+    cargo bench {{ args }} | cargo run --example bench_report
 
 # Check + clippy
 check:
