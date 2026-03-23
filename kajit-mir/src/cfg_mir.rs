@@ -1788,6 +1788,16 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
 pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
     let opts = CfgOptOptions::from_env();
+
+    // Run loop-invariant phi elimination early (requires analysis passes)
+    if opts.enabled("loop_phi_elim") {
+        for func in &mut cfg.funcs {
+            let dom = crate::analysis::dominance::DominanceInfo::compute(func);
+            let loops = crate::analysis::loops::LoopInfo::compute(func, &dom);
+            crate::opt::loop_phi_elim::eliminate_loop_invariant_phis(func, &dom, &loops);
+        }
+    }
+
     if opts.enabled("remat") {
         rematerialize_constants(&mut cfg);
     }
@@ -1828,7 +1838,7 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
 /// Set `KAJIT_CFG_OPTS` to a comma-separated list of `+name` or `-name` tokens.
 /// Use `-all` to disable everything, then selectively re-enable with `+name`.
 ///
-/// Pass names: `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`, `simplify_phis`, `merge_blocks`.
+/// Pass names: `loop_phi_elim`, `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`, `simplify_phis`, `merge_blocks`.
 ///
 /// Examples:
 ///   `KAJIT_CFG_OPTS=-all`           — disable all CFG opts

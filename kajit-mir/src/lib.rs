@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod cfg_mir;
+pub mod opt;
 
 mod debug_cli;
 mod debugger;
