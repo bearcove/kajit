@@ -1206,8 +1206,8 @@ pub fn allocate_cfg_program(
 
     let env = machine_env();
     let options = RegallocOptions {
-        verbose_log: false,
-        validate_ssa: false,
+        verbose_log: std::env::var_os("KAJIT_REGALLOC_LOG").is_some(),
+        validate_ssa: true,
         algorithm: regalloc2::Algorithm::Ion,
     };
 
