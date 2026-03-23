@@ -63,14 +63,15 @@ impl EmitCtx {
         if imm == 0 {
             if rd != rn {
                 let opcode = if subtract { "sub" } else { "add" };
-                self.emit.emit_word(
-                    if subtract {
-                        aarch64::encode_sub_imm(aarch64::Width::X64, rd, rn, 0, false)
-                    } else {
-                        aarch64::encode_add_imm(aarch64::Width::X64, rd, rn, 0, false)
-                    }
-                    .unwrap_or_else(|_| panic!("{opcode}")),
-                );
+                if subtract {
+                    self.emit
+                        .emit_sub_imm(aarch64::Width::X64, rd, rn, 0, false)
+                        .unwrap_or_else(|_| panic!("{opcode}"));
+                } else {
+                    self.emit
+                        .emit_add_imm(aarch64::Width::X64, rd, rn, 0, false)
+                        .unwrap_or_else(|_| panic!("{opcode}"));
+                }
             }
             return;
         }
@@ -89,12 +90,15 @@ impl EmitCtx {
                 (imm as u16, false, imm)
             };
 
-            let word = if subtract {
-                aarch64::encode_sub_imm(aarch64::Width::X64, rd, base, imm12, shift).expect("sub")
+            if subtract {
+                self.emit
+                    .emit_sub_imm(aarch64::Width::X64, rd, base, imm12, shift)
+                    .expect("sub");
             } else {
-                aarch64::encode_add_imm(aarch64::Width::X64, rd, base, imm12, shift).expect("add")
-            };
-            self.emit.emit_word(word);
+                self.emit
+                    .emit_add_imm(aarch64::Width::X64, rd, base, imm12, shift)
+                    .expect("add");
+            }
 
             imm -= chunk;
             base = rd;
@@ -117,55 +121,50 @@ impl EmitCtx {
         let frame_size = self.frame_size;
 
         self.emit_sub_imm_any(Reg::SP, Reg::SP, frame_size);
-        self.emit.emit_word(
-            aarch64::encode_stp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("stp"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect("stp"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_stp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect("stp"),
-        );
+        self.emit
+            .emit_stp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
+            .expect("stp");
+        self.emit
+            .emit_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16)
+            .expect("stp");
+        self.emit
+            .emit_stp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32)
+            .expect("stp");
         let extra_pairs = ((self.base_frame - BASE_FRAME) / 16) as usize;
         assert!(
             extra_pairs <= 3,
             "unsupported extra callee-saved pair count"
         );
         if extra_pairs >= 1 {
-            self.emit.emit_word(
-                aarch64::encode_stp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
-                    .expect("stp"),
-            );
+            self.emit
+                .emit_stp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
+                .expect("stp");
         }
         if extra_pairs >= 2 {
-            self.emit.emit_word(
-                aarch64::encode_stp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
-                    .expect("stp"),
-            );
+            self.emit
+                .emit_stp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
+                .expect("stp");
         }
         if extra_pairs >= 3 {
-            self.emit.emit_word(
-                aarch64::encode_stp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
-                    .expect("stp"),
-            );
+            self.emit
+                .emit_stp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
+                .expect("stp");
         }
-        self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X29, Reg::SP, 0, false).expect("add"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X0).expect("mov"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_mov_reg(aarch64::Width::X64, Reg::X22, Reg::X1).expect("mov"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
-                .expect("ldr"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_ldr_imm(aarch64::Width::X64, Reg::X20, Reg::X22, CTX_INPUT_END)
-                .expect("ldr"),
-        );
+        self.emit
+            .emit_add_imm(aarch64::Width::X64, Reg::X29, Reg::SP, 0, false)
+            .expect("add");
+        self.emit
+            .emit_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X0)
+            .expect("mov");
+        self.emit
+            .emit_mov_reg(aarch64::Width::X64, Reg::X22, Reg::X1)
+            .expect("mov");
+        self.emit
+            .emit_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+            .expect("ldr");
+        self.emit
+            .emit_ldr_imm(aarch64::Width::X64, Reg::X20, Reg::X22, CTX_INPUT_END)
+            .expect("ldr");
 
         self.error_exit = error_exit;
         (entry, error_exit)
@@ -183,71 +182,62 @@ impl EmitCtx {
             "unsupported extra callee-saved pair count"
         );
 
-        self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
-                .expect("str"),
-        );
+        self.emit
+            .emit_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+            .expect("str");
         if extra_pairs >= 3 {
-            self.emit.emit_word(
-                aarch64::encode_ldp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
-                    .expect("ldp"),
-            );
+            self.emit
+                .emit_ldp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
+                .expect("ldp");
         }
         if extra_pairs >= 2 {
-            self.emit.emit_word(
-                aarch64::encode_ldp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
-                    .expect("ldp"),
-            );
+            self.emit
+                .emit_ldp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
+                .expect("ldp");
         }
         if extra_pairs >= 1 {
-            self.emit.emit_word(
-                aarch64::encode_ldp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
-                    .expect("ldp"),
-            );
+            self.emit
+                .emit_ldp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
+                .expect("ldp");
         }
-        self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect("ldp"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect("ldp"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("ldp"),
-        );
-        self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
         self.emit
-            .emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
+            .emit_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32)
+            .expect("ldp");
+        self.emit
+            .emit_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16)
+            .expect("ldp");
+        self.emit
+            .emit_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
+            .expect("ldp");
+        self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
+        self.emit.emit_ret().expect("ret");
         self.emit.bind_label(error_exit).expect("bind");
         if extra_pairs >= 3 {
-            self.emit.emit_word(
-                aarch64::encode_ldp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
-                    .expect("ldp"),
-            );
+            self.emit
+                .emit_ldp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, 80)
+                .expect("ldp");
         }
         if extra_pairs >= 2 {
-            self.emit.emit_word(
-                aarch64::encode_ldp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
-                    .expect("ldp"),
-            );
+            self.emit
+                .emit_ldp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, 64)
+                .expect("ldp");
         }
         if extra_pairs >= 1 {
-            self.emit.emit_word(
-                aarch64::encode_ldp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
-                    .expect("ldp"),
-            );
+            self.emit
+                .emit_ldp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, 48)
+                .expect("ldp");
         }
-        self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32).expect("ldp"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16).expect("ldp"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0).expect("ldp"),
-        );
-        self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
         self.emit
-            .emit_word(aarch64::encode_ret(Reg::X30).expect("ret"));
+            .emit_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, 32)
+            .expect("ldp");
+        self.emit
+            .emit_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, 16)
+            .expect("ldp");
+        self.emit
+            .emit_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
+            .expect("ldp");
+        self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
+        self.emit.emit_ret().expect("ret");
     }
 
     /// Allocate a new dynamic label.
@@ -279,21 +269,19 @@ impl EmitCtx {
     pub fn emit_bounds_check(&mut self, count: u32) {
         let eof_label = self.emit.new_label();
         if count == 1 {
-            self.emit.emit_word(
-                aarch64::encode_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20).expect("cmp"),
-            );
+            self.emit
+                .emit_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20)
+                .expect("cmp");
             self.emit
                 .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
                 .expect("b.hs");
         } else {
-            self.emit.emit_word(
-                aarch64::encode_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X20, Reg::X19)
-                    .expect("sub"),
-            );
-            self.emit.emit_word(
-                aarch64::encode_cmp_imm(aarch64::Width::X64, Reg::X9, count as u16, false)
-                    .expect("cmp"),
-            );
+            self.emit
+                .emit_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X20, Reg::X19)
+                .expect("sub");
+            self.emit
+                .emit_cmp_imm(aarch64::Width::X64, Reg::X9, count as u16)
+                .expect("cmp");
             self.emit
                 .emit_b_cond_label(aarch64::Condition::Lo, eof_label)
                 .expect("b.lo");
@@ -302,19 +290,17 @@ impl EmitCtx {
         let past_eof = self.emit.new_label();
         self.emit.emit_b_label(past_eof).expect("b");
         self.emit.bind_label(eof_label).expect("bind eof");
-        self.emit.emit_word(
-            aarch64::encode_movz(
+        self.emit
+            .emit_movz_imm(
                 aarch64::Width::X64,
                 Reg::X9,
                 ErrorCode::UnexpectedEof as u16,
                 0,
             )
-            .expect("movz"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
-                .expect("str"),
-        );
+            .expect("movz");
+        self.emit
+            .emit_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+            .expect("str");
         let error_exit = self.error_exit;
         self.emit.emit_b_label(error_exit).expect("b");
         self.emit.bind_label(past_eof).expect("bind past_eof");
@@ -324,22 +310,20 @@ impl EmitCtx {
     pub fn emit_error(&mut self, code: crate::context::ErrorCode) {
         let error_exit = self.error_exit;
         let error_code = code as u32;
-        self.emit.emit_word(
-            aarch64::encode_movz(aarch64::Width::W32, Reg::X9, error_code as u16, 0).expect("movz"),
-        );
-        self.emit.emit_word(
-            aarch64::encode_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
-                .expect("str"),
-        );
+        self.emit
+            .emit_movz_imm(aarch64::Width::W32, Reg::X9, error_code as u16, 0)
+            .expect("movz");
+        self.emit
+            .emit_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+            .expect("str");
         self.emit.emit_b_label(error_exit).expect("b");
     }
 
     /// Advance the cached cursor by n bytes (inline, no function call).
     pub fn emit_advance_cursor_by(&mut self, n: u32) {
-        self.emit.emit_word(
-            aarch64::encode_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, n as u16, false)
-                .expect("add"),
-        );
+        self.emit
+            .emit_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, n as u16, false)
+            .expect("add");
     }
 
     /// Commit and finalize the assembler, returning the executable buffer.

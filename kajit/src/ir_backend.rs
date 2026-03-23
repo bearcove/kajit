@@ -74,7 +74,8 @@ pub fn compile_linear_ir_with_alloc_and_mode(
     #[cfg(target_arch = "aarch64")]
     {
         let _ = (ir, max_spillslots); // aarch64 backend reads from ra_mir directly
-        crate::backends::aarch64::compile(cfg_program, alloc, apply_regalloc_edits)
+        // TODO: Thread intrinsic_registry through from top-level compile functions
+        crate::backends::aarch64::compile(cfg_program, alloc, apply_regalloc_edits, None)
     }
 }
 

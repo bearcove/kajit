@@ -4,7 +4,7 @@ use super::*;
 use crate::backends::parallel_moves::{MoveEmitter, emit_parallel_moves};
 use kajit_emit::aarch64::{self, Reg};
 
-impl Lowerer {
+impl Lowerer<'_> {
     pub(super) fn emit_edit_move(&mut self, from: Allocation, to: Allocation) {
         if from == to || from.is_none() || to.is_none() {
             return;
@@ -164,7 +164,7 @@ impl Lowerer {
     }
 }
 
-impl MoveEmitter for Lowerer {
+impl MoveEmitter for Lowerer<'_> {
     fn flush_all_vregs(&mut self) {
         Lowerer::flush_all_vregs(self);
     }

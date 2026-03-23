@@ -109,6 +109,19 @@ fn label_ref<'src>() -> impl Parser<'src, &'src str, Label, Extra<'src>> + Clone
     just(".L").ignore_then(uint32()).map(Label).padded_by(ws())
 }
 
+// Parse a symbol name like @kajit_encode_postcard_string
+fn symbol<'src>() -> impl Parser<'src, &'src str, String, Extra<'src>> + Clone {
+    just('@')
+        .ignore_then(
+            any()
+                .filter(|c: &char| c.is_alphanumeric() || *c == '_')
+                .repeated()
+                .at_least(1)
+                .collect::<String>(),
+        )
+        .padded_by(ws())
+}
+
 // Parse memory operand like [x0] or [x0, #16]
 fn memory_operand<'src>() -> impl Parser<'src, &'src str, (Reg, u32), Extra<'src>> + Clone {
     just('[')
@@ -221,6 +234,12 @@ fn instruction<'src>() -> impl Parser<'src, &'src str, Instruction, Extra<'src>>
             imm,
             shift,
         });
+
+    let load_extern = just("load_extern ")
+        .ignore_then(register())
+        .then_ignore(token(","))
+        .then(symbol())
+        .map(|((rd, _width), symbol)| Instruction::LoadExtern { rd, symbol });
 
     // Arithmetic immediate
     let add_imm = just("add ")
@@ -467,6 +486,8 @@ fn instruction<'src>() -> impl Parser<'src, &'src str, Instruction, Extra<'src>>
 
     let branches = choice((b_cond, bl, blr, b, cbz, cbnz, tbz, tbnz));
 
+    let pseudo = load_extern;
+
     let moves = choice((movz, movk, mov));
 
     let arith_imm = choice((add_imm, sub_imm, cmp_imm));
@@ -491,6 +512,7 @@ fn instruction<'src>() -> impl Parser<'src, &'src str, Instruction, Extra<'src>>
     choice((
         simple,
         branches,
+        pseudo,
         moves,
         arith_imm,
         arith_reg,
@@ -523,9 +545,146 @@ pub fn parse_asm(text: &str) -> Result<Program, Vec<Rich<'_, char>>> {
     program().parse(text).into_result()
 }
 
+/// Expand pseudo-instructions (like LoadExtern) into real instructions.
+///
+/// The symbol_resolver function maps symbol names to 64-bit addresses.
+pub fn expand_pseudo_instructions<F>(program: Program, symbol_resolver: F) -> Program
+where
+    F: Fn(&str) -> Option<u64>,
+{
+    let mut expanded_items = Vec::new();
+
+    for item in program.items {
+        match item {
+            Item::Instruction(Instruction::LoadExtern { rd, symbol }) => {
+                let addr = symbol_resolver(&symbol)
+                    .unwrap_or_else(|| panic!("Unknown symbol: {}", symbol));
+
+                // Expand to movz/movk sequence
+                let p0 = (addr & 0xFFFF) as u16;
+                let p1 = ((addr >> 16) & 0xFFFF) as u16;
+                let p2 = ((addr >> 32) & 0xFFFF) as u16;
+                let p3 = ((addr >> 48) & 0xFFFF) as u16;
+
+                expanded_items.push(Item::Instruction(Instruction::MovzImm {
+                    width: Width::X64,
+                    rd,
+                    imm: p0,
+                    shift: 0,
+                }));
+
+                if p1 != 0 {
+                    expanded_items.push(Item::Instruction(Instruction::MovkImm {
+                        width: Width::X64,
+                        rd,
+                        imm: p1,
+                        shift: 16,
+                    }));
+                }
+
+                if p2 != 0 {
+                    expanded_items.push(Item::Instruction(Instruction::MovkImm {
+                        width: Width::X64,
+                        rd,
+                        imm: p2,
+                        shift: 32,
+                    }));
+                }
+
+                if p3 != 0 {
+                    expanded_items.push(Item::Instruction(Instruction::MovkImm {
+                        width: Width::X64,
+                        rd,
+                        imm: p3,
+                        shift: 48,
+                    }));
+                }
+            }
+            other => expanded_items.push(other),
+        }
+    }
+
+    Program {
+        items: expanded_items,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_load_extern() {
+        let asm = "load_extern x16, @test_function\n";
+        let parsed = parse_asm(asm).expect("Failed to parse");
+
+        assert_eq!(parsed.items.len(), 1);
+        match &parsed.items[0] {
+            Item::Instruction(Instruction::LoadExtern { rd, symbol }) => {
+                assert_eq!(*rd, Reg::X16);
+                assert_eq!(symbol, "test_function");
+            }
+            _ => panic!("Expected LoadExtern instruction"),
+        }
+
+        // Test expansion
+        let symbol_resolver = |name: &str| {
+            if name == "test_function" {
+                Some(0x123456789abcdef0)
+            } else {
+                None
+            }
+        };
+
+        let expanded = expand_pseudo_instructions(parsed, symbol_resolver);
+
+        // Should expand to movz + 3 movk instructions (all parts non-zero)
+        assert_eq!(expanded.items.len(), 4);
+
+        // Check movz
+        match &expanded.items[0] {
+            Item::Instruction(Instruction::MovzImm { rd, imm, shift, .. }) => {
+                assert_eq!(*rd, Reg::X16);
+                assert_eq!(*imm, 0xdef0);
+                assert_eq!(*shift, 0);
+            }
+            _ => panic!("Expected MovzImm"),
+        }
+
+        // Check first movk
+        match &expanded.items[1] {
+            Item::Instruction(Instruction::MovkImm { rd, imm, shift, .. }) => {
+                assert_eq!(*rd, Reg::X16);
+                assert_eq!(*imm, 0x9abc);
+                assert_eq!(*shift, 16);
+            }
+            _ => panic!("Expected MovkImm"),
+        }
+    }
+
+    #[test]
+    fn test_load_extern_display() {
+        let prog = Program {
+            items: vec![Item::Instruction(Instruction::LoadExtern {
+                rd: Reg::X16,
+                symbol: "my_function".to_string(),
+            })],
+        };
+
+        let formatted = format!("{}", prog);
+        assert_eq!(formatted.trim(), "load_extern x16, @my_function");
+
+        // Round-trip test
+        let parsed = parse_asm(&formatted).expect("Failed to parse formatted output");
+        assert_eq!(parsed.items.len(), 1);
+        match &parsed.items[0] {
+            Item::Instruction(Instruction::LoadExtern { rd, symbol }) => {
+                assert_eq!(*rd, Reg::X16);
+                assert_eq!(symbol, "my_function");
+            }
+            _ => panic!("Expected LoadExtern instruction"),
+        }
+    }
 
     #[test]
     fn parse_label() {

@@ -62,7 +62,7 @@ pub(crate) struct MaskedValueInfo {
     pub(crate) bit: u8,
 }
 
-pub(crate) struct Lowerer {
+pub(crate) struct Lowerer<'a> {
     pub(crate) ectx: EmitCtx,
     pub(crate) block_labels: BTreeMap<(u32, u32), LabelId>,
     pub(crate) lambda_labels: Vec<LabelId>,
@@ -89,6 +89,7 @@ pub(crate) struct Lowerer {
     pub(crate) no_edit_edge_tmp_base: u32,
     pub(crate) edge_args_by_lambda: BTreeMap<u32, BTreeMap<cfg_mir::EdgeId, Vec<cfg_mir::EdgeArg>>>,
     pub(crate) backend_debug_info: BackendDebugInfo,
+    pub(crate) intrinsic_registry: Option<&'a crate::ir::IntrinsicRegistry>,
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +104,7 @@ pub fn compile(
     program: &cfg_mir::Program,
     alloc: &AllocatedCfgProgram,
     apply_regalloc_edits: bool,
+    intrinsic_registry: Option<&crate::ir::IntrinsicRegistry>,
 ) -> LinearBackendResult {
     let max_spillslots = alloc
         .functions
@@ -111,7 +113,14 @@ pub fn compile(
         .max()
         .unwrap_or(0);
 
-    Lowerer::new(program, max_spillslots, alloc, apply_regalloc_edits).run(program)
+    Lowerer::new(
+        program,
+        max_spillslots,
+        alloc,
+        apply_regalloc_edits,
+        intrinsic_registry,
+    )
+    .run(program)
 }
 
 fn build_debug_line_maps(
@@ -144,7 +153,7 @@ fn build_debug_line_maps(
     (line_by_lambda_op, first_line_by_lambda)
 }
 
-impl Lowerer {
+impl Lowerer<'_> {
     fn max_edge_move_count(
         program: &cfg_mir::Program,
         alloc: &AllocatedCfgProgram,
@@ -279,12 +288,13 @@ impl Lowerer {
         max_pair.map_or(0, |p| p + 1)
     }
 
-    fn new(
+    fn new<'a>(
         program: &cfg_mir::Program,
         max_spillslots: usize,
         alloc: &AllocatedCfgProgram,
         apply_regalloc_edits: bool,
-    ) -> Self {
+        intrinsic_registry: Option<&'a crate::ir::IntrinsicRegistry>,
+    ) -> Lowerer<'a> {
         let no_edit_mode = !apply_regalloc_edits;
         let required_spillslots = if no_edit_mode {
             max_spillslots.max(program.vreg_count as usize)
@@ -391,7 +401,7 @@ impl Lowerer {
                 allocs_entry.insert(*op_id, inst_allocs.clone());
             }
         }
-        Self {
+        Lowerer {
             ectx,
             block_labels,
             lambda_labels,
@@ -416,6 +426,7 @@ impl Lowerer {
             no_edit_edge_tmp_base,
             edge_args_by_lambda,
             backend_debug_info: BackendDebugInfo::default(),
+            intrinsic_registry,
         }
     }
 

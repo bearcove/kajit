@@ -264,6 +264,20 @@ pub enum Instruction {
         rn: Reg,
         offset: u32,
     },
+    Stp {
+        width: Width,
+        rt1: Reg,
+        rt2: Reg,
+        rn: Reg,
+        offset: i16,
+    },
+    Ldp {
+        width: Width,
+        rt1: Reg,
+        rt2: Reg,
+        rn: Reg,
+        offset: i16,
+    },
 
     // Sign extend
     Sxtb {
@@ -315,6 +329,12 @@ pub enum Instruction {
     BCond {
         cond: Condition,
         target: Label,
+    },
+
+    // Pseudo-instructions (expanded during parsing/emission)
+    LoadExtern {
+        rd: Reg,
+        symbol: String,
     },
 
     // Special
@@ -668,6 +688,58 @@ impl std::fmt::Display for Instruction {
                     )
                 }
             }
+            Instruction::Stp {
+                width,
+                rt1,
+                rt2,
+                rn,
+                offset,
+            } => {
+                if *offset == 0 {
+                    write!(
+                        f,
+                        "stp {}, {}, [{}]",
+                        reg_name(*rt1, *width),
+                        reg_name(*rt2, *width),
+                        reg_name(*rn, Width::X64)
+                    )
+                } else {
+                    write!(
+                        f,
+                        "stp {}, {}, [{}, #{}]",
+                        reg_name(*rt1, *width),
+                        reg_name(*rt2, *width),
+                        reg_name(*rn, Width::X64),
+                        offset
+                    )
+                }
+            }
+            Instruction::Ldp {
+                width,
+                rt1,
+                rt2,
+                rn,
+                offset,
+            } => {
+                if *offset == 0 {
+                    write!(
+                        f,
+                        "ldp {}, {}, [{}]",
+                        reg_name(*rt1, *width),
+                        reg_name(*rt2, *width),
+                        reg_name(*rn, Width::X64)
+                    )
+                } else {
+                    write!(
+                        f,
+                        "ldp {}, {}, [{}, #{}]",
+                        reg_name(*rt1, *width),
+                        reg_name(*rt2, *width),
+                        reg_name(*rn, Width::X64),
+                        offset
+                    )
+                }
+            }
 
             // Sign extend
             Instruction::Sxtb { width, rd, rn } => {
@@ -720,6 +792,11 @@ impl std::fmt::Display for Instruction {
             }
             Instruction::BCond { cond, target } => {
                 write!(f, "b.{} {}", cond_name(*cond), target)
+            }
+
+            // Pseudo-instructions
+            Instruction::LoadExtern { rd, symbol } => {
+                write!(f, "load_extern {}, @{}", reg_name(*rd, Width::X64), symbol)
             }
 
             // Special

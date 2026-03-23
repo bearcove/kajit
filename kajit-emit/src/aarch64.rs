@@ -434,7 +434,7 @@ impl Emitter {
         Ok(())
     }
 
-    pub fn emit_word(&mut self, word: u32) {
+    pub(crate) fn emit_word(&mut self, word: u32) {
         self.maybe_record_source_map();
         self.buf.extend_from_slice(&word.to_le_bytes());
     }
@@ -906,6 +906,73 @@ impl Emitter {
     pub fn emit_sxtw(&mut self, rd: Reg, rn: Reg) -> Result<(), EmitError> {
         self.capture(crate::aarch64_asm::Instruction::Sxtw { rd, rn });
         self.emit_word(encode_sxtw(rd, rn)?);
+        Ok(())
+    }
+
+    pub fn emit_stp(
+        &mut self,
+        width: Width,
+        rt1: Reg,
+        rt2: Reg,
+        rn: Reg,
+        offset: i16,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Stp {
+            width,
+            rt1,
+            rt2,
+            rn,
+            offset,
+        });
+        self.emit_word(encode_stp(width, rt1, rt2, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_ldp(
+        &mut self,
+        width: Width,
+        rt1: Reg,
+        rt2: Reg,
+        rn: Reg,
+        offset: i16,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Ldp {
+            width,
+            rt1,
+            rt2,
+            rn,
+            offset,
+        });
+        self.emit_word(encode_ldp(width, rt1, rt2, rn, offset)?);
+        Ok(())
+    }
+
+    pub fn emit_load_extern(
+        &mut self,
+        rd: Reg,
+        symbol: String,
+        addr: u64,
+    ) -> Result<(), EmitError> {
+        // Capture the symbolic LoadExtern instruction
+        self.capture(crate::aarch64_asm::Instruction::LoadExtern { rd, symbol });
+
+        // Emit the actual movz/movk sequence
+        let p0 = (addr & 0xFFFF) as u16;
+        let p1 = ((addr >> 16) & 0xFFFF) as u16;
+        let p2 = ((addr >> 32) & 0xFFFF) as u16;
+        let p3 = ((addr >> 48) & 0xFFFF) as u16;
+
+        self.emit_word(encode_movz(Width::X64, rd, p0, 0)?);
+        if p1 != 0 {
+            self.emit_word(encode_movk(Width::X64, rd, p1, 16)?);
+        }
+        if p2 != 0 {
+            self.emit_word(encode_movk(Width::X64, rd, p2, 32)?);
+        }
+        if p3 != 0 {
+            self.emit_word(encode_movk(Width::X64, rd, p3, 48)?);
+        }
+
         Ok(())
     }
 

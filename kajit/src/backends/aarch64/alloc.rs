@@ -3,7 +3,7 @@
 use super::*;
 use kajit_emit::aarch64::{self, Reg};
 
-impl Lowerer {
+impl Lowerer<'_> {
     fn scratch_reg_avoiding(&self, a: Reg, b: Option<Reg>) -> Reg {
         for reg in [Reg::X9, Reg::X10, Reg::X16] {
             if reg != a && Some(reg) != b {

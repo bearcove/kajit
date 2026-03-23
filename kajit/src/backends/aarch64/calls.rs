@@ -5,7 +5,7 @@ use crate::backends::parallel_moves::emit_parallel_moves;
 use kajit_emit::aarch64::{self, Reg};
 use regalloc2::{Allocation, PReg, RegClass};
 
-impl Lowerer {
+impl Lowerer<'_> {
     fn emit_set_abi_out_field_arg(&mut self, abi_arg: u8, offset: u32) {
         match abi_arg {
             1 => self
@@ -70,6 +70,7 @@ impl Lowerer {
     pub(super) fn emit_call_intrinsic_with_args(
         &mut self,
         fn_ptr: *const u8,
+        symbol: Option<&str>,
         args: &[IntrinsicArg],
     ) {
         use crate::context::{CTX_ERROR_CODE, CTX_INPUT_PTR};
@@ -99,32 +100,41 @@ impl Lowerer {
             .emit_mov_reg(aarch64::Width::X64, Reg::X0, Reg::X22)
             .expect("mov");
 
-        let ptr = fn_ptr as u64;
-        let p0 = (ptr & 0xFFFF) as u32;
-        let p1 = ((ptr >> 16) & 0xFFFF) as u32;
-        let p2 = ((ptr >> 32) & 0xFFFF) as u32;
-        let p3 = ((ptr >> 48) & 0xFFFF) as u32;
-        self.ectx
-            .emit
-            .emit_movz_imm(aarch64::Width::X64, Reg::X16, p0 as u16, 0)
-            .expect("movz");
-        if p1 != 0 {
+        let addr = fn_ptr as u64;
+        if let Some(sym) = symbol {
+            // Use symbolic load_extern for better hand-optimization
             self.ectx
                 .emit
-                .emit_movk_imm(aarch64::Width::X64, Reg::X16, p1 as u16, 16)
-                .expect("movk");
-        }
-        if p2 != 0 {
+                .emit_load_extern(Reg::X16, sym.to_string(), addr)
+                .expect("load_extern");
+        } else {
+            // Fallback to raw movz/movk if no symbol name available
+            let p0 = (addr & 0xFFFF) as u32;
+            let p1 = ((addr >> 16) & 0xFFFF) as u32;
+            let p2 = ((addr >> 32) & 0xFFFF) as u32;
+            let p3 = ((addr >> 48) & 0xFFFF) as u32;
             self.ectx
                 .emit
-                .emit_movk_imm(aarch64::Width::X64, Reg::X16, p2 as u16, 32)
-                .expect("movk");
-        }
-        if p3 != 0 {
-            self.ectx
-                .emit
-                .emit_movk_imm(aarch64::Width::X64, Reg::X16, p3 as u16, 48)
-                .expect("movk");
+                .emit_movz_imm(aarch64::Width::X64, Reg::X16, p0 as u16, 0)
+                .expect("movz");
+            if p1 != 0 {
+                self.ectx
+                    .emit
+                    .emit_movk_imm(aarch64::Width::X64, Reg::X16, p1 as u16, 16)
+                    .expect("movk");
+            }
+            if p2 != 0 {
+                self.ectx
+                    .emit
+                    .emit_movk_imm(aarch64::Width::X64, Reg::X16, p2 as u16, 32)
+                    .expect("movk");
+            }
+            if p3 != 0 {
+                self.ectx
+                    .emit
+                    .emit_movk_imm(aarch64::Width::X64, Reg::X16, p3 as u16, 48)
+                    .expect("movk");
+            }
         }
         self.ectx.emit.emit_blr(Reg::X16).expect("blr");
 
@@ -151,6 +161,9 @@ impl Lowerer {
         field_offset: u32,
     ) {
         let fn_ptr = func.0 as *const u8;
+        let symbol = self
+            .intrinsic_registry
+            .and_then(|reg: &crate::ir::IntrinsicRegistry| reg.name_of(func));
         match dst {
             Some(dst) => {
                 let dst_operand_index = args.len();
@@ -160,7 +173,7 @@ impl Lowerer {
                     .enumerate()
                     .map(|(i, _vreg)| IntrinsicArg::VReg { operand_index: i })
                     .collect();
-                self.emit_call_intrinsic_with_args(fn_ptr, &call_args);
+                self.emit_call_intrinsic_with_args(fn_ptr, symbol, &call_args);
                 self.ectx
                     .emit
                     .emit_mov_reg(aarch64::Width::X64, Reg::X9, Reg::X0)
@@ -175,7 +188,7 @@ impl Lowerer {
                     .map(|(i, _vreg)| IntrinsicArg::VReg { operand_index: i })
                     .collect();
                 call_args.push(IntrinsicArg::OutField(field_offset));
-                self.emit_call_intrinsic_with_args(fn_ptr, &call_args);
+                self.emit_call_intrinsic_with_args(fn_ptr, symbol, &call_args);
             }
         }
     }
