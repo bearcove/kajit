@@ -26,8 +26,21 @@ pub(crate) fn emit_parallel_moves<E: MoveEmitter>(
         return;
     }
 
-    // Parallel-move semantics: read all sources first, then write all destinations.
+    // Check if any destination is also used as a source (cycle detection).
+    // If no cycles, we can emit direct moves without temporaries.
+    let has_cycle = filtered
+        .iter()
+        .any(|(_, to)| filtered.iter().any(|(from, _)| from == to));
+
     emitter.flush_all_vregs();
+    if !has_cycle {
+        for &(from, to) in &filtered {
+            emitter.emit_move(from, to);
+        }
+        return;
+    }
+
+    // Parallel-move semantics: read all sources first, then write all destinations.
     for (index, (from, _)) in filtered.iter().copied().enumerate() {
         emitter.save_move_src_to_tmp(index, from);
     }

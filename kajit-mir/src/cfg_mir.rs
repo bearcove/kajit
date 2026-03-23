@@ -2574,6 +2574,15 @@ fn copy_propagation_in_function(func: &mut Function) {
             }
             _ => {}
         }
+
+        // Rewrite edge arg sources for edges originating from this block.
+        // Edge args are conceptually "used" at the terminator point.
+        for &edge_id in &block.succs {
+            let edge = &mut func.edges[edge_id.index()];
+            for arg in &mut edge.args {
+                arg.source = get_canonical_at(arg.source, term_use_idx);
+            }
+        }
     }
 }
 
