@@ -43,7 +43,7 @@ pub mod liveness;
 pub mod machine_inst;
 pub mod parallel_copy;
 pub mod progpoint;
+pub mod spill_rewrite;
 
 // Future modules (not yet implemented):
-// mod spill_rewrite;
 // mod verify;
