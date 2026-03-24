@@ -77,7 +77,7 @@ pub fn insert_phi_copies(func: &mut Function, temp_vreg: VReg) {
 /// Strategy:
 /// - Find the block where these copies should go (copy block or predecessor)
 /// - Insert Copy instructions before the terminator
-fn insert_moves_on_edge(func: &mut Function, edge_id: EdgeId, moves: &[MoveOp]) {
+pub fn insert_moves_on_edge(func: &mut Function, edge_id: EdgeId, moves: &[MoveOp]) {
     let edge = &func.edges[edge_id.index()];
     let pred_block_id = edge.from;
 

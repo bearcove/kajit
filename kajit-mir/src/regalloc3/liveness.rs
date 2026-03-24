@@ -310,18 +310,14 @@ impl<'a> LivenessAnalyzer<'a> {
             // Sort and merge overlapping segments
             segments.sort_by_key(|&(start, _)| start);
 
-            // Merge adjacent/overlapping segments
-            let mut merged = Vec::new();
-            for (start, end) in segments {
-                if let Some(&mut (_, ref mut prev_end)) = merged.last_mut() {
-                    if start <= *prev_end {
-                        // Overlapping, extend previous segment
-                        *prev_end = end.max(*prev_end);
-                        continue;
-                    }
-                }
-                merged.push((start, end));
-            }
+            // Merge all segments into one contiguous interval (min start, max end).
+            // In SSA form without phi copies, vregs live across block boundaries
+            // have segments in non-adjacent prog point ranges (especially across
+            // back-edges where the successor has lower prog points than the
+            // predecessor). A single contiguous interval is conservative but correct.
+            let min_start = segments.iter().map(|s| s.0).min().unwrap();
+            let max_end = segments.iter().map(|s| s.1).max().unwrap();
+            let merged = vec![(min_start, max_end)];
 
             let uses = use_points.get(&vreg).cloned().unwrap_or_default();
             live_intervals.insert(

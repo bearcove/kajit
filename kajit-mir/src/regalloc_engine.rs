@@ -1372,14 +1372,12 @@ pub fn allocate_cfg_program_regalloc3_native(
     let mut modified_funcs = Vec::with_capacity(program.funcs.len());
 
     for func in &program.funcs {
-        // Clone function for modification (phi copies)
         let mut func_mut = func.clone();
 
-        // Insert phi resolution copies
-        let temp_vreg = kajit_ir::VReg::new(program.vreg_count);
-        phi_resolution::insert_phi_copies(&mut func_mut, temp_vreg);
-
-        // Run regalloc3 pipeline
+        // SSA-first allocation: do NOT insert phi copies before RA.
+        // Instead, build copy hints from edge args so the allocator prefers
+        // to assign the same register to both sides of each phi connection.
+        // Phi copies are inserted AFTER allocation, only where needed.
         let copy_hints = linear_scan::CopyHints::build(&func_mut);
         let progpoints = progpoint::ProgPointMap::build(&func_mut);
         let liveness = liveness::compute_liveness(&func_mut, &progpoints);
@@ -1392,6 +1390,16 @@ pub fn allocate_cfg_program_regalloc3_native(
             }
         }
         let alloc_result = linear_scan::allocate(liveness, abi, scratch, &hints, &copy_hints);
+
+        // SSA destruction: insert copies for phi edges.
+        // TODO: use insert_phi_copies_with_coalescing to skip coalesced copies
+        let temp_vreg = kajit_ir::VReg::new(program.vreg_count);
+        let force_all_copies = std::env::var("KAJIT_NO_COALESCE").is_ok();
+        if force_all_copies {
+            phi_resolution::insert_phi_copies(&mut func_mut, temp_vreg);
+        } else {
+            insert_phi_copies_with_coalescing(&mut func_mut, &alloc_result, temp_vreg);
+        }
 
         // Assign spill slots
         let mut spill_slots = HashMap::new();
@@ -1435,6 +1443,64 @@ pub fn allocate_cfg_program_regalloc3_native(
         cfg_program: modified_program,
         functions,
     })
+}
+
+/// Insert phi copies AFTER register allocation, skipping copies where
+/// the allocator already assigned the same physical register to both sides.
+///
+/// This is SSA destruction with coalescing: edge args that got the same
+/// register need no copy, edge args that got different registers (or
+/// involve spilled values) need explicit Copy instructions.
+/// Insert phi copies AFTER register allocation, skipping copies where
+/// the allocator already assigned the same physical register to both sides.
+fn insert_phi_copies_with_coalescing(
+    func: &mut cfg_mir::Function,
+    alloc_result: &crate::regalloc3::linear_scan::AllocationResult,
+    temp_vreg: kajit_ir::VReg,
+) {
+    use crate::regalloc3::linear_scan::Allocation as Ra3Alloc;
+    use crate::regalloc3::parallel_copy::{Copy, ParallelCopyResolver};
+
+    for edge_idx in 0..func.edges.len() {
+        let edge_id = cfg_mir::EdgeId(edge_idx as u32);
+        let edge = &func.edges[edge_idx];
+
+        if edge.args.is_empty() {
+            continue;
+        }
+
+        // Build parallel copies, but SKIP coalesced pairs (same register)
+        let copies: Vec<Copy> = edge
+            .args
+            .iter()
+            .filter(|arg| {
+                if arg.target == arg.source {
+                    return false; // identity
+                }
+                // Check if both sides got the same physical register
+                let target_alloc = alloc_result.allocations.get(&arg.target);
+                let source_alloc = alloc_result.allocations.get(&arg.source);
+                match (target_alloc, source_alloc) {
+                    (Some(Ra3Alloc::Reg(t)), Some(Ra3Alloc::Reg(s))) if t == s => {
+                        false // coalesced! no copy needed
+                    }
+                    _ => true, // different registers or spilled, need copy
+                }
+            })
+            .map(|arg| Copy {
+                dst: arg.target,
+                src: arg.source,
+            })
+            .collect();
+
+        if copies.is_empty() {
+            continue;
+        }
+
+        let resolver = ParallelCopyResolver::new(copies);
+        let moves = resolver.resolve(temp_vreg);
+        crate::regalloc3::phi_resolution::insert_moves_on_edge(func, edge_id, &moves);
+    }
 }
 
 const MAX_SIM_STEPS: usize = 1_000_000;

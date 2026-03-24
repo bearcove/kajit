@@ -49,10 +49,25 @@ pub struct CopyHints {
 }
 
 impl CopyHints {
-    /// Build copy hints from Copy instructions in the function.
+    /// Build copy hints from edge args (phi connections) in the function.
+    ///
+    /// Each edge arg `target => source` means the target block param should
+    /// prefer the same register as the source vreg. This enables phi copy
+    /// elimination — if both sides get the same register, no copy is needed.
     pub fn build(func: &Function) -> Self {
         let mut partners: HashMap<VReg, Vec<VReg>> = HashMap::new();
 
+        // Hints from edge args (phi connections)
+        for edge in &func.edges {
+            for arg in &edge.args {
+                if arg.target != arg.source {
+                    partners.entry(arg.target).or_default().push(arg.source);
+                    partners.entry(arg.source).or_default().push(arg.target);
+                }
+            }
+        }
+
+        // Also pick up explicit Copy instructions (if any remain)
         for inst in &func.insts {
             if let LinearOp::Copy { dst, src } = &inst.op {
                 if dst != src {
