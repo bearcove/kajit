@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod cfg_mir;
 pub mod opt;
+pub mod regalloc3;
 
 mod debug_cli;
 mod debugger;

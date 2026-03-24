@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use kajit_ir::VReg;
 
-use crate::cfg_mir::{BlockId, EdgeArg, Function};
+use crate::cfg_mir::{BlockId, Function};
 
 /// Value lattice for dataflow analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,6 +389,8 @@ fn replace_vregs_in_function(func: &mut Function, replacements: &HashMap<VReg, V
         return;
     }
 
+    let debug = std::env::var("KAJIT_DEBUG_CONST_PHI").is_ok();
+
     // Replace in instructions
     for block in &func.blocks {
         for &inst_id in &block.insts {
@@ -397,9 +399,21 @@ fn replace_vregs_in_function(func: &mut Function, replacements: &HashMap<VReg, V
             // Replace in operands
             for operand in &mut inst.operands {
                 if let Some(&replacement) = replacements.get(&operand.vreg) {
+                    if debug {
+                        eprintln!(
+                            "[const_phi]   inst i{}: operand {:?} v{} → v{}",
+                            inst_id.0,
+                            operand.kind,
+                            operand.vreg.index(),
+                            replacement.index()
+                        );
+                    }
                     operand.vreg = replacement;
                 }
             }
+
+            // Replace in LinearOp itself
+            replace_vregs_in_linear_op(&mut inst.op, replacements);
         }
     }
 
@@ -428,6 +442,148 @@ fn replace_vregs_in_function(func: &mut Function, replacements: &HashMap<VReg, V
                 arg.source = replacement;
             }
             // Note: we don't replace arg.target because that's the param being eliminated
+        }
+    }
+}
+
+/// Replace vregs inside a LinearOp.
+fn replace_vregs_in_linear_op(op: &mut kajit_lir::LinearOp, replacements: &HashMap<VReg, VReg>) {
+    use kajit_lir::LinearOp::*;
+
+    let debug = std::env::var("KAJIT_DEBUG_CONST_PHI").is_ok();
+
+    let replace = |v: &mut VReg| {
+        if let Some(&replacement) = replacements.get(v) {
+            if debug {
+                eprintln!(
+                    "[const_phi]     LinearOp v{} → v{}",
+                    v.index(),
+                    replacement.index()
+                );
+            }
+            *v = replacement;
+        }
+    };
+
+    let replace_opt = |v: &mut Option<VReg>| {
+        if let Some(vreg) = v {
+            replace(vreg);
+        }
+    };
+
+    let replace_vec = |v: &mut Vec<VReg>| {
+        for vreg in v {
+            replace(vreg);
+        }
+    };
+
+    let replace_phi = |args: &mut Vec<(VReg, VReg)>| {
+        for (src, dst) in args {
+            replace(src);
+            replace(dst);
+        }
+    };
+
+    match op {
+        // Values
+        Const { dst, .. } => replace(dst),
+        BinOp { dst, lhs, rhs, .. } => {
+            replace(dst);
+            replace(lhs);
+            replace(rhs);
+        }
+        UnaryOp { dst, src, .. } => {
+            replace(dst);
+            replace(src);
+        }
+        Copy { dst, src } => {
+            replace(dst);
+            replace(src);
+        }
+
+        // Cursor
+        BoundsCheck { .. } | AdvanceCursor { .. } => {}
+        ReadBytes { dst, .. } => replace(dst),
+        PeekByte { dst } => replace(dst),
+        AdvanceCursorBy { src } => replace(src),
+        SaveCursor { dst } => replace(dst),
+        SaveInputEnd { dst } => replace(dst),
+        RestoreCursor { src } => replace(src),
+
+        // Output
+        WriteToField { src, .. } => replace(src),
+        ReadFromField { dst, .. } => replace(dst),
+        SaveOutPtr { dst } => replace(dst),
+        SetOutPtr { src } => replace(src),
+
+        // Stack
+        SlotAddr { dst, .. } => replace(dst),
+        StoreToAddr { addr, src, .. } => {
+            replace(addr);
+            replace(src);
+        }
+        LoadFromAddr { dst, addr, .. } => {
+            replace(dst);
+            replace(addr);
+        }
+        WriteToSlot { src, .. } => replace(src),
+        ReadFromSlot { dst, .. } => replace(dst),
+
+        // Calls
+        CallIntrinsic { args, dst, .. } => {
+            replace_vec(args);
+            replace_opt(dst);
+        }
+        CallPure { args, dst, .. } => {
+            replace_vec(args);
+            replace(dst);
+        }
+
+        // Control flow (no vregs in Label/ErrorExit)
+        Label(_) | ErrorExit { .. } => {}
+        Branch { phi_args, .. } => replace_phi(phi_args),
+        BranchIf {
+            cond,
+            phi_args,
+            fallthrough_phi_args,
+            ..
+        } => {
+            replace(cond);
+            replace_phi(phi_args);
+            replace_phi(fallthrough_phi_args);
+        }
+        BranchIfZero {
+            cond,
+            phi_args,
+            fallthrough_phi_args,
+            ..
+        } => {
+            replace(cond);
+            replace_phi(phi_args);
+            replace_phi(fallthrough_phi_args);
+        }
+        JumpTable { predicate, .. } => replace(predicate),
+
+        // SIMD
+        SimdStringScan { pos, kind } => {
+            replace(pos);
+            replace(kind);
+        }
+        SimdWhitespaceSkip => {}
+
+        // Function structure
+        FuncStart {
+            data_args,
+            data_results,
+            ..
+        } => {
+            replace_vec(data_args);
+            replace_vec(data_results);
+        }
+        FuncEnd => {}
+        CallLambda { args, results, .. } => {
+            replace_vec(args);
+            replace_vec(results);
         }
     }
 }

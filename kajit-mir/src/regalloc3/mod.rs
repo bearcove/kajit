@@ -1,0 +1,48 @@
+//! regalloc3: Native register allocator for CFG-MIR
+//!
+//! This module implements a simple, correct register allocator that works
+//! directly on our CFG-MIR without an adapter layer.
+//!
+//! ## Design Principles
+//!
+//! 1. **Simple over sophisticated** - Linear scan, not graph coloring
+//! 2. **Correct over optimal** - First goal is removing adapter bugs
+//! 3. **One canonical operand model** - No decomposed trait methods
+//! 4. **Whole-interval allocation** - One home per vreg (no splitting in v1)
+//! 5. **Explicit contracts** - ABI, scratch registers, entry/exit semantics
+//!
+//! ## Phase 1 Scope (v1)
+//!
+//! - GPR only (no SIMD)
+//! - Whole-interval allocation (no live-range splitting)
+//! - No coalescing (copies are fine)
+//! - No rematerialization (spill everything)
+//! - No RVSDG hints (allocate dumbly)
+//!
+//! ## Architecture
+//!
+//! ```text
+//! CFG-MIR (stable IDs)
+//!   ↓
+//! Program points (dense ordering derived per-function)
+//!   ↓
+//! Liveness analysis (with holes, includes block params)
+//!   ↓
+//! Linear scan allocation (one register class)
+//!   ↓
+//! Spill/reload insertion (rewrite-once with scratch temps)
+//!   ↓
+//! Symbolic verification (location flow)
+//!   ↓
+//! Backend emission (with physical registers)
+//! ```
+
+pub mod machine_inst;
+
+// Future modules (not yet implemented):
+// mod progpoint;
+// mod liveness;
+// mod linear_scan;
+// mod parallel_copy;
+// mod spill_rewrite;
+// mod verify;
