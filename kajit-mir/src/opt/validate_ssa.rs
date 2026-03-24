@@ -91,6 +91,13 @@ pub enum SsaError {
         inst_index: usize,
     },
 
+    /// A vreg is defined multiple times (violates SSA)
+    MultipleDefs {
+        vreg: VReg,
+        first_def_block: BlockId,
+        second_def_block: BlockId,
+    },
+
     /// Edge argument count doesn't match target block parameter count
     PhiArgCountMismatch {
         edge: EdgeId,
@@ -175,6 +182,19 @@ impl std::fmt::Display for SsaError {
                     expected_param.index()
                 )
             }
+            SsaError::MultipleDefs {
+                vreg,
+                first_def_block,
+                second_def_block,
+            } => {
+                write!(
+                    f,
+                    "vreg {} defined multiple times: first in b{}, second in b{}",
+                    vreg.index(),
+                    first_def_block.index(),
+                    second_def_block.index()
+                )
+            }
         }
     }
 }
@@ -190,8 +210,9 @@ impl std::fmt::Display for SsaError {
 pub fn validate_ssa(func: &Function) -> Result<(), Vec<SsaError>> {
     let mut errors = Vec::new();
 
-    // Step 1: Build def map (vreg -> defining block)
-    let def_map = build_def_map(func);
+    // Step 1: Build def map (vreg -> defining block) and detect multiple defs
+    let (def_map, mut def_errors) = build_def_map(func);
+    errors.append(&mut def_errors);
 
     // Debug: check if we're tracking vreg 89
     if std::env::var("KAJIT_DEBUG_VREG_89").is_ok() {
@@ -219,13 +240,23 @@ pub fn validate_ssa(func: &Function) -> Result<(), Vec<SsaError>> {
 }
 
 /// Build a map from vreg to the block that defines it.
-fn build_def_map(func: &Function) -> HashMap<VReg, BlockId> {
+/// Returns (def_map, errors) where errors contains MultipleDefs violations.
+fn build_def_map(func: &Function) -> (HashMap<VReg, BlockId>, Vec<SsaError>) {
     let mut def_map = HashMap::new();
+    let mut errors = Vec::new();
 
     // Function arguments are definitions
     for &arg in &func.data_args {
         // Function args are considered to be defined at entry
-        def_map.insert(arg, func.entry);
+        if let Some(&first_def_block) = def_map.get(&arg) {
+            errors.push(SsaError::MultipleDefs {
+                vreg: arg,
+                first_def_block,
+                second_def_block: func.entry,
+            });
+        } else {
+            def_map.insert(arg, func.entry);
+        }
     }
 
     for block in &func.blocks {
@@ -236,7 +267,15 @@ fn build_def_map(func: &Function) -> HashMap<VReg, BlockId> {
 
         // Block parameters are definitions
         for &param in &block.params {
-            def_map.insert(param, block.id);
+            if let Some(&first_def_block) = def_map.get(&param) {
+                errors.push(SsaError::MultipleDefs {
+                    vreg: param,
+                    first_def_block,
+                    second_def_block: block.id,
+                });
+            } else {
+                def_map.insert(param, block.id);
+            }
         }
 
         // Instruction defs
@@ -244,12 +283,20 @@ fn build_def_map(func: &Function) -> HashMap<VReg, BlockId> {
             let inst = &func.insts[inst_id.index()];
             // Look for Def operands
             if let Some(dst) = inst.op.dst() {
-                def_map.insert(dst, block.id);
+                if let Some(&first_def_block) = def_map.get(&dst) {
+                    errors.push(SsaError::MultipleDefs {
+                        vreg: dst,
+                        first_def_block,
+                        second_def_block: block.id,
+                    });
+                } else {
+                    def_map.insert(dst, block.id);
+                }
             }
         }
     }
 
-    def_map
+    (def_map, errors)
 }
 
 /// Check that all vreg uses are valid (defined and dominated).

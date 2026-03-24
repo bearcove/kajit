@@ -2332,87 +2332,91 @@ fn rematerialize_constants_in_function(
         }
     }
 
-    // Phase 2: Rematerialize constants used directly across blocks (not via params).
+    // Phase 2: DISABLED - this phase created multiple defs which violate SSA.
+    // TODO: Reimplement by allocating fresh vregs and updating uses.
+    // The idea was: Rematerialize constants used directly across blocks (not via params).
     // For each non-entry block, find uses of vregs that are:
     // - Known constants (in const_values)
     // - NOT defined BEFORE this use in the block (respecting program order)
     // Insert a local Const instruction at block start for each such vreg.
-    // Since allow_multiple_vreg_defs() is true, this creates a valid multi-def pattern.
-    for block_idx in 0..func.blocks.len() {
-        let block = &func.blocks[block_idx];
-        if block.id == func.entry {
-            continue;
-        }
+    // But the old implementation reused the same vreg, creating multiple defs.
+    if false {
+        for block_idx in 0..func.blocks.len() {
+            let block = &func.blocks[block_idx];
+            if block.id == func.entry {
+                continue;
+            }
 
-        // Process instructions in order, tracking defs as we go
-        // Block params are defined at entry
-        let mut defs_so_far: HashSet<VReg> = block.params.iter().copied().collect();
-        let mut consts_to_insert: HashSet<VReg> = HashSet::new();
+            // Process instructions in order, tracking defs as we go
+            // Block params are defined at entry
+            let mut defs_so_far: HashSet<VReg> = block.params.iter().copied().collect();
+            let mut consts_to_insert: HashSet<VReg> = HashSet::new();
 
-        for &inst_id in &block.insts {
-            let inst = &func.insts[inst_id.index()];
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id.index()];
 
-            // First check uses (before adding this inst's defs)
-            for op in &inst.operands {
-                if op.kind == OperandKind::Use
-                    && !defs_so_far.contains(&op.vreg)
-                    && const_values.contains_key(&op.vreg)
-                {
-                    consts_to_insert.insert(op.vreg);
+                // First check uses (before adding this inst's defs)
+                for op in &inst.operands {
+                    if op.kind == OperandKind::Use
+                        && !defs_so_far.contains(&op.vreg)
+                        && const_values.contains_key(&op.vreg)
+                    {
+                        consts_to_insert.insert(op.vreg);
+                    }
+                }
+
+                // Then add this instruction's defs
+                for op in &inst.operands {
+                    if op.kind == OperandKind::Def {
+                        defs_so_far.insert(op.vreg);
+                    }
                 }
             }
 
-            // Then add this instruction's defs
-            for op in &inst.operands {
-                if op.kind == OperandKind::Def {
-                    defs_so_far.insert(op.vreg);
-                }
+            if consts_to_insert.is_empty() {
+                continue;
+            }
+
+            if debug {
+                eprintln!(
+                    "[remat] b{}: inserting {} local consts for cross-block uses",
+                    block.id.0,
+                    consts_to_insert.len()
+                );
+            }
+
+            // Insert Const instructions at block start (in stable order)
+            let mut sorted_consts: Vec<_> = consts_to_insert.into_iter().collect();
+            sorted_consts.sort_by_key(|v| v.index());
+
+            let mut new_insts = Vec::new();
+            for vreg in sorted_consts {
+                let const_val = const_values[&vreg];
+                let inst_id = InstId(func.insts.len() as u32);
+                func.insts.push(Inst {
+                    id: inst_id,
+                    op: LinearOp::Const {
+                        dst: vreg,
+                        value: const_val,
+                    },
+                    operands: vec![Operand {
+                        vreg,
+                        kind: OperandKind::Def,
+                        class: RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: Clobbers::default(),
+                });
+                new_insts.push(inst_id);
+            }
+
+            // Insert at block start
+            let block = &mut func.blocks[block_idx];
+            for inst_id in new_insts.into_iter().rev() {
+                block.insts.insert(0, inst_id);
             }
         }
-
-        if consts_to_insert.is_empty() {
-            continue;
-        }
-
-        if debug {
-            eprintln!(
-                "[remat] b{}: inserting {} local consts for cross-block uses",
-                block.id.0,
-                consts_to_insert.len()
-            );
-        }
-
-        // Insert Const instructions at block start (in stable order)
-        let mut sorted_consts: Vec<_> = consts_to_insert.into_iter().collect();
-        sorted_consts.sort_by_key(|v| v.index());
-
-        let mut new_insts = Vec::new();
-        for vreg in sorted_consts {
-            let const_val = const_values[&vreg];
-            let inst_id = InstId(func.insts.len() as u32);
-            func.insts.push(Inst {
-                id: inst_id,
-                op: LinearOp::Const {
-                    dst: vreg,
-                    value: const_val,
-                },
-                operands: vec![Operand {
-                    vreg,
-                    kind: OperandKind::Def,
-                    class: RegClass::Gpr,
-                    fixed: None,
-                }],
-                clobbers: Clobbers::default(),
-            });
-            new_insts.push(inst_id);
-        }
-
-        // Insert at block start
-        let block = &mut func.blocks[block_idx];
-        for inst_id in new_insts.into_iter().rev() {
-            block.insts.insert(0, inst_id);
-        }
-    }
+    } // end if false
 }
 
 /// Copy propagation for CFG-MIR.
