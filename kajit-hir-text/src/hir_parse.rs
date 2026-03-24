@@ -794,7 +794,10 @@ fn stmt<'src>() -> impl Parser<'src, &'src str, Stmt, Extra<'src>> + Clone {
             .then(block.clone())
             .map(|(id, body)| Stmt {
                 id,
-                kind: StmtKind::Loop { body },
+                kind: StmtKind::Loop {
+                    body,
+                    max_iterations: None,
+                },
             });
 
         let match_stmt = stmt_id()

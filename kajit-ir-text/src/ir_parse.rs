@@ -1356,7 +1356,10 @@ fn resolve_node(
                 debug_value: None,
                 inputs: resolved_inputs,
                 outputs: resolved_outputs,
-                kind: NodeKind::Theta { body: body_id },
+                kind: NodeKind::Theta {
+                    body: body_id,
+                    max_iterations: None,
+                },
             });
 
             node_map.insert(*id, node_id);

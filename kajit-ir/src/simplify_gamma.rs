@@ -35,7 +35,7 @@ fn resolve_constant_source(func: &IrFunc, source: &PortSource) -> Option<usize> 
                 .nodes
                 .iter()
                 .find(|(_, node)| match &node.kind {
-                    NodeKind::Theta { body } => *body == *region,
+                    NodeKind::Theta { body, .. } => *body == *region,
                     NodeKind::Gamma { regions } => regions.contains(region),
                     _ => false,
                 })
@@ -43,7 +43,7 @@ fn resolve_constant_source(func: &IrFunc, source: &PortSource) -> Option<usize> 
 
             let node = &func.nodes[owner_node];
             match &node.kind {
-                NodeKind::Theta { body } => {
+                NodeKind::Theta { body, .. } => {
                     // Theta: arg[K] corresponds to input[K]
                     let input = node.inputs.get(arg_index)?;
                     // Check that the theta result at this position passes the same arg through
@@ -310,7 +310,7 @@ fn branches_have_side_effects(func: &IrFunc, regions: &[RegionId]) -> bool {
                         return true;
                     }
                 }
-                NodeKind::Theta { body } => {
+                NodeKind::Theta { body, .. } => {
                     if branches_have_side_effects(func, &[*body]) {
                         return true;
                     }

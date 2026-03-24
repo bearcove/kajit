@@ -99,7 +99,7 @@ fn compute_region_slots(
                     slots.extend(map[&sub_region].iter());
                 }
             }
-            NodeKind::Theta { body } => {
+            NodeKind::Theta { body, .. } => {
                 let body = *body;
                 if !map.contains_key(&body) {
                     compute_region_slots(func, body, map);
@@ -211,7 +211,7 @@ fn promote_region(
                     }
                 }
             }
-            NodeKind::Theta { body } => {
+            NodeKind::Theta { body, .. } => {
                 let body = *body;
 
                 // Use PRE-COMPUTED slot accesses.
@@ -533,7 +533,7 @@ fn replace_uses_in_region(func: &mut IrFunc, region: RegionId, from: OutputRef, 
                     replace_uses_in_region(func, sub_region, from, to);
                 }
             }
-            NodeKind::Theta { body } => {
+            NodeKind::Theta { body, .. } => {
                 let body = *body;
                 replace_uses_in_region(func, body, from, to);
             }

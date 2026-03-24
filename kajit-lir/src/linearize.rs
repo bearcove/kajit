@@ -695,7 +695,7 @@ impl<'a> Linearizer<'a> {
                         self.collect_subregion_parent_deps(sub, node_pos, deps);
                     }
                 }
-                NodeKind::Theta { body } => {
+                NodeKind::Theta { body, .. } => {
                     self.collect_subregion_parent_deps(*body, node_pos, deps);
                 }
                 _ => {}
@@ -747,7 +747,7 @@ impl<'a> Linearizer<'a> {
                         self.collect_subregion_parent_deps(sub, &node_pos, &mut deps_for_node);
                     }
                 }
-                NodeKind::Theta { body } => {
+                NodeKind::Theta { body, .. } => {
                     self.collect_subregion_parent_deps(*body, &node_pos, &mut deps_for_node);
                 }
                 _ => {}
@@ -808,7 +808,7 @@ impl<'a> Linearizer<'a> {
         match kind {
             NodeKindRef::Simple(op) => self.linearize_simple(node_id, op),
             NodeKindRef::Gamma { regions } => self.linearize_gamma(node_id, &regions),
-            NodeKindRef::Theta { body } => self.linearize_theta(node_id, body),
+            NodeKindRef::Theta { body, .. } => self.linearize_theta(node_id, body),
             NodeKindRef::Lambda {
                 body,
                 label,
@@ -1896,7 +1896,7 @@ fn clone_node_kind(kind: &NodeKind) -> NodeKindRef<'_> {
         NodeKind::Gamma { regions } => NodeKindRef::Gamma {
             regions: regions.clone(),
         },
-        NodeKind::Theta { body } => NodeKindRef::Theta { body: *body },
+        NodeKind::Theta { body, .. } => NodeKindRef::Theta { body: *body },
         NodeKind::Lambda {
             body,
             label,

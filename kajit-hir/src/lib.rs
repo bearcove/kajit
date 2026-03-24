@@ -1231,6 +1231,9 @@ pub enum StmtKind {
     },
     Loop {
         body: Block,
+        /// Optional upper bound on iteration count for bounded loops.
+        /// Enables the RVSDG unrolling pass to convert to straight-line code.
+        max_iterations: Option<u32>,
     },
     Match {
         scrutinee: Expr,

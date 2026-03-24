@@ -299,10 +299,14 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     branch.set_results(&[]);
                 });
             }
-            hir::StmtKind::Loop { body } => {
+            hir::StmtKind::Loop {
+                body,
+                max_iterations,
+                ..
+            } => {
                 let active_slot = rb.alloc_slot();
                 let continue_slot = rb.alloc_slot();
-                let _ = rb.theta(&[], |body_rb| {
+                let build_body = |body_rb: &mut kajit_ir::RegionBuilder<'_>| {
                     let one = body_rb.const_val(1);
                     body_rb.write_to_slot(active_slot, one);
                     body_rb.write_to_slot(continue_slot, one);
@@ -316,7 +320,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     );
                     let predicate = body_rb.read_from_slot(continue_slot);
                     body_rb.set_results(&[predicate]);
-                });
+                };
+                if let Some(max_iter) = max_iterations {
+                    let _ = rb.theta_bounded(&[], *max_iter, build_body);
+                } else {
+                    let _ = rb.theta(&[], build_body);
+                }
             }
             hir::StmtKind::Return(None) => {}
             other => panic!("unsupported structural HIR statement: {other:?}"),
@@ -457,10 +466,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     branch.set_results(&[]);
                 });
             }
-            hir::StmtKind::Loop { body } => {
+            hir::StmtKind::Loop { body, max_iterations, .. } => {
                 let nested_active_slot = guard_rb.alloc_slot();
                 let nested_continue_slot = guard_rb.alloc_slot();
-                let _ = guard_rb.theta(&[], |body_rb| {
+                let build_body = |body_rb: &mut kajit_ir::RegionBuilder<'_>| {
                     let one = body_rb.const_val(1);
                     body_rb.write_to_slot(nested_active_slot, one);
                     body_rb.write_to_slot(nested_continue_slot, one);
@@ -474,7 +483,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     );
                     let predicate = body_rb.read_from_slot(nested_continue_slot);
                     body_rb.set_results(&[predicate]);
-                });
+                };
+                if let Some(max_iter) = max_iterations {
+                    let _ = guard_rb.theta_bounded(&[], *max_iter, build_body);
+                } else {
+                    let _ = guard_rb.theta(&[], build_body);
+                }
             }
             other => panic!("is_loop_control_flow returned true for non-control-flow: {other:?}"),
         });

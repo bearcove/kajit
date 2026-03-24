@@ -242,7 +242,7 @@ fn collect_reachable(func: &IrFunc) -> Result<ReachableInfo, VerifyError> {
                         stack.push((sub, Some(region)));
                     }
                 }
-                NodeKind::Theta { body } => stack.push((*body, Some(region))),
+                NodeKind::Theta { body, .. } => stack.push((*body, Some(region))),
                 NodeKind::Simple(_) | NodeKind::Apply { .. } => {}
                 NodeKind::Lambda { .. } => {
                     return Err(VerifyError::NodeRegionMismatch {

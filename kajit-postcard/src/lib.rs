@@ -2102,6 +2102,7 @@ impl PostcardHirLowerer {
                     scope: hir::ScopeId::new(0),
                     statements: loop_body,
                 },
+                max_iterations: None,
             },
         });
 
@@ -2492,7 +2493,7 @@ impl PostcardHirLowerer {
             },
         });
 
-        // Push the loop
+        // Push the loop — bounded by max varint byte count for this type
         statements.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Loop {
@@ -2500,6 +2501,7 @@ impl PostcardHirLowerer {
                     scope: hir::ScopeId::new(0),
                     statements: loop_body,
                 },
+                max_iterations: Some(max_bytes as u32),
             },
         });
 
@@ -2664,6 +2666,7 @@ impl PostcardHirLowerer {
                         scope,
                         statements: body_stmts,
                     },
+                    max_iterations: None,
                 },
             });
             return;

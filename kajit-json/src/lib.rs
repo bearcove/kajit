@@ -247,6 +247,7 @@ fn build_json_root_bool_decoder_hir(shape: &'static Shape) -> hir::Module {
                                 },
                             ],
                         },
+                        max_iterations: None,
                     },
                 },
                 hir::Stmt {
@@ -542,6 +543,7 @@ fn build_json_root_u32_decoder_hir(shape: &'static Shape) -> hir::Module {
                                 },
                             ],
                         },
+                        max_iterations: None,
                     },
                 },
                 hir::Stmt {
@@ -708,6 +710,7 @@ fn build_json_root_u32_decoder_hir(shape: &'static Shape) -> hir::Module {
                                 },
                             ],
                         },
+                        max_iterations: None,
                     },
                 },
                 hir::Stmt {
@@ -953,6 +956,7 @@ fn build_json_root_u64_decoder_hir(shape: &'static Shape) -> hir::Module {
                                 },
                             ],
                         },
+                        max_iterations: None,
                     },
                 },
                 hir::Stmt {
@@ -1155,6 +1159,7 @@ fn build_json_root_u64_decoder_hir(shape: &'static Shape) -> hir::Module {
                                 },
                             ],
                         },
+                        max_iterations: None,
                     },
                 },
                 hir::Stmt {

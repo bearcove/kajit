@@ -426,7 +426,7 @@ fn hoist_theta_loop_invariants_for_node(
 ) -> bool {
     let (parent_region, body_region) = {
         let node = &func.nodes[theta];
-        let NodeKind::Theta { body } = &node.kind else {
+        let NodeKind::Theta { body, .. } = &node.kind else {
             return false;
         };
         (node.region, *body)
@@ -568,7 +568,7 @@ fn hoist_theta_loop_invariants_for_node(
 fn hoist_theta_constants_as_args(func: &mut IrFunc, theta: NodeId) -> bool {
     let (parent_region, body_region, theta_debug_scope) = {
         let node = &func.nodes[theta];
-        let NodeKind::Theta { body } = &node.kind else {
+        let NodeKind::Theta { body, .. } = &node.kind else {
             return false;
         };
         (node.region, *body, node.debug_scope)
@@ -945,7 +945,7 @@ fn region_has_control_flow(func: &IrFunc, region: RegionId) -> bool {
                     }
                     return true;
                 }
-                NodeKind::Theta { body } => {
+                NodeKind::Theta { body, .. } => {
                     stack.push(*body);
                     return true;
                 }
@@ -995,7 +995,7 @@ fn count_region_nodes_recursive(func: &IrFunc, region: RegionId) -> usize {
                         stack.push(sub);
                     }
                 }
-                NodeKind::Theta { body } => stack.push(*body),
+                NodeKind::Theta { body, .. } => stack.push(*body),
                 _ => {}
             }
         }
@@ -1038,7 +1038,7 @@ fn collect_live_nodes(func: &IrFunc) -> HashSet<NodeId> {
                         stack.push(sub);
                     }
                 }
-                NodeKind::Theta { body } => stack.push(*body),
+                NodeKind::Theta { body, .. } => stack.push(*body),
                 _ => {}
             }
         }
@@ -1064,7 +1064,7 @@ fn collect_region_owners(
                         stack.push(sub);
                     }
                 }
-                NodeKind::Theta { body } => stack.push(*body),
+                NodeKind::Theta { body, .. } => stack.push(*body),
                 _ => {}
             }
         }
@@ -1141,7 +1141,14 @@ fn clone_region_into(
             NodeKind::Gamma { regions } => NodeKind::Gamma {
                 regions: regions.clone(),
             },
-            NodeKind::Theta { body } => NodeKind::Theta { body: *body },
+            NodeKind::Theta {
+                body,
+                max_iterations,
+                ..
+            } => NodeKind::Theta {
+                body: *body,
+                max_iterations: *max_iterations,
+            },
             NodeKind::Lambda { .. } => {
                 panic!("lambda nodes cannot appear inside lambda body regions");
             }
@@ -1173,7 +1180,12 @@ fn clone_region_into(
                     regions: remapped_subregions,
                 }
             }
-            NodeKind::Theta { body } => {
+            NodeKind::Theta {
+                body,
+                max_iterations,
+                ..
+            } => {
+                let max_iterations = max_iterations;
                 let old_reg = &func.regions[body];
                 // Clone args, creating new ArgIds
                 let mut new_args = Vec::with_capacity(old_reg.args.len());
@@ -1190,7 +1202,10 @@ fn clone_region_into(
                     nodes: Vec::new(),
                 });
                 clone_region_into(func, body, new_body, ctx);
-                NodeKind::Theta { body: new_body }
+                NodeKind::Theta {
+                    body: new_body,
+                    max_iterations,
+                }
             }
             other => other,
         };
@@ -1478,7 +1493,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body_before = match &func.nodes[theta_before].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
         let body_const_before = func.regions[body_before]
@@ -1500,7 +1515,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body_after = match &func.nodes[theta_after].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
         let body_const_after = func.regions[body_after]
@@ -1577,7 +1592,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body_before = match &func.nodes[theta_before].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
         let invariant_tree_nodes_before = func.regions[body_before]
@@ -1599,7 +1614,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body_after = match &func.nodes[theta_after].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
         let invariant_tree_nodes_after = func.regions[body_after]
@@ -1660,7 +1675,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body_before = match &func.nodes[theta_before].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
         let invariant_tree_nodes_before = func.regions[body_before]
@@ -1678,7 +1693,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body_after = match &func.nodes[theta_after].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
         let invariant_tree_nodes_after = func.regions[body_after]
@@ -1729,7 +1744,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body = match &func.nodes[theta].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
 
@@ -1756,7 +1771,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("theta should still exist");
         let body_after = match &func.nodes[theta_after].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!(),
         };
         let body_consts_after = func.regions[body_after]
@@ -1806,7 +1821,7 @@ mod tests {
             .find(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
             .expect("expected theta node");
         let body = match &func.nodes[theta].kind {
-            NodeKind::Theta { body } => *body,
+            NodeKind::Theta { body, .. } => *body,
             _ => unreachable!("expected theta node"),
         };
         let original_const = func.regions[body]

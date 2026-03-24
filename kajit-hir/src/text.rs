@@ -448,7 +448,7 @@ fn fmt_stmt(
             }
             writeln!(f)
         }
-        StmtKind::Loop { body } => {
+        StmtKind::Loop { body, .. } => {
             write!(f, "loop ")?;
             fmt_block(module, body, f, indent)?;
             writeln!(f)

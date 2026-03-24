@@ -566,6 +566,10 @@ pub enum NodeKind {
     Theta {
         /// The single body region.
         body: RegionId,
+        /// Optional upper bound on iteration count. If set, the loop
+        /// executes at most this many times. Used by the unrolling pass
+        /// to convert bounded thetas into gamma cascades.
+        max_iterations: Option<u32>,
     },
 
     /// A function definition containing a single body region.
@@ -2192,7 +2196,10 @@ impl<'a> RegionBuilder<'a> {
             debug_value: self.debug_value,
             inputs,
             outputs,
-            kind: NodeKind::Theta { body },
+            kind: NodeKind::Theta {
+                body,
+                max_iterations: None,
+            },
         });
 
         let state_domain_ids: Vec<_> = self
@@ -2218,6 +2225,35 @@ impl<'a> RegionBuilder<'a> {
             }));
         }
         data_outputs
+    }
+
+    /// Create a bounded theta (loop with known max iteration count).
+    ///
+    /// Same as `theta()` but annotates the node with a maximum iteration count,
+    /// enabling the unrolling pass to convert it to straight-line code.
+    pub fn theta_bounded(
+        &mut self,
+        loop_vars: &[PortSource],
+        max_iterations: u32,
+        build_body: impl FnOnce(&mut RegionBuilder<'_>),
+    ) -> Vec<PortSource> {
+        let results = self.theta(loop_vars, build_body);
+        // Find the theta node we just created (last node in the region with Theta kind)
+        let theta_node_id = self.func.regions[self.region]
+            .nodes
+            .iter()
+            .rev()
+            .find(|&&nid| matches!(self.func.nodes[nid].kind, NodeKind::Theta { .. }))
+            .copied()
+            .expect("theta_bounded: theta node not found after theta()");
+        if let NodeKind::Theta {
+            max_iterations: ref mut mi,
+            ..
+        } = self.func.nodes[theta_node_id].kind
+        {
+            *mi = Some(max_iterations);
+        }
+        results
     }
 
     /// Add an apply node (lambda call).
@@ -2458,7 +2494,7 @@ impl IrFunc {
                 }
                 writeln!(f, "]")?;
             }
-            NodeKind::Theta { body } => {
+            NodeKind::Theta { body, .. } => {
                 write!(f, "{pad}n{}", node_id.index())?;
                 if node.debug_scope != self.regions[node.region].debug_scope {
                     write!(f, " ")?;
@@ -3063,7 +3099,7 @@ mod tests {
         let theta_id = func.regions[func.root_body()].nodes[2];
         let theta = &func.nodes[theta_id];
         match &theta.kind {
-            NodeKind::Theta { body } => {
+            NodeKind::Theta { body, .. } => {
                 // Body: bounds_check, read_bytes, write_to_field, const, sub = 5 nodes.
                 assert_eq!(func.regions[*body].nodes.len(), 5);
                 // Results: predicate + loop_var + cursor_state + output_state = 4.
