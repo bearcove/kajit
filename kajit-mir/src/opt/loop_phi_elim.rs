@@ -14,14 +14,14 @@
 //! - Remove v88-v93 from block params
 //! - Remove corresponding args from all edges
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
 use crate::{
     analysis::{dominance::DominanceInfo, loops::LoopInfo},
-    cfg_mir::{BlockId, EdgeArg, Function},
+    cfg_mir::{BlockId, EdgeArg, EdgeId, Function},
 };
 
 /// Eliminate loop-invariant phi parameters from loop headers.
@@ -37,7 +37,7 @@ pub fn eliminate_loop_invariant_phis(
 
     // Process each loop header
     for header in loops.loop_headers() {
-        if eliminate_invariant_phis_in_header(func, dom, header, debug) {
+        if eliminate_invariant_phis_in_header(func, dom, loops, header, debug) {
             changed = true;
         }
     }
@@ -53,6 +53,7 @@ pub fn eliminate_loop_invariant_phis(
 fn eliminate_invariant_phis_in_header(
     func: &mut Function,
     dom: &DominanceInfo,
+    loops: &LoopInfo,
     header: BlockId,
     debug: bool,
 ) -> bool {
@@ -63,11 +64,21 @@ fn eliminate_invariant_phis_in_header(
         return false;
     }
 
-    // Collect incoming edges to this header
-    let incoming_edges: Vec<_> = header_block.preds.iter().map(|&eid| eid).collect();
+    // Get loop data for this header
+    let loop_data = loops.loop_for_header(header).unwrap();
 
-    if incoming_edges.is_empty() {
-        return false;
+    // Separate backedges from entry edges
+    let backedge_set: HashSet<EdgeId> = loop_data.backedges.iter().copied().collect();
+    let entry_edges: Vec<EdgeId> = header_block
+        .preds
+        .iter()
+        .copied()
+        .filter(|eid| !backedge_set.contains(eid))
+        .collect();
+    let backedges: Vec<EdgeId> = loop_data.backedges.clone();
+
+    if entry_edges.is_empty() {
+        return false; // No entry edges (unreachable loop?)
     }
 
     // For each parameter, check if it's loop-invariant
@@ -78,11 +89,25 @@ fn eliminate_invariant_phis_in_header(
         for (idx, &vreg) in params.iter().enumerate() {
             eprintln!("  param {} = v{}", idx, vreg.index());
         }
-        eprintln!("[loop_phi_elim] {} incoming edges:", incoming_edges.len());
-        for &edge_id in &incoming_edges {
+        eprintln!(
+            "[loop_phi_elim] {} entry edges, {} backedges:",
+            entry_edges.len(),
+            backedges.len()
+        );
+        for &edge_id in &entry_edges {
             let edge = &func.edges[edge_id.index()];
             eprintln!(
-                "  edge e{} (b{} -> b{}): {} args",
+                "  entry e{} (b{} -> b{}): {} args",
+                edge_id.index(),
+                edge.from.index(),
+                edge.to.index(),
+                edge.args.len()
+            );
+        }
+        for &edge_id in &backedges {
+            let edge = &func.edges[edge_id.index()];
+            eprintln!(
+                "  backedge e{} (b{} -> b{}): {} args",
                 edge_id.index(),
                 edge.from.index(),
                 edge.to.index(),
@@ -92,18 +117,17 @@ fn eliminate_invariant_phis_in_header(
     }
 
     for (param_idx, &param_vreg) in params.iter().enumerate() {
-        // Collect all values assigned to this parameter from incoming edges
-        let mut incoming_values: Vec<VReg> = Vec::new();
+        // Check entry edges: all must pass the same value
+        let mut entry_value: Option<VReg> = None;
+        let mut is_loop_invariant = true;
 
-        for &edge_id in &incoming_edges {
+        for &edge_id in &entry_edges {
             let edge = &func.edges[edge_id.index()];
-            if param_idx < edge.args.len() {
-                incoming_values.push(edge.args[param_idx].source);
-            } else {
+            if param_idx >= edge.args.len() {
                 // Edge doesn't provide this parameter - not invariant
                 if debug {
                     eprintln!(
-                        "  param {} (v{}): edge e{} missing args (has {}, need {})",
+                        "  param {} (v{}): entry edge e{} missing args (has {}, need {})",
                         param_idx,
                         param_vreg.index(),
                         edge_id.index(),
@@ -111,36 +135,58 @@ fn eliminate_invariant_phis_in_header(
                         param_idx + 1
                     );
                 }
-                incoming_values.clear();
+                is_loop_invariant = false;
+                break;
+            }
+
+            let value = edge.args[param_idx].source;
+            if let Some(expected) = entry_value {
+                if value != expected {
+                    // Entry edges don't agree on value - not invariant
+                    is_loop_invariant = false;
+                    break;
+                }
+            } else {
+                entry_value = Some(value);
+            }
+        }
+
+        if !is_loop_invariant {
+            continue;
+        }
+
+        let first_value = entry_value.unwrap();
+
+        // Check backedges: must pass either first_value or param_vreg (loop-carried)
+        for &edge_id in &backedges {
+            let edge = &func.edges[edge_id.index()];
+            if param_idx >= edge.args.len() {
+                is_loop_invariant = false;
+                break;
+            }
+
+            let value = edge.args[param_idx].source;
+            if value != first_value && value != param_vreg {
+                // Backedge passes something other than invariant value or self
+                is_loop_invariant = false;
                 break;
             }
         }
 
-        if incoming_values.is_empty() {
+        if !is_loop_invariant {
             continue;
         }
 
-        // Check if all incoming values are identical (or equal to param itself)
-        let first_value = incoming_values[0];
-        let all_same = incoming_values.iter().all(|&v| {
-            v == first_value || v == param_vreg // Self-reference is OK
-        });
-
         if debug {
             eprintln!(
-                "  param {} (v{}): values = {:?}, all_same = {}, first = v{}",
+                "  param {} (v{}): loop-invariant, first = v{}",
                 param_idx,
                 param_vreg.index(),
-                incoming_values
-                    .iter()
-                    .map(|v| format!("v{}", v.index()))
-                    .collect::<Vec<_>>(),
-                all_same,
                 first_value.index()
             );
         }
 
-        if all_same && first_value != param_vreg {
+        if first_value != param_vreg {
             // This parameter is loop-invariant!
             // Verify that the invariant value definition dominates ALL uses of the parameter
             if let Some(def_block) = find_def_block(func, first_value) {
@@ -184,7 +230,8 @@ fn eliminate_invariant_phis_in_header(
                     );
                 }
             }
-        } else if all_same {
+        } else {
+            // first_value == param_vreg, so it's a self-reference (loop-carried)
             if debug {
                 eprintln!("    -> self-reference (param == first_value), not eliminated");
             }
@@ -230,8 +277,13 @@ fn eliminate_invariant_phis_in_header(
 
     func.blocks[header.index()].params = new_params;
 
-    // Update all incoming edges to remove corresponding arguments
-    for &edge_id in &incoming_edges {
+    // Update all incoming edges (both entry and backedges) to remove corresponding arguments
+    let all_incoming: Vec<EdgeId> = entry_edges
+        .iter()
+        .chain(backedges.iter())
+        .copied()
+        .collect();
+    for &edge_id in &all_incoming {
         let edge = &mut func.edges[edge_id.index()];
         let new_args: Vec<EdgeArg> = edge
             .args
