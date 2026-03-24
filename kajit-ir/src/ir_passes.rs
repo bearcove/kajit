@@ -1071,16 +1071,16 @@ fn collect_region_owners(
     }
 }
 
-struct CloneCtx {
-    top_old_region: RegionId,
-    top_arg_sources: Vec<PortSource>,
-    node_map: HashMap<NodeId, NodeId>,
-    region_map: HashMap<RegionId, RegionId>,
-    arg_map: HashMap<crate::ArgId, crate::ArgId>,
-    top_new_nodes: Vec<NodeId>,
+pub(crate) struct CloneCtx {
+    pub(crate) top_old_region: RegionId,
+    pub(crate) top_arg_sources: Vec<PortSource>,
+    pub(crate) node_map: HashMap<NodeId, NodeId>,
+    pub(crate) region_map: HashMap<RegionId, RegionId>,
+    pub(crate) arg_map: HashMap<crate::ArgId, crate::ArgId>,
+    pub(crate) top_new_nodes: Vec<NodeId>,
 }
 
-fn remap_source(source: PortSource, ctx: &CloneCtx, func: &IrFunc) -> PortSource {
+pub(crate) fn remap_source(source: PortSource, ctx: &CloneCtx, func: &IrFunc) -> PortSource {
     match source {
         PortSource::Node(out) => {
             let new_node = *ctx
@@ -1119,7 +1119,7 @@ fn remap_source(source: PortSource, ctx: &CloneCtx, func: &IrFunc) -> PortSource
     }
 }
 
-fn clone_region_into(
+pub(crate) fn clone_region_into(
     func: &mut IrFunc,
     old_region: RegionId,
     new_region: RegionId,
