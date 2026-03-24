@@ -37,12 +37,13 @@
 //! Backend emission (with physical registers)
 //! ```
 
+pub mod critical_edge;
 pub mod machine_inst;
+pub mod parallel_copy;
 pub mod progpoint;
 
 // Future modules (not yet implemented):
 // mod liveness;
 // mod linear_scan;
-// mod parallel_copy;
 // mod spill_rewrite;
 // mod verify;
