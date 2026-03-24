@@ -591,13 +591,20 @@ fn register_bench_case<T>(
             }
         }),
     });
+    // Use #[inline(never)] to prevent LLVM from inlining the entire serde
+    // decoder into the benchmark loop — otherwise serde pays zero call overhead
+    // while kajit pays full prologue/epilogue, making the comparison unfair.
+    #[inline(never)]
+    fn serde_postcard_deser_noinline<U: serde::de::DeserializeOwned>(data: &[u8]) -> U {
+        postcard::from_bytes(data).unwrap()
+    }
     v.push(harness::Bench {
         name: format!("{postcard_prefix}/serde/deser"),
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             move |runner| {
                 runner.run(|| {
-                    black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
+                    black_box(serde_postcard_deser_noinline::<T>(black_box(&data[..])));
                 });
             }
         }),
