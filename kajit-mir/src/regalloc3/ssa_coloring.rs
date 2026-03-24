@@ -114,8 +114,7 @@ pub fn allocate(
     }
 
     // Phase 3: Coalesce — bounded phi-affinity recoloring
-    // TODO: temporarily disabled for debugging
-    // let coloring = coalesce_phase(func, liveness, &dom, &def_block, coloring, &spilled);
+    let coloring = coalesce_phase(func, liveness, &dom, &def_block, coloring, &spilled);
 
     // Build result
     let mut allocations = HashMap::new();
@@ -546,8 +545,13 @@ fn coalesce_phase(
 /// Check if vreg can be safely recolored to new_color.
 ///
 /// Safe iff no interfering neighbor currently uses new_color.
-/// Interference: v interferes with w iff def(v) dominates def(w) and v is
+/// SSA interference: v and w interfere iff def(v) dominates def(w) and v is
 /// live at def(w), or vice versa.
+///
+/// "Live at def(w)" means:
+/// - v is in live_in of w's block, OR
+/// - v is defined in the SAME block as w, before w, and v is live-out or
+///   used after w's definition point.
 fn can_recolor(
     vreg: VReg,
     new_color: PReg,
@@ -573,28 +577,65 @@ fn can_recolor(
             continue;
         };
 
-        // Check interference: do vreg and other overlap?
-        if dom.dominates(vreg_def_block, other_def_block) {
-            // vreg defined before other — interfere if vreg is live at other's def
-            if liveness
-                .live_in
-                .get(&other_def_block)
-                .map_or(false, |li| li.contains(&vreg))
-            {
-                return false; // interferes
-            }
-        } else if dom.dominates(other_def_block, vreg_def_block) {
-            // other defined before vreg — interfere if other is live at vreg's def
-            if liveness
-                .live_in
-                .get(&vreg_def_block)
-                .map_or(false, |li| li.contains(&other))
-            {
-                return false; // interferes
-            }
+        // Check interference using SSA dominance property
+        if interferes(vreg, vreg_def_block, other, other_def_block, liveness, dom) {
+            return false;
         }
-        // If neither dominates the other, they can't interfere in SSA
     }
 
     true
+}
+
+/// Check if two vregs interfere.
+///
+/// In SSA: v and w interfere iff one's definition dominates the other's
+/// AND the dominator is live at the dominated definition point.
+fn interferes(
+    v: VReg,
+    v_block: BlockId,
+    w: VReg,
+    w_block: BlockId,
+    liveness: &LivenessInfo,
+    dom: &DominanceInfo,
+) -> bool {
+    if v_block == w_block {
+        // Same block: they interfere if their live ranges overlap within the block.
+        // Conservative: if both are defined in the same block and either is live-out,
+        // assume they interfere (since we don't track intra-block ordering here).
+        let v_live_out = liveness
+            .live_out
+            .get(&v_block)
+            .map_or(false, |lo| lo.contains(&v));
+        let w_live_out = liveness
+            .live_out
+            .get(&w_block)
+            .map_or(false, |lo| lo.contains(&w));
+        // If either is live-out, they potentially overlap
+        if v_live_out || w_live_out {
+            return true;
+        }
+        // Both die in the same block — conservatively assume they interfere
+        // (proper fix: check instruction ordering within the block)
+        return true;
+    }
+
+    if dom.dominates(v_block, w_block) {
+        // v defined before w — interfere if v is live at w's block entry
+        // (live-in means v is alive when w gets defined)
+        return liveness
+            .live_in
+            .get(&w_block)
+            .map_or(false, |li| li.contains(&v));
+    }
+
+    if dom.dominates(w_block, v_block) {
+        // w defined before v — interfere if w is live at v's block entry
+        return liveness
+            .live_in
+            .get(&v_block)
+            .map_or(false, |li| li.contains(&w));
+    }
+
+    // Neither dominates the other — in SSA, they can't interfere
+    false
 }
