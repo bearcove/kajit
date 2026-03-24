@@ -115,6 +115,9 @@ pub enum SsaError {
         param_index: usize,
         expected_param: VReg,
     },
+
+    /// A vreg is live-in to entry block without being a function parameter
+    EntryLivein { vreg: VReg, inst_index: usize },
 }
 
 impl std::fmt::Display for SsaError {
@@ -195,6 +198,14 @@ impl std::fmt::Display for SsaError {
                     second_def_block.index()
                 )
             }
+            SsaError::EntryLivein { vreg, inst_index } => {
+                write!(
+                    f,
+                    "vreg {} is live-in to entry block at inst {} (not a function parameter)",
+                    vreg.index(),
+                    inst_index
+                )
+            }
         }
     }
 }
@@ -231,6 +242,9 @@ pub fn validate_ssa(func: &Function) -> Result<(), Vec<SsaError>> {
 
     // Step 4: Check phi consistency (edge args match block params)
     check_phi_consistency(func, &mut errors);
+
+    // Step 5: Check entry block liveness (no live-ins except parameters)
+    check_entry_liveness(func, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -428,6 +442,99 @@ fn check_phi_consistency(func: &Function, errors: &mut Vec<SsaError>) {
                     });
                 }
             }
+        }
+    }
+}
+
+/// Check that entry block has no live-ins except function parameters.
+///
+/// A vreg is live-in to entry if it's used in the entry block but not:
+/// - A function parameter (in func.data_args)
+/// - Defined in the entry block before its use
+fn check_entry_liveness(func: &Function, errors: &mut Vec<SsaError>) {
+    let debug = std::env::var("KAJIT_DEBUG_ENTRY_LIVEIN").is_ok();
+    let entry_block = &func.blocks[func.entry.index()];
+
+    if debug {
+        eprintln!(
+            "[entry_livein] Checking entry block b{}",
+            func.entry.index()
+        );
+        eprintln!(
+            "[entry_livein] Function args: {:?}",
+            func.data_args.iter().map(|v| v.index()).collect::<Vec<_>>()
+        );
+        eprintln!(
+            "[entry_livein] Entry params: {:?}",
+            entry_block
+                .params
+                .iter()
+                .map(|v| v.index())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Entry block should not have parameters (no predecessors to pass them)
+    if !entry_block.params.is_empty() {
+        for &param in &entry_block.params {
+            errors.push(SsaError::EntryLivein {
+                vreg: param,
+                inst_index: 0, // params are "used" at block entry
+            });
+        }
+    }
+
+    // Entry block should have no predecessors
+    if !entry_block.preds.is_empty() {
+        if debug {
+            eprintln!(
+                "[entry_livein] ERROR: entry block has {} predecessors!",
+                entry_block.preds.len()
+            );
+        }
+        // This is a structural error - entry block shouldn't have incoming edges
+        // Any parameters would be EntryLivein errors
+        for &param in &entry_block.params {
+            errors.push(SsaError::EntryLivein {
+                vreg: param,
+                inst_index: 0,
+            });
+        }
+    }
+
+    // Track vregs defined so far as we scan through instructions
+    let mut defined: HashSet<VReg> = func.data_args.iter().copied().collect();
+
+    // Check each instruction in order
+    for (inst_idx, &inst_id) in entry_block.insts.iter().enumerate() {
+        let inst = &func.insts[inst_id.index()];
+
+        // Check uses BEFORE adding this instruction's defs
+        for operand in &inst.operands {
+            if operand.kind == OperandKind::Use && !defined.contains(&operand.vreg) {
+                errors.push(SsaError::EntryLivein {
+                    vreg: operand.vreg,
+                    inst_index: inst_idx,
+                });
+            }
+        }
+
+        // Add this instruction's defs
+        for operand in &inst.operands {
+            if operand.kind == OperandKind::Def {
+                defined.insert(operand.vreg);
+            }
+        }
+    }
+
+    // Check terminator uses
+    let term = &func.terms[entry_block.term.index()];
+    if let Some(condition) = term.condition_vreg() {
+        if !defined.contains(&condition) {
+            errors.push(SsaError::EntryLivein {
+                vreg: condition,
+                inst_index: entry_block.insts.len(),
+            });
         }
     }
 }
