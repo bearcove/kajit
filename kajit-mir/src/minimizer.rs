@@ -506,6 +506,7 @@ fn rebuild_function_without_block(
             term: new_term,
             preds,
             succs,
+            dead: block.dead,
         });
     }
 

@@ -154,6 +154,7 @@ pub struct Block {
     pub term: TermId,
     pub preds: Vec<EdgeId>,
     pub succs: Vec<EdgeId>,
+    pub dead: bool, // Tombstone for merged blocks - backend should skip when computing offsets
 }
 
 #[derive(Debug, Clone)]
@@ -1377,6 +1378,7 @@ fn lower_function(
                     term: TermId(0),
                     preds: Vec::new(),
                     succs: Vec::new(),
+                    dead: false,
                 }],
                 edges: Vec::new(),
                 insts: Vec::new(),
@@ -1553,6 +1555,7 @@ fn lower_function(
             term: TermId(bi as u32),
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         });
         label_terms.push(term.expect("term must be set"));
     }

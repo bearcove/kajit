@@ -474,6 +474,12 @@ fn split_critical_edges_cfg(
     func: &cfg_mir::Function,
     num_vregs: &mut usize,
 ) -> Result<(Vec<WorkBlock>, Vec<Option<EdgeBlockInfo>>), RegallocEngineError> {
+    // Debug: check for dead blocks
+    let dead_count = func.blocks.iter().filter(|b| b.dead).count();
+    if dead_count > 0 {
+        eprintln!("WARNING: regalloc sees {} dead blocks!", dead_count);
+    }
+
     let schedule = func
         .derive_schedule()
         .map_err(|err| RegallocEngineError::Checker(err.to_string()))?;

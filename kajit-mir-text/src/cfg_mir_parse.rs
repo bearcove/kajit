@@ -782,6 +782,7 @@ fn resolve_function(ast: AstFunc, registry: &IntrinsicRegistry) -> Result<Functi
             term: b.term,
             preds: b.preds,
             succs: b.succs,
+            dead: false, // Parsed blocks are never dead
         })
         .collect::<Vec<_>>();
 

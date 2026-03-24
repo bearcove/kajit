@@ -56,6 +56,20 @@ pub fn merge_empty_blocks(func: &mut Function) -> bool {
         eprintln!("[block_merge] merged {} empty blocks", total_merged);
     }
 
+    // Physically remove dead blocks immediately to avoid index remapping issues
+    if total_merged > 0 {
+        remove_unreachable_blocks(func);
+
+        // Validate CFG consistency after removal
+        if let Err(errors) = crate::opt::validate::validate_cfg(func) {
+            eprintln!("CFG VALIDATION FAILED after block merging:");
+            for error in &errors {
+                eprintln!("  - {}", error);
+            }
+            panic!("CFG validation failed with {} errors", errors.len());
+        }
+    }
+
     total_merged > 0
 }
 
@@ -64,6 +78,16 @@ pub fn merge_empty_blocks(func: &mut Function) -> bool {
 /// Returns (empty_block, predecessor) if found.
 fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
     for block in &func.blocks {
+        // Skip dead blocks (tombstones)
+        if block.dead {
+            continue;
+        }
+
+        // Skip blocks that are already dead (no predecessors, not entry)
+        if block.preds.is_empty() && block.id != func.entry {
+            continue;
+        }
+
         // Skip non-empty blocks
         if !block.insts.is_empty() {
             continue;
@@ -79,18 +103,24 @@ fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
             continue;
         }
 
+        // Must have exactly one successor (simple forwarding)
+        if block.succs.len() != 1 {
+            continue;
+        }
+
         let pred_edge_id = block.preds[0];
         let pred_edge = &func.edges[pred_edge_id.index()];
         let pred_block = pred_edge.from;
 
-        // Predecessor must have this block as its only successor
-        let pred = &func.blocks[pred_block.index()];
-        if pred.succs.len() != 1 {
+        // Don't merge if edge has arguments (would need to handle phi parameters)
+        if !pred_edge.args.is_empty() {
             continue;
         }
 
-        // Don't merge if predecessor has edge arguments (would need to handle phi parameters)
-        if !pred_edge.args.is_empty() {
+        // Don't merge if successor edge has arguments
+        let succ_edge_id = block.succs[0];
+        let succ_edge = &func.edges[succ_edge_id.index()];
+        if !succ_edge.args.is_empty() {
             continue;
         }
 
@@ -109,36 +139,90 @@ fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
 /// - empty_block has exactly one predecessor (pred_block)
 /// - pred_block has exactly one successor (empty_block)
 /// - The edge between them has no arguments
-fn merge_blocks(func: &mut Function, empty_block: BlockId, pred_block: BlockId) {
+fn merge_blocks(func: &mut Function, empty_block: BlockId, _pred_block: BlockId) {
+    let debug = std::env::var("KAJIT_DEBUG_BLOCK_MERGE").is_ok();
+
     // Get data from empty block BEFORE modifying anything
     let empty = &func.blocks[empty_block.index()];
-    let empty_term_id = empty.term;
-    let empty_succs = empty.succs.clone();
-    let empty_pred_edge = empty.preds[0]; // We know it has exactly one pred
+    let edge_into_empty = empty.preds[0]; // pred → empty
+    let edge_out_of_empty = empty.succs[0]; // empty → succ
 
-    // Update edges: change empty block's outgoing edges to come from pred instead
-    for &succ_edge_id in &empty_succs {
-        let edge = &mut func.edges[succ_edge_id.index()];
-        edge.from = pred_block;
+    let final_target = func.edges[edge_out_of_empty.index()].to;
+
+    // Get pred block info before modifying
+    let pred_block_idx = func.edges[edge_into_empty.index()].from;
+
+    if debug {
+        let pred_term = &func.terms[func.blocks[pred_block_idx.index()].term.index()];
+        eprintln!(
+            "  retargeting: edge e{} (b{} -> b{}) to point to b{} instead",
+            edge_into_empty.index(),
+            pred_block_idx.index(),
+            empty_block.index(),
+            final_target.index()
+        );
+        eprintln!("    pred terminator: {:?}", pred_term);
+        eprintln!(
+            "    edge args: {:?}",
+            func.edges[edge_into_empty.index()].args
+        );
+        eprintln!(
+            "    final_target params: {:?}",
+            func.blocks[final_target.index()].params
+        );
     }
 
-    // Replace predecessor's terminator and successors with empty block's
-    let pred = &mut func.blocks[pred_block.index()];
-    pred.term = empty_term_id;
-    pred.succs = empty_succs.clone();
+    // Strategy: Retarget edge_into_empty to point to final_target
+    // This way pred's terminator doesn't need to change (it already references edge_into_empty)
 
-    // Mark empty block as dead by clearing all its data
-    // Create a new dead terminator for it
-    let dead_term_idx = func.terms.len();
-    func.terms.push(Terminator::Return);
-    let dead_term_id = TermId::new(dead_term_idx as u32);
+    // Step 1: Update the edge to point to the final target
+    func.edges[edge_into_empty.index()].to = final_target;
 
+    // Step 2: Remove edge_into_empty from the old target (empty block)'s preds
+    let empty_mut = &mut func.blocks[empty_block.index()];
+    empty_mut.preds.retain(|&e| e != edge_into_empty);
+
+    // Step 3: Update final_target's predecessor list
+    // Replace edge_out_of_empty with edge_into_empty
+    let succ_block = &mut func.blocks[final_target.index()];
+    let mut found = false;
+    for pred_edge in &mut succ_block.preds {
+        if *pred_edge == edge_out_of_empty {
+            if debug {
+                eprintln!(
+                    "    updating b{} preds: e{} → e{}",
+                    final_target.index(),
+                    edge_out_of_empty.index(),
+                    edge_into_empty.index()
+                );
+            }
+            *pred_edge = edge_into_empty;
+            found = true;
+            break;
+        }
+    }
+    if debug && !found {
+        eprintln!(
+            "    WARNING: edge e{} not found in b{}'s preds: {:?}",
+            edge_out_of_empty.index(),
+            final_target.index(),
+            succ_block
+                .preds
+                .iter()
+                .map(|e| e.index())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Step 4: Update pred's successor list
+    // If pred had edge_into_empty in its succs, it's already there (no change needed)
+    // The edge ID stays the same, just points to a different block now
+
+    // Step 5: Mark empty block as dead and clear preds so remove_unreachable_blocks finds it
     let empty_block_mut = &mut func.blocks[empty_block.index()];
-    empty_block_mut.preds.clear();
+    empty_block_mut.dead = true;
+    // Preds already removed in step 2, but clear succs too for consistency
     empty_block_mut.succs.clear();
-    empty_block_mut.params.clear();
-    empty_block_mut.insts.clear();
-    empty_block_mut.term = dead_term_id;
 }
 
 /// Remove unreachable blocks (blocks with no predecessors, except entry).
@@ -162,6 +246,10 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
             "[block_merge] removing {} unreachable blocks: {:?}",
             unreachable.len(),
             unreachable.iter().map(|b| b.index()).collect::<Vec<_>>()
+        );
+        eprintln!(
+            "[block_merge] entry block before removal: b{}",
+            func.entry.index()
         );
     }
 
@@ -198,14 +286,21 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
     // Update entry block ID
     func.entry = old_to_new[&func.entry];
 
-    // Update edge from/to references
+    // Update edge from/to references and build edge ID remapping
     // Note: edges referencing unreachable blocks will be removed by filtering
     let mut valid_edges = Vec::new();
-    for edge in &func.edges {
+    let mut old_edge_to_new: HashMap<EdgeId, EdgeId> = HashMap::new();
+
+    for (old_idx, edge) in func.edges.iter().enumerate() {
         if let (Some(&new_from), Some(&new_to)) =
             (old_to_new.get(&edge.from), old_to_new.get(&edge.to))
         {
+            let new_edge_idx = valid_edges.len();
+            let new_edge_id = EdgeId::new(new_edge_idx as u32);
+            old_edge_to_new.insert(EdgeId::new(old_idx as u32), new_edge_id);
+
             let mut updated_edge = edge.clone();
+            updated_edge.id = new_edge_id; // Update the edge's ID to match its new position
             updated_edge.from = new_from;
             updated_edge.to = new_to;
             valid_edges.push(updated_edge);
@@ -213,10 +308,55 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
     }
     func.edges = valid_edges;
 
-    // Update edge IDs in blocks
+    // Update edge IDs in blocks using the remapping
     for block in &mut func.blocks {
-        block.preds.retain(|eid| eid.index() < func.edges.len());
-        block.succs.retain(|eid| eid.index() < func.edges.len());
+        block.preds = block
+            .preds
+            .iter()
+            .filter_map(|&eid| old_edge_to_new.get(&eid).copied())
+            .collect();
+        block.succs = block
+            .succs
+            .iter()
+            .filter_map(|&eid| old_edge_to_new.get(&eid).copied())
+            .collect();
+    }
+
+    // Update edge IDs in terminators
+    for term in &mut func.terms {
+        match term {
+            crate::cfg_mir::Terminator::Branch { edge } => {
+                if let Some(&new_edge) = old_edge_to_new.get(edge) {
+                    *edge = new_edge;
+                }
+            }
+            crate::cfg_mir::Terminator::BranchIf {
+                taken, fallthrough, ..
+            }
+            | crate::cfg_mir::Terminator::BranchIfZero {
+                taken, fallthrough, ..
+            } => {
+                if let Some(&new_edge) = old_edge_to_new.get(taken) {
+                    *taken = new_edge;
+                }
+                if let Some(&new_edge) = old_edge_to_new.get(fallthrough) {
+                    *fallthrough = new_edge;
+                }
+            }
+            crate::cfg_mir::Terminator::JumpTable {
+                targets, default, ..
+            } => {
+                for edge in targets {
+                    if let Some(&new_edge) = old_edge_to_new.get(edge) {
+                        *edge = new_edge;
+                    }
+                }
+                if let Some(&new_edge) = old_edge_to_new.get(default) {
+                    *default = new_edge;
+                }
+            }
+            crate::cfg_mir::Terminator::Return | crate::cfg_mir::Terminator::ErrorExit { .. } => {}
+        }
     }
 
     true

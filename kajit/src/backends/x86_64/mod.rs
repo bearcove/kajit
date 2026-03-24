@@ -600,6 +600,11 @@ impl Lowerer {
             self.emit_store_incoming_lambda_args(&func.data_args);
 
             for (block_index, block) in func.blocks.iter().enumerate() {
+                // Skip dead blocks (tombstones from block merging)
+                if block.dead {
+                    continue;
+                }
+
                 self.flush_all_vregs();
                 let block_label = self.block_label(lambda_id, block.id);
                 self.ectx.bind_label(block_label);
