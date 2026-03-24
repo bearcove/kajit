@@ -1,4 +1,5 @@
 mod error;
+pub mod hints;
 mod ir;
 mod ir_passes;
 pub mod simplify_gamma;
