@@ -1374,10 +1374,9 @@ pub fn allocate_cfg_program_regalloc3_native(
     for func in &program.funcs {
         let mut func_mut = func.clone();
 
-        // Split critical edges so post-allocation copies can be placed correctly.
-        // A critical edge (pred with multiple succs → succ with multiple preds)
-        // needs an interposed block for edge-specific copies.
-        critical_edge::split_critical_edges(&mut func_mut);
+        // NOTE: critical edge splitting is deferred to after allocation,
+        // together with phi copy insertion. The copy insertion function
+        // handles edge placement correctly.
 
         // SSA-first allocation: do NOT insert phi copies before RA.
         // Instead, build copy hints from edge args so the allocator prefers
@@ -1396,11 +1395,11 @@ pub fn allocate_cfg_program_regalloc3_native(
         }
         let alloc_result = linear_scan::allocate(liveness, abi, scratch, &hints, &copy_hints);
 
-        // SSA destruction: insert copies for phi edges.
-        // TODO: use insert_phi_copies_with_coalescing to skip coalesced copies
+        // SSA destruction: split critical edges then insert copies for phi edges.
         let temp_vreg = kajit_ir::VReg::new(program.vreg_count);
         let force_all_copies = std::env::var("KAJIT_NO_COALESCE").is_ok();
         if force_all_copies {
+            critical_edge::split_critical_edges(&mut func_mut);
             phi_resolution::insert_phi_copies(&mut func_mut, temp_vreg);
         } else {
             insert_phi_copies_with_coalescing(&mut func_mut, &alloc_result, temp_vreg);
@@ -1465,6 +1464,9 @@ fn insert_phi_copies_with_coalescing(
 ) {
     use crate::regalloc3::linear_scan::Allocation as Ra3Alloc;
     use crate::regalloc3::parallel_copy::{Copy, ParallelCopyResolver};
+
+    // Split critical edges first so copies can be placed on specific edges
+    crate::regalloc3::critical_edge::split_critical_edges(func);
 
     for edge_idx in 0..func.edges.len() {
         let edge_id = cfg_mir::EdgeId(edge_idx as u32);
