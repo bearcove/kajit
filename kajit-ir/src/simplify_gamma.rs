@@ -10,7 +10,67 @@
 
 use std::collections::HashMap;
 
-use crate::{ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, RegionId, ResultId};
+use crate::{
+    ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, RegionArgRef, RegionId, ResultId,
+};
+
+/// Try to resolve a PortSource to a constant value.
+///
+/// Handles:
+/// 1. Direct Const node references
+/// 2. Region args that trace back to a theta input which is a constant
+///    AND the theta result passes the same arg through (loop-invariant constant)
+fn resolve_constant_source(func: &IrFunc, source: &PortSource) -> Option<usize> {
+    match source {
+        PortSource::Node(output_ref) => match &func.nodes[output_ref.node].kind {
+            NodeKind::Simple(IrOp::Const { value }) => Some(*value as usize),
+            _ => None,
+        },
+        PortSource::RegionArg(RegionArgRef { region, arg }) => {
+            // Find the arg's index in the region's arg list
+            let arg_index = func.regions[*region].args.iter().position(|a| a == arg)?;
+
+            // Find the node that owns this region (must be a theta or gamma)
+            let owner_node = func
+                .nodes
+                .iter()
+                .find(|(_, node)| match &node.kind {
+                    NodeKind::Theta { body } => *body == *region,
+                    NodeKind::Gamma { regions } => regions.contains(region),
+                    _ => false,
+                })
+                .map(|(nid, _)| nid)?;
+
+            let node = &func.nodes[owner_node];
+            match &node.kind {
+                NodeKind::Theta { body } => {
+                    // Theta: arg[K] corresponds to input[K]
+                    let input = node.inputs.get(arg_index)?;
+                    // Check that the theta result at this position passes the same arg through
+                    // (loop-invariant: result[K] == RegionArg(body, arg[K]))
+                    let result_id = func.regions[*body].results.get(arg_index)?;
+                    let result_source = &func.region_results[*result_id].source;
+                    let is_loop_invariant = matches!(
+                        result_source,
+                        PortSource::RegionArg(RegionArgRef { region: r, arg: a })
+                        if *r == *body && *a == *arg
+                    );
+                    if !is_loop_invariant {
+                        return None;
+                    }
+                    // Recurse: check if the theta input is a constant
+                    resolve_constant_source(func, &input.source)
+                }
+                NodeKind::Gamma { regions } => {
+                    // Gamma branch: arg[K] corresponds to gamma input[K+1] (skip predicate)
+                    let input = node.inputs.get(arg_index + 1)?;
+                    resolve_constant_source(func, &input.source)
+                }
+                _ => None,
+            }
+        }
+    }
+}
 
 /// Entry point: simplify gamma nodes until fixed point.
 pub fn simplify_trivial_gammas(func: &mut IrFunc) {
@@ -87,15 +147,9 @@ fn fold_constant_predicate(
     gamma_node: NodeId,
     branch_regions: &[RegionId],
 ) -> bool {
-    // Check if predicate is a constant.
+    // Check if predicate is a constant (direct or through theta arg).
     let pred_source = func.nodes[gamma_node].inputs[0].source;
-    let const_value = match pred_source {
-        PortSource::Node(output_ref) => match &func.nodes[output_ref.node].kind {
-            NodeKind::Simple(IrOp::Const { value }) => Some(*value as usize),
-            _ => None,
-        },
-        _ => None,
-    };
+    let const_value = resolve_constant_source(func, &pred_source);
 
     let Some(const_value) = const_value else {
         return false;
