@@ -396,136 +396,6 @@ fn find_def_block(func: &Function, vreg: VReg) -> Option<BlockId> {
     None
 }
 
-/// Replace vregs inside a LinearOp.
-fn replace_vregs_in_linear_op(op: &mut LinearOp, replacements: &HashMap<VReg, VReg>) {
-    // Helper to replace a single vreg
-    let replace = |v: &mut VReg| {
-        if let Some(&repl) = replacements.get(v) {
-            *v = repl;
-        }
-    };
-
-    match op {
-        LinearOp::Copy { dst, src } => {
-            replace(dst);
-            replace(src);
-        }
-        LinearOp::Const { dst, .. } => {
-            replace(dst);
-        }
-        LinearOp::BinOp { dst, lhs, rhs, .. } => {
-            replace(dst);
-            replace(lhs);
-            replace(rhs);
-        }
-        LinearOp::UnaryOp { dst, src, .. } => {
-            replace(dst);
-            replace(src);
-        }
-        LinearOp::LoadFromAddr { dst, addr, .. } => {
-            replace(dst);
-            replace(addr);
-        }
-        LinearOp::StoreToAddr { addr, src, .. } => {
-            replace(addr);
-            replace(src);
-        }
-        LinearOp::ReadBytes { dst, .. }
-        | LinearOp::PeekByte { dst }
-        | LinearOp::SaveCursor { dst }
-        | LinearOp::SaveInputEnd { dst }
-        | LinearOp::ReadFromField { dst, .. }
-        | LinearOp::SlotAddr { dst, .. }
-        | LinearOp::SaveOutPtr { dst }
-        | LinearOp::ReadFromSlot { dst, .. } => {
-            replace(dst);
-        }
-        LinearOp::RestoreCursor { src }
-        | LinearOp::AdvanceCursorBy { src }
-        | LinearOp::SetOutPtr { src }
-        | LinearOp::WriteToSlot { src, .. }
-        | LinearOp::WriteToField { src, .. } => {
-            replace(src);
-        }
-        LinearOp::CallIntrinsic { args, dst, .. } => {
-            for arg in args {
-                replace(arg);
-            }
-            if let Some(d) = dst {
-                replace(d);
-            }
-        }
-        LinearOp::CallPure { args, dst, .. } => {
-            for arg in args {
-                replace(arg);
-            }
-            replace(dst);
-        }
-        LinearOp::CallLambda { args, results, .. } => {
-            for arg in args {
-                replace(arg);
-            }
-            for result in results {
-                replace(result);
-            }
-        }
-        LinearOp::BranchIf {
-            cond,
-            phi_args,
-            fallthrough_phi_args,
-            ..
-        }
-        | LinearOp::BranchIfZero {
-            cond,
-            phi_args,
-            fallthrough_phi_args,
-            ..
-        } => {
-            replace(cond);
-            for (src, tgt) in phi_args {
-                replace(src);
-                replace(tgt);
-            }
-            for (src, tgt) in fallthrough_phi_args {
-                replace(src);
-                replace(tgt);
-            }
-        }
-        LinearOp::Branch { phi_args, .. } => {
-            for (src, tgt) in phi_args {
-                replace(src);
-                replace(tgt);
-            }
-        }
-        LinearOp::JumpTable { predicate, .. } => {
-            replace(predicate);
-        }
-        LinearOp::SimdStringScan { pos, kind } => {
-            replace(pos);
-            replace(kind);
-        }
-        LinearOp::FuncStart {
-            data_args,
-            data_results,
-            ..
-        } => {
-            for arg in data_args {
-                replace(arg);
-            }
-            for result in data_results {
-                replace(result);
-            }
-        }
-        // No vregs to replace
-        LinearOp::Label(_)
-        | LinearOp::BoundsCheck { .. }
-        | LinearOp::AdvanceCursor { .. }
-        | LinearOp::SimdWhitespaceSkip
-        | LinearOp::ErrorExit { .. }
-        | LinearOp::FuncEnd => {}
-    }
-}
-
 /// Replace uses of invariant parameters with their invariant values.
 fn replace_vregs_in_function(
     func: &mut Function,
@@ -548,7 +418,11 @@ fn replace_vregs_in_function(
             let inst = &mut func.insts[inst_id.index()];
 
             // Replace vregs in the LinearOp itself
-            replace_vregs_in_linear_op(&mut inst.op, &replacements);
+            inst.op.for_each_vreg_mut(|v| {
+                if let Some(&repl) = replacements.get(v) {
+                    *v = repl;
+                }
+            });
 
             // Replace vregs in operands array
             for operand in &mut inst.operands {

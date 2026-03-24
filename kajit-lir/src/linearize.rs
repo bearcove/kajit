@@ -226,6 +226,317 @@ pub enum LinearOp {
     },
 }
 
+impl LinearOp {
+    /// Visit every VReg *use* (read) in this op, mutably.
+    pub fn for_each_use_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
+        use LinearOp::*;
+        match self {
+            // Values
+            Const { .. } => {}
+            BinOp { lhs, rhs, .. } => {
+                f(lhs);
+                f(rhs);
+            }
+            UnaryOp { src, .. } | Copy { src, .. } => f(src),
+
+            // Cursor
+            BoundsCheck { .. } | AdvanceCursor { .. } => {}
+            ReadBytes { .. } | PeekByte { .. } | SaveCursor { .. } | SaveInputEnd { .. } => {}
+            AdvanceCursorBy { src } | RestoreCursor { src } => f(src),
+
+            // Output
+            WriteToField { src, .. } => f(src),
+            ReadFromField { .. } => {}
+            SaveOutPtr { .. } => {}
+            SetOutPtr { src } => f(src),
+
+            // Stack
+            SlotAddr { .. } => {}
+            StoreToAddr { addr, src, .. } => {
+                f(addr);
+                f(src);
+            }
+            LoadFromAddr { addr, .. } => f(addr),
+            WriteToSlot { src, .. } => f(src),
+            ReadFromSlot { .. } => {}
+
+            // Calls
+            CallIntrinsic { args, .. } => {
+                for arg in args {
+                    f(arg);
+                }
+            }
+            CallPure { args, .. } => {
+                for arg in args {
+                    f(arg);
+                }
+            }
+
+            // Control flow
+            Label(_) | ErrorExit { .. } => {}
+            Branch { phi_args, .. } => {
+                for (src, _dst) in phi_args {
+                    f(src);
+                }
+            }
+            BranchIf {
+                cond,
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            } => {
+                f(cond);
+                for (src, _dst) in phi_args {
+                    f(src);
+                }
+                for (src, _dst) in fallthrough_phi_args {
+                    f(src);
+                }
+            }
+            BranchIfZero {
+                cond,
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            } => {
+                f(cond);
+                for (src, _dst) in phi_args {
+                    f(src);
+                }
+                for (src, _dst) in fallthrough_phi_args {
+                    f(src);
+                }
+            }
+            JumpTable { predicate, .. } => f(predicate),
+
+            // SIMD
+            SimdStringScan { pos, kind } => {
+                f(pos);
+                f(kind);
+            }
+            SimdWhitespaceSkip => {}
+
+            // Function structure
+            FuncStart { data_args, .. } => {
+                for arg in data_args {
+                    f(arg);
+                }
+            }
+            FuncEnd => {}
+            CallLambda { args, .. } => {
+                for arg in args {
+                    f(arg);
+                }
+            }
+        }
+    }
+
+    /// Visit every VReg *definition* (write) in this op, mutably.
+    pub fn for_each_def_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
+        use LinearOp::*;
+        match self {
+            Const { dst, .. }
+            | BinOp { dst, .. }
+            | UnaryOp { dst, .. }
+            | Copy { dst, .. }
+            | ReadBytes { dst, .. }
+            | PeekByte { dst }
+            | SaveCursor { dst }
+            | SaveInputEnd { dst }
+            | ReadFromField { dst, .. }
+            | SaveOutPtr { dst }
+            | SlotAddr { dst, .. }
+            | LoadFromAddr { dst, .. }
+            | ReadFromSlot { dst, .. }
+            | CallPure { dst, .. } => f(dst),
+
+            CallIntrinsic { dst, .. } => {
+                if let Some(dst) = dst {
+                    f(dst);
+                }
+            }
+
+            // Phi targets in branches
+            Branch { phi_args, .. } => {
+                for (_src, dst) in phi_args {
+                    f(dst);
+                }
+            }
+            BranchIf {
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            }
+            | BranchIfZero {
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            } => {
+                for (_src, dst) in phi_args {
+                    f(dst);
+                }
+                for (_src, dst) in fallthrough_phi_args {
+                    f(dst);
+                }
+            }
+
+            // Function structure defs
+            FuncStart { data_results, .. } => {
+                for r in data_results {
+                    f(r);
+                }
+            }
+            CallLambda { results, .. } => {
+                for r in results {
+                    f(r);
+                }
+            }
+
+            // No defs
+            BoundsCheck { .. }
+            | AdvanceCursor { .. }
+            | AdvanceCursorBy { .. }
+            | RestoreCursor { .. }
+            | WriteToField { .. }
+            | SetOutPtr { .. }
+            | StoreToAddr { .. }
+            | WriteToSlot { .. }
+            | Label(_)
+            | ErrorExit { .. }
+            | JumpTable { .. }
+            | SimdStringScan { .. }
+            | SimdWhitespaceSkip
+            | FuncEnd => {}
+        }
+    }
+
+    /// Visit every VReg in this op (both uses and defs), mutably.
+    pub fn for_each_vreg_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
+        use LinearOp::*;
+        match self {
+            Const { dst, .. } => f(dst),
+            BinOp { dst, lhs, rhs, .. } => {
+                f(dst);
+                f(lhs);
+                f(rhs);
+            }
+            UnaryOp { dst, src, .. } | Copy { dst, src } => {
+                f(dst);
+                f(src);
+            }
+
+            BoundsCheck { .. } | AdvanceCursor { .. } => {}
+            ReadBytes { dst, .. } => f(dst),
+            PeekByte { dst } => f(dst),
+            AdvanceCursorBy { src } => f(src),
+            SaveCursor { dst } => f(dst),
+            SaveInputEnd { dst } => f(dst),
+            RestoreCursor { src } => f(src),
+
+            WriteToField { src, .. } => f(src),
+            ReadFromField { dst, .. } => f(dst),
+            SaveOutPtr { dst } => f(dst),
+            SetOutPtr { src } => f(src),
+
+            SlotAddr { dst, .. } => f(dst),
+            StoreToAddr { addr, src, .. } => {
+                f(addr);
+                f(src);
+            }
+            LoadFromAddr { dst, addr, .. } => {
+                f(dst);
+                f(addr);
+            }
+            WriteToSlot { src, .. } => f(src),
+            ReadFromSlot { dst, .. } => f(dst),
+
+            CallIntrinsic { args, dst, .. } => {
+                for arg in args {
+                    f(arg);
+                }
+                if let Some(dst) = dst {
+                    f(dst);
+                }
+            }
+            CallPure { args, dst, .. } => {
+                for arg in args {
+                    f(arg);
+                }
+                f(dst);
+            }
+
+            Label(_) | ErrorExit { .. } => {}
+            Branch { phi_args, .. } => {
+                for (src, dst) in phi_args {
+                    f(src);
+                    f(dst);
+                }
+            }
+            BranchIf {
+                cond,
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            } => {
+                f(cond);
+                for (src, dst) in phi_args {
+                    f(src);
+                    f(dst);
+                }
+                for (src, dst) in fallthrough_phi_args {
+                    f(src);
+                    f(dst);
+                }
+            }
+            BranchIfZero {
+                cond,
+                phi_args,
+                fallthrough_phi_args,
+                ..
+            } => {
+                f(cond);
+                for (src, dst) in phi_args {
+                    f(src);
+                    f(dst);
+                }
+                for (src, dst) in fallthrough_phi_args {
+                    f(src);
+                    f(dst);
+                }
+            }
+            JumpTable { predicate, .. } => f(predicate),
+
+            SimdStringScan { pos, kind } => {
+                f(pos);
+                f(kind);
+            }
+            SimdWhitespaceSkip => {}
+
+            FuncStart {
+                data_args,
+                data_results,
+                ..
+            } => {
+                for arg in data_args {
+                    f(arg);
+                }
+                for r in data_results {
+                    f(r);
+                }
+            }
+            FuncEnd => {}
+            CallLambda { args, results, .. } => {
+                for arg in args {
+                    f(arg);
+                }
+                for r in results {
+                    f(r);
+                }
+            }
+        }
+    }
+}
+
 // ─── LinearIr ────────────────────────────────────────────────────────────────
 
 /// The linearized form of an RVSDG function.

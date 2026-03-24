@@ -25,6 +25,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::cfg_mir::{BlockId, EdgeId, Function, TermId, Terminator};
+use kajit_ir::VReg;
 
 /// Merge empty forwarding blocks into their predecessors.
 ///
@@ -88,13 +89,8 @@ fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
             continue;
         }
 
-        // Skip non-empty blocks
+        // Skip non-empty blocks (must have no instructions)
         if !block.insts.is_empty() {
-            continue;
-        }
-
-        // Skip blocks with parameters (complex to merge)
-        if !block.params.is_empty() {
             continue;
         }
 
@@ -103,7 +99,7 @@ fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
             continue;
         }
 
-        // Must have exactly one successor (simple forwarding)
+        // Must have exactly one successor (simple forwarding via unconditional branch)
         if block.succs.len() != 1 {
             continue;
         }
@@ -112,16 +108,12 @@ fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
         let pred_edge = &func.edges[pred_edge_id.index()];
         let pred_block = pred_edge.from;
 
-        // Don't merge if edge has arguments (would need to handle phi parameters)
-        if !pred_edge.args.is_empty() {
-            continue;
-        }
-
-        // Don't merge if successor edge has arguments
-        let succ_edge_id = block.succs[0];
-        let succ_edge = &func.edges[succ_edge_id.index()];
-        if !succ_edge.args.is_empty() {
-            continue;
+        // If block has params, the incoming edge MUST supply all of them
+        // (and we'll substitute them through the outgoing edge args)
+        if !block.params.is_empty() {
+            if pred_edge.args.len() != block.params.len() {
+                continue;
+            }
         }
 
         // Found a candidate!
@@ -135,10 +127,13 @@ fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
 ///
 /// Assumes:
 /// - empty_block has no instructions
-/// - empty_block has no parameters
 /// - empty_block has exactly one predecessor (pred_block)
-/// - pred_block has exactly one successor (empty_block)
-/// - The edge between them has no arguments
+/// - Unconditional branch to single successor
+///
+/// Handles two cases:
+/// 1. Block has no params: just copy outgoing edge args to incoming edge
+/// 2. Block has params: substitute param vregs in outgoing edge args with
+///    values from incoming edge args (composition)
 fn merge_blocks(func: &mut Function, empty_block: BlockId, _pred_block: BlockId) {
     let debug = std::env::var("KAJIT_DEBUG_BLOCK_MERGE").is_ok();
 
@@ -146,6 +141,7 @@ fn merge_blocks(func: &mut Function, empty_block: BlockId, _pred_block: BlockId)
     let empty = &func.blocks[empty_block.index()];
     let edge_into_empty = empty.preds[0]; // pred → empty
     let edge_out_of_empty = empty.succs[0]; // empty → succ
+    let block_params = empty.params.clone();
 
     let final_target = func.edges[edge_out_of_empty.index()].to;
 
@@ -163,28 +159,48 @@ fn merge_blocks(func: &mut Function, empty_block: BlockId, _pred_block: BlockId)
         );
         eprintln!("    pred terminator: {:?}", pred_term);
         eprintln!(
-            "    edge args: {:?}",
+            "    edge in args: {:?}",
             func.edges[edge_into_empty.index()].args
         );
         eprintln!(
-            "    final_target params: {:?}",
-            func.blocks[final_target.index()].params
+            "    edge out args: {:?}",
+            func.edges[edge_out_of_empty.index()].args
         );
+    }
+
+    // Build substitution map: param vreg → source vreg from incoming edge
+    let incoming_args = func.edges[edge_into_empty.index()].args.clone();
+    let mut param_subst: HashMap<VReg, VReg> = HashMap::new();
+    for (param, edge_arg) in block_params.iter().zip(incoming_args.iter()) {
+        param_subst.insert(*param, edge_arg.source);
+    }
+
+    // Compose outgoing edge args through substitution
+    let mut composed_args = func.edges[edge_out_of_empty.index()].args.clone();
+    for arg in &mut composed_args {
+        if let Some(&replacement) = param_subst.get(&arg.source) {
+            arg.source = replacement;
+        }
     }
 
     // Strategy: Retarget edge_into_empty to point to final_target
     // This way pred's terminator doesn't need to change (it already references edge_into_empty)
 
-    // Step 1: Update the edge to point to the final target, copying arguments from edge_out_of_empty
-    let edge_out_args = func.edges[edge_out_of_empty.index()].args.clone();
+    // Step 1: Update the edge to point to the final target with composed arguments
     func.edges[edge_into_empty.index()].to = final_target;
-    func.edges[edge_into_empty.index()].args = edge_out_args;
+    func.edges[edge_into_empty.index()].args = composed_args;
 
-    // Step 2: Remove edge_into_empty from the old target (empty block)'s preds
+    // Step 2: If block had params, globally substitute them with their source values.
+    // These params are now "dead definitions" since the block is being removed.
+    if !param_subst.is_empty() {
+        super::constant_phi_elim::replace_vregs_in_function(func, &param_subst);
+    }
+
+    // Step 3: Remove edge_into_empty from the old target (empty block)'s preds
     let empty_mut = &mut func.blocks[empty_block.index()];
     empty_mut.preds.retain(|&e| e != edge_into_empty);
 
-    // Step 3: Update final_target's predecessor list
+    // Step 4: Update final_target's predecessor list
     // Replace edge_out_of_empty with edge_into_empty
     let succ_block = &mut func.blocks[final_target.index()];
     let mut found = false;
@@ -216,14 +232,14 @@ fn merge_blocks(func: &mut Function, empty_block: BlockId, _pred_block: BlockId)
         );
     }
 
-    // Step 4: Update pred's successor list
+    // Step 5: Update pred's successor list
     // If pred had edge_into_empty in its succs, it's already there (no change needed)
     // The edge ID stays the same, just points to a different block now
 
-    // Step 5: Mark empty block as dead and clear preds so remove_unreachable_blocks finds it
+    // Step 6: Mark empty block as dead and clear preds so remove_unreachable_blocks finds it
     let empty_block_mut = &mut func.blocks[empty_block.index()];
     empty_block_mut.dead = true;
-    // Preds already removed in step 2, but clear succs too for consistency
+    // Preds already removed in step 3, but clear succs too for consistency
     empty_block_mut.succs.clear();
 }
 
