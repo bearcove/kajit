@@ -38,9 +38,9 @@
 //! ```
 
 pub mod machine_inst;
+pub mod progpoint;
 
 // Future modules (not yet implemented):
-// mod progpoint;
 // mod liveness;
 // mod linear_scan;
 // mod parallel_copy;
