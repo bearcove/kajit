@@ -1792,6 +1792,39 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
     let mut cfg = lower_linear_ir(ir);
     let opts = CfgOptOptions::from_env();
 
+    // SSA validation: enabled in debug builds or via KAJIT_VALIDATE_SSA=1
+    let validate_ssa = cfg!(debug_assertions) || std::env::var("KAJIT_VALIDATE_SSA").is_ok();
+
+    // Helper to validate after each opt
+    let mut validate_after = |pass_name: &str, cfg: &Program| {
+        if !validate_ssa {
+            return;
+        }
+        eprintln!("[SSA] Validating after {}...", pass_name);
+        for func in &cfg.funcs {
+            if let Err(errors) = crate::opt::validate_ssa::validate_ssa(func) {
+                eprintln!(
+                    "\n❌ SSA VALIDATION FAILED after optimization pass: {}",
+                    pass_name
+                );
+                eprintln!("Found {} SSA violation(s):\n", errors.len());
+                for (i, error) in errors.iter().enumerate() {
+                    eprintln!("  {}. {}", i + 1, error);
+                }
+                eprintln!("\nTo debug:");
+                eprintln!(
+                    "  1. Run with KAJIT_CFG_OPTS=-all,+{} to isolate this pass",
+                    pass_name
+                );
+                eprintln!("  2. Add KAJIT_DUMP_STAGES=cfg to see CFG before/after");
+                eprintln!("  3. Check if other passes compensate (try adding +cse, +gvn, etc.)");
+                panic!("SSA validation failed after {}", pass_name);
+            } else {
+                eprintln!("[SSA] ✓ Passed validation after {}", pass_name);
+            }
+        }
+    };
+
     // Run loop-invariant phi elimination early (requires analysis passes)
     if opts.enabled("loop_phi_elim") {
         for func in &mut cfg.funcs {
@@ -1799,34 +1832,43 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
             let loops = crate::analysis::loops::LoopInfo::compute(func, &dom);
             crate::opt::loop_phi_elim::eliminate_loop_invariant_phis(func, &dom, &loops);
         }
+        validate_after("loop_phi_elim", &cfg);
     }
 
     if opts.enabled("remat") {
         rematerialize_constants(&mut cfg);
+        validate_after("remat", &cfg);
     }
     if opts.enabled("cse") {
         local_cse(&mut cfg);
+        validate_after("cse", &cfg);
     }
     if opts.enabled("gvn") {
         global_value_numbering(&mut cfg);
+        validate_after("gvn", &cfg);
     }
     if opts.enabled("copyprop") {
         copy_propagation(&mut cfg);
+        validate_after("copyprop", &cfg);
     }
     if opts.enabled("fuse_cmpz") {
         fuse_compare_zero_branch(&mut cfg);
+        validate_after("fuse_cmpz", &cfg);
     }
     if opts.enabled("elim_imm") {
         eliminate_immediate_only_const_defs(&mut cfg);
+        validate_after("elim_imm", &cfg);
     }
     if opts.enabled("dce") {
         dead_code_elimination(&mut cfg);
+        validate_after("dce", &cfg);
     }
     if opts.enabled("merge_blocks") {
         for func in &mut cfg.funcs {
             crate::opt::block_merge::merge_empty_blocks(func);
             // Note: unreachable blocks are left in place, will be cleaned up by later passes
         }
+        validate_after("merge_blocks", &cfg);
     }
     // TODO: simplify_trivial_phis needs more work to maintain SSA
     // The basic idea is sound (found 32 trivial phis in scalar_u32)
