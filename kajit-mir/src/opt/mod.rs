@@ -8,6 +8,7 @@
 //! - `validate_ssa`: SSA validation to catch def/use violations
 
 pub mod block_merge;
+pub mod const_branch_fold;
 pub mod constant_phi_elim;
 pub mod loop_phi_elim;
 pub mod validate;

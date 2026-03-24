@@ -1941,6 +1941,12 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
         dead_code_elimination(&mut cfg);
         validate_after("dce", &cfg);
     }
+    if opts.enabled("const_branch_fold") {
+        for func in &mut cfg.funcs {
+            crate::opt::const_branch_fold::fold_const_branches(func);
+        }
+        validate_after("const_branch_fold", &cfg);
+    }
     if opts.enabled("merge_blocks") {
         for func in &mut cfg.funcs {
             crate::opt::block_merge::merge_empty_blocks(func);
