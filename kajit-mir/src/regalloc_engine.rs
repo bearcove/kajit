@@ -1380,10 +1380,11 @@ pub fn allocate_cfg_program_regalloc3_native(
         phi_resolution::insert_phi_copies(&mut func_mut, temp_vreg);
 
         // Run regalloc3 pipeline
+        let copy_hints = linear_scan::CopyHints::build(&func_mut);
         let progpoints = progpoint::ProgPointMap::build(&func_mut);
         let liveness = liveness::compute_liveness(&func_mut, &progpoints);
         let hints = &program.hints;
-        let alloc_result = linear_scan::allocate(liveness, abi, scratch, hints);
+        let alloc_result = linear_scan::allocate(liveness, abi, scratch, hints, &copy_hints);
 
         // Assign spill slots
         let mut spill_slots = HashMap::new();

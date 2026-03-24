@@ -24,6 +24,7 @@
 //! - Spill slot (will be rewritten in spill/reload pass)
 
 use kajit_ir::VReg;
+use kajit_lir::LinearOp;
 use std::collections::HashMap;
 
 use super::{
@@ -32,6 +33,38 @@ use super::{
     machine_inst::{AbiInfo, PReg, ScratchPolicy},
     progpoint::{LiveInterval, ProgPoint},
 };
+
+use crate::cfg_mir::Function;
+
+/// Copy-preference hints for register coalescing.
+///
+/// For each vreg, stores the set of vregs it has been copied to/from
+/// (via phi copies on block edges). When allocating, the allocator
+/// prefers to assign the same physical register as a copy partner
+/// that's already allocated, eliminating the copy at runtime.
+#[derive(Debug, Default)]
+pub struct CopyHints {
+    /// vreg → list of preferred partner vregs
+    pub partners: HashMap<VReg, Vec<VReg>>,
+}
+
+impl CopyHints {
+    /// Build copy hints from Copy instructions in the function.
+    pub fn build(func: &Function) -> Self {
+        let mut partners: HashMap<VReg, Vec<VReg>> = HashMap::new();
+
+        for inst in &func.insts {
+            if let LinearOp::Copy { dst, src } = &inst.op {
+                if dst != src {
+                    partners.entry(*dst).or_default().push(*src);
+                    partners.entry(*src).or_default().push(*dst);
+                }
+            }
+        }
+
+        CopyHints { partners }
+    }
+}
 
 /// Allocation decision for a vreg
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +99,9 @@ pub struct LinearScanAllocator<'a> {
     /// Allocation hints (spill costs from RVSDG)
     hints: &'a HintMap,
 
+    /// Copy-preference hints for coalescing
+    copy_hints: &'a CopyHints,
+
     /// Allocation decisions
     allocations: HashMap<VReg, Allocation>,
 
@@ -96,19 +132,22 @@ impl<'a> LinearScanAllocator<'a> {
         abi: &'a AbiInfo,
         scratch: &'a ScratchPolicy,
         hints: &'a HintMap,
+        copy_hints: &'a CopyHints,
     ) -> Self {
         // Extract and sort intervals by start point
         let mut intervals: Vec<LiveInterval> = liveness.intervals.into_values().collect();
         intervals.sort_by_key(|iv| iv.start());
 
-        // Initialize free register pool (GPR only, excluding scratch)
+        // Initialize free register pool (GPR only, excluding scratch).
+        // Callee-saved go first (bottom of stack) so they're allocated last,
+        // minimizing the number of stp/ldp pairs in the prologue/epilogue.
         let mut free = Vec::new();
-        for &preg in abi.caller_saved_gpr {
+        for &preg in abi.callee_saved_gpr {
             if !scratch.reserved.contains(&preg) {
                 free.push(preg);
             }
         }
-        for &preg in abi.callee_saved_gpr {
+        for &preg in abi.caller_saved_gpr {
             if !scratch.reserved.contains(&preg) {
                 free.push(preg);
             }
@@ -119,6 +158,7 @@ impl<'a> LinearScanAllocator<'a> {
             abi,
             scratch,
             hints,
+            copy_hints,
             allocations: HashMap::new(),
             active: Vec::new(),
             free,
@@ -145,9 +185,20 @@ impl<'a> LinearScanAllocator<'a> {
         // Expire old intervals (end < start)
         self.expire_old_intervals(start);
 
-        // Try to allocate a free register
-        if let Some(preg) = self.free.pop() {
-            // Allocate to free register
+        // Try to allocate a register, preferring copy partner's register
+        let preferred = self.find_preferred_register(interval.vreg);
+        let preg = if let Some(preferred) = preferred {
+            // Try to use the preferred register (copy partner's register)
+            if let Some(idx) = self.free.iter().position(|&r| r == preferred) {
+                Some(self.free.remove(idx))
+            } else {
+                self.free.pop()
+            }
+        } else {
+            self.free.pop()
+        };
+
+        if let Some(preg) = preg {
             self.allocations
                 .insert(interval.vreg, Allocation::Reg(preg));
             self.active.push(ActiveInterval {
@@ -160,6 +211,20 @@ impl<'a> LinearScanAllocator<'a> {
             // No free register, must spill
             self.spill(interval, start);
         }
+    }
+
+    /// Find a preferred physical register for this vreg based on copy hints.
+    ///
+    /// If this vreg is a copy partner of another vreg that's already allocated
+    /// to a physical register, prefer that register to eliminate the copy.
+    fn find_preferred_register(&self, vreg: VReg) -> Option<PReg> {
+        let partners = self.copy_hints.partners.get(&vreg)?;
+        for partner in partners {
+            if let Some(Allocation::Reg(preg)) = self.allocations.get(partner) {
+                return Some(*preg);
+            }
+        }
+        None
     }
 
     /// Expire intervals that end before current point
@@ -249,8 +314,9 @@ pub fn allocate(
     abi: &AbiInfo,
     scratch: &ScratchPolicy,
     hints: &HintMap,
+    copy_hints: &CopyHints,
 ) -> AllocationResult {
-    let allocator = LinearScanAllocator::new(liveness, abi, scratch, hints);
+    let allocator = LinearScanAllocator::new(liveness, abi, scratch, hints, copy_hints);
     allocator.allocate()
 }
 
@@ -318,7 +384,8 @@ mod tests {
         let progpoints = ProgPointMap::build(&func);
         let liveness = compute_liveness(&func, &progpoints);
         let hints = HintMap::new();
-        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+        let copy_hints = CopyHints::default();
+        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
         // Should allocate to a register (plenty available)
         assert!(matches!(
@@ -420,7 +487,8 @@ mod tests {
         let progpoints = ProgPointMap::build(&func);
         let liveness = compute_liveness(&func, &progpoints);
         let hints = HintMap::new();
-        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+        let copy_hints = CopyHints::default();
+        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
         // Should have some spills (6 vregs, 5 registers)
         // Note: dead code (unused defs) won't cause pressure
@@ -478,7 +546,8 @@ mod tests {
         let progpoints = ProgPointMap::build(&func);
         let liveness = compute_liveness(&func, &progpoints);
         let hints = HintMap::new();
-        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+        let copy_hints = CopyHints::default();
+        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
         // Both should get registers (non-overlapping)
         assert!(matches!(
@@ -607,7 +676,8 @@ mod tests {
             },
         );
 
-        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+        let copy_hints = CopyHints::default();
+        let result = allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
         // If spilling happens, v2 should be spilled (lower cost) not v1
         // Note: with 6 dead vregs and 5 registers, we may not actually spill

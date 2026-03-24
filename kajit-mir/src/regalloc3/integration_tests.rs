@@ -76,7 +76,8 @@ fn test_end_to_end_simple() {
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
     let hints = hints::HintMap::new();
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+    let copy_hints = linear_scan::CopyHints::default();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
     // Should allocate v1 to a register
     assert!(matches!(
@@ -142,7 +143,8 @@ fn test_end_to_end_with_use() {
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
     let hints = hints::HintMap::new();
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+    let copy_hints = linear_scan::CopyHints::default();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
     // Both should be allocated
     assert!(alloc.allocations.contains_key(&VReg::new(1)));
@@ -203,7 +205,8 @@ fn test_end_to_end_block_params() {
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
     let hints = hints::HintMap::new();
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+    let copy_hints = linear_scan::CopyHints::default();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
     // Both vregs should be allocated
     assert!(alloc.allocations.contains_key(&VReg::new(1)));
@@ -315,7 +318,8 @@ fn test_end_to_end_register_pressure() {
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
     let hints = hints::HintMap::new();
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+    let copy_hints = linear_scan::CopyHints::default();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
     // All vregs should have allocations (some may be spilled)
     assert_eq!(alloc.allocations.len(), 7);
@@ -381,7 +385,8 @@ fn test_end_to_end_with_spill_rewrite() {
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
     let hints = hints::HintMap::new();
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
+    let copy_hints = linear_scan::CopyHints::default();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints, &copy_hints);
 
     // Run spill rewrite
     let spill_result = spill_rewrite::rewrite_spills(&mut func, &alloc, &TEST_SCRATCH);
