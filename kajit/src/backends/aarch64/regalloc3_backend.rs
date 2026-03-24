@@ -963,9 +963,21 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     // Check which callee-saved registers are used
     let extra_saved_pairs = regalloc3_extra_saved_pairs(alloc);
 
+    // Detect leaf functions (no bl instructions needed)
+    let is_leaf = program.funcs.iter().all(|func| {
+        func.insts.iter().all(|inst| {
+            !matches!(
+                inst.op,
+                LinearOp::CallIntrinsic { .. }
+                    | LinearOp::CallPure { .. }
+                    | LinearOp::CallLambda { .. }
+            )
+        })
+    });
+
     // Create emission context with stack space for spills + user slots
     let extra_stack = ((max_spillslots + program.slot_count as usize) * 8) as u32;
-    let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs);
+    let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
 
     // Emit function prologue

@@ -316,7 +316,7 @@ impl Lowerer<'_> {
         let edge_tmp_bytes = max_parallel_moves * 8;
         let extra_stack = slot_bytes + spill_bytes + edge_tmp_bytes + 8;
 
-        let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs);
+        let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, false);
 
         let mut block_labels = BTreeMap::new();
         let mut lambda_max = 0usize;
