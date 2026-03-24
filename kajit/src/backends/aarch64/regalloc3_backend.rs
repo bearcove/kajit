@@ -19,6 +19,8 @@ struct EmitContext<'a> {
     success_exit: LabelId,
     /// Slot offset base: base_frame + spill_slots * 8 gives the start of user slots.
     slot_base: u32,
+    /// VReg → constant value (for immediate folding in BinOps)
+    const_values: HashMap<kajit_ir::VReg, u64>,
 }
 
 impl<'a> EmitContext<'a> {
@@ -113,6 +115,16 @@ impl<'a> EmitContext<'a> {
         }
     }
 
+    /// If vreg is a known constant that fits in a 12-bit immediate, return its value.
+    fn small_const(&self, vreg: kajit_ir::VReg) -> Option<u16> {
+        let value = self.const_values.get(&vreg)?;
+        if *value <= 0xFFF {
+            Some(*value as u16)
+        } else {
+            None
+        }
+    }
+
     /// Offset of a user slot on the stack.
     fn slot_off(&self, slot: u32) -> u32 {
         self.slot_base + slot * 8
@@ -133,9 +145,11 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::Const { dst, value } => {
-                // Try to emit directly into the target register
                 if let Some(preg) = self.preg_for_vreg(*dst) {
                     self.emit_load_u64(self.preg_to_reg(preg), *value);
+                } else if self.alloc_func.rematerializable.contains_key(dst) {
+                    // Rematerializable constant: skip store to spill slot.
+                    // All reads of this vreg will re-emit movz instead.
                 } else {
                     // Spilled - load into x9, store to spill slot
                     self.emit_load_u64(Reg::X9, *value);
@@ -469,7 +483,7 @@ impl<'a> EmitContext<'a> {
         lhs: kajit_ir::VReg,
         rhs: kajit_ir::VReg,
     ) {
-        // Comparisons: cmp + cset
+        // Comparisons: cmp + cset (with immediate folding)
         if matches!(
             kind,
             BinOpKind::CmpEq
@@ -480,11 +494,19 @@ impl<'a> EmitContext<'a> {
                 | BinOpKind::CmpGe
         ) {
             let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X9);
-            let rhs_reg = self.reg_for_vreg_with_temp(rhs, Reg::X10);
-            self.ectx
-                .emit
-                .emit_cmp_reg(Width::X64, lhs_reg, rhs_reg)
-                .expect("cmp");
+            // Fold rhs constant into cmp immediate
+            if let Some(imm) = self.small_const(rhs) {
+                self.ectx
+                    .emit
+                    .emit_cmp_imm(Width::X64, lhs_reg, imm)
+                    .expect("cmp imm");
+            } else {
+                let rhs_reg = self.reg_for_vreg_with_temp(rhs, Reg::X10);
+                self.ectx
+                    .emit
+                    .emit_cmp_reg(Width::X64, lhs_reg, rhs_reg)
+                    .expect("cmp");
+            }
             let condition = match kind {
                 BinOpKind::CmpEq => Condition::Eq,
                 BinOpKind::CmpNe => Condition::Ne,
@@ -508,6 +530,37 @@ impl<'a> EmitContext<'a> {
                 self.store_to_vreg(dst, Reg::X9);
             }
             return;
+        }
+
+        // Try to fold a small constant rhs into an immediate-form instruction
+        if let Some(imm) = self.small_const(rhs) {
+            if matches!(kind, BinOpKind::Add | BinOpKind::Sub) {
+                let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X9);
+                let result_reg = if let Some(preg) = self.preg_for_vreg(dst) {
+                    self.preg_to_reg(preg)
+                } else {
+                    Reg::X11
+                };
+                match kind {
+                    BinOpKind::Add => {
+                        self.ectx
+                            .emit
+                            .emit_add_imm(Width::X64, result_reg, lhs_reg, imm, false)
+                            .expect("add imm");
+                    }
+                    BinOpKind::Sub => {
+                        self.ectx
+                            .emit
+                            .emit_sub_imm(Width::X64, result_reg, lhs_reg, imm, false)
+                            .expect("sub imm");
+                    }
+                    _ => unreachable!(),
+                }
+                if result_reg == Reg::X11 {
+                    self.store_to_vreg(dst, result_reg);
+                }
+                return;
+            }
         }
 
         // Arithmetic/logic: load operands, compute, store
@@ -923,6 +976,14 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
     // Compile first function
     if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
+        // Build constant value map for immediate folding
+        let mut const_values = HashMap::new();
+        for inst in &func.insts {
+            if let LinearOp::Const { dst, value } = &inst.op {
+                const_values.insert(*dst, *value);
+            }
+        }
+
         let mut ctx = EmitContext {
             ectx: &mut ectx,
             func,
@@ -930,6 +991,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             block_labels: HashMap::new(),
             success_exit,
             slot_base,
+            const_values,
         };
 
         ctx.emit_function();
