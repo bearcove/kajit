@@ -45,3 +45,6 @@ pub mod parallel_copy;
 pub mod progpoint;
 pub mod spill_rewrite;
 pub mod verify;
+
+#[cfg(test)]
+mod integration_tests;
