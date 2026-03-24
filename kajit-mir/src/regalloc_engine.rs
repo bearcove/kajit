@@ -1374,6 +1374,11 @@ pub fn allocate_cfg_program_regalloc3_native(
     for func in &program.funcs {
         let mut func_mut = func.clone();
 
+        // Split critical edges so post-allocation copies can be placed correctly.
+        // A critical edge (pred with multiple succs → succ with multiple preds)
+        // needs an interposed block for edge-specific copies.
+        critical_edge::split_critical_edges(&mut func_mut);
+
         // SSA-first allocation: do NOT insert phi copies before RA.
         // Instead, build copy hints from edge args so the allocator prefers
         // to assign the same register to both sides of each phi connection.
@@ -1465,7 +1470,8 @@ fn insert_phi_copies_with_coalescing(
         let edge_id = cfg_mir::EdgeId(edge_idx as u32);
         let edge = &func.edges[edge_idx];
 
-        if edge.args.is_empty() {
+        // Skip dead edges (from critical edge splitting) and edges with no args
+        if edge.from.0 == u32::MAX || edge.args.is_empty() {
             continue;
         }
 

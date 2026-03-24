@@ -125,6 +125,42 @@ fn split_edge(func: &mut Function, edge_id: EdgeId) {
         }
     }
 
+    // Update predecessor's terminator to reference the new edge
+    let pred_term = &mut func.terms[pred.term.0 as usize];
+    match pred_term {
+        Terminator::Branch { edge } => {
+            if *edge == edge_id {
+                *edge = edge1_id;
+            }
+        }
+        Terminator::BranchIf {
+            taken, fallthrough, ..
+        }
+        | Terminator::BranchIfZero {
+            taken, fallthrough, ..
+        } => {
+            if *taken == edge_id {
+                *taken = edge1_id;
+            }
+            if *fallthrough == edge_id {
+                *fallthrough = edge1_id;
+            }
+        }
+        Terminator::JumpTable {
+            targets, default, ..
+        } => {
+            for target in targets.iter_mut() {
+                if *target == edge_id {
+                    *target = edge1_id;
+                }
+            }
+            if *default == edge_id {
+                *default = edge1_id;
+            }
+        }
+        Terminator::Return | Terminator::ErrorExit { .. } => {}
+    }
+
     // Update successor's predecessor list
     let succ = &mut func.blocks[succ_id.index()];
     for pred_edge in &mut succ.preds {

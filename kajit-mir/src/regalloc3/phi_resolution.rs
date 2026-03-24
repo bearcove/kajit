@@ -45,7 +45,8 @@ pub fn insert_phi_copies(func: &mut Function, temp_vreg: VReg) {
         let edge_id = EdgeId(edge_id as u32);
         let edge = &func.edges[edge_id.index()];
 
-        if edge.args.is_empty() {
+        // Skip dead edges (from critical edge splitting) and edges with no args
+        if edge.from.0 == u32::MAX || edge.args.is_empty() {
             continue;
         }
 
