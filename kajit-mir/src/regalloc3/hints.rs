@@ -27,6 +27,8 @@ use std::collections::HashMap;
 /// Spill cost hint (simple classification)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SpillCost {
+    /// Rematerializable constant (essentially free to spill — just re-emit movz)
+    Rematerializable,
     /// Not loop-carried (cheap to spill)
     Low,
     /// Loop-carried in single loop (expensive to spill)
@@ -39,9 +41,10 @@ impl SpillCost {
     /// Weight for spill victim selection (lower = prefer to spill)
     pub fn weight(self) -> u32 {
         match self {
-            SpillCost::Low => 1,
-            SpillCost::Medium => 10,
-            SpillCost::High => 100,
+            SpillCost::Rematerializable => 1,
+            SpillCost::Low => 2,
+            SpillCost::Medium => 20,
+            SpillCost::High => 200,
         }
     }
 }

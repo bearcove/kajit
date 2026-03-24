@@ -1383,8 +1383,15 @@ pub fn allocate_cfg_program_regalloc3_native(
         let copy_hints = linear_scan::CopyHints::build(&func_mut);
         let progpoints = progpoint::ProgPointMap::build(&func_mut);
         let liveness = liveness::compute_liveness(&func_mut, &progpoints);
-        let hints = &program.hints;
-        let alloc_result = linear_scan::allocate(liveness, abi, scratch, hints, &copy_hints);
+
+        // Enrich hints: mark constants as rematerializable (cheap to spill)
+        let mut hints = program.hints.clone();
+        for inst in &func_mut.insts {
+            if let kajit_lir::LinearOp::Const { dst, .. } = &inst.op {
+                hints.entry(*dst).or_default().spill_cost = hints::SpillCost::Rematerializable;
+            }
+        }
+        let alloc_result = linear_scan::allocate(liveness, abi, scratch, &hints, &copy_hints);
 
         // Assign spill slots
         let mut spill_slots = HashMap::new();
@@ -1394,11 +1401,22 @@ pub fn allocate_cfg_program_regalloc3_native(
             next_slot += 1;
         }
 
+        // Build rematerialization map: spilled constants can be re-emitted as movz
+        let mut rematerializable = HashMap::new();
+        for inst in &func_mut.insts {
+            if let kajit_lir::LinearOp::Const { dst, value } = &inst.op {
+                if alloc_result.allocations.get(dst) == Some(&linear_scan::Allocation::Spill) {
+                    rematerializable.insert(*dst, *value);
+                }
+            }
+        }
+
         functions.push(AllocatedCfgFunctionRa3 {
             lambda_id: func_mut.lambda_id,
             num_spillslots: next_slot as usize,
             allocations: alloc_result.allocations.clone(),
             spill_slots,
+            rematerializable,
         });
 
         modified_funcs.push(func_mut);

@@ -33,9 +33,16 @@ impl<'a> EmitContext<'a> {
     }
 
     /// Get hardware register for a vreg, or use a temp register and load from spill slot.
+    /// For spilled constants, rematerializes with movz instead of loading from stack.
     fn reg_for_vreg_with_temp(&mut self, vreg: kajit_ir::VReg, temp: Reg) -> Reg {
         if let Some(preg) = self.preg_for_vreg(vreg) {
             return self.preg_to_reg(preg);
+        }
+
+        // Rematerializable constant - emit movz instead of stack load
+        if let Some(&value) = self.alloc_func.rematerializable.get(&vreg) {
+            self.emit_load_u64(temp, value);
+            return temp;
         }
 
         // Spilled - load from spill slot

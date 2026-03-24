@@ -18,6 +18,9 @@ pub struct AllocatedCfgFunctionRa3 {
 
     /// VReg → SpillSlot mapping (for spilled vregs)
     pub spill_slots: HashMap<VReg, crate::regalloc3::spill_rewrite::SpillSlot>,
+
+    /// VReg → constant value (for rematerialization of spilled constants)
+    pub rematerializable: HashMap<VReg, u64>,
 }
 
 /// Allocation result for entire CFG program (regalloc3 native format).
