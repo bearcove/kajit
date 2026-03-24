@@ -175,8 +175,10 @@ fn merge_blocks(func: &mut Function, empty_block: BlockId, _pred_block: BlockId)
     // Strategy: Retarget edge_into_empty to point to final_target
     // This way pred's terminator doesn't need to change (it already references edge_into_empty)
 
-    // Step 1: Update the edge to point to the final target
+    // Step 1: Update the edge to point to the final target, copying arguments from edge_out_of_empty
+    let edge_out_args = func.edges[edge_out_of_empty.index()].args.clone();
     func.edges[edge_into_empty.index()].to = final_target;
+    func.edges[edge_into_empty.index()].args = edge_out_args;
 
     // Step 2: Remove edge_into_empty from the old target (empty block)'s preds
     let empty_mut = &mut func.blocks[empty_block.index()];
