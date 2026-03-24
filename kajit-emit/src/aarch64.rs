@@ -757,6 +757,26 @@ impl Emitter {
         Ok(())
     }
 
+    /// Emit BFI (Bitfield Insert): insert `bit_width` bits from low bits of `rn` into `rd` at position `lsb`.
+    pub fn emit_bfi(
+        &mut self,
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        lsb: u8,
+        bit_width: u8,
+    ) -> Result<(), EmitError> {
+        self.capture(crate::aarch64_asm::Instruction::Bfi {
+            width,
+            rd,
+            rn,
+            lsb,
+            bit_width,
+        });
+        self.emit_word(encode_bfi(width, rd, rn, lsb, bit_width)?);
+        Ok(())
+    }
+
     pub fn emit_and_imm(
         &mut self,
         width: Width,
@@ -1820,6 +1840,38 @@ pub fn encode_eor_imm(width: Width, rd: Reg, rn: Reg, imm: u64) -> Result<u32, E
         Width::X64 => 0xD200_0000u32,
     };
     Ok(base | (n << 22) | (immr << 16) | (imms << 10) | (rn << 5) | rd)
+}
+
+/// Encode BFI (Bitfield Insert): `BFI Rd, Rn, #lsb, #width`
+///
+/// Inserts `width` bits from the low bits of Rn into Rd starting at bit `lsb`.
+/// Other bits of Rd are unchanged. This is an alias of BFM.
+pub fn encode_bfi(
+    width: Width,
+    rd: Reg,
+    rn: Reg,
+    lsb: u8,
+    bit_width: u8,
+) -> Result<u32, EmitError> {
+    let rd = check_reg(rd);
+    let rn = check_reg(rn);
+    let reg_size: u32 = match width {
+        Width::W32 => 32,
+        Width::X64 => 64,
+    };
+    if lsb as u32 >= reg_size || bit_width == 0 || (lsb as u32 + bit_width as u32) > reg_size {
+        return Err(EmitError::InvalidImmediate {
+            instruction: "bfi",
+            value: ((lsb as i64) << 8) | bit_width as i64,
+        });
+    }
+    let immr = (reg_size - lsb as u32) % reg_size;
+    let imms = bit_width as u32 - 1;
+    let base: u32 = match width {
+        Width::W32 => 0x3300_0000,
+        Width::X64 => 0xB340_0000,
+    };
+    Ok(base | (immr << 16) | (imms << 10) | (rn << 5) | rd)
 }
 
 pub fn encode_csel(

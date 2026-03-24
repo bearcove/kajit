@@ -779,6 +779,15 @@ fn emit_instruction(
         Instruction::EorReg { width, rd, rn, rm } => {
             emitter.emit_eor_reg(*width, *rd, *rn, *rm).map_err(map_err)
         }
+        Instruction::Bfi {
+            width,
+            rd,
+            rn,
+            lsb,
+            bit_width,
+        } => emitter
+            .emit_bfi(*width, *rd, *rn, *lsb, *bit_width)
+            .map_err(map_err),
         Instruction::LslImm {
             width,
             rd,

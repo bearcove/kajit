@@ -159,6 +159,15 @@ pub enum Instruction {
         imm: u64,
     },
 
+    // Bitfield
+    Bfi {
+        width: Width,
+        rd: Reg,
+        rn: Reg,
+        lsb: u8,
+        bit_width: u8,
+    },
+
     // Logical - register
     AndReg {
         width: Width,
@@ -450,6 +459,24 @@ impl std::fmt::Display for Instruction {
                     reg_name(*rd, *width),
                     reg_name(*rn, *width),
                     imm
+                )
+            }
+
+            // Bitfield
+            Instruction::Bfi {
+                width,
+                rd,
+                rn,
+                lsb,
+                bit_width,
+            } => {
+                write!(
+                    f,
+                    "bfi {}, {}, #{}, #{}",
+                    reg_name(*rd, *width),
+                    reg_name(*rn, *width),
+                    lsb,
+                    bit_width
                 )
             }
 
