@@ -331,6 +331,19 @@ impl LinearOp {
         }
     }
 
+    /// Visit every VReg *use* (read) in this op, immutably.
+    pub fn for_each_use(&self, mut f: impl FnMut(&VReg)) {
+        // Clone and delegate to mutable version (avoids duplicating the match)
+        let mut clone = self.clone();
+        clone.for_each_use_mut(|v| f(v));
+    }
+
+    /// Visit every VReg *definition* (write) in this op, immutably.
+    pub fn for_each_def(&self, mut f: impl FnMut(&VReg)) {
+        let mut clone = self.clone();
+        clone.for_each_def_mut(|v| f(v));
+    }
+
     /// Visit every VReg *definition* (write) in this op, mutably.
     pub fn for_each_def_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
         use LinearOp::*;

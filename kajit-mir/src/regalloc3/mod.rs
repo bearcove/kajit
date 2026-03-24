@@ -46,6 +46,7 @@ pub mod parallel_copy;
 pub mod phi_resolution;
 pub mod progpoint;
 pub mod spill_rewrite;
+pub mod ssa_coloring;
 pub mod verify;
 
 #[cfg(test)]

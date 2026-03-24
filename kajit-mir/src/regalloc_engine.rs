@@ -1393,7 +1393,14 @@ pub fn allocate_cfg_program_regalloc3_native(
                 hints.entry(*dst).or_default().spill_cost = hints::SpillCost::Rematerializable;
             }
         }
-        let alloc_result = linear_scan::allocate(liveness, abi, scratch, &hints, &copy_hints);
+        let alloc_result = crate::regalloc3::ssa_coloring::allocate(
+            &func_mut,
+            &liveness,
+            abi,
+            scratch,
+            &hints,
+            &copy_hints,
+        );
 
         // SSA destruction: split critical edges then insert copies for phi edges.
         let temp_vreg = kajit_ir::VReg::new(program.vreg_count);
