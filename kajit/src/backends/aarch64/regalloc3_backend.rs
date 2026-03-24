@@ -832,6 +832,36 @@ impl<'a> EmitContext<'a> {
         self.store_to_vreg(dst, Reg::X0);
     }
 
+    /// Check if a vreg is the result of `And(x, power_of_2)`.
+    /// Returns (source_vreg, bit_position) if so.
+    fn is_and_bit_test(&self, vreg: kajit_ir::VReg) -> Option<(kajit_ir::VReg, u8)> {
+        for inst in &self.func.insts {
+            if let LinearOp::BinOp {
+                op: BinOpKind::And,
+                dst,
+                lhs,
+                rhs,
+            } = &inst.op
+            {
+                if *dst == vreg {
+                    // Check if rhs is a power of 2 constant
+                    if let Some(&val) = self.const_values.get(rhs) {
+                        if val.is_power_of_two() {
+                            return Some((*lhs, val.trailing_zeros() as u8));
+                        }
+                    }
+                    // Check if lhs is a power of 2 constant
+                    if let Some(&val) = self.const_values.get(lhs) {
+                        if val.is_power_of_two() {
+                            return Some((*rhs, val.trailing_zeros() as u8));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Emit a terminator. `next_block` is the block that follows in emission order (for fallthrough elision).
     fn emit_terminator(&mut self, term: &Terminator, next_block: Option<cfg_mir::BlockId>) {
         match term {
@@ -857,15 +887,23 @@ impl<'a> EmitContext<'a> {
                 taken,
                 fallthrough,
             } => {
-                let cond_reg = self.reg_for_vreg_with_temp(*cond, Reg::X9);
                 let taken_block = self.func.edges[taken.index()].to;
                 let fallthrough_block = self.func.edges[fallthrough.index()].to;
                 let taken_label = self.block_labels[&taken_block];
-                self.ectx
-                    .emit
-                    .emit_cbnz_label(Width::X64, cond_reg, taken_label)
-                    .expect("cbnz");
-                // Only emit explicit branch if fallthrough isn't the next block
+                // Try to fuse And(x, power_of_2) + branch_if into tbnz
+                if let Some((src, bit)) = self.is_and_bit_test(*cond) {
+                    let src_reg = self.reg_for_vreg_with_temp(src, Reg::X9);
+                    self.ectx
+                        .emit
+                        .emit_tbnz_label(src_reg, bit, taken_label)
+                        .expect("tbnz");
+                } else {
+                    let cond_reg = self.reg_for_vreg_with_temp(*cond, Reg::X9);
+                    self.ectx
+                        .emit
+                        .emit_cbnz_label(Width::X64, cond_reg, taken_label)
+                        .expect("cbnz");
+                }
                 if Some(fallthrough_block) != next_block {
                     let fallthrough_label = self.block_labels[&fallthrough_block];
                     self.ectx
@@ -880,14 +918,23 @@ impl<'a> EmitContext<'a> {
                 taken,
                 fallthrough,
             } => {
-                let cond_reg = self.reg_for_vreg_with_temp(*cond, Reg::X9);
                 let taken_block = self.func.edges[taken.index()].to;
                 let fallthrough_block = self.func.edges[fallthrough.index()].to;
                 let taken_label = self.block_labels[&taken_block];
-                self.ectx
-                    .emit
-                    .emit_cbz_label(Width::X64, cond_reg, taken_label)
-                    .expect("cbz");
+                // Try to fuse And(x, power_of_2) + branch_if_zero into tbz
+                if let Some((src, bit)) = self.is_and_bit_test(*cond) {
+                    let src_reg = self.reg_for_vreg_with_temp(src, Reg::X9);
+                    self.ectx
+                        .emit
+                        .emit_tbz_label(src_reg, bit, taken_label)
+                        .expect("tbz");
+                } else {
+                    let cond_reg = self.reg_for_vreg_with_temp(*cond, Reg::X9);
+                    self.ectx
+                        .emit
+                        .emit_cbz_label(Width::X64, cond_reg, taken_label)
+                        .expect("cbz");
+                }
                 // Only emit explicit branch if fallthrough isn't the next block
                 if Some(fallthrough_block) != next_block {
                     let fallthrough_label = self.block_labels[&fallthrough_block];
