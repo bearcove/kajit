@@ -156,15 +156,24 @@ fn eliminate_invariant_phis_in_header(
                 if dominates {
                     invariant_params.insert(param_idx, first_value);
                 }
-            } else {
+            } else if func.data_args.contains(&first_value) {
+                // Function argument - always dominates everything
                 if debug {
                     eprintln!(
-                        "    -> invariant! v{} (function arg or unknown, assuming dominance)",
+                        "    -> invariant! v{} is function arg, dominates all",
                         first_value.index()
                     );
                 }
-                // Function argument or unknown def - assume it dominates
                 invariant_params.insert(param_idx, first_value);
+            } else {
+                // No definition found and not a function arg - skip this parameter
+                // (vreg might be undefined, which would violate SSA)
+                if debug {
+                    eprintln!(
+                        "    -> skipping: v{} has no definition (not a param, inst def, or func arg)",
+                        first_value.index()
+                    );
+                }
             }
         } else if all_same {
             if debug {
