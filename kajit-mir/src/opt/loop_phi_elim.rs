@@ -142,18 +142,27 @@ fn eliminate_invariant_phis_in_header(
 
         if all_same && first_value != param_vreg {
             // This parameter is loop-invariant!
-            // Verify that the invariant value dominates the header
+            // Verify that the invariant value definition dominates ALL uses of the parameter
             if let Some(def_block) = find_def_block(func, first_value) {
-                let dominates = dom.dominates(def_block, header);
+                // Find all blocks that use this parameter
+                let use_blocks = find_vreg_use_blocks(func, param_vreg);
+
+                // Check if def_block dominates all use blocks
+                let dominates_all = use_blocks
+                    .iter()
+                    .all(|&use_block| dom.dominates(def_block, use_block));
+
                 if debug {
                     eprintln!(
-                        "    -> invariant! v{} defined in b{}, dominates = {}",
+                        "    -> invariant! v{} defined in b{}, dominates header={}, dominates all {} uses={}",
                         first_value.index(),
                         def_block.index(),
-                        dominates
+                        dom.dominates(def_block, header),
+                        use_blocks.len(),
+                        dominates_all
                     );
                 }
-                if dominates {
+                if dominates_all {
                     invariant_params.insert(param_idx, first_value);
                 }
             } else if func.data_args.contains(&first_value) {
@@ -240,6 +249,78 @@ fn eliminate_invariant_phis_in_header(
     }
 
     true
+}
+
+/// Find all blocks that use a vreg (in instructions, terminators, or edge arguments).
+fn find_vreg_use_blocks(func: &Function, vreg: VReg) -> Vec<BlockId> {
+    let mut use_blocks = Vec::new();
+
+    for block in &func.blocks {
+        if block.dead {
+            continue;
+        }
+
+        let mut found_in_block = false;
+
+        // Check instructions
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.index()];
+            for operand in &inst.operands {
+                if operand.vreg == vreg && operand.kind == crate::cfg_mir::OperandKind::Use {
+                    use_blocks.push(block.id);
+                    found_in_block = true;
+                    break;
+                }
+            }
+            if found_in_block {
+                break;
+            }
+        }
+
+        if found_in_block {
+            continue;
+        }
+
+        // Check terminator conditions
+        let term = &func.terms[block.term.index()];
+        match term {
+            crate::cfg_mir::Terminator::BranchIf { cond, .. }
+            | crate::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                if *cond == vreg {
+                    use_blocks.push(block.id);
+                    found_in_block = true;
+                }
+            }
+            crate::cfg_mir::Terminator::JumpTable { predicate, .. } => {
+                if *predicate == vreg {
+                    use_blocks.push(block.id);
+                    found_in_block = true;
+                }
+            }
+            _ => {}
+        }
+
+        if found_in_block {
+            continue;
+        }
+
+        // Check edge arguments (source vregs passed to successors)
+        for &succ_edge_id in &block.succs {
+            let edge = &func.edges[succ_edge_id.index()];
+            for arg in &edge.args {
+                if arg.source == vreg {
+                    use_blocks.push(block.id);
+                    found_in_block = true;
+                    break;
+                }
+            }
+            if found_in_block {
+                break;
+            }
+        }
+    }
+
+    use_blocks
 }
 
 /// Find the block that defines a vreg, if it's defined by an instruction.
