@@ -4227,6 +4227,7 @@ mod tests {
                 term: TermId(0),
                 preds: Vec::new(),
                 succs: Vec::new(),
+                dead: false,
             }],
             edges: Vec::new(),
             insts: vec![Inst {
@@ -4402,6 +4403,7 @@ mod tests {
                 term: TermId(0),
                 preds: Vec::new(),
                 succs: Vec::new(),
+                dead: false,
             }],
             edges: Vec::new(),
             insts,
@@ -4672,6 +4674,7 @@ mod tests {
                     term: TermId(0),        // branch to b1
                     preds: Vec::new(),
                     succs: vec![EdgeId(0)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(1),
@@ -4680,6 +4683,7 @@ mod tests {
                     term: TermId(1), // return
                     preds: vec![EdgeId(0)],
                     succs: Vec::new(),
+                    dead: false,
                 },
             ],
             edges: vec![Edge {
@@ -4826,6 +4830,7 @@ mod tests {
                     term: TermId(0),
                     preds: Vec::new(),
                     succs: vec![EdgeId(0)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(1),
@@ -4834,6 +4839,7 @@ mod tests {
                     term: TermId(1),
                     preds: vec![EdgeId(0)],
                     succs: vec![EdgeId(1)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(2),
@@ -4842,6 +4848,7 @@ mod tests {
                     term: TermId(2),
                     preds: vec![EdgeId(1)],
                     succs: Vec::new(),
+                    dead: false,
                 },
             ],
             edges: vec![
@@ -4892,6 +4899,7 @@ mod tests {
                     term: TermId(0),
                     preds: Vec::new(),
                     succs: vec![EdgeId(0), EdgeId(1)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(1),
@@ -4900,6 +4908,7 @@ mod tests {
                     term: TermId(1),
                     preds: vec![EdgeId(0)],
                     succs: vec![EdgeId(2)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(2),
@@ -4908,6 +4917,7 @@ mod tests {
                     term: TermId(2),
                     preds: vec![EdgeId(1)],
                     succs: vec![EdgeId(3)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(3),
@@ -4916,6 +4926,7 @@ mod tests {
                     term: TermId(3),
                     preds: vec![EdgeId(2), EdgeId(3)],
                     succs: Vec::new(),
+                    dead: false,
                 },
             ],
             edges: vec![
@@ -5071,6 +5082,7 @@ mod tests {
                     term: TermId(0),
                     preds: Vec::new(),
                     succs: vec![EdgeId(0)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(1),
@@ -5079,6 +5091,7 @@ mod tests {
                     term: TermId(1),
                     preds: vec![EdgeId(0)],
                     succs: Vec::new(),
+                    dead: false,
                 },
             ],
             edges: vec![Edge {
@@ -5130,6 +5143,7 @@ mod tests {
                     term: TermId(0),
                     preds: Vec::new(),
                     succs: vec![EdgeId(0), EdgeId(1)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(1),
@@ -5138,6 +5152,7 @@ mod tests {
                     term: TermId(1),
                     preds: vec![EdgeId(0)],
                     succs: vec![EdgeId(2)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(2),
@@ -5146,6 +5161,7 @@ mod tests {
                     term: TermId(2),
                     preds: vec![EdgeId(1)],
                     succs: vec![EdgeId(3)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(3),
@@ -5154,6 +5170,7 @@ mod tests {
                     term: TermId(3),
                     preds: vec![EdgeId(2), EdgeId(3)],
                     succs: Vec::new(),
+                    dead: false,
                 },
             ],
             edges: vec![
@@ -5353,6 +5370,7 @@ mod tests {
                     term: TermId(0),
                     preds: Vec::new(),
                     succs: vec![EdgeId(0), EdgeId(1)],
+                    dead: false,
                 },
                 Block {
                     id: BlockId(1),
@@ -5361,6 +5379,7 @@ mod tests {
                     term: TermId(1),
                     preds: vec![EdgeId(0)],
                     succs: Vec::new(),
+                    dead: false,
                 },
                 Block {
                     id: BlockId(2),
@@ -5369,6 +5388,7 @@ mod tests {
                     term: TermId(2),
                     preds: vec![EdgeId(1)],
                     succs: Vec::new(),
+                    dead: false,
                 },
             ],
             edges: vec![
@@ -5483,6 +5503,7 @@ mod tests {
                 term: TermId(0),
                 preds: Vec::new(),
                 succs: vec![EdgeId(0), EdgeId(1)],
+                dead: false,
             }],
             edges: vec![
                 Edge {

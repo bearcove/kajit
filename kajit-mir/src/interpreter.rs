@@ -2213,6 +2213,7 @@ mod tests {
             term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         };
         cfg_mir::Program {
             funcs: vec![cfg_mir::Function {
@@ -2258,6 +2259,7 @@ mod tests {
             term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: vec![cfg_mir::EdgeId(0), cfg_mir::EdgeId(1)],
+            dead: false,
         };
         let b1 = cfg_mir::Block {
             id: cfg_mir::BlockId(1),
@@ -2266,6 +2268,7 @@ mod tests {
             term: cfg_mir::TermId(1),
             preds: vec![cfg_mir::EdgeId(0)],
             succs: Vec::new(),
+            dead: false,
         };
         let b2 = cfg_mir::Block {
             id: cfg_mir::BlockId(2),
@@ -2274,6 +2277,7 @@ mod tests {
             term: cfg_mir::TermId(2),
             preds: vec![cfg_mir::EdgeId(1)],
             succs: Vec::new(),
+            dead: false,
         };
         cfg_mir::Program {
             funcs: vec![cfg_mir::Function {

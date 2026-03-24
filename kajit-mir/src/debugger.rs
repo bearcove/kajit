@@ -630,6 +630,7 @@ mod tests {
             term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         };
         cfg_mir::Program {
             funcs: vec![cfg_mir::Function {
@@ -674,6 +675,7 @@ mod tests {
             term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         };
         cfg_mir::Program {
             funcs: vec![cfg_mir::Function {

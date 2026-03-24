@@ -3393,6 +3393,7 @@ lambda @0 (shape: "u8") {
                     term: term_branch,
                     preds: Vec::new(),
                     succs: vec![edge_id],
+                    dead: false,
                 },
                 crate::cfg_mir::Block {
                     id: crate::cfg_mir::BlockId::new(1),
@@ -3401,6 +3402,7 @@ lambda @0 (shape: "u8") {
                     term: term_ret,
                     preds: vec![edge_id],
                     succs: Vec::new(),
+                    dead: false,
                 },
             ],
             edges: vec![crate::cfg_mir::Edge {

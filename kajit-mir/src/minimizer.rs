@@ -655,6 +655,7 @@ mod tests {
             term: dead_entry_term_id,
             preds: Vec::new(),
             succs: vec![dead_edge_id],
+            dead: false,
         });
         func.blocks.push(cfg_mir::Block {
             id: dead_exit_block_id,
@@ -663,6 +664,7 @@ mod tests {
             term: dead_exit_term_id,
             preds: vec![dead_edge_id],
             succs: Vec::new(),
+            dead: false,
         });
         func.terms
             .push(cfg_mir::Terminator::Branch { edge: dead_edge_id });
@@ -738,6 +740,7 @@ mod tests {
                         term: cfg_mir::TermId::new(0),
                         preds: Vec::new(),
                         succs: Vec::new(),
+                        dead: false,
                     },
                     cfg_mir::Block {
                         id: cfg_mir::BlockId::new(1),
@@ -746,6 +749,7 @@ mod tests {
                         term: cfg_mir::TermId::new(1),
                         preds: Vec::new(),
                         succs: Vec::new(),
+                        dead: false,
                     },
                 ],
                 edges: Vec::new(),
@@ -803,6 +807,7 @@ mod tests {
                         term: cfg_mir::TermId::new(0),
                         preds: Vec::new(),
                         succs: vec![cfg_mir::EdgeId::new(0)],
+                        dead: false,
                     },
                     cfg_mir::Block {
                         id: cfg_mir::BlockId::new(1),
@@ -811,6 +816,7 @@ mod tests {
                         term: cfg_mir::TermId::new(1),
                         preds: vec![cfg_mir::EdgeId::new(0)],
                         succs: Vec::new(),
+                        dead: false,
                     },
                 ],
                 edges: vec![cfg_mir::Edge {
@@ -866,6 +872,7 @@ mod tests {
                         term: cfg_mir::TermId::new(0),
                         preds: Vec::new(),
                         succs: vec![cfg_mir::EdgeId::new(0)],
+                        dead: false,
                     },
                     cfg_mir::Block {
                         id: cfg_mir::BlockId::new(1),
@@ -874,6 +881,7 @@ mod tests {
                         term: cfg_mir::TermId::new(1),
                         preds: vec![cfg_mir::EdgeId::new(0)],
                         succs: vec![cfg_mir::EdgeId::new(1)],
+                        dead: false,
                     },
                     cfg_mir::Block {
                         id: cfg_mir::BlockId::new(2),
@@ -882,6 +890,7 @@ mod tests {
                         term: cfg_mir::TermId::new(2),
                         preds: vec![cfg_mir::EdgeId::new(1)],
                         succs: Vec::new(),
+                        dead: false,
                     },
                 ],
                 edges: vec![
