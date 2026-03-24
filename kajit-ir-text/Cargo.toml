@@ -10,6 +10,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 kajit-ir = { path = "../kajit-ir" }
+kajit-parse-util = { path = "../kajit-parse-util" }
 chumsky = "1.0.0-alpha.8"
 
 [dev-dependencies]

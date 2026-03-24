@@ -880,40 +880,25 @@ fn fmt_cfg_inst(
         .filter(|op| op.kind == OperandKind::Use)
         .collect();
 
-    // Show def: prefer operands, fall back to LinearOp
-    if !defs.is_empty() {
-        for (idx, op) in defs.iter().enumerate() {
-            if idx > 0 {
-                write!(f, ", ")?;
-            }
-            fmt_cfg_operand(f, op)?;
-        }
-        write!(f, " = ")?;
-    } else if let Some(dst) = linearop_dst(&inst.op) {
+    // Show def: always use linearop_dst() for consistency (inst.operands may
+    // have been modified by elim_imm, but the LinearOp always has the real dst).
+    if let Some(dst) = linearop_dst(&inst.op) {
         write!(f, "v{}:gpr = ", dst.index())?;
     }
 
     fmt_cfg_op_name(f, &inst.op, registry)?;
 
-    // Show uses: prefer operands, fall back to LinearOp
-    if !uses.is_empty() {
+    // Show uses: always use linearop_uses() for completeness (inst.operands
+    // may have operands removed by elim_imm pass, but the LinearOp still has
+    // all source vregs and the text format must be round-trippable).
+    let canonical_uses = linearop_uses(&inst.op);
+    if !canonical_uses.is_empty() {
         write!(f, " ")?;
-        for (idx, op) in uses.iter().enumerate() {
+        for (idx, vreg) in canonical_uses.iter().enumerate() {
             if idx > 0 {
                 write!(f, ", ")?;
             }
-            fmt_cfg_operand(f, op)?;
-        }
-    } else {
-        let fallback_uses = linearop_uses(&inst.op);
-        if !fallback_uses.is_empty() {
-            write!(f, " ")?;
-            for (idx, vreg) in fallback_uses.iter().enumerate() {
-                if idx > 0 {
-                    write!(f, ", ")?;
-                }
-                write!(f, "v{}:gpr", vreg.index())?;
-            }
+            write!(f, "v{}:gpr", vreg.index())?;
         }
     }
 

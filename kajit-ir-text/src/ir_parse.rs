@@ -745,11 +745,8 @@ impl std::error::Error for ParseError {}
 pub fn parse_ir(input: &str, registry: &IntrinsicRegistry) -> Result<IrFunc, ParseError> {
     let result = program().parse(input);
 
-    let lambdas = result.into_result().map_err(|errs| {
-        let msgs: Vec<String> = errs.into_iter().map(|e| format!("{e}")).collect();
-        ParseError {
-            message: msgs.join("\n"),
-        }
+    let lambdas = result.into_result().map_err(|errs| ParseError {
+        message: kajit_parse_util::format_rich_errors(input, errs),
     })?;
 
     resolve(lambdas, registry)

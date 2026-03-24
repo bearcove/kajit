@@ -76,15 +76,32 @@ pub fn insert_phi_copies(func: &mut Function, temp_vreg: VReg) {
 /// Insert move instructions on an edge.
 ///
 /// Strategy:
-/// - Find the block where these copies should go (copy block or predecessor)
-/// - Insert Copy instructions before the terminator
+/// - If predecessor has only one successor: insert copies at end of predecessor
+/// - If successor has only one predecessor: insert copies at start of successor
+/// - Otherwise (critical edge): edge must have been split already, panic
 pub fn insert_moves_on_edge(func: &mut Function, edge_id: EdgeId, moves: &[MoveOp]) {
     let edge = &func.edges[edge_id.index()];
     let pred_block_id = edge.from;
+    let succ_block_id = edge.to;
 
-    // Find where to insert: at end of predecessor, before terminator
-    let pred_block = &mut func.blocks[pred_block_id.index()];
-    let insert_point = pred_block.insts.len();
+    let pred_has_one_succ = func.blocks[pred_block_id.index()].succs.len() == 1;
+    let succ_has_one_pred = func.blocks[succ_block_id.index()].preds.len() == 1;
+
+    // Determine where to insert copies
+    let (target_block_id, insert_point) = if pred_has_one_succ {
+        // Safe to insert at end of predecessor (only one outgoing edge)
+        let insert_point = func.blocks[pred_block_id.index()].insts.len();
+        (pred_block_id, insert_point)
+    } else if succ_has_one_pred {
+        // Predecessor has multiple successors, but successor has only one predecessor.
+        // Insert at START of successor so copies only execute on this edge.
+        (succ_block_id, 0)
+    } else {
+        panic!(
+            "insert_moves_on_edge: edge e{} (b{} -> b{}) is critical — should have been split",
+            edge_id.0, pred_block_id.0, succ_block_id.0
+        );
+    };
 
     // Create new Copy instructions
     let mut new_insts = Vec::new();
@@ -153,9 +170,9 @@ pub fn insert_moves_on_edge(func: &mut Function, edge_id: EdgeId, moves: &[MoveO
     let inst_ids: Vec<InstId> = new_insts.iter().map(|inst| inst.id).collect();
     func.insts.extend(new_insts);
 
-    // Insert into block's inst list
-    let pred_block = &mut func.blocks[pred_block_id.index()];
+    // Insert into target block's inst list
+    let target_block = &mut func.blocks[target_block_id.index()];
     for (i, inst_id) in inst_ids.iter().enumerate() {
-        pred_block.insts.insert(insert_point + i, *inst_id);
+        target_block.insts.insert(insert_point + i, *inst_id);
     }
 }

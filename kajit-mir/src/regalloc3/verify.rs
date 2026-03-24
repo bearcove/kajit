@@ -19,6 +19,7 @@
 //!
 //! After allocation, before emission. Fail fast if allocation is incorrect.
 
+use indexmap::IndexMap;
 use kajit_ir::VReg;
 use std::collections::{HashMap, HashSet};
 
@@ -206,7 +207,7 @@ mod tests {
 
         let liveness = LivenessInfo {
             intervals: {
-                let mut map = HashMap::new();
+                let mut map = IndexMap::new();
                 map.insert(
                     VReg::new(1),
                     LiveInterval {
@@ -249,7 +250,7 @@ mod tests {
 
         let liveness = LivenessInfo {
             intervals: {
-                let mut map = HashMap::new();
+                let mut map = IndexMap::new();
                 map.insert(
                     VReg::new(1),
                     LiveInterval {
@@ -295,7 +296,7 @@ mod tests {
 
         let liveness = LivenessInfo {
             intervals: {
-                let mut map = HashMap::new();
+                let mut map = IndexMap::new();
                 map.insert(
                     VReg::new(1),
                     LiveInterval {
@@ -329,7 +330,7 @@ mod tests {
 
         let liveness = LivenessInfo {
             intervals: {
-                let mut map = HashMap::new();
+                let mut map = IndexMap::new();
                 map.insert(
                     VReg::new(1),
                     LiveInterval {

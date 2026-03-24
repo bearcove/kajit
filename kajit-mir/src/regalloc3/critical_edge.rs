@@ -78,12 +78,12 @@ fn split_edge(func: &mut Function, edge_id: EdgeId) {
     let pred_id = edge.from;
     let succ_id = edge.to;
 
-    // Create copy block
+    // Create copy block — no params, just a trampoline for phi copies
     let copy_block_id = BlockId(func.blocks.len() as u32);
     let copy_block = Block {
         id: copy_block_id,
-        params: func.blocks[succ_id.index()].params.clone(), // same params as successor
-        insts: vec![],                                       // no instructions
+        params: vec![], // no params: copies are inserted as instructions
+        insts: vec![],  // phi copies will be inserted here
         term: TermId(func.terms.len() as u32),
         preds: vec![], // will be filled below
         succs: vec![], // will be filled below
@@ -103,14 +103,14 @@ fn split_edge(func: &mut Function, edge_id: EdgeId) {
         id: edge1_id,
         from: pred_id,
         to: copy_block_id,
-        args: edge.args.clone(), // copy original edge args
+        args: vec![], // no args: copy block has no params
     };
 
     let edge2 = Edge {
         id: edge2_id,
         from: copy_block_id,
         to: succ_id,
-        args: edge.args, // same args (copy block just forwards them)
+        args: edge.args, // original args: copies inserted in copy block
     };
 
     // Update copy block terminator with correct edge

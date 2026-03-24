@@ -42,6 +42,7 @@
 //! - But NOT necessarily live throughout pred
 //! - Must track edge-specific liveness separately
 
+use indexmap::IndexMap;
 use kajit_ir::VReg;
 use std::collections::{HashMap, HashSet};
 
@@ -52,8 +53,8 @@ use super::progpoint::{LiveInterval, ProgPoint, ProgPointMap};
 /// Liveness information for a function
 #[derive(Debug)]
 pub struct LivenessInfo {
-    /// Live intervals for each vreg
-    pub intervals: HashMap<VReg, LiveInterval>,
+    /// Live intervals for each vreg (IndexMap for deterministic iteration)
+    pub intervals: IndexMap<VReg, LiveInterval>,
 
     /// Live-in set for each block
     pub live_in: HashMap<BlockId, HashSet<VReg>>,
@@ -239,8 +240,8 @@ impl<'a> LivenessAnalyzer<'a> {
 
     /// Build live intervals from liveness sets
     fn build_intervals(self) -> LivenessInfo {
-        let mut intervals: HashMap<VReg, Vec<(ProgPoint, ProgPoint)>> = HashMap::new();
-        let mut use_points: HashMap<VReg, Vec<ProgPoint>> = HashMap::new();
+        let mut intervals: IndexMap<VReg, Vec<(ProgPoint, ProgPoint)>> = IndexMap::new();
+        let mut use_points: IndexMap<VReg, Vec<ProgPoint>> = IndexMap::new();
 
         // For each block, track live ranges
         for block in &self.func.blocks {
@@ -304,8 +305,10 @@ impl<'a> LivenessAnalyzer<'a> {
             }
         }
 
-        // Convert to LiveInterval structs
-        let mut live_intervals = HashMap::new();
+        // Convert to LiveInterval structs — sort by vreg index for determinism
+        // (intervals were built from HashSet iteration which is nondeterministic)
+        intervals.sort_by(|a, _, b, _| a.index().cmp(&b.index()));
+        let mut live_intervals = IndexMap::new();
         for (vreg, mut segments) in intervals {
             // Sort and merge overlapping segments
             segments.sort_by_key(|&(start, _)| start);

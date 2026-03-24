@@ -15,6 +15,7 @@ members = [
   "kajit-mir",
   "kajit-mir-mcp",
   "kajit-mir-text",
+  "kajit-parse-util",
   "xtask",
 ]
 resolver = "3"

@@ -277,8 +277,10 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
     let binops = choice((
         just("Add").to(AstOp::BinOp(BinOpKind::Add)),
         just("Sub").to(AstOp::BinOp(BinOpKind::Sub)),
+        just("Mul").to(AstOp::BinOp(BinOpKind::Mul)),
         just("And").to(AstOp::BinOp(BinOpKind::And)),
         just("Or").to(AstOp::BinOp(BinOpKind::Or)),
+        just("Sar").to(AstOp::BinOp(BinOpKind::Sar)),
         just("Shr").to(AstOp::BinOp(BinOpKind::Shr)),
         just("Shl").to(AstOp::BinOp(BinOpKind::Shl)),
         just("Xor").to(AstOp::BinOp(BinOpKind::Xor)),
@@ -659,11 +661,8 @@ pub fn parse_cfg_mir_with_registry(
 ) -> Result<Program, ParseError> {
     let stripped = strip_comments(input);
     let parsed = cfg_program().padded_by(ws()).parse(stripped.as_str());
-    let ast = parsed.into_result().map_err(|errs| {
-        let msgs = errs.into_iter().map(|e| format!("{e}")).collect::<Vec<_>>();
-        ParseError {
-            message: msgs.join("\n"),
-        }
+    let ast = parsed.into_result().map_err(|errs| ParseError {
+        message: kajit_parse_util::format_rich_errors(&stripped, errs),
     })?;
     resolve_program(ast, registry)
 }
@@ -738,41 +737,11 @@ fn resolve_function(ast: AstFunc, registry: &IntrinsicRegistry) -> Result<Functi
         }
     }
 
+    // Sort by ID; IDs may be sparse (gaps from optimization passes).
+    // We'll fill gaps with placeholder entries so Vec indexing works.
     insts.sort_by_key(|inst| inst.id.0);
-    for (idx, inst) in insts.iter().enumerate() {
-        if inst.id.0 as usize != idx {
-            return Err(ParseError {
-                message: format!(
-                    "cfg_func @{} inst IDs must be dense from i0, got i{} at position {}",
-                    ast.lambda_id, inst.id.0, idx
-                ),
-            });
-        }
-    }
-
     terms.sort_by_key(|term| term.id.0);
-    for (idx, term) in terms.iter().enumerate() {
-        if term.id.0 as usize != idx {
-            return Err(ParseError {
-                message: format!(
-                    "cfg_func @{} term IDs must be dense from t0, got t{} at position {}",
-                    ast.lambda_id, term.id.0, idx
-                ),
-            });
-        }
-    }
-
     edges.sort_by_key(|edge| edge.id.0);
-    for (idx, edge) in edges.iter().enumerate() {
-        if edge.id.0 as usize != idx {
-            return Err(ParseError {
-                message: format!(
-                    "cfg_func @{} edge IDs must be dense from e0, got e{} at position {}",
-                    ast.lambda_id, edge.id.0, idx
-                ),
-            });
-        }
-    }
 
     let blocks = blocks
         .into_iter()
@@ -787,20 +756,51 @@ fn resolve_function(ast: AstFunc, registry: &IntrinsicRegistry) -> Result<Functi
         })
         .collect::<Vec<_>>();
 
-    let insts = insts
-        .into_iter()
-        .map(|inst| resolve_inst(inst, registry))
-        .collect::<Result<Vec<_>, _>>()?;
-    let terms = terms.into_iter().map(|t| t.term).collect::<Vec<_>>();
-    let edges = edges
-        .into_iter()
-        .map(|e| Edge {
-            id: e.id,
-            from: e.from,
-            to: e.to,
-            args: e.args,
+    // Build dense Vecs, filling gaps with placeholder entries (IDs may be sparse).
+    let max_inst_id = insts.last().map_or(0, |i| i.id.0 as usize + 1);
+    let mut inst_vec: Vec<Inst> = (0..max_inst_id)
+        .map(|idx| Inst {
+            id: InstId(idx as u32),
+            op: LinearOp::Const {
+                dst: VReg::new(0),
+                value: 0,
+            },
+            operands: vec![],
+            clobbers: Default::default(),
         })
-        .collect::<Vec<_>>();
+        .collect();
+    for ast_inst in insts {
+        let idx = ast_inst.id.0 as usize;
+        inst_vec[idx] = resolve_inst(ast_inst, registry)?;
+    }
+    let insts = inst_vec;
+
+    let max_term_id = terms.last().map_or(0, |t| t.id.0 as usize + 1);
+    let mut term_vec: Vec<Terminator> = (0..max_term_id).map(|_| Terminator::Return).collect();
+    for ast_term in terms {
+        term_vec[ast_term.id.0 as usize] = ast_term.term;
+    }
+    let terms = term_vec;
+
+    let max_edge_id = edges.last().map_or(0, |e| e.id.0 as usize + 1);
+    let mut edge_vec: Vec<Edge> = (0..max_edge_id)
+        .map(|idx| Edge {
+            id: EdgeId(idx as u32),
+            from: BlockId(u32::MAX),
+            to: BlockId(u32::MAX),
+            args: vec![],
+        })
+        .collect();
+    for ast_edge in edges {
+        let idx = ast_edge.id.0 as usize;
+        edge_vec[idx] = Edge {
+            id: ast_edge.id,
+            from: ast_edge.from,
+            to: ast_edge.to,
+            args: ast_edge.args,
+        };
+    }
+    let edges = edge_vec;
 
     let function = Function {
         id: FunctionId::new(ast.function_id),
@@ -1057,6 +1057,31 @@ mod tests {
     use super::*;
     use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, Width};
     use kajit_lir::linearize;
+
+    #[test]
+    fn parse_real_u64_cfg_dump() {
+        // Test that a real post-optimization CFG dump can be parsed.
+        // This exercises the printer/parser round-trip for programs with
+        // immediate-folded BinOps, dead terms, etc.
+        let text =
+            std::fs::read_to_string("/tmp/kajit-dump/postcard__scalar_u64_v2__aarch64__cfg.txt");
+        let text = match text {
+            Ok(t) => t,
+            Err(_) => {
+                eprintln!(
+                    "skip: /tmp/kajit-dump/postcard__scalar_u64_v2__aarch64__cfg.txt not found"
+                );
+                return;
+            }
+        };
+        let program = parse_cfg_mir(&text).expect("should parse real u64 CFG dump");
+        assert_eq!(program.funcs.len(), 1);
+        // Round-trip: print and re-parse
+        let text2 = format!("{program}");
+        let program2 = parse_cfg_mir(&text2).expect("round-trip should parse");
+        let text3 = format!("{program2}");
+        assert_eq!(text2, text3, "round-trip mismatch");
+    }
 
     #[test]
     fn parse_simple_cfg_program() {

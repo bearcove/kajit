@@ -433,6 +433,103 @@ impl DebuggerSession {
                 }
                 self.write_vreg(dst.index(), value);
             }
+            LinearOp::SaveCursor { dst } => {
+                self.write_vreg(dst.index(), self.cursor as u64);
+            }
+            LinearOp::SaveInputEnd { dst } => {
+                self.write_vreg(dst.index(), self.input.len() as u64);
+            }
+            LinearOp::RestoreCursor { src } => {
+                self.cursor = self.read_vreg(src.index()) as usize;
+            }
+            LinearOp::AdvanceCursor { count } => {
+                self.cursor += *count as usize;
+            }
+            LinearOp::AdvanceCursorBy { src } => {
+                self.cursor += self.read_vreg(src.index()) as usize;
+            }
+            LinearOp::PeekByte { dst } => {
+                if self.cursor < self.input.len() {
+                    self.write_vreg(dst.index(), self.input[self.cursor] as u64);
+                } else {
+                    self.write_vreg(dst.index(), 0);
+                }
+            }
+            LinearOp::LoadFromAddr { dst, addr, width } => {
+                // addr is cursor-relative (input pointer)
+                let addr_val = self.read_vreg(addr.index()) as usize;
+                let width = width.bytes() as usize;
+                if addr_val + width <= self.input.len() {
+                    let mut value = 0u64;
+                    for i in 0..width {
+                        value |= (self.input[addr_val + i] as u64) << (i * 8);
+                    }
+                    self.write_vreg(dst.index(), value);
+                } else {
+                    self.write_vreg(dst.index(), 0);
+                }
+            }
+            LinearOp::StoreToAddr { addr, src, width } => {
+                let addr_val = self.read_vreg(addr.index()) as usize;
+                let value = self.read_vreg(src.index());
+                let width = width.bytes() as usize;
+                self.ensure_output_len(addr_val + width);
+                for i in 0..width {
+                    self.output[addr_val + i] = ((value >> (i * 8)) & 0xff) as u8;
+                }
+            }
+            LinearOp::UnaryOp { op, dst, src } => {
+                let src_val = self.read_vreg(src.index());
+                let result = match op {
+                    kajit_lir::UnaryOpKind::ZigzagDecode { wide } => {
+                        if *wide {
+                            let v = src_val as i64;
+                            ((v >> 1) ^ -(v & 1)) as u64
+                        } else {
+                            let v = src_val as u32 as i32;
+                            ((v >> 1) ^ -(v & 1)) as u32 as u64
+                        }
+                    }
+                    kajit_lir::UnaryOpKind::SignExtend { from_width } => {
+                        let bits = from_width.bytes() as u32 * 8;
+                        let mask = 1u64 << (bits - 1);
+                        (src_val ^ mask).wrapping_sub(mask)
+                    }
+                };
+                self.write_vreg(dst.index(), result);
+            }
+            LinearOp::SaveOutPtr { dst } => {
+                // Output pointer — just use 0 as base (output is separate buffer)
+                self.write_vreg(dst.index(), 0);
+            }
+            LinearOp::SetOutPtr { src } => {
+                // No-op in interpreter (output is managed separately)
+            }
+            LinearOp::SlotAddr { dst, slot } => {
+                // Slot addresses: use high addresses that won't collide with cursor
+                let addr = 0x1_0000_0000u64
+                    + (slot.index() as u64) * kajit_ir::SLOT_ADDR_STRIDE_BYTES as u64;
+                self.write_vreg(dst.index(), addr);
+            }
+            LinearOp::WriteToSlot { src, slot } => {
+                let value = self.read_vreg(src.index());
+                let base = slot.index() * kajit_ir::SLOT_ADDR_STRIDE_BYTES;
+                let width = 8; // slots are u64-sized
+                self.ensure_output_len(base + width);
+                for i in 0..width {
+                    self.output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
+                }
+            }
+            LinearOp::ReadFromSlot { dst, slot } => {
+                let base = slot.index() * kajit_ir::SLOT_ADDR_STRIDE_BYTES;
+                let width = 8;
+                self.ensure_output_len(base + width);
+                let mut value = 0u64;
+                for i in 0..width {
+                    value |= (self.output[base + i] as u64) << (i * 8);
+                }
+                self.write_vreg(dst.index(), value);
+            }
             LinearOp::ErrorExit { code } => {
                 self.trap(*code);
             }

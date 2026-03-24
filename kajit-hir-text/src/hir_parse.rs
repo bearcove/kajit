@@ -1112,12 +1112,10 @@ fn build_module(parsed: ParsedModule) -> Result<Module, String> {
 }
 
 pub fn parse_hir(text: &str) -> Result<Module, String> {
-    let parsed = module_parser().parse(text).into_result().map_err(|errs| {
-        errs.into_iter()
-            .map(|err| err.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
+    let parsed = module_parser()
+        .parse(text)
+        .into_result()
+        .map_err(|errs| kajit_parse_util::format_rich_errors(text, errs))?;
     build_module(parsed)
 }
 
