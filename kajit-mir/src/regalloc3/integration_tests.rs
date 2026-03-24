@@ -75,7 +75,8 @@ fn test_end_to_end_simple() {
     // Run full pipeline
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH);
+    let hints = hints::HintMap::new();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
 
     // Should allocate v1 to a register
     assert!(matches!(
@@ -140,7 +141,8 @@ fn test_end_to_end_with_use() {
     // Run full pipeline
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH);
+    let hints = hints::HintMap::new();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
 
     // Both should be allocated
     assert!(alloc.allocations.contains_key(&VReg::new(1)));
@@ -200,7 +202,8 @@ fn test_end_to_end_block_params() {
     // Run full pipeline
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH);
+    let hints = hints::HintMap::new();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
 
     // Both vregs should be allocated
     assert!(alloc.allocations.contains_key(&VReg::new(1)));
@@ -311,7 +314,8 @@ fn test_end_to_end_register_pressure() {
     // Run full pipeline
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH);
+    let hints = hints::HintMap::new();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
 
     // All vregs should have allocations (some may be spilled)
     assert_eq!(alloc.allocations.len(), 7);
@@ -376,7 +380,8 @@ fn test_end_to_end_with_spill_rewrite() {
     // Run allocation
     let progpoints = progpoint::ProgPointMap::build(&func);
     let liveness = liveness::compute_liveness(&func, &progpoints);
-    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH);
+    let hints = hints::HintMap::new();
+    let alloc = linear_scan::allocate(liveness, &TEST_ABI, &TEST_SCRATCH, &hints);
 
     // Run spill rewrite
     let spill_result = spill_rewrite::rewrite_spills(&mut func, &alloc, &TEST_SCRATCH);

@@ -38,6 +38,7 @@
 //! ```
 
 pub mod critical_edge;
+pub mod hints;
 pub mod linear_scan;
 pub mod liveness;
 pub mod machine_inst;
