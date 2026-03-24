@@ -17,6 +17,8 @@ mod calls;
 mod edits;
 mod emit;
 
+pub mod regalloc3_backend;
+
 pub(crate) struct FunctionCtx {
     pub(crate) error_exit: LabelId,
     pub(crate) data_results: Vec<crate::ir::VReg>,

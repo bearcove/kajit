@@ -212,7 +212,8 @@ pub fn regalloc_edit_count_with_options(
     let mut func = build_decoder_ir_via_hir(shape, kind);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed while counting edits: {err}"));
     alloc.functions.iter().map(|f| f.edits.len()).sum()
@@ -239,7 +240,8 @@ pub fn regalloc_edits_text_with_options(
     let mut func = build_decoder_ir_via_hir(shape, kind);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = if pipeline_opts.resolve_regalloc(true) {
         let mut alloc =
             crate::regalloc_engine::allocate_cfg_program(&cfg_program).unwrap_or_else(|err| {
@@ -474,25 +476,57 @@ fn compile_linear_ir_decoder_with_options(
     let jit_debug = jit_debug_enabled();
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir);
-    let regalloc_alloc = if apply_regalloc_edits {
-        let mut alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-        maybe_disable_regalloc_edits_cfg(&mut alloc, &pipeline_opts);
-        alloc
-    } else {
-        no_regalloc_alloc_for_cfg_program(&cfg_program)
-    };
+    let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
 
-    let (buf, entry, source_map, backend_debug_info, asm_program) = {
-        let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
-            ir,
-            &cfg_program,
-            &regalloc_alloc,
-            apply_regalloc_edits,
-            registry,
-        );
-        materialize_backend_result(result)
+    // Use regalloc3 by default, opt out with KAJIT_USE_REGALLOC2=1
+    let use_regalloc3 = std::env::var("KAJIT_USE_REGALLOC2").is_err();
+
+    let (buf, entry, source_map, backend_debug_info, asm_program, regalloc_alloc) = if use_regalloc3
+    {
+        let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
+            .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
+        let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
+        let (buf, entry, source_map, backend_debug_info, asm_program) =
+            materialize_backend_result(result);
+        // Create a dummy regalloc2 alloc for DWARF/debug info (just needs cfg_program)
+        let dummy_alloc = no_regalloc_alloc_for_cfg_program(&cfg_program);
+        (
+            buf,
+            entry,
+            source_map,
+            backend_debug_info,
+            asm_program,
+            dummy_alloc,
+        )
+    } else {
+        let regalloc_alloc = if apply_regalloc_edits {
+            let mut alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
+                .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+            maybe_disable_regalloc_edits_cfg(&mut alloc, &pipeline_opts);
+            alloc
+        } else {
+            no_regalloc_alloc_for_cfg_program(&cfg_program)
+        };
+
+        let (buf, entry, source_map, backend_debug_info, asm_program) = {
+            let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
+                ir,
+                &cfg_program,
+                &regalloc_alloc,
+                apply_regalloc_edits,
+                registry,
+            );
+            materialize_backend_result(result)
+        };
+        (
+            buf,
+            entry,
+            source_map,
+            backend_debug_info,
+            asm_program,
+            regalloc_alloc,
+        )
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };

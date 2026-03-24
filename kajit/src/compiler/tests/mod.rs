@@ -1096,7 +1096,8 @@ fn postcard_structural_hir_array_path_matches_jit_differential_harness() {
 fn postcard_structural_hir_array_path_matches_post_regalloc_simulation() {
     let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
     let linear = crate::linearize::linearize(&mut func);
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default();
+    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate structural HIR postcard array cfg");
     let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &[1, 2, 3, 4]);
@@ -1113,13 +1114,15 @@ fn postcard_structural_hir_array_path_matches_post_regalloc_simulation() {
 fn postcard_structural_hir_array_path_without_backend_edit_emission() {
     let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
     let linear = crate::linearize::linearize(&mut func);
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default();
+    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate structural HIR postcard array cfg");
     let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
         &linear, &cfg, &alloc, false, None,
     );
-    let (buf, entry, _source_map, _backend_debug_info) = materialize_backend_result(result);
+    let (buf, entry, _source_map, _backend_debug_info, _asm_program) =
+        materialize_backend_result(result);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
     let decoder = CompiledDecoder {
@@ -1129,6 +1132,7 @@ fn postcard_structural_hir_array_path_without_backend_edit_emission() {
         func,
         trusted_utf8_input: false,
         _jit_registration: None,
+        asm_program: None,
     };
 
     let value = crate::deserialize::<ScalarArrayHolder>(&decoder, &[1, 2, 3, 4])
@@ -1145,7 +1149,8 @@ fn postcard_structural_hir_array_path_without_backend_edit_emission() {
 fn debug_scalar_array_regalloc_edits() {
     let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
     let linear = crate::linearize::linearize(&mut func);
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default();
+    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate structural HIR postcard array cfg");
     println!("{}", format_allocated_regalloc_edits(&alloc));
@@ -1176,7 +1181,8 @@ fn json_bool_true_false_matches_post_regalloc_simulation() {
     let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, crate::DecoderKind::Json);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default();
+    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate json bool cfg");
     let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &input);
@@ -1204,13 +1210,15 @@ fn json_bool_true_false_without_backend_edit_emission() {
     let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, crate::DecoderKind::Json);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default();
+    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate json bool cfg");
     let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
         &linear, &cfg, &alloc, false, None,
     );
-    let (buf, entry, _source_map, _backend_debug_info) = materialize_backend_result(result);
+    let (buf, entry, _source_map, _backend_debug_info, _asm_program) =
+        materialize_backend_result(result);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
     let decoder = CompiledDecoder {
@@ -1220,6 +1228,7 @@ fn json_bool_true_false_without_backend_edit_emission() {
         func,
         trusted_utf8_input: false,
         _jit_registration: None,
+        asm_program: None,
     };
 
     let got = crate::from_str::<Bools>(&decoder, core::str::from_utf8(&input).unwrap())
@@ -1345,6 +1354,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
             term: term_id,
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         }],
         edges: Vec::new(),
         insts: vec![
@@ -1422,6 +1432,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
             vreg_scopes: vec![Some(block_scope), Some(root_scope)],
             vreg_values: vec![None, None],
         },
+        hints: Default::default(),
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
@@ -1565,6 +1576,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
                 term: term_id,
                 preds: Vec::new(),
                 succs: vec![edge_id],
+                dead: false,
             },
             crate::regalloc_engine::cfg_mir::Block {
                 id: exit_block_id,
@@ -1573,6 +1585,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
                 term: return_term_id,
                 preds: vec![edge_id],
                 succs: Vec::new(),
+                dead: false,
             },
         ],
         edges: vec![crate::regalloc_engine::cfg_mir::Edge {
@@ -1651,6 +1664,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
             vreg_scopes: vec![Some(block_scope), Some(root_scope)],
             vreg_values: vec![None, None],
         },
+        hints: Default::default(),
     };
     let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
     #[cfg(target_arch = "aarch64")]
@@ -1779,6 +1793,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
             term: term_id,
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         }],
         edges: Vec::new(),
         insts: vec![
@@ -1856,6 +1871,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
             vreg_scopes: vec![Some(block_scope), Some(root_scope)],
             vreg_values: vec![None, None],
         },
+        hints: Default::default(),
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
@@ -2010,6 +2026,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
             term: term_id,
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         }],
         edges: Vec::new(),
         insts: vec![
@@ -2075,6 +2092,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
             vreg_scopes: Vec::new(),
             vreg_values: Vec::new(),
         },
+        hints: Default::default(),
     };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
@@ -2185,6 +2203,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
             term: term_id,
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         }],
         edges: Vec::new(),
         insts: vec![crate::regalloc_engine::cfg_mir::Inst {
@@ -2228,6 +2247,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
             vreg_scopes: vec![Some(root_scope)],
             vreg_values: vec![Some(debug_a)],
         },
+        hints: Default::default(),
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
@@ -2318,6 +2338,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
             term: term_id,
             preds: Vec::new(),
             succs: Vec::new(),
+            dead: false,
         }],
         edges: Vec::new(),
         insts: vec![
@@ -2402,6 +2423,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
             vreg_scopes: vec![Some(root_scope), Some(root_scope)],
             vreg_values: vec![Some(debug_flag), Some(debug_flag)],
         },
+        hints: Default::default(),
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);

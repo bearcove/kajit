@@ -194,7 +194,8 @@ pub fn debug_cfg_mir(
     let mut func = compiler::build_decoder_ir_via_hir(shape, kind);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
-    regalloc_engine::cfg_mir::lower_and_optimize(&linear)
+    let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
+    regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints)
 }
 
 /// Build the current prototype postcard HIR for a shape.
@@ -648,7 +649,8 @@ pub fn differential_check_linear_ir_vs_jit_with_output_size(
     input: &[u8],
     output_size: usize,
 ) -> Result<DifferentialReport, DifferentialHarnessError> {
-    let cfg_program = regalloc_engine::cfg_mir::lower_linear_ir(ir);
+    let hints = Default::default(); // TODO: Pass hints from caller
+    let cfg_program = regalloc_engine::cfg_mir::lower_linear_ir(ir, hints);
     let alloc = regalloc_engine::allocate_cfg_program(&cfg_program)?;
     let simulation = regalloc_engine::simulate_execution_cfg(&alloc, input)?;
     let interpreter = normalize_simulation_outcome(simulation, output_size);

@@ -634,7 +634,8 @@ mod tests {
         let mut ir_func = parse_ir(snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT), &registry)
             .expect("RVSDG snapshot should parse");
         let linear = kajit_lir::linearize(&mut ir_func);
-        cfg_mir::lower_linear_ir(&linear)
+        let hints = Default::default();
+        cfg_mir::lower_linear_ir(&linear, hints)
     }
 
     fn add_noise_to_real_cfg(program: &cfg_mir::Program) -> cfg_mir::Program {
@@ -787,6 +788,7 @@ mod tests {
             vreg_count: 1,
             slot_count: 0,
             debug: Default::default(),
+            hints: Default::default(),
         }
     }
 
@@ -852,6 +854,7 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             debug: Default::default(),
+            hints: Default::default(),
         }
     }
 
@@ -964,6 +967,7 @@ mod tests {
             vreg_count: 4,
             slot_count: 0,
             debug: Default::default(),
+            hints: Default::default(),
         }
     }
 

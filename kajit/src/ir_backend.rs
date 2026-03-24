@@ -37,21 +37,6 @@ pub struct LinearBackendResult {
     pub asm_program: Option<kajit_emit::aarch64_asm::Program>,
 }
 
-pub fn compile_linear_ir(ir: &LinearIr) -> LinearBackendResult {
-    let cfg_program = cfg_mir::lower_linear_ir(ir);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-        .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-    compile_linear_ir_with_alloc(ir, &cfg_program, &alloc)
-}
-
-pub fn compile_linear_ir_with_alloc(
-    ir: &LinearIr,
-    cfg_program: &cfg_mir::Program,
-    alloc: &AllocatedCfgProgram,
-) -> LinearBackendResult {
-    compile_linear_ir_with_alloc_and_mode(ir, cfg_program, alloc, true, None)
-}
-
 pub fn compile_linear_ir_with_alloc_and_mode(
     ir: &LinearIr,
     cfg_program: &cfg_mir::Program,
@@ -102,7 +87,8 @@ mod tests {
         let mut func = builder.finish();
         crate::ir_passes::run_default_passes(&mut func);
         let linear = crate::linearize::linearize(&mut func);
-        let cfg_program = cfg_mir::lower_linear_ir(&linear);
+        let hints = Default::default();
+        let cfg_program = cfg_mir::lower_linear_ir(&linear, hints);
         let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
             .unwrap_or_else(|err| panic!("regalloc2 allocation failed in test: {err}"));
 

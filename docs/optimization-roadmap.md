@@ -1,11 +1,12 @@
 # Optimization Roadmap
 
-## Current State (2026-03-23)
+## Current State (2026-03-24)
 
-### Performance Gap
-- **Kajit**: 3.5 ns/op for scalar u32 varint decode
-- **Serde**: 0.7 ns/op (5x faster)
-- **Code size**: Kajit 424 bytes vs Serde ~80 bytes
+### Performance Gap (regalloc3 native backend)
+- **Kajit**: 5.1 ns/op for scalar u32 varint decode (regalloc3 native backend)
+- **Kajit (regalloc2, historical)**: 3.5 ns/op — regalloc2 path is currently broken due to adapter fragility, not actively maintained
+- **Serde**: 0.7 ns/op (7x faster than current kajit)
+- **Primary bottleneck**: RVSDG-level structure — 32 blocks for a varint decoder, constant-valued branches that should be folded upstream before reaching the backend
 
 ### Structural Issues
 

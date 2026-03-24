@@ -92,12 +92,11 @@ impl<'a> LivenessAnalyzer<'a> {
         let mut inst_uses = HashMap::new();
         let mut inst_defs = HashMap::new();
 
-        // Collect use/def for each instruction
+        // Collect use/def for each instruction from LinearOp fields
+        // (operands may be incomplete for some instructions)
         for inst in &func.insts {
-            let uses: Vec<VReg> = inst.operands.iter().map(|op| op.vreg).collect();
-
-            // Extract def from LinearOp (if any)
             use kajit_lir::LinearOp;
+
             let defs = match &inst.op {
                 LinearOp::Const { dst, .. }
                 | LinearOp::BinOp { dst, .. }
@@ -110,7 +109,9 @@ impl<'a> LivenessAnalyzer<'a> {
                 | LinearOp::ReadFromField { dst, .. }
                 | LinearOp::SaveOutPtr { dst }
                 | LinearOp::SlotAddr { dst, .. }
-                | LinearOp::LoadFromAddr { dst, .. } => vec![*dst],
+                | LinearOp::LoadFromAddr { dst, .. }
+                | LinearOp::ReadFromSlot { dst, .. }
+                | LinearOp::CallPure { dst, .. } => vec![*dst],
                 LinearOp::CallIntrinsic { dst, .. } => {
                     if let Some(dst) = dst {
                         vec![*dst]
@@ -118,6 +119,23 @@ impl<'a> LivenessAnalyzer<'a> {
                         vec![]
                     }
                 }
+                _ => vec![],
+            };
+
+            let uses = match &inst.op {
+                LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
+                LinearOp::UnaryOp { src, .. }
+                | LinearOp::Copy { src, .. }
+                | LinearOp::AdvanceCursorBy { src }
+                | LinearOp::RestoreCursor { src }
+                | LinearOp::WriteToField { src, .. }
+                | LinearOp::SetOutPtr { src }
+                | LinearOp::WriteToSlot { src, .. } => vec![*src],
+                LinearOp::StoreToAddr { addr, src, .. } => vec![*addr, *src],
+                LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
+                LinearOp::CallIntrinsic { args, .. }
+                | LinearOp::CallPure { args, .. }
+                | LinearOp::CallLambda { args, .. } => args.clone(),
                 _ => vec![],
             };
 
@@ -178,6 +196,16 @@ impl<'a> LivenessAnalyzer<'a> {
                     }
 
                     live_out.extend(succ_live);
+                }
+
+                // Add terminator uses (condition vregs in branches)
+                let term = &self.func.terms[block.term.0 as usize];
+                match term {
+                    crate::cfg_mir::Terminator::BranchIf { cond, .. }
+                    | crate::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                        live_out.insert(*cond);
+                    }
+                    _ => {}
                 }
 
                 // Compute live-in from live-out

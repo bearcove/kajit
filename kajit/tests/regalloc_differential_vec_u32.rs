@@ -14,7 +14,8 @@ fn postcard_vec_u32_v0_regalloc_differential_runs() {
     };
     let input = postcard::to_allocvec(&value).expect("serialize postcard input");
     let linear = kajit::debug_linear_ir(Nums::SHAPE, kajit::DecoderKind::Postcard);
-    let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default();
+    let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let lambda_ids: Vec<usize> = cfg_program
         .funcs
         .iter()
@@ -48,7 +49,8 @@ fn postcard_vec_u32_v0_linear_49_has_term_cond_alloc() {
     };
     let _input = postcard::to_allocvec(&value).expect("serialize postcard input");
     let linear = kajit::debug_linear_ir(Nums::SHAPE, kajit::DecoderKind::Postcard);
-    let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear);
+    let hints = Default::default();
+    let cfg_program = kajit::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let allocated =
         kajit::regalloc_engine::allocate_cfg_program(&cfg_program).expect("allocate cfg program");
     let cfg_lambda1 = cfg_program

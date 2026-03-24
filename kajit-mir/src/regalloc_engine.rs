@@ -1293,6 +1293,131 @@ pub fn allocate_cfg_program(
     Ok(allocated)
 }
 
+/// Run regalloc3 (native allocator) over canonical CFG MIR.
+/// Returns native regalloc3 types (no conversion to regalloc2).
+pub fn allocate_cfg_program_regalloc3_native(
+    program: &cfg_mir::Program,
+) -> Result<crate::regalloc3_result::AllocatedCfgProgramRa3, RegallocEngineError> {
+    use crate::regalloc3::*;
+    use crate::regalloc3_result::*;
+
+    program
+        .validate()
+        .map_err(|err| RegallocEngineError::Checker(err.to_string()))?;
+
+    // Get ABI info for current architecture
+    // Reserved: x9-x11 (backend scratch), x18 (platform), x19-x22 (cursor/ctx)
+    let abi = &machine_inst::AbiInfo {
+        #[cfg(target_arch = "aarch64")]
+        caller_saved_gpr: &[
+            // x0-x8, x12-x17 (excluding x9-x11 scratch, x18 platform)
+            machine_inst::PReg(0),
+            machine_inst::PReg(1),
+            machine_inst::PReg(2),
+            machine_inst::PReg(3),
+            machine_inst::PReg(4),
+            machine_inst::PReg(5),
+            machine_inst::PReg(6),
+            machine_inst::PReg(7),
+            machine_inst::PReg(8),
+            machine_inst::PReg(12),
+            machine_inst::PReg(13),
+            machine_inst::PReg(14),
+            machine_inst::PReg(15),
+            machine_inst::PReg(16),
+            machine_inst::PReg(17),
+        ],
+        #[cfg(target_arch = "aarch64")]
+        callee_saved_gpr: &[
+            // x19-x22 reserved for cursor/ctx, only x23-x28 allocatable
+            machine_inst::PReg(23),
+            machine_inst::PReg(24),
+            machine_inst::PReg(25),
+            machine_inst::PReg(26),
+            machine_inst::PReg(27),
+            machine_inst::PReg(28),
+        ],
+        #[cfg(target_arch = "x86_64")]
+        caller_saved_gpr: &[
+            machine_inst::PReg(0),
+            machine_inst::PReg(1),
+            machine_inst::PReg(2),
+            machine_inst::PReg(6),
+            machine_inst::PReg(7),
+            machine_inst::PReg(8),
+            machine_inst::PReg(9),
+            machine_inst::PReg(10),
+            machine_inst::PReg(11),
+        ],
+        #[cfg(target_arch = "x86_64")]
+        callee_saved_gpr: &[
+            machine_inst::PReg(3),
+            machine_inst::PReg(5),
+            machine_inst::PReg(12),
+            machine_inst::PReg(13),
+            machine_inst::PReg(14),
+            machine_inst::PReg(15),
+        ],
+        arg_gprs: &[],
+        ret_gprs: &[],
+        red_zone_size: 0,
+    };
+
+    let scratch = &machine_inst::ScratchPolicy {
+        reserved: &[machine_inst::PReg(31)],
+        max_simultaneous_spills: 2,
+    };
+
+    let mut functions = Vec::with_capacity(program.funcs.len());
+    let mut modified_funcs = Vec::with_capacity(program.funcs.len());
+
+    for func in &program.funcs {
+        // Clone function for modification (phi copies)
+        let mut func_mut = func.clone();
+
+        // Insert phi resolution copies
+        let temp_vreg = kajit_ir::VReg::new(program.vreg_count);
+        phi_resolution::insert_phi_copies(&mut func_mut, temp_vreg);
+
+        // Run regalloc3 pipeline
+        let progpoints = progpoint::ProgPointMap::build(&func_mut);
+        let liveness = liveness::compute_liveness(&func_mut, &progpoints);
+        let hints = &program.hints;
+        let alloc_result = linear_scan::allocate(liveness, abi, scratch, hints);
+
+        // Assign spill slots
+        let mut spill_slots = HashMap::new();
+        let mut next_slot = 0u32;
+        for &vreg in &alloc_result.spilled {
+            spill_slots.insert(vreg, spill_rewrite::SpillSlot(next_slot));
+            next_slot += 1;
+        }
+
+        functions.push(AllocatedCfgFunctionRa3 {
+            lambda_id: func_mut.lambda_id,
+            num_spillslots: next_slot as usize,
+            allocations: alloc_result.allocations.clone(),
+            spill_slots,
+        });
+
+        modified_funcs.push(func_mut);
+    }
+
+    // Build modified program with phi copies inserted
+    let modified_program = cfg_mir::Program {
+        funcs: modified_funcs,
+        vreg_count: program.vreg_count,
+        slot_count: program.slot_count,
+        debug: program.debug.clone(),
+        hints: program.hints.clone(),
+    };
+
+    Ok(AllocatedCfgProgramRa3 {
+        cfg_program: modified_program,
+        functions,
+    })
+}
+
 const MAX_SIM_STEPS: usize = 1_000_000;
 const SLOT_ADDR_STRIDE: usize = SLOT_ADDR_STRIDE_BYTES;
 
@@ -3083,7 +3208,8 @@ mod tests {
     fn regalloc2_allocates_cfg_mir_program() {
         let mut func = build_stress_ir();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate cfg_mir");
 
         assert_eq!(alloc.functions.len(), cfg.funcs.len());
@@ -3126,7 +3252,8 @@ mod tests {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc =
             allocate_cfg_program(&cfg).expect("regalloc2 should allocate cfg_mir gamma/theta");
 
@@ -3138,7 +3265,8 @@ mod tests {
     fn cfg_mir_typed_edits_reference_valid_program_ids() {
         let mut func = build_stress_ir();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate cfg_mir");
 
         for (func_alloc, cfg_func) in alloc.functions.iter().zip(cfg.funcs.iter()) {
@@ -3197,7 +3325,8 @@ mod tests {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate gamma/theta");
         assert!(!alloc.functions.is_empty());
     }
@@ -3231,7 +3360,8 @@ lambda @0 (shape: "u8") {
         let registry = IntrinsicRegistry::empty();
         let mut func = parse_ir(input, &registry).expect("fixture should parse");
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let _alloc = allocate_cfg_program(&cfg).unwrap_or_else(|e| {
             panic!(
                 "regalloc should allocate textual theta fixture: {e}\n--- linear ---\n{lin}\n--- cfg-mir ---\n{cfg}"
@@ -3269,7 +3399,8 @@ lambda @0 (shape: "u8") {
         let mut func = parse_ir(input, &registry).expect("fixture should parse");
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let _alloc = allocate_cfg_program(&cfg).unwrap_or_else(|e| {
             panic!(
                 "regalloc should allocate textual theta fixture after passes: {e}\n--- linear ---\n{lin}\n--- cfg-mir ---\n{cfg}"
@@ -3283,7 +3414,8 @@ lambda @0 (shape: "u8") {
         let mut func = build_stress_ir();
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate stress IR");
         assert!(
             alloc.functions.iter().any(|f| f.lambda_id.index() == 0),
@@ -3318,7 +3450,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate call-heavy IR");
         assert!(!alloc.functions[0].op_allocs.is_empty());
     }
@@ -3331,7 +3464,8 @@ lambda @0 (shape: "u8") {
         let mut func = build_stress_ir();
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("regalloc2 should allocate stress IR");
 
         let total_edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
@@ -3348,7 +3482,8 @@ lambda @0 (shape: "u8") {
         let mut func = build_stress_ir();
         run_default_passes(&mut func);
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let env = machine_env();
         let options = RegallocOptions {
             verbose_log: false,
@@ -3460,6 +3595,7 @@ lambda @0 (shape: "u8") {
                 vreg_count: 32,
                 slot_count: 0,
                 debug: Default::default(),
+                hints: Default::default(),
             },
             functions: vec![AllocatedCfgFunction {
                 lambda_id: LambdaId::new(0),
@@ -3537,7 +3673,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("allocation should succeed");
 
         let input = [0x78_u8, 0x56, 0x34, 0x12];
@@ -3565,7 +3702,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
         let input = [0x78_u8, 0x56, 0x34, 0x12];
@@ -3597,7 +3735,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
         let result = differential_check_cfg(&cfg, &alloc, &[]);
@@ -3628,7 +3767,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
         let child_alloc = alloc
             .functions
@@ -3663,7 +3803,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
         let root_alloc = alloc
@@ -3725,7 +3866,8 @@ lambda @0 (shape: "u8") {
         }
         let mut func = builder.finish();
         let lin = linearize(&mut func);
-        let cfg = crate::cfg_mir::lower_linear_ir(&lin);
+        let hints = Default::default();
+        let cfg = crate::cfg_mir::lower_linear_ir(&lin, hints);
         let alloc = allocate_cfg_program(&cfg).expect("cfg allocation should succeed");
 
         let child_func = cfg

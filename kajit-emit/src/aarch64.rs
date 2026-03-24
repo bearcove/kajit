@@ -2930,7 +2930,7 @@ mod tests {
         emitter.bind_label(label0).unwrap();
         emitter.emit_movz_imm(Width::X64, Reg::X0, 0x42, 0).unwrap();
         emitter
-            .emit_add_imm(Width::X64, Reg::X1, Reg::X0, 7)
+            .emit_add_imm(Width::X64, Reg::X1, Reg::X0, 7, false)
             .unwrap();
         emitter
             .emit_ldr_imm(Width::W32, Reg::X2, Reg::X1, 0)

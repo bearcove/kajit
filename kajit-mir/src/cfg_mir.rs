@@ -178,6 +178,7 @@ pub struct Program {
     pub vreg_count: u32,
     pub slot_count: u32,
     pub debug: ProgramDebugProvenance,
+    pub hints: crate::regalloc3::hints::HintMap,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -654,7 +655,17 @@ fn fmt_cfg_function(
         )?;
     }
 
+    // Collect inst IDs referenced by blocks (skip dead/unreferenced insts)
+    let mut referenced_insts = std::collections::HashSet::new();
+    for block in &func.blocks {
+        for &inst_id in &block.insts {
+            referenced_insts.insert(inst_id);
+        }
+    }
     for inst in &func.insts {
+        if !referenced_insts.contains(&inst.id) {
+            continue;
+        }
         write!(f, "    inst i{}: ", inst.id.0)?;
         fmt_cfg_inst(f, inst, registry)?;
         writeln!(f)?;
@@ -811,6 +822,48 @@ fn fmt_cfg_op_name(
     }
 }
 
+/// Extract dst vreg from a LinearOp (fallback when operands are empty).
+fn linearop_dst(op: &LinearOp) -> Option<VReg> {
+    match op {
+        LinearOp::Const { dst, .. }
+        | LinearOp::BinOp { dst, .. }
+        | LinearOp::UnaryOp { dst, .. }
+        | LinearOp::Copy { dst, .. }
+        | LinearOp::ReadBytes { dst, .. }
+        | LinearOp::PeekByte { dst }
+        | LinearOp::SaveCursor { dst }
+        | LinearOp::SaveInputEnd { dst }
+        | LinearOp::ReadFromField { dst, .. }
+        | LinearOp::SaveOutPtr { dst }
+        | LinearOp::SlotAddr { dst, .. }
+        | LinearOp::LoadFromAddr { dst, .. }
+        | LinearOp::ReadFromSlot { dst, .. }
+        | LinearOp::CallPure { dst, .. } => Some(*dst),
+        LinearOp::CallIntrinsic { dst, .. } => *dst,
+        _ => None,
+    }
+}
+
+/// Extract use vregs from a LinearOp (fallback when operands are empty).
+fn linearop_uses(op: &LinearOp) -> Vec<VReg> {
+    match op {
+        LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
+        LinearOp::UnaryOp { src, .. }
+        | LinearOp::Copy { src, .. }
+        | LinearOp::AdvanceCursorBy { src }
+        | LinearOp::RestoreCursor { src }
+        | LinearOp::WriteToField { src, .. }
+        | LinearOp::SetOutPtr { src }
+        | LinearOp::WriteToSlot { src, .. } => vec![*src],
+        LinearOp::StoreToAddr { addr, src, .. } => vec![*addr, *src],
+        LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
+        LinearOp::CallIntrinsic { args, .. }
+        | LinearOp::CallPure { args, .. }
+        | LinearOp::CallLambda { args, .. } => args.clone(),
+        _ => vec![],
+    }
+}
+
 fn fmt_cfg_inst(
     f: &mut fmt::Formatter<'_>,
     inst: &Inst,
@@ -827,6 +880,7 @@ fn fmt_cfg_inst(
         .filter(|op| op.kind == OperandKind::Use)
         .collect();
 
+    // Show def: prefer operands, fall back to LinearOp
     if !defs.is_empty() {
         for (idx, op) in defs.iter().enumerate() {
             if idx > 0 {
@@ -835,10 +889,13 @@ fn fmt_cfg_inst(
             fmt_cfg_operand(f, op)?;
         }
         write!(f, " = ")?;
+    } else if let Some(dst) = linearop_dst(&inst.op) {
+        write!(f, "v{}:gpr = ", dst.index())?;
     }
 
     fmt_cfg_op_name(f, &inst.op, registry)?;
 
+    // Show uses: prefer operands, fall back to LinearOp
     if !uses.is_empty() {
         write!(f, " ")?;
         for (idx, op) in uses.iter().enumerate() {
@@ -846,6 +903,17 @@ fn fmt_cfg_inst(
                 write!(f, ", ")?;
             }
             fmt_cfg_operand(f, op)?;
+        }
+    } else {
+        let fallback_uses = linearop_uses(&inst.op);
+        if !fallback_uses.is_empty() {
+            write!(f, " ")?;
+            for (idx, vreg) in fallback_uses.iter().enumerate() {
+                if idx > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "v{}:gpr", vreg.index())?;
+            }
         }
     }
 
@@ -1695,7 +1763,7 @@ fn lower_function(
 }
 
 /// Lower linearized IR into the canonical CFG MIR model.
-pub fn lower_linear_ir(ir: &LinearIr) -> Program {
+pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -> Program {
     let mut funcs = Vec::<Function>::new();
     let mut op_scopes = HashMap::<(LambdaId, OpId), DebugScopeId>::new();
     let mut op_values = HashMap::<(LambdaId, OpId), DebugValueId>::new();
@@ -1776,6 +1844,7 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
             vreg_scopes: ir.debug.vreg_scopes.clone(),
             vreg_values: ir.debug.vreg_values.clone(),
         },
+        hints,
     }
 }
 
@@ -1788,8 +1857,8 @@ pub fn lower_linear_ir(ir: &LinearIr) -> Program {
 ///
 /// This is the single entry point for producing optimized CFG-MIR from linear IR,
 /// ensuring consistent behavior between compilation and debug/test paths.
-pub fn lower_and_optimize(ir: &LinearIr) -> Program {
-    let mut cfg = lower_linear_ir(ir);
+pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -> Program {
+    let mut cfg = lower_linear_ir(ir, hints);
     let opts = CfgOptOptions::from_env();
 
     // SSA validation: enabled in debug builds or via KAJIT_VALIDATE_SSA=1
@@ -4359,7 +4428,8 @@ mod tests {
         }
         let mut func = builder.finish();
         let linear = linearize(&mut func);
-        let program = lower_linear_ir(&linear);
+        let hints = crate::regalloc3::hints::HintMap::default();
+        let program = lower_linear_ir(&linear, hints);
         program
             .validate()
             .expect("lowered cfg program should validate");
@@ -4386,7 +4456,8 @@ mod tests {
         }
         let mut func = builder.finish();
         let linear = linearize(&mut func);
-        let program = lower_linear_ir(&linear);
+        let hints = crate::regalloc3::hints::HintMap::default();
+        let program = lower_linear_ir(&linear, hints);
         let root = &program.funcs[0];
 
         let merge = root
@@ -4433,7 +4504,8 @@ mod tests {
         func.nodes[const_node].outputs[0].debug_scope = root_scope;
 
         let linear = linearize(&mut func);
-        let program = lower_linear_ir(&linear);
+        let hints = crate::regalloc3::hints::HintMap::default();
+        let program = lower_linear_ir(&linear, hints);
         let root = &program.funcs[0];
         let const_inst = root.insts[0].id;
 
@@ -4606,6 +4678,7 @@ mod tests {
                 make_const(1, 1, 99),
             ])],
             debug: Default::default(),
+            hints: Default::default(),
         };
 
         // Mark v1 as used by adding it to data_results
@@ -4644,6 +4717,7 @@ mod tests {
                 make_binop(2, 2, 0, 1, kajit_lir::BinOpKind::Add),
             ])],
             debug: Default::default(),
+            hints: Default::default(),
         };
 
         local_cse(&mut program);
@@ -4678,6 +4752,7 @@ mod tests {
                 make_binop(2, 2, 0, 1, kajit_lir::BinOpKind::Add),
             ])],
             debug: Default::default(),
+            hints: Default::default(),
         };
 
         // Mark v2 as used (result)
@@ -4784,6 +4859,7 @@ mod tests {
             slot_count: 0,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
+            hints: Default::default(),
         };
 
         // Verify initial state
@@ -4839,6 +4915,7 @@ mod tests {
             slot_count: 0,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
+            hints: Default::default(),
         };
 
         let insts_before: usize = program.funcs.iter().map(|f| f.insts.len()).sum();
@@ -5370,6 +5447,7 @@ mod tests {
                 },
             ])],
             debug: Default::default(),
+            hints: Default::default(),
         };
 
         // v3 needs to be defined somewhere (as data_arg)

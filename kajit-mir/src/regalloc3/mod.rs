@@ -43,6 +43,7 @@ pub mod linear_scan;
 pub mod liveness;
 pub mod machine_inst;
 pub mod parallel_copy;
+pub mod phi_resolution;
 pub mod progpoint;
 pub mod spill_rewrite;
 pub mod verify;
