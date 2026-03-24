@@ -1825,7 +1825,16 @@ pub fn lower_and_optimize(ir: &LinearIr) -> Program {
         }
     };
 
-    // Run loop-invariant phi elimination early (requires analysis passes)
+    // Run constant phi elimination (general redundant block-param elimination)
+    // This replaces loop_phi_elim with a proper iterative dataflow approach
+    if opts.enabled("const_phi_elim") {
+        for func in &mut cfg.funcs {
+            crate::opt::constant_phi_elim::eliminate_constant_phis(func);
+        }
+        validate_after("const_phi_elim", &cfg);
+    }
+
+    // DEPRECATED: old loop-specific phi elimination (disabled by default)
     if opts.enabled("loop_phi_elim") {
         for func in &mut cfg.funcs {
             let dom = crate::analysis::dominance::DominanceInfo::compute(func);
@@ -1922,10 +1931,17 @@ impl CfgOptOptions {
     }
 
     fn enabled(&self, name: &str) -> bool {
-        self.overrides
-            .get(name)
-            .copied()
-            .unwrap_or(self.default_enabled)
+        // Check explicit override first
+        if let Some(&enabled) = self.overrides.get(name) {
+            return enabled;
+        }
+
+        // Special cases for deprecated/new opts
+        match name {
+            "loop_phi_elim" => false, // DEPRECATED: disabled by default
+            "const_phi_elim" => true, // NEW: enabled by default
+            _ => self.default_enabled,
+        }
     }
 }
 
