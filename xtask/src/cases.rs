@@ -3174,6 +3174,7 @@ pub(crate) fn render_test_file() -> String {
             edits: usize,
             edits_text: String,
             emission_text: String,
+            asm_text: String,
             opt_timeline: Vec<(String, String)>,
         }
 
@@ -3188,6 +3189,10 @@ pub(crate) fn render_test_file() -> String {
             let edits = kajit::regalloc_edit_count(shape, kind);
             let edits_text = kajit::regalloc_edits_text(shape, kind);
             let emission_text = kajit::emission_trace_text(shape, kind);
+            #[cfg(target_arch = "aarch64")]
+            let asm_text = kajit::assembly_text(shape, kind);
+            #[cfg(not(target_arch = "aarch64"))]
+            let asm_text = String::from("(assembly capture only available on aarch64)");
             let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, kind);
             CodegenArtifacts {
                 hir_text,
@@ -3197,6 +3202,7 @@ pub(crate) fn render_test_file() -> String {
                 edits,
                 edits_text,
                 emission_text,
+                asm_text,
                 opt_timeline,
             }
         }
@@ -3301,8 +3307,8 @@ pub(crate) fn render_test_file() -> String {
             if should_dump_stage("edits") {
                 dump_stage(format_label, case, "edits", &artifacts.edits_text);
             }
-            if should_dump_stage("emit") {
-                dump_stage(format_label, case, "emit", &artifacts.emission_text);
+            if should_dump_stage("emit") || should_dump_stage("asm") {
+                dump_stage(format_label, case, "asm", &artifacts.asm_text);
             }
             if should_dump_stage("opts") {
                 for (index, (pass_name, ir_text)) in artifacts.opt_timeline.iter().enumerate() {
