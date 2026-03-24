@@ -77,8 +77,45 @@ pub fn allocate(
     // Phase 2: Color — domtree preorder walk, assign colors
     let coloring = color_phase(func, liveness, &dom, &spilled, &allocatable);
 
+    if std::env::var("KAJIT_RA_DEBUG").is_ok() {
+        eprintln!(
+            "[ssa_coloring] k={k}, spilled={}, colored={}",
+            spilled.len(),
+            coloring.len()
+        );
+        // Check for conflicts: any two colored vregs that interfere
+        // and got the same color
+        let mut conflicts = 0;
+        for (&v1, &c1) in &coloring {
+            for (&v2, &c2) in &coloring {
+                if v1 >= v2 || c1 != c2 {
+                    continue;
+                }
+                // Check if they interfere: both live at some common point
+                // Simple check: same block live-in
+                for (block_id, live_in) in &liveness.live_in {
+                    if live_in.contains(&v1) && live_in.contains(&v2) {
+                        eprintln!(
+                            "  CONFLICT: v{} and v{} both colored p{}, both live-in at b{}",
+                            v1.index(),
+                            v2.index(),
+                            c1.0,
+                            block_id.0
+                        );
+                        conflicts += 1;
+                        break;
+                    }
+                }
+            }
+        }
+        if conflicts > 0 {
+            eprintln!("  {} conflicts found!", conflicts);
+        }
+    }
+
     // Phase 3: Coalesce — bounded phi-affinity recoloring
-    let coloring = coalesce_phase(func, liveness, &dom, &def_block, coloring, &spilled);
+    // TODO: temporarily disabled for debugging
+    // let coloring = coalesce_phase(func, liveness, &dom, &def_block, coloring, &spilled);
 
     // Build result
     let mut allocations = HashMap::new();
@@ -296,7 +333,10 @@ fn is_last_use_in_block(
 /// Walk blocks in domtree preorder. At each block:
 /// 1. Mark colors of live-in values as occupied
 /// 2. Color block params (phi defs)
-/// 3. Scan instructions: on def, assign lowest available color; on last use, free color
+/// 3. Scan instructions: free dead values before each def, assign lowest color to defs
+///
+/// Key correctness invariant: a color is "occupied" iff the vreg holding it
+/// is still live (will be used again in this block or is live-out).
 fn color_phase(
     func: &Function,
     liveness: &LivenessInfo,
@@ -309,18 +349,59 @@ fn color_phase(
     // Walk domtree in preorder
     let preorder = domtree_preorder(func.entry, dom);
 
+    // Pre-compute: for each (block, vreg), the index of the last instruction
+    // that uses it in that block (including terminator and edge args).
+    // u32::MAX means "used at/after terminator" (edge arg or branch cond).
+    let mut last_use_in_block: HashMap<(BlockId, VReg), u32> = HashMap::new();
+    for block in &func.blocks {
+        if block.dead {
+            continue;
+        }
+        // Instruction uses
+        for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
+            let inst = &func.insts[inst_id.0 as usize];
+            inst.op.for_each_use(|src| {
+                last_use_in_block.insert((block.id, *src), inst_idx as u32);
+            });
+        }
+        // Terminator condition uses
+        let term = &func.terms[block.term.0 as usize];
+        match term {
+            cfg_mir::Terminator::BranchIf { cond, .. }
+            | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                last_use_in_block.insert((block.id, *cond), u32::MAX);
+            }
+            _ => {}
+        }
+        // Edge arg source uses (at terminator)
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            if edge.from.0 == u32::MAX {
+                continue;
+            }
+            for arg in &edge.args {
+                last_use_in_block.insert((block.id, arg.source), u32::MAX);
+            }
+        }
+    }
+
     for block_id in preorder {
         let block = &func.blocks[block_id.index()];
         if block.dead {
             continue;
         }
 
+        let live_out = liveness.live_out.get(&block_id);
+
         // Track which colors are occupied in this block
         let mut occupied: HashSet<PReg> = HashSet::new();
 
-        // Mark colors of live-in values
+        // Mark colors of live-in values (not spilled)
         if let Some(live_in) = liveness.live_in.get(&block_id) {
             for &vreg in live_in {
+                if spilled.contains(&vreg) {
+                    continue;
+                }
                 if let Some(&preg) = coloring.get(&vreg) {
                     occupied.insert(preg);
                 }
@@ -337,26 +418,45 @@ fn color_phase(
                 coloring.insert(param, color);
                 occupied.insert(color);
             }
-            // else: ran out of colors (shouldn't happen if spill phase worked)
         }
 
         // Scan instructions in program order
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
 
-            // Free colors of values with last use at this instruction
+            // Before processing this instruction's defs, free colors of values
+            // whose last use was at a PREVIOUS instruction and are NOT live-out.
+            // (We free after last use, not at last use, to avoid freeing a color
+            // that this instruction reads and another def wants.)
+            let mut to_free = Vec::new();
+            for (&preg, _) in occupied.iter().map(|p| (p, ())) {
+                // Find which vreg holds this color
+                // (linear scan through coloring — could be optimized with reverse map)
+            }
+            // Simpler approach: collect all uses of this instruction, then free
+            // any previously-used vregs that are dead after this point.
+            let mut uses_here: Vec<VReg> = Vec::new();
             inst.op.for_each_use(|src| {
-                if is_last_use_in_block(func, block, *src, inst_idx)
-                    && !liveness
-                        .live_out
-                        .get(&block_id)
-                        .map_or(false, |lo| lo.contains(src))
+                uses_here.push(*src);
+            });
+
+            // Free colors of vregs whose last use in this block is at inst_idx
+            // and that are NOT live-out
+            for &vreg in &uses_here {
+                if spilled.contains(&vreg) {
+                    continue;
+                }
+                let last = last_use_in_block.get(&(block_id, vreg)).copied();
+                if last == Some(inst_idx as u32) && !live_out.map_or(false, |lo| lo.contains(&vreg))
                 {
-                    if let Some(&preg) = coloring.get(src) {
-                        occupied.remove(&preg);
+                    if let Some(&preg) = coloring.get(&vreg) {
+                        to_free.push(preg);
                     }
                 }
-            });
+            }
+            for preg in to_free {
+                occupied.remove(&preg);
+            }
 
             // Color defs
             inst.op.for_each_def(|dst| {
@@ -370,9 +470,6 @@ fn color_phase(
                 }
             });
         }
-
-        // Free colors of values that are NOT live-out
-        // (their last use was in the terminator or they die at block exit)
     }
 
     coloring
