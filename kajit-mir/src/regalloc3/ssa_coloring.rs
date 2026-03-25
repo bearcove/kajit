@@ -131,15 +131,26 @@ pub fn allocate(
     }
 
     // Phase 3: Coalesce — bounded phi-affinity recoloring
-    let coloring = coalesce_phase(
-        func,
-        liveness,
-        &dom,
-        &def_block,
-        coloring,
-        &spilled,
-        &callee_saved_set,
-    );
+    // DISABLED: the coalesce phase has a bug where it recolors vregs without
+    // properly checking interference through loop back-edges. This causes
+    // values live across loop bodies to share registers with temporaries
+    // inside the loop. The phi resolution handles non-coalesced copies
+    // correctly, so disabling coalescing is safe (just less efficient).
+    // TODO: fix the interference check in coalesce_phase to handle
+    // block params and loop-carried values correctly.
+    let coloring = if std::env::var("KAJIT_COALESCE").is_ok() {
+        coalesce_phase(
+            func,
+            liveness,
+            &dom,
+            &def_block,
+            coloring,
+            &spilled,
+            &callee_saved_set,
+        )
+    } else {
+        coloring
+    };
 
     // Validate: no caller-saved register holds a value live across a call.
     // This catches the bug where a vreg is assigned a caller-saved register
