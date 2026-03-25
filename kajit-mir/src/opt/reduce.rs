@@ -795,9 +795,22 @@ pub fn get_sequence_ssa_errors(
 /// Run a program through the ideal interpreter and return output bytes.
 /// Returns None if execution fails (trap, timeout, etc.)
 pub fn interpret(program: &Program, input: &[u8]) -> Option<Vec<u8>> {
-    let session = crate::DebuggerSession::new(program, input).ok()?;
-    // Allow up to 100k steps
-    let mut session = session;
+    let mut session = crate::DebuggerSession::new(program, input).ok()?;
+
+    // If the program has intrinsic calls, set real base addresses so pointer
+    // values passed to intrinsics are dereferenceable.
+    let has_intrinsics = program.funcs.iter().any(|f| {
+        f.insts.iter().any(|inst| {
+            matches!(
+                inst.op,
+                kajit_lir::LinearOp::CallIntrinsic { .. } | kajit_lir::LinearOp::CallPure { .. }
+            )
+        })
+    });
+    if has_intrinsics {
+        session.set_real_addresses();
+    }
+
     let _events = session
         .run_until(crate::RunUntilTarget::Return, 100_000)
         .ok()?;

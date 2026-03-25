@@ -308,9 +308,8 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             Err(e) => println!("  jit error:   {e}"),
         }
 
-        // Run interpreter on the pre-opt CFG
-        let pre_opt_cfg = kajit::compile_pre_opt_cfg(shape, kind, &pipeline_opts);
-        let interp_result = kajit_mir::opt::reduce::interpret(&pre_opt_cfg, &input);
+        // Run interpreter on the post-opt CFG (same IR the JIT compiled)
+        let interp_result = kajit_mir::opt::reduce::interpret(&artifacts.cfg_program, &input);
         match &interp_result {
             Some(bytes) => {
                 println!("  interp out:  {} ({})", encode_hex(bytes), bytes.len())

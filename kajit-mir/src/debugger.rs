@@ -230,6 +230,15 @@ impl DebuggerSession {
         self.output[start..end].to_vec()
     }
 
+    /// Set real memory addresses so that pointer-valued operations (SaveCursor,
+    /// SaveInputEnd, LoadFromAddr) produce dereferenceable pointers. Required
+    /// when the program contains CallIntrinsic ops that read through those pointers.
+    pub fn set_real_addresses(&mut self) {
+        self.input_base_addr = Some(self.input.as_ptr() as u64);
+        self.input_end_addr = Some(unsafe { self.input.as_ptr().add(self.input.len()) } as u64);
+        self.output_base_addr = Some(self.output.as_ptr() as u64);
+    }
+
     pub fn step_forward(&mut self) -> Result<StepEvent, DebuggerError> {
         let location_before = self.location();
         let cursor_before = self.cursor;
