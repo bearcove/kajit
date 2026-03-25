@@ -54,6 +54,9 @@ pub trait JitDebugger {
 
     /// Get the current DWARF source line number.
     fn current_source_line(&self) -> Result<u32, DebugError>;
+
+    /// Get disassembly around the current PC (a few instructions before/after).
+    fn disassemble_around_pc(&self, context: usize) -> Result<String, DebugError>;
 }
 
 #[derive(Debug)]
@@ -272,9 +275,19 @@ pub fn run_lockstep(
                 });
             }
 
+            let disasm = debugger
+                .disassemble_around_pc(3)
+                .unwrap_or_else(|_| "<disassembly unavailable>".to_string());
+
             let source_line = format!(
-                "CONTROL FLOW DIVERGENCE after: {}\n  JIT went to line {} (pc=0x{:x}): {}\n  Interpreter went to line {}: {}",
-                exec_source, dwarf_line, jit_pc, jit_target, interp_next_line, interp_target
+                "CONTROL FLOW DIVERGENCE after: {}\n  JIT went to line {} (pc=0x{:x}): {}\n  Interpreter went to line {}: {}\n\n  Machine code at divergence:\n{}",
+                exec_source,
+                dwarf_line,
+                jit_pc,
+                jit_target,
+                interp_next_line,
+                interp_target,
+                disasm
             );
 
             return Ok(LockstepResult {
@@ -328,12 +341,14 @@ pub fn run_lockstep(
                             });
                         }
                     }
-                    let source_line =
+                    let disasm = debugger.disassemble_around_pc(3).unwrap_or_default();
+                    let base_line =
                         if executed_line > 0 && (executed_line as usize) <= listing_lines.len() {
                             listing_lines[executed_line as usize - 1].clone()
                         } else {
                             format!("<line {executed_line}>")
                         };
+                    let source_line = format!("{base_line}\n\n  Machine code:\n{disasm}");
                     return Ok(LockstepResult {
                         steps: jit_steps,
                         divergence: Some(Divergence {

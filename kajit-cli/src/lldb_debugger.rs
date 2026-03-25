@@ -141,6 +141,60 @@ impl JitDebugger for LldbJitDebugger {
         let frame = self.process.selected_thread().selected_frame();
         Ok(frame.line_entry().map(|le| le.line()).unwrap_or(0))
     }
+
+    fn disassemble_around_pc(&self, context: usize) -> Result<String, DebugError> {
+        let thread = self.process.selected_thread();
+        let frame = thread.selected_frame();
+        let pc = frame.pc();
+
+        // Use LLDB's command interpreter to get disassembly
+        // (the SB API's frame.disassemble() returns the entire function)
+        let ci = self.debugger.command_interpreter();
+        let cmd = format!(
+            "disassemble -s 0x{:x} -c {}",
+            pc.saturating_sub((context * 4) as u64),
+            context * 2 + 1
+        );
+
+        // For now, use frame.disassemble() and extract the relevant lines
+        let full_disasm = frame.disassemble();
+        let mut lines: Vec<&str> = Vec::new();
+        let pc_str = format!("0x{:x}", pc);
+        let mut found_idx = None;
+
+        for (i, line) in full_disasm.lines().enumerate() {
+            if line.contains(&pc_str) || line.contains("->") {
+                found_idx = Some(i);
+            }
+            lines.push(line);
+        }
+
+        if let Some(idx) = found_idx {
+            let start = idx.saturating_sub(context);
+            let end = (idx + context + 1).min(lines.len());
+            Ok(lines[start..end]
+                .iter()
+                .map(|l| {
+                    if l.contains(&pc_str) {
+                        format!("→ {l}")
+                    } else {
+                        format!("  {l}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n"))
+        } else {
+            // Fallback: just show a few lines around the middle
+            let mid = lines.len() / 2;
+            let start = mid.saturating_sub(context);
+            let end = (mid + context + 1).min(lines.len());
+            Ok(lines[start..end]
+                .iter()
+                .map(|l| format!("  {l}"))
+                .collect::<Vec<_>>()
+                .join("\n"))
+        }
+    }
 }
 
 impl Drop for LldbJitDebugger {
