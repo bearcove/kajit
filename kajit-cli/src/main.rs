@@ -597,7 +597,29 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
             });
 
     // Phase 4: Run lockstep
-    let listing_lines: Vec<String> = artifacts.decoder.cfg_mir_lines().iter().cloned().collect();
+    // Generate listing from the SAME cfg_program used by the interpreter,
+    // so line numbers match between DWARF, listing, and interpreter.
+    let listing_lines = artifacts.cfg_program.debug_line_listing_with_registry(None);
+    let decoder_lines = artifacts.decoder.cfg_mir_lines().len();
+    let total_ops: usize = artifacts
+        .cfg_program
+        .funcs
+        .iter()
+        .map(|f| f.blocks.iter().map(|b| b.insts.len() + 1).sum::<usize>())
+        .sum();
+    let dead_blocks: usize = artifacts
+        .cfg_program
+        .funcs
+        .iter()
+        .map(|f| f.blocks.iter().filter(|b| b.dead).count())
+        .sum();
+    eprintln!(
+        "[debug-diff] listing: {} lines (cfg_program), {} lines (decoder), {} total ops, {} dead blocks",
+        listing_lines.len(),
+        decoder_lines,
+        total_ops,
+        dead_blocks
+    );
 
     let input = parse_hex(input_hex);
     eprintln!(

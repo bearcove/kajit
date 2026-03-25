@@ -275,32 +275,40 @@ pub fn compile_pipeline(
     // Phase 4: CFG-MIR + optimize
     let trusted_utf8_input = matches!(kind, DecoderKind::Json);
 
-    // Phase 5: CFG-MIR lowering + optimization
+    // Phase 5: CFG-MIR lowering + optimization (ONCE — used for everything)
     let hints = Default::default();
     let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
 
-    // Phase 6: Register allocation (regalloc3)
-    let alloc_map = {
-        let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
-            .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
-        let map = ra3_alloc
-            .functions
-            .first()
-            .map(|f| crate::harness::AllocationMap::from_regalloc3(f))
-            .unwrap_or_default();
-        map
+    // Phase 6: Register allocation + backend compilation from the ONE cfg_program
+    let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
+        .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
+
+    let alloc_map = ra3_alloc
+        .functions
+        .first()
+        .map(|f| crate::harness::AllocationMap::from_regalloc3(f))
+        .unwrap_or_default();
+
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
+    let (buf, entry, source_map, _backend_debug_info, asm_program) =
+        materialize_backend_result(result);
+
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
+        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+
+    let listing = dwarf::build_cfg_mir_listing(&cfg_program, Some(&registry));
+
+    let decoder = CompiledDecoder {
+        buf,
+        cfg_mir_line_text_by_line: listing.line_text_by_line,
+        entry,
+        func,
+        trusted_utf8_input,
+        _jit_registration: None, // JIT debug registration handled by the old path if needed
+        #[cfg(target_arch = "aarch64")]
+        asm_program,
     };
 
-    // Phase 7: Compile through to JIT (reuses the same linear IR)
-    let decoder = compile_linear_ir_decoder_with_options(
-        &linear,
-        trusted_utf8_input,
-        pipeline_opts.clone(),
-        Some(&registry),
-        Some(shape),
-    );
-
-    // Capture CFG text from the decoder's internal state
     let cfg_text = decoder.cfg_mir_text();
 
     // Capture ASM
@@ -317,7 +325,7 @@ pub fn compile_pipeline(
         cfg_canonical_text: String::new(),
         asm_text,
         alloc_map,
-        cfg_program: cfg_program.clone(),
+        cfg_program: ra3_alloc.cfg_program.clone(),
         decoder,
     }
 }
