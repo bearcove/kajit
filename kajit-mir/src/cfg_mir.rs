@@ -1849,6 +1849,23 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
     // SSA validation: enabled in debug builds or via KAJIT_VALIDATE_SSA=1
     let validate_ssa = cfg!(debug_assertions) || std::env::var("KAJIT_VALIDATE_SSA").is_ok();
 
+    // Validate BEFORE any passes — catches bugs from linearization
+    if validate_ssa {
+        for func in &cfg.funcs {
+            if let Err(errors) = crate::opt::validate_ssa::validate_ssa(func) {
+                eprintln!(
+                    "\n❌ SSA VALIDATION FAILED before optimization passes (fresh from linearizer)"
+                );
+                eprintln!("Found {} SSA violation(s):\n", errors.len());
+                for (i, error) in errors.iter().enumerate() {
+                    eprintln!("  {}. {}", i + 1, error);
+                }
+                panic!("SSA validation failed before optimization passes");
+            }
+        }
+        eprintln!("[SSA] ✓ Passed validation before optimization passes");
+    }
+
     // Helper to validate after each opt
     let mut validate_after = |pass_name: &str, cfg: &Program| {
         if !validate_ssa {

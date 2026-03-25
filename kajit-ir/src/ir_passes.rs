@@ -1175,7 +1175,9 @@ pub(crate) fn clone_region_into(
                     let mut new_args = Vec::with_capacity(old_reg.args.len());
                     for &old_arg_id in &old_reg.args {
                         let old_arg = &func.region_args[old_arg_id];
-                        let new_arg_id = func.region_args.push(old_arg.clone());
+                        let mut cloned_arg = old_arg.clone();
+                        cloned_arg.vreg = None; // fresh vreg from assign_vregs
+                        let new_arg_id = func.region_args.push(cloned_arg);
                         ctx.arg_map.insert(old_arg_id, new_arg_id);
                         new_args.push(new_arg_id);
                     }
@@ -1230,12 +1232,24 @@ pub(crate) fn clone_region_into(
             })
             .collect();
 
+        // Clear vreg assignments on cloned outputs — assign_vregs will
+        // give them fresh vregs during linearization. Without this, cloned
+        // nodes from theta unrolling would reuse the original's vregs,
+        // violating SSA (multiple defs for the same vreg).
+        let outputs: Vec<_> = old_outputs
+            .into_iter()
+            .map(|mut out| {
+                out.vreg = None;
+                out
+            })
+            .collect();
+
         let new_node = func.nodes.push(Node {
             region: new_region,
             debug_scope: func.nodes[old_node].debug_scope,
             debug_value: func.nodes[old_node].debug_value,
             inputs,
-            outputs: old_outputs,
+            outputs,
             kind,
         });
         ctx.node_map.insert(old_node, new_node);
