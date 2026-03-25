@@ -682,7 +682,8 @@ fn build_dsym_macho(
         sectname[..len].copy_from_slice(&name[..len]);
         out.extend_from_slice(&sectname);
         out.extend_from_slice(&segname); // segname: __DWARF
-        out.extend_from_slice(&0u64.to_le_bytes()); // addr
+        let sect_vmaddr = dwarf_vmaddr + (off - dwarf_fileoff) as u64;
+        out.extend_from_slice(&sect_vmaddr.to_le_bytes()); // addr
         out.extend_from_slice(&(size as u64).to_le_bytes()); // size
         out.extend_from_slice(&off.to_le_bytes()); // offset
         out.extend_from_slice(&0u32.to_le_bytes()); // align
