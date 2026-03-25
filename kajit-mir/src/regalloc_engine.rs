@@ -1477,7 +1477,20 @@ fn insert_phi_copies_with_coalescing(
     temp_vreg: kajit_ir::VReg,
 ) {
     use crate::regalloc3::linear_scan::Allocation as Ra3Alloc;
+    use crate::regalloc3::machine_inst::PReg;
     use crate::regalloc3::parallel_copy::Copy;
+
+    // Callee-saved registers survive calls — any other register may be clobbered.
+    let callee_saved_set: std::collections::HashSet<PReg> = [
+        #[cfg(target_arch = "aarch64")]
+        &[PReg(23), PReg(24), PReg(25), PReg(26), PReg(27), PReg(28)][..],
+        #[cfg(target_arch = "x86_64")]
+        &[PReg(3), PReg(5), PReg(12), PReg(13), PReg(14), PReg(15)][..],
+    ]
+    .into_iter()
+    .flatten()
+    .copied()
+    .collect();
 
     // Split critical edges first so copies can be placed on specific edges
     crate::regalloc3::critical_edge::split_critical_edges(func);
@@ -1491,7 +1504,17 @@ fn insert_phi_copies_with_coalescing(
             continue;
         }
 
+        // Check if the predecessor block has a clobbering instruction (call).
+        // If so, caller-saved registers may have been destroyed even if source
+        // and target share the same register.
+        let pred_block = &func.blocks[edge.from.index()];
+        let pred_has_clobber = pred_block
+            .insts
+            .iter()
+            .any(|inst_id| func.insts[inst_id.0 as usize].clobbers.caller_saved_gpr);
+
         // Build parallel copies, but SKIP coalesced pairs (same register)
+        // UNLESS the register was clobbered by a call in the predecessor block.
         let copies: Vec<Copy> = edge
             .args
             .iter()
@@ -1504,7 +1527,12 @@ fn insert_phi_copies_with_coalescing(
                 let source_alloc = alloc_result.allocations.get(&arg.source);
                 match (target_alloc, source_alloc) {
                     (Some(Ra3Alloc::Reg(t)), Some(Ra3Alloc::Reg(s))) if t == s => {
-                        false // coalesced! no copy needed
+                        // Same register — but was it clobbered by a call?
+                        if pred_has_clobber && !callee_saved_set.contains(t) {
+                            true // caller-saved register clobbered, need copy
+                        } else {
+                            false // genuinely coalesced
+                        }
                     }
                     _ => true, // different registers or spilled, need copy
                 }

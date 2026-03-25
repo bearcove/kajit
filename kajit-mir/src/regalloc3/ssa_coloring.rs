@@ -133,6 +133,66 @@ pub fn allocate(
     // Phase 3: Coalesce — bounded phi-affinity recoloring
     let coloring = coalesce_phase(func, liveness, &dom, &def_block, coloring, &spilled);
 
+    // Validate: no caller-saved register holds a value live across a call.
+    // This catches the bug where a vreg is assigned a caller-saved register
+    // but its value must survive a call instruction.
+    for block in &func.blocks {
+        if block.dead {
+            continue;
+        }
+        // Find clobbering instructions
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.0 as usize];
+            if !inst.clobbers.caller_saved_gpr {
+                continue;
+            }
+            // Check edge arg sources: they must survive to the terminator
+            for &edge_id in &block.succs {
+                let edge = &func.edges[edge_id.index()];
+                if edge.from.0 == u32::MAX {
+                    continue;
+                }
+                for arg in &edge.args {
+                    if spilled.contains(&arg.source) {
+                        continue;
+                    }
+                    if let Some(&preg) = coloring.get(&arg.source) {
+                        if !callee_saved_set.contains(&preg) {
+                            eprintln!(
+                                "[ssa_coloring] BUG: edge arg source v{} (p{}) is caller-saved \
+                                 but must survive call in b{} → edge arg to v{} in b{}",
+                                arg.source.index(),
+                                preg.0,
+                                block.id.0,
+                                arg.target.index(),
+                                edge.to.0,
+                            );
+                        }
+                    }
+                }
+            }
+            // Also check live-out vregs
+            if let Some(live_out) = liveness.live_out.get(&block.id) {
+                for &vreg in live_out {
+                    if spilled.contains(&vreg) {
+                        continue;
+                    }
+                    if let Some(&preg) = coloring.get(&vreg) {
+                        if !callee_saved_set.contains(&preg) {
+                            eprintln!(
+                                "[ssa_coloring] BUG: v{} (p{}) is caller-saved but live-out \
+                                 of b{} which contains a call",
+                                vreg.index(),
+                                preg.0,
+                                block.id.0,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Build result
     let mut allocations = HashMap::new();
     for (&vreg, &preg) in &coloring {
@@ -507,6 +567,12 @@ fn color_phase(
         }
     }
 
+    // Diagnostic: check if a specific vreg is tracked correctly
+    let trace_vreg = std::env::var("KAJIT_RA_TRACE_VREG")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .map(VReg::new);
+
     for block_id in preorder {
         let block = &func.blocks[block_id.index()];
         if block.dead {
@@ -520,6 +586,19 @@ fn color_phase(
 
         // Mark colors of live-in values (not spilled)
         if let Some(live_in) = liveness.live_in.get(&block_id) {
+            if let Some(tv) = trace_vreg {
+                let in_live_in = live_in.contains(&tv);
+                let in_live_out = live_out.map_or(false, |lo| lo.contains(&tv));
+                if in_live_in || in_live_out {
+                    eprintln!(
+                        "[ra-trace] b{}: v{} live_in={} live_out={}",
+                        block_id.0,
+                        tv.index(),
+                        in_live_in,
+                        in_live_out
+                    );
+                }
+            }
             for &vreg in live_in {
                 if spilled.contains(&vreg) {
                     continue;

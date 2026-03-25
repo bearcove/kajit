@@ -2216,16 +2216,91 @@ fn fmt_op(
             }
             write!(f, ")")
         }
-        LinearOp::Branch { target, .. } => write!(f, "br L{}", target.index()),
-        LinearOp::BranchIf { cond, target, .. } => {
+        LinearOp::Branch { target, phi_args } => {
+            write!(f, "br L{}", target.index())?;
+            if !phi_args.is_empty() {
+                write!(f, " phi[")?;
+                for (i, (src, dst)) in phi_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    fmt_vreg(f, *src)?;
+                    write!(f, "→")?;
+                    fmt_vreg(f, *dst)?;
+                }
+                write!(f, "]")?;
+            }
+            Ok(())
+        }
+        LinearOp::BranchIf {
+            cond,
+            target,
+            phi_args,
+            fallthrough_phi_args,
+        } => {
             write!(f, "br_if ")?;
             fmt_vreg(f, *cond)?;
-            write!(f, " L{}", target.index())
+            write!(f, " L{}", target.index())?;
+            if !phi_args.is_empty() {
+                write!(f, " phi[")?;
+                for (i, (src, dst)) in phi_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    fmt_vreg(f, *src)?;
+                    write!(f, "→")?;
+                    fmt_vreg(f, *dst)?;
+                }
+                write!(f, "]")?;
+            }
+            if !fallthrough_phi_args.is_empty() {
+                write!(f, " fall[")?;
+                for (i, (src, dst)) in fallthrough_phi_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    fmt_vreg(f, *src)?;
+                    write!(f, "→")?;
+                    fmt_vreg(f, *dst)?;
+                }
+                write!(f, "]")?;
+            }
+            Ok(())
         }
-        LinearOp::BranchIfZero { cond, target, .. } => {
+        LinearOp::BranchIfZero {
+            cond,
+            target,
+            phi_args,
+            fallthrough_phi_args,
+        } => {
             write!(f, "br_zero ")?;
             fmt_vreg(f, *cond)?;
-            write!(f, " L{}", target.index())
+            write!(f, " L{}", target.index())?;
+            if !phi_args.is_empty() {
+                write!(f, " phi[")?;
+                for (i, (src, dst)) in phi_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    fmt_vreg(f, *src)?;
+                    write!(f, "→")?;
+                    fmt_vreg(f, *dst)?;
+                }
+                write!(f, "]")?;
+            }
+            if !fallthrough_phi_args.is_empty() {
+                write!(f, " fall[")?;
+                for (i, (src, dst)) in fallthrough_phi_args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    fmt_vreg(f, *src)?;
+                    write!(f, "→")?;
+                    fmt_vreg(f, *dst)?;
+                }
+                write!(f, "]")?;
+            }
+            Ok(())
         }
         LinearOp::JumpTable {
             predicate,

@@ -13,11 +13,36 @@
 //!   with a single index remap, avoiding stale cached PortSources
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
     InputPort, IrFunc, IrOp, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
     RegionArg, RegionArgRef, RegionId, RegionResult, SlotId,
 };
+
+static DEBUG_S2R_INIT: AtomicBool = AtomicBool::new(false);
+static DEBUG_S2R: AtomicBool = AtomicBool::new(false);
+
+fn debug_s2r() -> bool {
+    if !DEBUG_S2R_INIT.load(Ordering::Relaxed) {
+        let val = std::env::var("KAJIT_DEBUG_S2R").is_ok();
+        DEBUG_S2R.store(val, Ordering::Relaxed);
+        DEBUG_S2R_INIT.store(true, Ordering::Relaxed);
+    }
+    DEBUG_S2R.load(Ordering::Relaxed)
+}
+
+fn fmt_port_source(func: &IrFunc, ps: PortSource) -> String {
+    match ps {
+        PortSource::Node(oref) => {
+            let kind = &func.nodes[oref.node].kind;
+            format!("{:?}[{}] ({:?})", oref.node, oref.index, kind)
+        }
+        PortSource::RegionArg(aref) => {
+            format!("arg({:?}, {:?})", aref.region, aref.arg)
+        }
+    }
+}
 
 /// Pre-computed slot access information for each region.
 /// Maps region → set of slots accessed anywhere in that region's sub-tree.
@@ -167,6 +192,15 @@ fn promote_region(
                     node: node_id,
                     index: 0,
                 };
+
+                if debug_s2r() {
+                    eprintln!(
+                        "[s2r] region {:?}: WriteToSlot {} => {}",
+                        region,
+                        slot.index(),
+                        fmt_port_source(func, written_value)
+                    );
+                }
 
                 slot_values.insert(slot, written_value);
                 replace_uses_in_region(func, region, state_output, incoming_state);
@@ -513,6 +547,18 @@ fn promote_theta(
 ) {
     let debug_scope = func.nodes[node_id].debug_scope;
 
+    if debug_s2r() {
+        eprintln!("[s2r] promote_theta {:?} body={:?}", node_id, body);
+        eprintln!("[s2r]   slots_to_thread: {:?}", slots_to_thread);
+        for &slot in slots_to_thread {
+            eprintln!(
+                "[s2r]   incoming slot {} = {}",
+                slot.index(),
+                fmt_port_source(func, slot_values[&slot])
+            );
+        }
+    }
+
     // Phase 1: Add inputs and body args for all slots (before recursion).
     let mut body_slot_values = BTreeMap::new();
     let mut body_arg_sources: BTreeMap<SlotId, PortSource> = BTreeMap::new();
@@ -524,15 +570,48 @@ fn promote_theta(
         body_arg_sources.insert(slot, arg_source);
     }
 
+    if debug_s2r() {
+        eprintln!("[s2r]   body_slot_values (entry):");
+        for (&slot, &val) in &body_slot_values {
+            eprintln!(
+                "[s2r]     slot {} = {}",
+                slot.index(),
+                fmt_port_source(func, val)
+            );
+        }
+    }
+
     // Phase 2: Recurse into body (bottom-up: body is fully promoted before
     // we compute the parent theta's output wiring).
     let final_body_values = promote_region(func, body, all_slots, slot_access, body_slot_values);
+
+    if debug_s2r() {
+        eprintln!("[s2r]   final_body_values (exit):");
+        for (&slot, &val) in &final_body_values {
+            eprintln!(
+                "[s2r]     slot {} = {}",
+                slot.index(),
+                fmt_port_source(func, val)
+            );
+        }
+    }
 
     // Phase 3: Add body results for all slots.
     let body_debug_scope = func.regions[body].debug_scope;
     for &slot in slots_to_thread {
         let body_arg = body_arg_sources[&slot];
         let mut final_value = final_body_values.get(&slot).copied().unwrap_or(body_arg);
+        if debug_s2r() {
+            let from_map = final_body_values.get(&slot).is_some();
+            eprintln!(
+                "[s2r]   theta {:?} slot {} feedback: {} (from_map={}, eq_body_arg={})",
+                node_id,
+                slot.index(),
+                fmt_port_source(func, final_value),
+                from_map,
+                final_value == body_arg
+            );
+        }
 
         // If the slot wasn't modified in the body, insert an Identity node
         // to break the self-reference cycle.
