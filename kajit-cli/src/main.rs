@@ -41,11 +41,15 @@ enum Command {
         #[facet(args::positional)]
         ty: String,
 
-        /// Stages to dump: hir, ir, linear, cfg, emit, asm, all
+        /// Stages to dump: hir, ir, linear, cfg, emit, asm, exec, all
         #[facet(args::named, args::short = 's', default)]
         stage: Option<String>,
 
-        /// Reduce: find minimal CFG-MIR that triggers SSA breakage in this pass
+        /// Input bytes as hex string (for exec stage)
+        #[facet(args::named, args::short = 'i', default)]
+        input: Option<String>,
+
+        /// Reduce: find minimal CFG-MIR that triggers divergence or SSA breakage
         #[facet(args::named, default)]
         reduce: Option<String>,
     },
@@ -74,12 +78,18 @@ fn main() {
             format,
             ty,
             stage,
+            input,
             reduce,
         } => {
             if let Some(pass_name) = reduce {
                 cmd_compile_reduce(&format, &ty, &pass_name);
             } else {
-                cmd_compile(&format, &ty, stage.as_deref().unwrap_or("all"));
+                cmd_compile(
+                    &format,
+                    &ty,
+                    stage.as_deref().unwrap_or("all"),
+                    input.as_deref(),
+                );
             }
         }
     }
@@ -143,7 +153,7 @@ fn print_interpreter_state(state: &kajit_mir::DebuggerState) {
 
 // ─── compile: full pipeline dump ─────────────────────────────────────────────
 
-fn cmd_compile(format: &str, ty: &str, stages: &str) {
+fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
     let kind = match format {
         "postcard" => kajit::DecoderKind::Postcard,
         "json" => kajit::DecoderKind::Json,
@@ -201,6 +211,64 @@ fn cmd_compile(format: &str, ty: &str, stages: &str) {
                 .count();
             println!("=== Assembly ({inst_count} instructions) ===");
             println!("{}", artifacts.asm_text);
+        }
+    }
+
+    if dump("exec") || dump_all {
+        // Get input: either from --input flag or auto-generate
+        let input = input_hex
+            .map(|h| parse_hex(h))
+            .unwrap_or_else(|| make_test_input(format, ty));
+
+        let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
+
+        println!("=== Exec ===");
+        println!("  input:       {} ({})", encode_hex(&input), input.len());
+        println!("  output_size: {output_size}");
+
+        // Run JIT
+        let jit_result = kajit::deserialize_raw(&artifacts.decoder, &input, output_size);
+        match &jit_result {
+            Ok(bytes) => println!("  jit output:  {} ({})", encode_hex(bytes), bytes.len()),
+            Err(e) => println!("  jit error:   {e}"),
+        }
+
+        // Run interpreter on the pre-opt CFG
+        let pre_opt_cfg = kajit::compile_pre_opt_cfg(shape, kind, &pipeline_opts);
+        let interp_result = kajit_mir::opt::reduce::interpret(&pre_opt_cfg, &input);
+        match &interp_result {
+            Some(bytes) => {
+                println!("  interp out:  {} ({})", encode_hex(bytes), bytes.len())
+            }
+            None => println!("  interp:      TRAP/TIMEOUT"),
+        }
+
+        // Compare
+        match (&jit_result, &interp_result) {
+            (Ok(jit), Some(interp)) if jit == interp => {
+                println!("  match:       YES");
+            }
+            (Ok(jit), Some(interp)) => {
+                println!("  match:       NO — DIVERGENCE");
+                // Show byte-by-byte diff
+                let max_len = jit.len().max(interp.len());
+                for i in 0..max_len {
+                    let j = jit.get(i).copied();
+                    let r = interp.get(i).copied();
+                    if j != r {
+                        println!(
+                            "    byte[{i}]: jit={} interp={}",
+                            j.map(|b| format!("0x{b:02x}"))
+                                .unwrap_or_else(|| "---".to_string()),
+                            r.map(|b| format!("0x{b:02x}"))
+                                .unwrap_or_else(|| "---".to_string()),
+                        );
+                    }
+                }
+            }
+            _ => {
+                println!("  match:       N/A (one side errored)");
+            }
         }
     }
 
