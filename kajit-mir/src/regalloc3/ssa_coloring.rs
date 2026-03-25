@@ -89,28 +89,26 @@ pub fn allocate(
         for (v, p) in &allocs {
             eprintln!("  v{} -> p{}", v.index(), p.0);
         }
-        // Check for conflicts: any two colored vregs that interfere
-        // and got the same color
+        // Check for conflicts: any two colored vregs with same color that interfere
         let mut conflicts = 0;
         for (&v1, &c1) in &coloring {
             for (&v2, &c2) in &coloring {
                 if v1 >= v2 || c1 != c2 {
                     continue;
                 }
-                // Check if they interfere: both live at some common point
-                // Simple check: same block live-in
-                for (block_id, live_in) in &liveness.live_in {
-                    if live_in.contains(&v1) && live_in.contains(&v2) {
-                        eprintln!(
-                            "  CONFLICT: v{} and v{} both colored p{}, both live-in at b{}",
-                            v1.index(),
-                            v2.index(),
-                            c1.0,
-                            block_id.0
-                        );
-                        conflicts += 1;
-                        break;
-                    }
+                let v1_block = def_block.get(&v1).copied().unwrap_or(BlockId(u32::MAX));
+                let v2_block = def_block.get(&v2).copied().unwrap_or(BlockId(u32::MAX));
+                if interferes(v1, v1_block, v2, v2_block, liveness, &dom) {
+                    eprintln!(
+                        "  CONFLICT: v{} (b{}) and v{} (b{}) both colored p{}",
+                        v1.index(),
+                        v1_block.0,
+                        v2.index(),
+                        v2_block.0,
+                        c1.0
+                    );
+                    conflicts += 1;
+                    break;
                 }
             }
         }

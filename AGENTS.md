@@ -194,6 +194,19 @@ absolute path if you want dumps in a specific workspace location.
 
 Dump files are named `<format>__<case>__<arch>__<stage>.txt`.
 
+**Gotcha:** Not all types produce dumps. Some types (e.g. u16, i8) may use
+a code path that doesn't hit the dump logic. If no dump file appears, try
+u32 or u64 instead — those reliably dump. You can also dump the CFG-MIR
+before a specific optimization pass by adding a temporary `eprintln!("{cfg}")`
+before the pass call in `kajit-mir/src/cfg_mir.rs` (search for the pass name).
+
+**CFG-MIR pass debugging env vars:**
+- `KAJIT_CFG_OPTS=-all,-const_phi_elim` — disable ALL CFG-MIR opts plus force-disable const_phi_elim
+- `KAJIT_CFG_OPTS=-remat,-cse` — disable specific passes
+- `KAJIT_DUMP_BEFORE_PHI_ELIM=1` — dump CFG to stderr before const_phi_elim runs
+- `KAJIT_UNROLL=1` — enable bounded-theta unrolling (currently opt-in during development)
+- `KAJIT_RA_DEBUG=1` — print SSA coloring allocator debug output (vreg→preg assignments, conflicts)
+
 ### Comparing serde vs kajit disassembly
 
 Compare optimized disassembly of serde vs kajit for any benchmark case:
