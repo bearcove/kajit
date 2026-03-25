@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::cfg_mir::{BlockId, EdgeId, Function, TermId, Terminator};
+use crate::cfg_mir::{BlockId, EdgeId, Function};
 use kajit_ir::VReg;
 
 /// Merge empty forwarding blocks into their predecessors.
@@ -248,7 +248,7 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
     let debug = std::env::var("KAJIT_DEBUG_BLOCK_MERGE").is_ok();
 
     // Collect unreachable blocks (no predecessors, and not the entry block)
-    let mut unreachable: Vec<BlockId> = func
+    let unreachable: Vec<BlockId> = func
         .blocks
         .iter()
         .filter(|b| b.preds.is_empty() && b.id != func.entry)

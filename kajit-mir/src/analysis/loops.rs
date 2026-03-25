@@ -160,7 +160,7 @@ fn compute_loop_depths(loops: &mut HashMap<BlockId, LoopData>) {
     // Build parent relationship: child header -> parent header
     let mut parents: HashMap<BlockId, BlockId> = HashMap::new();
 
-    for (&child_header, child_data) in loops.iter() {
+    for (&child_header, _child_data) in loops.iter() {
         // Find the innermost loop that contains this loop's header (excluding itself)
         let mut parent = None;
         let mut min_body_size = usize::MAX;

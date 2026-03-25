@@ -869,12 +869,12 @@ fn fmt_cfg_inst(
     inst: &Inst,
     registry: Option<&IntrinsicRegistry>,
 ) -> fmt::Result {
-    let defs: Vec<_> = inst
+    let _defs: Vec<_> = inst
         .operands
         .iter()
         .filter(|op| op.kind == OperandKind::Def)
         .collect();
-    let uses: Vec<_> = inst
+    let _uses: Vec<_> = inst
         .operands
         .iter()
         .filter(|op| op.kind == OperandKind::Use)
@@ -1409,7 +1409,7 @@ fn lower_function(
     ops: &[LinearOp],
     op_scopes: &[Option<DebugScopeId>],
     op_values: &[Option<DebugValueId>],
-    vreg_count: u32,
+    _vreg_count: u32,
 ) -> (
     Function,
     HashMap<OpId, DebugScopeId>,
@@ -1629,7 +1629,7 @@ fn lower_function(
     //
     // For each block, collect phi_arg targets from ALL incoming edges.
     let mut block_param_sets = vec![Vec::<VReg>::new(); blocks.len()];
-    for (bi, term) in block_terms.iter().enumerate() {
+    for (_bi, term) in block_terms.iter().enumerate() {
         let successors = term.successors();
         for (succ_idx, succ) in successors.iter().enumerate() {
             for &(_src, tgt) in term.phi_args_for_successor(succ_idx) {
@@ -1867,7 +1867,7 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
     }
 
     // Helper to validate after each opt
-    let mut validate_after = |pass_name: &str, cfg: &Program| {
+    let validate_after = |pass_name: &str, cfg: &Program| {
         if !validate_ssa {
             return;
         }
@@ -2644,7 +2644,7 @@ fn global_copy_propagation(func: &mut Function) {
             let mut changed = false;
 
             // Closure to rewrite a single vreg use
-            let mut rewrite_use = |v: &mut VReg| -> bool {
+            let rewrite_use = |v: &mut VReg| -> bool {
                 let ultimate = get_ultimate_source(*v);
                 if ultimate != *v && is_available_at_inst(ultimate, block_id, inst_idx) {
                     *v = ultimate;
@@ -2727,7 +2727,7 @@ fn global_copy_propagation(func: &mut Function) {
         let term_idx = block.insts.len() + 1; // Terminator comes after all instructions
         let term = &mut func.terms[block.term.index()];
 
-        let mut rewrite_term_use = |v: &mut VReg| {
+        let rewrite_term_use = |v: &mut VReg| {
             let ultimate = get_ultimate_source(*v);
             if ultimate != *v && is_available_at_inst(ultimate, block_id, term_idx) {
                 *v = ultimate;
@@ -4198,7 +4198,7 @@ fn simplify_trivial_phis_in_function(func: &mut Function) {
     }
 
     // Rewrite all uses of trivial phis
-    let mut rewrite_vreg = |v: &mut VReg| {
+    let rewrite_vreg = |v: &mut VReg| {
         if let Some(&replacement) = phi_replacements.get(v) {
             *v = replacement;
         }

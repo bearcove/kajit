@@ -16,9 +16,7 @@ use crate::intrinsics;
 use crate::ir::{RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;
 
-pub(crate) use hir_to_ir::{
-    build_postcard_decoder_ir_via_hir, build_structural_hir_ir, lower_hir_module,
-};
+pub(crate) use hir_to_ir::{build_postcard_decoder_ir_via_hir, build_structural_hir_ir};
 pub(crate) use kajit_json::{build_json_decoder_hir, supports_json_decoder_hir};
 pub(crate) use kajit_postcard::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 
@@ -79,6 +77,11 @@ impl CompiledDecoder {
         ))
     }
 
+    /// CFG-MIR listing text (the same text used for DWARF debug info).
+    pub fn cfg_mir_text(&self) -> String {
+        self.cfg_mir_line_text_by_line.join("\n")
+    }
+
     /// ARM64 assembly text (captured instructions before encoding).
     #[cfg(target_arch = "aarch64")]
     pub fn assembly_text(&self) -> Option<String> {
@@ -130,6 +133,88 @@ pub(crate) fn materialize_backend_result(
         backend_debug_info,
     } = result;
     (buf, entry as usize, source_map, backend_debug_info)
+}
+
+/// All intermediate artifacts from a compilation pipeline run.
+///
+/// This is THE canonical way to compile a decoder. Both the CLI and tests
+/// use this, so debug dumps and JIT execution see identical vreg numbering.
+pub struct PipelineArtifacts {
+    /// HIR module text
+    pub hir_text: String,
+    /// IR text after each optimization pass: (pass_name, ir_text)
+    pub ir_opt_timeline: Vec<(String, String)>,
+    /// Linearized IR text
+    pub linear_text: String,
+    /// CFG-MIR text (after CFG optimizations)
+    pub cfg_text: String,
+    /// Assembly text (aarch64 only, empty on other platforms)
+    pub asm_text: String,
+    /// The compiled decoder (ready to execute)
+    pub decoder: CompiledDecoder,
+}
+
+/// Run the full compilation pipeline, producing all artifacts in one pass.
+pub fn compile_pipeline(
+    shape: &'static Shape,
+    kind: DecoderKind,
+    pipeline_opts: &PipelineOptions,
+) -> PipelineArtifacts {
+    let registry = symbol_registry_for_shape(shape);
+
+    // Phase 1: HIR
+    let module = match kind {
+        DecoderKind::Postcard => build_postcard_decoder_hir(shape),
+        DecoderKind::Json => build_json_decoder_hir(shape),
+    };
+    let hir_text = module.to_string();
+
+    // Phase 2: IR + passes with timeline
+    let mut func = build_structural_hir_ir(shape, &module);
+    let mut ir_opt_timeline = vec![(
+        "initial".to_string(),
+        format!("{}", func.display_with_registry(&registry)),
+    )];
+    run_configured_default_passes_with_observer(&mut func, pipeline_opts, |pass_name, func| {
+        ir_opt_timeline.push((
+            pass_name.to_string(),
+            format!("{}", func.display_with_registry(&registry)),
+        ));
+    });
+
+    // Phase 3: Linearize
+    let linear = crate::linearize::linearize(&mut func);
+    let linear_text = format!("{linear}");
+
+    // Phase 4: CFG-MIR + optimize
+    let trusted_utf8_input = matches!(kind, DecoderKind::Json);
+
+    // Phase 5+6+7: Compile through to JIT (reuses the same linear IR)
+    let decoder = compile_linear_ir_decoder_with_options(
+        &linear,
+        trusted_utf8_input,
+        pipeline_opts.clone(),
+        Some(&registry),
+        Some(shape),
+    );
+
+    // Capture CFG text from the decoder's internal state
+    let cfg_text = decoder.cfg_mir_text();
+
+    // Capture ASM
+    #[cfg(target_arch = "aarch64")]
+    let asm_text = decoder.assembly_text().unwrap_or_default();
+    #[cfg(not(target_arch = "aarch64"))]
+    let asm_text = String::new();
+
+    PipelineArtifacts {
+        hir_text,
+        ir_opt_timeline,
+        linear_text,
+        cfg_text,
+        asm_text,
+        decoder,
+    }
 }
 
 /// Compile a deserializer through RVSDG + linearization + backend adapter.

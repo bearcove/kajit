@@ -46,7 +46,7 @@ use indexmap::IndexMap;
 use kajit_ir::VReg;
 use std::collections::{HashMap, HashSet};
 
-use crate::cfg_mir::{BlockId, EdgeId, Function, InstId};
+use crate::cfg_mir::{BlockId, Function, InstId};
 
 use super::progpoint::{LiveInterval, ProgPoint, ProgPointMap};
 

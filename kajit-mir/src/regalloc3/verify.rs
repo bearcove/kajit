@@ -19,9 +19,8 @@
 //!
 //! After allocation, before emission. Fail fast if allocation is incorrect.
 
-use indexmap::IndexMap;
 use kajit_ir::VReg;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::cfg_mir::Function;
 
@@ -86,7 +85,7 @@ impl std::fmt::Display for VerifyError {
 
 /// Verify allocation is correct
 pub fn verify(
-    func: &Function,
+    _func: &Function,
     alloc: &AllocationResult,
     liveness: &LivenessInfo,
     scratch: &ScratchPolicy,

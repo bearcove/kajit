@@ -13,9 +13,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::analysis::dominance::DominanceInfo;
 use crate::analysis::loops::LoopInfo;
-use crate::cfg_mir::{self, BlockId, Function, InstId};
+use crate::cfg_mir::{self, BlockId, Function};
 use kajit_ir::VReg;
-use kajit_lir::LinearOp;
 
 use super::hints::{HintMap, SpillCost};
 use super::linear_scan::{Allocation, AllocationResult, CopyHints};
@@ -144,7 +143,7 @@ pub fn allocate(
 fn spill_phase(
     func: &Function,
     liveness: &LivenessInfo,
-    dom: &DominanceInfo,
+    _dom: &DominanceInfo,
     loop_info: &LoopInfo,
     hints: &HintMap,
     k: usize,
@@ -418,6 +417,15 @@ fn color_phase(
             }
             let color = lowest_available_color(allocatable, &occupied);
             if let Some(color) = color {
+                if std::env::var("KAJIT_RA_TRACE").is_ok() {
+                    eprintln!(
+                        "  b{} param v{} -> p{} (occupied: {:?})",
+                        block_id.0,
+                        param.index(),
+                        color.0,
+                        occupied.iter().map(|p| p.0).collect::<Vec<_>>()
+                    );
+                }
                 coloring.insert(param, color);
                 occupied.insert(color);
             }
@@ -432,7 +440,7 @@ fn color_phase(
             // (We free after last use, not at last use, to avoid freeing a color
             // that this instruction reads and another def wants.)
             let mut to_free = Vec::new();
-            for (&preg, _) in occupied.iter().map(|p| (p, ())) {
+            for (&_preg, _) in occupied.iter().map(|p| (p, ())) {
                 // Find which vreg holds this color
                 // (linear scan through coloring — could be optimized with reverse map)
             }
@@ -457,6 +465,7 @@ fn color_phase(
                     }
                 }
             }
+            let freed_debug: Vec<u8> = to_free.iter().map(|p| p.0).collect();
             for preg in to_free {
                 occupied.remove(&preg);
             }
@@ -468,6 +477,16 @@ fn color_phase(
                 }
                 let color = lowest_available_color(allocatable, &occupied);
                 if let Some(color) = color {
+                    if std::env::var("KAJIT_RA_TRACE").is_ok() {
+                        eprintln!(
+                            "  b{} def v{} -> p{} (freed: {:?}, occupied: {})",
+                            block_id.0,
+                            dst.index(),
+                            color.0,
+                            freed_debug,
+                            occupied.len()
+                        );
+                    }
                     coloring.insert(*dst, color);
                     occupied.insert(color);
                 }

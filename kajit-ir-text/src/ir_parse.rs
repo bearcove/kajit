@@ -9,11 +9,11 @@ use chumsky::prelude::*;
 
 use kajit_ir::ErrorCode;
 use kajit_ir::{
-    Arena, CURSOR_STATE_DOMAIN, CURSOR_STATE_DOMAIN_NAME, CURSOR_STATE_PORT, DebugScope,
-    DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry, IrFunc, IrOp,
-    LambdaId, Node, NodeId, NodeKind, OUTPUT_STATE_DOMAIN, OUTPUT_STATE_DOMAIN_NAME,
-    OUTPUT_STATE_PORT, OutputPort, OutputRef, PortKind, PortSource, Region, RegionArg,
-    RegionArgRef, RegionId, RegionResult, SlotId, StateDomain, StateDomainId, VReg, Width,
+    Arena, CURSOR_STATE_DOMAIN, CURSOR_STATE_DOMAIN_NAME, DebugScope, DebugScopeId, DebugScopeKind,
+    InputPort, IntrinsicFn, IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind,
+    OUTPUT_STATE_DOMAIN, OUTPUT_STATE_DOMAIN_NAME, OutputPort, OutputRef, PortKind, PortSource,
+    Region, RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, StateDomain, StateDomainId,
+    VReg, Width,
 };
 
 // ─── AST types (first pass) ────────────────────────────────────────────────

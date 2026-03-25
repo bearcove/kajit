@@ -141,72 +141,77 @@ fn cmd_compile(format: &str, ty: &str, stages: &str) {
     };
 
     let shape = resolve_shape(ty);
+    let pipeline_opts = kajit::PipelineOptions::from_env();
+
+    // Single compilation pass — all artifacts share the same vreg numbering
+    let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
 
     let dump_all = stages == "all";
     let dump = |name: &str| dump_all || stages.split(',').any(|s| s.trim() == name);
 
-    // HIR
     if dump("hir") {
-        let hir_text = kajit::debug_hir_text(shape, kind);
         println!("=== HIR ===");
-        println!("{hir_text}");
+        println!("{}", artifacts.hir_text);
     }
 
-    // IR + opt timeline
     if dump("ir") || dump("opts") {
-        let timeline = kajit::debug_ir_opt_timeline_text(shape, kind);
-        for (pass_name, ir_text) in &timeline {
-            println!("=== IR after {pass_name} ===");
-            // Count nodes
+        for (pass_name, ir_text) in &artifacts.ir_opt_timeline {
             let node_count = ir_text.matches(" = ").count();
-            println!("  ({node_count} nodes)");
+            println!("=== IR after {pass_name} ({node_count} nodes) ===");
             if dump("ir") {
                 println!("{ir_text}");
             }
         }
     }
 
-    // Linear IR
     if dump("linear") {
-        let linear_text = kajit::debug_linear_ir_text(shape, kind);
         println!("=== Linear IR ===");
-        println!("{linear_text}");
+        println!("{}", artifacts.linear_text);
     }
 
-    // CFG-MIR
     if dump("cfg") {
-        let cfg_text = kajit::debug_cfg_mir_text(shape, kind);
-        let block_count = cfg_text.matches("block b").count();
-        let inst_count = cfg_text.matches("inst i").count();
-        let edge_count = cfg_text.matches("edge e").count();
+        let block_count = artifacts.cfg_text.matches("block b").count();
+        let inst_count = artifacts.cfg_text.matches("inst i").count();
+        let edge_count = artifacts.cfg_text.matches("edge e").count();
         println!("=== CFG-MIR ({block_count} blocks, {inst_count} insts, {edge_count} edges) ===");
-        println!("{cfg_text}");
+        println!("{}", artifacts.cfg_text);
     }
 
-    // Assembly (aarch64 only)
-    #[cfg(target_arch = "aarch64")]
     if dump("asm") || dump("emit") {
-        let asm_text = kajit::assembly_text(shape, kind);
-        let inst_count = asm_text
+        if artifacts.asm_text.is_empty() {
+            println!("=== Assembly (not available on this platform) ===");
+        } else {
+            let inst_count = artifacts
+                .asm_text
+                .lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('.'))
+                .count();
+            println!("=== Assembly ({inst_count} instructions) ===");
+            println!("{}", artifacts.asm_text);
+        }
+    }
+
+    if dump_all {
+        let last_ir = artifacts
+            .ir_opt_timeline
+            .last()
+            .map(|(_, t)| t.as_str())
+            .unwrap_or("");
+        let ir_nodes = last_ir.matches(" = ").count();
+        let cfg_blocks = artifacts.cfg_text.matches("block b").count();
+        let cfg_insts = artifacts.cfg_text.matches("inst i").count();
+        let cfg_edges = artifacts.cfg_text.matches("edge e").count();
+        let asm_insts = artifacts
+            .asm_text
             .lines()
             .filter(|l| !l.is_empty() && !l.starts_with('.'))
             .count();
-        println!("=== Assembly ({inst_count} instructions) ===");
-        println!("{asm_text}");
-    }
-
-    // Stats summary
-    if dump_all {
-        let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
-        let ir_nodes = ir_text.matches(" = ").count();
-        let cfg_blocks = cfg_text.matches("block b").count();
-        let cfg_insts = cfg_text.matches("inst i").count();
-        let cfg_edges = cfg_text.matches("edge e").count();
         println!("=== Stats ===");
-        println!("  IR nodes:   {ir_nodes}");
-        println!("  CFG blocks: {cfg_blocks}");
-        println!("  CFG insts:  {cfg_insts}");
-        println!("  CFG edges:  {cfg_edges}");
+        println!("  IR nodes:    {ir_nodes}");
+        println!("  CFG blocks:  {cfg_blocks}");
+        println!("  CFG insts:   {cfg_insts}");
+        println!("  CFG edges:   {cfg_edges}");
+        println!("  ASM insts:   {asm_insts}");
     }
 }
 

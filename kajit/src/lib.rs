@@ -24,7 +24,7 @@ mod pow10tab;
 pub mod regalloc_engine;
 pub mod solver;
 
-use compiler::CompiledDecoder;
+pub use compiler::{CompiledDecoder, PipelineArtifacts, compile_pipeline};
 use context::{DeserContext, ErrorCode};
 pub use format::DecoderKind;
 pub use pipeline_opts::PipelineOptions;

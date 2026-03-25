@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::cfg_mir::{EdgeId, Function, TermId, Terminator};
+use crate::cfg_mir::{EdgeId, Function, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
@@ -81,7 +81,7 @@ pub fn fold_const_branches(func: &mut Function) -> usize {
 
         // Remove this block from the dead edge target's preds
         let dead_target = func.edges[dead_edge.index()].to;
-        let dead_source = func.edges[dead_edge.index()].from;
+        let _dead_source = func.edges[dead_edge.index()].from;
         func.blocks[dead_target.index()]
             .preds
             .retain(|e| *e != dead_edge);

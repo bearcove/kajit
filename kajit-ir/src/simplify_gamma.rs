@@ -61,7 +61,7 @@ fn resolve_constant_source(func: &IrFunc, source: &PortSource) -> Option<usize> 
                     // Recurse: check if the theta input is a constant
                     resolve_constant_source(func, &input.source)
                 }
-                NodeKind::Gamma { regions } => {
+                NodeKind::Gamma { regions: _ } => {
                     // Gamma branch: arg[K] corresponds to gamma input[K+1] (skip predicate)
                     let input = node.inputs.get(arg_index + 1)?;
                     resolve_constant_source(func, &input.source)

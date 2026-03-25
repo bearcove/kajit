@@ -711,8 +711,6 @@ fn emit_instruction(
     inst: &Instruction,
     label_map: &std::collections::HashMap<Label, kajit_emit::aarch64::LabelId>,
 ) -> Result<(), String> {
-    use kajit_emit::aarch64::{Condition, Reg, Width};
-
     let map_err = |e: kajit_emit::aarch64::EmitError| format!("{:?}", e);
 
     match inst {

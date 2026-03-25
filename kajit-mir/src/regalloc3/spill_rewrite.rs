@@ -34,11 +34,11 @@
 use kajit_ir::VReg;
 use std::collections::HashMap;
 
-use crate::cfg_mir::{Function, Inst, InstId, Operand};
+use crate::cfg_mir::{Function, InstId};
 
 use super::{
     linear_scan::{Allocation, AllocationResult},
-    machine_inst::{PReg, ScratchPolicy},
+    machine_inst::ScratchPolicy,
 };
 
 /// Spill slot ID (index into spill area)
@@ -83,8 +83,8 @@ pub fn rewrite_spills(
 fn rewrite_instructions(
     func: &mut Function,
     alloc: &AllocationResult,
-    spill_slots: &HashMap<VReg, SpillSlot>,
-    scratch: &ScratchPolicy,
+    _spill_slots: &HashMap<VReg, SpillSlot>,
+    _scratch: &ScratchPolicy,
 ) {
     // For each block
     for block in &mut func.blocks {

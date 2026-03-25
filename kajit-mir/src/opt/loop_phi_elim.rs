@@ -17,7 +17,6 @@
 use std::collections::{HashMap, HashSet};
 
 use kajit_ir::VReg;
-use kajit_lir::LinearOp;
 
 use crate::{
     analysis::{dominance::DominanceInfo, loops::LoopInfo},

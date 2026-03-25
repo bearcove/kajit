@@ -502,7 +502,7 @@ impl DebuggerSession {
                 // Output pointer — just use 0 as base (output is separate buffer)
                 self.write_vreg(dst.index(), 0);
             }
-            LinearOp::SetOutPtr { src } => {
+            LinearOp::SetOutPtr { src: _ } => {
                 // No-op in interpreter (output is managed separately)
             }
             LinearOp::SlotAddr { dst, slot } => {

@@ -143,7 +143,7 @@ struct ActiveInterval {
 impl<'a> LinearScanAllocator<'a> {
     /// Create allocator
     pub fn new(
-        mut liveness: LivenessInfo,
+        liveness: LivenessInfo,
         abi: &'a AbiInfo,
         scratch: &'a ScratchPolicy,
         hints: &'a HintMap,

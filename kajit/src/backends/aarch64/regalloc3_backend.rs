@@ -6,7 +6,7 @@ use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::{AllocatedCfgFunctionRa3, AllocatedCfgProgramRa3};
 
 use crate::arch::EmitCtx;
-use crate::ir_backend::{BackendDebugInfo, LinearBackendResult};
+use crate::ir_backend::LinearBackendResult;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use std::collections::HashMap;
 

@@ -39,7 +39,7 @@ pub fn unroll_bounded_thetas(func: &mut IrFunc) -> bool {
 
     // Collect thetas to unroll (can't mutate while iterating)
     let mut targets: Vec<(NodeId, u32)> = Vec::new();
-    for (region_id, region) in func.regions.iter() {
+    for (_region_id, region) in func.regions.iter() {
         for &node_id in &region.nodes {
             if let NodeKind::Theta {
                 max_iterations: Some(n),
@@ -105,7 +105,7 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
     // We replace the theta node with the gamma cascade.
 
     // Step 1: Inline first iteration's body into parent region
-    let mut current_sources = theta_inputs.clone();
+    let current_sources = theta_inputs.clone();
 
     // We'll build nested gammas. The outermost result sources will replace
     // the theta node's outputs.
@@ -114,7 +114,7 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
 
     // Step 2: Replace theta outputs with the cascade results
     // We need to rewrite all uses of the theta's outputs to use the cascade's outputs.
-    let theta_outputs: Vec<OutputRef> = (0..theta_output_count as u16)
+    let _theta_outputs: Vec<OutputRef> = (0..theta_output_count as u16)
         .map(|i| OutputRef {
             node: theta_node_id,
             index: i,
@@ -122,12 +122,12 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
         .collect();
 
     // Find all uses of the theta's outputs and rewrite them
-    for (region_id, region) in func.regions.iter() {
+    for (_region_id, region) in func.regions.iter() {
         for &node_id in &region.nodes {
             if node_id == theta_node_id {
                 continue;
             }
-            for input in &func.nodes[node_id].inputs {
+            for _input in &func.nodes[node_id].inputs {
                 // Check later — need to collect first
             }
         }
@@ -137,7 +137,7 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
     let mut uses_to_rewrite: Vec<(NodeId, usize, PortSource)> = Vec::new();
     let mut result_uses_to_rewrite: Vec<(crate::ResultId, PortSource)> = Vec::new();
 
-    for (region_id, region) in func.regions.iter() {
+    for (_region_id, region) in func.regions.iter() {
         for &node_id in &region.nodes {
             if node_id == theta_node_id {
                 continue;
@@ -240,7 +240,7 @@ fn topological_sort_region(func: &mut IrFunc, region_id: crate::RegionId) {
     let mut in_degree: std::collections::HashMap<NodeId, usize> = std::collections::HashMap::new();
     for &nid in &nodes {
         in_degree.entry(nid).or_insert(0);
-        for &dep in &deps[&nid] {
+        for &_dep in &deps[&nid] {
             // dep is used by nid, so nid depends on dep
             // But we need: for each node, how many nodes depend on it
         }
@@ -315,7 +315,7 @@ fn build_unrolled_cascade(
 
     // Build gamma: check predicate, either exit or continue
     let debug_scope = func.regions[target_region].debug_scope;
-    let exit_values = updated_values.clone();
+    let _exit_values = updated_values.clone();
 
     // Create gamma with 2 branches:
     // Branch 0 (pred==0, exit): pass through updated_values
@@ -342,7 +342,7 @@ fn build_unrolled_cascade(
         nodes: Vec::new(),
     });
     // Branch 0 results: just pass through the args
-    for (i, &arg_id) in branch0_args.iter().enumerate() {
+    for (_i, &arg_id) in branch0_args.iter().enumerate() {
         let result_id = func.region_results.push(crate::RegionResult {
             kind: func.region_args[arg_id].kind,
             source: PortSource::RegionArg(crate::RegionArgRef {

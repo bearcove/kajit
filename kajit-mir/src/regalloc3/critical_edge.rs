@@ -91,7 +91,7 @@ fn split_edge(func: &mut Function, edge_id: EdgeId) {
     };
 
     // Create terminator: unconditional branch to successor
-    let copy_term = Terminator::Branch {
+    let _copy_term = Terminator::Branch {
         edge: EdgeId(0), // will be updated below
     };
 
@@ -176,7 +176,7 @@ fn split_edge(func: &mut Function, edge_id: EdgeId) {
     copy_block.succs = vec![edge2_id];
 
     // Update terminator for copy block
-    let copy_term_id = copy_block.term;
+    let _copy_term_id = copy_block.term;
 
     // Add everything to function
     func.blocks.push(copy_block);

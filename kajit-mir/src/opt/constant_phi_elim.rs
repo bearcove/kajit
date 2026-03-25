@@ -214,7 +214,7 @@ fn analyze_param(
     values: &HashMap<(BlockId, usize), ParamValue>,
     block_id: BlockId,
     param_idx: usize,
-    param_vreg: VReg,
+    _param_vreg: VReg,
 ) -> ParamValue {
     let block = &func.blocks[block_id.index()];
     let mut result = ParamValue::None;

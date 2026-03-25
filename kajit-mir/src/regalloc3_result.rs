@@ -1,6 +1,6 @@
 //! Regalloc3 allocation results (native types, no regalloc2 conversion).
 
-use crate::cfg_mir::{self, OpId};
+use crate::cfg_mir::{self};
 use crate::regalloc3::{linear_scan, machine_inst::PReg};
 use kajit_ir::{LambdaId, VReg};
 use std::collections::HashMap;

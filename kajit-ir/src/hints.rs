@@ -19,7 +19,7 @@
 //! RVSDG output ports → LIR vregs → CFG-MIR vregs
 //! Each lowering stage must preserve hint metadata.
 
-use crate::ir::{IrFunc, Node, NodeKind, RegionId};
+use crate::ir::{IrFunc, NodeKind, RegionId};
 use std::collections::HashMap;
 
 /// Spill cost hint (matches kajit-mir::regalloc3::hints::SpillCost)
@@ -46,7 +46,7 @@ pub type PortHintMap = HashMap<OutputId, PortHint>;
 ///
 /// TODO: Proper implementation when integrating with lowering pipeline.
 /// For now, returns empty hints (all vregs get default Low cost).
-pub fn analyze_spill_costs(func: &IrFunc) -> PortHintMap {
+pub fn analyze_spill_costs(_func: &IrFunc) -> PortHintMap {
     let hints = PortHintMap::new();
     // TODO: Traverse func starting from func.root
     // - Visit each node recursively
