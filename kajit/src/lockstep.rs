@@ -96,9 +96,23 @@ pub fn run_lockstep(
     debugger: &mut dyn JitDebugger,
     max_steps: usize,
 ) -> Result<LockstepResult, DebugError> {
-    // Set up interpreter
+    // Read the JIT's base addresses from its registers at the breakpoint.
+    // After the aarch64 prologue: x19=cursor, x20=input_end, x21=output_ptr, x22=ctx
+    let jit_cursor = debugger.read_register(19)?; // x19
+    let jit_input_end = debugger.read_register(20)?; // x20
+    let jit_output_ptr = debugger.read_register(21)?; // x21
+
+    eprintln!(
+        "[lockstep] JIT base addrs: cursor=0x{:x}, end=0x{:x}, out=0x{:x}",
+        jit_cursor, jit_input_end, jit_output_ptr
+    );
+
+    // Set up interpreter with the JIT's base addresses so pointer values match
     let mut session = kajit_mir::DebuggerSession::new(program, input)
         .map_err(|e| DebugError::LldbError(format!("interpreter init: {e}")))?;
+    session.input_base_addr = Some(jit_cursor);
+    session.input_end_addr = Some(jit_input_end);
+    session.output_base_addr = Some(jit_output_ptr);
 
     let mut steps = 0;
 
@@ -120,22 +134,11 @@ pub fn run_lockstep(
             });
         }
 
-        // Step interpreter one op
-        let _event = session
-            .step_forward()
-            .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+        // Step BOTH: JIT first (executes the current op's machine code),
+        // then interpreter (executes the same op in the ideal model).
+        // After both step, they should agree on the op's output.
 
-        let state = session.state();
-        if state.returned {
-            eprintln!("[lockstep] interpreter returned after {steps} steps");
-            return Ok(LockstepResult {
-                steps,
-                divergence: None,
-                completed: true,
-            });
-        }
-
-        // Step JIT to next source line
+        // Step JIT to next source line (executes current op's machine code)
         let dwarf_line = match debugger.step_to_next_source_line() {
             Ok(line) => line,
             Err(DebugError::ProcessExited(_)) => {
@@ -149,58 +152,104 @@ pub fn run_lockstep(
             Err(e) => return Err(e),
         };
 
-        // Compare vreg values
-        let sp = debugger.read_sp()?;
-        let mut vreg_diffs = Vec::new();
-        let mut has_divergence = false;
+        // Step interpreter one op — capture which op executed
+        let event = session
+            .step_forward()
+            .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
 
-        // Check all vregs that have allocations
-        for (&vreg_idx, location) in &alloc_map.locations {
-            let vreg_idx_usize = vreg_idx as usize;
-
-            // Get interpreter value (if this vreg is live)
-            let interp_value = if vreg_idx_usize < state.vregs.len() {
-                state.vregs[vreg_idx_usize]
-            } else {
-                continue; // vreg not in interpreter state
-            };
-
-            // Get JIT value from physical location
-            let jit_value = match location {
-                VRegLocation::Register(preg) => debugger.read_register(*preg).ok(),
-                VRegLocation::StackSlot(offset) => {
-                    let addr = sp + *offset as u64;
-                    debugger
-                        .read_memory(addr, 8)
-                        .ok()
-                        .map(|bytes| u64::from_le_bytes(bytes[..8].try_into().unwrap()))
-                }
-                VRegLocation::Constant(val) => Some(*val),
-            };
-
-            let matches = jit_value == Some(interp_value);
-            if !matches && interp_value != 0 {
-                // Only report divergences for non-zero interpreter values
-                // (zero vregs are often dead/unused)
-                has_divergence = true;
-            }
-
-            if !matches {
-                vreg_diffs.push(VRegDiff {
-                    vreg_index: vreg_idx,
-                    interpreter_value: interp_value,
-                    jit_value,
-                    jit_location: location.clone(),
-                    matches,
-                });
-            }
+        let state = session.state();
+        if state.returned || event.returned {
+            eprintln!("[lockstep] interpreter returned after {steps} steps");
+            return Ok(LockstepResult {
+                steps,
+                divergence: None,
+                completed: true,
+            });
         }
+
+        // Find which vregs the executed op defines and uses
+        let func = &program.funcs[0]; // single function
+        let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, &event.location_before);
 
         steps += 1;
 
-        if has_divergence {
-            // Sort diffs by vreg index for readability
-            vreg_diffs.sort_by_key(|d| d.vreg_index);
+        // Compare only the defined vreg (the output of this op)
+        let Some(dst) = def_vreg else {
+            // Terminators and side-effect-only ops don't define a vreg — skip comparison
+            if steps % 50 == 0 {
+                eprintln!("[lockstep] step {steps}, line {dwarf_line}");
+            }
+            continue;
+        };
+
+        let dst_idx = dst.index() as u32;
+        let Some(location) = alloc_map.locations.get(&dst_idx) else {
+            continue; // vreg not allocated (dead?)
+        };
+
+        let interp_value = if (dst.index()) < state.vregs.len() {
+            state.vregs[dst.index()]
+        } else {
+            continue;
+        };
+
+        let sp = debugger.read_sp()?;
+        let jit_value = match location {
+            VRegLocation::Register(preg) => debugger.read_register(*preg).ok(),
+            VRegLocation::StackSlot(offset) => {
+                let addr = sp + *offset as u64;
+                debugger
+                    .read_memory(addr, 8)
+                    .ok()
+                    .map(|bytes| u64::from_le_bytes(bytes[..8].try_into().unwrap()))
+            }
+            VRegLocation::Constant(val) => Some(*val),
+        };
+
+        let matches = jit_value == Some(interp_value);
+
+        if !matches {
+            // Build context: also read the use vregs
+            let mut vreg_diffs = Vec::new();
+
+            // The diverging def vreg
+            vreg_diffs.push(VRegDiff {
+                vreg_index: dst_idx,
+                interpreter_value: interp_value,
+                jit_value,
+                jit_location: location.clone(),
+                matches: false,
+            });
+
+            // Context: show the use (input) vregs too
+            for use_vreg in &use_vregs {
+                let use_idx = use_vreg.index() as u32;
+                if let Some(use_loc) = alloc_map.locations.get(&use_idx) {
+                    let use_interp = if use_vreg.index() < state.vregs.len() {
+                        state.vregs[use_vreg.index()]
+                    } else {
+                        0
+                    };
+                    let use_jit = match use_loc {
+                        VRegLocation::Register(p) => debugger.read_register(*p).ok(),
+                        VRegLocation::StackSlot(off) => {
+                            let addr = sp + *off as u64;
+                            debugger
+                                .read_memory(addr, 8)
+                                .ok()
+                                .map(|b| u64::from_le_bytes(b[..8].try_into().unwrap()))
+                        }
+                        VRegLocation::Constant(v) => Some(*v),
+                    };
+                    vreg_diffs.push(VRegDiff {
+                        vreg_index: use_idx,
+                        interpreter_value: use_interp,
+                        jit_value: use_jit,
+                        jit_location: use_loc.clone(),
+                        matches: use_jit == Some(use_interp),
+                    });
+                }
+            }
 
             let source_line = if dwarf_line > 0 && (dwarf_line as usize) <= listing_lines.len() {
                 listing_lines[dwarf_line as usize - 1].clone()
@@ -220,11 +269,79 @@ pub fn run_lockstep(
             });
         }
 
-        // Progress report every 50 steps
-        if steps % 50 == 0 {
-            eprintln!("[lockstep] step {steps}, line {dwarf_line}, no divergence yet");
+        // Progress report
+        let loc_str = match &event.location_before.at_terminator {
+            true => format!("b{} term", event.location_before.block.index()),
+            false => format!(
+                "b{} inst[{}]",
+                event.location_before.block.index(),
+                event.location_before.next_inst_index
+            ),
+        };
+        let loc_name = AllocationMap::reg_name(
+            alloc_map
+                .locations
+                .get(&dst_idx)
+                .map(|l| match l {
+                    VRegLocation::Register(p) => *p,
+                    _ => 255,
+                })
+                .unwrap_or(255),
+        );
+        eprintln!(
+            "[lockstep] step {steps}: {loc_str} line {dwarf_line} v{dst_idx}({loc_name}) = {interp_value} OK"
+        );
+    }
+}
+
+/// Extract def vreg, use vregs, and whether this op produces a pointer value.
+fn op_def_uses_and_kind(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> (Option<kajit_ir::VReg>, Vec<kajit_ir::VReg>, bool) {
+    use kajit_lir::LinearOp;
+    use kajit_mir::cfg_mir::OperandKind;
+
+    let block = &func.blocks[loc.block.index()];
+
+    if loc.at_terminator {
+        let term = &func.terms[block.term.index()];
+        let uses = match term {
+            kajit_mir::cfg_mir::Terminator::BranchIf { cond, .. }
+            | kajit_mir::cfg_mir::Terminator::BranchIfZero { cond, .. } => vec![*cond],
+            kajit_mir::cfg_mir::Terminator::JumpTable { predicate, .. } => vec![*predicate],
+            _ => Vec::new(),
+        };
+        return (None, uses, false);
+    }
+
+    if loc.next_inst_index >= block.insts.len() {
+        return (None, Vec::new(), false);
+    }
+
+    let inst_id = block.insts[loc.next_inst_index];
+    let inst = &func.insts[inst_id.index()];
+
+    let mut def = None;
+    let mut uses = Vec::new();
+    for op in &inst.operands {
+        match op.kind {
+            OperandKind::Def => def = Some(op.vreg),
+            OperandKind::Use => uses.push(op.vreg),
         }
     }
+
+    // Ops that produce pointer values (interpreter uses different base addresses)
+    let is_pointer = matches!(
+        inst.op,
+        LinearOp::SaveCursor { .. }
+            | LinearOp::SaveInputEnd { .. }
+            | LinearOp::SaveOutPtr { .. }
+            | LinearOp::SlotAddr { .. }
+            | LinearOp::LoadFromAddr { .. }
+    );
+
+    (def, uses, is_pointer)
 }
 
 /// Pretty-print a lockstep result.

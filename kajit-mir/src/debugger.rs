@@ -145,6 +145,14 @@ pub struct DebuggerSession {
     next_inst: usize,
     steps: usize,
     history: Vec<SessionSnapshot>,
+    /// When set, SaveCursor returns input_base_addr + cursor (raw pointer)
+    /// instead of just cursor (abstract offset). Used by the lockstep debugger
+    /// to match the JIT's pointer-based values.
+    pub input_base_addr: Option<u64>,
+    /// When set, SaveInputEnd returns this value instead of input.len().
+    pub input_end_addr: Option<u64>,
+    /// When set, SaveOutPtr returns this value instead of an abstract offset.
+    pub output_base_addr: Option<u64>,
 }
 
 impl DebuggerSession {
@@ -168,6 +176,9 @@ impl DebuggerSession {
             func,
             block_indices,
             input: input.to_vec(),
+            input_base_addr: None,
+            input_end_addr: None,
+            output_base_addr: None,
         })
     }
 
@@ -434,13 +445,28 @@ impl DebuggerSession {
                 self.write_vreg(dst.index(), value);
             }
             LinearOp::SaveCursor { dst } => {
-                self.write_vreg(dst.index(), self.cursor as u64);
+                let value = match self.input_base_addr {
+                    Some(base) => base + self.cursor as u64,
+                    None => self.cursor as u64,
+                };
+                self.write_vreg(dst.index(), value);
             }
             LinearOp::SaveInputEnd { dst } => {
-                self.write_vreg(dst.index(), self.input.len() as u64);
+                let value = match self.input_end_addr {
+                    Some(end) => end,
+                    None => match self.input_base_addr {
+                        Some(base) => base + self.input.len() as u64,
+                        None => self.input.len() as u64,
+                    },
+                };
+                self.write_vreg(dst.index(), value);
             }
             LinearOp::RestoreCursor { src } => {
-                self.cursor = self.read_vreg(src.index()) as usize;
+                let raw = self.read_vreg(src.index());
+                self.cursor = match self.input_base_addr {
+                    Some(base) => (raw - base) as usize,
+                    None => raw as usize,
+                };
             }
             LinearOp::AdvanceCursor { count } => {
                 self.cursor += *count as usize;
@@ -499,8 +525,8 @@ impl DebuggerSession {
                 self.write_vreg(dst.index(), result);
             }
             LinearOp::SaveOutPtr { dst } => {
-                // Output pointer — just use 0 as base (output is separate buffer)
-                self.write_vreg(dst.index(), 0);
+                let value = self.output_base_addr.unwrap_or(0);
+                self.write_vreg(dst.index(), value);
             }
             LinearOp::SetOutPtr { src: _ } => {
                 // No-op in interpreter (output is managed separately)
