@@ -707,13 +707,14 @@ where
     }
     let expected: T = serde_json::from_str(&encoded).unwrap();
     maybe_wait_for_debugger();
-    let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
+    let pipeline_opts = kajit::PipelineOptions::from_env();
+    let pipeline = kajit::compile_pipeline(T::SHAPE, kajit::DecoderKind::Json, &pipeline_opts);
     let case = runtime_case_name();
     if dumps_enabled_for_case("json", &case) {
-        let artifacts = codegen_artifacts::<T>(kajit::DecoderKind::Json);
+        let artifacts = codegen_artifacts_from_pipeline(&pipeline);
         maybe_dump_codegen_artifacts("json", &case, &artifacts);
     }
-    let got: T = kajit::from_str(&decoder, &encoded).unwrap();
+    let got: T = kajit::from_str(&pipeline.decoder, &encoded).unwrap();
     assert_eq!(got, expected);
 }
 fn assert_postcard_case<T>(value: T)
@@ -738,13 +739,14 @@ where
     }
     let expected: T = ::postcard::from_bytes(&encoded).unwrap();
     maybe_wait_for_debugger();
-    let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
+    let pipeline_opts = kajit::PipelineOptions::from_env();
+    let pipeline = kajit::compile_pipeline(T::SHAPE, kajit::DecoderKind::Postcard, &pipeline_opts);
     let case = runtime_case_name();
     if dumps_enabled_for_case("postcard", &case) {
-        let artifacts = codegen_artifacts::<T>(kajit::DecoderKind::Postcard);
+        let artifacts = codegen_artifacts_from_pipeline(&pipeline);
         maybe_dump_codegen_artifacts("postcard", &case, &artifacts);
     }
-    let got: T = kajit::deserialize(&decoder, &encoded).unwrap();
+    let got: T = kajit::deserialize(&pipeline.decoder, &encoded).unwrap();
     assert_eq!(got, expected);
 }
 fn assert_json_input_case<T>(input: &[u8], expected: T)
@@ -910,32 +912,22 @@ struct CodegenArtifacts {
     asm_text: String,
     opt_timeline: Vec<(String, String)>,
 }
-fn codegen_artifacts<T>(kind: kajit::DecoderKind) -> CodegenArtifacts
-where
-    for<'input> T: Facet<'input>,
-{
-    let shape = T::SHAPE;
-    let hir_text = kajit::debug_hir_text(shape, kind);
-    let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
-    let linear_text = kajit::debug_linear_ir_text(shape, kind);
-    let edits = 0;
-    let edits_text = String::new();
-    let emission_text = String::new();
-    #[cfg(target_arch = "aarch64")]
-    let asm_text = kajit::assembly_text(shape, kind);
-    #[cfg(not(target_arch = "aarch64"))]
-    let asm_text = String::from("(assembly capture only available on aarch64)");
-    let opt_timeline = kajit::debug_ir_opt_timeline_text(shape, kind);
+fn codegen_artifacts_from_pipeline(pipeline: &kajit::PipelineArtifacts) -> CodegenArtifacts {
+    let ir_text = pipeline
+        .ir_opt_timeline
+        .last()
+        .map(|(_, t)| t.clone())
+        .unwrap_or_default();
     CodegenArtifacts {
-        hir_text,
+        hir_text: pipeline.hir_text.clone(),
         ir_text,
-        linear_text,
-        cfg_text,
-        edits,
-        edits_text,
-        emission_text,
-        asm_text,
-        opt_timeline,
+        linear_text: pipeline.linear_text.clone(),
+        cfg_text: pipeline.cfg_text.clone(),
+        edits: 0,
+        edits_text: String::new(),
+        emission_text: String::new(),
+        asm_text: pipeline.asm_text.clone(),
+        opt_timeline: pipeline.ir_opt_timeline.clone(),
     }
 }
 fn runtime_case_name() -> String {
@@ -3654,7 +3646,13 @@ mod postreg {
     use super::*;
     #[test]
     fn vec_scalar_large_hotpath_asserts() {
-        let artifacts = codegen_artifacts::<ScalarVec>(kajit::DecoderKind::Postcard);
+        let pipeline_opts = kajit::PipelineOptions::from_env();
+        let pipeline = kajit::compile_pipeline(
+            ScalarVec::SHAPE,
+            kajit::DecoderKind::Postcard,
+            &pipeline_opts,
+        );
+        let artifacts = codegen_artifacts_from_pipeline(&pipeline);
         assert!(
             artifacts.ir_text.contains("theta") || artifacts.ir_text.contains("apply @"),
             "expected loop form (`theta`) or outlined loop body (`apply`) in IR"

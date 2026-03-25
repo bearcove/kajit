@@ -229,6 +229,16 @@ pub fn compile_decoder_with_options(
     kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> CompiledDecoder {
+    // Delegate to compile_pipeline so all paths share identical codegen
+    compile_pipeline(shape, kind, pipeline_opts).decoder
+}
+
+/// Legacy entry point kept for backward compatibility.
+fn compile_decoder_with_options_legacy(
+    shape: &'static Shape,
+    kind: DecoderKind,
+    pipeline_opts: &PipelineOptions,
+) -> CompiledDecoder {
     match kind {
         DecoderKind::Json if supports_json_decoder_hir(shape) => {
             compile_json_decoder_via_hir_with_options(shape, pipeline_opts.clone())
