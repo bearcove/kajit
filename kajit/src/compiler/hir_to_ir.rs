@@ -322,17 +322,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     body_rb.set_results(&[predicate]);
                 };
                 if let Some(max_iter) = max_iterations {
-                    // Unroll bounded loop into a gamma cascade.
-                    // Each iteration: execute body, check predicate, gamma(continue/exit).
-                    self.lower_unrolled_loop(
-                        rb,
-                        &body.statements,
-                        dest_local,
-                        dest_ty,
-                        active_slot,
-                        continue_slot,
-                        *max_iter as usize,
-                    );
+                    let _ = rb.theta_bounded(&[], *max_iter, build_body);
                 } else {
                     let _ = rb.theta(&[], build_body);
                 }
