@@ -595,11 +595,29 @@ impl DebuggerSession {
                 taken,
                 fallthrough,
             } => {
-                let next = if self.read_vreg(cond.index()) != 0 {
-                    *taken
-                } else {
-                    *fallthrough
-                };
+                let cond_val = self.read_vreg(cond.index());
+                let next = if cond_val != 0 { *taken } else { *fallthrough };
+                if std::env::var("KAJIT_LOCKSTEP_TRACE").is_ok() {
+                    let taken_to = self.func.edge(*taken).map(|e| e.to.index()).unwrap_or(999);
+                    let fall_to = self
+                        .func
+                        .edge(*fallthrough)
+                        .map(|e| e.to.index())
+                        .unwrap_or(999);
+                    let next_to = self.func.edge(next).map(|e| e.to.index()).unwrap_or(999);
+                    eprintln!(
+                        "[interp] branch_if v{}={} in b{}: taken=e{}→b{}, fall=e{}→b{}, going to e{}→b{}",
+                        cond.index(),
+                        cond_val,
+                        block_id.index(),
+                        taken.index(),
+                        taken_to,
+                        fallthrough.index(),
+                        fall_to,
+                        next.index(),
+                        next_to,
+                    );
+                }
                 self.apply_edge(next)?;
                 self.next_inst = 0;
             }
