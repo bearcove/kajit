@@ -1512,10 +1512,168 @@ fn insert_phi_copies_with_coalescing(
             continue;
         }
 
-        let resolver = ParallelCopyResolver::new(copies);
-        let moves = resolver.resolve(temp_vreg);
-        crate::regalloc3::phi_resolution::insert_moves_on_edge(func, edge_id, &moves);
+        // Resolve parallel copies using PHYSICAL REGISTER dependencies.
+        // The vreg-based resolver doesn't know that two different vregs
+        // might share the same physical register, causing clobber bugs.
+        let resolved_moves = resolve_copies_by_preg(&copies, alloc_result, temp_vreg);
+        crate::regalloc3::phi_resolution::insert_moves_on_edge(func, edge_id, &resolved_moves);
     }
+}
+
+/// Resolve parallel copies using physical register assignments.
+///
+/// Builds the dependency graph on PHYSICAL REGISTERS (not vregs), then:
+/// 1. Emit all acyclic moves (dst not read by any remaining move)
+/// 2. Break cycles with temp register
+///
+/// This is the standard parallel-move algorithm (Briggs et al.) applied
+/// to physical locations after register allocation.
+fn resolve_copies_by_preg(
+    copies: &[crate::regalloc3::parallel_copy::Copy],
+    alloc: &crate::regalloc3::linear_scan::AllocationResult,
+    temp_vreg: kajit_ir::VReg,
+) -> Vec<crate::regalloc3::parallel_copy::MoveOp> {
+    use crate::regalloc3::linear_scan::Allocation as Ra3Alloc;
+    use crate::regalloc3::parallel_copy::MoveOp;
+
+    // Map each copy to physical registers, drop identities
+    struct PregMove {
+        dst_vreg: kajit_ir::VReg,
+        src_vreg: kajit_ir::VReg,
+        dst_preg: u8,
+        src_preg: u8,
+    }
+
+    let mut moves: Vec<PregMove> = copies
+        .iter()
+        .filter_map(|c| {
+            let dst_preg = match alloc.allocations.get(&c.dst)? {
+                Ra3Alloc::Reg(p) => p.0,
+                Ra3Alloc::Spill => return None,
+            };
+            let src_preg = match alloc.allocations.get(&c.src)? {
+                Ra3Alloc::Reg(p) => p.0,
+                Ra3Alloc::Spill => return None,
+            };
+            if dst_preg == src_preg {
+                return None; // identity
+            }
+            Some(PregMove {
+                dst_vreg: c.dst,
+                src_vreg: c.src,
+                dst_preg,
+                src_preg,
+            })
+        })
+        .collect();
+
+    if moves.is_empty() {
+        return Vec::new();
+    }
+
+    if std::env::var("KAJIT_PHI_TRACE").is_ok() {
+        eprintln!("[phi] resolving {} preg moves:", moves.len());
+        for (i, m) in moves.iter().enumerate() {
+            eprintln!(
+                "  [{}] x{} ← x{} (v{} ← v{})",
+                i,
+                m.dst_preg,
+                m.src_preg,
+                m.dst_vreg.index(),
+                m.src_vreg.index()
+            );
+        }
+    }
+
+    let mut result = Vec::new();
+    let mut pending: Vec<bool> = vec![true; moves.len()];
+
+    // Phase 1: repeatedly emit acyclic moves (dst_preg not read by any remaining)
+    loop {
+        let mut progress = false;
+        for i in 0..moves.len() {
+            if !pending[i] {
+                continue;
+            }
+            let dst = moves[i].dst_preg;
+            let blocked =
+                (0..moves.len()).any(|j| j != i && pending[j] && moves[j].src_preg == dst);
+            if !blocked {
+                result.push(MoveOp::Move {
+                    dst: moves[i].dst_vreg,
+                    src: moves[i].src_vreg,
+                });
+                pending[i] = false;
+                progress = true;
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+
+    // Phase 2: remaining moves form cycles — break each with temp
+    while let Some(cycle_start) = pending.iter().position(|p| *p) {
+        // Collect the cycle by walking: follow dst_preg → find who reads from it
+        let mut cycle = vec![cycle_start];
+        let mut current = cycle_start;
+        loop {
+            let dst = moves[current].dst_preg;
+            let next = (0..moves.len()).find(|&j| pending[j] && moves[j].src_preg == dst);
+            match next {
+                Some(j) if j == cycle_start => break, // cycle complete
+                Some(j) => {
+                    cycle.push(j);
+                    current = j;
+                }
+                None => break, // shouldn't happen in a true cycle
+            }
+        }
+
+        // Cycle is [a, b, c, d, e] where:
+        //   a: x1←x12, b: x5←x1, c: x7←x5, d: x8←x7, e: x12←x8
+        //
+        // Resolution:
+        //   temp ← src of a (save x12)
+        //   emit LAST to SECOND in reverse: e, d, c, b
+        //   emit a with temp as source: a.dst ← temp
+
+        if std::env::var("KAJIT_PHI_TRACE").is_ok() {
+            eprintln!(
+                "[phi] cycle of length {}: {:?}",
+                cycle.len(),
+                cycle
+                    .iter()
+                    .map(|&i| format!("x{}←x{}", moves[i].dst_preg, moves[i].src_preg))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        // Save the first move's source to temp
+        result.push(MoveOp::MoveToTemp {
+            dst_temp: temp_vreg,
+            src: moves[cycle[0]].src_vreg,
+        });
+        pending[cycle[0]] = false;
+
+        // Emit the rest of the cycle in REVERSE order
+        // (each move's source hasn't been clobbered yet because we go backwards)
+        for &i in cycle[1..].iter().rev() {
+            result.push(MoveOp::Move {
+                dst: moves[i].dst_vreg,
+                src: moves[i].src_vreg,
+            });
+            pending[i] = false;
+        }
+
+        // Emit the first move reading from temp
+        result.push(MoveOp::Move {
+            dst: moves[cycle[0]].dst_vreg,
+            src: temp_vreg,
+        });
+    }
+
+    result
 }
 
 const MAX_SIM_STEPS: usize = 1_000_000;
