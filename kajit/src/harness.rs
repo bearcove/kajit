@@ -389,11 +389,7 @@ fn build_dsym(
     function_name: &str,
     entry_offset: usize,
 ) -> Result<(), HarnessError> {
-    use object::read::{Object, ObjectSymbol};
-    use object::write::{Object as WriteObject, Symbol, SymbolSection};
-    use object::{
-        Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
-    };
+    use object::read::{Object, ObjectSection, ObjectSegment, ObjectSymbol};
 
     let exe_data = std::fs::read(exe_path).map_err(|e| HarnessError::Io("read exe for dSYM", e))?;
     let exe_obj = object::read::File::parse(&*exe_data)
@@ -409,6 +405,13 @@ fn build_dsym(
         .find(|s| s.name() == Ok(&mangled))
         .map(|s| s.address())
         .ok_or_else(|| HarnessError::Link(format!("symbol {mangled} not found for dSYM")))?;
+
+    // Get __TEXT segment address range (needed for LLDB address resolution)
+    let (text_vmaddr, text_vmsize) = exe_obj
+        .segments()
+        .find(|s| s.name() == Ok(Some("__TEXT")))
+        .map(|s| (s.address(), s.size()))
+        .unwrap_or((symbol_addr, 0x10000)); // fallback: use symbol addr + generous size
 
     drop(exe_obj);
 
@@ -437,7 +440,14 @@ fn build_dsym(
     }
 
     // Build the dSYM Mach-O by hand (need LC_UUID which the object crate can't emit)
-    let dsym_data = build_dsym_macho(&uuid, &debug_info, &debug_line, &dwarf.debug_abbrev);
+    let dsym_data = build_dsym_macho(
+        &uuid,
+        &debug_info,
+        &debug_line,
+        &dwarf.debug_abbrev,
+        text_vmaddr,
+        text_vmsize,
+    );
 
     // Write dSYM bundle
     let dsym_dir = exe_path.with_extension("dSYM");
@@ -474,25 +484,28 @@ fn build_dsym(
     Ok(())
 }
 
-/// Build a minimal dSYM Mach-O from scratch: header + LC_UUID + LC_SEGMENT_64(__DWARF).
+/// Build a dSYM Mach-O: header + LC_UUID + LC_SEGMENT_64(__TEXT) + LC_SEGMENT_64(__DWARF).
+///
+/// The __TEXT segment is a stub (no file data) that tells LLDB the virtual
+/// address range of the code, so it can resolve addresses to compile units.
 fn build_dsym_macho(
     uuid: &[u8; 16],
     debug_info: &[u8],
     debug_line: &[u8],
     debug_abbrev: &[u8],
+    text_vmaddr: u64,
+    text_vmsize: u64,
 ) -> Vec<u8> {
-    use std::io::Write;
-
-    // Count sections
-    let mut nsects = 0u32;
+    // Count DWARF sections
+    let mut dwarf_nsects = 0u32;
     if !debug_info.is_empty() {
-        nsects += 1;
+        dwarf_nsects += 1;
     }
     if !debug_line.is_empty() {
-        nsects += 1;
+        dwarf_nsects += 1;
     }
     if !debug_abbrev.is_empty() {
-        nsects += 1;
+        dwarf_nsects += 1;
     }
 
     // Sizes
@@ -500,14 +513,18 @@ fn build_dsym_macho(
     let uuid_cmd_size = 24u32; // LC_UUID
     let segment_cmd_size = 72u32; // LC_SEGMENT_64 (without sections)
     let section_size = 80u32; // section_64 per section
-    let load_cmds_size = uuid_cmd_size + segment_cmd_size + nsects * section_size;
+    let text_nsects = 1u32; // __text section stub
+    let text_segment_size = segment_cmd_size + text_nsects * section_size;
+    let dwarf_segment_size = segment_cmd_size + dwarf_nsects * section_size;
+    let ncmds = 3u32; // LC_UUID + LC_SEGMENT_64(__TEXT) + LC_SEGMENT_64(__DWARF)
+    let load_cmds_size = uuid_cmd_size + text_segment_size + dwarf_segment_size;
     let header_and_cmds = header_size + load_cmds_size;
 
     // Align data start to 8 bytes
     let data_start = (header_and_cmds + 7) & !7;
     let padding = data_start - header_and_cmds;
 
-    // Layout sections sequentially
+    // Layout DWARF sections sequentially after headers
     let mut section_offsets = Vec::new();
     let mut offset = data_start;
     for data in [debug_info, debug_line, debug_abbrev] {
@@ -525,7 +542,7 @@ fn build_dsym_macho(
     out.extend_from_slice(&(12u32 | 0x01000000).to_le_bytes()); // cputype: CPU_TYPE_ARM64
     out.extend_from_slice(&0u32.to_le_bytes()); // cpusubtype: ALL
     out.extend_from_slice(&0x0Au32.to_le_bytes()); // filetype: MH_DSYM
-    out.extend_from_slice(&2u32.to_le_bytes()); // ncmds: LC_UUID + LC_SEGMENT_64
+    out.extend_from_slice(&ncmds.to_le_bytes()); // ncmds
     out.extend_from_slice(&load_cmds_size.to_le_bytes()); // sizeofcmds
     out.extend_from_slice(&0u32.to_le_bytes()); // flags
     out.extend_from_slice(&0u32.to_le_bytes()); // reserved
@@ -535,10 +552,40 @@ fn build_dsym_macho(
     out.extend_from_slice(&uuid_cmd_size.to_le_bytes()); // cmdsize
     out.extend_from_slice(uuid); // 16 bytes UUID
 
+    // --- LC_SEGMENT_64 (__TEXT) — stub for address resolution ---
+    out.extend_from_slice(&0x19u32.to_le_bytes()); // cmd: LC_SEGMENT_64
+    out.extend_from_slice(&text_segment_size.to_le_bytes()); // cmdsize
+    let mut text_segname = [0u8; 16];
+    text_segname[..6].copy_from_slice(b"__TEXT");
+    out.extend_from_slice(&text_segname); // segname
+    out.extend_from_slice(&text_vmaddr.to_le_bytes()); // vmaddr
+    out.extend_from_slice(&text_vmsize.to_le_bytes()); // vmsize
+    out.extend_from_slice(&0u64.to_le_bytes()); // fileoff (no file data)
+    out.extend_from_slice(&0u64.to_le_bytes()); // filesize (no file data)
+    out.extend_from_slice(&5i32.to_le_bytes()); // maxprot: VM_PROT_READ | VM_PROT_EXECUTE
+    out.extend_from_slice(&5i32.to_le_bytes()); // initprot: VM_PROT_READ | VM_PROT_EXECUTE
+    out.extend_from_slice(&text_nsects.to_le_bytes()); // nsects
+    out.extend_from_slice(&0u32.to_le_bytes()); // flags
+
+    // __text section stub (no file data, just address range)
+    let mut text_sectname = [0u8; 16];
+    text_sectname[..6].copy_from_slice(b"__text");
+    out.extend_from_slice(&text_sectname); // sectname
+    out.extend_from_slice(&text_segname); // segname
+    out.extend_from_slice(&text_vmaddr.to_le_bytes()); // addr
+    out.extend_from_slice(&text_vmsize.to_le_bytes()); // size
+    out.extend_from_slice(&0u32.to_le_bytes()); // offset (no file data)
+    out.extend_from_slice(&0u32.to_le_bytes()); // align
+    out.extend_from_slice(&0u32.to_le_bytes()); // reloff
+    out.extend_from_slice(&0u32.to_le_bytes()); // nreloc
+    out.extend_from_slice(&0x80000400u32.to_le_bytes()); // flags: S_REGULAR | S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved1
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved2
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved3
+
     // --- LC_SEGMENT_64 (__DWARF) ---
     out.extend_from_slice(&0x19u32.to_le_bytes()); // cmd: LC_SEGMENT_64
-    out.extend_from_slice(&(segment_cmd_size + nsects * section_size).to_le_bytes());
-    // segname: "__DWARF\0\0\0\0\0\0\0\0\0"
+    out.extend_from_slice(&dwarf_segment_size.to_le_bytes());
     let mut segname = [0u8; 16];
     segname[..7].copy_from_slice(b"__DWARF");
     out.extend_from_slice(&segname);
@@ -548,7 +595,7 @@ fn build_dsym_macho(
     out.extend_from_slice(&(total_data as u64).to_le_bytes()); // filesize
     out.extend_from_slice(&0i32.to_le_bytes()); // maxprot
     out.extend_from_slice(&0i32.to_le_bytes()); // initprot
-    out.extend_from_slice(&nsects.to_le_bytes()); // nsects
+    out.extend_from_slice(&dwarf_nsects.to_le_bytes()); // nsects
     out.extend_from_slice(&0u32.to_le_bytes()); // flags
 
     // --- section_64 entries ---
