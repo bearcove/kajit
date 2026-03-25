@@ -651,8 +651,11 @@ pub enum IrOp {
     // ── Stack ops ───────────────────────────────────────────────────
     // r[impl ir.ops.stack]
     /// Compute the address of a stack slot (`sp + slot_offset`).
+    /// `num_slots` is the number of consecutive 8-byte slots starting at `slot`
+    /// that the pointer may access. Used by slot_to_reg to prevent promotion
+    /// of address-taken struct fields.
     /// Inputs: []. Outputs: [Data].
-    SlotAddr { slot: SlotId },
+    SlotAddr { slot: SlotId, num_slots: u32 },
 
     /// Store a scalar value to a computed address.
     /// Inputs: [Data (addr), Data (value), State(memory)]. Outputs: [State(memory)].
@@ -1700,7 +1703,9 @@ impl<'a> RegionBuilder<'a> {
     }
 
     /// Compute the address of a stack slot (`sp + slot_offset`).
-    pub fn slot_addr(&mut self, slot: SlotId) -> PortSource {
+    /// `num_slots` is the number of consecutive 8-byte slots that may be accessed
+    /// through the returned pointer (used to prevent slot_to_reg promotion).
+    pub fn slot_addr(&mut self, slot: SlotId, num_slots: u32) -> PortSource {
         let data_out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
@@ -1708,7 +1713,7 @@ impl<'a> RegionBuilder<'a> {
             debug_value: self.debug_value,
             inputs: vec![],
             outputs: vec![data_out],
-            kind: NodeKind::Simple(IrOp::SlotAddr { slot }),
+            kind: NodeKind::Simple(IrOp::SlotAddr { slot, num_slots }),
         });
         PortSource::Node(OutputRef { node, index: 0 })
     }
@@ -2614,7 +2619,9 @@ impl IrFunc {
             }
             IrOp::SaveOutPtr => write!(f, "SaveOutPtr"),
             IrOp::SetOutPtr => write!(f, "SetOutPtr"),
-            IrOp::SlotAddr { slot } => write!(f, "SlotAddr({})", slot.index()),
+            IrOp::SlotAddr { slot, num_slots } => {
+                write!(f, "SlotAddr({}, n={})", slot.index(), num_slots)
+            }
             IrOp::StoreToAddr { width } => write!(f, "StoreToAddr({width})"),
             IrOp::LoadFromAddr { width } => write!(f, "LoadFromAddr({width})"),
             IrOp::WriteToSlot { slot } => write!(f, "WriteToSlot({})", slot.index()),

@@ -401,10 +401,13 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
     let stack_ops = choice((
         just("SlotAddr(")
             .ignore_then(uint32())
+            .then_ignore(just(", n="))
+            .then(uint32())
             .then_ignore(just(")"))
-            .map(|s| {
+            .map(|(s, n)| {
                 AstOp::Resolved(IrOp::SlotAddr {
                     slot: SlotId::new(s),
+                    num_slots: n,
                 })
             }),
         just("StoreToAddr(")
@@ -1100,7 +1103,7 @@ fn resolve_node(
 
             // Track slots.
             match &resolved_op {
-                IrOp::SlotAddr { slot }
+                IrOp::SlotAddr { slot, .. }
                 | IrOp::WriteToSlot { slot }
                 | IrOp::ReadFromSlot { slot } => {
                     *max_slot = (*max_slot).max(slot.index() as u32);
@@ -1912,7 +1915,7 @@ lambda @0 (shape: "u8") {
 
             // Stack ops
             let slot = rb.alloc_slot();
-            let _ = rb.slot_addr(slot);
+            let _ = rb.slot_addr(slot, 1);
 
             rb.set_results(&[]);
         }

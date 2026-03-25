@@ -24,7 +24,7 @@ lambda @0 @s0 (shape: "dynamic_aggregate_summary") {
     n9 = Const(0x1) [] -> [v4]
     n10 = WriteToSlot(5) [v4, %cs:n8] -> [%cs]
     n11 = ReadFromSlot(5) [%cs:n10] -> [v5, %cs]
-    n12 = SlotAddr(1) [] -> [v6]
+    n12 = SlotAddr(1, n=4) [] -> [v6]
     n13 = Const(0x10) [] -> [v7]
     n14 = Mul [v5, v7] -> [v8]
     n15 = Add [v6, v8] -> [v9]

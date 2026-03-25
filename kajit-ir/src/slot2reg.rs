@@ -42,9 +42,12 @@ fn collect_all_slots(func: &IrFunc) -> BTreeSet<SlotId> {
             | NodeKind::Simple(IrOp::ReadFromSlot { slot }) => {
                 slots.insert(*slot);
             }
-            NodeKind::Simple(IrOp::SlotAddr { slot }) => {
-                // This slot's address escapes — it must stay in memory.
-                address_taken.insert(*slot);
+            NodeKind::Simple(IrOp::SlotAddr { slot, num_slots }) => {
+                // This slot's address escapes — mark the entire range as address-taken
+                // since the pointer may access any field in the struct.
+                for i in 0..*num_slots {
+                    address_taken.insert(SlotId::new(slot.index() as u32 + i));
+                }
             }
             _ => {}
         }

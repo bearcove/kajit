@@ -950,7 +950,7 @@ impl<'a> Linearizer<'a> {
             }
 
             // ── Stack ops ──
-            IrOp::SlotAddr { slot } => {
+            IrOp::SlotAddr { slot, .. } => {
                 self.emit_node(
                     node,
                     LinearOp::SlotAddr {

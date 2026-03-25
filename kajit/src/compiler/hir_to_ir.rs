@@ -1503,8 +1503,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     panic!("dynamic indexed local place requires an HIR array type");
                 };
                 let base_slot = Self::slot_at(storage, slot_offset);
-                let base_addr = rb.slot_addr(base_slot);
                 let elem_slots = Self::slot_count_for_type(self.module, element);
+                let total_slots = Self::slot_count_for_type(self.module, ty);
+                let base_addr = rb.slot_addr(base_slot, total_slots as u32);
                 let addr = self.add_scaled_index(
                     rb,
                     base_addr,
@@ -2037,22 +2038,26 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     "Option::Some should carry exactly one payload field"
                 );
                 let payload_ptr = match &fields[0].1 {
-                    hir::Expr::Local(local) => rb.slot_addr(self.local_slots[local].base_slot),
+                    hir::Expr::Local(local) => {
+                        let num_slots =
+                            Self::slot_count_for_type(self.module, self.local_types[local]) as u32;
+                        rb.slot_addr(self.local_slots[local].base_slot, num_slots)
+                    }
                     hir::Expr::Literal(hir::Literal::Unit) => {
                         let slot = rb.alloc_slot();
-                        rb.slot_addr(slot)
+                        rb.slot_addr(slot, 1)
                     }
                     hir::Expr::Literal(hir::Literal::Bool(value)) => {
                         let slot = rb.alloc_slot();
                         let value = rb.const_val(u64::from(*value));
                         rb.write_to_slot(slot, value);
-                        rb.slot_addr(slot)
+                        rb.slot_addr(slot, 1)
                     }
                     hir::Expr::Literal(hir::Literal::Integer(value)) => {
                         let slot = rb.alloc_slot();
                         let value = rb.const_val(*value);
                         rb.write_to_slot(slot, value);
-                        rb.slot_addr(slot)
+                        rb.slot_addr(slot, 1)
                     }
                     other => panic!("unsupported structural Option payload: {other:?}"),
                 };

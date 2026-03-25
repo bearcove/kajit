@@ -387,9 +387,18 @@ fn resolve_shape(ty: &str) -> &'static facet::Shape {
         "i64" => i64::SHAPE,
         "bool" => bool::SHAPE,
         "String" | "string" => String::SHAPE,
+        "Vec<u8>" => Vec::<u8>::SHAPE,
+        "Vec<u32>" => Vec::<u32>::SHAPE,
+        "Vec<u64>" => Vec::<u64>::SHAPE,
+        "Vec<String>" => Vec::<String>::SHAPE,
+        "Option<u32>" => Option::<u32>::SHAPE,
+        "Option<String>" => Option::<String>::SHAPE,
+        "(u32, u32)" => <(u32, u32)>::SHAPE,
         other => {
             eprintln!("error: unknown type '{other}'");
             eprintln!("supported: u8 u16 u32 u64 i8 i16 i32 i64 bool String");
+            eprintln!("          Vec<u8> Vec<u32> Vec<u64> Vec<String>");
+            eprintln!("          Option<u32> Option<String> (u32, u32)");
             std::process::exit(1);
         }
     }
