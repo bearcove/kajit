@@ -1081,6 +1081,7 @@ impl Lowerer<'_> {
             source_map,
             backend_debug_info: Some(self.backend_debug_info),
             asm_program,
+            intrinsic_call_sites: Vec::new(),
         }
     }
 }

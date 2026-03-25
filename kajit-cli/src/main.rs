@@ -245,6 +245,24 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
 
         let dwarf = artifacts.decoder.build_standalone_dwarf(&listing_path);
 
+        // Map backend call sites to harness call sites (resolve symbol names)
+        let known = kajit::intrinsics::known_intrinsics();
+        let intrinsic_calls: Vec<_> = artifacts
+            .intrinsic_call_sites
+            .iter()
+            .filter_map(|site| {
+                let name = known
+                    .iter()
+                    .find(|(_, f)| f.0 == site.func.0)
+                    .map(|(name, _)| name.to_string())?;
+                Some(kajit::harness::IntrinsicCallSite {
+                    code_offset: site.code_offset,
+                    baked_addr: site.func.0 as u64,
+                    symbol_name: name,
+                })
+            })
+            .collect();
+
         let harness_input = kajit::harness::HarnessInput {
             code: artifacts.decoder.code(),
             entry_offset: artifacts.decoder.entry_offset(),
@@ -253,6 +271,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
             function_name: "kajit_decode",
             alloc_map: Some(&artifacts.alloc_map),
+            intrinsic_calls,
         };
 
         match kajit::harness::generate_harness(&harness_input, &output_dir, &base_name) {
@@ -301,20 +320,20 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         println!("  input:       {} ({})", encode_hex(&input), input.len());
         println!("  output_size: {output_size}");
 
-        // Run JIT
-        let jit_result = kajit::deserialize_raw(&artifacts.decoder, &input, output_size);
-        match &jit_result {
-            Ok(bytes) => println!("  jit output:  {} ({})", encode_hex(bytes), bytes.len()),
-            Err(e) => println!("  jit error:   {e}"),
-        }
-
-        // Run interpreter on the post-opt CFG (same IR the JIT compiled)
+        // Run interpreter FIRST (it has a step budget and won't hang)
         let interp_result = kajit_mir::opt::reduce::interpret(&artifacts.cfg_program, &input);
         match &interp_result {
             Some(bytes) => {
                 println!("  interp out:  {} ({})", encode_hex(bytes), bytes.len())
             }
             None => println!("  interp:      TRAP/TIMEOUT"),
+        }
+
+        // Run JIT (may hang on buggy programs — run after interpreter)
+        let jit_result = kajit::deserialize_raw(&artifacts.decoder, &input, output_size);
+        match &jit_result {
+            Ok(bytes) => println!("  jit output:  {} ({})", encode_hex(bytes), bytes.len()),
+            Err(e) => println!("  jit error:   {e}"),
         }
 
         // Compare
@@ -579,6 +598,23 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
 
     let dwarf = artifacts.decoder.build_standalone_dwarf(&listing_path);
 
+    let known = kajit::intrinsics::known_intrinsics();
+    let intrinsic_calls: Vec<_> = artifacts
+        .intrinsic_call_sites
+        .iter()
+        .filter_map(|site| {
+            let name = known
+                .iter()
+                .find(|(_, f)| f.0 == site.func.0)
+                .map(|(name, _)| name.to_string())?;
+            Some(kajit::harness::IntrinsicCallSite {
+                code_offset: site.code_offset,
+                baked_addr: site.func.0 as u64,
+                symbol_name: name,
+            })
+        })
+        .collect();
+
     let harness_input = kajit::harness::HarnessInput {
         code: artifacts.decoder.code(),
         entry_offset: artifacts.decoder.entry_offset(),
@@ -587,6 +623,7 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
         cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
         function_name: "kajit_decode",
         alloc_map: Some(&artifacts.alloc_map),
+        intrinsic_calls,
     };
 
     let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)

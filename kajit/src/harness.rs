@@ -35,7 +35,13 @@ pub struct AllocationMap {
 
 impl AllocationMap {
     /// Build from a regalloc3 allocation result.
-    pub fn from_regalloc3(alloc: &kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3) -> Self {
+    ///
+    /// `base_frame` is the stack offset past the callee-saved register save area.
+    /// Spill slots are at `[sp + base_frame + slot * 8]`.
+    pub fn from_regalloc3(
+        alloc: &kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3,
+        base_frame: u32,
+    ) -> Self {
         let mut locations = HashMap::new();
 
         for (&vreg, allocation) in &alloc.allocations {
@@ -50,7 +56,7 @@ impl AllocationMap {
                     } else if let Some(slot) = alloc.spill_slots.get(&vreg) {
                         locations.insert(
                             vreg.index() as u32,
-                            VRegLocation::StackSlot(slot.0 * 8), // each slot is 8 bytes
+                            VRegLocation::StackSlot(base_frame + slot.0 * 8),
                         );
                     }
                 }
@@ -110,6 +116,17 @@ impl AllocationMap {
     }
 }
 
+/// An intrinsic call site in the JIT code that needs patching for the standalone harness.
+#[derive(Debug, Clone)]
+pub struct IntrinsicCallSite {
+    /// Offset in the code buffer of the first `movz` instruction (3-instruction sequence).
+    pub code_offset: usize,
+    /// The baked-in function pointer (from the compiler process).
+    pub baked_addr: u64,
+    /// Symbol name to resolve (e.g. "_kajit_alloc_persistent").
+    pub symbol_name: String,
+}
+
 /// Information needed to generate a standalone harness.
 pub struct HarnessInput<'a> {
     /// Raw JIT machine code bytes.
@@ -126,6 +143,8 @@ pub struct HarnessInput<'a> {
     pub function_name: &'a str,
     /// Allocation map (vreg → physical location).
     pub alloc_map: Option<&'a AllocationMap>,
+    /// Intrinsic call sites that need address patching.
+    pub intrinsic_calls: Vec<IntrinsicCallSite>,
 }
 
 /// Generate a standalone test harness.
@@ -202,9 +221,76 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
     build_ver.sdk = (14 << 16) | (0 << 8);
     obj.set_macho_build_version(build_ver);
 
-    // Add .text section with JIT code
+    // Patch intrinsic call sites: replace movz/movk/movk with adrp/add/nop
+    // so the linker can resolve intrinsic symbols.
+    let mut code = input.code.to_vec();
+    let mut intrinsic_relocs: Vec<(usize, object::write::SymbolId)> = Vec::new();
+
+    for site in &input.intrinsic_calls {
+        // Add an undefined symbol for this intrinsic
+        let sym_id = obj.add_symbol(Symbol {
+            name: site.symbol_name.as_bytes().to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Text,
+            scope: SymbolScope::Dynamic,
+            weak: false,
+            section: SymbolSection::Undefined,
+            flags: SymbolFlags::None,
+        });
+
+        // Rewrite movz/movk/movk (12 bytes) to adrp/add/nop (12 bytes).
+        // adrp x16, sym@PAGE  → will be fixed by ARM64_RELOC_PAGE21
+        // add x16, x16, sym@PAGEOFF → will be fixed by ARM64_RELOC_PAGEOFF12
+        // nop → padding (was movk)
+        let off = site.code_offset;
+        let adrp = 0x90000010u32; // adrp x16, #0 (imm filled by linker)
+        let add = 0x91000210u32; // add x16, x16, #0 (imm filled by linker)
+        let nop = 0xD503201Fu32; // nop
+        code[off..off + 4].copy_from_slice(&adrp.to_le_bytes());
+        code[off + 4..off + 8].copy_from_slice(&add.to_le_bytes());
+        code[off + 8..off + 12].copy_from_slice(&nop.to_le_bytes());
+        intrinsic_relocs.push((off, sym_id));
+    }
+
+    // Add .text section with (possibly patched) JIT code
     let text_section = obj.section_id(object::write::StandardSection::Text);
-    obj.append_section_data(text_section, input.code, 16);
+    obj.append_section_data(text_section, &code, 16);
+
+    // Add relocations for intrinsic call sites
+    for &(off, sym_id) in &intrinsic_relocs {
+        // ADRP relocation (page-relative, 21-bit)
+        obj.add_relocation(
+            text_section,
+            Relocation {
+                offset: off as u64,
+                symbol: sym_id,
+                flags: RelocationFlags::MachO {
+                    r_type: object::macho::ARM64_RELOC_PAGE21,
+                    r_pcrel: true,
+                    r_length: 2,
+                },
+                addend: 0,
+            },
+        )
+        .expect("adrp relocation");
+
+        // ADD relocation (page offset, 12-bit)
+        obj.add_relocation(
+            text_section,
+            Relocation {
+                offset: (off + 4) as u64,
+                symbol: sym_id,
+                flags: RelocationFlags::MachO {
+                    r_type: object::macho::ARM64_RELOC_PAGEOFF12,
+                    r_pcrel: false,
+                    r_length: 2,
+                },
+                addend: 0,
+            },
+        )
+        .expect("add relocation");
+    }
 
     // Add the entry point symbol (global, so the C harness can call it)
     let symbol_name = input.function_name.to_string();
@@ -311,14 +397,27 @@ fn write_c_harness(input: &HarnessInput, path: &Path) -> Result<(), HarnessError
 
 // DeserContext — must match kajit::context::DeserContext layout
 typedef struct {{
-    const uint8_t *cursor;
-    const uint8_t *end;
-    uint8_t *out_ptr;
-    struct {{
+    const uint8_t *cursor;   // input_ptr
+    const uint8_t *end;      // input_end
+    struct {{                 // error (ErrorSlot)
         uint32_t code;
         uint32_t offset;
     }} error;
+    uint8_t *key_scratch_ptr;
+    size_t key_scratch_cap;
+    uint8_t trusted_utf8;    // bool
 }} DeserContext;
+
+// Intrinsic implementations (called by JIT code)
+uint8_t *kajit_alloc_persistent(DeserContext *ctx, size_t size, size_t align) {{
+    if (size == 0) return NULL;
+    void *buf;
+    if (posix_memalign(&buf, align < sizeof(void*) ? sizeof(void*) : align, size) != 0) {{
+        ctx->error.code = 7; // AllocError
+        return NULL;
+    }}
+    return (uint8_t *)buf;
+}}
 
 // The JIT-compiled decoder function (linked from the .o file)
 extern void {func_name}(uint8_t *output, DeserContext *ctx);
@@ -361,7 +460,6 @@ int main(int argc, char **argv) {{
     memset(&ctx, 0, sizeof(ctx));
     ctx.cursor = input;
     ctx.end = input + input_len;
-    ctx.out_ptr = output;
 
     // Call the JIT decoder
     {func_name}(output, &ctx);

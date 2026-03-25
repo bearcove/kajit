@@ -10,6 +10,15 @@ use crate::ir_backend::LinearBackendResult;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use std::collections::HashMap;
 
+/// Recorded intrinsic call site for harness relocation.
+#[derive(Debug, Clone)]
+pub struct IntrinsicCallSiteInfo {
+    /// Offset in the code buffer of the first `movz` instruction.
+    pub code_offset: usize,
+    /// The intrinsic function pointer (for looking up the symbol name).
+    pub func: kajit_ir::IntrinsicFn,
+}
+
 /// Context for emitting a single function.
 struct EmitContext<'a> {
     ectx: &'a mut EmitCtx,
@@ -23,6 +32,8 @@ struct EmitContext<'a> {
     const_values: HashMap<kajit_ir::VReg, u64>,
     /// OpId → DWARF line number (for source-level debugging)
     line_map: HashMap<cfg_mir::OpId, u32>,
+    /// Recorded intrinsic call sites for harness relocation.
+    intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
 }
 
 impl<'a> EmitContext<'a> {
@@ -772,8 +783,13 @@ impl<'a> EmitContext<'a> {
             .expect("mov ctx");
 
         // Load function pointer and call
+        let call_site_offset = self.ectx.emit.code_len();
         self.emit_load_u64(Reg::X16, func.0 as u64);
         self.ectx.emit.emit_blr(Reg::X16).expect("blr");
+        self.intrinsic_call_sites.push(IntrinsicCallSiteInfo {
+            code_offset: call_site_offset,
+            func,
+        });
 
         // Restore out_ptr
         if let Some(off) = field_offset {
@@ -827,8 +843,13 @@ impl<'a> EmitContext<'a> {
         }
 
         // Load function pointer and call
+        let call_site_offset = self.ectx.emit.code_len();
         self.emit_load_u64(Reg::X16, func.0 as u64);
         self.ectx.emit.emit_blr(Reg::X16).expect("blr");
+        self.intrinsic_call_sites.push(IntrinsicCallSiteInfo {
+            code_offset: call_site_offset,
+            func,
+        });
 
         // Store result (return value is in x0)
         self.store_to_vreg(dst, Reg::X0);
@@ -1013,6 +1034,28 @@ impl<'a> EmitContext<'a> {
     }
 }
 
+/// Compute the base frame offset for spill slots (past callee-saved register save area).
+/// Used by the lockstep debugger to read spilled vregs from the JIT's stack.
+pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
+    let extra_saved_pairs = regalloc3_extra_saved_pairs(alloc);
+    let is_leaf = alloc.cfg_program.funcs.iter().all(|func| {
+        func.insts.iter().all(|inst| {
+            !matches!(
+                inst.op,
+                LinearOp::CallIntrinsic { .. }
+                    | LinearOp::CallPure { .. }
+                    | LinearOp::CallLambda { .. }
+            )
+        })
+    });
+    let base = if is_leaf {
+        crate::arch::LEAF_BASE_FRAME
+    } else {
+        crate::arch::BASE_FRAME
+    };
+    base + extra_saved_pairs * 16
+}
+
 /// Compile CFG-MIR with regalloc3 allocations to aarch64 machine code.
 pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult {
     let program = &alloc.cfg_program;
@@ -1052,6 +1095,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     let success_exit = ectx.new_label();
 
     // Compile first function
+    let mut intrinsic_call_sites = Vec::new();
     if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
         // Build constant value map for immediate folding
         let mut const_values = HashMap::new();
@@ -1079,9 +1123,11 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             slot_base,
             const_values,
             line_map,
+            intrinsic_call_sites: Vec::new(),
         };
 
         ctx.emit_function();
+        intrinsic_call_sites = ctx.intrinsic_call_sites.clone();
     }
 
     // Bind success exit and emit epilogue
@@ -1102,6 +1148,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         },
         backend_debug_info: None,
         asm_program,
+        intrinsic_call_sites,
     }
 }
 

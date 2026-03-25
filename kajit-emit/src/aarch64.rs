@@ -354,6 +354,11 @@ impl Emitter {
         Self::default()
     }
 
+    /// Current code buffer length (offset of next emitted instruction).
+    pub fn code_len(&self) -> usize {
+        self.buf.len()
+    }
+
     /// Enable instruction capture for assembly dump/parse workflow
     pub fn enable_capture(&mut self) {
         self.captured_instructions = Some(Vec::new());

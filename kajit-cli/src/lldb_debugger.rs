@@ -93,6 +93,27 @@ impl JitDebugger for LldbJitDebugger {
             return Err(DebugError::ProcessExited(self.process.exit_status()));
         }
 
+        // Check for signal (SIGSEGV, SIGBUS, SIGABRT, etc.)
+        let stop_reason = thread.stop_reason();
+        if stop_reason == lldb::StopReason::Signal || stop_reason == lldb::StopReason::Exception {
+            self.exited = true;
+            // On macOS, Mach exceptions map to Unix signals. The exit status
+            // encodes the signal number when the process is killed.
+            let status = self.process.exit_status();
+            // If process is still alive (stopped on signal), use stop info
+            let sig = if self.process.is_alive() {
+                // LLDB exposes signal via stop description; approximate from exception type
+                match stop_reason {
+                    lldb::StopReason::Signal => status,
+                    lldb::StopReason::Exception => 11, // SIGSEGV is most common
+                    _ => status,
+                }
+            } else {
+                status
+            };
+            return Err(DebugError::ProcessSignaled(sig));
+        }
+
         // Check if we stepped out of the function
         let frame = thread.selected_frame();
         let line = frame.line_entry().map(|le| le.line()).unwrap_or(0);

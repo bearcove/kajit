@@ -188,6 +188,7 @@ pub(crate) fn materialize_backend_result(
         source_map,
         backend_debug_info,
         asm_program,
+        intrinsic_call_sites: _,
     } = result;
     (
         buf,
@@ -235,6 +236,9 @@ pub struct PipelineArtifacts {
     pub asm_text: String,
     /// VReg → physical location map (for lockstep debugger)
     pub alloc_map: crate::harness::AllocationMap,
+    /// Intrinsic call sites in the JIT code (for harness relocation)
+    pub intrinsic_call_sites:
+        Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
     /// The post-optimization CFG-MIR program (same one the JIT compiled).
     /// Used by the lockstep debugger to run the interpreter on the exact same IR.
     pub cfg_program: kajit_mir::cfg_mir::Program,
@@ -285,13 +289,15 @@ pub fn compile_pipeline(
     let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
+    let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&ra3_alloc);
     let alloc_map = ra3_alloc
         .functions
         .first()
-        .map(|f| crate::harness::AllocationMap::from_regalloc3(f))
+        .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
         .unwrap_or_default();
 
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
+    let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
         materialize_backend_result(result);
 
@@ -327,6 +333,7 @@ pub fn compile_pipeline(
         cfg_canonical_text: String::new(),
         asm_text,
         alloc_map,
+        intrinsic_call_sites,
         cfg_program: ra3_alloc.cfg_program.clone(),
         decoder,
     }

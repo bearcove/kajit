@@ -59,7 +59,10 @@ pub trait JitDebugger {
 
 #[derive(Debug)]
 pub enum DebugError {
+    /// Process exited normally with exit code.
     ProcessExited(i32),
+    /// Process killed by signal (SIGSEGV=11, SIGBUS=10, SIGABRT=6, etc.)
+    ProcessSignaled(i32),
     LldbError(String),
     Io(std::io::Error),
 }
@@ -68,6 +71,15 @@ impl std::fmt::Display for DebugError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DebugError::ProcessExited(code) => write!(f, "process exited with code {code}"),
+            DebugError::ProcessSignaled(sig) => {
+                let name = match sig {
+                    6 => "SIGABRT",
+                    10 => "SIGBUS",
+                    11 => "SIGSEGV",
+                    _ => "unknown",
+                };
+                write!(f, "process killed by signal {sig} ({name})")
+            }
             DebugError::LldbError(msg) => write!(f, "lldb: {msg}"),
             DebugError::Io(e) => write!(f, "io: {e}"),
         }
@@ -162,44 +174,31 @@ pub fn run_lockstep(
         // Step JIT one source line
         let dwarf_line = match debugger.step_to_next_source_line() {
             Ok(line) => line,
-            Err(DebugError::ProcessExited(_)) => {
-                // JIT exited — run interpreter to completion and compare
-                let mut interp_steps = 0;
-                loop {
-                    let ev = session
-                        .step_forward()
-                        .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
-                    interp_steps += 1;
-                    if ev.returned || interp_steps > 10000 {
-                        break;
-                    }
-                }
-                let final_state = session.state();
-                if !final_state.returned {
-                    let source_line = format!(
-                        "JIT exited after {} steps but interpreter did not return ({} extra steps, halted={})",
-                        jit_steps, interp_steps, final_state.halted
-                    );
-                    return Ok(LockstepResult {
-                        steps: jit_steps,
-                        divergence: Some(Divergence {
-                            step: jit_steps,
-                            dwarf_line: prev_dwarf_line,
-                            source_line,
-                            vreg_diffs: Vec::new(),
-                        }),
-                        completed: false,
-                    });
-                }
-                eprintln!(
-                    "[lockstep] both completed: JIT in {} steps, interpreter needed {} extra steps",
-                    jit_steps, interp_steps
+            Err(DebugError::ProcessExited(code)) => {
+                return handle_jit_exit(
+                    &mut session,
+                    &op_to_line,
+                    listing_lines,
+                    jit_steps,
+                    prev_dwarf_line,
+                    &format!("exited with code {code}"),
                 );
-                return Ok(LockstepResult {
-                    steps: jit_steps,
-                    divergence: None,
-                    completed: true,
-                });
+            }
+            Err(DebugError::ProcessSignaled(sig)) => {
+                let sig_name = match sig {
+                    6 => "SIGABRT",
+                    10 => "SIGBUS",
+                    11 => "SIGSEGV",
+                    _ => "signal",
+                };
+                return handle_jit_exit(
+                    &mut session,
+                    &op_to_line,
+                    listing_lines,
+                    jit_steps,
+                    prev_dwarf_line,
+                    &format!("killed by {} (signal {})", sig_name, sig),
+                );
             }
             Err(e) => return Err(e),
         };
@@ -657,6 +656,78 @@ fn loc_to_line(
     ))
     .copied()
     .unwrap_or(0)
+}
+
+/// Handle JIT process exit: run interpreter to see how far behind it is.
+/// If the interpreter needs more steps, that's a divergence.
+fn handle_jit_exit(
+    session: &mut kajit_mir::DebuggerSession,
+    op_to_line: &std::collections::HashMap<(u32, bool, usize), u32>,
+    listing_lines: &[String],
+    jit_steps: usize,
+    last_dwarf_line: u32,
+    exit_reason: &str,
+) -> Result<LockstepResult, DebugError> {
+    let mut interp_steps = 0;
+    loop {
+        let ev = session
+            .step_forward()
+            .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+        interp_steps += 1;
+        if ev.returned || interp_steps > 10000 {
+            break;
+        }
+    }
+    let final_state = session.state();
+    let interp_loc = final_state.location;
+    let interp_line = loc_to_line(op_to_line, &interp_loc);
+
+    let line_text = |n: u32| -> String {
+        if n > 0 && (n as usize) <= listing_lines.len() {
+            listing_lines[n as usize - 1].clone()
+        } else {
+            format!("<line {n}>")
+        }
+    };
+
+    // If interpreter also returned quickly (≤2 extra steps), it's a genuine match
+    if final_state.returned && interp_steps <= 2 {
+        eprintln!(
+            "[lockstep] both completed: JIT {} after {} steps, interpreter needed {} extra steps",
+            exit_reason, jit_steps, interp_steps
+        );
+        return Ok(LockstepResult {
+            steps: jit_steps,
+            divergence: None,
+            completed: true,
+        });
+    }
+
+    // JIT exited but interpreter still had work — divergence
+    let source_line = format!(
+        "\
+JIT EARLY EXIT at step {jit_steps}
+
+  JIT {exit_reason} at line {last_dwarf_line}: {last_op}
+  interpreter needed {interp_steps} more steps (returned={returned}, at line {interp_line}: {interp_op})
+
+  The JIT exited while the interpreter still had {interp_steps} operations to execute.
+  This means the JIT skipped a section of the program (likely an entire loop body).",
+        last_op = line_text(last_dwarf_line),
+        returned = final_state.returned,
+        interp_op = line_text(interp_line),
+    );
+
+    Ok(LockstepResult {
+        steps: jit_steps,
+        divergence: Some(Divergence {
+            step: jit_steps,
+            dwarf_line: last_dwarf_line,
+            source_line,
+            vreg_diffs: Vec::new(),
+        }),
+        completed: false,
+    })
 }
 
 /// Read a vreg's value from the JIT process.
