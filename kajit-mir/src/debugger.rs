@@ -482,8 +482,12 @@ impl DebuggerSession {
                 }
             }
             LinearOp::LoadFromAddr { dst, addr, width } => {
-                // addr is cursor-relative (input pointer)
-                let addr_val = self.read_vreg(addr.index()) as usize;
+                let raw_addr = self.read_vreg(addr.index()) as usize;
+                // Convert raw pointer to input index if using pointer-mode addresses
+                let addr_val = match self.input_base_addr {
+                    Some(base) => raw_addr.wrapping_sub(base as usize),
+                    None => raw_addr,
+                };
                 let width = width.bytes() as usize;
                 if addr_val + width <= self.input.len() {
                     let mut value = 0u64;

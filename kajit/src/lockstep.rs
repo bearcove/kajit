@@ -116,20 +116,21 @@ pub fn run_lockstep(
 
     // Build bidirectional mapping: DWARF line ↔ (block, inst_index, is_term)
     let func = &program.funcs[0];
-    let mut op_to_line: std::collections::HashMap<
-        (u32, usize, bool), // (block_index, inst_index, is_term)
-        u32,
-    > = std::collections::HashMap::new();
+    // Map (block_id, is_terminator, inst_index_if_not_term) → DWARF line
+    // For terminators, inst_index doesn't matter — we key by (block, true, 0)
+    let mut op_to_line: std::collections::HashMap<(u32, bool, usize), u32> =
+        std::collections::HashMap::new();
     let mut next_line = 1u32;
     for block in &func.blocks {
         if block.dead {
             continue;
         }
         for (inst_idx, _) in block.insts.iter().enumerate() {
-            op_to_line.insert((block.id.0, inst_idx, false), next_line);
+            op_to_line.insert((block.id.0, false, inst_idx), next_line);
             next_line += 1;
         }
-        op_to_line.insert((block.id.0, 0, true), next_line);
+        // Terminator: key with is_term=true, inst_idx=0 (ignored)
+        op_to_line.insert((block.id.0, true, 0), next_line);
         next_line += 1;
     }
 
@@ -175,130 +176,106 @@ pub fn run_lockstep(
         let executed_line = prev_dwarf_line;
         prev_dwarf_line = dwarf_line;
 
-        // Step interpreter until it executes the op at `executed_line`.
-        // We compute the interpreter's current DWARF line from its location,
-        // and keep stepping until it matches.
+        // Step interpreter to the executed line. Track where it actually goes.
         let mut last_event = None;
+        let mut interp_line = 0u32;
         for _ in 0..1000 {
             let event = session
                 .step_forward()
                 .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
 
-            if event.returned {
-                eprintln!("[lockstep] interpreter returned while syncing");
-                return Ok(LockstepResult {
-                    steps: jit_steps,
-                    divergence: None,
-                    completed: true,
-                });
-            }
-
-            // What DWARF line does this interpreter op correspond to?
             let loc = &event.location_before;
-            let interp_line = op_to_line
-                .get(&(loc.block.0, loc.next_inst_index, loc.at_terminator))
+            interp_line = op_to_line
+                .get(&(
+                    loc.block.0,
+                    loc.at_terminator,
+                    if loc.at_terminator {
+                        0
+                    } else {
+                        loc.next_inst_index
+                    },
+                ))
                 .copied()
                 .unwrap_or(0);
 
-            last_event = Some(event);
+            last_event = Some(event.clone());
 
-            if interp_line == executed_line {
-                break; // synced!
+            if event.returned || interp_line == executed_line {
+                break;
             }
         }
 
-        let Some(event) = last_event else {
-            continue;
-        };
-
+        let Some(event) = last_event else { continue };
         let state = session.state();
         let func = &program.funcs[0];
         let loc = &event.location_before;
-        let interp_line = op_to_line
-            .get(&(loc.block.0, loc.next_inst_index, loc.at_terminator))
-            .copied()
-            .unwrap_or(0);
         let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, loc);
 
-        eprintln!(
-            "[lockstep] exec line {executed_line}: b{} inst[{}] term={} def={:?}",
-            loc.block.index(),
-            loc.next_inst_index,
-            loc.at_terminator,
-            def_vreg.map(|v| v.index())
-        );
-        if interp_line != executed_line {
-            eprintln!(
-                "[lockstep] SYNC MISMATCH: interp at line {interp_line}, expected {executed_line} (b{} inst[{}] term={})",
-                loc.block.index(),
-                loc.next_inst_index,
-                loc.at_terminator
-            );
-        }
+        // After stepping, check where BOTH sides ended up NEXT.
+        // The JIT is now at `dwarf_line`. The interpreter is at its next op.
+        // If these don't match, we have a CONTROL FLOW DIVERGENCE.
+        let interp_next_loc = session.state().location;
+        let interp_next_line = op_to_line
+            .get(&(
+                interp_next_loc.block.0,
+                interp_next_loc.at_terminator,
+                if interp_next_loc.at_terminator {
+                    0
+                } else {
+                    interp_next_loc.next_inst_index
+                },
+            ))
+            .copied()
+            .unwrap_or(0);
 
-        // Compare the defined vreg
-        let Some(dst) = def_vreg else {
-            continue; // terminator or side-effect op
-        };
+        if interp_next_line != dwarf_line && !state.returned && dwarf_line != 0 {
+            // CONTROL FLOW DIVERGENCE
+            let jit_pc = debugger.read_pc()?;
 
-        let dst_idx = dst.index() as u32;
-        let Some(location) = alloc_map.locations.get(&dst_idx) else {
-            continue;
-        };
-
-        let interp_value = if dst.index() < state.vregs.len() {
-            state.vregs[dst.index()]
-        } else {
-            continue;
-        };
-
-        let sp = debugger.read_sp()?;
-        let jit_value = read_vreg_from_jit(debugger, location, sp)?;
-
-        if jit_value == Some(interp_value) {
-            let reg_name = match location {
-                VRegLocation::Register(p) => AllocationMap::reg_name(*p),
-                _ => "stk",
-            };
-            eprintln!(
-                "[lockstep] line {executed_line}: v{}({}) = {} OK",
-                dst_idx, reg_name, interp_value
-            );
-        } else {
-            // DIVERGENCE — build report with context
-            let mut vreg_diffs = vec![VRegDiff {
-                vreg_index: dst_idx,
-                interpreter_value: interp_value,
-                jit_value,
-                jit_location: location.clone(),
-                matches: false,
-            }];
-
-            for use_vreg in &use_vregs {
-                let use_idx = use_vreg.index() as u32;
-                if let Some(use_loc) = alloc_map.locations.get(&use_idx) {
-                    let use_interp = if use_vreg.index() < state.vregs.len() {
-                        state.vregs[use_vreg.index()]
-                    } else {
-                        0
-                    };
-                    let use_jit = read_vreg_from_jit(debugger, use_loc, sp)?;
-                    vreg_diffs.push(VRegDiff {
-                        vreg_index: use_idx,
-                        interpreter_value: use_interp,
-                        jit_value: use_jit,
-                        jit_location: use_loc.clone(),
-                        matches: use_jit == Some(use_interp),
-                    });
-                }
-            }
-
-            let source_line =
+            let exec_source =
                 if executed_line > 0 && (executed_line as usize) <= listing_lines.len() {
                     listing_lines[executed_line as usize - 1].clone()
                 } else {
                     format!("<line {executed_line}>")
                 };
+            let jit_target = if dwarf_line > 0 && (dwarf_line as usize) <= listing_lines.len() {
+                listing_lines[dwarf_line as usize - 1].clone()
+            } else {
+                format!("<line {dwarf_line}>")
+            };
+            let interp_target =
+                if interp_next_line > 0 && (interp_next_line as usize) <= listing_lines.len() {
+                    listing_lines[interp_next_line as usize - 1].clone()
+                } else {
+                    format!("<line {interp_next_line}>")
+                };
+
+            let mut vreg_diffs = Vec::new();
+            // Show the branch condition if it was a terminator
+            if let (Some(dst), Some(location)) = (
+                def_vreg,
+                def_vreg.and_then(|d| alloc_map.locations.get(&(d.index() as u32))),
+            ) {
+                let sp = debugger.read_sp()?;
+                let interp_val = if dst.index() < state.vregs.len() {
+                    state.vregs[dst.index()]
+                } else {
+                    0
+                };
+                let jit_val = read_vreg_from_jit(debugger, location, sp)?;
+                vreg_diffs.push(VRegDiff {
+                    vreg_index: dst.index() as u32,
+                    interpreter_value: interp_val,
+                    jit_value: jit_val,
+                    jit_location: location.clone(),
+                    matches: jit_val == Some(interp_val),
+                });
+            }
+
+            let source_line = format!(
+                "CONTROL FLOW DIVERGENCE after: {}\n  JIT went to line {} (pc=0x{:x}): {}\n  Interpreter went to line {}: {}",
+                exec_source, dwarf_line, jit_pc, jit_target, interp_next_line, interp_target
+            );
 
             return Ok(LockstepResult {
                 steps: jit_steps,
@@ -310,6 +287,74 @@ pub fn run_lockstep(
                 }),
                 completed: false,
             });
+        }
+
+        // Compare the defined vreg (if any)
+        if let Some(dst) = def_vreg {
+            let dst_idx = dst.index() as u32;
+            if let Some(location) = alloc_map.locations.get(&dst_idx) {
+                let interp_value = if dst.index() < state.vregs.len() {
+                    state.vregs[dst.index()]
+                } else {
+                    continue;
+                };
+
+                let sp = debugger.read_sp()?;
+                let jit_value = read_vreg_from_jit(debugger, location, sp)?;
+
+                if jit_value != Some(interp_value) {
+                    let mut vreg_diffs = vec![VRegDiff {
+                        vreg_index: dst_idx,
+                        interpreter_value: interp_value,
+                        jit_value,
+                        jit_location: location.clone(),
+                        matches: false,
+                    }];
+                    for use_vreg in &use_vregs {
+                        let use_idx = use_vreg.index() as u32;
+                        if let Some(use_loc) = alloc_map.locations.get(&use_idx) {
+                            let use_interp = if use_vreg.index() < state.vregs.len() {
+                                state.vregs[use_vreg.index()]
+                            } else {
+                                0
+                            };
+                            let use_jit = read_vreg_from_jit(debugger, use_loc, sp)?;
+                            vreg_diffs.push(VRegDiff {
+                                vreg_index: use_idx,
+                                interpreter_value: use_interp,
+                                jit_value: use_jit,
+                                jit_location: use_loc.clone(),
+                                matches: use_jit == Some(use_interp),
+                            });
+                        }
+                    }
+                    let source_line =
+                        if executed_line > 0 && (executed_line as usize) <= listing_lines.len() {
+                            listing_lines[executed_line as usize - 1].clone()
+                        } else {
+                            format!("<line {executed_line}>")
+                        };
+                    return Ok(LockstepResult {
+                        steps: jit_steps,
+                        divergence: Some(Divergence {
+                            step: jit_steps,
+                            dwarf_line: executed_line,
+                            source_line,
+                            vreg_diffs,
+                        }),
+                        completed: false,
+                    });
+                }
+
+                let reg_name = match location {
+                    VRegLocation::Register(p) => AllocationMap::reg_name(*p),
+                    _ => "stk",
+                };
+                eprintln!(
+                    "[lockstep] line {executed_line}: v{}({}) = {} OK",
+                    dst_idx, reg_name, interp_value
+                );
+            }
         }
     }
 }
