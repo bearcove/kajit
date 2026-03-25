@@ -233,6 +233,9 @@ pub struct PipelineArtifacts {
     pub asm_text: String,
     /// VReg → physical location map (for lockstep debugger)
     pub alloc_map: crate::harness::AllocationMap,
+    /// The post-optimization CFG-MIR program (same one the JIT compiled).
+    /// Used by the lockstep debugger to run the interpreter on the exact same IR.
+    pub cfg_program: kajit_mir::cfg_mir::Program,
     /// The compiled decoder (ready to execute)
     pub decoder: CompiledDecoder,
 }
@@ -314,6 +317,7 @@ pub fn compile_pipeline(
         cfg_canonical_text: String::new(),
         asm_text,
         alloc_map,
+        cfg_program: cfg_program.clone(),
         decoder,
     }
 }

@@ -587,10 +587,6 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
             std::process::exit(1);
         });
 
-    // Phase 2: Get the pre-opt CFG for the interpreter
-    eprintln!("[debug-diff] getting pre-opt CFG for interpreter...");
-    let pre_opt_cfg = kajit::compile_pre_opt_cfg(shape, kind, &pipeline_opts);
-
     // Phase 3: Launch LLDB on the harness (dSYM auto-discovered)
     eprintln!("[debug-diff] launching LLDB on {}...", exe_path.display());
     let mut debugger =
@@ -610,7 +606,7 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
     );
 
     let result = kajit::lockstep::run_lockstep(
-        &pre_opt_cfg,
+        &artifacts.cfg_program,
         &input,
         &artifacts.alloc_map,
         &listing_lines,
