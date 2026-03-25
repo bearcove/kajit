@@ -257,12 +257,23 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
             );
             obj.append_section_data(sid, &dwarf.debug_abbrev, 1);
         }
+        let mut debug_aranges_section_id = None;
+        if !dwarf.debug_aranges.is_empty() {
+            let sid = obj.add_section(
+                dwarf_segment.clone(),
+                b"__debug_aranges".to_vec(),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(sid, &dwarf.debug_aranges, 1);
+            debug_aranges_section_id = Some(sid);
+        }
 
         // Add relocations so the linker/dsymutil fixes up DWARF addresses
         for (section, reloc) in &dwarf.relocations {
             let target_section = match section {
                 crate::jit_dwarf::DwarfSection::DebugInfo => debug_info_section_id,
                 crate::jit_dwarf::DwarfSection::DebugLine => debug_line_section_id,
+                crate::jit_dwarf::DwarfSection::DebugAranges => debug_aranges_section_id,
             };
             if let Some(sid) = target_section {
                 obj.add_relocation(
@@ -434,11 +445,13 @@ fn build_dsym(
 
     let mut debug_info = dwarf.debug_info.clone();
     let mut debug_line = dwarf.debug_line.clone();
+    let mut debug_aranges = dwarf.debug_aranges.clone();
 
     for (section, reloc) in &dwarf.relocations {
         let data = match section {
             crate::jit_dwarf::DwarfSection::DebugInfo => &mut debug_info,
             crate::jit_dwarf::DwarfSection::DebugLine => &mut debug_line,
+            crate::jit_dwarf::DwarfSection::DebugAranges => &mut debug_aranges,
         };
         let offset = reloc.offset as usize;
         if offset + 8 <= data.len() {
@@ -452,6 +465,7 @@ fn build_dsym(
         &debug_info,
         &debug_line,
         &dwarf.debug_abbrev,
+        &debug_aranges,
         text_vmaddr,
         text_vmsize,
         symbol_addr,
@@ -501,6 +515,7 @@ fn build_dsym_macho(
     debug_info: &[u8],
     debug_line: &[u8],
     debug_abbrev: &[u8],
+    debug_aranges: &[u8],
     text_vmaddr: u64,
     text_vmsize: u64,
     symbol_addr: u64,
@@ -516,6 +531,9 @@ fn build_dsym_macho(
         dwarf_nsects += 1;
     }
     if !debug_abbrev.is_empty() {
+        dwarf_nsects += 1;
+    }
+    if !debug_aranges.is_empty() {
         dwarf_nsects += 1;
     }
 
@@ -566,7 +584,7 @@ fn build_dsym_macho(
     let dwarf_fileoff = linkedit_fileoff + linkedit_size_aligned;
     let mut section_offsets = Vec::new();
     let mut offset = dwarf_fileoff;
-    for data in [debug_info, debug_line, debug_abbrev] {
+    for data in [debug_info, debug_line, debug_abbrev, debug_aranges] {
         if !data.is_empty() {
             section_offsets.push((offset, data.len() as u32));
             offset += data.len() as u32;
@@ -673,6 +691,9 @@ fn build_dsym_macho(
         if !debug_abbrev.is_empty() {
             names.push(b"__debug_abbrev" as &[u8]);
         }
+        if !debug_aranges.is_empty() {
+            names.push(b"__debug_aranges" as &[u8]);
+        }
         names
     };
 
@@ -713,6 +734,9 @@ fn build_dsym_macho(
     }
     if !debug_abbrev.is_empty() {
         out.extend_from_slice(debug_abbrev);
+    }
+    if !debug_aranges.is_empty() {
+        out.extend_from_slice(debug_aranges);
     }
 
     out
@@ -792,6 +816,7 @@ fn patch_object_dwarf(
         let base = match section {
             crate::jit_dwarf::DwarfSection::DebugInfo => debug_info_offset,
             crate::jit_dwarf::DwarfSection::DebugLine => debug_line_offset,
+            crate::jit_dwarf::DwarfSection::DebugAranges => None, // aranges handled by dSYM builder
         };
         let Some(base) = base else { continue };
         let offset = base as usize + reloc.offset as usize;

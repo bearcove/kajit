@@ -19,6 +19,7 @@ pub struct DwarfRelocation {
 pub enum DwarfSection {
     DebugInfo,
     DebugLine,
+    DebugAranges,
 }
 
 /// Owned DWARF sections ready to be attached to the JIT ELF.
@@ -27,6 +28,7 @@ pub struct JitDwarfSections {
     pub debug_line: Vec<u8>,
     pub debug_abbrev: Vec<u8>,
     pub debug_info: Vec<u8>,
+    pub debug_aranges: Vec<u8>,
     pub debug_loc: Vec<u8>,
     pub debug_ranges: Vec<u8>,
     /// Relocations needed for standalone binaries (code_address=0).
@@ -313,14 +315,73 @@ pub fn build_jit_dwarf_sections_from_debug_info(
         Vec::new()
     };
 
+    // Build .debug_aranges: maps address ranges to compile units
+    let (debug_aranges, aranges_relocs) =
+        build_debug_aranges(debug_info.code_address, debug_info.code_size);
+
+    let mut relocations = relocations;
+    relocations.extend(aranges_relocs);
+
     Ok(JitDwarfSections {
         debug_line,
         debug_abbrev: build_debug_abbrev_section(),
         debug_info: debug_info_section,
+        debug_aranges,
         debug_loc,
         debug_ranges,
         relocations,
     })
+}
+
+/// Build .debug_aranges section.
+///
+/// Maps one address range (the entire CU) to CU offset 0 in .debug_info.
+/// Format: DWARF32 header + one (address, length) pair + terminator.
+fn build_debug_aranges(
+    code_address: u64,
+    code_size: u64,
+) -> (Vec<u8>, Vec<(DwarfSection, DwarfRelocation)>) {
+    let mut out = Vec::new();
+    let mut relocs = Vec::new();
+
+    // Header (fixed size for DWARF32 + 8-byte addresses)
+    // length: will fill in at the end
+    let length_pos = out.len();
+    out.extend_from_slice(&0u32.to_le_bytes()); // unit_length (placeholder)
+    out.extend_from_slice(&2u16.to_le_bytes()); // version
+    out.extend_from_slice(&0u32.to_le_bytes()); // debug_info_offset (CU at offset 0)
+    out.push(8); // address_size
+    out.push(0); // segment_selector_size
+
+    // Pad to 2*address_size alignment (16 bytes from start of header)
+    // Header so far: 4 + 2 + 4 + 1 + 1 = 12 bytes. Need to align to 16.
+    out.extend_from_slice(&0u32.to_le_bytes()); // 4 bytes padding → 16
+
+    // One address range entry: (address, length)
+    let addr_offset = out.len();
+    out.extend_from_slice(&code_address.to_le_bytes()); // start address
+    out.extend_from_slice(&code_size.to_le_bytes()); // length
+
+    // Terminator: (0, 0)
+    out.extend_from_slice(&0u64.to_le_bytes());
+    out.extend_from_slice(&0u64.to_le_bytes());
+
+    // Fill in unit_length (everything after the initial 4-byte length field)
+    let unit_length = (out.len() - 4) as u32;
+    out[length_pos..length_pos + 4].copy_from_slice(&unit_length.to_le_bytes());
+
+    // Add relocation for the address field (if code_address=0)
+    if code_address == 0 {
+        relocs.push((
+            DwarfSection::DebugAranges,
+            DwarfRelocation {
+                offset: addr_offset as u32,
+                addend: 0,
+            },
+        ));
+    }
+
+    (out, relocs)
 }
 
 /// Compute DWARF relocation offsets for a standalone binary.
