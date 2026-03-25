@@ -13,7 +13,7 @@ members = [
   "kajit-ir-text",
   "kajit-lir",
   "kajit-mir",
-  "kajit-mir-mcp",
+  "kajit-cli",
   "kajit-mir-text",
   "kajit-parse-util",
   "xtask",

@@ -982,8 +982,8 @@ mod tests {
 
 fn install() {
     let root = workspace_root();
-    let package = "kajit-mir-mcp";
-    let binary = platform_binary_name(package);
+    let package = "kajit-cli";
+    let binary = platform_binary_name("kajit");
 
     println!("building {package} in release mode...");
     let status = Command::new("cargo")
@@ -1129,8 +1129,8 @@ fn print_mcp_setup_instructions(installed_binary: &Path) {
     let binary = installed_binary.display();
     println!();
     println!("MCP setup (copy/paste):");
-    println!("  codex  => codex mcp add kajit-mir -- {binary}");
-    println!("  claude => claude mcp add --transport stdio kajit-mir -- {binary}");
+    println!("  codex  => codex mcp add kajit-mir -- {binary} mcp");
+    println!("  claude => claude mcp add --transport stdio kajit-mir -- {binary} mcp");
     println!();
     println!("After adding, restart the client so it picks up the new MCP server.");
 }

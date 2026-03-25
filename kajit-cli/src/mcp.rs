@@ -612,22 +612,14 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == "--real") {
-        // Real mode: run the actual MCP server
-        if let Err(error) = run().await {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-    } else {
-        // Proxy mode: spawn --real subprocess and forward stdin/stdout
-        if let Err(error) = run_proxy().await {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
-    }
+/// Run the MCP server (real mode — handles MCP protocol directly).
+pub async fn run_real() -> Result<(), String> {
+    run().await
+}
+
+/// Run the MCP proxy (spawns --real subprocess, forwards stdin/stdout).
+pub async fn run_mcp_proxy() -> Result<(), String> {
+    run_proxy().await
 }
 
 /// Proxy mode: spawn the real MCP server as a subprocess and forward
@@ -641,7 +633,7 @@ async fn run_proxy() -> Result<(), String> {
 
     loop {
         let mut child = Command::new(&exe)
-            .arg("--real")
+            .args(["mcp", "--real"])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit())

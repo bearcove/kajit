@@ -1,7 +1,11 @@
 [package]
-name = "kajit-mir-mcp"
+name = "kajit-cli"
 version = "0.1.0"
 edition = "2024"
+
+[[bin]]
+name = "kajit"
+path = "src/main.rs"
 
 [package.metadata]
 
@@ -9,8 +13,12 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
+kajit-ir = { path = "../kajit-ir" }
+kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
+facet = "0.44"
+figue = "2"
 rust-mcp-sdk = { version = "0.8", default-features = false, features = [
   "stdio",
   "server",
