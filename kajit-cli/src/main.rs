@@ -1,3 +1,4 @@
+mod lldb_debugger;
 mod mcp;
 
 use facet::Facet;
@@ -53,6 +54,21 @@ enum Command {
         #[facet(args::named, default)]
         reduce: Option<String>,
     },
+
+    /// Lockstep differential debugger: step interpreter + LLDB in parallel
+    DebugDiff {
+        /// Format: postcard or json
+        #[facet(args::positional)]
+        format: String,
+
+        /// Type to compile (e.g. u32, Vec<u8>, MyStruct)
+        #[facet(args::positional)]
+        ty: String,
+
+        /// Input bytes as hex string
+        #[facet(args::positional)]
+        input_hex: String,
+    },
 }
 
 fn main() {
@@ -91,6 +107,13 @@ fn main() {
                     input.as_deref(),
                 );
             }
+        }
+        Command::DebugDiff {
+            format,
+            ty,
+            input_hex,
+        } => {
+            cmd_debug_diff(&format, &ty, &input_hex);
         }
     }
 }
@@ -520,6 +543,87 @@ fn make_test_input(format: &str, ty: &str) -> Vec<u8> {
         },
         _ => vec![0x80, 0x01],
     }
+}
+
+// ─── debug-diff: lockstep differential debugger ──────────────────────────────
+
+fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
+    let kind = match format {
+        "postcard" => kajit::DecoderKind::Postcard,
+        "json" => kajit::DecoderKind::Json,
+        other => {
+            eprintln!("error: unknown format '{other}'");
+            std::process::exit(1);
+        }
+    };
+
+    let shape = resolve_shape(ty);
+    let pipeline_opts = kajit::PipelineOptions::from_env();
+
+    // Phase 1: Compile and generate harness
+    eprintln!("[debug-diff] compiling {format} {ty}...");
+    let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
+
+    let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
+    let output_dir = std::path::PathBuf::from("/tmp/kajit-harness");
+    let base_name = format!("harness_{format}_{ty}");
+    let listing_path = output_dir.join(format!("{base_name}.cfg-mir"));
+
+    let dwarf = artifacts.decoder.build_standalone_dwarf(&listing_path);
+
+    let harness_input = kajit::harness::HarnessInput {
+        code: artifacts.decoder.code(),
+        entry_offset: artifacts.decoder.entry_offset(),
+        output_size,
+        dwarf,
+        cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
+        function_name: "kajit_decode",
+        alloc_map: Some(&artifacts.alloc_map),
+    };
+
+    let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)
+        .unwrap_or_else(|e| {
+            eprintln!("error generating harness: {e}");
+            std::process::exit(1);
+        });
+
+    // Phase 2: Get the pre-opt CFG for the interpreter
+    eprintln!("[debug-diff] getting pre-opt CFG for interpreter...");
+    let pre_opt_cfg = kajit::compile_pre_opt_cfg(shape, kind, &pipeline_opts);
+
+    // Phase 3: Launch LLDB on the harness
+    eprintln!("[debug-diff] launching LLDB on {}...", exe_path.display());
+    let mut debugger =
+        lldb_debugger::LldbJitDebugger::launch(exe_path.to_str().unwrap(), input_hex)
+            .unwrap_or_else(|e| {
+                eprintln!("error launching LLDB: {e}");
+                std::process::exit(1);
+            });
+
+    // Phase 4: Run lockstep
+    let listing_lines: Vec<String> = artifacts.decoder.cfg_mir_lines().iter().cloned().collect();
+
+    let input = parse_hex(input_hex);
+    eprintln!(
+        "[debug-diff] running lockstep (input: {} bytes)...\n",
+        input.len()
+    );
+
+    let result = kajit::lockstep::run_lockstep(
+        &pre_opt_cfg,
+        &input,
+        &artifacts.alloc_map,
+        &listing_lines,
+        &mut debugger,
+        10_000,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("error during lockstep: {e}");
+        std::process::exit(1);
+    });
+
+    // Phase 5: Print result
+    print!("{}", kajit::lockstep::format_result(&result));
 }
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

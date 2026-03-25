@@ -238,6 +238,14 @@ impl SBTarget {
         unsafe { sys::SBTargetDeleteAllBreakpoints(self.raw) };
     }
 
+    /// Create a breakpoint by function name.
+    pub fn breakpoint_create_by_name(&self, name: &str) -> SBBreakpoint {
+        let name = CString::new(name).unwrap();
+        SBBreakpoint::wrap(unsafe {
+            sys::SBTargetBreakpointCreateByName(self.raw, name.as_ptr(), std::ptr::null())
+        })
+    }
+
     #[allow(missing_docs)]
     pub fn breakpoint_create_by_location(&self, file: &str, line: u32) -> SBBreakpoint {
         let file = CString::new(file).unwrap();

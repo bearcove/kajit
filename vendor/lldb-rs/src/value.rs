@@ -93,6 +93,11 @@ impl SBValue {
         unsafe { self.check_null_ptr(sys::SBValueGetValue(self.raw)) }
     }
 
+    /// Get the value as an unsigned 64-bit integer.
+    pub fn value_as_unsigned(&self, fail_value: u64) -> u64 {
+        unsafe { sys::SBValueGetValueAsUnsigned2(self.raw, fail_value) }
+    }
+
     #[allow(missing_docs)]
     pub fn set_value_from_cstring(&self, val: &str) -> Result<(), SBError> {
         let error = SBError::default();
