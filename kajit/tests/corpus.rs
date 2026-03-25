@@ -798,10 +798,9 @@ where
                 };
                 show("  JIT output", &raw_bytes);
                 show("  expected  ", &expected_bytes);
-                panic!(
-                    "JIT raw output differs from expected at byte offset {} (of {})",
-                    first_diff, output_size
-                );
+                // Don't panic here — pointer fields (String, Vec) will naturally differ
+                // between serde-deserialized and JIT-deserialized values. The typed
+                // assert_eq below is the authoritative check.
             }
         }
     }

@@ -50,6 +50,13 @@ pub fn allocate(
     }
     let k = allocatable.len();
 
+    // Count callee-saved registers (survive calls)
+    let callee_saved_set: HashSet<PReg> = abi.callee_saved_gpr.iter().copied().collect();
+    let k_callee_saved = allocatable
+        .iter()
+        .filter(|p| callee_saved_set.contains(p))
+        .count();
+
     // Build def-site map: vreg → (block, inst_index_in_block)
     // Also build next-use-distance info per block
     let mut def_block: HashMap<VReg, BlockId> = HashMap::new();
@@ -71,10 +78,17 @@ pub fn allocate(
     }
 
     // Phase 1: Spill — reduce max pressure at every point to ≤ k
-    let spilled = spill_phase(func, liveness, &dom, &loop_info, hints, k);
+    let spilled = spill_phase(func, liveness, &dom, &loop_info, hints, k, k_callee_saved);
 
     // Phase 2: Color — domtree preorder walk, assign colors
-    let coloring = color_phase(func, liveness, &dom, &spilled, &allocatable);
+    let coloring = color_phase(
+        func,
+        liveness,
+        &dom,
+        &spilled,
+        &allocatable,
+        &callee_saved_set,
+    );
 
     if std::env::var("KAJIT_RA_DEBUG").is_ok() {
         eprintln!(
@@ -147,6 +161,7 @@ fn spill_phase(
     loop_info: &LoopInfo,
     hints: &HintMap,
     k: usize,
+    k_callee_saved: usize,
 ) -> HashSet<VReg> {
     let mut spilled = HashSet::new();
 
@@ -215,6 +230,32 @@ fn spill_phase(
                     live.remove(&victim);
                 } else {
                     break;
+                }
+            }
+
+            // Call clobber handling: if this instruction clobbers caller-saved GPRs,
+            // values that are live PAST the call can only use callee-saved registers.
+            // Reduce effective capacity to k_callee_saved and spill excess.
+            if inst.clobbers.caller_saved_gpr {
+                // Values live across the call = values in `live` that are NOT
+                // solely consumed by this instruction (i.e., they have uses after this point).
+                // Conservatively: anything still in `live` after processing uses/defs
+                // is live across the call.
+                while live.len() > k_callee_saved {
+                    let victim = pick_spill_victim(
+                        &live,
+                        &next_uses,
+                        block.id,
+                        inst_idx + 1,
+                        hints,
+                        loop_info,
+                    );
+                    if let Some(victim) = victim {
+                        spilled.insert(victim);
+                        live.remove(&victim);
+                    } else {
+                        break;
+                    }
                 }
             }
         }
@@ -345,11 +386,90 @@ fn color_phase(
     dom: &DominanceInfo,
     spilled: &HashSet<VReg>,
     allocatable: &[PReg],
+    callee_saved_set: &HashSet<PReg>,
 ) -> HashMap<VReg, PReg> {
     let mut coloring: HashMap<VReg, PReg> = HashMap::new();
 
     // Walk domtree in preorder
     let preorder = domtree_preorder(func.entry, dom);
+
+    // Pre-compute: which vregs are "live across a clobbering instruction" in each block.
+    // These vregs MUST be assigned callee-saved registers (or spilled).
+    let mut live_across_call: HashSet<VReg> = HashSet::new();
+    for block in &func.blocks {
+        if block.dead {
+            continue;
+        }
+        // Find clobbering instructions in this block
+        for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
+            let inst = &func.insts[inst_id.0 as usize];
+            if !inst.clobbers.caller_saved_gpr {
+                continue;
+            }
+            // Any vreg that is (a) live-in to this block or defined before this inst,
+            // AND (b) has a use after this inst in this block or is live-out,
+            // is live across the call.
+            //
+            // Collect uses of this instruction (they're consumed AT the call, not after)
+            let mut call_uses: HashSet<VReg> = HashSet::new();
+            inst.op.for_each_use(|src| {
+                call_uses.insert(*src);
+            });
+
+            // Check all vregs that MIGHT be live at this point
+            let live_in = liveness.live_in.get(&block.id);
+            let live_out = liveness.live_out.get(&block.id);
+
+            // Vregs live-in to the block
+            if let Some(live_in) = live_in {
+                for &vreg in live_in {
+                    if spilled.contains(&vreg) {
+                        continue;
+                    }
+                    // Is it used after the call (not just at the call)?
+                    let used_after = has_use_after_inst(func, block, vreg, inst_idx)
+                        || live_out.map_or(false, |lo| lo.contains(&vreg));
+                    if used_after {
+                        live_across_call.insert(vreg);
+                    }
+                }
+            }
+
+            // Block params
+            for &param in &block.params {
+                if spilled.contains(&param) {
+                    continue;
+                }
+                let used_after = has_use_after_inst(func, block, param, inst_idx)
+                    || live_out.map_or(false, |lo| lo.contains(&param));
+                if used_after {
+                    live_across_call.insert(param);
+                }
+            }
+
+            // Vregs defined before this instruction in this block
+            for (prev_idx, &prev_inst_id) in block.insts[..inst_idx].iter().enumerate() {
+                let prev_inst = &func.insts[prev_inst_id.0 as usize];
+                prev_inst.op.for_each_def(|dst| {
+                    if spilled.contains(dst) {
+                        return;
+                    }
+                    let used_after = has_use_after_inst(func, block, *dst, inst_idx)
+                        || live_out.map_or(false, |lo| lo.contains(dst));
+                    if used_after {
+                        live_across_call.insert(*dst);
+                    }
+                });
+            }
+        }
+    }
+
+    // Build callee-saved-only allocatable list
+    let callee_saved_allocatable: Vec<PReg> = allocatable
+        .iter()
+        .filter(|p| callee_saved_set.contains(p))
+        .copied()
+        .collect();
 
     // Pre-compute: for each (block, vreg), the index of the last instruction
     // that uses it in that block (including terminator and edge args).
@@ -415,7 +535,12 @@ fn color_phase(
             if spilled.contains(&param) {
                 continue;
             }
-            let color = lowest_available_color(allocatable, &occupied);
+            let pool = if live_across_call.contains(&param) {
+                &callee_saved_allocatable
+            } else {
+                allocatable
+            };
+            let color = lowest_available_color(pool, &occupied);
             if let Some(color) = color {
                 if std::env::var("KAJIT_RA_TRACE").is_ok() {
                     eprintln!(
@@ -475,26 +600,105 @@ fn color_phase(
                 if spilled.contains(dst) {
                     return;
                 }
-                let color = lowest_available_color(allocatable, &occupied);
+                // If this vreg is live across a call, only use callee-saved registers
+                let pool = if live_across_call.contains(dst) {
+                    &callee_saved_allocatable
+                } else {
+                    allocatable
+                };
+                let color = lowest_available_color(pool, &occupied);
                 if let Some(color) = color {
                     if std::env::var("KAJIT_RA_TRACE").is_ok() {
                         eprintln!(
-                            "  b{} def v{} -> p{} (freed: {:?}, occupied: {})",
+                            "  b{} def v{} -> p{} (freed: {:?}, occupied: {}, callee_only: {})",
                             block_id.0,
                             dst.index(),
                             color.0,
                             freed_debug,
-                            occupied.len()
+                            occupied.len(),
+                            live_across_call.contains(dst),
                         );
                     }
                     coloring.insert(*dst, color);
                     occupied.insert(color);
                 }
             });
+
+            // Call clobber handling: after a clobbering instruction, caller-saved
+            // registers are destroyed. Any value still live past this point that
+            // was assigned a caller-saved register has a conflict — the spill phase
+            // should have ensured this doesn't happen, but as a safety net we
+            // re-color or evict here.
+            //
+            // The correct effect: after the call, caller-saved colors are "free"
+            // (the call killed them), and only callee-saved colors of surviving
+            // live values remain occupied.
+            if inst.clobbers.caller_saved_gpr {
+                // Free all caller-saved colors from occupied set — the call killed them.
+                // Values that were using caller-saved registers and are still live
+                // should have been spilled by the spill phase. If they weren't, they're
+                // dead after this instruction (their last use was the call args).
+                let caller_saved_to_free: Vec<PReg> = occupied
+                    .iter()
+                    .filter(|p| !callee_saved_set.contains(p))
+                    .copied()
+                    .collect();
+                for preg in caller_saved_to_free {
+                    occupied.remove(&preg);
+                }
+            }
         }
     }
 
     coloring
+}
+
+/// Check if a vreg has any use strictly after `inst_idx` in the given block.
+fn has_use_after_inst(
+    func: &Function,
+    block: &cfg_mir::Block,
+    vreg: VReg,
+    inst_idx: usize,
+) -> bool {
+    // Check instructions after inst_idx
+    for &later_inst_id in &block.insts[inst_idx + 1..] {
+        let later_inst = &func.insts[later_inst_id.0 as usize];
+        let mut found = false;
+        later_inst.op.for_each_use(|src| {
+            if *src == vreg {
+                found = true;
+            }
+        });
+        if found {
+            return true;
+        }
+    }
+    // Check terminator
+    let term = &func.terms[block.term.0 as usize];
+    match term {
+        cfg_mir::Terminator::BranchIf { cond, .. }
+        | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+            if *cond == vreg {
+                return true;
+            }
+        }
+        cfg_mir::Terminator::JumpTable { predicate, .. } => {
+            if *predicate == vreg {
+                return true;
+            }
+        }
+        _ => {}
+    }
+    // Check edge args
+    for &edge_id in &block.succs {
+        let edge = &func.edges[edge_id.index()];
+        for arg in &edge.args {
+            if arg.source == vreg {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Compute domtree preorder traversal.
