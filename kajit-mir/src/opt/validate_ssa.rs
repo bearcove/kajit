@@ -118,6 +118,25 @@ pub enum SsaError {
 
     /// A vreg is live-in to entry block without being a function parameter
     EntryLivein { vreg: VReg, inst_index: usize },
+
+    /// Edge argument source vreg is not defined anywhere
+    EdgeArgSourceUndefined {
+        edge: EdgeId,
+        from: BlockId,
+        to: BlockId,
+        param_index: usize,
+        source_vreg: VReg,
+    },
+
+    /// Edge argument source vreg's definition does not dominate the edge's source block
+    EdgeArgSourceNotDominated {
+        edge: EdgeId,
+        from: BlockId,
+        to: BlockId,
+        param_index: usize,
+        source_vreg: VReg,
+        def_block: BlockId,
+    },
 }
 
 impl std::fmt::Display for SsaError {
@@ -206,6 +225,43 @@ impl std::fmt::Display for SsaError {
                     inst_index
                 )
             }
+            SsaError::EdgeArgSourceUndefined {
+                edge,
+                from,
+                to,
+                param_index,
+                source_vreg,
+            } => {
+                write!(
+                    f,
+                    "edge e{} (b{} -> b{}) param {}: source vreg v{} is not defined anywhere",
+                    edge.index(),
+                    from.index(),
+                    to.index(),
+                    param_index,
+                    source_vreg.index()
+                )
+            }
+            SsaError::EdgeArgSourceNotDominated {
+                edge,
+                from,
+                to,
+                param_index,
+                source_vreg,
+                def_block,
+            } => {
+                write!(
+                    f,
+                    "edge e{} (b{} -> b{}) param {}: source vreg v{} defined in b{} does not dominate b{}",
+                    edge.index(),
+                    from.index(),
+                    to.index(),
+                    param_index,
+                    source_vreg.index(),
+                    def_block.index(),
+                    from.index()
+                )
+            }
         }
     }
 }
@@ -240,8 +296,8 @@ pub fn validate_ssa(func: &Function) -> Result<(), Vec<SsaError>> {
     // Step 3: Check all uses
     check_uses(func, &def_map, &dom, &mut errors);
 
-    // Step 4: Check phi consistency (edge args match block params)
-    check_phi_consistency(func, &mut errors);
+    // Step 4: Check phi consistency (edge args match block params, sources defined & dominated)
+    check_phi_consistency(func, &def_map, &dom, &mut errors);
 
     // Step 5: Check entry block liveness (no live-ins except parameters)
     check_entry_liveness(func, &mut errors);
@@ -400,7 +456,12 @@ fn check_use(
 }
 
 /// Check that phi parameters (block parameters) match incoming edge arguments.
-fn check_phi_consistency(func: &Function, errors: &mut Vec<SsaError>) {
+fn check_phi_consistency(
+    func: &Function,
+    def_map: &HashMap<VReg, BlockId>,
+    dom: &DominanceInfo,
+    errors: &mut Vec<SsaError>,
+) {
     for block in &func.blocks {
         // Skip dead blocks
         if block.dead {
@@ -439,6 +500,29 @@ fn check_phi_consistency(func: &Function, errors: &mut Vec<SsaError>) {
                         to: block.id,
                         param_index: param_idx,
                         expected_param: param,
+                    });
+                }
+
+                // The edge argument's source vreg must be defined
+                if let Some(&def_block) = def_map.get(&arg.source) {
+                    // Source is defined — check it dominates the edge's source block
+                    if !dom.dominates(def_block, edge.from) {
+                        errors.push(SsaError::EdgeArgSourceNotDominated {
+                            edge: edge_id,
+                            from: edge.from,
+                            to: block.id,
+                            param_index: param_idx,
+                            source_vreg: arg.source,
+                            def_block,
+                        });
+                    }
+                } else {
+                    errors.push(SsaError::EdgeArgSourceUndefined {
+                        edge: edge_id,
+                        from: edge.from,
+                        to: block.id,
+                        param_index: param_idx,
+                        source_vreg: arg.source,
                     });
                 }
             }

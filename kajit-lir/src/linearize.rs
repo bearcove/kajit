@@ -1488,8 +1488,29 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::WriteToSlot { src, .. } => vec![*src],
         LinearOp::CallIntrinsic { args, .. } => args.clone(),
         LinearOp::CallPure { args, .. } => args.clone(),
-        LinearOp::BranchIf { cond, .. } => vec![*cond],
-        LinearOp::BranchIfZero { cond, .. } => vec![*cond],
+        LinearOp::BranchIf {
+            cond,
+            phi_args,
+            fallthrough_phi_args,
+            ..
+        } => {
+            let mut v = vec![*cond];
+            v.extend(phi_args.iter().map(|(src, _dst)| *src));
+            v.extend(fallthrough_phi_args.iter().map(|(src, _dst)| *src));
+            v
+        }
+        LinearOp::BranchIfZero {
+            cond,
+            phi_args,
+            fallthrough_phi_args,
+            ..
+        } => {
+            let mut v = vec![*cond];
+            v.extend(phi_args.iter().map(|(src, _dst)| *src));
+            v.extend(fallthrough_phi_args.iter().map(|(src, _dst)| *src));
+            v
+        }
+        LinearOp::Branch { phi_args, .. } => phi_args.iter().map(|(src, _dst)| *src).collect(),
         LinearOp::JumpTable { predicate, .. } => vec![*predicate],
         LinearOp::SimdStringScan { pos, kind } => vec![*pos, *kind],
         LinearOp::CallLambda { args, .. } => args.clone(),
@@ -1506,7 +1527,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
-        | LinearOp::Branch { .. }
         | LinearOp::ErrorExit { .. }
         | LinearOp::SimdWhitespaceSkip
         | LinearOp::FuncStart { .. } => Vec::new(),
@@ -1598,8 +1618,30 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
                 rewrite(arg, &mut resolve);
             }
         }
-        LinearOp::BranchIf { cond, .. } | LinearOp::BranchIfZero { cond, .. } => {
+        LinearOp::BranchIf {
+            cond,
+            phi_args,
+            fallthrough_phi_args,
+            ..
+        }
+        | LinearOp::BranchIfZero {
+            cond,
+            phi_args,
+            fallthrough_phi_args,
+            ..
+        } => {
             rewrite(cond, &mut resolve);
+            for (src, _dst) in phi_args.iter_mut() {
+                rewrite(src, &mut resolve);
+            }
+            for (src, _dst) in fallthrough_phi_args.iter_mut() {
+                rewrite(src, &mut resolve);
+            }
+        }
+        LinearOp::Branch { phi_args, .. } => {
+            for (src, _dst) in phi_args.iter_mut() {
+                rewrite(src, &mut resolve);
+            }
         }
         LinearOp::JumpTable { predicate, .. } => rewrite(predicate, &mut resolve),
         LinearOp::SimdStringScan { pos, kind } => {
@@ -1618,7 +1660,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
-        | LinearOp::Branch { .. }
         | LinearOp::ErrorExit { .. }
         | LinearOp::SimdWhitespaceSkip
         | LinearOp::FuncStart { .. }
