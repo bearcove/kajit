@@ -19,6 +19,7 @@ pub mod jit_dwarf;
 pub mod jit_f64;
 pub mod json_intrinsics;
 pub mod linearize;
+pub mod lockstep;
 pub mod malum;
 pub mod pipeline_opts;
 mod pow10tab;
