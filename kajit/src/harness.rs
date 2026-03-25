@@ -8,7 +8,106 @@
 //! Usage: `kajit compile postcard u32 -s harness`
 //! Produces: `harness_postcard_u32` executable + source listing
 
+use std::collections::HashMap;
 use std::path::Path;
+
+/// Where a vreg lives after register allocation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum VRegLocation {
+    /// Physical register (aarch64 GPR index: 0=x0, 1=x1, ..., 28=x28)
+    Register(u8),
+    /// Stack slot (offset from frame pointer in bytes)
+    StackSlot(u32),
+    /// Rematerializable constant (re-emitted as movz/movk, not loaded from stack)
+    Constant(u64),
+}
+
+/// Maps vreg index → physical location. Used by the lockstep debugger
+/// to read JIT register/stack state and compare with interpreter vreg values.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct AllocationMap {
+    /// vreg_index → location
+    pub locations: HashMap<u32, VRegLocation>,
+    /// Number of spill slots allocated (for computing frame size)
+    pub num_spill_slots: usize,
+}
+
+impl AllocationMap {
+    /// Build from a regalloc3 allocation result.
+    pub fn from_regalloc3(alloc: &kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3) -> Self {
+        let mut locations = HashMap::new();
+
+        for (&vreg, allocation) in &alloc.allocations {
+            match allocation {
+                kajit_mir::regalloc3::linear_scan::Allocation::Reg(preg) => {
+                    locations.insert(vreg.index() as u32, VRegLocation::Register(preg.0));
+                }
+                kajit_mir::regalloc3::linear_scan::Allocation::Spill => {
+                    // Check if it's rematerializable first
+                    if let Some(&value) = alloc.rematerializable.get(&vreg) {
+                        locations.insert(vreg.index() as u32, VRegLocation::Constant(value));
+                    } else if let Some(slot) = alloc.spill_slots.get(&vreg) {
+                        locations.insert(
+                            vreg.index() as u32,
+                            VRegLocation::StackSlot(slot.0 * 8), // each slot is 8 bytes
+                        );
+                    }
+                }
+            }
+        }
+
+        Self {
+            locations,
+            num_spill_slots: alloc.num_spillslots,
+        }
+    }
+
+    /// Write as JSON to a file.
+    pub fn write_json(&self, path: &Path) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        std::fs::write(path, json)
+    }
+
+    /// Get the aarch64 register name for a physical register index.
+    pub fn reg_name(preg: u8) -> &'static str {
+        match preg {
+            0 => "x0",
+            1 => "x1",
+            2 => "x2",
+            3 => "x3",
+            4 => "x4",
+            5 => "x5",
+            6 => "x6",
+            7 => "x7",
+            8 => "x8",
+            9 => "x9",
+            10 => "x10",
+            11 => "x11",
+            12 => "x12",
+            13 => "x13",
+            14 => "x14",
+            15 => "x15",
+            16 => "x16",
+            17 => "x17",
+            18 => "x18",
+            19 => "x19",
+            20 => "x20",
+            21 => "x21",
+            22 => "x22",
+            23 => "x23",
+            24 => "x24",
+            25 => "x25",
+            26 => "x26",
+            27 => "x27",
+            28 => "x28",
+            29 => "fp",
+            30 => "lr",
+            31 => "sp",
+            _ => "???",
+        }
+    }
+}
 
 /// Information needed to generate a standalone harness.
 pub struct HarnessInput<'a> {
@@ -24,6 +123,8 @@ pub struct HarnessInput<'a> {
     pub cfg_mir_lines: &'a [String],
     /// Name for the generated function symbol.
     pub function_name: &'a str,
+    /// Allocation map (vreg → physical location).
+    pub alloc_map: Option<&'a AllocationMap>,
 }
 
 /// Generate a standalone test harness.
@@ -55,6 +156,14 @@ pub fn generate_harness(
     // Write the C harness
     let c_path = output_dir.join(format!("{base_name}_main.c"));
     write_c_harness(input, &c_path)?;
+
+    // Write allocation map (for lockstep debugger)
+    if let Some(alloc_map) = input.alloc_map {
+        let map_path = output_dir.join(format!("{base_name}.alloc.json"));
+        alloc_map
+            .write_json(&map_path)
+            .map_err(|e| HarnessError::Io("write alloc map", e))?;
+    }
 
     // Link: cc -o harness harness_main.c jit.o -lSystem
     let exe_path = output_dir.join(base_name);

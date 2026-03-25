@@ -213,6 +213,8 @@ pub struct PipelineArtifacts {
     pub cfg_canonical_text: String,
     /// Assembly text (aarch64 only, empty on other platforms)
     pub asm_text: String,
+    /// VReg → physical location map (for lockstep debugger)
+    pub alloc_map: crate::harness::AllocationMap,
     /// The compiled decoder (ready to execute)
     pub decoder: CompiledDecoder,
 }
@@ -252,7 +254,23 @@ pub fn compile_pipeline(
     // Phase 4: CFG-MIR + optimize
     let trusted_utf8_input = matches!(kind, DecoderKind::Json);
 
-    // Phase 5+6+7: Compile through to JIT (reuses the same linear IR)
+    // Phase 5: CFG-MIR lowering + optimization
+    let hints = Default::default();
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+
+    // Phase 6: Register allocation (regalloc3)
+    let alloc_map = {
+        let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
+            .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
+        let map = ra3_alloc
+            .functions
+            .first()
+            .map(|f| crate::harness::AllocationMap::from_regalloc3(f))
+            .unwrap_or_default();
+        map
+    };
+
+    // Phase 7: Compile through to JIT (reuses the same linear IR)
     let decoder = compile_linear_ir_decoder_with_options(
         &linear,
         trusted_utf8_input,
@@ -275,8 +293,9 @@ pub fn compile_pipeline(
         ir_opt_timeline,
         linear_text,
         cfg_text,
-        cfg_canonical_text: String::new(), // filled by compile_pre_opt_cfg if needed
+        cfg_canonical_text: String::new(),
         asm_text,
+        alloc_map,
         decoder,
     }
 }

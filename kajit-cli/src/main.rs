@@ -229,6 +229,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             dwarf,
             cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
             function_name: "kajit_decode",
+            alloc_map: Some(&artifacts.alloc_map),
         };
 
         match kajit::harness::generate_harness(&harness_input, &output_dir, &base_name) {
