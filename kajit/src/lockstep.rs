@@ -125,9 +125,7 @@ pub fn run_lockstep(
         std::collections::HashMap::new();
     let mut next_line = 1u32;
     for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+        // Include ALL blocks (even dead ones) to match build_debug_line_maps
         for (inst_idx, _) in block.insts.iter().enumerate() {
             op_to_line.insert((block.id.0, false, inst_idx), next_line);
             next_line += 1;
@@ -211,17 +209,19 @@ pub fn run_lockstep(
         prev_dwarf_line = dwarf_line;
 
         // Step interpreter until it reaches dwarf_line (where the JIT is now).
-        // The interpreter should pass through executed_line on the way.
+        // We sync by (block, inst) position, not just line number, because
+        // DWARF lines follow emission order while the interpreter follows
+        // execution order — these differ in unrolled code.
+        //
+        // Strategy: step the interpreter, capturing the event when its line
+        // matches executed_line. Stop when its line matches dwarf_line.
         let mut last_event = None;
         let mut synced = false;
-        let max_sync = 500;
-        for _sync_step in 0..max_sync {
+        for _ in 0..500 {
             let pre_loc = session.state().location;
             let pre_line = loc_to_line(&op_to_line, &pre_loc);
 
-            // Capture: if we're AT executed_line, this is the op the JIT just ran
             if pre_line == executed_line && last_event.is_none() {
-                // Step this op and capture the event
                 let event = session
                     .step_forward()
                     .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
@@ -237,9 +237,19 @@ pub fn run_lockstep(
                 break;
             }
 
+            // If we already captured last_event and overshot past dwarf_line,
+            // the interpreter and JIT may be visiting blocks in different order.
+            // In that case, just step until we hit dwarf_line or the interpreter
+            // catches up.
             let event = session
                 .step_forward()
                 .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+
+            // Also capture if this step happens to hit executed_line
+            let ev_line = loc_to_line(&op_to_line, &event.location_before);
+            if ev_line == executed_line && last_event.is_none() {
+                last_event = Some(event.clone());
+            }
 
             if event.returned {
                 break;
