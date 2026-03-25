@@ -591,7 +591,7 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
     eprintln!("[debug-diff] getting pre-opt CFG for interpreter...");
     let pre_opt_cfg = kajit::compile_pre_opt_cfg(shape, kind, &pipeline_opts);
 
-    // Phase 3: Launch LLDB on the harness
+    // Phase 3: Launch LLDB on the harness (dSYM auto-discovered)
     eprintln!("[debug-diff] launching LLDB on {}...", exe_path.display());
     let mut debugger =
         lldb_debugger::LldbJitDebugger::launch(exe_path.to_str().unwrap(), input_hex)
