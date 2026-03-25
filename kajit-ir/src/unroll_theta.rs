@@ -62,6 +62,11 @@ pub fn unroll_bounded_thetas(func: &mut IrFunc) -> bool {
 }
 
 fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
+    eprintln!(
+        "[unroll] theta node #{}, max_iter={}",
+        theta_node_id.index(),
+        max_iter
+    );
     let NodeKind::Theta { body, .. } = func.nodes[theta_node_id].kind else {
         return;
     };
@@ -171,9 +176,32 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
         .retain(|&nid| nid != theta_node_id);
 
     // Topologically sort the parent region's nodes.
-    // After unrolling, cloned nodes and gamma cascades may be out of order
-    // relative to pre-existing nodes that use their outputs.
     topological_sort_region(func, parent_region);
+
+    // Debug: check for out-of-scope references
+    for (region_id, region) in func.regions.iter() {
+        let node_set: std::collections::HashSet<NodeId> = region.nodes.iter().copied().collect();
+        for &nid in &region.nodes {
+            for (i, input) in func.nodes[nid].inputs.iter().enumerate() {
+                if let PortSource::Node(out) = input.source {
+                    if out.node != nid && !node_set.contains(&out.node) {
+                        // Source is not in this region — check if it's in a parent
+                        let source_region = func.nodes[out.node].region;
+                        if source_region != region_id {
+                            eprintln!(
+                                "[unroll] SCOPE: n{} (region {:?}) input[{}] refs n{} (region {:?})",
+                                nid.index(),
+                                region_id,
+                                i,
+                                out.node.index(),
+                                source_region
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Sort a region's nodes in topological order (dependencies before dependents).
@@ -441,6 +469,12 @@ fn clone_body_into_region(
     };
 
     clone_region_into(func, body_region, target_region, &mut ctx);
+
+    // Add cloned top-level nodes to the target region
+    // (clone_region_into puts top-level nodes in ctx.top_new_nodes, not in the region)
+    for &node_id in &ctx.top_new_nodes {
+        func.regions[target_region].nodes.push(node_id);
+    }
 
     // Return remapped result sources
     let results = func.regions[body_region].results.clone();

@@ -169,13 +169,8 @@ fn run_dead_code_elimination_pass(func: &mut IrFunc) {
 }
 
 fn run_unroll_bounded_thetas_pass(func: &mut IrFunc) {
-    // The RVSDG-level unrolling pass (unroll_theta.rs) needs state domain
-    // threading through gamma cascades — complex to do post-hoc.
-    // For now, unrolling is done at HIR→IR lowering time using the
-    // RegionBuilder API which handles state domains correctly.
-    // This pass is a no-op placeholder until the direct RVSDG
-    // transformation is completed.
-    let _ = func;
+    crate::unroll_theta::unroll_bounded_thetas(func);
+    debug_verify(func, "unroll_bounded_thetas");
 }
 
 fn run_simplify_trivial_gammas_pass(func: &mut IrFunc) {
