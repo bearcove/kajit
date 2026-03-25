@@ -169,6 +169,13 @@ pub fn generate_harness(
     let exe_path = output_dir.join(base_name);
     link_harness(&c_path, &obj_path, &exe_path)?;
 
+    // Post-link: patch DWARF addresses with actual symbol address
+    if let Some(dwarf) = &input.dwarf {
+        if let Err(e) = patch_dwarf_addresses(&exe_path, dwarf, input.function_name) {
+            eprintln!("[harness] warning: failed to patch DWARF: {e}");
+        }
+    }
+
     eprintln!("[harness] generated: {}", exe_path.display());
     eprintln!("[harness] listing:   {}", listing_path.display());
     eprintln!("[harness] usage:     {} <input-hex>", exe_path.display());
@@ -181,9 +188,10 @@ pub fn generate_harness(
 }
 
 fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {
-    use object::write::{Object, Symbol, SymbolSection};
+    use object::write::{Object, Relocation, Symbol, SymbolSection};
     use object::{
-        Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
+        Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
+        RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
     };
 
     let mut obj = Object::new(
@@ -204,9 +212,8 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
     obj.append_section_data(text_section, input.code, 16);
 
     // Add the entry point symbol (global, so the C harness can call it)
-    // The object crate adds the Mach-O `_` prefix automatically for MachO format
     let symbol_name = input.function_name.to_string();
-    obj.add_symbol(Symbol {
+    let text_symbol = obj.add_symbol(Symbol {
         name: symbol_name.into_bytes(),
         value: input.entry_offset as u64,
         size: (input.code.len() - input.entry_offset) as u64,
@@ -217,33 +224,37 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
         flags: SymbolFlags::None,
     });
 
-    // Add DWARF sections if available
+    // Add DWARF sections with relocations
     if let Some(dwarf) = &input.dwarf {
+        let mut debug_info_section_id = None;
+        let mut debug_line_section_id = None;
+
         if !dwarf.debug_line.is_empty() {
-            let section_id =
-                obj.add_section(Vec::new(), b"__debug_line".to_vec(), SectionKind::Debug);
-            obj.append_section_data(section_id, &dwarf.debug_line, 1);
+            let sid = obj.add_section(Vec::new(), b"__debug_line".to_vec(), SectionKind::Debug);
+            obj.append_section_data(sid, &dwarf.debug_line, 8);
+            debug_line_section_id = Some(sid);
         }
         if !dwarf.debug_info.is_empty() {
-            let section_id =
-                obj.add_section(Vec::new(), b"__debug_info".to_vec(), SectionKind::Debug);
-            obj.append_section_data(section_id, &dwarf.debug_info, 1);
+            let sid = obj.add_section(Vec::new(), b"__debug_info".to_vec(), SectionKind::Debug);
+            obj.append_section_data(sid, &dwarf.debug_info, 8);
+            debug_info_section_id = Some(sid);
         }
         if !dwarf.debug_abbrev.is_empty() {
-            let section_id =
-                obj.add_section(Vec::new(), b"__debug_abbrev".to_vec(), SectionKind::Debug);
-            obj.append_section_data(section_id, &dwarf.debug_abbrev, 1);
+            let sid = obj.add_section(Vec::new(), b"__debug_abbrev".to_vec(), SectionKind::Debug);
+            obj.append_section_data(sid, &dwarf.debug_abbrev, 1);
         }
         if !dwarf.debug_loc.is_empty() {
-            let section_id =
-                obj.add_section(Vec::new(), b"__debug_loc".to_vec(), SectionKind::Debug);
-            obj.append_section_data(section_id, &dwarf.debug_loc, 1);
+            let sid = obj.add_section(Vec::new(), b"__debug_loc".to_vec(), SectionKind::Debug);
+            obj.append_section_data(sid, &dwarf.debug_loc, 1);
         }
         if !dwarf.debug_ranges.is_empty() {
-            let section_id =
-                obj.add_section(Vec::new(), b"__debug_ranges".to_vec(), SectionKind::Debug);
-            obj.append_section_data(section_id, &dwarf.debug_ranges, 1);
+            let sid = obj.add_section(Vec::new(), b"__debug_ranges".to_vec(), SectionKind::Debug);
+            obj.append_section_data(sid, &dwarf.debug_ranges, 1);
         }
+
+        // Note: we don't add relocations here because Mach-O requires
+        // 8-byte aligned relocation targets and DWARF addresses aren't aligned.
+        // Instead, we patch the DWARF addresses post-link (see patch_dwarf_addresses).
     }
 
     let data = obj.write().map_err(HarnessError::ObjectWrite)?;
@@ -342,6 +353,100 @@ int main(int argc, char **argv) {{
 
     std::fs::write(path, c_code).map_err(|e| HarnessError::Io("write C harness", e))?;
     Ok(())
+}
+
+/// Patch DWARF addresses in a linked binary.
+///
+/// After linking, we know the actual address of kajit_decode. We find the
+/// symbol address with `nm`, then binary-patch the DWARF sections to replace
+/// code_address=0 with the real address.
+fn patch_dwarf_addresses(
+    exe_path: &Path,
+    dwarf: &crate::jit_dwarf::JitDwarfSections,
+    function_name: &str,
+) -> Result<(), HarnessError> {
+    // Get the symbol address from the linked binary
+    let output = std::process::Command::new("nm")
+        .arg(exe_path)
+        .output()
+        .map_err(|e| HarnessError::Io("invoke nm", e))?;
+
+    let nm_output = String::from_utf8_lossy(&output.stdout);
+    let symbol_to_find = format!("_{function_name}");
+    let addr = nm_output
+        .lines()
+        .find_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 3 && parts[2] == symbol_to_find {
+                u64::from_str_radix(parts[0], 16).ok()
+            } else {
+                None
+            }
+        })
+        .ok_or_else(|| {
+            HarnessError::Link(format!("symbol {symbol_to_find} not found in nm output"))
+        })?;
+
+    eprintln!("[harness] patching DWARF: {symbol_to_find} @ 0x{addr:x}");
+
+    // Read the binary
+    let mut binary =
+        std::fs::read(exe_path).map_err(|e| HarnessError::Io("read binary for patch", e))?;
+
+    // Find and patch zero addresses in DWARF sections.
+    // We search for the pattern of 8 zero bytes at the relocation offsets
+    // within the DWARF section data, which appears somewhere in the binary.
+    let addr_bytes = addr.to_le_bytes();
+    let zero_bytes = [0u8; 8];
+
+    // For each relocation, find the DWARF section data in the binary and patch it
+    for (section, reloc) in &dwarf.relocations {
+        let section_data = match section {
+            crate::jit_dwarf::DwarfSection::DebugInfo => &dwarf.debug_info,
+            crate::jit_dwarf::DwarfSection::DebugLine => &dwarf.debug_line,
+        };
+
+        // Find where this section's data appears in the binary
+        // We use a sliding window match on a unique prefix around the relocation offset
+        let offset = reloc.offset as usize;
+        if offset + 8 > section_data.len() {
+            continue;
+        }
+
+        // Create a search pattern: bytes before the address + 8 zero bytes
+        let context_start = offset.saturating_sub(4);
+        let context_end = (offset + 8).min(section_data.len());
+        let pattern = &section_data[context_start..context_end];
+
+        // Find this pattern in the binary
+        if let Some(pos) = find_bytes(&binary, pattern) {
+            let addr_pos = pos + (offset - context_start);
+            // Verify it's still zeros
+            if binary[addr_pos..addr_pos + 8] == zero_bytes {
+                binary[addr_pos..addr_pos + 8].copy_from_slice(&addr_bytes);
+                eprintln!(
+                    "[harness]   patched {:?} offset {} → 0x{:x}",
+                    section, reloc.offset, addr
+                );
+            }
+        }
+    }
+
+    // Write back
+    std::fs::write(exe_path, &binary).map_err(|e| HarnessError::Io("write patched binary", e))?;
+
+    // Re-sign the binary (macOS code signing)
+    let _ = std::process::Command::new("codesign")
+        .args(["--force", "--sign", "-"])
+        .arg(exe_path)
+        .output();
+
+    Ok(())
+}
+
+/// Find a byte pattern in a haystack.
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), HarnessError> {

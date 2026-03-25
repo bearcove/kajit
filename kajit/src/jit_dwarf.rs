@@ -4,6 +4,23 @@
 //! - `JitDebugInfo`, a structured debug-info model owned by the compiler.
 //! - a DWARF v4 serializer that lowers that model to ELF sections.
 
+/// A relocation needed in a DWARF section: an 8-byte absolute address
+/// at the given offset that should point to (text_symbol + addend).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DwarfRelocation {
+    /// Byte offset within the DWARF section.
+    pub offset: u32,
+    /// Addend (offset from the start of the text section).
+    pub addend: i64,
+}
+
+/// Which DWARF section a relocation belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DwarfSection {
+    DebugInfo,
+    DebugLine,
+}
+
 /// Owned DWARF sections ready to be attached to the JIT ELF.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct JitDwarfSections {
@@ -12,6 +29,9 @@ pub struct JitDwarfSections {
     pub debug_info: Vec<u8>,
     pub debug_loc: Vec<u8>,
     pub debug_ranges: Vec<u8>,
+    /// Relocations needed for standalone binaries (code_address=0).
+    /// Each entry: (section, relocation).
+    pub relocations: Vec<(DwarfSection, DwarfRelocation)>,
 }
 
 impl JitDwarfSections {
@@ -276,17 +296,124 @@ pub fn build_jit_dwarf_sections_from_debug_info(
     let (debug_loc, variable_loc_offsets) = build_debug_loc_section_from_debug_info(debug_info);
     let (debug_ranges, lexical_block_range_offsets) =
         build_debug_ranges_section_from_debug_info(debug_info);
+    let debug_line = build_debug_line_section_from_debug_info(debug_info)?;
+    let debug_info_section = build_debug_info_section_from_debug_info(
+        debug_info,
+        &variable_loc_offsets,
+        &lexical_block_range_offsets,
+    );
+
+    // Compute relocation offsets for standalone binary use.
+    // These are the byte positions of code_address fields that need
+    // relocation when code_address=0 (i.e., for object files where the
+    // linker resolves addresses).
+    let relocations = if debug_info.code_address == 0 {
+        compute_dwarf_relocations(debug_info, &debug_info_section, &debug_line)
+    } else {
+        Vec::new()
+    };
+
     Ok(JitDwarfSections {
-        debug_line: build_debug_line_section_from_debug_info(debug_info)?,
+        debug_line,
         debug_abbrev: build_debug_abbrev_section(),
-        debug_info: build_debug_info_section_from_debug_info(
-            debug_info,
-            &variable_loc_offsets,
-            &lexical_block_range_offsets,
-        ),
+        debug_info: debug_info_section,
         debug_loc,
         debug_ranges,
+        relocations,
     })
+}
+
+/// Compute DWARF relocation offsets for a standalone binary.
+///
+/// When code_address=0, these offsets mark where 8-byte absolute addresses
+/// appear in the DWARF sections. The linker needs to add the actual text
+/// section address at these positions.
+fn compute_dwarf_relocations(
+    debug_info: &JitDebugInfo,
+    debug_info_section: &[u8],
+    debug_line_section: &[u8],
+) -> Vec<(DwarfSection, DwarfRelocation)> {
+    let mut relocs = Vec::new();
+
+    // debug_info section layout:
+    //   4 bytes: unit_length
+    //   2 bytes: version
+    //   4 bytes: debug_abbrev_offset
+    //   1 byte:  address_size
+    //   --- DIE content starts here (offset 11) ---
+    //   1 byte:  abbrev index (ULEB128 = 1)
+    //   4 bytes: DW_AT_stmt_list
+    //   8 bytes: DW_AT_low_pc  ← RELOCATION #1 at offset 16
+    //   8 bytes: DW_AT_high_pc (length, not address — no reloc needed)
+    //   N bytes: DW_AT_name (null-terminated string)
+    //   ... base type DIE ...
+    //   1 byte:  abbrev index (ULEB128 = 3, subprogram)
+    //   N bytes: DW_AT_name (subprogram name, null-terminated)
+    //   8 bytes: DW_AT_low_pc  ← RELOCATION #2
+
+    // CU DW_AT_low_pc: always at offset 16
+    relocs.push((
+        DwarfSection::DebugInfo,
+        DwarfRelocation {
+            offset: 16,
+            addend: 0,
+        },
+    ));
+
+    // Subprogram DW_AT_low_pc: need to find its offset.
+    // After the CU header (11 bytes) + DIE content:
+    //   1 (abbrev) + 4 (stmt_list) + 8 (low_pc) + 8 (high_pc) = 21 bytes
+    //   Then file_name string + null terminator
+    //   Then base_type DIE: 1 (abbrev=2) + "u64\0" (4) + 1 (encoding) + 1 (byte_size) = 7
+    //   Then subprogram DIE: 1 (abbrev=3) + name + null
+    //   Then 8 bytes DW_AT_low_pc ← this is what we want
+    let file_name_len = debug_info.line_table.file_name.len() + 1; // +1 for null
+    let subprogram_name_len = debug_info.subprogram.name.len() + 1;
+
+    // Offset within the DIE content (after the 11-byte CU header):
+    //   1 + 4 + 8 + 8 + file_name_len + 7 (base type) + 1 + subprogram_name_len
+    let subprogram_low_pc_die_offset = 1 + 4 + 8 + 8 + file_name_len + 7 + 1 + subprogram_name_len;
+    let subprogram_low_pc_section_offset = 11 + subprogram_low_pc_die_offset;
+
+    relocs.push((
+        DwarfSection::DebugInfo,
+        DwarfRelocation {
+            offset: subprogram_low_pc_section_offset as u32,
+            addend: 0,
+        },
+    ));
+
+    // debug_line section: the DW_LNE_SET_ADDRESS extended opcode.
+    // The line program starts after the header. The header has a known
+    // structure but variable length (depends on directory/file names).
+    // The SET_ADDRESS opcode is: 0x00 (extended), length ULEB128, 0x02, then 8 bytes.
+    // We need to find the 8-byte address. Search for the pattern:
+    // 0x00, <uleb128 for 9>, 0x02, <8 zero bytes>
+    // This is fragile but works for our generated DWARF.
+    for i in 0..debug_line_section.len().saturating_sub(11) {
+        if debug_line_section[i] == 0x00 // extended opcode marker
+            && debug_line_section[i + 2] == 0x02
+        // DW_LNE_SET_ADDRESS
+        {
+            // The address starts at i+3
+            let addr_offset = i + 3;
+            // Verify it's 8 zero bytes (our code_address=0)
+            if addr_offset + 8 <= debug_line_section.len()
+                && debug_line_section[addr_offset..addr_offset + 8] == [0; 8]
+            {
+                relocs.push((
+                    DwarfSection::DebugLine,
+                    DwarfRelocation {
+                        offset: addr_offset as u32,
+                        addend: 0,
+                    },
+                ));
+                break;
+            }
+        }
+    }
+
+    relocs
 }
 
 pub fn build_debug_abbrev_section() -> Vec<u8> {
