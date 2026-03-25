@@ -811,10 +811,31 @@ pub fn interpret(program: &Program, input: &[u8]) -> Option<Vec<u8>> {
         session.set_real_addresses();
     }
 
-    let _events = session
-        .run_until(crate::RunUntilTarget::Return, 100_000)
-        .ok()?;
+    let max_steps = std::env::var("KAJIT_INTERP_STEPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000);
+    let trace = std::env::var("KAJIT_INTERP_TRACE").is_ok();
+
+    for step in 0..max_steps {
+        let event = session.step_forward().ok()?;
+        if trace {
+            let st = session.state();
+            eprintln!(
+                "[interp] step {step}: block b{} inst#{} term={} event={event:?}",
+                st.location.block.0, st.location.next_inst_index, st.location.at_terminator
+            );
+        }
+        if session.state().returned || session.state().trap.is_some() {
+            break;
+        }
+    }
+
     let state = session.state();
+    if trace && !state.returned {
+        // Print block visit frequency
+        eprintln!("[interp] did NOT return after {max_steps} steps");
+    }
     if state.returned {
         Some(state.output.clone())
     } else {

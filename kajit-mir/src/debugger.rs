@@ -147,6 +147,7 @@ pub enum RunUntilTarget {
 struct SessionSnapshot {
     cursor: usize,
     output: Vec<u8>,
+    slots: Vec<u8>,
     vregs: Vec<u64>,
     trap: Option<InterpreterTrap>,
     returned: bool,
@@ -161,6 +162,8 @@ pub struct DebuggerSession {
     input: Vec<u8>,
     cursor: usize,
     output: Vec<u8>,
+    /// Separate storage for slot values (not part of the output).
+    slots: Vec<u8>,
     vregs: Vec<u64>,
     trap: Option<InterpreterTrap>,
     returned: bool,
@@ -189,6 +192,7 @@ impl DebuggerSession {
         Ok(Self {
             cursor: 0,
             output: vec![0u8; infer_output_size(&func)],
+            slots: Vec::new(),
             vregs: vec![0u64; program.vreg_count as usize],
             trap: None,
             returned: false,
@@ -381,6 +385,7 @@ impl DebuggerSession {
         SessionSnapshot {
             cursor: self.cursor,
             output: self.output.clone(),
+            slots: self.slots.clone(),
             vregs: self.vregs.clone(),
             trap: self.trap,
             returned: self.returned,
@@ -393,6 +398,7 @@ impl DebuggerSession {
     fn restore(&mut self, snapshot: SessionSnapshot) {
         self.cursor = snapshot.cursor;
         self.output = snapshot.output;
+        self.slots = snapshot.slots;
         self.vregs = snapshot.vregs;
         self.trap = snapshot.trap;
         self.returned = snapshot.returned;
@@ -415,6 +421,12 @@ impl DebuggerSession {
     fn ensure_output_len(&mut self, len: usize) {
         if self.output.len() < len {
             self.output.resize(len, 0);
+        }
+    }
+
+    fn ensure_slots_len(&mut self, len: usize) {
+        if self.slots.len() < len {
+            self.slots.resize(len, 0);
         }
     }
 
@@ -532,12 +544,22 @@ impl DebuggerSession {
                 }
             }
             LinearOp::StoreToAddr { addr, src, width } => {
-                let addr_val = self.read_vreg(addr.index()) as usize;
+                let raw_addr = self.read_vreg(addr.index()) as usize;
                 let value = self.read_vreg(src.index());
                 let width = width.bytes() as usize;
-                self.ensure_output_len(addr_val + width);
-                for i in 0..width {
-                    self.output[addr_val + i] = ((value >> (i * 8)) & 0xff) as u8;
+                if self.output_base_addr.is_some() {
+                    // Real-address mode: write to actual memory (e.g., heap buffer
+                    // from kajit_alloc_persistent). The address is a real pointer.
+                    let ptr = raw_addr as *mut u8;
+                    for i in 0..width {
+                        unsafe { ptr.add(i).write(((value >> (i * 8)) & 0xff) as u8) };
+                    }
+                } else {
+                    // Abstract mode: address is an offset into the output buffer.
+                    self.ensure_output_len(raw_addr + width);
+                    for i in 0..width {
+                        self.output[raw_addr + i] = ((value >> (i * 8)) & 0xff) as u8;
+                    }
                 }
             }
             LinearOp::UnaryOp { op, dst, src } => {
@@ -577,18 +599,18 @@ impl DebuggerSession {
                 let value = self.read_vreg(src.index());
                 let base = slot.index() * kajit_ir::SLOT_ADDR_STRIDE_BYTES;
                 let width = 8; // slots are u64-sized
-                self.ensure_output_len(base + width);
+                self.ensure_slots_len(base + width);
                 for i in 0..width {
-                    self.output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
+                    self.slots[base + i] = ((value >> (i * 8)) & 0xff) as u8;
                 }
             }
             LinearOp::ReadFromSlot { dst, slot } => {
                 let base = slot.index() * kajit_ir::SLOT_ADDR_STRIDE_BYTES;
                 let width = 8;
-                self.ensure_output_len(base + width);
+                self.ensure_slots_len(base + width);
                 let mut value = 0u64;
                 for i in 0..width {
-                    value |= (self.output[base + i] as u64) << (i * 8);
+                    value |= (self.slots[base + i] as u64) << (i * 8);
                 }
                 self.write_vreg(dst.index(), value);
             }
