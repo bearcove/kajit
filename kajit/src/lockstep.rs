@@ -179,10 +179,30 @@ pub fn run_lockstep(
         let executed_line = prev_dwarf_line;
         prev_dwarf_line = dwarf_line;
 
-        // Step interpreter to the executed line. Track where it actually goes.
+        // Step interpreter until it reaches dwarf_line (where the JIT is now).
+        // This executes the op at executed_line AND any terminators/branches
+        // that the JIT fell through without a separate source line.
         let mut last_event = None;
         let mut interp_line = 0u32;
         for _ in 0..1000 {
+            // Check current position before stepping
+            let pre_loc = session.state().location;
+            let pre_line = op_to_line
+                .get(&(
+                    pre_loc.block.0,
+                    pre_loc.at_terminator,
+                    if pre_loc.at_terminator {
+                        0
+                    } else {
+                        pre_loc.next_inst_index
+                    },
+                ))
+                .copied()
+                .unwrap_or(0);
+            if pre_line == dwarf_line {
+                break; // already at the JIT's current position
+            }
+
             let event = session
                 .step_forward()
                 .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
@@ -201,9 +221,12 @@ pub fn run_lockstep(
                 .copied()
                 .unwrap_or(0);
 
-            last_event = Some(event.clone());
+            // Remember the event for the executed_line op (for def/use extraction)
+            if interp_line == executed_line {
+                last_event = Some(event.clone());
+            }
 
-            if event.returned || interp_line == executed_line {
+            if event.returned {
                 break;
             }
         }
@@ -232,62 +255,79 @@ pub fn run_lockstep(
             .unwrap_or(0);
 
         if interp_next_line != dwarf_line && !state.returned && dwarf_line != 0 {
-            // CONTROL FLOW DIVERGENCE
+            // CONTROL FLOW DIVERGENCE — build rich diagnostic
             let jit_pc = debugger.read_pc()?;
+            let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
 
-            let exec_source =
-                if executed_line > 0 && (executed_line as usize) <= listing_lines.len() {
-                    listing_lines[executed_line as usize - 1].clone()
+            let line = |n: u32| -> String {
+                if n > 0 && (n as usize) <= listing_lines.len() {
+                    listing_lines[n as usize - 1].clone()
                 } else {
-                    format!("<line {executed_line}>")
-                };
-            let jit_target = if dwarf_line > 0 && (dwarf_line as usize) <= listing_lines.len() {
-                listing_lines[dwarf_line as usize - 1].clone()
-            } else {
-                format!("<line {dwarf_line}>")
+                    format!("<line {n}>")
+                }
             };
-            let interp_target =
-                if interp_next_line > 0 && (interp_next_line as usize) <= listing_lines.len() {
-                    listing_lines[interp_next_line as usize - 1].clone()
-                } else {
-                    format!("<line {interp_next_line}>")
-                };
+
+            // Look up the terminator and its edge targets from the CFG
+            let term_info = {
+                let loc = &event.location_before;
+                let block = &func.blocks[loc.block.index()];
+                let term = &func.terms[block.term.index()];
+                let mut info = format!("  terminator: {:?}\n", term);
+                for &edge_id in &block.succs {
+                    let edge = &func.edges[edge_id.index()];
+                    let target = &func.blocks[edge.to.index()];
+                    let target_line = op_to_line
+                        .get(&(edge.to.0, false, 0))
+                        .or_else(|| op_to_line.get(&(edge.to.0, true, 0)))
+                        .copied()
+                        .unwrap_or(0);
+                    info.push_str(&format!(
+                        "  edge e{}: b{} → b{} (line {}) args={}\n",
+                        edge_id.index(),
+                        edge.from.index(),
+                        edge.to.index(),
+                        target_line,
+                        edge.args.len()
+                    ));
+                }
+                info
+            };
 
             let mut vreg_diffs = Vec::new();
-            // Show the branch condition if it was a terminator
             if let (Some(dst), Some(location)) = (
                 def_vreg,
                 def_vreg.and_then(|d| alloc_map.locations.get(&(d.index() as u32))),
             ) {
                 let sp = debugger.read_sp()?;
-                let interp_val = if dst.index() < state.vregs.len() {
+                let iv = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
                 } else {
                     0
                 };
-                let jit_val = read_vreg_from_jit(debugger, location, sp)?;
+                let jv = read_vreg_from_jit(debugger, location, sp)?;
                 vreg_diffs.push(VRegDiff {
                     vreg_index: dst.index() as u32,
-                    interpreter_value: interp_val,
-                    jit_value: jit_val,
+                    interpreter_value: iv,
+                    jit_value: jv,
                     jit_location: location.clone(),
-                    matches: jit_val == Some(interp_val),
+                    matches: jv == Some(iv),
                 });
             }
 
-            let disasm = debugger
-                .disassemble_around_pc(3)
-                .unwrap_or_else(|_| "<disassembly unavailable>".to_string());
-
             let source_line = format!(
-                "CONTROL FLOW DIVERGENCE after: {}\n  JIT went to line {} (pc=0x{:x}): {}\n  Interpreter went to line {}: {}\n\n  Machine code at divergence:\n{}",
-                exec_source,
-                dwarf_line,
-                jit_pc,
-                jit_target,
-                interp_next_line,
-                interp_target,
-                disasm
+                "\
+CONTROL FLOW DIVERGENCE at step {jit_steps}
+
+  last op (line {executed_line}): {}
+{term_info}
+  JIT went to:         line {dwarf_line} (pc=0x{jit_pc:x}): {}
+  interpreter went to: line {interp_next_line}: {}
+
+  machine code:
+{disasm}",
+                line(executed_line),
+                line(dwarf_line),
+                line(interp_next_line),
             );
 
             return Ok(LockstepResult {
