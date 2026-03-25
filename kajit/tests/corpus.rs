@@ -746,6 +746,65 @@ where
         let artifacts = codegen_artifacts_from_pipeline(&pipeline);
         maybe_dump_codegen_artifacts("postcard", &case, &artifacts);
     }
+    // First try raw deserialization to catch corrupted output before assert_eq.
+    // This prevents double-panics from Debug-printing corrupted Strings/Vecs.
+    let output_size = std::mem::size_of::<T>();
+    match kajit::deserialize_raw(&pipeline.decoder, &encoded, output_size) {
+        Err(e) => panic!(
+            "JIT deserialize_raw failed: {:?} (input {} bytes: {})",
+            e,
+            encoded.len(),
+            encoded
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+        Ok(raw_bytes) => {
+            // Deserialize the expected value through serde to get reference bytes
+            let mut expected_bytes = vec![0u8; output_size];
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    &expected as *const T as *const u8,
+                    expected_bytes.as_mut_ptr(),
+                    output_size,
+                );
+            }
+            if raw_bytes != expected_bytes {
+                // Find first divergent byte
+                let first_diff = raw_bytes
+                    .iter()
+                    .zip(expected_bytes.iter())
+                    .position(|(a, b)| a != b)
+                    .unwrap_or(raw_bytes.len());
+                eprintln!("=== RAW OUTPUT MISMATCH at byte offset {} ===", first_diff);
+                eprintln!("output_size: {output_size} bytes");
+                let show = |label: &str, bytes: &[u8]| {
+                    eprintln!("{label}:");
+                    for (i, chunk) in bytes.chunks(16).enumerate() {
+                        let hex: String = chunk
+                            .iter()
+                            .map(|b| format!("{b:02x}"))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let offset = i * 16;
+                        let marker = if (first_diff >= offset && first_diff < offset + 16) {
+                            " <--"
+                        } else {
+                            ""
+                        };
+                        eprintln!("  {offset:04x}: {hex}{marker}");
+                    }
+                };
+                show("  JIT output", &raw_bytes);
+                show("  expected  ", &expected_bytes);
+                panic!(
+                    "JIT raw output differs from expected at byte offset {} (of {})",
+                    first_diff, output_size
+                );
+            }
+        }
+    }
     let got: T = kajit::deserialize(&pipeline.decoder, &encoded).unwrap();
     assert_eq!(got, expected);
 }
