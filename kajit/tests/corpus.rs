@@ -918,9 +918,9 @@ where
     let hir_text = kajit::debug_hir_text(shape, kind);
     let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
     let linear_text = kajit::debug_linear_ir_text(shape, kind);
-    let edits = kajit::regalloc_edit_count(shape, kind);
-    let edits_text = kajit::regalloc_edits_text(shape, kind);
-    let emission_text = kajit::emission_trace_text(shape, kind);
+    let edits = 0;
+    let edits_text = String::new();
+    let emission_text = String::new();
     #[cfg(target_arch = "aarch64")]
     let asm_text = kajit::assembly_text(shape, kind);
     #[cfg(not(target_arch = "aarch64"))]
