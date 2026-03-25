@@ -82,6 +82,67 @@ impl CompiledDecoder {
         self.cfg_mir_line_text_by_line.join("\n")
     }
 
+    /// CFG-MIR listing lines (individual lines, for harness generation).
+    pub fn cfg_mir_lines(&self) -> &[String] {
+        &self.cfg_mir_line_text_by_line
+    }
+
+    /// Build DWARF sections for a standalone binary (code_address=0).
+    ///
+    /// The linker will relocate the addresses. This is used by the harness
+    /// generator to produce DWARF that works in a standalone executable.
+    pub fn build_standalone_dwarf(
+        &self,
+        listing_path: &std::path::Path,
+    ) -> Option<crate::jit_dwarf::JitDwarfSections> {
+        let source_map = self.source_map()?;
+        let file_name = listing_path.file_name()?.to_str()?.to_owned();
+        let directory = listing_path
+            .parent()
+            .and_then(std::path::Path::to_str)
+            .map(str::to_owned);
+
+        let rows: Vec<crate::jit_dwarf::JitDebugLineRow> = source_map
+            .iter()
+            .filter(|entry| entry.location.line != 0)
+            .map(|entry| crate::jit_dwarf::JitDebugLineRow {
+                code_offset: entry.offset,
+                line: entry.location.line,
+            })
+            .collect();
+
+        let debug_info = crate::jit_dwarf::JitDebugInfo {
+            target_arch: crate::compiler::dwarf::jit_dwarf_target_arch(),
+            code_address: 0, // standalone binary — linker relocates
+            code_size: self.code().len() as u64,
+            line_table: crate::jit_dwarf::JitDebugLineTable {
+                file_name,
+                directory,
+                rows,
+            },
+            subprogram: crate::jit_dwarf::JitDebugSubprogram {
+                name: "kajit_decode".to_owned(),
+                frame_base_expression: Vec::new(),
+                variables: Vec::new(),
+                lexical_blocks: Vec::new(),
+            },
+        };
+
+        crate::jit_dwarf::build_jit_dwarf_sections_from_debug_info(&debug_info).ok()
+    }
+
+    /// Source map (code offset → DWARF line).
+    fn source_map(&self) -> Option<&kajit_emit::SourceMap> {
+        #[cfg(target_arch = "aarch64")]
+        {
+            Some(&self.buf.source_map)
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            Some(&self.buf.source_map)
+        }
+    }
+
     /// ARM64 assembly text (captured instructions before encoding).
     #[cfg(target_arch = "aarch64")]
     pub fn assembly_text(&self) -> Option<String> {

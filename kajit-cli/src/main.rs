@@ -214,6 +214,57 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         }
     }
 
+    if dump("harness") {
+        let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
+        let output_dir = std::path::PathBuf::from(format!("/tmp/kajit-harness"));
+        let base_name = format!("harness_{format}_{ty}");
+        let listing_path = output_dir.join(format!("{base_name}.cfg-mir"));
+
+        let dwarf = artifacts.decoder.build_standalone_dwarf(&listing_path);
+
+        let harness_input = kajit::harness::HarnessInput {
+            code: artifacts.decoder.code(),
+            entry_offset: artifacts.decoder.entry_offset(),
+            output_size,
+            dwarf,
+            cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
+            function_name: "kajit_decode",
+        };
+
+        match kajit::harness::generate_harness(&harness_input, &output_dir, &base_name) {
+            Ok(exe_path) => {
+                println!("=== Harness ===");
+                println!("  executable: {}", exe_path.display());
+                println!("  listing:    {}", listing_path.display());
+
+                // If we have input, run it
+                let input = input_hex
+                    .map(|h| parse_hex(h))
+                    .unwrap_or_else(|| make_test_input(format, ty));
+                let hex_input: String = input.iter().map(|b| format!("{b:02x}")).collect();
+
+                let result = std::process::Command::new(&exe_path)
+                    .arg(&hex_input)
+                    .output();
+                match result {
+                    Ok(output) if output.status.success() => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        println!("  run({hex_input}): {}", stdout.trim());
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        println!("  run({hex_input}): FAILED — {}", stderr.trim());
+                    }
+                    Err(e) => println!("  run: could not execute — {e}"),
+                }
+            }
+            Err(e) => {
+                eprintln!("error generating harness: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     if dump("exec") || dump_all {
         // Get input: either from --input flag or auto-generate
         let input = input_hex

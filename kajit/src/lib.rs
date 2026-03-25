@@ -11,6 +11,7 @@ pub mod intrinsics;
 pub mod ir;
 pub mod ir_backend;
 
+pub mod harness;
 pub mod ir_parse;
 pub mod ir_passes;
 pub mod jit_debug;

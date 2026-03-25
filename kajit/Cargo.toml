@@ -18,6 +18,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 [dependencies]
 facet = "0.44"
 itoa = "1"
+object = { version = "0.36", features = ["write"] }
 zmij = "1"
 regalloc2 = "0.15"
 kajit-ir = { path = "../kajit-ir" }
