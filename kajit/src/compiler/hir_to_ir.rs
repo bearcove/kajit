@@ -322,7 +322,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     body_rb.set_results(&[predicate]);
                 };
                 if let Some(max_iter) = max_iterations {
-                    let _ = rb.theta_bounded(&[], *max_iter, build_body);
+                    // Unroll bounded loop into a gamma cascade.
+                    // Each iteration: execute body, check predicate, gamma(continue/exit).
+                    self.lower_unrolled_loop(
+                        rb,
+                        &body.statements,
+                        dest_local,
+                        dest_ty,
+                        active_slot,
+                        continue_slot,
+                        *max_iter as usize,
+                    );
                 } else {
                     let _ = rb.theta(&[], build_body);
                 }
@@ -330,6 +340,95 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::StmtKind::Return(None) => {}
             other => panic!("unsupported structural HIR statement: {other:?}"),
         }
+    }
+
+    /// Lower a bounded loop by unrolling it into a gamma cascade.
+    ///
+    /// Instead of generating a theta, we generate N iterations as straight-line
+    /// code with gamma branches (continue or exit) after each.
+    fn lower_unrolled_loop(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        statements: &[hir::Stmt],
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+        active_slot: kajit_ir::SlotId,
+        continue_slot: kajit_ir::SlotId,
+        max_iterations: usize,
+    ) {
+        self.lower_unrolled_iteration(
+            rb,
+            statements,
+            dest_local,
+            dest_ty,
+            active_slot,
+            continue_slot,
+            max_iterations,
+            0,
+        );
+    }
+
+    /// Lower one iteration of an unrolled loop, then recurse for remaining.
+    fn lower_unrolled_iteration(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        statements: &[hir::Stmt],
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+        active_slot: kajit_ir::SlotId,
+        continue_slot: kajit_ir::SlotId,
+        remaining: usize,
+        iteration: usize,
+    ) {
+        if remaining == 0 {
+            return;
+        }
+
+        // Initialize active/continue slots for each iteration.
+        // In the original theta, these are re-initialized at body entry.
+        // In the unrolled form, each iteration starts fresh.
+        let one = rb.const_val(1);
+        rb.write_to_slot(active_slot, one);
+        rb.write_to_slot(continue_slot, one);
+
+        // Execute one iteration of the loop body
+        self.lower_loop_block(
+            rb,
+            statements,
+            dest_local,
+            dest_ty,
+            active_slot,
+            continue_slot,
+        );
+
+        if remaining == 1 {
+            // Last iteration — no need for a gamma, just stop
+            return;
+        }
+
+        // Read predicate: should we continue?
+        let predicate = rb.read_from_slot(continue_slot);
+
+        // Gamma: predicate != 0 → branch 1 (continue), predicate == 0 → branch 0 (exit)
+        let _ = rb.gamma(predicate, &[], 2, |branch_idx, branch_rb| {
+            if branch_idx == 0 {
+                // Exit branch: do nothing (just pass through state)
+                branch_rb.set_results(&[]);
+            } else {
+                // Continue branch: recurse with remaining - 1
+                self.lower_unrolled_iteration(
+                    branch_rb,
+                    statements,
+                    dest_local,
+                    dest_ty,
+                    active_slot,
+                    continue_slot,
+                    remaining - 1,
+                    iteration + 1,
+                );
+                branch_rb.set_results(&[]);
+            }
+        });
     }
 
     fn lower_loop_block(
