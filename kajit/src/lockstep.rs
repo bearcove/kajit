@@ -139,6 +139,10 @@ pub fn run_lockstep(
     // Track which DWARF line LLDB was at before stepping
     let mut prev_dwarf_line = debugger.current_source_line().unwrap_or(1);
 
+    // History: vreg_index → (last_verified_value, at_line, at_step)
+    let mut verified: std::collections::HashMap<u32, (u64, u32, usize)> =
+        std::collections::HashMap::new();
+
     loop {
         if jit_steps >= max_steps {
             eprintln!("[lockstep] max steps ({max_steps}) reached");
@@ -501,14 +505,117 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                             });
                         }
                     }
-                    let disasm = debugger.disassemble_around_pc(3).unwrap_or_default();
-                    let base_line =
-                        if executed_line > 0 && (executed_line as usize) <= listing_lines.len() {
-                            listing_lines[executed_line as usize - 1].clone()
+                    let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
+                    let line_text = |n: u32| -> String {
+                        if n > 0 && (n as usize) <= listing_lines.len() {
+                            listing_lines[n as usize - 1].clone()
                         } else {
-                            format!("<line {executed_line}>")
-                        };
-                    let source_line = format!("{base_line}\n\n  Machine code:\n{disasm}");
+                            format!("<line {n}>")
+                        }
+                    };
+
+                    // Build rich diagnostic: history, register sharing, clobber trail
+                    let mut diag = String::new();
+                    diag.push_str(&format!(
+                        "VALUE DIVERGENCE at step {jit_steps}, line {executed_line}\n\n"
+                    ));
+                    diag.push_str(&format!("  op: {}\n", line_text(executed_line)));
+
+                    // Show the diverging vreg
+                    let reg_name = match location {
+                        VRegLocation::Register(p) => AllocationMap::reg_name(*p),
+                        _ => "stk",
+                    };
+                    diag.push_str(&format!(
+                        "\n  v{dst_idx} ({reg_name}): interpreter={interp_value}, jit={}\n",
+                        jit_value.map(|v| v.to_string()).unwrap_or("???".into())
+                    ));
+
+                    // Show last verified value for this vreg
+                    if let Some(&(last_val, last_line, last_step)) = verified.get(&dst_idx) {
+                        diag.push_str(&format!(
+                            "  v{dst_idx} last verified: {} at line {} (step {})\n",
+                            last_val, last_line, last_step
+                        ));
+                    } else {
+                        diag.push_str(&format!("  v{dst_idx} was NEVER verified before\n"));
+                    }
+
+                    // Show what else shares this physical register
+                    if let VRegLocation::Register(preg) = location {
+                        let sharing: Vec<_> = alloc_map
+                            .locations
+                            .iter()
+                            .filter(|(k, v)| {
+                                **k != dst_idx
+                                    && matches!(v, VRegLocation::Register(p) if p == preg)
+                            })
+                            .map(|(k, _)| *k)
+                            .collect();
+                        if !sharing.is_empty() {
+                            diag.push_str(&format!(
+                                "\n  other vregs sharing {}: ",
+                                AllocationMap::reg_name(*preg)
+                            ));
+                            for (i, v) in sharing.iter().enumerate() {
+                                if i > 0 {
+                                    diag.push_str(", ");
+                                }
+                                if let Some(&(val, line, step)) = verified.get(v) {
+                                    diag.push_str(&format!("v{}(={} @line{})", v, val, line));
+                                } else {
+                                    diag.push_str(&format!("v{}", v));
+                                }
+                            }
+                            diag.push('\n');
+
+                            // Show which sharing vreg has the JIT's current value
+                            if let Some(jv) = jit_value {
+                                for &v in &sharing {
+                                    if let Some(&(val, line, _)) = verified.get(&v) {
+                                        if val == jv {
+                                            diag.push_str(&format!(
+                                                "\n  SUSPECT: v{} had value {} at line {} — same as JIT's current {}\n",
+                                                v, val, line, reg_name
+                                            ));
+                                            diag.push_str(&format!(
+                                                "  → {} was NOT updated between line {} and line {}\n",
+                                                reg_name, line, executed_line
+                                            ));
+                                            diag.push_str("  → likely a missing phi/copy move on the edge into this block\n");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Show use vregs
+                    if !vreg_diffs.is_empty() {
+                        diag.push_str("\n  inputs:\n");
+                        for d in &vreg_diffs[1..] {
+                            let m = if d.matches { "OK" } else { "MISMATCH" };
+                            let loc_str = match &d.jit_location {
+                                VRegLocation::Register(p) => {
+                                    AllocationMap::reg_name(*p).to_string()
+                                }
+                                VRegLocation::StackSlot(o) => format!("[sp+{o}]"),
+                                VRegLocation::Constant(v) => format!("const({v})"),
+                            };
+                            diag.push_str(&format!(
+                                "    v{}({}): interp={}, jit={} {}\n",
+                                d.vreg_index,
+                                loc_str,
+                                d.interpreter_value,
+                                d.jit_value.map(|v| v.to_string()).unwrap_or("???".into()),
+                                m
+                            ));
+                        }
+                    }
+
+                    diag.push_str(&format!("\n  machine code:\n{disasm}\n"));
+
+                    let source_line = diag;
                     return Ok(LockstepResult {
                         steps: jit_steps,
                         divergence: Some(Divergence {
@@ -520,6 +627,8 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                         completed: false,
                     });
                 }
+
+                verified.insert(dst_idx, (interp_value, executed_line, jit_steps));
 
                 let reg_name = match location {
                     VRegLocation::Register(p) => AllocationMap::reg_name(*p),
