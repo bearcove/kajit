@@ -147,7 +147,7 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
             }
         }
         for &result_id in &region.results {
-            let result = &func.results[result_id];
+            let result = &func.region_results[result_id];
             if let PortSource::Node(out_ref) = result.source {
                 if out_ref.node == theta_node_id {
                     let new_source = final_sources[out_ref.index as usize];
@@ -162,7 +162,7 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
         func.nodes[node_id].inputs[input_idx].source = new_source;
     }
     for (result_id, new_source) in result_uses_to_rewrite {
-        func.results[result_id].source = new_source;
+        func.region_results[result_id].source = new_source;
     }
 
     // Remove theta from parent region's node list
@@ -229,7 +229,7 @@ fn build_unrolled_cascade(
     });
     // Branch 0 results: just pass through the args
     for (i, &arg_id) in branch0_args.iter().enumerate() {
-        let result_id = func.results.push(crate::RegionResult {
+        let result_id = func.region_results.push(crate::RegionResult {
             kind: func.region_args[arg_id].kind,
             source: PortSource::RegionArg(crate::RegionArgRef {
                 region: branch0_region,
@@ -284,7 +284,7 @@ fn build_unrolled_cascade(
             PortSource::Node(out) => func.nodes[out.node].outputs[out.index as usize].kind,
             PortSource::RegionArg(arg_ref) => func.region_args[arg_ref.arg].kind,
         };
-        let result_id = func.results.push(crate::RegionResult {
+        let result_id = func.region_results.push(crate::RegionResult {
             kind,
             source: *source,
         });
@@ -318,7 +318,11 @@ fn build_unrolled_cascade(
             PortSource::Node(out) => func.nodes[out.node].outputs[out.index as usize].kind,
             PortSource::RegionArg(arg_ref) => func.region_args[arg_ref.arg].kind,
         };
-        gamma_outputs.push(crate::OutputPort { kind });
+        gamma_outputs.push(crate::OutputPort {
+            kind,
+            vreg: None,
+            debug_scope,
+        });
     }
 
     let gamma_node_id = func.nodes.push(crate::Node {
@@ -368,7 +372,7 @@ fn clone_body_into_region(
     results
         .iter()
         .map(|&result_id| {
-            let source = func.results[result_id].source;
+            let source = func.region_results[result_id].source;
             remap_source(source, &ctx, func)
         })
         .collect()

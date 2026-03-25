@@ -168,6 +168,11 @@ fn run_dead_code_elimination_pass(func: &mut IrFunc) {
     debug_verify(func, "dead_code_elimination_pass");
 }
 
+fn run_unroll_bounded_thetas_pass(func: &mut IrFunc) {
+    crate::unroll_theta::unroll_bounded_thetas(func);
+    debug_verify(func, "unroll_bounded_thetas");
+}
+
 fn run_simplify_trivial_gammas_pass(func: &mut IrFunc) {
     crate::simplify_gamma::simplify_trivial_gammas(func);
     debug_verify(func, "simplify_trivial_gammas");
@@ -192,7 +197,7 @@ fn run_slot_to_reg_pass(func: &mut IrFunc) {
     debug_verify(func, "slot_to_reg");
 }
 
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 6] = [
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 7] = [
     DefaultPassSpec {
         name: "slot_to_reg",
         description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
@@ -212,6 +217,11 @@ const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 6] = [
         name: "theta_loop_invariant_hoist",
         description: "Hoist loop-invariant setup out of theta loop bodies when safe.",
         run: run_hoist_theta_loop_invariant_setup_pass,
+    },
+    DefaultPassSpec {
+        name: "unroll_bounded_thetas",
+        description: "Unroll theta loops with known max iteration count into gamma cascades.",
+        run: run_unroll_bounded_thetas_pass,
     },
     DefaultPassSpec {
         name: "inline_apply",
