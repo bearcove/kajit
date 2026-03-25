@@ -44,6 +44,10 @@ enum Command {
         /// Stages to dump: hir, ir, linear, cfg, emit, asm, all
         #[facet(args::named, args::short = 's', default)]
         stage: Option<String>,
+
+        /// Reduce: find minimal CFG-MIR that triggers SSA breakage in this pass
+        #[facet(args::named, default)]
+        reduce: Option<String>,
     },
 }
 
@@ -66,8 +70,17 @@ fn main() {
         Command::Eval { cfg_mir, input_hex } => {
             cmd_eval(&cfg_mir, input_hex.as_deref().unwrap_or(""));
         }
-        Command::Compile { format, ty, stage } => {
-            cmd_compile(&format, &ty, stage.as_deref().unwrap_or("all"));
+        Command::Compile {
+            format,
+            ty,
+            stage,
+            reduce,
+        } => {
+            if let Some(pass_name) = reduce {
+                cmd_compile_reduce(&format, &ty, &pass_name);
+            } else {
+                cmd_compile(&format, &ty, stage.as_deref().unwrap_or("all"));
+            }
         }
     }
 }
@@ -236,6 +249,156 @@ fn resolve_shape(ty: &str) -> &'static facet::Shape {
             eprintln!("supported: u8 u16 u32 u64 i8 i16 i32 i64 bool String");
             std::process::exit(1);
         }
+    }
+}
+
+// ─── compile --reduce: minimize CFG-MIR reproducer ───────────────────────────
+
+fn cmd_compile_reduce(format: &str, ty: &str, mode: &str) {
+    use kajit_mir::opt::reduce;
+
+    let kind = match format {
+        "postcard" => kajit::DecoderKind::Postcard,
+        "json" => kajit::DecoderKind::Json,
+        other => {
+            eprintln!("error: unknown format '{other}', expected 'postcard' or 'json'");
+            std::process::exit(1);
+        }
+    };
+
+    let shape = resolve_shape(ty);
+    let pipeline_opts = kajit::PipelineOptions::from_env();
+
+    eprintln!("compiling {format} {ty} → pre-opt CFG-MIR...");
+    let program = kajit::compile_pre_opt_cfg(shape, kind, &pipeline_opts);
+
+    let initial_size = kajit_mir::ProgramSize::of(&program);
+    eprintln!(
+        "pre-opt CFG: {} blocks, {} insts, {} edges",
+        initial_size.blocks, initial_size.insts, initial_size.edges
+    );
+
+    let input = make_test_input(format, ty);
+    eprintln!("test input: {} bytes ({})", input.len(), encode_hex(&input));
+
+    match mode {
+        "differential" | "diff" | "all" => {
+            // Use the existing differential minimizer: interpreter vs post-regalloc
+            eprintln!("mode: differential (interpreter vs regalloc simulator)");
+
+            match kajit_mir::minimize_cfg_program_for_differential(&program, &input) {
+                Ok((reduced, stats, witness)) => {
+                    eprintln!(
+                        "\nreduction: {} → {} blocks, {} → {} insts ({} attempts, {} accepted)",
+                        stats.initial_size.blocks,
+                        stats.final_size.blocks,
+                        stats.initial_size.insts,
+                        stats.final_size.insts,
+                        stats.attempts,
+                        stats.accepted,
+                    );
+                    for step in &stats.steps {
+                        eprintln!(
+                            "  {} : {} → {} blocks",
+                            step.strategy, step.before.blocks, step.after.blocks
+                        );
+                    }
+                    eprintln!("witness: divergence on field '{}'", witness.field);
+                    if let Some(trap) = &witness.ideal_trap {
+                        eprintln!("  ideal trap: {:?}", trap);
+                    }
+                    if let Some(trap) = &witness.post_trap {
+                        eprintln!("  post-regalloc trap: {:?}", trap);
+                    }
+
+                    let reduced_text = format!("{reduced}");
+                    let output_path = format!("reduced_{format}_{ty}_differential.cfgmir");
+                    std::fs::write(&output_path, &reduced_text).unwrap_or_else(|e| {
+                        eprintln!("warning: failed to write {output_path}: {e}");
+                    });
+                    eprintln!("wrote: {output_path}");
+                    print!("{reduced_text}");
+                }
+                Err(kajit_mir::MinimizeError::NotInteresting) => {
+                    eprintln!("no differential divergence found — interpreter and regalloc agree");
+                    std::process::exit(0);
+                }
+                Err(kajit_mir::MinimizeError::Predicate(e)) => {
+                    eprintln!("error during reduction: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        other => {
+            // Interpret as pass name(s) — SSA breakage mode
+            let passes: Vec<&str> = other.split(',').map(|s| s.trim()).collect();
+            for &p in &passes {
+                if !reduce::ALL_PASS_NAMES.contains(&p) {
+                    eprintln!("error: unknown pass or mode '{p}'");
+                    eprintln!("modes: all/differential, or pass name(s)");
+                    eprintln!("passes: {}", reduce::ALL_PASS_NAMES.join(", "));
+                    std::process::exit(1);
+                }
+            }
+
+            eprintln!("mode: SSA breakage after passes {:?}", passes);
+
+            if !reduce::sequence_breaks_ssa(&program, &passes) {
+                eprintln!("pass sequence does NOT break SSA — nothing to reduce");
+                std::process::exit(0);
+            }
+
+            eprintln!("confirmed: SSA breaks after {:?}", passes);
+            let predicate = reduce::predicate_sequence_breaks_ssa(
+                &passes.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            );
+            let result = reduce::reduce(&program, &*predicate);
+            let reduced_text = format!("{}", result.program);
+
+            let pass_label = passes.join("+");
+            let output_path = format!("reduced_{format}_{ty}_{pass_label}.cfgmir");
+            std::fs::write(&output_path, &reduced_text).unwrap_or_else(|e| {
+                eprintln!("warning: failed to write {output_path}: {e}");
+            });
+            eprintln!(
+                "reduction: {} → {} ({} steps, {} candidates)",
+                initial_size.blocks,
+                result
+                    .program
+                    .funcs
+                    .iter()
+                    .map(|f| f.blocks.iter().filter(|b| !b.dead).count())
+                    .sum::<usize>(),
+                result.steps_applied,
+                result.candidates_tested
+            );
+            eprintln!("wrote: {output_path}");
+            print!("{reduced_text}");
+        }
+    }
+}
+
+/// Generate a representative test input for a type in a given format.
+fn make_test_input(format: &str, ty: &str) -> Vec<u8> {
+    match format {
+        "postcard" => match ty {
+            // Postcard varints: encode 128 (needs 2 bytes: 0x80 0x01)
+            "u32" | "u64" | "i32" | "i64" | "u16" | "i16" => vec![0x80, 0x01],
+            "u8" | "i8" => vec![42],
+            "bool" => vec![1],
+            "String" | "string" => {
+                // Length-prefixed: length=5, then "hello"
+                vec![5, b'h', b'e', b'l', b'l', b'o']
+            }
+            _ => vec![0x80, 0x01], // default: 2-byte varint
+        },
+        "json" => match ty {
+            "u32" | "u64" | "i32" | "i64" | "u16" | "i16" | "u8" | "i8" => b"128".to_vec(),
+            "bool" => b"true".to_vec(),
+            "String" | "string" => b"\"hello\"".to_vec(),
+            _ => b"128".to_vec(),
+        },
+        _ => vec![0x80, 0x01],
     }
 }
 

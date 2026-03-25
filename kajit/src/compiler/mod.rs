@@ -146,8 +146,10 @@ pub struct PipelineArtifacts {
     pub ir_opt_timeline: Vec<(String, String)>,
     /// Linearized IR text
     pub linear_text: String,
-    /// CFG-MIR text (after CFG optimizations)
+    /// CFG-MIR text (debug line listing, after CFG optimizations)
     pub cfg_text: String,
+    /// CFG-MIR canonical text (round-trippable, after CFG optimizations)
+    pub cfg_canonical_text: String,
     /// Assembly text (aarch64 only, empty on other platforms)
     pub asm_text: String,
     /// The compiled decoder (ready to execute)
@@ -212,9 +214,37 @@ pub fn compile_pipeline(
         ir_opt_timeline,
         linear_text,
         cfg_text,
+        cfg_canonical_text: String::new(), // filled by compile_pre_opt_cfg if needed
         asm_text,
         decoder,
     }
+}
+
+/// Produce the pre-optimization CFG-MIR Program for a given type/format.
+///
+/// This runs HIR → IR → linearize → CFG-MIR lowering but stops before any
+/// CFG-MIR optimization passes. Used by the reducer to get the raw input CFG.
+pub fn compile_pre_opt_cfg(
+    shape: &'static facet::Shape,
+    kind: DecoderKind,
+    pipeline_opts: &PipelineOptions,
+) -> kajit_mir::cfg_mir::Program {
+    // Phase 1: HIR
+    let module = match kind {
+        DecoderKind::Postcard => build_postcard_decoder_hir(shape),
+        DecoderKind::Json => build_json_decoder_hir(shape),
+    };
+
+    // Phase 2: IR + passes
+    let mut func = build_structural_hir_ir(shape, &module);
+    run_configured_default_passes_with_observer(&mut func, pipeline_opts, |_, _| {});
+
+    // Phase 3: Linearize
+    let linear = crate::linearize::linearize(&mut func);
+
+    // Phase 4: Lower to CFG-MIR (NO optimization passes)
+    let hints = Default::default();
+    crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints)
 }
 
 /// Compile a deserializer through RVSDG + linearization + backend adapter.
