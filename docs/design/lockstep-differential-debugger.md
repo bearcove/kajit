@@ -147,31 +147,163 @@ Inst(42)    | b7    | v23 = Shl v19, v20        | 896           | 0             
   simulator check. The lockstep debugger supersedes this with instruction-level
   granularity.
 
+## Consultant Recommendation (2026-03-25)
+
+**Primary path:** Standalone child process + LLDB SB API (Rust bindings).
+**Secondary path:** Child-process true JIT + LLDB JITLoaderGDB.
+**Fallback:** Unicorn for deterministic instruction tracing.
+**Skip:** QEMU (unnecessary on Apple Silicon), custom ptrace/Mach (too much work).
+
+Key insight: Use `step_over_until(frame, file, line)` or `RunToAddress` to
+efficiently advance to the next OpId boundary, rather than single-stepping
+every instruction and re-checking the DWARF line.
+
+## Technology Stack
+
+### Rust LLDB Bindings (`lldb` crate)
+
+Use the `lldb` crate (https://lib.rs/crates/lldb, v0.0.12, Dec 2024) which
+wraps the LLDB SB API. May need to vendor + upgrade `lldb` + `lldb-sys` for
+latest LLDB compatibility.
+
+Key types and their roles in the lockstep debugger:
+
+```rust
+// Setup
+let debugger = SBDebugger::create(false);         // no source manager
+let target = debugger.create_target(&harness_path); // standalone executable
+let bp = target.breakpoint_create_by_name("jit_entry");
+let process = target.launch(&launch_info);         // launch child
+
+// Per-OpId lockstep loop
+let thread = process.selected_thread();
+let frame = thread.selected_frame();
+
+// Step to next OpId boundary (DWARF line = OpId index)
+thread.step_over_until(&frame, &file_spec, next_dwarf_line)?;
+
+// Read physical registers
+let x3 = frame.find_register("x3").unwrap();
+let x3_val: u64 = x3.value_as_unsigned(0);
+
+// Read stack slot (for spilled vregs)
+let mut buf = [0u8; 8];
+process.read_memory(sp + spill_offset, &mut buf)?;
+
+// Get current DWARF line → OpId
+let line_entry = frame.line_entry().unwrap();
+let dwarf_line = line_entry.line();  // maps to OpId
+```
+
+### Standalone Test Harness
+
+Phase 1 generates a standalone Mach-O executable per test case:
+
+```
+┌────────────────────────────────────────┐
+│  Generated test harness binary         │
+│                                        │
+│  .text:                                │
+│    _main:                              │
+│      set up input buffer from argv     │
+│      call jit_entry                    │
+│      write output to stdout            │
+│      exit                              │
+│                                        │
+│  .text (JIT):                          │
+│    jit_entry:                          │
+│      <JIT-compiled decoder code>       │
+│                                        │
+│  .debug_line:  OpId → DWARF lines      │
+│  .debug_info:  CU + function info      │
+│  .debug_abbrev                         │
+└────────────────────────────────────────┘
+```
+
+This avoids the complexity of in-process JIT debugging. LLDB gets a normal
+binary with standard DWARF, no JITLoaderGDB needed.
+
+### DWARF Line → OpId Index
+
+We already emit DWARF line info mapping each machine instruction to an OpId.
+The lockstep controller precomputes an index:
+
+```rust
+struct OpIdAddressMap {
+    /// Sorted by address. Each entry = first machine address for an OpId.
+    entries: Vec<(u64, OpId)>,
+}
+
+impl OpIdAddressMap {
+    /// Given a DWARF line number, return the OpId.
+    fn op_id_for_line(&self, line: u32) -> Option<OpId>;
+
+    /// Given an OpId, return the start address of the next OpId.
+    /// Used for RunToAddress / step_over_until.
+    fn next_op_address(&self, current: OpId) -> Option<u64>;
+}
+```
+
+### Vreg → Physical Location Map
+
+The regalloc3 allocator produces vreg assignments. We need to expose:
+
+```rust
+enum PhysicalLocation {
+    Register(u8),       // aarch64 GPR index (0=x0, 1=x1, ...)
+    StackSlot(i32),     // offset from SP
+}
+
+struct AllocationMap {
+    /// For each (OpId, VReg), where is the value after this op executes?
+    assignments: HashMap<(OpId, VReg), PhysicalLocation>,
+}
+```
+
+This already exists implicitly in the regalloc3 result — it needs to be
+extracted and serialized into the harness binary (or a sidecar file).
+
 ## Implementation Plan
 
-### Phase 1: `exec` stage (immediate)
-- Add `-s exec` to `kajit compile` that runs JIT on test input and prints result
-- Compare with interpreter output
-- No LLDB, just "do they agree?"
+### Phase 1: `exec` stage (DONE)
+- [x] Add `-s exec` to `kajit compile` that runs JIT on test input
+- [x] Compare with interpreter output, byte-level diff
+- [x] Confirmed unrolled u32 varint bug: JIT=0, interpreter=128
 
-### Phase 2: Allocation map query API
-- Expose `(OpId, VReg) → PhysicalLocation` from regalloc3 result
-- Serialize alongside DWARF info
+### Phase 2: Standalone harness generation
+- Generate a Mach-O executable with embedded JIT code + DWARF
+- Harness reads input from argv, runs the JIT function, writes output to stdout
+- Can be run standalone: `./harness 8001` → prints output hex
+- Can be debugged normally: `lldb ./harness -- 8001`
 
-### Phase 3: Lockstep prototype (MCP-based)
-- Controller that alternates between interpreter MCP and LLDB MCP
-- Steps both, reads state, compares
-- Text-based output of divergence
+### Phase 3: Allocation map export
+- Extract vreg → preg/stack mapping from regalloc3 result
+- Serialize as a sidecar JSON file alongside the harness
+- Format: `{ "Inst(42)": { "v23": "x3", "v19": "x1" }, ... }`
 
-### Phase 4: Integrated `debug-diff` command
-- Single CLI command that sets up everything
-- Automatic DWARF compilation, LLDB attachment, interpreter setup
-- Reducer integration for automated minimization
+### Phase 4: Lockstep controller (`kajit debug-diff`)
+- Use `lldb` crate to launch harness as child process
+- Set breakpoint at `jit_entry`
+- Step interpreter one OpId, step LLDB to matching DWARF line
+- Read registers, map to vregs via allocation map
+- Compare, stop on first divergence
+- Print report:
+  ```
+  DIVERGENCE at Inst(42) in b7: v23 = Shl v19, v20
+    interpreter: v23 = 896
+    JIT (x3):   v23 = 0
+    context: v19=7 (x1, ✓), v20=7 (x2, ✓)
+  ```
 
-### Phase 5: Trace mode + Python LLDB integration
-- Full trace dump for offline analysis
-- Python LLDB script for faster stepping (no MCP text overhead)
-- Integration with the CFG-MIR reducer's predicate system
+### Phase 5: Reducer integration
+- Use divergence as the predicate for CFG-MIR reduction
+- Predicate: "does this CFG still diverge at any op?"
+- Produces minimal CFG that triggers the specific bug
+
+### Phase 6: Unicorn fallback (optional)
+- In-process aarch64 emulation for instruction-accurate tracing
+- Hook every instruction, full register dump
+- Useful when LLDB stepping is too coarse or for CI without LLDB
 
 ## Why This Matters
 
@@ -187,6 +319,6 @@ With the lockstep debugger:
 3. Look at one instruction
 4. Fix the bug
 
-For the current unrolled u32 varint bug (JIT returns 1 instead of 128), this
+For the current unrolled u32 varint bug (JIT returns 0 instead of 128), this
 would instantly pinpoint which shift/accumulate operation across the unrolled
 iterations is being lost.
