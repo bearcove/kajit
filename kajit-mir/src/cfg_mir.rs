@@ -1882,6 +1882,9 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
     // Run constant phi elimination (general redundant block-param elimination)
     // This replaces loop_phi_elim with a proper iterative dataflow approach
     if opts.enabled("const_phi_elim") {
+        if std::env::var("KAJIT_DUMP_BEFORE_PHI_ELIM").is_ok() {
+            eprintln!("=== BEFORE const_phi_elim ===\n{cfg}\n=== END ===");
+        }
         for func in &mut cfg.funcs {
             crate::opt::constant_phi_elim::eliminate_constant_phis(func);
         }
