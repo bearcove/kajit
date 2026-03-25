@@ -1,0 +1,29 @@
+[package]
+name = "lldb"
+version = "0.0.12"
+edition = "2024"
+authors = ["Bruce Mitchener <bruce.mitchener@gmail.com>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+description = "Rust-like bindings to the public LLDB API. LLDB is the debugger from the LLVM project and is the system debugger on macOS."
+keywords = ["lldb", "debugger"]
+categories = ["api-bindings", "development-tools::debugging"]
+documentation = "https://docs.rs/lldb/latest/lldb/"
+homepage = "https://github.com/endoli/lldb.rs"
+repository = "https://github.com/endoli/lldb.rs"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[[example]]
+name = "basic_synchronous"
+
+[features]
+graphql = ["dep:juniper"]
+
+[dependencies]
+libc = "0.2"
+lldb-sys = { path = "../lldb-sys-rs" }
+juniper = { version = "0.15", optional = true }

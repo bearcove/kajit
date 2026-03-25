@@ -14,6 +14,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 kajit = { path = "../kajit" }
+lldb = { path = "../vendor/lldb-rs" }
 kajit-ir = { path = "../kajit-ir" }
 kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }

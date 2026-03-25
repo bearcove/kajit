@@ -17,6 +17,8 @@ members = [
   "kajit-mir-text",
   "kajit-parse-util",
   "xtask",
+  "vendor/lldb-rs",
+  "vendor/lldb-sys-rs",
 ]
 resolver = "3"
 

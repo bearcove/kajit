@@ -1,3 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
 test-x86_64 = "xtask test-x86_64"
+
+[env]
+LLVM_CONFIG = "/opt/homebrew/opt/llvm/bin/llvm-config"
