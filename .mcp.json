@@ -2,11 +2,14 @@
   "mcpServers": {
     "gdb": {
       "command": "uv",
-      "args": ["run", "--python", "3.14", "--directory", "/Users/amos/bearcove/MDB-MCP", "server.py"]
-    },
-    "kajit-mir": {
-      "command": "cargo",
-      "args": ["run", "-q", "-p", "kajit-mir-mcp"]
+      "args": [
+        "run",
+        "--python",
+        "3.14",
+        "--directory",
+        "/Users/amos/bearcove/MDB-MCP",
+        "server.py"
+      ]
     }
   }
 }
