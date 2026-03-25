@@ -163,7 +163,38 @@ pub fn run_lockstep(
         let dwarf_line = match debugger.step_to_next_source_line() {
             Ok(line) => line,
             Err(DebugError::ProcessExited(_)) => {
-                eprintln!("[lockstep] JIT exited after {jit_steps} steps");
+                // JIT exited — run interpreter to completion and compare
+                let mut interp_steps = 0;
+                loop {
+                    let ev = session
+                        .step_forward()
+                        .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+                    interp_steps += 1;
+                    if ev.returned || interp_steps > 10000 {
+                        break;
+                    }
+                }
+                let final_state = session.state();
+                if !final_state.returned {
+                    let source_line = format!(
+                        "JIT exited after {} steps but interpreter did not return ({} extra steps, halted={})",
+                        jit_steps, interp_steps, final_state.halted
+                    );
+                    return Ok(LockstepResult {
+                        steps: jit_steps,
+                        divergence: Some(Divergence {
+                            step: jit_steps,
+                            dwarf_line: prev_dwarf_line,
+                            source_line,
+                            vreg_diffs: Vec::new(),
+                        }),
+                        completed: false,
+                    });
+                }
+                eprintln!(
+                    "[lockstep] both completed: JIT in {} steps, interpreter needed {} extra steps",
+                    jit_steps, interp_steps
+                );
                 return Ok(LockstepResult {
                     steps: jit_steps,
                     divergence: None,
@@ -342,8 +373,17 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
             });
         }
 
-        // Compare the defined vreg (if any)
-        if let Some(dst) = def_vreg {
+        // Compare: either the defined vreg, or for store ops, the source vreg
+        let compare_vregs: Vec<kajit_ir::VReg> = if let Some(dst) = def_vreg {
+            vec![dst]
+        } else if !use_vregs.is_empty() {
+            // No def — this is a store/side-effect op. Compare its use vregs.
+            use_vregs.clone()
+        } else {
+            Vec::new()
+        };
+
+        if let Some(&dst) = compare_vregs.first() {
             let dst_idx = dst.index() as u32;
             if let Some(location) = alloc_map.locations.get(&dst_idx) {
                 let interp_value = if dst.index() < state.vregs.len() {
