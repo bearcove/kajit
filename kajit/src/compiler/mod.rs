@@ -111,6 +111,24 @@ impl CompiledDecoder {
             })
             .collect();
 
+        eprintln!(
+            "[dwarf] source map: {} entries, {} with line!=0",
+            source_map.len(),
+            rows.len()
+        );
+        if let Some(first) = rows.first() {
+            eprintln!(
+                "[dwarf] first row: offset={}, line={}",
+                first.code_offset, first.line
+            );
+        }
+        if let Some(last) = rows.last() {
+            eprintln!(
+                "[dwarf] last row: offset={}, line={}",
+                last.code_offset, last.line
+            );
+        }
+
         let debug_info = crate::jit_dwarf::JitDebugInfo {
             target_arch: crate::compiler::dwarf::jit_dwarf_target_arch(),
             code_address: 0, // standalone binary — linker relocates

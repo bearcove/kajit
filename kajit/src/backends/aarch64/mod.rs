@@ -125,7 +125,7 @@ pub fn compile(
     .run(program)
 }
 
-fn build_debug_line_maps(
+pub(crate) fn build_debug_line_maps(
     program: &cfg_mir::Program,
 ) -> (BTreeMap<(u32, cfg_mir::OpId), u32>, BTreeMap<u32, u32>) {
     let mut line_by_lambda_op = BTreeMap::<(u32, cfg_mir::OpId), u32>::new();

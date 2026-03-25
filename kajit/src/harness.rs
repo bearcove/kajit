@@ -169,10 +169,10 @@ pub fn generate_harness(
     let exe_path = output_dir.join(base_name);
     link_harness(&c_path, &obj_path, &exe_path)?;
 
-    // Post-link: patch DWARF addresses with actual symbol address
+    // Build dSYM bundle: copy DWARF sections with patched addresses
     if let Some(dwarf) = &input.dwarf {
-        if let Err(e) = patch_dwarf_addresses(&exe_path, dwarf, input.function_name) {
-            eprintln!("[harness] warning: failed to patch DWARF: {e}");
+        if let Err(e) = build_dsym(&exe_path, dwarf, input.function_name, input.entry_offset) {
+            eprintln!("[harness] warning: dSYM creation failed: {e}");
         }
     }
 
@@ -229,32 +229,58 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
         let mut debug_info_section_id = None;
         let mut debug_line_section_id = None;
 
+        // Mach-O DWARF sections must be in the __DWARF segment
+        let dwarf_segment = b"__DWARF".to_vec();
         if !dwarf.debug_line.is_empty() {
-            let sid = obj.add_section(Vec::new(), b"__debug_line".to_vec(), SectionKind::Debug);
-            obj.append_section_data(sid, &dwarf.debug_line, 8);
+            let sid = obj.add_section(
+                dwarf_segment.clone(),
+                b"__debug_line".to_vec(),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(sid, &dwarf.debug_line, 1);
             debug_line_section_id = Some(sid);
         }
         if !dwarf.debug_info.is_empty() {
-            let sid = obj.add_section(Vec::new(), b"__debug_info".to_vec(), SectionKind::Debug);
-            obj.append_section_data(sid, &dwarf.debug_info, 8);
+            let sid = obj.add_section(
+                dwarf_segment.clone(),
+                b"__debug_info".to_vec(),
+                SectionKind::Debug,
+            );
+            obj.append_section_data(sid, &dwarf.debug_info, 1);
             debug_info_section_id = Some(sid);
         }
         if !dwarf.debug_abbrev.is_empty() {
-            let sid = obj.add_section(Vec::new(), b"__debug_abbrev".to_vec(), SectionKind::Debug);
+            let sid = obj.add_section(
+                dwarf_segment.clone(),
+                b"__debug_abbrev".to_vec(),
+                SectionKind::Debug,
+            );
             obj.append_section_data(sid, &dwarf.debug_abbrev, 1);
         }
-        if !dwarf.debug_loc.is_empty() {
-            let sid = obj.add_section(Vec::new(), b"__debug_loc".to_vec(), SectionKind::Debug);
-            obj.append_section_data(sid, &dwarf.debug_loc, 1);
-        }
-        if !dwarf.debug_ranges.is_empty() {
-            let sid = obj.add_section(Vec::new(), b"__debug_ranges".to_vec(), SectionKind::Debug);
-            obj.append_section_data(sid, &dwarf.debug_ranges, 1);
-        }
 
-        // Note: we don't add relocations here because Mach-O requires
-        // 8-byte aligned relocation targets and DWARF addresses aren't aligned.
-        // Instead, we patch the DWARF addresses post-link (see patch_dwarf_addresses).
+        // Add relocations so the linker/dsymutil fixes up DWARF addresses
+        for (section, reloc) in &dwarf.relocations {
+            let target_section = match section {
+                crate::jit_dwarf::DwarfSection::DebugInfo => debug_info_section_id,
+                crate::jit_dwarf::DwarfSection::DebugLine => debug_line_section_id,
+            };
+            if let Some(sid) = target_section {
+                obj.add_relocation(
+                    sid,
+                    Relocation {
+                        offset: reloc.offset as u64,
+                        symbol: text_symbol,
+                        addend: reloc.addend + input.entry_offset as i64,
+                        flags: RelocationFlags::MachO {
+                            r_type: object::macho::ARM64_RELOC_UNSIGNED,
+                            r_pcrel: false,
+                            r_length: 3, // 8 bytes (2^3)
+                        },
+                    },
+                )
+                .map_err(HarnessError::ObjectWrite)?;
+            }
+        }
     }
 
     let data = obj.write().map_err(HarnessError::ObjectWrite)?;
@@ -355,104 +381,321 @@ int main(int argc, char **argv) {{
     Ok(())
 }
 
-/// Patch DWARF addresses in a linked binary.
-///
-/// After linking, we know the actual address of kajit_decode. We find the
-/// symbol address with `nm`, then binary-patch the DWARF sections to replace
-/// code_address=0 with the real address.
-fn patch_dwarf_addresses(
+/// Build a dSYM bundle by hand: read UUID from exe, patch DWARF addresses,
+/// write a Mach-O with DWARF into the dSYM directory structure.
+fn build_dsym(
     exe_path: &Path,
     dwarf: &crate::jit_dwarf::JitDwarfSections,
     function_name: &str,
+    entry_offset: usize,
 ) -> Result<(), HarnessError> {
-    // Get the symbol address from the linked binary
-    let output = std::process::Command::new("nm")
-        .arg(exe_path)
-        .output()
-        .map_err(|e| HarnessError::Io("invoke nm", e))?;
+    use object::read::{Object, ObjectSymbol};
+    use object::write::{Object as WriteObject, Symbol, SymbolSection};
+    use object::{
+        Architecture, BinaryFormat, Endianness, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
+    };
 
-    let nm_output = String::from_utf8_lossy(&output.stdout);
-    let symbol_to_find = format!("_{function_name}");
-    let addr = nm_output
-        .lines()
-        .find_map(|line| {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 3 && parts[2] == symbol_to_find {
-                u64::from_str_radix(parts[0], 16).ok()
-            } else {
-                None
-            }
-        })
-        .ok_or_else(|| {
-            HarnessError::Link(format!("symbol {symbol_to_find} not found in nm output"))
-        })?;
+    let exe_data = std::fs::read(exe_path).map_err(|e| HarnessError::Io("read exe for dSYM", e))?;
+    let exe_obj = object::read::File::parse(&*exe_data)
+        .map_err(|e| HarnessError::Link(format!("parse exe: {e}")))?;
 
-    eprintln!("[harness] patching DWARF: {symbol_to_find} @ 0x{addr:x}");
+    // Get UUID
+    let uuid = exe_obj.mach_uuid().ok().flatten().unwrap_or([0u8; 16]);
 
-    // Read the binary
-    let mut binary =
-        std::fs::read(exe_path).map_err(|e| HarnessError::Io("read binary for patch", e))?;
+    // Get symbol address
+    let mangled = format!("_{function_name}");
+    let symbol_addr = exe_obj
+        .symbols()
+        .find(|s| s.name() == Ok(&mangled))
+        .map(|s| s.address())
+        .ok_or_else(|| HarnessError::Link(format!("symbol {mangled} not found for dSYM")))?;
 
-    // Find and patch zero addresses in DWARF sections.
-    // We search for the pattern of 8 zero bytes at the relocation offsets
-    // within the DWARF section data, which appears somewhere in the binary.
-    let addr_bytes = addr.to_le_bytes();
-    let zero_bytes = [0u8; 8];
+    drop(exe_obj);
 
-    // For each relocation, find the DWARF section data in the binary and patch it
+    eprintln!(
+        "[harness] building dSYM: {} @ 0x{:x}, uuid={}",
+        mangled,
+        symbol_addr,
+        uuid.iter().map(|b| format!("{b:02X}")).collect::<String>()
+    );
+
+    // Patch DWARF: copy sections and fix addresses at relocation offsets
+    let addr_bytes = symbol_addr.to_le_bytes();
+
+    let mut debug_info = dwarf.debug_info.clone();
+    let mut debug_line = dwarf.debug_line.clone();
+
     for (section, reloc) in &dwarf.relocations {
-        let section_data = match section {
-            crate::jit_dwarf::DwarfSection::DebugInfo => &dwarf.debug_info,
-            crate::jit_dwarf::DwarfSection::DebugLine => &dwarf.debug_line,
+        let data = match section {
+            crate::jit_dwarf::DwarfSection::DebugInfo => &mut debug_info,
+            crate::jit_dwarf::DwarfSection::DebugLine => &mut debug_line,
         };
-
-        // Find where this section's data appears in the binary
-        // We use a sliding window match on a unique prefix around the relocation offset
         let offset = reloc.offset as usize;
-        if offset + 8 > section_data.len() {
-            continue;
-        }
-
-        // Create a search pattern: bytes before the address + 8 zero bytes
-        let context_start = offset.saturating_sub(4);
-        let context_end = (offset + 8).min(section_data.len());
-        let pattern = &section_data[context_start..context_end];
-
-        // Find this pattern in the binary
-        if let Some(pos) = find_bytes(&binary, pattern) {
-            let addr_pos = pos + (offset - context_start);
-            // Verify it's still zeros
-            if binary[addr_pos..addr_pos + 8] == zero_bytes {
-                binary[addr_pos..addr_pos + 8].copy_from_slice(&addr_bytes);
-                eprintln!(
-                    "[harness]   patched {:?} offset {} → 0x{:x}",
-                    section, reloc.offset, addr
-                );
-            }
+        if offset + 8 <= data.len() {
+            data[offset..offset + 8].copy_from_slice(&addr_bytes);
         }
     }
 
-    // Write back
-    std::fs::write(exe_path, &binary).map_err(|e| HarnessError::Io("write patched binary", e))?;
+    // Build the dSYM Mach-O by hand (need LC_UUID which the object crate can't emit)
+    let dsym_data = build_dsym_macho(&uuid, &debug_info, &debug_line, &dwarf.debug_abbrev);
 
-    // Re-sign the binary (macOS code signing)
-    let _ = std::process::Command::new("codesign")
-        .args(["--force", "--sign", "-"])
-        .arg(exe_path)
-        .output();
+    // Write dSYM bundle
+    let dsym_dir = exe_path.with_extension("dSYM");
+    let dwarf_dir = dsym_dir.join("Contents/Resources/DWARF");
+    std::fs::create_dir_all(&dwarf_dir).map_err(|e| HarnessError::Io("create dSYM dir", e))?;
 
+    let dsym_file = dwarf_dir.join(exe_path.file_name().unwrap());
+    std::fs::write(&dsym_file, &dsym_data).map_err(|e| HarnessError::Io("write dSYM Mach-O", e))?;
+
+    // Write Info.plist
+    let plist = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>English</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.kajit.harness.{}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>dSYM</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+</dict>
+</plist>"#,
+        exe_path.file_stem().unwrap().to_str().unwrap()
+    );
+    let plist_path = dsym_dir.join("Contents/Info.plist");
+    std::fs::write(&plist_path, plist).map_err(|e| HarnessError::Io("write Info.plist", e))?;
+
+    eprintln!("[harness] created dSYM: {}", dsym_dir.display());
     Ok(())
 }
 
-/// Find a byte pattern in a haystack.
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|w| w == needle)
+/// Build a minimal dSYM Mach-O from scratch: header + LC_UUID + LC_SEGMENT_64(__DWARF).
+fn build_dsym_macho(
+    uuid: &[u8; 16],
+    debug_info: &[u8],
+    debug_line: &[u8],
+    debug_abbrev: &[u8],
+) -> Vec<u8> {
+    use std::io::Write;
+
+    // Count sections
+    let mut nsects = 0u32;
+    if !debug_info.is_empty() {
+        nsects += 1;
+    }
+    if !debug_line.is_empty() {
+        nsects += 1;
+    }
+    if !debug_abbrev.is_empty() {
+        nsects += 1;
+    }
+
+    // Sizes
+    let header_size = 32u32; // mach_header_64
+    let uuid_cmd_size = 24u32; // LC_UUID
+    let segment_cmd_size = 72u32; // LC_SEGMENT_64 (without sections)
+    let section_size = 80u32; // section_64 per section
+    let load_cmds_size = uuid_cmd_size + segment_cmd_size + nsects * section_size;
+    let header_and_cmds = header_size + load_cmds_size;
+
+    // Align data start to 8 bytes
+    let data_start = (header_and_cmds + 7) & !7;
+    let padding = data_start - header_and_cmds;
+
+    // Layout sections sequentially
+    let mut section_offsets = Vec::new();
+    let mut offset = data_start;
+    for data in [debug_info, debug_line, debug_abbrev] {
+        if !data.is_empty() {
+            section_offsets.push((offset, data.len() as u32));
+            offset += data.len() as u32;
+        }
+    }
+    let total_data = offset - data_start;
+
+    let mut out = Vec::with_capacity(offset as usize);
+
+    // --- Mach-O header (mach_header_64) ---
+    out.extend_from_slice(&0xFEEDFACFu32.to_le_bytes()); // magic (MH_MAGIC_64)
+    out.extend_from_slice(&(12u32 | 0x01000000).to_le_bytes()); // cputype: CPU_TYPE_ARM64
+    out.extend_from_slice(&0u32.to_le_bytes()); // cpusubtype: ALL
+    out.extend_from_slice(&0x0Au32.to_le_bytes()); // filetype: MH_DSYM
+    out.extend_from_slice(&2u32.to_le_bytes()); // ncmds: LC_UUID + LC_SEGMENT_64
+    out.extend_from_slice(&load_cmds_size.to_le_bytes()); // sizeofcmds
+    out.extend_from_slice(&0u32.to_le_bytes()); // flags
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved
+
+    // --- LC_UUID ---
+    out.extend_from_slice(&0x1Bu32.to_le_bytes()); // cmd: LC_UUID
+    out.extend_from_slice(&uuid_cmd_size.to_le_bytes()); // cmdsize
+    out.extend_from_slice(uuid); // 16 bytes UUID
+
+    // --- LC_SEGMENT_64 (__DWARF) ---
+    out.extend_from_slice(&0x19u32.to_le_bytes()); // cmd: LC_SEGMENT_64
+    out.extend_from_slice(&(segment_cmd_size + nsects * section_size).to_le_bytes());
+    // segname: "__DWARF\0\0\0\0\0\0\0\0\0"
+    let mut segname = [0u8; 16];
+    segname[..7].copy_from_slice(b"__DWARF");
+    out.extend_from_slice(&segname);
+    out.extend_from_slice(&0u64.to_le_bytes()); // vmaddr
+    out.extend_from_slice(&0u64.to_le_bytes()); // vmsize
+    out.extend_from_slice(&(data_start as u64).to_le_bytes()); // fileoff
+    out.extend_from_slice(&(total_data as u64).to_le_bytes()); // filesize
+    out.extend_from_slice(&0i32.to_le_bytes()); // maxprot
+    out.extend_from_slice(&0i32.to_le_bytes()); // initprot
+    out.extend_from_slice(&nsects.to_le_bytes()); // nsects
+    out.extend_from_slice(&0u32.to_le_bytes()); // flags
+
+    // --- section_64 entries ---
+    let section_names: Vec<&[u8]> = {
+        let mut names = Vec::new();
+        if !debug_info.is_empty() {
+            names.push(b"__debug_info" as &[u8]);
+        }
+        if !debug_line.is_empty() {
+            names.push(b"__debug_line" as &[u8]);
+        }
+        if !debug_abbrev.is_empty() {
+            names.push(b"__debug_abbrev" as &[u8]);
+        }
+        names
+    };
+
+    for (i, (name, &(off, size))) in section_names.iter().zip(section_offsets.iter()).enumerate() {
+        let mut sectname = [0u8; 16];
+        let len = name.len().min(16);
+        sectname[..len].copy_from_slice(&name[..len]);
+        out.extend_from_slice(&sectname);
+        out.extend_from_slice(&segname); // segname: __DWARF
+        out.extend_from_slice(&0u64.to_le_bytes()); // addr
+        out.extend_from_slice(&(size as u64).to_le_bytes()); // size
+        out.extend_from_slice(&off.to_le_bytes()); // offset
+        out.extend_from_slice(&0u32.to_le_bytes()); // align
+        out.extend_from_slice(&0u32.to_le_bytes()); // reloff
+        out.extend_from_slice(&0u32.to_le_bytes()); // nreloc
+        out.extend_from_slice(&0x02000000u32.to_le_bytes()); // flags: S_REGULAR | S_ATTR_DEBUG
+        out.extend_from_slice(&0u32.to_le_bytes()); // reserved1
+        out.extend_from_slice(&0u32.to_le_bytes()); // reserved2
+        out.extend_from_slice(&0u32.to_le_bytes()); // reserved3 (padding for 64-bit)
+    }
+
+    // Padding
+    out.extend(std::iter::repeat_n(0u8, padding as usize));
+
+    // Section data
+    if !debug_info.is_empty() {
+        out.extend_from_slice(debug_info);
+    }
+    if !debug_line.is_empty() {
+        out.extend_from_slice(debug_line);
+    }
+    if !debug_abbrev.is_empty() {
+        out.extend_from_slice(debug_abbrev);
+    }
+
+    out
+}
+
+/// Patch the LC_UUID in a Mach-O binary.
+/// LC_UUID has cmd=0x1B, cmdsize=24, followed by 16 bytes of UUID.
+fn patch_macho_uuid(data: &mut [u8], uuid: &[u8; 16]) {
+    const LC_UUID: u32 = 0x1b;
+    // Walk load commands to find LC_UUID
+    // Mach-O 64 header: 32 bytes, then load commands
+    if data.len() < 32 {
+        return;
+    }
+    let ncmds = u32::from_le_bytes(data[16..20].try_into().unwrap()) as usize;
+    let mut offset = 32; // past mach_header_64
+
+    for _ in 0..ncmds {
+        if offset + 8 > data.len() {
+            break;
+        }
+        let cmd = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        let cmdsize = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap()) as usize;
+
+        if cmd == LC_UUID && cmdsize >= 24 && offset + 24 <= data.len() {
+            data[offset + 8..offset + 24].copy_from_slice(uuid);
+            return;
+        }
+
+        offset += cmdsize;
+    }
+}
+
+/// Find the address of a symbol in a linked binary.
+fn find_symbol_address(exe_path: &Path, function_name: &str) -> Result<u64, HarnessError> {
+    use object::read::{Object, ObjectSymbol};
+
+    let binary = std::fs::read(exe_path).map_err(|e| HarnessError::Io("read binary", e))?;
+    let obj = object::read::File::parse(&*binary)
+        .map_err(|e| HarnessError::Link(format!("parse linked binary: {e}")))?;
+
+    let mangled = format!("_{function_name}");
+    obj.symbols()
+        .find(|s| s.name() == Ok(&mangled))
+        .map(|s| s.address())
+        .ok_or_else(|| HarnessError::Link(format!("symbol {mangled} not found")))
+}
+
+/// Patch DWARF addresses in a .o file so dsymutil picks them up.
+fn patch_object_dwarf(
+    obj_path: &Path,
+    dwarf: &crate::jit_dwarf::JitDwarfSections,
+    symbol_addr: u64,
+) -> Result<(), HarnessError> {
+    use object::read::{Object, ObjectSection};
+
+    let mut data = std::fs::read(obj_path).map_err(|e| HarnessError::Io("read .o for patch", e))?;
+
+    let obj = object::read::File::parse(&*data)
+        .map_err(|e| HarnessError::Link(format!("parse .o: {e}")))?;
+
+    let debug_info_offset = obj
+        .section_by_name("__debug_info")
+        .and_then(|s| s.file_range())
+        .map(|(off, _)| off);
+    let debug_line_offset = obj
+        .section_by_name("__debug_line")
+        .and_then(|s| s.file_range())
+        .map(|(off, _)| off);
+
+    drop(obj); // release borrow on data
+
+    eprintln!("[harness] patching .o DWARF: addr=0x{:x}", symbol_addr);
+    let addr_bytes = symbol_addr.to_le_bytes();
+
+    for (section, reloc) in &dwarf.relocations {
+        let base = match section {
+            crate::jit_dwarf::DwarfSection::DebugInfo => debug_info_offset,
+            crate::jit_dwarf::DwarfSection::DebugLine => debug_line_offset,
+        };
+        let Some(base) = base else { continue };
+        let offset = base as usize + reloc.offset as usize;
+        if offset + 8 <= data.len() {
+            data[offset..offset + 8].copy_from_slice(&addr_bytes);
+            eprintln!(
+                "[harness]   patched {:?} @ 0x{:x} (section+{})",
+                section, offset, reloc.offset
+            );
+        }
+    }
+
+    std::fs::write(obj_path, &data).map_err(|e| HarnessError::Io("write patched .o", e))?;
+    Ok(())
 }
 
 fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), HarnessError> {
     let output = std::process::Command::new("cc")
         .arg("-g") // keep debug info
         .arg("-O0") // no optimization (so DWARF is accurate)
+        .arg("-Wl,-no_deduplicate") // don't mess with our sections
         .arg("-o")
         .arg(exe_path)
         .arg(c_path)

@@ -21,6 +21,8 @@ struct EmitContext<'a> {
     slot_base: u32,
     /// VReg → constant value (for immediate folding in BinOps)
     const_values: HashMap<kajit_ir::VReg, u64>,
+    /// OpId → DWARF line number (for source-level debugging)
+    line_map: HashMap<cfg_mir::OpId, u32>,
 }
 
 impl<'a> EmitContext<'a> {
@@ -976,8 +978,16 @@ impl<'a> EmitContext<'a> {
                 self.ectx.bind_label(label);
             }
 
-            // Emit instructions
+            // Emit instructions with source location tracking
             for &inst_id in &block.insts {
+                let op_id = kajit_mir::cfg_mir::OpId::Inst(inst_id);
+                if let Some(&line) = self.line_map.get(&op_id) {
+                    self.ectx.set_source_location(kajit_emit::SourceLocation {
+                        file: 1,
+                        line,
+                        column: 0,
+                    });
+                }
                 let inst = &self.func.insts[inst_id.index()];
                 self.emit_inst(inst);
             }
@@ -988,7 +998,15 @@ impl<'a> EmitContext<'a> {
                 .find(|b| !b.dead)
                 .map(|b| b.id);
 
-            // Emit terminator
+            // Emit terminator with source location
+            let term_op = kajit_mir::cfg_mir::OpId::Term(block.term);
+            if let Some(&line) = self.line_map.get(&term_op) {
+                self.ectx.set_source_location(kajit_emit::SourceLocation {
+                    file: 1,
+                    line,
+                    column: 0,
+                });
+            }
             let term = &self.func.terms[block.term.0 as usize];
             self.emit_terminator(term, next_block_id);
         }
@@ -1043,6 +1061,15 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             }
         }
 
+        // Build debug line map for source location tracking
+        let (line_by_op, _) = super::build_debug_line_maps(program);
+        let lambda_id = func.lambda_id.index() as u32;
+        let line_map: HashMap<cfg_mir::OpId, u32> = line_by_op
+            .iter()
+            .filter(|((lid, _), _)| *lid == lambda_id)
+            .map(|((_, op_id), &line)| (*op_id, line))
+            .collect();
+
         let mut ctx = EmitContext {
             ectx: &mut ectx,
             func,
@@ -1051,6 +1078,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             success_exit,
             slot_base,
             const_values,
+            line_map,
         };
 
         ctx.emit_function();
@@ -1063,10 +1091,15 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     // Finalize
     let (buf, asm_program) = ectx.finalize();
 
+    let source_map = buf.source_map.clone();
     LinearBackendResult {
         buf,
         entry,
-        source_map: None,
+        source_map: if source_map.is_empty() {
+            None
+        } else {
+            Some(source_map)
+        },
         backend_debug_info: None,
         asm_program,
     }
