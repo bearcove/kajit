@@ -171,9 +171,20 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
     }
 
     // Remove theta from parent region's node list
+    let before_count = func.regions[parent_region].nodes.len();
     func.regions[parent_region]
         .nodes
         .retain(|&nid| nid != theta_node_id);
+    let after_count = func.regions[parent_region].nodes.len();
+    eprintln!(
+        "[unroll] removed theta from region: {} -> {} nodes. Has thetas: {}",
+        before_count,
+        after_count,
+        func.regions[parent_region]
+            .nodes
+            .iter()
+            .any(|&nid| matches!(func.nodes[nid].kind, NodeKind::Theta { .. }))
+    );
 
     // Topologically sort the parent region's nodes.
     topological_sort_region(func, parent_region);

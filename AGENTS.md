@@ -279,6 +279,36 @@ Full reference: `docs/pipeline-debugging.md` § "LLDB debugging of JIT code"
 
 **Key architecture detail:** Both backends (`aarch64/mod.rs`, `x86_64/mod.rs`) call `set_source_location()` in their instruction emission loops, mapping each emitted CFG-MIR op (`OpId`) to a DWARF line number in the generated `.cfg-mir` listing. The DWARF sections are built in `jit_dwarf.rs` and attached to the in-memory ELF in `jit_debug.rs`. LLDB requires all three DWARF sections (`.debug_info` with a CU referencing `.debug_line` via `DW_AT_stmt_list`, plus `.debug_abbrev`) — `.debug_line` alone is silently ignored.
 
+### LLDB via MCP (for Claude Code agents)
+
+To debug corpus tests with the LLDB MCP tool:
+
+```
+# 1. Build the test binary
+cargo test -p kajit --test corpus --no-run 2>&1 | grep Executable
+# Output: Executable tests/corpus.rs (target/debug/deps/corpus-HASH)
+
+# 2. Start LLDB session via MCP
+lldb_start
+
+# 3. Load the binary (MUST use absolute path)
+lldb_command: file /Users/amos/bearcove/kajit/target/debug/deps/corpus-HASH
+
+# 4. Set environment variables
+lldb_command: env KAJIT_CFG_OPTS=-all,-const_phi_elim
+lldb_command: env KAJIT_DEBUG=1
+lldb_command: env KAJIT_DUMP_STAGES=emit
+lldb_command: env KAJIT_DUMP_DIR=/tmp/kajit-dump
+
+# 5. Set test filter
+lldb_command: settings set target.run-args -- "postcard::scalar_u32_v0" --exact --nocapture
+
+# 6. Run
+lldb_command: run
+```
+
+The binary hash changes on recompilation. Always re-discover it with `cargo test --no-run`.
+
 ## Multi-agent workflow (bud)
 
 Large tasks are delegated to a buddy agent via `bud assign`. The captain (lead agent) stays in conversation with the user, reviews work, commits, and steers.

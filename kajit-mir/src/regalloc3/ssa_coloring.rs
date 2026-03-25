@@ -83,6 +83,12 @@ pub fn allocate(
             spilled.len(),
             coloring.len()
         );
+        // Print all allocations sorted by vreg
+        let mut allocs: Vec<_> = coloring.iter().collect();
+        allocs.sort_by_key(|(v, _)| v.index());
+        for (v, p) in &allocs {
+            eprintln!("  v{} -> p{}", v.index(), p.0);
+        }
         // Check for conflicts: any two colored vregs that interfere
         // and got the same color
         let mut conflicts = 0;
