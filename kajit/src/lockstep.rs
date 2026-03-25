@@ -211,58 +211,128 @@ pub fn run_lockstep(
         prev_dwarf_line = dwarf_line;
 
         // Step interpreter until it reaches dwarf_line (where the JIT is now).
-        // This executes the op at executed_line AND any terminators/branches
-        // that the JIT fell through without a separate source line.
+        // The interpreter should pass through executed_line on the way.
         let mut last_event = None;
-        let mut interp_line = 0u32;
-        for _ in 0..1000 {
-            // Check current position before stepping
+        let mut synced = false;
+        let max_sync = 500;
+        for _sync_step in 0..max_sync {
             let pre_loc = session.state().location;
-            let pre_line = op_to_line
-                .get(&(
-                    pre_loc.block.0,
-                    pre_loc.at_terminator,
-                    if pre_loc.at_terminator {
-                        0
-                    } else {
-                        pre_loc.next_inst_index
-                    },
-                ))
-                .copied()
-                .unwrap_or(0);
+            let pre_line = loc_to_line(&op_to_line, &pre_loc);
+
+            // Capture: if we're AT executed_line, this is the op the JIT just ran
+            if pre_line == executed_line && last_event.is_none() {
+                // Step this op and capture the event
+                let event = session
+                    .step_forward()
+                    .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+                last_event = Some(event.clone());
+                if event.returned {
+                    break;
+                }
+                continue;
+            }
+
             if pre_line == dwarf_line {
-                break; // already at the JIT's current position
+                synced = true;
+                break;
             }
 
             let event = session
                 .step_forward()
                 .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
 
-            let loc = &event.location_before;
-            interp_line = op_to_line
-                .get(&(
-                    loc.block.0,
-                    loc.at_terminator,
-                    if loc.at_terminator {
-                        0
-                    } else {
-                        loc.next_inst_index
-                    },
-                ))
-                .copied()
-                .unwrap_or(0);
-
-            // Remember the event for the executed_line op (for def/use extraction)
-            if interp_line == executed_line {
-                last_event = Some(event.clone());
-            }
-
             if event.returned {
                 break;
             }
         }
 
-        let Some(event) = last_event else { continue };
+        if !synced && !session.state().returned {
+            let cur_loc = session.state().location;
+            let cur_line = loc_to_line(&op_to_line, &cur_loc);
+            let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
+            let line_text = |n: u32| -> String {
+                if n > 0 && (n as usize) <= listing_lines.len() {
+                    listing_lines[n as usize - 1].clone()
+                } else {
+                    format!("<line {n}>")
+                }
+            };
+
+            let source_line = format!(
+                "\
+SYNC FAILURE at JIT step {jit_steps}
+
+  JIT executed line {executed_line}: {}
+  JIT now at line {dwarf_line}: {}
+  interpreter stuck at line {cur_line} (b{} inst[{}] term={}): {}
+
+  machine code at JIT position:
+{disasm}",
+                line_text(executed_line),
+                line_text(dwarf_line),
+                cur_loc.block.index(),
+                cur_loc.next_inst_index,
+                cur_loc.at_terminator,
+                line_text(cur_line),
+            );
+
+            return Ok(LockstepResult {
+                steps: jit_steps,
+                divergence: Some(Divergence {
+                    step: jit_steps,
+                    dwarf_line: executed_line,
+                    source_line,
+                    vreg_diffs: Vec::new(),
+                }),
+                completed: false,
+            });
+        }
+
+        let Some(event) = last_event else {
+            let cur_loc = session.state().location;
+            let cur_line = loc_to_line(&op_to_line, &cur_loc);
+            let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
+            let line_text = |n: u32| -> String {
+                if n > 0 && (n as usize) <= listing_lines.len() {
+                    listing_lines[n as usize - 1].clone()
+                } else {
+                    format!("<line {n}>")
+                }
+            };
+
+            let source_line = format!(
+                "\
+LOCKSTEP DESYNC at JIT step {jit_steps}
+
+  JIT executed line {executed_line}: {}
+  JIT now at line {dwarf_line}: {}
+  interpreter at line {cur_line} (b{} inst[{}] term={}): {}
+
+  The interpreter could not find line {executed_line} — the JIT and interpreter
+  are visiting different blocks. This is either a control flow bug or a
+  DWARF line numbering mismatch.
+
+  machine code at JIT position:
+{disasm}",
+                line_text(executed_line),
+                line_text(dwarf_line),
+                cur_loc.block.index(),
+                cur_loc.next_inst_index,
+                cur_loc.at_terminator,
+                line_text(cur_line),
+            );
+
+            return Ok(LockstepResult {
+                steps: jit_steps,
+                divergence: Some(Divergence {
+                    step: jit_steps,
+                    dwarf_line: executed_line,
+                    source_line,
+                    vreg_diffs: Vec::new(),
+                }),
+                completed: false,
+            });
+        };
         let state = session.state();
         let func = &program.funcs[0];
         let loc = &event.location_before;
@@ -452,6 +522,24 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
             }
         }
     }
+}
+
+/// Look up the DWARF line for an interpreter ProgramLocation.
+fn loc_to_line(
+    map: &std::collections::HashMap<(u32, bool, usize), u32>,
+    loc: &kajit_mir::ProgramLocation,
+) -> u32 {
+    map.get(&(
+        loc.block.0,
+        loc.at_terminator,
+        if loc.at_terminator {
+            0
+        } else {
+            loc.next_inst_index
+        },
+    ))
+    .copied()
+    .unwrap_or(0)
 }
 
 /// Read a vreg's value from the JIT process.
