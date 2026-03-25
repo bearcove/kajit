@@ -16,7 +16,7 @@ readme = "README.md"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+facet = "0.44"
 itoa = "1"
 zmij = "1"
 regalloc2 = "0.15"

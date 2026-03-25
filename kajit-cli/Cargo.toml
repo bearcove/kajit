@@ -13,6 +13,7 @@ path = "src/main.rs"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
+kajit = { path = "../kajit" }
 kajit-ir = { path = "../kajit-ir" }
 kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }

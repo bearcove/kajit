@@ -15,5 +15,5 @@ indexmap = "2"
 regalloc2 = "0.15"
 
 [dev-dependencies]
-facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+facet = "0.44"
 kajit-ir-text = { path = "../kajit-ir-text" }

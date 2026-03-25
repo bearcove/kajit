@@ -13,7 +13,7 @@ license = "MIT OR Apache-2.0"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+facet = "0.44"
 kajit-format = { path = "../kajit-format" }
 kajit-hir = { path = "../kajit-hir" }
 kajit-malum = { path = "../kajit-malum" }

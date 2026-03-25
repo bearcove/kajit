@@ -20,7 +20,7 @@ enum Command {
         real: bool,
     },
 
-    /// Evaluate a CFG-MIR program and print the result
+    /// Evaluate a CFG-MIR program with the ideal interpreter
     Eval {
         /// Path to CFG-MIR text file
         #[facet(args::positional)]
@@ -30,13 +30,27 @@ enum Command {
         #[facet(args::positional, default)]
         input_hex: Option<String>,
     },
+
+    /// Compile a type and dump pipeline stages
+    Compile {
+        /// Format: postcard or json
+        #[facet(args::positional)]
+        format: String,
+
+        /// Type to compile (e.g. u32, Vec<u8>, MyStruct)
+        #[facet(args::positional)]
+        ty: String,
+
+        /// Stages to dump: hir, ir, linear, cfg, emit, asm, all
+        #[facet(args::named, args::short = 's', default)]
+        stage: Option<String>,
+    },
 }
 
 fn main() {
     let args: Args = figue::from_std_args().unwrap();
-    let cmd = args.command;
 
-    match cmd {
+    match args.command {
         Command::Mcp { real } => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             let result = if real {
@@ -52,8 +66,13 @@ fn main() {
         Command::Eval { cfg_mir, input_hex } => {
             cmd_eval(&cfg_mir, input_hex.as_deref().unwrap_or(""));
         }
+        Command::Compile { format, ty, stage } => {
+            cmd_compile(&format, &ty, stage.as_deref().unwrap_or("all"));
+        }
     }
 }
+
+// ─── eval: ideal interpreter on CFG-MIR ──────────────────────────────────────
 
 fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
     let mir_text = std::fs::read_to_string(cfg_mir_path).unwrap_or_else(|e| {
@@ -67,14 +86,12 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
     });
 
     let input = parse_hex(input_hex);
-    let session = kajit_mir::DebuggerSession::new(&program, &input).unwrap_or_else(|e| {
+    let mut session = kajit_mir::DebuggerSession::new(&program, &input).unwrap_or_else(|e| {
         eprintln!("error: failed to create session: {e}");
         std::process::exit(1);
     });
 
-    // Run to completion
-    let mut session = session;
-    let events = session
+    let _events = session
         .run_until(kajit_mir::RunUntilTarget::Return, 100_000)
         .unwrap_or_else(|e| {
             eprintln!("error: execution failed: {e}");
@@ -82,8 +99,10 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
         });
 
     let state = session.state();
+    print_interpreter_state(&state);
+}
 
-    // Print result
+fn print_interpreter_state(state: &kajit_mir::DebuggerState) {
     println!("steps: {}", state.step_count);
     println!("cursor: {}", state.cursor);
     if let Some(trap) = &state.trap {
@@ -94,7 +113,6 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
     }
     println!("output: {}", encode_hex(&state.output));
 
-    // Non-zero vregs
     let nonzero: Vec<_> = state
         .vregs
         .iter()
@@ -109,6 +127,114 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
         println!();
     }
 }
+
+// ─── compile: full pipeline dump ─────────────────────────────────────────────
+
+fn cmd_compile(format: &str, ty: &str, stages: &str) {
+    let kind = match format {
+        "postcard" => kajit::DecoderKind::Postcard,
+        "json" => kajit::DecoderKind::Json,
+        other => {
+            eprintln!("error: unknown format '{other}', expected 'postcard' or 'json'");
+            std::process::exit(1);
+        }
+    };
+
+    let shape = resolve_shape(ty);
+
+    let dump_all = stages == "all";
+    let dump = |name: &str| dump_all || stages.split(',').any(|s| s.trim() == name);
+
+    // HIR
+    if dump("hir") {
+        let hir_text = kajit::debug_hir_text(shape, kind);
+        println!("=== HIR ===");
+        println!("{hir_text}");
+    }
+
+    // IR + opt timeline
+    if dump("ir") || dump("opts") {
+        let timeline = kajit::debug_ir_opt_timeline_text(shape, kind);
+        for (pass_name, ir_text) in &timeline {
+            println!("=== IR after {pass_name} ===");
+            // Count nodes
+            let node_count = ir_text.matches(" = ").count();
+            println!("  ({node_count} nodes)");
+            if dump("ir") {
+                println!("{ir_text}");
+            }
+        }
+    }
+
+    // Linear IR
+    if dump("linear") {
+        let linear_text = kajit::debug_linear_ir_text(shape, kind);
+        println!("=== Linear IR ===");
+        println!("{linear_text}");
+    }
+
+    // CFG-MIR
+    if dump("cfg") {
+        let cfg_text = kajit::debug_cfg_mir_text(shape, kind);
+        let block_count = cfg_text.matches("block b").count();
+        let inst_count = cfg_text.matches("inst i").count();
+        let edge_count = cfg_text.matches("edge e").count();
+        println!("=== CFG-MIR ({block_count} blocks, {inst_count} insts, {edge_count} edges) ===");
+        println!("{cfg_text}");
+    }
+
+    // Assembly (aarch64 only)
+    #[cfg(target_arch = "aarch64")]
+    if dump("asm") || dump("emit") {
+        let asm_text = kajit::assembly_text(shape, kind);
+        let inst_count = asm_text
+            .lines()
+            .filter(|l| !l.is_empty() && !l.starts_with('.'))
+            .count();
+        println!("=== Assembly ({inst_count} instructions) ===");
+        println!("{asm_text}");
+    }
+
+    // Stats summary
+    if dump_all {
+        let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
+        let ir_nodes = ir_text.matches(" = ").count();
+        let cfg_blocks = cfg_text.matches("block b").count();
+        let cfg_insts = cfg_text.matches("inst i").count();
+        let cfg_edges = cfg_text.matches("edge e").count();
+        println!("=== Stats ===");
+        println!("  IR nodes:   {ir_nodes}");
+        println!("  CFG blocks: {cfg_blocks}");
+        println!("  CFG insts:  {cfg_insts}");
+        println!("  CFG edges:  {cfg_edges}");
+    }
+}
+
+/// Resolve a type name to a facet Shape.
+///
+/// Supports built-in types: u8, u16, u32, u64, i8, i16, i32, i64, bool, String
+fn resolve_shape(ty: &str) -> &'static facet::Shape {
+    use facet::Facet;
+    match ty {
+        "u8" => u8::SHAPE,
+        "u16" => u16::SHAPE,
+        "u32" => u32::SHAPE,
+        "u64" => u64::SHAPE,
+        "i8" => i8::SHAPE,
+        "i16" => i16::SHAPE,
+        "i32" => i32::SHAPE,
+        "i64" => i64::SHAPE,
+        "bool" => bool::SHAPE,
+        "String" | "string" => String::SHAPE,
+        other => {
+            eprintln!("error: unknown type '{other}'");
+            eprintln!("supported: u8 u16 u32 u64 i8 i16 i32 i64 bool String");
+            std::process::exit(1);
+        }
+    }
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
 
 fn parse_hex(s: &str) -> Vec<u8> {
     let cleaned: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();

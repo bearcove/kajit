@@ -14,7 +14,7 @@ kajit-parse-util = { path = "../kajit-parse-util" }
 chumsky = "1.0.0-alpha.8"
 
 [dev-dependencies]
-facet = { git = "https://github.com/facet-rs/facet", branch = "main" }
+facet = "0.44"
 datatest-stable = "0.3"
 
 [[test]]
