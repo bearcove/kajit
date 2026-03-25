@@ -131,7 +131,15 @@ pub fn allocate(
     }
 
     // Phase 3: Coalesce — bounded phi-affinity recoloring
-    let coloring = coalesce_phase(func, liveness, &dom, &def_block, coloring, &spilled);
+    let coloring = coalesce_phase(
+        func,
+        liveness,
+        &dom,
+        &def_block,
+        coloring,
+        &spilled,
+        &callee_saved_set,
+    );
 
     // Validate: no caller-saved register holds a value live across a call.
     // This catches the bug where a vreg is assigned a caller-saved register
@@ -813,7 +821,44 @@ fn coalesce_phase(
     def_block: &HashMap<VReg, BlockId>,
     mut coloring: HashMap<VReg, PReg>,
     spilled: &HashSet<VReg>,
+    callee_saved_set: &HashSet<PReg>,
 ) -> HashMap<VReg, PReg> {
+    // Pre-compute: which vregs are live across a clobbering instruction.
+    // These must NOT be recolored to caller-saved registers.
+    let mut must_be_callee_saved: HashSet<VReg> = HashSet::new();
+    for block in &func.blocks {
+        if block.dead {
+            continue;
+        }
+        let has_clobber = block
+            .insts
+            .iter()
+            .any(|inst_id| func.insts[inst_id.0 as usize].clobbers.caller_saved_gpr);
+        if !has_clobber {
+            continue;
+        }
+        // Every vreg that's live-out of this block must be callee-saved
+        if let Some(live_out) = liveness.live_out.get(&block.id) {
+            for &vreg in live_out {
+                if !spilled.contains(&vreg) {
+                    must_be_callee_saved.insert(vreg);
+                }
+            }
+        }
+        // Edge arg sources must also survive the call
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            if edge.from.0 == u32::MAX {
+                continue;
+            }
+            for arg in &edge.args {
+                if !spilled.contains(&arg.source) {
+                    must_be_callee_saved.insert(arg.source);
+                }
+            }
+        }
+    }
+
     // Build phi affinity groups from edge args
     for edge in &func.edges {
         if edge.from.0 == u32::MAX {
@@ -834,12 +879,22 @@ fn coalesce_phase(
                 continue;
             };
 
+            // Don't recolor to caller-saved if the vreg must survive a call
+            let target_ok =
+                !must_be_callee_saved.contains(&arg.target) || callee_saved_set.contains(&sc);
+            let source_ok =
+                !must_be_callee_saved.contains(&arg.source) || callee_saved_set.contains(&tc);
+
             // Try to recolor the target to match the source
-            if can_recolor(arg.target, sc, &coloring, liveness, dom, def_block, spilled) {
+            if target_ok
+                && can_recolor(arg.target, sc, &coloring, liveness, dom, def_block, spilled)
+            {
                 coloring.insert(arg.target, sc);
             }
             // Else try to recolor the source to match the target
-            else if can_recolor(arg.source, tc, &coloring, liveness, dom, def_block, spilled) {
+            else if source_ok
+                && can_recolor(arg.source, tc, &coloring, liveness, dom, def_block, spilled)
+            {
                 coloring.insert(arg.source, tc);
             }
         }
