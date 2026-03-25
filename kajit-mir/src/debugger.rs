@@ -669,7 +669,6 @@ impl DebuggerSession {
         // into the output buffer at the given field_offset.
         let out_ptr: Option<*mut u8> = if dst.is_none() {
             let offset = field_offset as usize;
-            self.ensure_output_len(offset + 64);
             Some(unsafe { self.output.as_mut_ptr().add(offset) })
         } else {
             None

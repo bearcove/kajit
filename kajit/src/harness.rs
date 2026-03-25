@@ -408,17 +408,6 @@ typedef struct {{
     uint8_t trusted_utf8;    // bool
 }} DeserContext;
 
-// Intrinsic implementations (called by JIT code)
-uint8_t *kajit_alloc_persistent(DeserContext *ctx, size_t size, size_t align) {{
-    if (size == 0) return NULL;
-    void *buf;
-    if (posix_memalign(&buf, align < sizeof(void*) ? sizeof(void*) : align, size) != 0) {{
-        ctx->error.code = 7; // AllocError
-        return NULL;
-    }}
-    return (uint8_t *)buf;
-}}
-
 // The JIT-compiled decoder function (linked from the .o file)
 extern void {func_name}(uint8_t *output, DeserContext *ctx);
 
@@ -927,6 +916,10 @@ fn patch_object_dwarf(
 }
 
 fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), HarnessError> {
+    // Find the kajit staticlib for intrinsic resolution.
+    // Build it if needed: `cargo rustc -p kajit --crate-type=staticlib`
+    let staticlib = find_or_build_staticlib()?;
+
     let output = std::process::Command::new("cc")
         .arg("-g") // keep debug info
         .arg("-O0") // no optimization (so DWARF is accurate)
@@ -935,6 +928,11 @@ fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), H
         .arg(exe_path)
         .arg(c_path)
         .arg(obj_path)
+        .arg(&staticlib) // link kajit staticlib for intrinsics
+        .arg("-lSystem")
+        .arg("-lc++")
+        .arg("-framework")
+        .arg("Security") // Rust std dependency
         .output()
         .map_err(|e| HarnessError::Io("invoke cc", e))?;
 
@@ -944,6 +942,47 @@ fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), H
     }
 
     Ok(())
+}
+
+/// Find or build the kajit staticlib for linking intrinsics into standalone harnesses.
+fn find_or_build_staticlib() -> Result<std::path::PathBuf, HarnessError> {
+    // Check common locations for an existing staticlib
+    let candidates = [
+        "target/debug/libkajit.a",
+        "target/release/libkajit.a",
+        "../target/debug/libkajit.a",
+    ];
+    for path in &candidates {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    // Try to build it
+    eprintln!("[harness] building kajit staticlib...");
+    let output = std::process::Command::new("cargo")
+        .args(["rustc", "-p", "kajit", "--crate-type=staticlib"])
+        .output()
+        .map_err(|e| HarnessError::Io("build staticlib", e))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(HarnessError::Link(format!(
+            "failed to build kajit staticlib: {stderr}"
+        )));
+    }
+
+    // Find the built lib
+    for path in &candidates {
+        let p = std::path::PathBuf::from(path);
+        if p.exists() {
+            return Ok(p);
+        }
+    }
+
+    Err(HarnessError::Link(
+        "kajit staticlib not found after build".into(),
+    ))
 }
 
 #[derive(Debug)]
