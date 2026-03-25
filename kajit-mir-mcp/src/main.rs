@@ -17,12 +17,12 @@ use serde_json::{Map as JsonMap, Value as JsonValue, json};
 
 #[mcp_tool(
     name = "session_new",
-    description = "Create a new CFG-MIR debugger session."
+    description = "Create a new CFG-MIR debugger session from a file."
 )]
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 struct SessionNewTool {
-    /// CFG-MIR text program
-    cfg_mir_text: String,
+    /// Path to a CFG-MIR text file
+    cfg_mir_path: String,
     /// Input bytes as hex string (e.g. '8101' or '[0x81, 0x01]')
     #[serde(default)]
     input_hex: Option<String>,
@@ -175,7 +175,9 @@ impl MirHandler {
     }
 
     fn session_new(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
-        let mir_text = arg_str(args, "cfg_mir_text")?;
+        let mir_path = arg_str(args, "cfg_mir_path")?;
+        let mir_text = std::fs::read_to_string(&mir_path)
+            .map_err(|e| format!("failed to read {mir_path}: {e}"))?;
         let input_hex = arg_opt_str(args, "input_hex").unwrap_or_default();
         let input = parse_hex_input(&input_hex)?;
         let program = kajit_mir_text::parse_cfg_mir(&mir_text).map_err(|e| e.to_string())?;
@@ -194,11 +196,13 @@ impl MirHandler {
             .get(&session_id)
             .expect("inserted session should exist")
             .state();
-        Ok(json!({
-            "session_id": session_id,
-            "input_hex": encode_hex(&input),
-            "state": state_json(&snapshot),
-        }))
+        let mut md = format!(
+            "Session **{}** created (input: `{}`)\n\n",
+            session_id,
+            encode_hex(&input)
+        );
+        md.push_str(&format_state_markdown(&snapshot));
+        Ok(json!({ "text": md }))
     }
 
     fn session_close(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
@@ -289,17 +293,16 @@ impl MirHandler {
 
         let events = session
             .run_until(target, max_steps)
-            .map_err(|e| e.to_string())?
-            .iter()
-            .map(event_json)
-            .collect::<Vec<_>>();
+            .map_err(|e| e.to_string())?;
 
-        Ok(json!({
-            "session_id": session_id,
-            "events": events,
-            "state": state_json(&session.state()),
-            "max_steps": max_steps,
-        }))
+        let mut md = format!("**Session {}** — {} steps:\n\n", session_id, events.len());
+        for event in &events {
+            md.push_str(&format_event_markdown(event));
+            md.push('\n');
+        }
+        md.push_str(&format!("\n**Final state:**\n"));
+        md.push_str(&format_state_markdown(&session.state()));
+        Ok(json!({ "text": md }))
     }
 
     fn session_state(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
@@ -310,10 +313,9 @@ impl MirHandler {
             .get(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?
             .state();
-        Ok(json!({
-            "session_id": session_id,
-            "state": state_json(&state),
-        }))
+        let mut md = format!("**Session {}**\n\n", session_id);
+        md.push_str(&format_state_markdown(&state));
+        Ok(json!({ "text": md }))
     }
 
     fn session_inspect_vreg(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
@@ -325,12 +327,7 @@ impl MirHandler {
             .get(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
         let value = session.inspect_vreg(vreg);
-        Ok(json!({
-            "session_id": session_id,
-            "vreg": vreg,
-            "value": value,
-            "value_hex": format!("0x{value:x}"),
-        }))
+        Ok(json!({ "text": format!("v{} = {} (0x{:x})", vreg, value, value) }))
     }
 
     fn session_inspect_output(
@@ -346,13 +343,9 @@ impl MirHandler {
             .get(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
         let bytes = session.inspect_output(start, len);
-        Ok(json!({
-            "session_id": session_id,
-            "start": start,
-            "len": bytes.len(),
-            "bytes": bytes,
-            "bytes_hex": encode_hex(&bytes),
-        }))
+        Ok(
+            json!({ "text": format!("output[{}..{}]: `{}`", start, start + bytes.len(), encode_hex(&bytes)) }),
+        )
     }
 }
 
@@ -420,25 +413,81 @@ fn trap_json(trap: &kajit_mir::InterpreterTrap) -> JsonValue {
 }
 
 fn state_json(state: &DebuggerState) -> JsonValue {
-    let trap = state
-        .trap
-        .map(|trap| trap_json(&trap))
-        .unwrap_or(JsonValue::Null);
+    // Markdown-friendly output instead of raw JSON
     json!({
-        "step_count": state.step_count,
-        "location": {
-            "block": state.location.block.0,
-            "next_inst_index": state.location.next_inst_index,
-            "at_terminator": state.location.at_terminator,
-        },
-        "cursor": state.cursor,
-        "trap": trap,
-        "returned": state.returned,
-        "halted": state.halted,
-        "vregs": state.vregs,
-        "output_len": state.output.len(),
-        "output_hex": encode_hex(&state.output),
+        "text": format_state_markdown(state),
     })
+}
+
+fn format_state_markdown(state: &DebuggerState) -> String {
+    let mut s = String::new();
+    s.push_str(&format!(
+        "**b{}** inst={} {} | cursor={} | steps={}\n",
+        state.location.block.0,
+        state.location.next_inst_index,
+        if state.location.at_terminator {
+            "(at term)"
+        } else {
+            ""
+        },
+        state.cursor,
+        state.step_count,
+    ));
+    if let Some(trap) = &state.trap {
+        s.push_str(&format!(
+            "**TRAP**: {:?} at offset {}\n",
+            trap.code, trap.offset
+        ));
+    }
+    if state.returned {
+        s.push_str("**RETURNED**\n");
+    }
+    if state.halted {
+        s.push_str("**HALTED**\n");
+    }
+    s.push_str(&format!("output: `{}`\n", encode_hex(&state.output)));
+
+    // Only show non-zero vregs
+    let nonzero: Vec<_> = state
+        .vregs
+        .iter()
+        .enumerate()
+        .filter(|(_, v)| **v != 0)
+        .collect();
+    if !nonzero.is_empty() {
+        s.push_str("vregs: ");
+        for (i, (idx, val)) in nonzero.iter().enumerate() {
+            if i > 0 {
+                s.push_str(", ");
+            }
+            s.push_str(&format!("v{}={}", idx, val));
+        }
+        s.push('\n');
+    }
+    s
+}
+
+fn format_event_markdown(event: &StepEvent) -> String {
+    let mut s = String::new();
+    let arrow = if event.location_before.block != event.location_after.block {
+        format!(
+            "b{}→b{}",
+            event.location_before.block.0, event.location_after.block.0
+        )
+    } else {
+        format!("b{}", event.location_before.block.0)
+    };
+    s.push_str(&format!(
+        "#{} [{}] `{}` cursor={}",
+        event.step_index, arrow, event.detail, event.cursor_after,
+    ));
+    if let Some(trap) = &event.trap {
+        s.push_str(&format!(" **TRAP {:?}**", trap.code));
+    }
+    if event.returned {
+        s.push_str(" **RETURN**");
+    }
+    s
 }
 
 fn event_json(event: &StepEvent) -> JsonValue {
@@ -469,7 +518,12 @@ fn event_json(event: &StepEvent) -> JsonValue {
 }
 
 fn call_tool_ok(payload: JsonValue) -> CallToolResult {
-    let text = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string());
+    // If payload has a "text" field, use it directly as markdown
+    let text = if let Some(t) = payload.get("text").and_then(|v| v.as_str()) {
+        t.to_string()
+    } else {
+        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
+    };
     CallToolResult::text_content(vec![text.into()])
 }
 
@@ -560,9 +614,116 @@ async fn run() -> Result<(), String> {
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("{error}");
-        std::process::exit(1);
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--real") {
+        // Real mode: run the actual MCP server
+        if let Err(error) = run().await {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    } else {
+        // Proxy mode: spawn --real subprocess and forward stdin/stdout
+        if let Err(error) = run_proxy().await {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Proxy mode: spawn the real MCP server as a subprocess and forward
+/// stdin/stdout bidirectionally. This lets the MCP connection survive
+/// rebuilds — just call the `reload` tool to restart the subprocess.
+async fn run_proxy() -> Result<(), String> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::process::Command;
+
+    let exe = std::env::current_exe().map_err(|e| format!("can't find self: {e}"))?;
+
+    loop {
+        let mut child = Command::new(&exe)
+            .arg("--real")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("failed to spawn --real: {e}"))?;
+
+        let mut child_stdin = child.stdin.take().unwrap();
+        let child_stdout = child.stdout.take().unwrap();
+
+        let mut proxy_stdin = BufReader::new(tokio::io::stdin());
+        let mut child_stdout_reader = BufReader::new(child_stdout);
+
+        // Forward proxy stdin → child stdin, child stdout → proxy stdout
+        let mut proxy_stdout = tokio::io::stdout();
+
+        let mut should_reload = false;
+
+        loop {
+            let mut from_client = String::new();
+            let mut from_child = String::new();
+
+            tokio::select! {
+                result = proxy_stdin.read_line(&mut from_client) => {
+                    match result {
+                        Ok(0) => return Ok(()), // EOF from client
+                        Ok(_) => {
+                            // Check if this is a reload request
+                            if from_client.contains("\"reload\"") && from_client.contains("tools/call") {
+                                // Parse JSON-RPC to extract the ID, send back a success response
+                                if let Ok(parsed) = serde_json::from_str::<JsonValue>(&from_client) {
+                                    let id = parsed.get("id").cloned().unwrap_or(JsonValue::Null);
+                                    let response = json!({
+                                        "jsonrpc": "2.0",
+                                        "id": id,
+                                        "result": {
+                                            "content": [{
+                                                "type": "text",
+                                                "text": "Reloading backend..."
+                                            }]
+                                        }
+                                    });
+                                    let resp_str = serde_json::to_string(&response).unwrap();
+                                    proxy_stdout.write_all(resp_str.as_bytes()).await.ok();
+                                    proxy_stdout.write_all(b"\n").await.ok();
+                                    proxy_stdout.flush().await.ok();
+                                }
+                                should_reload = true;
+                                break;
+                            }
+                            // Forward to child
+                            child_stdin.write_all(from_client.as_bytes()).await.ok();
+                            child_stdin.flush().await.ok();
+                        }
+                        Err(e) => return Err(format!("stdin read error: {e}")),
+                    }
+                }
+                result = child_stdout_reader.read_line(&mut from_child) => {
+                    match result {
+                        Ok(0) => {
+                            // Child died — restart
+                            should_reload = true;
+                            break;
+                        }
+                        Ok(_) => {
+                            // Forward to client
+                            proxy_stdout.write_all(from_child.as_bytes()).await.ok();
+                            proxy_stdout.flush().await.ok();
+                        }
+                        Err(e) => return Err(format!("child stdout read error: {e}")),
+                    }
+                }
+            }
+        }
+
+        // Kill child and restart if reload requested
+        child.kill().await.ok();
+        child.wait().await.ok();
+
+        if !should_reload {
+            return Ok(());
+        }
+        eprintln!("[kajit-mir-mcp] reloading backend...");
     }
 }
 
