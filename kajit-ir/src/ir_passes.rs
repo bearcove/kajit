@@ -170,6 +170,13 @@ fn run_dead_code_elimination_pass(func: &mut IrFunc) {
 
 fn run_unroll_bounded_thetas_pass(func: &mut IrFunc) {
     crate::unroll_theta::unroll_bounded_thetas(func);
+    if std::env::var("KAJIT_DUMP_UNROLL").is_ok() {
+        let registry = crate::IntrinsicRegistry::empty();
+        eprintln!(
+            "=== AFTER unroll ===\n{}\n=== END ===",
+            func.display_with_registry(&registry)
+        );
+    }
     debug_verify(func, "unroll_bounded_thetas");
 }
 

@@ -169,6 +169,81 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
     func.regions[parent_region]
         .nodes
         .retain(|&nid| nid != theta_node_id);
+
+    // Topologically sort the parent region's nodes.
+    // After unrolling, cloned nodes and gamma cascades may be out of order
+    // relative to pre-existing nodes that use their outputs.
+    topological_sort_region(func, parent_region);
+}
+
+/// Sort a region's nodes in topological order (dependencies before dependents).
+fn topological_sort_region(func: &mut IrFunc, region_id: crate::RegionId) {
+    use std::collections::HashSet;
+
+    let nodes = func.regions[region_id].nodes.clone();
+    let node_set: HashSet<NodeId> = nodes.iter().copied().collect();
+
+    // Build adjacency: for each node, which other nodes in this region does it depend on?
+    let mut deps: std::collections::HashMap<NodeId, Vec<NodeId>> = std::collections::HashMap::new();
+    for &nid in &nodes {
+        let mut node_deps = Vec::new();
+        for input in &func.nodes[nid].inputs {
+            if let PortSource::Node(out) = input.source {
+                if node_set.contains(&out.node) && out.node != nid {
+                    node_deps.push(out.node);
+                }
+            }
+        }
+        deps.insert(nid, node_deps);
+    }
+
+    // Kahn's algorithm
+    let mut in_degree: std::collections::HashMap<NodeId, usize> = std::collections::HashMap::new();
+    for &nid in &nodes {
+        in_degree.entry(nid).or_insert(0);
+        for &dep in &deps[&nid] {
+            // dep is used by nid, so nid depends on dep
+            // But we need: for each node, how many nodes depend on it
+        }
+    }
+
+    // Recompute: in_degree[n] = how many of n's dependencies are in this region
+    for &nid in &nodes {
+        in_degree.insert(nid, deps[&nid].len());
+    }
+
+    let mut queue: std::collections::VecDeque<NodeId> = std::collections::VecDeque::new();
+    for &nid in &nodes {
+        if in_degree[&nid] == 0 {
+            queue.push_back(nid);
+        }
+    }
+
+    // Build reverse deps: for each node, which nodes depend on it?
+    let mut rdeps: std::collections::HashMap<NodeId, Vec<NodeId>> =
+        std::collections::HashMap::new();
+    for &nid in &nodes {
+        for &dep in &deps[&nid] {
+            rdeps.entry(dep).or_default().push(nid);
+        }
+    }
+
+    let mut sorted = Vec::with_capacity(nodes.len());
+    while let Some(nid) = queue.pop_front() {
+        sorted.push(nid);
+        for &dependent in rdeps.get(&nid).unwrap_or(&Vec::new()) {
+            let deg = in_degree.get_mut(&dependent).unwrap();
+            *deg -= 1;
+            if *deg == 0 {
+                queue.push_back(dependent);
+            }
+        }
+    }
+
+    // If sorted has fewer nodes than the original, there's a cycle (shouldn't happen)
+    if sorted.len() == nodes.len() {
+        func.regions[region_id].nodes = sorted;
+    }
 }
 
 /// Build the unrolled gamma cascade, returning the final output sources.
