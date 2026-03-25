@@ -411,7 +411,14 @@ fn build_dsym(
         .segments()
         .find(|s| s.name() == Ok(Some("__TEXT")))
         .map(|s| (s.address(), s.size()))
-        .unwrap_or((symbol_addr, 0x10000)); // fallback: use symbol addr + generous size
+        .unwrap_or((symbol_addr, 0x10000));
+
+    // Get symbol size
+    let code_size = exe_obj
+        .symbols()
+        .find(|s| s.name() == Ok(&mangled))
+        .map(|s| s.size())
+        .unwrap_or(0x1000);
 
     drop(exe_obj);
 
@@ -447,6 +454,9 @@ fn build_dsym(
         &dwarf.debug_abbrev,
         text_vmaddr,
         text_vmsize,
+        symbol_addr,
+        code_size,
+        &mangled,
     );
 
     // Write dSYM bundle
@@ -484,10 +494,8 @@ fn build_dsym(
     Ok(())
 }
 
-/// Build a dSYM Mach-O: header + LC_UUID + LC_SEGMENT_64(__TEXT) + LC_SEGMENT_64(__DWARF).
-///
-/// The __TEXT segment is a stub (no file data) that tells LLDB the virtual
-/// address range of the code, so it can resolve addresses to compile units.
+/// Build a dSYM Mach-O with: LC_UUID + LC_SYMTAB + LC_SEGMENT_64(__TEXT) +
+/// LC_SEGMENT_64(__LINKEDIT) + LC_SEGMENT_64(__DWARF).
 fn build_dsym_macho(
     uuid: &[u8; 16],
     debug_info: &[u8],
@@ -495,6 +503,9 @@ fn build_dsym_macho(
     debug_abbrev: &[u8],
     text_vmaddr: u64,
     text_vmsize: u64,
+    symbol_addr: u64,
+    symbol_size: u64,
+    symbol_name: &str, // mangled, e.g. "_kajit_decode"
 ) -> Vec<u8> {
     // Count DWARF sections
     let mut dwarf_nsects = 0u32;
@@ -515,25 +526,54 @@ fn build_dsym_macho(
     let section_size = 80u32; // section_64 per section
     let text_nsects = 1u32; // __text section stub
     let text_segment_size = segment_cmd_size + text_nsects * section_size;
+    let linkedit_segment_size = segment_cmd_size; // no sections
+    let symtab_cmd_size = 24u32; // LC_SYMTAB
     let dwarf_segment_size = segment_cmd_size + dwarf_nsects * section_size;
-    let ncmds = 3u32; // LC_UUID + LC_SEGMENT_64(__TEXT) + LC_SEGMENT_64(__DWARF)
-    let load_cmds_size = uuid_cmd_size + text_segment_size + dwarf_segment_size;
+    let ncmds = 5u32; // LC_UUID + LC_SYMTAB + __TEXT + __LINKEDIT + __DWARF
+    let load_cmds_size = uuid_cmd_size
+        + symtab_cmd_size
+        + text_segment_size
+        + linkedit_segment_size
+        + dwarf_segment_size;
     let header_and_cmds = header_size + load_cmds_size;
 
-    // Align data start to 8 bytes
-    let data_start = (header_and_cmds + 7) & !7;
+    // Build symtab + strtab for __LINKEDIT
+    // strtab: \0 + symbol_name + \0
+    let mut strtab = vec![0u8]; // index 0 = empty string
+    let sym_name_offset = strtab.len() as u32;
+    strtab.extend_from_slice(symbol_name.as_bytes());
+    strtab.push(0);
+
+    // nlist_64: 16 bytes per symbol
+    // { n_strx: u32, n_type: u8, n_sect: u8, n_desc: u16, n_value: u64 }
+    let mut symtab_data = Vec::new();
+    symtab_data.extend_from_slice(&sym_name_offset.to_le_bytes()); // n_strx
+    symtab_data.push(0x0F); // n_type: N_SECT | N_EXT
+    symtab_data.push(1); // n_sect: 1 (__text)
+    symtab_data.extend_from_slice(&0u16.to_le_bytes()); // n_desc
+    symtab_data.extend_from_slice(&symbol_addr.to_le_bytes()); // n_value
+
+    // Align data start to page boundary (4096) for __LINKEDIT
+    let data_start = ((header_and_cmds + 4095) / 4096) * 4096;
     let padding = data_start - header_and_cmds;
 
-    // Layout DWARF sections sequentially after headers
+    // Layout: [headers + padding] [LINKEDIT: symtab + strtab] [DWARF sections]
+    let linkedit_fileoff = data_start;
+    let linkedit_size = (symtab_data.len() + strtab.len()) as u32;
+    let linkedit_size_aligned = ((linkedit_size as u32 + 4095) / 4096) * 4096;
+    let linkedit_vmaddr = text_vmaddr + text_vmsize;
+
+    let dwarf_fileoff = linkedit_fileoff + linkedit_size_aligned;
     let mut section_offsets = Vec::new();
-    let mut offset = data_start;
+    let mut offset = dwarf_fileoff;
     for data in [debug_info, debug_line, debug_abbrev] {
         if !data.is_empty() {
             section_offsets.push((offset, data.len() as u32));
             offset += data.len() as u32;
         }
     }
-    let total_data = offset - data_start;
+    let dwarf_total_data = offset - dwarf_fileoff;
+    let dwarf_vmaddr = linkedit_vmaddr + linkedit_size_aligned as u64;
 
     let mut out = Vec::with_capacity(offset as usize);
 
@@ -551,6 +591,14 @@ fn build_dsym_macho(
     out.extend_from_slice(&0x1Bu32.to_le_bytes()); // cmd: LC_UUID
     out.extend_from_slice(&uuid_cmd_size.to_le_bytes()); // cmdsize
     out.extend_from_slice(uuid); // 16 bytes UUID
+
+    // --- LC_SYMTAB ---
+    out.extend_from_slice(&0x02u32.to_le_bytes()); // cmd: LC_SYMTAB
+    out.extend_from_slice(&symtab_cmd_size.to_le_bytes()); // cmdsize
+    out.extend_from_slice(&linkedit_fileoff.to_le_bytes()); // symoff
+    out.extend_from_slice(&1u32.to_le_bytes()); // nsyms
+    out.extend_from_slice(&(linkedit_fileoff + symtab_data.len() as u32).to_le_bytes()); // stroff
+    out.extend_from_slice(&(strtab.len() as u32).to_le_bytes()); // strsize
 
     // --- LC_SEGMENT_64 (__TEXT) — stub for address resolution ---
     out.extend_from_slice(&0x19u32.to_le_bytes()); // cmd: LC_SEGMENT_64
@@ -583,16 +631,31 @@ fn build_dsym_macho(
     out.extend_from_slice(&0u32.to_le_bytes()); // reserved2
     out.extend_from_slice(&0u32.to_le_bytes()); // reserved3
 
+    // --- LC_SEGMENT_64 (__LINKEDIT) ---
+    out.extend_from_slice(&0x19u32.to_le_bytes()); // cmd: LC_SEGMENT_64
+    out.extend_from_slice(&linkedit_segment_size.to_le_bytes());
+    let mut linkedit_segname = [0u8; 16];
+    linkedit_segname[..10].copy_from_slice(b"__LINKEDIT");
+    out.extend_from_slice(&linkedit_segname);
+    out.extend_from_slice(&linkedit_vmaddr.to_le_bytes()); // vmaddr
+    out.extend_from_slice(&(linkedit_size_aligned as u64).to_le_bytes()); // vmsize
+    out.extend_from_slice(&(linkedit_fileoff as u64).to_le_bytes()); // fileoff
+    out.extend_from_slice(&(linkedit_size as u64).to_le_bytes()); // filesize
+    out.extend_from_slice(&1i32.to_le_bytes()); // maxprot: VM_PROT_READ
+    out.extend_from_slice(&1i32.to_le_bytes()); // initprot: VM_PROT_READ
+    out.extend_from_slice(&0u32.to_le_bytes()); // nsects
+    out.extend_from_slice(&0u32.to_le_bytes()); // flags
+
     // --- LC_SEGMENT_64 (__DWARF) ---
     out.extend_from_slice(&0x19u32.to_le_bytes()); // cmd: LC_SEGMENT_64
     out.extend_from_slice(&dwarf_segment_size.to_le_bytes());
     let mut segname = [0u8; 16];
     segname[..7].copy_from_slice(b"__DWARF");
     out.extend_from_slice(&segname);
-    out.extend_from_slice(&0u64.to_le_bytes()); // vmaddr
-    out.extend_from_slice(&0u64.to_le_bytes()); // vmsize
-    out.extend_from_slice(&(data_start as u64).to_le_bytes()); // fileoff
-    out.extend_from_slice(&(total_data as u64).to_le_bytes()); // filesize
+    out.extend_from_slice(&dwarf_vmaddr.to_le_bytes()); // vmaddr
+    out.extend_from_slice(&(dwarf_total_data as u64).to_le_bytes()); // vmsize
+    out.extend_from_slice(&(dwarf_fileoff as u64).to_le_bytes()); // fileoff
+    out.extend_from_slice(&(dwarf_total_data as u64).to_le_bytes()); // filesize
     out.extend_from_slice(&0i32.to_le_bytes()); // maxprot
     out.extend_from_slice(&0i32.to_le_bytes()); // initprot
     out.extend_from_slice(&dwarf_nsects.to_le_bytes()); // nsects
@@ -631,10 +694,16 @@ fn build_dsym_macho(
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved3 (padding for 64-bit)
     }
 
-    // Padding
-    out.extend(std::iter::repeat_n(0u8, padding as usize));
+    // Padding to page boundary
+    out.resize(data_start as usize, 0);
 
-    // Section data
+    // __LINKEDIT data: symtab + strtab
+    out.extend_from_slice(&symtab_data);
+    out.extend_from_slice(&strtab);
+    // Pad __LINKEDIT to page boundary
+    out.resize((linkedit_fileoff + linkedit_size_aligned) as usize, 0);
+
+    // __DWARF section data
     if !debug_info.is_empty() {
         out.extend_from_slice(debug_info);
     }
