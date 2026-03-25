@@ -479,6 +479,25 @@ fn promote_gamma(
             }),
         );
     }
+
+    // Assertion: no branch region args escaped into the parent's slot_values.
+    for (&slot, val) in slot_values.iter() {
+        if let PortSource::RegionArg(aref) = val {
+            for &branch_region in branch_regions {
+                if aref.region == branch_region {
+                    panic!(
+                        "[slot2reg] SCOPING BUG: after promoting gamma {:?}, \
+                         parent slot_values[slot {}] still references branch region {:?} arg {:?}. \
+                         Should be a gamma output.",
+                        node_id,
+                        slot.index(),
+                        branch_region,
+                        aref.arg,
+                    );
+                }
+            }
+        }
+    }
 }
 
 // ─── Theta promotion ─────────────────────────────────────────────────────────
@@ -566,6 +585,22 @@ fn promote_theta(
                 index: new_output_indices[i],
             }),
         );
+    }
+
+    // Assertion: no body args escaped into the parent's slot_values.
+    for (&slot, val) in slot_values.iter() {
+        if let PortSource::RegionArg(aref) = val {
+            if aref.region == body {
+                panic!(
+                    "[slot2reg] SCOPING BUG: after promoting theta {:?}, \
+                     parent slot_values[slot {}] still references body region arg {:?}. \
+                     Should be a theta output.",
+                    node_id,
+                    slot.index(),
+                    aref.arg,
+                );
+            }
+        }
     }
 }
 

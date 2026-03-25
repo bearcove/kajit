@@ -6,6 +6,29 @@ use kajit_lir::{BinOpKind, LinearOp};
 use crate::InterpreterTrap;
 use crate::cfg_mir;
 
+/// Minimal runtime context matching the JIT's DeserContext layout.
+/// Used to call real intrinsic functions from the interpreter.
+#[repr(C)]
+struct RuntimeDeserContext {
+    input_ptr: *const u8,
+    input_end: *const u8,
+    error: RuntimeErrorSlot,
+    key_scratch_ptr: *mut u8,
+    key_scratch_cap: usize,
+    trusted_utf8: bool,
+}
+
+#[repr(C)]
+struct RuntimeErrorSlot {
+    code: u32,
+    offset: u32,
+}
+
+fn error_code_from_u32(code: u32) -> ErrorCode {
+    // Safety: ErrorCode is repr(u32) and all valid codes are contiguous
+    unsafe { core::mem::transmute(code) }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebuggerError {
     NoFunctions,
@@ -563,6 +586,17 @@ impl DebuggerSession {
             LinearOp::ErrorExit { code } => {
                 self.trap(*code);
             }
+            LinearOp::CallIntrinsic {
+                func,
+                args,
+                dst,
+                field_offset,
+            } => {
+                self.execute_call_intrinsic(func.0, args, *dst, *field_offset)?;
+            }
+            LinearOp::CallPure { func, args, dst } => {
+                self.execute_call_pure(func.0, args, *dst)?;
+            }
             op => {
                 return Err(DebuggerError::UnsupportedOp {
                     block,
@@ -571,6 +605,154 @@ impl DebuggerSession {
             }
         }
 
+        Ok(())
+    }
+
+    /// Execute a call to an intrinsic function.
+    ///
+    /// This creates a temporary DeserContext, calls the real C function, and
+    /// updates the interpreter's state from the context afterwards.
+    fn execute_call_intrinsic(
+        &mut self,
+        func_addr: usize,
+        args: &[kajit_ir::VReg],
+        dst: Option<kajit_ir::VReg>,
+        field_offset: u32,
+    ) -> Result<(), DebuggerError> {
+        // Collect arg values
+        let arg_values: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
+
+        // Build a temporary runtime context
+        let mut ctx = RuntimeDeserContext {
+            input_ptr: unsafe { self.input.as_ptr().add(self.cursor) },
+            input_end: unsafe { self.input.as_ptr().add(self.input.len()) },
+            error: RuntimeErrorSlot { code: 0, offset: 0 },
+            key_scratch_ptr: std::ptr::null_mut(),
+            key_scratch_cap: 0,
+            trusted_utf8: false,
+        };
+
+        let ctx_ptr = &mut ctx as *mut RuntimeDeserContext;
+
+        // Determine out_ptr: for side-effect calls (dst=None), pass a pointer
+        // into the output buffer at the given field_offset.
+        let out_ptr: Option<*mut u8> = if dst.is_none() {
+            let offset = field_offset as usize;
+            self.ensure_output_len(offset + 64);
+            Some(unsafe { self.output.as_mut_ptr().add(offset) })
+        } else {
+            None
+        };
+
+        // Call the intrinsic
+        let ret = unsafe {
+            match (out_ptr, arg_values.len()) {
+                (None, 0) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr)
+                }
+                (None, 1) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr, arg_values[0])
+                }
+                (None, 2) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr, arg_values[0], arg_values[1])
+                }
+                (None, 3) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr, arg_values[0], arg_values[1], arg_values[2])
+                }
+                (Some(out), 0) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, *mut u8) =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr, out);
+                    0
+                }
+                (Some(out), 1) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, *mut u8) =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr, arg_values[0], out);
+                    0
+                }
+                (Some(out), 2) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, *mut u8) =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr, arg_values[0], arg_values[1], out);
+                    0
+                }
+                (Some(out), 3) => {
+                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, *mut u8) =
+                        core::mem::transmute(func_addr);
+                    f(ctx_ptr, arg_values[0], arg_values[1], arg_values[2], out);
+                    0
+                }
+                _ => {
+                    return Err(DebuggerError::UnsupportedOp {
+                        block: self.current,
+                        op: format!(
+                            "CallIntrinsic with {} args (unsupported arity)",
+                            arg_values.len()
+                        ),
+                    });
+                }
+            }
+        };
+
+        // Update cursor from context
+        self.cursor = unsafe { ctx.input_ptr.offset_from(self.input.as_ptr()) as usize };
+
+        // Check for errors
+        if ctx.error.code != 0 {
+            self.trap(error_code_from_u32(ctx.error.code));
+        }
+
+        // Store return value
+        if let Some(dst) = dst {
+            self.write_vreg(dst.index(), ret);
+        }
+
+        Ok(())
+    }
+
+    /// Execute a pure function call (no context, no side effects).
+    fn execute_call_pure(
+        &mut self,
+        func_addr: usize,
+        args: &[kajit_ir::VReg],
+        dst: kajit_ir::VReg,
+    ) -> Result<(), DebuggerError> {
+        let arg_values: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
+        let ret = unsafe {
+            match arg_values.len() {
+                0 => {
+                    let f: unsafe extern "C" fn() -> u64 = core::mem::transmute(func_addr);
+                    f()
+                }
+                1 => {
+                    let f: unsafe extern "C" fn(u64) -> u64 = core::mem::transmute(func_addr);
+                    f(arg_values[0])
+                }
+                2 => {
+                    let f: unsafe extern "C" fn(u64, u64) -> u64 = core::mem::transmute(func_addr);
+                    f(arg_values[0], arg_values[1])
+                }
+                _ => {
+                    return Err(DebuggerError::UnsupportedOp {
+                        block: self.current,
+                        op: format!(
+                            "CallPure with {} args (unsupported arity)",
+                            arg_values.len()
+                        ),
+                    });
+                }
+            }
+        };
+        self.write_vreg(dst.index(), ret);
         Ok(())
     }
 
