@@ -1393,7 +1393,7 @@ pub fn allocate_cfg_program_regalloc3_native(
                 hints.entry(*dst).or_default().spill_cost = hints::SpillCost::Rematerializable;
             }
         }
-        let alloc_result = crate::regalloc3::ssa_coloring::allocate(
+        let mut alloc_result = crate::regalloc3::ssa_coloring::allocate(
             &func_mut,
             &liveness,
             abi,
@@ -1403,7 +1403,14 @@ pub fn allocate_cfg_program_regalloc3_native(
         );
 
         // SSA destruction: split critical edges then insert copies for phi edges.
+        // temp_vreg is assigned to x16 (IP0, reserved scratch) for cycle breaking.
+        // x16/x17 are never allocated by the coloring pass (they're in the reserved set).
         let temp_vreg = kajit_ir::VReg::new(program.vreg_count);
+        alloc_result.allocations.insert(
+            temp_vreg,
+            linear_scan::Allocation::Reg(crate::regalloc3::machine_inst::PReg(16)),
+        ); // x16 = IP0 scratch
+
         let force_all_copies = std::env::var("KAJIT_NO_COALESCE").is_ok();
         if force_all_copies {
             critical_edge::split_critical_edges(&mut func_mut);
