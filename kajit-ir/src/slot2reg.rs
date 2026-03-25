@@ -6,6 +6,11 @@
 //! spilling them to the stack.
 //!
 //! This is analogous to LLVM's mem2reg pass (alloca → SSA promotion).
+//!
+//! Design:
+//! - Bottom-up: child regions are promoted before parent wiring is computed
+//! - Batch port insertion: all new ports for a gamma/theta are added in one shot
+//!   with a single index remap, avoiding stale cached PortSources
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -25,7 +30,6 @@ pub fn slot_to_reg(func: &mut IrFunc) {
         return;
     }
 
-    // Pre-compute slot accesses for every region BEFORE we start modifying the IR.
     let slot_access = precompute_slot_access(func);
 
     let lambda_body = find_lambda_body(func);
@@ -43,8 +47,6 @@ fn collect_all_slots(func: &IrFunc) -> BTreeSet<SlotId> {
                 slots.insert(*slot);
             }
             NodeKind::Simple(IrOp::SlotAddr { slot, num_slots }) => {
-                // This slot's address escapes — mark the entire range as address-taken
-                // since the pointer may access any field in the struct.
                 for i in 0..*num_slots {
                     address_taken.insert(SlotId::new(slot.index() as u32 + i));
                 }
@@ -52,7 +54,6 @@ fn collect_all_slots(func: &IrFunc) -> BTreeSet<SlotId> {
             _ => {}
         }
     }
-    // Exclude address-taken slots from promotion.
     for slot in &address_taken {
         slots.remove(slot);
     }
@@ -68,11 +69,8 @@ fn find_lambda_body(func: &IrFunc) -> RegionId {
     panic!("no lambda found in IR");
 }
 
-/// Pre-compute, for each region, the set of slots accessed anywhere in its sub-tree.
-/// This is done once before any modifications so it's stable.
 fn precompute_slot_access(func: &IrFunc) -> SlotAccessMap {
     let mut map: SlotAccessMap = HashMap::new();
-    // Process all regions. For each, collect direct slot ops + recurse into sub-regions.
     let region_ids: Vec<RegionId> = func.regions.iter().map(|(id, _)| id).collect();
     for &region_id in &region_ids {
         if !map.contains_key(&region_id) {
@@ -140,7 +138,6 @@ fn promote_region(
             NodeKind::Simple(IrOp::ReadFromSlot { slot }) => {
                 let slot = *slot;
                 if !all_slots.contains(&slot) {
-                    // Slot is not promotable (e.g. address-taken) — skip.
                     continue;
                 }
                 if let Some(&current_val) = slot_values.get(&slot) {
@@ -162,7 +159,6 @@ fn promote_region(
             NodeKind::Simple(IrOp::WriteToSlot { slot }) => {
                 let slot = *slot;
                 if !all_slots.contains(&slot) {
-                    // Slot is not promotable (e.g. address-taken) — skip.
                     continue;
                 }
                 let written_value = func.nodes[node_id].inputs[0].source;
@@ -179,7 +175,6 @@ fn promote_region(
             NodeKind::Gamma { regions } => {
                 let regions_clone = regions.clone();
 
-                // Use PRE-COMPUTED slot accesses — not live node lists.
                 let mut needed_slots = BTreeSet::new();
                 for &branch_region in &regions_clone {
                     if let Some(accessed) = slot_access.get(&branch_region) {
@@ -189,7 +184,6 @@ fn promote_region(
                 let slots_to_thread: Vec<SlotId> =
                     needed_slots.intersection(all_slots).copied().collect();
 
-                // Ensure all needed slots have initial values.
                 ensure_slot_defaults(func, region, &slots_to_thread, &mut slot_values, node_id);
 
                 if !slots_to_thread.is_empty() {
@@ -217,12 +211,10 @@ fn promote_region(
             NodeKind::Theta { body, .. } => {
                 let body = *body;
 
-                // Use PRE-COMPUTED slot accesses.
                 let needed_slots = slot_access.get(&body).cloned().unwrap_or_default();
                 let slots_to_thread: Vec<SlotId> =
                     needed_slots.intersection(all_slots).copied().collect();
 
-                // Ensure all needed slots have initial values.
                 ensure_slot_defaults(func, region, &slots_to_thread, &mut slot_values, node_id);
 
                 if !slots_to_thread.is_empty() {
@@ -251,8 +243,6 @@ fn promote_region(
     slot_values
 }
 
-/// For any slot in `needed` that doesn't yet have a value in `slot_values`,
-/// create a const(0) node in `region` before `before_node`.
 fn ensure_slot_defaults(
     func: &mut IrFunc,
     region: RegionId,
@@ -291,33 +281,55 @@ fn ensure_slot_defaults(
     }
 }
 
-/// Insert a data output on `node_id` before the state outputs, and update all
-/// existing references to the shifted state outputs.
-fn insert_data_output(func: &mut IrFunc, node_id: NodeId, debug_scope: crate::DebugScopeId) -> u16 {
-    let state_count = func.state_domains.len();
-    let insert_idx = func.nodes[node_id].outputs.len() - state_count;
-    let vreg = func.fresh_vreg();
-    func.nodes[node_id].outputs.insert(
-        insert_idx,
-        OutputPort {
-            kind: PortKind::Data,
-            vreg: Some(vreg),
-            debug_scope,
-        },
-    );
+// ─── Batch port insertion helpers ────────────────────────────────────────────
 
-    shift_output_refs(func, node_id, insert_idx as u16);
-    insert_idx as u16
+/// Add N data outputs to a node in one shot, shifting existing state output
+/// references once. Returns the indices of the new outputs.
+fn batch_insert_data_outputs(
+    func: &mut IrFunc,
+    node_id: NodeId,
+    count: usize,
+    debug_scope: crate::DebugScopeId,
+) -> Vec<u16> {
+    if count == 0 {
+        return vec![];
+    }
+
+    let state_count = func.state_domains.len();
+    let insert_base = func.nodes[node_id].outputs.len() - state_count;
+
+    // Insert all new outputs at once
+    let mut new_indices = Vec::with_capacity(count);
+    for i in 0..count {
+        let vreg = func.fresh_vreg();
+        func.nodes[node_id].outputs.insert(
+            insert_base + i,
+            OutputPort {
+                kind: PortKind::Data,
+                vreg: Some(vreg),
+                debug_scope,
+            },
+        );
+        new_indices.push((insert_base + i) as u16);
+    }
+
+    // Single remap: shift all existing references at index >= insert_base by +count
+    batch_shift_output_refs(func, node_id, insert_base as u16, count as u16);
+
+    new_indices
 }
 
-/// Shift all references to node outputs at index >= `from` by +1.
-fn shift_output_refs(func: &mut IrFunc, node_id: NodeId, from: u16) {
+/// Shift all references to node outputs at index >= `from` by `+delta`.
+fn batch_shift_output_refs(func: &mut IrFunc, node_id: NodeId, from: u16, delta: u16) {
+    if delta == 0 {
+        return;
+    }
     let all_node_ids: Vec<NodeId> = func.nodes.iter().map(|(id, _)| id).collect();
     for &nid in &all_node_ids {
         for input in &mut func.nodes[nid].inputs {
             if let PortSource::Node(ref mut oref) = input.source {
                 if oref.node == node_id && oref.index >= from {
-                    oref.index += 1;
+                    oref.index += delta;
                 }
             }
         }
@@ -328,13 +340,28 @@ fn shift_output_refs(func: &mut IrFunc, node_id: NodeId, from: u16) {
     for &rid in &all_result_ids {
         if let PortSource::Node(ref mut oref) = func.region_results[rid].source {
             if oref.node == node_id && oref.index >= from {
-                oref.index += 1;
+                oref.index += delta;
             }
         }
     }
 }
 
-/// Insert a data input on `node_id` before the state inputs.
+/// Also remap any PortSources in a pass-local map that reference the shifted node.
+fn remap_slot_values(
+    slot_values: &mut BTreeMap<SlotId, PortSource>,
+    node_id: NodeId,
+    from: u16,
+    delta: u16,
+) {
+    for val in slot_values.values_mut() {
+        if let PortSource::Node(oref) = val {
+            if oref.node == node_id && oref.index >= from {
+                oref.index += delta;
+            }
+        }
+    }
+}
+
 fn insert_data_input(func: &mut IrFunc, node_id: NodeId, source: PortSource) {
     let state_count = func.state_domains.len();
     let insert_idx = func.nodes[node_id].inputs.len() - state_count;
@@ -347,7 +374,6 @@ fn insert_data_input(func: &mut IrFunc, node_id: NodeId, source: PortSource) {
     );
 }
 
-/// Insert a data region arg before the state args.
 fn insert_data_region_arg(func: &mut IrFunc, region: RegionId) -> PortSource {
     let state_count = func.state_domains.len();
     let insert_idx = func.regions[region].args.len() - state_count;
@@ -363,7 +389,6 @@ fn insert_data_region_arg(func: &mut IrFunc, region: RegionId) -> PortSource {
     })
 }
 
-/// Insert a data region result before the state results.
 fn insert_data_region_result(func: &mut IrFunc, region: RegionId, source: PortSource) {
     let state_count = func.state_domains.len();
     let insert_idx = func.regions[region].results.len() - state_count;
@@ -373,6 +398,8 @@ fn insert_data_region_result(func: &mut IrFunc, region: RegionId, source: PortSo
     });
     func.regions[region].results.insert(insert_idx, result_id);
 }
+
+// ─── Gamma promotion ─────────────────────────────────────────────────────────
 
 fn promote_gamma(
     func: &mut IrFunc,
@@ -386,7 +413,7 @@ fn promote_gamma(
     let debug_scope = func.nodes[node_id].debug_scope;
     let state_count = func.state_domains.len();
 
-    // Phase 1: Add inputs and region args for all slots to thread.
+    // Phase 1: Add inputs and region args for all slots.
     for &slot in slots_to_thread {
         let incoming_value = slot_values[&slot];
         insert_data_input(func, node_id, incoming_value);
@@ -395,12 +422,11 @@ fn promote_gamma(
         }
     }
 
-    // Phase 2: Recurse into each branch with strict scoping.
+    // Phase 2: Recurse into each branch (bottom-up: children first).
     let mut branch_arg_sources: Vec<BTreeMap<SlotId, PortSource>> = Vec::new();
     let mut branch_final_values: Vec<BTreeMap<SlotId, PortSource>> = Vec::new();
 
     for &branch_region in branch_regions {
-        // Strict scoping: only region args are valid inside the child region.
         let mut branch_slots = BTreeMap::new();
         let mut arg_sources = BTreeMap::new();
         let data_arg_count = func.regions[branch_region].args.len() - state_count;
@@ -419,27 +445,43 @@ fn promote_gamma(
         branch_final_values.push(final_vals);
     }
 
-    // Phase 3: Add results and outputs for each slot.
+    // Phase 3: Batch-add results and outputs for all slots at once.
     for &slot in slots_to_thread {
         for (branch_idx, &branch_region) in branch_regions.iter().enumerate() {
-            // Fall back to the branch's region arg (not parent scope).
             let final_value = branch_final_values[branch_idx]
                 .get(&slot)
                 .copied()
                 .unwrap_or_else(|| branch_arg_sources[branch_idx][&slot]);
             insert_data_region_result(func, branch_region, final_value);
         }
+    }
 
-        let output_idx = insert_data_output(func, node_id, debug_scope);
+    // Batch insert all data outputs at once — single shift.
+    let new_output_indices =
+        batch_insert_data_outputs(func, node_id, slots_to_thread.len(), debug_scope);
+
+    // Remap parent slot_values through the same shift.
+    let insert_base = new_output_indices.first().copied().unwrap_or(0);
+    remap_slot_values(
+        slot_values,
+        node_id,
+        insert_base + slots_to_thread.len() as u16,
+        slots_to_thread.len() as u16,
+    );
+
+    // Record new output PortSources.
+    for (i, &slot) in slots_to_thread.iter().enumerate() {
         slot_values.insert(
             slot,
             PortSource::Node(OutputRef {
                 node: node_id,
-                index: output_idx,
+                index: new_output_indices[i],
             }),
         );
     }
 }
+
+// ─── Theta promotion ─────────────────────────────────────────────────────────
 
 fn promote_theta(
     func: &mut IrFunc,
@@ -452,7 +494,7 @@ fn promote_theta(
 ) {
     let debug_scope = func.nodes[node_id].debug_scope;
 
-    // Phase 1: Add inputs and region args for all slots.
+    // Phase 1: Add inputs and body args for all slots (before recursion).
     let mut body_slot_values = BTreeMap::new();
     let mut body_arg_sources: BTreeMap<SlotId, PortSource> = BTreeMap::new();
     for &slot in slots_to_thread {
@@ -463,18 +505,18 @@ fn promote_theta(
         body_arg_sources.insert(slot, arg_source);
     }
 
-    // Phase 2: Recurse into body.
+    // Phase 2: Recurse into body (bottom-up: body is fully promoted before
+    // we compute the parent theta's output wiring).
     let final_body_values = promote_region(func, body, all_slots, slot_access, body_slot_values);
 
-    // Phase 3: Add results and outputs for each slot.
+    // Phase 3: Add body results for all slots.
     let body_debug_scope = func.regions[body].debug_scope;
     for &slot in slots_to_thread {
         let body_arg = body_arg_sources[&slot];
         let mut final_value = final_body_values.get(&slot).copied().unwrap_or(body_arg);
 
-        // If the slot wasn't modified in the body, the result would reference the
-        // same region arg — creating a self-copy (v_N from v_N) that regalloc2
-        // can't handle. Insert an Identity node to break the cycle.
+        // If the slot wasn't modified in the body, insert an Identity node
+        // to break the self-reference cycle.
         if final_value == body_arg {
             let vreg = func.fresh_vreg();
             let identity_node = func.nodes.push(crate::Node {
@@ -500,21 +542,35 @@ fn promote_theta(
         }
 
         insert_data_region_result(func, body, final_value);
+    }
 
-        let output_idx = insert_data_output(func, node_id, debug_scope);
+    // Phase 4: Batch insert all data outputs at once — single shift.
+    let new_output_indices =
+        batch_insert_data_outputs(func, node_id, slots_to_thread.len(), debug_scope);
+
+    // Remap parent slot_values through the same shift.
+    let insert_base = new_output_indices.first().copied().unwrap_or(0);
+    remap_slot_values(
+        slot_values,
+        node_id,
+        insert_base + slots_to_thread.len() as u16,
+        slots_to_thread.len() as u16,
+    );
+
+    // Record new output PortSources.
+    for (i, &slot) in slots_to_thread.iter().enumerate() {
         slot_values.insert(
             slot,
             PortSource::Node(OutputRef {
                 node: node_id,
-                index: output_idx,
+                index: new_output_indices[i],
             }),
         );
     }
 }
 
-/// Replace all uses of a node output within a region and all descendant regions.
-/// This is needed because gamma/theta sub-regions can directly reference
-/// parent-scope node outputs (not just through passthrough/loop-vars).
+// ─── Replace uses ────────────────────────────────────────────────────────────
+
 fn replace_uses_in_region(func: &mut IrFunc, region: RegionId, from: OutputRef, to: PortSource) {
     let from_source = PortSource::Node(from);
     if from_source == to {
@@ -528,7 +584,6 @@ fn replace_uses_in_region(func: &mut IrFunc, region: RegionId, from: OutputRef, 
                 input.source = to;
             }
         }
-        // Recurse into sub-regions of structural nodes.
         match &func.nodes[nid].kind {
             NodeKind::Gamma { regions } => {
                 let sub_regions: Vec<RegionId> = regions.clone();
