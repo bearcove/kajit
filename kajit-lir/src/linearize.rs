@@ -1249,6 +1249,7 @@ impl<'a> Linearizer<'a> {
     }
 
     /// Emit Copy ops for gamma branch results → gamma node output vregs.
+    #[allow(dead_code)]
     fn emit_gamma_exit_copies(
         &mut self,
         node_id: NodeId,

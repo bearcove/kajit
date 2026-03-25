@@ -391,7 +391,7 @@ fn build_debug_aranges(
 /// section address at these positions.
 fn compute_dwarf_relocations(
     debug_info: &JitDebugInfo,
-    debug_info_section: &[u8],
+    _debug_info_section: &[u8],
     debug_line_section: &[u8],
 ) -> Vec<(DwarfSection, DwarfRelocation)> {
     let mut relocs = Vec::new();

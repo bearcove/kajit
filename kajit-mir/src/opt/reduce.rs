@@ -538,7 +538,7 @@ fn repair_dangling_params(func: &mut Function) {
         if func.blocks[block_idx].dead {
             continue;
         }
-        let block_id = func.blocks[block_idx].id;
+        let _block_id = func.blocks[block_idx].id;
 
         // Check if all incoming edges have the right arg count
         let expected_params = func.blocks[block_idx].params.len();

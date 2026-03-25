@@ -649,6 +649,7 @@ async fn run_proxy() -> Result<(), String> {
         // Forward proxy stdin → child stdin, child stdout → proxy stdout
         let mut proxy_stdout = tokio::io::stdout();
 
+        #[allow(unused_assignments)]
         let mut should_reload = false;
 
         loop {

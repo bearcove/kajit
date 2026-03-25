@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Canonical post-linearization CFG MIR.
 //!
 //! This module defines an explicit control-flow representation with typed IDs
@@ -751,7 +752,7 @@ fn fmt_edge_arg_list_bracketed(args: &[EdgeArg]) -> String {
     out
 }
 
-fn fmt_cfg_operand(f: &mut fmt::Formatter<'_>, operand: &Operand) -> fmt::Result {
+fn _fmt_cfg_operand(f: &mut fmt::Formatter<'_>, operand: &Operand) -> fmt::Result {
     write!(f, "v{}", operand.vreg.index())?;
     write!(
         f,
@@ -1075,7 +1076,7 @@ enum TempTermBlock {
 }
 
 impl TempTermBlock {
-    fn uses(&self) -> Vec<VReg> {
+    fn _uses(&self) -> Vec<VReg> {
         let mut out = Vec::new();
         match self {
             Self::Branch { phi_args, .. } => {
@@ -1371,7 +1372,7 @@ fn resolve_term_labels(
     }
 }
 
-fn collect_use_def(
+fn _collect_use_def(
     block: &Block,
     insts: &[Inst],
     term: &TempTermBlock,
@@ -1393,7 +1394,7 @@ fn collect_use_def(
             }
         }
     }
-    for vreg in term.uses() {
+    for vreg in term._uses() {
         if !def_set[vreg.index()] {
             use_set[vreg.index()] = true;
         }
@@ -2877,225 +2878,6 @@ fn dominates(idom: &HashMap<BlockId, Option<BlockId>>, a: BlockId, b: BlockId) -
                 current = *parent;
             }
             _ => return false, // Reached entry or undefined
-        }
-    }
-}
-
-fn copy_propagation_in_function_OLD_INTRA_BLOCK_ONLY(func: &mut Function) {
-    // OLD IMPLEMENTATION - kept for reference, not used
-    // Process each block independently to avoid cross-block data flow issues.
-    // We track when each vreg is defined within the block to avoid use-before-def.
-
-    for block in &func.blocks {
-        // Build map of vreg -> instruction index where it's defined (first def wins)
-        let mut def_order: HashMap<VReg, usize> = HashMap::new();
-
-        // Block params are considered defined at index 0
-        for &param in &block.params {
-            def_order.insert(param, 0);
-        }
-
-        // Collect definitions from instructions
-        for (idx, &inst_id) in block.insts.iter().enumerate() {
-            let inst = &func.insts[inst_id.index()];
-            // Find the def operand (if any) and record its position
-            for operand in &inst.operands {
-                if operand.kind == OperandKind::Def {
-                    // Only record first definition to handle redefinitions correctly
-                    def_order.entry(operand.vreg).or_insert(idx + 1);
-                }
-            }
-        }
-
-        // Build local copy map: dst -> (src, copy_instruction_index)
-        let mut copies: HashMap<VReg, (VReg, usize)> = HashMap::new();
-
-        for (idx, &inst_id) in block.insts.iter().enumerate() {
-            let inst = &func.insts[inst_id.index()];
-            if let LinearOp::Copy { dst, src } = &inst.op {
-                copies.insert(*dst, (*src, idx + 1));
-            }
-        }
-
-        if copies.is_empty() {
-            continue;
-        }
-
-        // Helper to get canonical vreg, ensuring we don't create use-before-def
-        // Returns the canonical vreg only if the source is defined before use_idx
-        let get_canonical_at = |v: VReg, use_idx: usize| -> VReg {
-            let mut current = v;
-            // Follow copy chain while respecting def order
-            while let Some(&(src, _copy_idx)) = copies.get(&current) {
-                // Self-copy: v = copy v - don't loop forever
-                if src == current {
-                    break;
-                }
-                // Check if the source is defined before our use point
-                if let Some(&src_def_idx) = def_order.get(&src)
-                    && src_def_idx < use_idx
-                {
-                    current = src;
-                    continue;
-                }
-                // Can't propagate further - source not defined yet
-                break;
-            }
-            current
-        };
-
-        // Rewrite uses in this block's instructions
-        for (idx, &inst_id) in block.insts.iter().enumerate() {
-            let use_idx = idx + 1; // Instruction indices are 1-based (0 is block params)
-            let inst = &mut func.insts[inst_id.index()];
-            let mut operands_changed = false;
-
-            match &mut inst.op {
-                LinearOp::Copy { src, .. } => {
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_src != *src {
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::BinOp { lhs, rhs, .. } => {
-                    let new_lhs = get_canonical_at(*lhs, use_idx);
-                    let new_rhs = get_canonical_at(*rhs, use_idx);
-                    if new_lhs != *lhs || new_rhs != *rhs {
-                        *lhs = new_lhs;
-                        *rhs = new_rhs;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::UnaryOp { src, .. } => {
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_src != *src {
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::WriteToSlot { src, .. } => {
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_src != *src {
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::WriteToField { src, .. } => {
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_src != *src {
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::StoreToAddr { addr, src, .. } => {
-                    let new_addr = get_canonical_at(*addr, use_idx);
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_addr != *addr || new_src != *src {
-                        *addr = new_addr;
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::LoadFromAddr { addr, .. } => {
-                    let new_addr = get_canonical_at(*addr, use_idx);
-                    if new_addr != *addr {
-                        *addr = new_addr;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::AdvanceCursorBy { src } => {
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_src != *src {
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::RestoreCursor { src } => {
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_src != *src {
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::SetOutPtr { src } => {
-                    let new_src = get_canonical_at(*src, use_idx);
-                    if new_src != *src {
-                        *src = new_src;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::BranchIf { cond, .. } | LinearOp::BranchIfZero { cond, .. } => {
-                    let new_cond = get_canonical_at(*cond, use_idx);
-                    if new_cond != *cond {
-                        *cond = new_cond;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::JumpTable { predicate, .. } => {
-                    let new_pred = get_canonical_at(*predicate, use_idx);
-                    if new_pred != *predicate {
-                        *predicate = new_pred;
-                        operands_changed = true;
-                    }
-                }
-                LinearOp::CallIntrinsic { args, .. }
-                | LinearOp::CallPure { args, .. }
-                | LinearOp::CallLambda { args, .. } => {
-                    for arg in args.iter_mut() {
-                        let new_arg = get_canonical_at(*arg, use_idx);
-                        if new_arg != *arg {
-                            *arg = new_arg;
-                            operands_changed = true;
-                        }
-                    }
-                }
-                LinearOp::SimdStringScan { pos, kind } => {
-                    let new_pos = get_canonical_at(*pos, use_idx);
-                    let new_kind = get_canonical_at(*kind, use_idx);
-                    if new_pos != *pos || new_kind != *kind {
-                        *pos = new_pos;
-                        *kind = new_kind;
-                        operands_changed = true;
-                    }
-                }
-                _ => {}
-            }
-
-            // Update operands to match
-            if operands_changed {
-                for operand in &mut inst.operands {
-                    if operand.kind == OperandKind::Use {
-                        operand.vreg = get_canonical_at(operand.vreg, use_idx);
-                    }
-                }
-            }
-        }
-
-        // Also rewrite the block's terminator (accessed via block.term)
-        // Terminator uses are at the end of the block
-        let term_use_idx = block.insts.len() + 1;
-        let term = &mut func.terms[block.term.index()];
-        match term {
-            Terminator::BranchIf { cond, .. } => {
-                *cond = get_canonical_at(*cond, term_use_idx);
-            }
-            Terminator::BranchIfZero { cond, .. } => {
-                *cond = get_canonical_at(*cond, term_use_idx);
-            }
-            Terminator::JumpTable { predicate, .. } => {
-                *predicate = get_canonical_at(*predicate, term_use_idx);
-            }
-            _ => {}
-        }
-
-        // Rewrite edge arg sources for edges originating from this block.
-        // Edge args are conceptually "used" at the terminator point.
-        for &edge_id in &block.succs {
-            let edge = &mut func.edges[edge_id.index()];
-            for arg in &mut edge.args {
-                arg.source = get_canonical_at(arg.source, term_use_idx);
-            }
         }
     }
 }

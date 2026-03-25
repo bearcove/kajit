@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Standalone test harness generator.
 //!
 //! Generates a Mach-O executable containing:
@@ -135,12 +136,6 @@ pub fn generate_harness(
     output_dir: &Path,
     base_name: &str,
 ) -> Result<std::path::PathBuf, HarnessError> {
-    use object::write::{Object, Relocation, StandardSection, Symbol, SymbolSection};
-    use object::{
-        Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
-        RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
-    };
-
     std::fs::create_dir_all(output_dir).map_err(|e| HarnessError::Io("create output dir", e))?;
 
     // Write the CFG-MIR listing file (DWARF source)
@@ -190,8 +185,8 @@ pub fn generate_harness(
 fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {
     use object::write::{Object, Relocation, Symbol, SymbolSection};
     use object::{
-        Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags,
-        RelocationKind, SectionKind, SymbolFlags, SymbolKind, SymbolScope,
+        Architecture, BinaryFormat, Endianness, RelocationFlags, SectionKind, SymbolFlags,
+        SymbolKind, SymbolScope,
     };
 
     let mut obj = Object::new(
@@ -398,9 +393,9 @@ fn build_dsym(
     exe_path: &Path,
     dwarf: &crate::jit_dwarf::JitDwarfSections,
     function_name: &str,
-    entry_offset: usize,
+    _entry_offset: usize,
 ) -> Result<(), HarnessError> {
-    use object::read::{Object, ObjectSection, ObjectSegment, ObjectSymbol};
+    use object::read::{Object, ObjectSegment, ObjectSymbol};
 
     let exe_data = std::fs::read(exe_path).map_err(|e| HarnessError::Io("read exe for dSYM", e))?;
     let exe_obj = object::read::File::parse(&*exe_data)
@@ -519,7 +514,7 @@ fn build_dsym_macho(
     text_vmaddr: u64,
     text_vmsize: u64,
     symbol_addr: u64,
-    symbol_size: u64,
+    _symbol_size: u64,
     symbol_name: &str, // mangled, e.g. "_kajit_decode"
 ) -> Vec<u8> {
     // Count DWARF sections
@@ -573,7 +568,7 @@ fn build_dsym_macho(
 
     // Align data start to page boundary (4096) for __LINKEDIT
     let data_start = ((header_and_cmds + 4095) / 4096) * 4096;
-    let padding = data_start - header_and_cmds;
+    let _padding = data_start - header_and_cmds;
 
     // Layout: [headers + padding] [LINKEDIT: symtab + strtab] [DWARF sections]
     let linkedit_fileoff = data_start;
@@ -697,7 +692,7 @@ fn build_dsym_macho(
         names
     };
 
-    for (i, (name, &(off, size))) in section_names.iter().zip(section_offsets.iter()).enumerate() {
+    for (_i, (name, &(off, size))) in section_names.iter().zip(section_offsets.iter()).enumerate() {
         let mut sectname = [0u8; 16];
         let len = name.len().min(16);
         sectname[..len].copy_from_slice(&name[..len]);

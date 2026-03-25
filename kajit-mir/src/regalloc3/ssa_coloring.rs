@@ -448,7 +448,7 @@ fn color_phase(
             }
 
             // Vregs defined before this instruction in this block
-            for (prev_idx, &prev_inst_id) in block.insts[..inst_idx].iter().enumerate() {
+            for (_prev_idx, &prev_inst_id) in block.insts[..inst_idx].iter().enumerate() {
                 let prev_inst = &func.insts[prev_inst_id.0 as usize];
                 prev_inst.op.for_each_def(|dst| {
                     if spilled.contains(dst) {

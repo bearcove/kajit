@@ -10,7 +10,7 @@ Schema (facet Shape)
   → IR (kajit-ir)          — RVSDG: theta/gamma nodes, ports, SSA
   → LIR (kajit-lir)        — linearized IR
   → CFG-MIR (kajit-mir)    — control flow graph, VRegs
-  → Register Allocation    — regalloc2
+  → Register Allocation    — regalloc3 (native SSA coloring)
   → Backend                — aarch64 or x86_64 machine code
 ```
 
@@ -86,6 +86,43 @@ For example, `scalar_u32/postcard` runs:
 - `flat_struct`, `nested_struct`, `deep_struct` — struct nesting
 - `vec_scalar_small`, `vec_scalar_large` — vectors of primitives
 - `option_u32`, `option_string`, `option_struct` — optional fields
+
+## CLI (`kajit`)
+
+The `kajit` binary (in `kajit-cli`) is the primary tool for inspecting and debugging the compilation pipeline. Use it instead of env-var-driven test dumps.
+
+```bash
+# Dump all pipeline stages for u32
+cargo run -p kajit-cli -- compile postcard u32
+
+# Dump specific stages
+cargo run -p kajit-cli -- compile postcard u32 -s cfg
+cargo run -p kajit-cli -- compile postcard u32 -s hir,ir,cfg,asm
+
+# Run JIT vs interpreter comparison
+cargo run -p kajit-cli -- compile postcard u32 -s exec -i 2a
+
+# Dump assembly only
+cargo run -p kajit-cli -- compile postcard u32 -s asm
+
+# Build standalone debuggable harness
+cargo run -p kajit-cli -- compile postcard u32 -s harness -i 2a
+
+# Run CFG-MIR reducer (find minimal diverging program)
+cargo run -p kajit-cli -- compile postcard u32 --reduce differential
+
+# Evaluate a CFG-MIR file with the interpreter
+cargo run -p kajit-cli -- eval /tmp/test.cfg-mir 2a
+
+# Lockstep differential debugger (interpreter + LLDB in parallel)
+cargo run -p kajit-cli -- debug-diff postcard u32 2a
+```
+
+**Stages:** `hir`, `ir`, `opts` (RVSDG pass timeline), `linear`, `cfg`, `asm`/`emit`, `exec` (JIT vs interpreter), `harness`, `all`.
+
+**Supported types:** `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `bool`, `String`.
+
+**The `exec` stage** is the go-to for debugging: it runs both the JIT and the CFG-MIR interpreter on the same input and shows a byte-by-byte diff if they diverge. No need for corpus tests or env vars.
 
 ## Debugging
 

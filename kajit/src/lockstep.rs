@@ -1,11 +1,9 @@
+#![allow(dead_code)]
 //! Lockstep differential debugger.
 //!
 //! Drives the CFG-MIR interpreter and a JIT process (via LLDB) simultaneously,
 //! comparing vreg values after each CFG-MIR operation and stopping on the first
 //! divergence.
-
-use std::collections::HashMap;
-use std::path::Path;
 
 use crate::harness::{AllocationMap, VRegLocation};
 
@@ -390,7 +388,7 @@ LOCKSTEP DESYNC at JIT step {jit_steps}
                 let mut info = format!("  terminator: {:?}\n", term);
                 for &edge_id in &block.succs {
                     let edge = &func.edges[edge_id.index()];
-                    let target = &func.blocks[edge.to.index()];
+                    let _target = &func.blocks[edge.to.index()];
                     let target_line = op_to_line
                         .get(&(edge.to.0, false, 0))
                         .or_else(|| op_to_line.get(&(edge.to.0, true, 0)))
@@ -561,7 +559,7 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                                 if i > 0 {
                                     diag.push_str(", ");
                                 }
-                                if let Some(&(val, line, step)) = verified.get(v) {
+                                if let Some(&(val, line, _step)) = verified.get(v) {
                                     diag.push_str(&format!("v{}(={} @line{})", v, val, line));
                                 } else {
                                     diag.push_str(&format!("v{}", v));

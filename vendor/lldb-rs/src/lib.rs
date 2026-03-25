@@ -93,7 +93,11 @@
 //! [LLVM project]: https://llvm.org/
 //! [crates.io]: https://crates.io/crates/lldb
 
-#![allow(clippy::upper_case_acronyms)]
+#![allow(
+    clippy::upper_case_acronyms,
+    mismatched_lifetime_syntaxes,
+    unsafe_op_in_unsafe_fn
+)]
 #![warn(clippy::doc_markdown, missing_docs)]
 #![deny(
     trivial_numeric_casts,

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! HIR→IR lowering — converts hir::Module into RVSDG (ir::IrFunc).
 
 use super::*;

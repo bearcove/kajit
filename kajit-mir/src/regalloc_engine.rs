@@ -1477,7 +1477,7 @@ fn insert_phi_copies_with_coalescing(
     temp_vreg: kajit_ir::VReg,
 ) {
     use crate::regalloc3::linear_scan::Allocation as Ra3Alloc;
-    use crate::regalloc3::parallel_copy::{Copy, ParallelCopyResolver};
+    use crate::regalloc3::parallel_copy::Copy;
 
     // Split critical edges first so copies can be placed on specific edges
     crate::regalloc3::critical_edge::split_critical_edges(func);
@@ -1551,7 +1551,7 @@ fn resolve_copies_by_preg(
         src_preg: u8,
     }
 
-    let mut moves: Vec<PregMove> = copies
+    let moves: Vec<PregMove> = copies
         .iter()
         .filter_map(|c| {
             let dst_preg = match alloc.allocations.get(&c.dst)? {

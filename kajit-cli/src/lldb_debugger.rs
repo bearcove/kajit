@@ -5,6 +5,7 @@ use lldb::*;
 use std::path::Path;
 
 /// LLDB-based JIT debugger that drives a standalone harness process.
+#[allow(dead_code)]
 pub struct LldbJitDebugger {
     debugger: SBDebugger,
     target: SBTarget,
@@ -149,8 +150,8 @@ impl JitDebugger for LldbJitDebugger {
 
         // Use LLDB's command interpreter to get disassembly
         // (the SB API's frame.disassemble() returns the entire function)
-        let ci = self.debugger.command_interpreter();
-        let cmd = format!(
+        let _ci = self.debugger.command_interpreter();
+        let _cmd = format!(
             "disassemble -s 0x{:x} -c {}",
             pc.saturating_sub((context * 4) as u64),
             context * 2 + 1

@@ -46,6 +46,7 @@ pub(crate) struct EdgeTrampoline {
 
 /// Tracks a bit test pattern: `(src & (1 << bit)) == 0` or `!= 0`
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) struct BitTestInfo {
     /// The source vreg being tested
     pub(crate) src: crate::ir::VReg,
@@ -649,10 +650,12 @@ impl Lowerer<'_> {
         self.masked_vregs[v.index()] = info;
     }
 
+    #[allow(dead_code)]
     pub(super) fn bit_test_of(&self, v: crate::ir::VReg) -> Option<BitTestInfo> {
         self.bit_test_vregs[v.index()]
     }
 
+    #[allow(dead_code)]
     pub(super) fn set_bit_test(&mut self, v: crate::ir::VReg, info: Option<BitTestInfo>) {
         self.bit_test_vregs[v.index()] = info;
     }

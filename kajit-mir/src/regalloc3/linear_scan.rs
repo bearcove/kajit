@@ -101,6 +101,7 @@ pub struct AllocationResult {
 }
 
 /// Linear scan allocator
+#[allow(dead_code)]
 pub struct LinearScanAllocator<'a> {
     /// Live intervals (sorted by start point)
     intervals: Vec<LiveInterval>,

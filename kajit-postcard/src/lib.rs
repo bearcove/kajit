@@ -2161,6 +2161,7 @@ impl PostcardHirLowerer {
         }
     }
 
+    #[allow(dead_code)]
     fn postcard_varint_finish_block(
         &mut self,
         place: hir::Place,

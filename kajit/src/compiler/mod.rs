@@ -290,7 +290,7 @@ pub fn compile_pipeline(
         .unwrap_or_default();
 
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
-    let (buf, entry, source_map, _backend_debug_info, asm_program) =
+    let (buf, entry, _source_map, _backend_debug_info, asm_program) =
         materialize_backend_result(result);
 
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
@@ -374,6 +374,7 @@ pub fn compile_decoder_with_options(
 }
 
 /// Legacy entry point kept for backward compatibility.
+#[allow(dead_code)]
 fn compile_decoder_with_options_legacy(
     shape: &'static Shape,
     kind: DecoderKind,

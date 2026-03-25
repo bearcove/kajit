@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_must_use)]
+
 use chumsky::prelude::*;
 
 use kajit_emit::aarch64::{Condition, Reg, Width};
