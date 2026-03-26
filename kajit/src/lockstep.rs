@@ -5,7 +5,7 @@
 //! comparing vreg values after each CFG-MIR operation and stopping on the first
 //! divergence.
 
-use crate::harness::{AllocationMap, VRegLocation};
+use crate::harness::{LocationMap, VRegLocation};
 
 /// A divergence found by the lockstep debugger.
 #[derive(Debug, Clone)]
@@ -104,7 +104,7 @@ pub struct LockstepResult {
 pub fn run_lockstep(
     program: &kajit_mir::cfg_mir::Program,
     input: &[u8],
-    alloc_map: &AllocationMap,
+    location_map: &LocationMap,
     listing_lines: &[String],
     debugger: &mut dyn JitDebugger,
     max_steps: usize,
@@ -408,7 +408,7 @@ LOCKSTEP DESYNC at JIT step {jit_steps}
             let mut vreg_diffs = Vec::new();
             if let (Some(dst), Some(location)) = (
                 def_vreg,
-                def_vreg.and_then(|d| alloc_map.locations.get(&(d.index() as u32))),
+                def_vreg.and_then(|d| location_map.location_at(executed_line, d.index() as u32)),
             ) {
                 let sp = debugger.read_sp()?;
                 let iv = if dst.index() < state.vregs.len() {
@@ -466,7 +466,10 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
 
         if let Some(&dst) = compare_vregs.first() {
             let dst_idx = dst.index() as u32;
-            if let Some(location) = alloc_map.locations.get(&dst_idx) {
+            // Use per-line location lookup: at call sites, caller-saved registers
+            // are clobbered. location_at returns None for clobbered locations.
+            let location = location_map.location_at(executed_line, dst_idx);
+            if let Some(location) = location {
                 let interp_value = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
                 } else {
@@ -486,7 +489,7 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                     }];
                     for use_vreg in &use_vregs {
                         let use_idx = use_vreg.index() as u32;
-                        if let Some(use_loc) = alloc_map.locations.get(&use_idx) {
+                        if let Some(use_loc) = location_map.location_at(executed_line, use_idx) {
                             let use_interp = if use_vreg.index() < state.vregs.len() {
                                 state.vregs[use_vreg.index()]
                             } else {
@@ -520,7 +523,7 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
 
                     // Show the diverging vreg
                     let reg_name = match location {
-                        VRegLocation::Register(p) => AllocationMap::reg_name(*p),
+                        VRegLocation::Register(p) => LocationMap::reg_name(*p),
                         _ => "stk",
                     };
                     diag.push_str(&format!(
@@ -540,8 +543,8 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
 
                     // Show what else shares this physical register
                     if let VRegLocation::Register(preg) = location {
-                        let sharing: Vec<_> = alloc_map
-                            .locations
+                        let sharing: Vec<_> = location_map
+                            .static_locations
                             .iter()
                             .filter(|(k, v)| {
                                 **k != dst_idx
@@ -552,7 +555,7 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                         if !sharing.is_empty() {
                             diag.push_str(&format!(
                                 "\n  other vregs sharing {}: ",
-                                AllocationMap::reg_name(*preg)
+                                LocationMap::reg_name(*preg)
                             ));
                             for (i, v) in sharing.iter().enumerate() {
                                 if i > 0 {
@@ -593,9 +596,7 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                         for d in &vreg_diffs[1..] {
                             let m = if d.matches { "OK" } else { "MISMATCH" };
                             let loc_str = match &d.jit_location {
-                                VRegLocation::Register(p) => {
-                                    AllocationMap::reg_name(*p).to_string()
-                                }
+                                VRegLocation::Register(p) => LocationMap::reg_name(*p).to_string(),
                                 VRegLocation::StackSlot(o) => format!("[sp+{o}]"),
                                 VRegLocation::Constant(v) => format!("const({v})"),
                             };
@@ -628,12 +629,17 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                 verified.insert(dst_idx, (interp_value, executed_line, jit_steps));
 
                 let reg_name = match location {
-                    VRegLocation::Register(p) => AllocationMap::reg_name(*p),
+                    VRegLocation::Register(p) => LocationMap::reg_name(*p),
                     _ => "stk",
                 };
                 eprintln!(
                     "[lockstep] line {executed_line}: v{}({}) = {} OK",
                     dst_idx, reg_name, interp_value
+                );
+            } else if location_map.call_lines.contains(&executed_line) {
+                // Vreg is in a clobbered register at a call site — skip comparison
+                eprintln!(
+                    "[lockstep] line {executed_line}: v{dst_idx} skipped (call-clobbered register)"
                 );
             }
         }
@@ -813,7 +819,7 @@ pub fn format_result(result: &LockstepResult) -> String {
 
         for diff in &div.vreg_diffs {
             let loc_str = match &diff.jit_location {
-                VRegLocation::Register(p) => AllocationMap::reg_name(*p).to_string(),
+                VRegLocation::Register(p) => LocationMap::reg_name(*p).to_string(),
                 VRegLocation::StackSlot(off) => format!("[sp+{off}]"),
                 VRegLocation::Constant(v) => format!("const({v})"),
             };

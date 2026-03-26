@@ -1547,10 +1547,79 @@ fn insert_phi_copies_with_coalescing(
             continue;
         }
 
-        // Resolve parallel copies using PHYSICAL REGISTER dependencies.
-        // The vreg-based resolver doesn't know that two different vregs
-        // might share the same physical register, causing clobber bugs.
-        let resolved_moves = resolve_copies_by_preg(&copies, alloc_result, temp_vreg);
+        // Separate copies by location class. The parallel copy resolver only handles
+        // register-register dependencies, so spill-involving copies are scheduled
+        // around it with correct ordering to avoid lost-copy bugs.
+        //
+        // Ordering contract (phi copies are conceptually simultaneous):
+        //   1. Reg→Spill: reads source reg, writes to stack. Must run BEFORE reg-reg
+        //      copies that might overwrite the source register.
+        //   2. Reg→Reg: resolved by the parallel copy resolver (handles cycles).
+        //   3. Spill→Reg: reads from stack, writes to dest reg. Must run AFTER reg-reg
+        //      copies so it doesn't clobber a register that reg-reg needs to read.
+        //   4. Spill→Spill: no register involvement, can go anywhere.
+        let mut reg_to_spill = Vec::new();
+        let mut reg_reg_copies = Vec::new();
+        let mut spill_to_reg = Vec::new();
+        let mut spill_to_spill = Vec::new();
+        for c in &copies {
+            let src_alloc = alloc_result.allocations.get(&c.src);
+            let dst_alloc = alloc_result.allocations.get(&c.dst);
+            let src_is_spill = matches!(src_alloc, Some(Ra3Alloc::Spill) | None);
+            let dst_is_spill = matches!(dst_alloc, Some(Ra3Alloc::Spill) | None);
+            match (src_is_spill, dst_is_spill) {
+                (false, false) => reg_reg_copies.push(c.clone()),
+                (false, true) => reg_to_spill.push(c.clone()),
+                (true, false) => spill_to_reg.push(c.clone()),
+                (true, true) => spill_to_spill.push(c.clone()),
+            }
+        }
+
+        if std::env::var("KAJIT_PHI_TRACE").is_ok()
+            && (!reg_to_spill.is_empty() || !spill_to_reg.is_empty() || !spill_to_spill.is_empty())
+        {
+            let from_block = func.edges[edge_idx].from;
+            let to_block = func.edges[edge_idx].to;
+            eprintln!(
+                "[phi] spill copies on edge e{} (b{}→b{}): {} reg→spill, {} spill→reg, {} spill→spill",
+                edge_idx,
+                from_block.0,
+                to_block.0,
+                reg_to_spill.len(),
+                spill_to_reg.len(),
+                spill_to_spill.len()
+            );
+        }
+
+        // Phase 1: Reg→Spill — save register values to stack BEFORE reg-reg clobbers them
+        let mut resolved_moves: Vec<crate::regalloc3::parallel_copy::MoveOp> = Vec::new();
+        for c in reg_to_spill {
+            resolved_moves.push(crate::regalloc3::parallel_copy::MoveOp::Move {
+                dst: c.dst,
+                src: c.src,
+            });
+        }
+
+        // Phase 2: Reg→Reg — resolved with parallel copy algorithm (handles cycles)
+        let reg_moves = resolve_copies_by_preg(&reg_reg_copies, alloc_result, temp_vreg);
+        resolved_moves.extend(reg_moves);
+
+        // Phase 3: Spill→Reg — load from stack AFTER reg-reg is done
+        for c in spill_to_reg {
+            resolved_moves.push(crate::regalloc3::parallel_copy::MoveOp::Move {
+                dst: c.dst,
+                src: c.src,
+            });
+        }
+
+        // Phase 4: Spill→Spill — no register involvement
+        for c in spill_to_spill {
+            resolved_moves.push(crate::regalloc3::parallel_copy::MoveOp::Move {
+                dst: c.dst,
+                src: c.src,
+            });
+        }
+
         crate::regalloc3::phi_resolution::insert_moves_on_edge(func, edge_id, &resolved_moves);
     }
 }

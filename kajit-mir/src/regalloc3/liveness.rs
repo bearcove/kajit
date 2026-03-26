@@ -44,7 +44,7 @@
 
 use indexmap::IndexMap;
 use kajit_ir::VReg;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use crate::cfg_mir::{BlockId, Function, InstId};
 
@@ -56,11 +56,11 @@ pub struct LivenessInfo {
     /// Live intervals for each vreg (IndexMap for deterministic iteration)
     pub intervals: IndexMap<VReg, LiveInterval>,
 
-    /// Live-in set for each block
-    pub live_in: HashMap<BlockId, HashSet<VReg>>,
+    /// Live-in set for each block (BTreeSet for deterministic iteration)
+    pub live_in: HashMap<BlockId, BTreeSet<VReg>>,
 
-    /// Live-out set for each block
-    pub live_out: HashMap<BlockId, HashSet<VReg>>,
+    /// Live-out set for each block (BTreeSet for deterministic iteration)
+    pub live_out: HashMap<BlockId, BTreeSet<VReg>>,
 }
 
 /// Compute liveness information
@@ -82,10 +82,10 @@ struct LivenessAnalyzer<'a> {
     inst_defs: HashMap<InstId, Vec<VReg>>,
 
     /// Live-in set per block
-    live_in: HashMap<BlockId, HashSet<VReg>>,
+    live_in: HashMap<BlockId, BTreeSet<VReg>>,
 
     /// Live-out set per block
-    live_out: HashMap<BlockId, HashSet<VReg>>,
+    live_out: HashMap<BlockId, BTreeSet<VReg>>,
 }
 
 impl<'a> LivenessAnalyzer<'a> {
@@ -159,8 +159,8 @@ impl<'a> LivenessAnalyzer<'a> {
         // Initialize all sets to empty
         for block in &self.func.blocks {
             if !block.dead {
-                self.live_in.insert(block.id, HashSet::new());
-                self.live_out.insert(block.id, HashSet::new());
+                self.live_in.insert(block.id, BTreeSet::new());
+                self.live_out.insert(block.id, BTreeSet::new());
             }
         }
 
@@ -178,7 +178,7 @@ impl<'a> LivenessAnalyzer<'a> {
                 let old_live_in = self.live_in[&block.id].clone();
 
                 // Compute live-out from successors
-                let mut live_out = HashSet::new();
+                let mut live_out = BTreeSet::new();
                 for &edge_id in &block.succs {
                     let edge = &self.func.edges[edge_id.index()];
                     let succ = &self.func.blocks[edge.to.index()];
@@ -306,7 +306,6 @@ impl<'a> LivenessAnalyzer<'a> {
         }
 
         // Convert to LiveInterval structs — sort by vreg index for determinism
-        // (intervals were built from HashSet iteration which is nondeterministic)
         intervals.sort_by(|a, _, b, _| a.index().cmp(&b.index()));
         let mut live_intervals = IndexMap::new();
         for (vreg, mut segments) in intervals {

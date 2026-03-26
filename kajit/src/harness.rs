@@ -116,6 +116,114 @@ impl AllocationMap {
     }
 }
 
+/// Per-program-point vreg location map for the lockstep debugger.
+///
+/// Extends the static AllocationMap with call-clobber awareness: at DWARF lines
+/// that contain call instructions, caller-saved registers (x0-x18) are clobbered
+/// by the ABI. The only valid caller-saved register after a call is the return
+/// value's register (if any).
+///
+/// This replaces reading from a static vreg→register map, which gives false
+/// divergences when the lockstep reads a clobbered register after a call.
+#[derive(Debug, Clone, Default)]
+pub struct LocationMap {
+    /// Static allocation for each vreg (same data as AllocationMap.locations).
+    pub static_locations: HashMap<u32, VRegLocation>,
+    /// DWARF lines that contain call instructions (CallIntrinsic, CallPure, CallLambda).
+    /// At these lines, caller-saved registers are clobbered after execution.
+    pub call_lines: std::collections::HashSet<u32>,
+    /// For each call line, the return value vreg index (if any).
+    /// This vreg IS valid in its allocated register after the call.
+    pub call_return_vregs: HashMap<u32, u32>,
+    pub num_spill_slots: usize,
+}
+
+impl LocationMap {
+    /// Look up the location of a vreg after a specific DWARF line has executed.
+    ///
+    /// Returns `None` if the vreg is in a clobbered register at a call site
+    /// (meaning its value cannot be reliably read from the JIT at this point).
+    pub fn location_at(&self, dwarf_line: u32, vreg_idx: u32) -> Option<&VRegLocation> {
+        let loc = self.static_locations.get(&vreg_idx)?;
+
+        if self.call_lines.contains(&dwarf_line) {
+            if let VRegLocation::Register(preg) = loc {
+                // Caller-saved registers on aarch64: x0-x18
+                // (x19-x28 are callee-saved, x29=fp, x30=lr)
+                if *preg <= 18 {
+                    // The return value vreg is valid — the backend stores x0 → dst register
+                    if self.call_return_vregs.get(&dwarf_line) == Some(&vreg_idx) {
+                        return Some(loc);
+                    }
+                    // All other vregs in caller-saved registers: clobbered by the call
+                    return None;
+                }
+            }
+        }
+
+        Some(loc)
+    }
+
+    /// Build from an AllocationMap and CFG program.
+    ///
+    /// Walks the CFG in the same order as `build_debug_line_maps` to assign
+    /// DWARF line numbers, then identifies call sites and their return vregs.
+    pub fn from_alloc_map_and_cfg(
+        alloc_map: &AllocationMap,
+        program: &kajit_mir::cfg_mir::Program,
+    ) -> Self {
+        use kajit_lir::LinearOp;
+        use std::collections::HashSet;
+
+        let mut call_lines = HashSet::new();
+        let mut call_return_vregs = HashMap::new();
+
+        for func in &program.funcs {
+            let mut next_line = 1u32;
+            for block in &func.blocks {
+                for inst_id in &block.insts {
+                    let inst = &func.insts[inst_id.index()];
+                    match &inst.op {
+                        LinearOp::CallIntrinsic { dst, .. } => {
+                            call_lines.insert(next_line);
+                            if let Some(dst) = dst {
+                                call_return_vregs.insert(next_line, dst.index() as u32);
+                            }
+                        }
+                        LinearOp::CallPure { dst, .. } => {
+                            call_lines.insert(next_line);
+                            call_return_vregs.insert(next_line, dst.index() as u32);
+                        }
+                        LinearOp::CallLambda { results, .. } => {
+                            call_lines.insert(next_line);
+                            // First result is the primary return value
+                            if let Some(first) = results.first() {
+                                call_return_vregs.insert(next_line, first.index() as u32);
+                            }
+                        }
+                        _ => {}
+                    }
+                    next_line += 1;
+                }
+                // Terminator line
+                next_line += 1;
+            }
+        }
+
+        Self {
+            static_locations: alloc_map.locations.clone(),
+            call_lines,
+            call_return_vregs,
+            num_spill_slots: alloc_map.num_spill_slots,
+        }
+    }
+
+    /// Get the aarch64 register name for a physical register index.
+    pub fn reg_name(preg: u8) -> &'static str {
+        AllocationMap::reg_name(preg)
+    }
+}
+
 /// An intrinsic call site in the JIT code that needs patching for the standalone harness.
 #[derive(Debug, Clone)]
 pub struct IntrinsicCallSite {
@@ -420,7 +528,10 @@ static int hex_digit(char c) {{
 
 static size_t parse_hex(const char *s, uint8_t *buf, size_t max) {{
     size_t len = 0;
-    while (*s && *(s+1) && len < max) {{
+    while (*s && len < max) {{
+        // Skip spaces and other non-hex characters
+        while (*s && hex_digit(*s) < 0) s++;
+        if (!*s || !*(s+1)) break;
         int hi = hex_digit(*s);
         int lo = hex_digit(*(s+1));
         if (hi < 0 || lo < 0) break;

@@ -759,20 +759,14 @@ impl<'a> EmitContext<'a> {
             }
         }
 
-        // If no dst but field_offset, add out_field arg
+        // If no dst but field_offset, pass x21 (already adjusted) as out_field arg
         if dst.is_none() {
-            if let Some(off) = field_offset {
+            if field_offset.is_some() {
                 let arg_idx = args.len() + 1;
                 self.ectx
                     .emit
-                    .emit_add_imm(
-                        Width::X64,
-                        Reg::from_raw(arg_idx as u8),
-                        Reg::X21,
-                        off as u16,
-                        false,
-                    )
-                    .expect("add out_field");
+                    .emit_mov_reg(Width::X64, Reg::from_raw(arg_idx as u8), Reg::X21)
+                    .expect("mov out_field");
             }
         }
 

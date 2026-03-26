@@ -675,7 +675,7 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
     let result = kajit::lockstep::run_lockstep(
         &artifacts.cfg_program,
         &input,
-        &artifacts.alloc_map,
+        &artifacts.location_map,
         &listing_lines,
         &mut debugger,
         10_000,

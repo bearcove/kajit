@@ -234,8 +234,10 @@ pub struct PipelineArtifacts {
     pub cfg_canonical_text: String,
     /// Assembly text (aarch64 only, empty on other platforms)
     pub asm_text: String,
-    /// VReg → physical location map (for lockstep debugger)
+    /// VReg → physical location map (for lockstep debugger, legacy static map)
     pub alloc_map: crate::harness::AllocationMap,
+    /// Per-program-point vreg location map (call-clobber aware, replaces alloc_map for lockstep)
+    pub location_map: crate::harness::LocationMap,
     /// Intrinsic call sites in the JIT code (for harness relocation)
     pub intrinsic_call_sites:
         Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
@@ -296,6 +298,9 @@ pub fn compile_pipeline(
         .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
         .unwrap_or_default();
 
+    let location_map =
+        crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &ra3_alloc.cfg_program);
+
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
@@ -333,6 +338,7 @@ pub fn compile_pipeline(
         cfg_canonical_text: String::new(),
         asm_text,
         alloc_map,
+        location_map,
         intrinsic_call_sites,
         cfg_program: ra3_alloc.cfg_program.clone(),
         decoder,
