@@ -567,6 +567,29 @@ fn color_phase(
             }
         }
 
+        // Pre-compute: for each block param, find edge arg sources that feed it.
+        // The param should prefer the register of its sources (phi affinity).
+        let mut param_source_vregs: HashMap<VReg, Vec<VReg>> = HashMap::new();
+        for pred_block in &func.blocks {
+            if pred_block.dead {
+                continue;
+            }
+            for &edge_id in &pred_block.succs {
+                let edge = &func.edges[edge_id.index()];
+                if edge.to != block_id || edge.from.0 == u32::MAX {
+                    continue;
+                }
+                for arg in &edge.args {
+                    if !spilled.contains(&arg.source) && !spilled.contains(&arg.target) {
+                        param_source_vregs
+                            .entry(arg.target)
+                            .or_default()
+                            .push(arg.source);
+                    }
+                }
+            }
+        }
+
         // Color block params first (they're defined at block entry)
         for &param in &block.params {
             if spilled.contains(&param) {
@@ -577,7 +600,17 @@ fn color_phase(
             } else {
                 allocatable
             };
-            let color = lowest_available_color(pool, &occupied);
+            // Phi affinity: prefer registers of already-colored source vregs.
+            let phi_prefs: Vec<PReg> = param_source_vregs
+                .get(&param)
+                .map(|sources| {
+                    sources
+                        .iter()
+                        .filter_map(|src| coloring.get(src).copied())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let color = preferred_color(pool, &occupied, &[], &phi_prefs);
             if let Some(color) = color {
                 if std::env::var("KAJIT_RA_TRACE").is_ok() {
                     eprintln!(
@@ -632,6 +665,44 @@ fn color_phase(
                 occupied.remove(&preg);
             }
 
+            // Compute dying source preferences: sources whose last use is this
+            // instruction and that are not live-out. Their registers are about
+            // to be freed, so new defs should prefer reusing them.
+            let mut dying_source_colors: Vec<PReg> = Vec::new();
+            for &vreg in &uses_here {
+                if spilled.contains(&vreg) {
+                    continue;
+                }
+                let last = last_use_in_block.get(&(block_id, vreg)).copied();
+                let is_dying = last == Some(inst_idx as u32)
+                    && !live_out.map_or(false, |lo| lo.contains(&vreg));
+                if is_dying {
+                    if let Some(&preg) = coloring.get(&vreg) {
+                        dying_source_colors.push(preg);
+                    }
+                }
+            }
+
+            // Edge arg preferences: if this def will be used as an edge arg source,
+            // prefer the target param's register (if already colored).
+            let edge_arg_prefs: Vec<(VReg, PReg)> = {
+                let mut prefs = Vec::new();
+                for &edge_id in &block.succs {
+                    let edge = &func.edges[edge_id.index()];
+                    if edge.from.0 == u32::MAX {
+                        continue;
+                    }
+                    for arg in &edge.args {
+                        if !spilled.contains(&arg.target) {
+                            if let Some(&tc) = coloring.get(&arg.target) {
+                                prefs.push((arg.source, tc));
+                            }
+                        }
+                    }
+                }
+                prefs
+            };
+
             // Color defs
             inst.op.for_each_def(|dst| {
                 if spilled.contains(dst) {
@@ -643,7 +714,15 @@ fn color_phase(
                 } else {
                     allocatable
                 };
-                let color = lowest_available_color(pool, &occupied);
+
+                // Collect phi preferences specific to this def.
+                let phi_prefs: Vec<PReg> = edge_arg_prefs
+                    .iter()
+                    .filter(|(src, _)| *src == *dst)
+                    .map(|(_, tc)| *tc)
+                    .collect();
+
+                let color = preferred_color(pool, &occupied, &dying_source_colors, &phi_prefs);
                 if let Some(color) = color {
                     if std::env::var("KAJIT_RA_TRACE").is_ok() {
                         eprintln!(
@@ -756,6 +835,38 @@ fn domtree_preorder(entry: BlockId, dom: &DominanceInfo) -> Vec<BlockId> {
 /// Find the lowest-numbered available color not in the occupied set.
 fn lowest_available_color(allocatable: &[PReg], occupied: &HashSet<PReg>) -> Option<PReg> {
     allocatable.iter().find(|p| !occupied.contains(p)).copied()
+}
+
+// ─── Preference-guided coloring ─────────────────────────────────────────────
+
+/// Choose the best available register for a vreg, considering preferences.
+///
+/// Preference sources resolved dynamically from current coloring state:
+/// 1. Dying sources at this instruction → their freed registers (highest priority)
+/// 2. Edge arg partners already colored → their registers (phi affinity)
+/// 3. Falls back to lowest available if no preference matches
+fn preferred_color(
+    allocatable: &[PReg],
+    occupied: &HashSet<PReg>,
+    dying_source_colors: &[PReg],
+    phi_partner_colors: &[PReg],
+) -> Option<PReg> {
+    // Try dying source registers first (highest value: reuse avoids a mov).
+    for &pref in dying_source_colors {
+        if !occupied.contains(&pref) && allocatable.contains(&pref) {
+            return Some(pref);
+        }
+    }
+
+    // Try phi partner registers (avoid copy at edge).
+    for &pref in phi_partner_colors {
+        if !occupied.contains(&pref) && allocatable.contains(&pref) {
+            return Some(pref);
+        }
+    }
+
+    // Fall back to lowest available.
+    lowest_available_color(allocatable, occupied)
 }
 
 // ─── Phase 3: Coalesce ──────────────────────────────────────────────────────
