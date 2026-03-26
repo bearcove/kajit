@@ -35,6 +35,8 @@
 use kajit_ir::VReg;
 use std::collections::HashMap;
 
+use super::machine_inst::PReg;
+
 /// A single copy operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Copy {
@@ -138,6 +140,124 @@ impl ParallelCopyResolver {
         // Update dependencies: cycle_start now reads from temp
         self.deps.insert(cycle_start, temp_reg);
     }
+}
+
+// ─── Unified location-based parallel copy resolver ──────────────────────────
+//
+// The resolver above works on abstract VRegs. This resolver works on physical
+// locations (registers + stack slots), which is what you need after register
+// allocation. It sees the FULL dependency graph — including Reg→Stack and
+// Stack→Reg copies — so spill-involving copies participate naturally in
+// ordering instead of being hand-scheduled in phases.
+
+/// A physical location where a value lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Location {
+    /// Physical register (aarch64 GPR index)
+    Reg(PReg),
+    /// Stack spill slot (index, not byte offset)
+    Stack(u32),
+}
+
+/// A parallel copy between physical locations, carrying the vreg identities
+/// so the backend can emit the right Copy instructions.
+#[derive(Debug, Clone, Copy)]
+pub struct LocationCopy {
+    pub dst_loc: Location,
+    pub src_loc: Location,
+    pub dst_vreg: VReg,
+    pub src_vreg: VReg,
+}
+
+/// Resolve a set of simultaneous location copies into a sequential move list.
+///
+/// This is the standard Briggs parallel-move algorithm generalized to locations
+/// (registers AND stack slots). The key insight: dependencies are on LOCATIONS,
+/// not vregs. A copy `Stack(5) ← Reg(1)` blocks any copy that overwrites Reg(1)
+/// until it has read Reg(1).
+///
+/// `temp_vreg` is used for cycle breaking (moved to/from a temp register).
+pub fn resolve_location_copies(copies: &[LocationCopy], temp_vreg: VReg) -> Vec<MoveOp> {
+    // Drop identity copies (same location)
+    let pending: Vec<LocationCopy> = copies
+        .iter()
+        .filter(|c| c.dst_loc != c.src_loc)
+        .copied()
+        .collect();
+
+    if pending.is_empty() {
+        return Vec::new();
+    }
+
+    let mut alive = vec![true; pending.len()];
+    let mut result = Vec::new();
+
+    // Repeatedly emit copies whose dst_loc is NOT read by any remaining copy's src_loc
+    loop {
+        let mut progress = false;
+        for i in 0..pending.len() {
+            if !alive[i] {
+                continue;
+            }
+            let dst = pending[i].dst_loc;
+            let blocked =
+                (0..pending.len()).any(|j| j != i && alive[j] && pending[j].src_loc == dst);
+            if !blocked {
+                result.push(MoveOp::Move {
+                    dst: pending[i].dst_vreg,
+                    src: pending[i].src_vreg,
+                });
+                alive[i] = false;
+                progress = true;
+            }
+        }
+        if !progress {
+            break;
+        }
+    }
+
+    // Remaining copies form cycles — break each with temp
+    while let Some(cycle_start) = alive.iter().position(|&a| a) {
+        // Walk the cycle: follow dst_loc → find who reads from it
+        let mut cycle = vec![cycle_start];
+        let mut current = cycle_start;
+        loop {
+            let dst = pending[current].dst_loc;
+            let next = (0..pending.len()).find(|&j| alive[j] && pending[j].src_loc == dst);
+            match next {
+                Some(j) if j == cycle_start => break,
+                Some(j) => {
+                    cycle.push(j);
+                    current = j;
+                }
+                None => break,
+            }
+        }
+
+        // Save the first move's source to temp
+        result.push(MoveOp::MoveToTemp {
+            dst_temp: temp_vreg,
+            src: pending[cycle[0]].src_vreg,
+        });
+        alive[cycle[0]] = false;
+
+        // Emit rest of cycle in reverse (each source not yet clobbered)
+        for &i in cycle[1..].iter().rev() {
+            result.push(MoveOp::Move {
+                dst: pending[i].dst_vreg,
+                src: pending[i].src_vreg,
+            });
+            alive[i] = false;
+        }
+
+        // Emit the first move reading from temp
+        result.push(MoveOp::Move {
+            dst: pending[cycle[0]].dst_vreg,
+            src: temp_vreg,
+        });
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -320,5 +440,145 @@ mod tests {
         let temp = VReg::new(100);
         let moves = resolver.resolve(temp);
         assert_eq!(moves.len(), 0);
+    }
+
+    // ─── Unified location resolver tests ────────────────────────────────
+
+    #[test]
+    fn test_location_reg_to_spill_before_reg_to_reg() {
+        // The exact bug that was found:
+        // Copy 1: Reg(1) ← Reg(2)    (reg-reg)
+        // Copy 2: Stack(0) ← Reg(1)  (reg-to-spill)
+        //
+        // Stack(0) must read Reg(1) BEFORE Reg(1) is overwritten by Copy 1.
+        let copies = vec![
+            LocationCopy {
+                dst_loc: Location::Reg(PReg(1)),
+                src_loc: Location::Reg(PReg(2)),
+                dst_vreg: VReg::new(10),
+                src_vreg: VReg::new(20),
+            },
+            LocationCopy {
+                dst_loc: Location::Stack(0),
+                src_loc: Location::Reg(PReg(1)),
+                dst_vreg: VReg::new(30),
+                src_vreg: VReg::new(40),
+            },
+        ];
+
+        let temp = VReg::new(100);
+        let moves = resolve_location_copies(&copies, temp);
+
+        // Stack(0) ← Reg(1) must come first (Stack(0) is not read by anyone)
+        assert_eq!(moves.len(), 2);
+        // First move should be the stack write (v30←v40)
+        assert!(matches!(moves[0], MoveOp::Move { dst, .. } if dst == VReg::new(30)));
+    }
+
+    #[test]
+    fn test_location_spill_to_reg_after_reg_to_reg() {
+        // Copy 1: Reg(2) ← Reg(1)    (reg-reg)
+        // Copy 2: Reg(1) ← Stack(0)  (spill-to-reg)
+        //
+        // Reg(2) must read Reg(1) BEFORE Reg(1) is overwritten by Copy 2.
+        let copies = vec![
+            LocationCopy {
+                dst_loc: Location::Reg(PReg(2)),
+                src_loc: Location::Reg(PReg(1)),
+                dst_vreg: VReg::new(10),
+                src_vreg: VReg::new(20),
+            },
+            LocationCopy {
+                dst_loc: Location::Reg(PReg(1)),
+                src_loc: Location::Stack(0),
+                dst_vreg: VReg::new(30),
+                src_vreg: VReg::new(40),
+            },
+        ];
+
+        let temp = VReg::new(100);
+        let moves = resolve_location_copies(&copies, temp);
+
+        // Reg(2) ← Reg(1) must come first
+        assert_eq!(moves.len(), 2);
+        assert!(matches!(moves[0], MoveOp::Move { dst, .. } if dst == VReg::new(10)));
+    }
+
+    #[test]
+    fn test_location_mixed_cycle() {
+        // Reg(1) ← Stack(0)
+        // Stack(0) ← Reg(1)
+        // This is a 2-cycle between a register and a stack slot.
+        let copies = vec![
+            LocationCopy {
+                dst_loc: Location::Reg(PReg(1)),
+                src_loc: Location::Stack(0),
+                dst_vreg: VReg::new(10),
+                src_vreg: VReg::new(20),
+            },
+            LocationCopy {
+                dst_loc: Location::Stack(0),
+                src_loc: Location::Reg(PReg(1)),
+                dst_vreg: VReg::new(30),
+                src_vreg: VReg::new(40),
+            },
+        ];
+
+        let temp = VReg::new(100);
+        let moves = resolve_location_copies(&copies, temp);
+
+        // Should need temp to break the cycle
+        assert_eq!(moves.len(), 3);
+        assert!(matches!(moves[0], MoveOp::MoveToTemp { .. }));
+    }
+
+    #[test]
+    fn test_location_identity_removed() {
+        // Same location → no copy needed
+        let copies = vec![
+            LocationCopy {
+                dst_loc: Location::Reg(PReg(1)),
+                src_loc: Location::Reg(PReg(1)),
+                dst_vreg: VReg::new(10),
+                src_vreg: VReg::new(20),
+            },
+            LocationCopy {
+                dst_loc: Location::Reg(PReg(2)),
+                src_loc: Location::Reg(PReg(3)),
+                dst_vreg: VReg::new(30),
+                src_vreg: VReg::new(40),
+            },
+        ];
+
+        let temp = VReg::new(100);
+        let moves = resolve_location_copies(&copies, temp);
+        assert_eq!(moves.len(), 1);
+    }
+
+    #[test]
+    fn test_location_all_spill() {
+        // Stack(0) ← Stack(1), Stack(1) ← Stack(2)
+        // No register involvement at all — still ordered correctly
+        let copies = vec![
+            LocationCopy {
+                dst_loc: Location::Stack(0),
+                src_loc: Location::Stack(1),
+                dst_vreg: VReg::new(10),
+                src_vreg: VReg::new(20),
+            },
+            LocationCopy {
+                dst_loc: Location::Stack(1),
+                src_loc: Location::Stack(2),
+                dst_vreg: VReg::new(30),
+                src_vreg: VReg::new(40),
+            },
+        ];
+
+        let temp = VReg::new(100);
+        let moves = resolve_location_copies(&copies, temp);
+        // Stack(1)←Stack(2) first, then Stack(0)←Stack(1)
+        assert_eq!(moves.len(), 2);
+        assert!(matches!(moves[0], MoveOp::Move { dst, .. } if dst == VReg::new(30)));
+        assert!(matches!(moves[1], MoveOp::Move { dst, .. } if dst == VReg::new(10)));
     }
 }

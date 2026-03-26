@@ -9,7 +9,7 @@ use kajit_ir::VReg;
 use crate::cfg_mir::{BlockId, InstId};
 
 /// Physical register (target-specific)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PReg(pub u8);
 
 impl PReg {

@@ -1547,237 +1547,51 @@ fn insert_phi_copies_with_coalescing(
             continue;
         }
 
-        // Separate copies by location class. The parallel copy resolver only handles
-        // register-register dependencies, so spill-involving copies are scheduled
-        // around it with correct ordering to avoid lost-copy bugs.
+        // Unified location-based parallel copy resolution.
         //
-        // Ordering contract (phi copies are conceptually simultaneous):
-        //   1. Reg→Spill: reads source reg, writes to stack. Must run BEFORE reg-reg
-        //      copies that might overwrite the source register.
-        //   2. Reg→Reg: resolved by the parallel copy resolver (handles cycles).
-        //   3. Spill→Reg: reads from stack, writes to dest reg. Must run AFTER reg-reg
-        //      copies so it doesn't clobber a register that reg-reg needs to read.
-        //   4. Spill→Spill: no register involvement, can go anywhere.
-        let mut reg_to_spill = Vec::new();
-        let mut reg_reg_copies = Vec::new();
-        let mut spill_to_reg = Vec::new();
-        let mut spill_to_spill = Vec::new();
-        for c in &copies {
-            let src_alloc = alloc_result.allocations.get(&c.src);
-            let dst_alloc = alloc_result.allocations.get(&c.dst);
-            let src_is_spill = matches!(src_alloc, Some(Ra3Alloc::Spill) | None);
-            let dst_is_spill = matches!(dst_alloc, Some(Ra3Alloc::Spill) | None);
-            match (src_is_spill, dst_is_spill) {
-                (false, false) => reg_reg_copies.push(c.clone()),
-                (false, true) => reg_to_spill.push(c.clone()),
-                (true, false) => spill_to_reg.push(c.clone()),
-                (true, true) => spill_to_spill.push(c.clone()),
-            }
-        }
+        // All copies — reg→reg, reg→spill, spill→reg, spill→spill — go through
+        // one resolver that sees the full dependency graph on physical locations.
+        // This prevents lost-copy bugs where a Reg→Spill copy's source register
+        // is clobbered by a Reg→Reg copy that runs before it.
+        use crate::regalloc3::parallel_copy::LocationCopy;
 
-        if std::env::var("KAJIT_PHI_TRACE").is_ok()
-            && (!reg_to_spill.is_empty() || !spill_to_reg.is_empty() || !spill_to_spill.is_empty())
-        {
-            let from_block = func.edges[edge_idx].from;
-            let to_block = func.edges[edge_idx].to;
-            eprintln!(
-                "[phi] spill copies on edge e{} (b{}→b{}): {} reg→spill, {} spill→reg, {} spill→spill",
-                edge_idx,
-                from_block.0,
-                to_block.0,
-                reg_to_spill.len(),
-                spill_to_reg.len(),
-                spill_to_spill.len()
-            );
-        }
+        let location_copies: Vec<LocationCopy> = copies
+            .iter()
+            .filter_map(|c| {
+                let src_loc = vreg_location(c.src, alloc_result)?;
+                let dst_loc = vreg_location(c.dst, alloc_result)?;
+                Some(LocationCopy {
+                    dst_loc,
+                    src_loc,
+                    dst_vreg: c.dst,
+                    src_vreg: c.src,
+                })
+            })
+            .collect();
 
-        // Phase 1: Reg→Spill — save register values to stack BEFORE reg-reg clobbers them
-        let mut resolved_moves: Vec<crate::regalloc3::parallel_copy::MoveOp> = Vec::new();
-        for c in reg_to_spill {
-            resolved_moves.push(crate::regalloc3::parallel_copy::MoveOp::Move {
-                dst: c.dst,
-                src: c.src,
-            });
-        }
-
-        // Phase 2: Reg→Reg — resolved with parallel copy algorithm (handles cycles)
-        let reg_moves = resolve_copies_by_preg(&reg_reg_copies, alloc_result, temp_vreg);
-        resolved_moves.extend(reg_moves);
-
-        // Phase 3: Spill→Reg — load from stack AFTER reg-reg is done
-        for c in spill_to_reg {
-            resolved_moves.push(crate::regalloc3::parallel_copy::MoveOp::Move {
-                dst: c.dst,
-                src: c.src,
-            });
-        }
-
-        // Phase 4: Spill→Spill — no register involvement
-        for c in spill_to_spill {
-            resolved_moves.push(crate::regalloc3::parallel_copy::MoveOp::Move {
-                dst: c.dst,
-                src: c.src,
-            });
-        }
+        let resolved_moves =
+            crate::regalloc3::parallel_copy::resolve_location_copies(&location_copies, temp_vreg);
 
         crate::regalloc3::phi_resolution::insert_moves_on_edge(func, edge_id, &resolved_moves);
     }
 }
 
-/// Resolve parallel copies using physical register assignments.
+/// Map a vreg to its physical location (register or stack).
 ///
-/// Builds the dependency graph on PHYSICAL REGISTERS (not vregs), then:
-/// 1. Emit all acyclic moves (dst not read by any remaining move)
-/// 2. Break cycles with temp register
-///
-/// This is the standard parallel-move algorithm (Briggs et al.) applied
-/// to physical locations after register allocation.
-fn resolve_copies_by_preg(
-    copies: &[crate::regalloc3::parallel_copy::Copy],
+/// For spilled vregs, we use the vreg index as a unique stack "slot ID".
+/// The resolver only needs location identity for dependency tracking — it
+/// doesn't need the actual byte offset. Each spilled vreg has a unique slot,
+/// so using the vreg index as the slot ID is correct.
+fn vreg_location(
+    vreg: kajit_ir::VReg,
     alloc: &crate::regalloc3::linear_scan::AllocationResult,
-    temp_vreg: kajit_ir::VReg,
-) -> Vec<crate::regalloc3::parallel_copy::MoveOp> {
+) -> Option<crate::regalloc3::parallel_copy::Location> {
     use crate::regalloc3::linear_scan::Allocation as Ra3Alloc;
-    use crate::regalloc3::parallel_copy::MoveOp;
-
-    // Map each copy to physical registers, drop identities
-    struct PregMove {
-        dst_vreg: kajit_ir::VReg,
-        src_vreg: kajit_ir::VReg,
-        dst_preg: u8,
-        src_preg: u8,
+    use crate::regalloc3::parallel_copy::Location;
+    match alloc.allocations.get(&vreg)? {
+        Ra3Alloc::Reg(preg) => Some(Location::Reg(*preg)),
+        Ra3Alloc::Spill => Some(Location::Stack(vreg.index() as u32)),
     }
-
-    let moves: Vec<PregMove> = copies
-        .iter()
-        .filter_map(|c| {
-            let dst_preg = match alloc.allocations.get(&c.dst)? {
-                Ra3Alloc::Reg(p) => p.0,
-                Ra3Alloc::Spill => return None,
-            };
-            let src_preg = match alloc.allocations.get(&c.src)? {
-                Ra3Alloc::Reg(p) => p.0,
-                Ra3Alloc::Spill => return None,
-            };
-            if dst_preg == src_preg {
-                return None; // identity
-            }
-            Some(PregMove {
-                dst_vreg: c.dst,
-                src_vreg: c.src,
-                dst_preg,
-                src_preg,
-            })
-        })
-        .collect();
-
-    if moves.is_empty() {
-        return Vec::new();
-    }
-
-    if std::env::var("KAJIT_PHI_TRACE").is_ok() {
-        eprintln!("[phi] resolving {} preg moves:", moves.len());
-        for (i, m) in moves.iter().enumerate() {
-            eprintln!(
-                "  [{}] x{} ← x{} (v{} ← v{})",
-                i,
-                m.dst_preg,
-                m.src_preg,
-                m.dst_vreg.index(),
-                m.src_vreg.index()
-            );
-        }
-    }
-
-    let mut result = Vec::new();
-    let mut pending: Vec<bool> = vec![true; moves.len()];
-
-    // Phase 1: repeatedly emit acyclic moves (dst_preg not read by any remaining)
-    loop {
-        let mut progress = false;
-        for i in 0..moves.len() {
-            if !pending[i] {
-                continue;
-            }
-            let dst = moves[i].dst_preg;
-            let blocked =
-                (0..moves.len()).any(|j| j != i && pending[j] && moves[j].src_preg == dst);
-            if !blocked {
-                result.push(MoveOp::Move {
-                    dst: moves[i].dst_vreg,
-                    src: moves[i].src_vreg,
-                });
-                pending[i] = false;
-                progress = true;
-            }
-        }
-        if !progress {
-            break;
-        }
-    }
-
-    // Phase 2: remaining moves form cycles — break each with temp
-    while let Some(cycle_start) = pending.iter().position(|p| *p) {
-        // Collect the cycle by walking: follow dst_preg → find who reads from it
-        let mut cycle = vec![cycle_start];
-        let mut current = cycle_start;
-        loop {
-            let dst = moves[current].dst_preg;
-            let next = (0..moves.len()).find(|&j| pending[j] && moves[j].src_preg == dst);
-            match next {
-                Some(j) if j == cycle_start => break, // cycle complete
-                Some(j) => {
-                    cycle.push(j);
-                    current = j;
-                }
-                None => break, // shouldn't happen in a true cycle
-            }
-        }
-
-        // Cycle is [a, b, c, d, e] where:
-        //   a: x1←x12, b: x5←x1, c: x7←x5, d: x8←x7, e: x12←x8
-        //
-        // Resolution:
-        //   temp ← src of a (save x12)
-        //   emit LAST to SECOND in reverse: e, d, c, b
-        //   emit a with temp as source: a.dst ← temp
-
-        if std::env::var("KAJIT_PHI_TRACE").is_ok() {
-            eprintln!(
-                "[phi] cycle of length {}: {:?}",
-                cycle.len(),
-                cycle
-                    .iter()
-                    .map(|&i| format!("x{}←x{}", moves[i].dst_preg, moves[i].src_preg))
-                    .collect::<Vec<_>>()
-            );
-        }
-
-        // Save the first move's source to temp
-        result.push(MoveOp::MoveToTemp {
-            dst_temp: temp_vreg,
-            src: moves[cycle[0]].src_vreg,
-        });
-        pending[cycle[0]] = false;
-
-        // Emit the rest of the cycle in REVERSE order
-        // (each move's source hasn't been clobbered yet because we go backwards)
-        for &i in cycle[1..].iter().rev() {
-            result.push(MoveOp::Move {
-                dst: moves[i].dst_vreg,
-                src: moves[i].src_vreg,
-            });
-            pending[i] = false;
-        }
-
-        // Emit the first move reading from temp
-        result.push(MoveOp::Move {
-            dst: moves[cycle[0]].dst_vreg,
-            src: temp_vreg,
-        });
-    }
-
-    result
 }
 
 const MAX_SIM_STEPS: usize = 1_000_000;
