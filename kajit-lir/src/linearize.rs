@@ -1076,8 +1076,9 @@ impl<'a> Linearizer<'a> {
             return;
         }
 
-        // Try the cascade optimization
-        if self.try_linearize_gamma_cascade(node_id, regions) {
+        // Try passthrough-exit lowering: if one branch is data-passthrough,
+        // emit conditional exit to shared landing block + inline the other.
+        if self.try_linearize_passthrough_exit(node_id, regions, None) {
             return;
         }
 
@@ -1350,90 +1351,12 @@ impl<'a> Linearizer<'a> {
         true
     }
 
-    // ─── Gamma cascade linearization ────────────────────────────────────
+    // ─── Passthrough-exit gamma lowering ────────────────────────────────
 
-    /// Try to linearize a gamma as a flattened cascade (conditional-exit style).
-    /// Returns true if the pattern was detected and handled.
-    fn try_linearize_gamma_cascade(&mut self, node_id: NodeId, regions: &[RegionId]) -> bool {
-        // Only 2-branch gammas can form cascades
-        if regions.len() != 2 {
-            return false;
-        }
-
-        // Collect cascade levels
-        let levels = self.collect_cascade_levels(node_id);
-        if levels.len() < 2 {
-            return false; // Not a cascade (single gamma)
-        }
-
-        eprintln!(
-            "[cascade] flattening {}-level gamma cascade at node #{}",
-            levels.len(),
-            node_id.index()
-        );
-        self.emit_gamma_cascade(node_id, &levels);
-        true
-    }
-
-    /// Collect all levels of a gamma cascade starting from the outermost gamma.
-    ///
-    /// A cascade level is: gamma(pred) { branch0: passthrough, branch1: body + tail_gamma }
-    /// The tail gamma feeds ALL of the continue region's results.
-    fn collect_cascade_levels(&self, gamma_node: NodeId) -> Vec<CascadeLevel> {
-        let mut levels = Vec::new();
-        let mut current = gamma_node;
-
-        loop {
-            let NodeKind::Gamma { regions } = &self.func.nodes[current].kind else {
-                break;
-            };
-            if regions.len() != 2 {
-                break;
-            }
-
-            let exit_region = regions[0];
-            let continue_region = regions[1];
-
-            // Check: is exit_region a passthrough? (no computation, results = args)
-            if !self.is_passthrough_region(exit_region) {
-                break;
-            }
-
-            levels.push(CascadeLevel {
-                gamma_node: current,
-                exit_region,
-                continue_region,
-            });
-
-            // Check: does continue_region have a tail gamma that feeds all results?
-            match self.find_tail_gamma_in_region(continue_region) {
-                Some(next_gamma) => {
-                    current = next_gamma;
-                }
-                None => break, // Last level (no more nesting)
-            }
-        }
-
-        levels
-    }
-
-    /// Check if a region is a pure passthrough: no computation nodes,
-    /// each result is the corresponding region arg.
-    fn is_passthrough_region(&self, region_id: RegionId) -> bool {
+    /// Check if a region is data-passthrough: each data result equals the
+    /// corresponding incoming region arg. Ignores non-data computation.
+    fn is_data_passthrough_region(&self, region_id: RegionId) -> bool {
         let region = &self.func.regions[region_id];
-
-        // No computation nodes (only check non-gamma, non-theta simple nodes)
-        let has_computation = region.nodes.iter().any(|&nid| {
-            !matches!(
-                &self.func.nodes[nid].kind,
-                NodeKind::Simple(IrOp::Const { .. })
-            )
-        });
-        if has_computation {
-            return false;
-        }
-
-        // Each data result must be the corresponding arg
         let data_results: Vec<_> = region
             .results
             .iter()
@@ -1446,14 +1369,11 @@ impl<'a> Linearizer<'a> {
             .enumerate()
             .filter(|&(_, &aid)| self.func.region_args[aid].kind == PortKind::Data)
             .collect();
-
         if data_results.len() != data_args.len() {
             return false;
         }
-
         for (&(_, &rid), &(_, &aid)) in data_results.iter().zip(data_args.iter()) {
-            let result = &self.func.region_results[rid];
-            match result.source {
+            match self.func.region_results[rid].source {
                 PortSource::RegionArg(arg_ref) => {
                     if arg_ref.region != region_id || arg_ref.arg != aid {
                         return false;
@@ -1462,141 +1382,266 @@ impl<'a> Linearizer<'a> {
                 _ => return false,
             }
         }
-
         true
     }
 
-    /// Find a gamma node at the "tail" of a region that feeds all data results.
-    fn find_tail_gamma_in_region(&self, region_id: RegionId) -> Option<NodeId> {
-        let region = &self.func.regions[region_id];
-
-        // Find the last gamma node in this region
-        let gamma_node = region
-            .nodes
-            .iter()
-            .rev()
-            .find(|&&nid| matches!(&self.func.nodes[nid].kind, NodeKind::Gamma { .. }))?;
-
-        // Check: does this gamma feed ALL data results of the region?
-        let data_results: Vec<_> = region
-            .results
-            .iter()
-            .filter(|&&rid| self.func.region_results[rid].kind == PortKind::Data)
-            .collect();
-
-        for &rid in &data_results {
-            let result = &self.func.region_results[*rid];
-            match result.source {
-                PortSource::Node(out_ref) if out_ref.node == *gamma_node => {
-                    // Good — this result comes from the tail gamma
-                }
-                _ => return None,
-            }
+    /// Lower a passthrough-exit gamma as a conditional exit to a shared landing.
+    ///
+    /// `exit_ctx`: if Some, contains (landing_label, landing_vregs, state_env).
+    /// state_env[i] = current vreg for landing param i in the environment.
+    ///
+    /// The key idea: exits branch to the landing block carrying the CURRENT
+    /// environment's state, not the inner gamma's raw outputs. This handles
+    /// arity mismatches between nested gammas naturally.
+    /// `exit_ctx`: (landing_label, landing_vregs, state_env, output_to_landing)
+    /// output_to_landing[j] = index into state_env/landing_vregs for this gamma's output j.
+    fn try_linearize_passthrough_exit(
+        &mut self,
+        node_id: NodeId,
+        regions: &[RegionId],
+        exit_ctx: Option<(LabelId, Vec<VReg>, Vec<VReg>, Vec<usize>)>,
+    ) -> bool {
+        if regions.len() != 2 {
+            return false;
+        }
+        let b0_pt = self.is_data_passthrough_region(regions[0]);
+        let b1_pt = self.is_data_passthrough_region(regions[1]);
+        if !b0_pt && !b1_pt {
+            return false;
+        }
+        if b0_pt && b1_pt {
+            return false;
+        }
+        let (cont_branch, exit_on_zero) = if b0_pt {
+            (regions[1], true)
+        } else {
+            (regions[0], false)
+        };
+        if self.region_is_error_only(cont_branch) {
+            return false;
         }
 
-        Some(*gamma_node)
-    }
-
-    /// Emit a flattened gamma cascade as conditional-exit straight-line code.
-    fn emit_gamma_cascade(&mut self, outermost_node: NodeId, levels: &[CascadeLevel]) {
-        let outermost = &self.func.nodes[outermost_node];
-        let data_output_count = outermost
+        let node = &self.func.nodes[node_id];
+        let predicate = self.resolve_vreg(node.inputs[0].source);
+        let state_count = self.func.state_domains.len();
+        let passthrough_count = node.inputs.len() - 1 - state_count;
+        let data_output_count = node
             .outputs
             .iter()
             .filter(|o| o.kind == PortKind::Data)
             .count();
 
-        // The done_label is where all exit branches converge
-        let done_label = self.fresh_label();
+        // Create or reuse landing block
+        let owns_landing = exit_ctx.is_none();
+        let (landing_label, landing_vregs, mut state_env, output_to_landing) = exit_ctx
+            .unwrap_or_else(|| {
+                let label = self.fresh_label();
+                let vregs: Vec<VReg> = (0..data_output_count)
+                    .map(|i| {
+                        let v = node.outputs[i].vreg.expect("gamma output vreg");
+                        self.record_vreg_scope(v, node.outputs[i].debug_scope);
+                        v
+                    })
+                    .collect();
+                // Initial state = gamma inputs (current environment)
+                let state: Vec<VReg> = (0..data_output_count)
+                    .map(|i| self.resolve_vreg(node.inputs[i + 1].source))
+                    .collect();
+                // Identity mapping: output j = landing param j
+                let mapping: Vec<usize> = (0..data_output_count).collect();
+                (label, vregs, state, mapping)
+            });
 
-        // Output vregs from the outermost gamma
-        let output_vregs: Vec<VReg> = (0..data_output_count)
-            .map(|i| {
-                let vreg = outermost.outputs[i]
-                    .vreg
-                    .expect("gamma data output must have vreg");
-                self.record_vreg_scope(vreg, outermost.outputs[i].debug_scope);
-                vreg
-            })
+        // Exit phis: project current state_env onto landing params.
+        // On the passthrough exit, the state_env already has the right values
+        // (passthrough = no change = current env is correct).
+        let exit_phis: Vec<(VReg, VReg)> = state_env
+            .iter()
+            .zip(landing_vregs.iter())
+            .filter(|(s, d)| s != d)
+            .map(|(s, d)| (*s, *d))
             .collect();
 
-        for (level_idx, level) in levels.iter().enumerate() {
-            let gamma_node = &self.func.nodes[level.gamma_node];
-            let continue_region = level.continue_region;
-            let state_count = self.func.state_domains.len();
-            let passthrough_count = gamma_node.inputs.len() - 1 - state_count;
-
-            // Emit entry phis: map gamma inputs → continue_region args
-            let cont_region = &self.func.regions[continue_region];
-            let mut entry_phis = Vec::new();
-            for i in 0..passthrough_count {
-                let src_input = &gamma_node.inputs[i + 1];
-                if src_input.kind == PortKind::Data {
+        // Entry phis for continue branch
+        let cont_region = &self.func.regions[cont_branch];
+        let mut cont_entry_phis = Vec::new();
+        for i in 0..passthrough_count {
+            let src_input = &node.inputs[i + 1];
+            if src_input.kind == PortKind::Data {
+                let arg = &self.func.region_args[cont_region.args[i]];
+                if let Some(dst_vreg) = arg.vreg {
                     let src_vreg = self.resolve_vreg(src_input.source);
-                    let arg = &self.func.region_args[cont_region.args[i]];
-                    if let Some(dst_vreg) = arg.vreg {
-                        self.record_vreg_scope(dst_vreg, cont_region.debug_scope);
-                        entry_phis.push((src_vreg, dst_vreg));
-                    }
+                    self.record_vreg_scope(dst_vreg, cont_region.debug_scope);
+                    cont_entry_phis.push((src_vreg, dst_vreg));
                 }
-            }
-
-            // Build exit phis: map exit_region results → outermost output vregs.
-            // The exit region is a passthrough, so exit results = gamma inputs (skipping pred).
-            let mut exit_phis = Vec::new();
-            for i in 0..data_output_count {
-                let src_input = &gamma_node.inputs[i + 1];
-                if src_input.kind == PortKind::Data {
-                    let src_vreg = self.resolve_vreg(src_input.source);
-                    exit_phis.push((src_vreg, output_vregs[i]));
-                }
-            }
-
-            // Emit: predicate check → branch to done if pred==0 (exit)
-            let predicate = self.resolve_vreg(gamma_node.inputs[0].source);
-            self.emit(
-                Some(gamma_node.debug_scope),
-                LinearOp::BranchIfZero {
-                    cond: predicate,
-                    target: done_label,
-                    phi_args: exit_phis,
-                    fallthrough_phi_args: entry_phis,
-                },
-            );
-
-            // Linearize the continue region's body (everything except the tail gamma)
-            let is_last = level_idx == levels.len() - 1;
-            if is_last {
-                // Last level: linearize the entire continue region (no tail gamma)
-                self.linearize_region(continue_region);
-
-                // Emit branch to done with the continue region's result values
-                let cont_region = &self.func.regions[continue_region];
-                let mut final_phis = Vec::new();
-                for i in 0..data_output_count {
-                    let result = &self.func.region_results[cont_region.results[i]];
-                    if result.kind == PortKind::Data {
-                        let src_vreg = self.resolve_vreg(result.source);
-                        final_phis.push((src_vreg, output_vregs[i]));
-                    }
-                }
-                self.emit(
-                    Some(cont_region.debug_scope),
-                    LinearOp::Branch {
-                        target: done_label,
-                        phi_args: final_phis,
-                    },
-                );
-            } else {
-                // Not last: linearize everything in continue_region EXCEPT the tail gamma
-                // (the tail gamma will be handled by the next cascade level)
-                let tail_gamma = levels[level_idx + 1].gamma_node;
-                self.linearize_region_except(continue_region, tail_gamma);
             }
         }
 
-        // Done label: all exits converge here
-        self.emit(Some(outermost.debug_scope), LinearOp::Label(done_label));
+        // Conditional exit to landing
+        if exit_on_zero {
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIfZero {
+                    cond: predicate,
+                    target: landing_label,
+                    phi_args: exit_phis,
+                    fallthrough_phi_args: cont_entry_phis,
+                },
+            );
+        } else {
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIf {
+                    cond: predicate,
+                    target: landing_label,
+                    phi_args: exit_phis,
+                    fallthrough_phi_args: cont_entry_phis,
+                },
+            );
+        }
+
+        // Check for tail passthrough gamma to chain into
+        let tail_gamma = self.find_tail_passthrough_gamma(cont_branch);
+        if let Some(tail_id) = tail_gamma {
+            // Linearize everything except the tail gamma
+            let node_ids: Vec<NodeId> = self.func.regions[cont_branch].nodes.clone();
+            for &nid in &node_ids {
+                if nid != tail_id {
+                    self.linearize_node(nid);
+                }
+            }
+
+            // Update state_env for entries that DON'T come from the tail gamma.
+            // Build the output_to_landing mapping for the tail gamma.
+            let cont_results = self.func.regions[cont_branch].results.clone();
+            let cont_data_results: Vec<usize> = cont_results
+                .iter()
+                .enumerate()
+                .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+                .map(|(i, _)| i)
+                .collect();
+
+            // For each data result of the continue region: it maps to
+            // this gamma's output[j], which maps to landing param output_to_landing[j].
+            let mut tail_output_to_landing: Vec<usize> = Vec::new();
+            for (j, &result_idx) in cont_data_results.iter().enumerate() {
+                let landing_idx = if j < output_to_landing.len() {
+                    output_to_landing[j]
+                } else {
+                    continue;
+                };
+                let result = &self.func.region_results[cont_results[result_idx]];
+                match result.source {
+                    PortSource::Node(out_ref) if out_ref.node == tail_id => {
+                        // This result comes from the tail gamma's output.
+                        // Map tail gamma output[out_ref.index] → landing_idx.
+                        let tail_out_idx = out_ref.index as usize;
+                        // Extend the mapping if needed
+                        while tail_output_to_landing.len() <= tail_out_idx {
+                            tail_output_to_landing.push(usize::MAX); // placeholder
+                        }
+                        tail_output_to_landing[tail_out_idx] = landing_idx;
+                    }
+                    _ => {
+                        // From earlier computation — update state now
+                        state_env[landing_idx] = self.resolve_vreg(result.source);
+                    }
+                }
+            }
+
+            // Remove placeholder entries
+            tail_output_to_landing.retain(|&x| x != usize::MAX);
+
+            // Recurse with updated state and tail mapping
+            let NodeKind::Gamma { regions: tr } = &self.func.nodes[tail_id].kind else {
+                unreachable!()
+            };
+            let tr = tr.clone();
+            self.try_linearize_passthrough_exit(
+                tail_id,
+                &tr,
+                Some((
+                    landing_label,
+                    landing_vregs.clone(),
+                    state_env,
+                    tail_output_to_landing,
+                )),
+            );
+        } else {
+            // No chain — linearize full continue region
+            self.linearize_region(cont_branch);
+
+            // Branch to landing with continue region's results mapped to landing params
+            let cont_results = self.func.regions[cont_branch].results.clone();
+            let cont_data_results: Vec<usize> = cont_results
+                .iter()
+                .enumerate()
+                .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+                .map(|(i, _)| i)
+                .collect();
+            let mut final_phis = Vec::new();
+            for (j, &result_idx) in cont_data_results.iter().enumerate() {
+                if j >= output_to_landing.len() {
+                    break;
+                }
+                let landing_idx = output_to_landing[j];
+                let result = &self.func.region_results[cont_results[result_idx]];
+                if result.kind == PortKind::Data {
+                    let src = self.resolve_vreg(result.source);
+                    final_phis.push((src, landing_vregs[landing_idx]));
+                }
+            }
+            // Also carry any state_env values for landing params not covered
+            // by this gamma's outputs (they keep their current values)
+            for (i, &lv) in landing_vregs.iter().enumerate() {
+                if !final_phis.iter().any(|(_, d)| *d == lv) {
+                    final_phis.push((state_env[i], lv));
+                }
+            }
+            self.emit(
+                Some(self.func.regions[cont_branch].debug_scope),
+                LinearOp::Branch {
+                    target: landing_label,
+                    phi_args: final_phis,
+                },
+            );
+        }
+
+        if owns_landing {
+            self.emit(Some(node.debug_scope), LinearOp::Label(landing_label));
+        }
+        true
+    }
+
+    /// Find a tail gamma that feeds all data results and has a passthrough branch.
+    fn find_tail_passthrough_gamma(&self, region_id: RegionId) -> Option<NodeId> {
+        let region = &self.func.regions[region_id];
+        let gamma_node = region
+            .nodes
+            .iter()
+            .rev()
+            .find(|&&nid| matches!(&self.func.nodes[nid].kind, NodeKind::Gamma { .. }))?;
+        for &rid in &region.results {
+            if self.func.region_results[rid].kind != PortKind::Data {
+                continue;
+            }
+            match self.func.region_results[rid].source {
+                PortSource::Node(out_ref) if out_ref.node == *gamma_node => {}
+                _ => return None,
+            }
+        }
+        let NodeKind::Gamma { regions } = &self.func.nodes[*gamma_node].kind else {
+            return None;
+        };
+        if regions.len() != 2 {
+            return None;
+        }
+        if !self.is_data_passthrough_region(regions[0])
+            && !self.is_data_passthrough_region(regions[1])
+        {
+            return None;
+        }
+        Some(*gamma_node)
     }
 
     /// Linearize all nodes in a region EXCEPT the specified node.
