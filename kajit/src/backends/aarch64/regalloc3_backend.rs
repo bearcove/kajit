@@ -98,6 +98,17 @@ impl<'a> EmitContext<'a> {
         // If dead, do nothing
     }
 
+    /// Get the destination register for a vreg def.
+    /// Returns the allocated register if available, or the fallback temp.
+    /// After emitting, call `store_to_vreg` only if this returned the fallback.
+    fn dst_reg_or_temp(&self, vreg: kajit_ir::VReg, fallback: Reg) -> Reg {
+        if let Some(preg) = self.preg_for_vreg(vreg) {
+            self.preg_to_reg(preg)
+        } else {
+            fallback
+        }
+    }
+
     /// Load a 64-bit constant into a register.
     fn emit_load_u64(&mut self, rd: Reg, value: u64) {
         let p0 = (value & 0xFFFF) as u16;
@@ -223,30 +234,24 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ReadBytes { dst, count } => {
-                // Read from cursor (x19), store to dst
+                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
                 match count {
                     1 => {
-                        self.ectx
-                            .emit
-                            .emit_ldrb_imm(Reg::X9, Reg::X19, 0)
-                            .expect("ldrb");
+                        self.ectx.emit.emit_ldrb_imm(rd, Reg::X19, 0).expect("ldrb");
                     }
                     2 => {
-                        self.ectx
-                            .emit
-                            .emit_ldrh_imm(Reg::X9, Reg::X19, 0)
-                            .expect("ldrh");
+                        self.ectx.emit.emit_ldrh_imm(rd, Reg::X19, 0).expect("ldrh");
                     }
                     4 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::W32, Reg::X9, Reg::X19, 0)
+                            .emit_ldr_imm(Width::W32, rd, Reg::X19, 0)
                             .expect("ldr");
                     }
                     8 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::X64, Reg::X9, Reg::X19, 0)
+                            .emit_ldr_imm(Width::X64, rd, Reg::X19, 0)
                             .expect("ldr");
                     }
                     _ => {
@@ -254,16 +259,17 @@ impl<'a> EmitContext<'a> {
                         return;
                     }
                 }
-                self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X9 {
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
             }
 
             LinearOp::PeekByte { dst } => {
-                // Read byte at cursor without advancing
-                self.ectx
-                    .emit
-                    .emit_ldrb_imm(Reg::X9, Reg::X19, 0)
-                    .expect("ldrb");
-                self.store_to_vreg(*dst, Reg::X9);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                self.ectx.emit.emit_ldrb_imm(rd, Reg::X19, 0).expect("ldrb");
+                if rd == Reg::X9 {
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
             }
 
             LinearOp::AdvanceCursor { count } => {
@@ -310,43 +316,47 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ReadFromField { dst, offset, width } => {
-                // Out pointer is in x21
+                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
                 match width {
                     kajit_ir::Width::W1 => {
                         self.ectx
                             .emit
-                            .emit_ldrb_imm(Reg::X9, Reg::X21, *offset)
+                            .emit_ldrb_imm(rd, Reg::X21, *offset)
                             .expect("ldrb");
                     }
                     kajit_ir::Width::W2 => {
                         self.ectx
                             .emit
-                            .emit_ldrh_imm(Reg::X9, Reg::X21, *offset)
+                            .emit_ldrh_imm(rd, Reg::X21, *offset)
                             .expect("ldrh");
                     }
                     kajit_ir::Width::W4 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::W32, Reg::X9, Reg::X21, *offset)
+                            .emit_ldr_imm(Width::W32, rd, Reg::X21, *offset)
                             .expect("ldr");
                     }
                     kajit_ir::Width::W8 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::X64, Reg::X9, Reg::X21, *offset)
+                            .emit_ldr_imm(Width::X64, rd, Reg::X21, *offset)
                             .expect("ldr");
                     }
                 }
-                self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X9 {
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
             }
 
             LinearOp::SaveOutPtr { dst } => {
-                // Out pointer is in x21
+                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
                 self.ectx
                     .emit
-                    .emit_mov_reg(Width::X64, Reg::X9, Reg::X21)
+                    .emit_mov_reg(Width::X64, rd, Reg::X21)
                     .expect("mov");
-                self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X9 {
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
             }
 
             LinearOp::SetOutPtr { src } => {
@@ -358,13 +368,15 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::SlotAddr { dst, slot } => {
-                // Compute address of stack slot
+                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
                 let off = self.slot_off(slot.index() as u32);
                 self.ectx
                     .emit
-                    .emit_add_imm(Width::X64, Reg::X9, Reg::SP, off as u16, false)
+                    .emit_add_imm(Width::X64, rd, Reg::SP, off as u16, false)
                     .expect("add");
-                self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X9 {
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
             }
 
             LinearOp::StoreToAddr { addr, src, width } => {
@@ -400,33 +412,32 @@ impl<'a> EmitContext<'a> {
 
             LinearOp::LoadFromAddr { dst, addr, width } => {
                 let addr_reg = self.reg_for_vreg_with_temp(*addr, Reg::X10);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                // Ensure rd != addr_reg (load would clobber the address before reading it)
+                let rd = if rd == addr_reg { Reg::X9 } else { rd };
                 match width {
                     kajit_ir::Width::W1 => {
-                        self.ectx
-                            .emit
-                            .emit_ldrb_imm(Reg::X9, addr_reg, 0)
-                            .expect("ldrb");
+                        self.ectx.emit.emit_ldrb_imm(rd, addr_reg, 0).expect("ldrb");
                     }
                     kajit_ir::Width::W2 => {
-                        self.ectx
-                            .emit
-                            .emit_ldrh_imm(Reg::X9, addr_reg, 0)
-                            .expect("ldrh");
+                        self.ectx.emit.emit_ldrh_imm(rd, addr_reg, 0).expect("ldrh");
                     }
                     kajit_ir::Width::W4 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::W32, Reg::X9, addr_reg, 0)
+                            .emit_ldr_imm(Width::W32, rd, addr_reg, 0)
                             .expect("ldr");
                     }
                     kajit_ir::Width::W8 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::X64, Reg::X9, addr_reg, 0)
+                            .emit_ldr_imm(Width::X64, rd, addr_reg, 0)
                             .expect("ldr");
                     }
                 }
-                self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X9 {
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
             }
 
             LinearOp::WriteToSlot { slot, src } => {
@@ -439,12 +450,15 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ReadFromSlot { dst, slot } => {
+                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
                 let off = self.slot_off(slot.index() as u32);
                 self.ectx
                     .emit
-                    .emit_ldr_imm(Width::X64, Reg::X9, Reg::SP, off)
+                    .emit_ldr_imm(Width::X64, rd, Reg::SP, off)
                     .expect("ldr slot");
-                self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X9 {
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
             }
 
             LinearOp::ErrorExit { code } => {
