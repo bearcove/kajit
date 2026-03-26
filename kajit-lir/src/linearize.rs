@@ -1526,7 +1526,11 @@ impl<'a> Linearizer<'a> {
             let mut tail_output_to_landing: Vec<usize> = Vec::new();
             for (j, &result_idx) in cont_data_results.iter().enumerate() {
                 let landing_idx = if j < output_to_landing.len() {
-                    output_to_landing[j]
+                    let idx = output_to_landing[j];
+                    if idx == usize::MAX {
+                        continue;
+                    }
+                    idx
                 } else {
                     continue;
                 };
@@ -1549,8 +1553,8 @@ impl<'a> Linearizer<'a> {
                 }
             }
 
-            // Remove placeholder entries
-            tail_output_to_landing.retain(|&x| x != usize::MAX);
+            // Keep placeholders — indexing must match tail gamma output positions.
+            // Entries with usize::MAX mean "this output doesn't map to any landing param."
 
             // Recurse with updated state and tail mapping
             let NodeKind::Gamma { regions: tr } = &self.func.nodes[tail_id].kind else {
@@ -1585,6 +1589,9 @@ impl<'a> Linearizer<'a> {
                     break;
                 }
                 let landing_idx = output_to_landing[j];
+                if landing_idx == usize::MAX {
+                    continue;
+                }
                 let result = &self.func.region_results[cont_results[result_idx]];
                 if result.kind == PortKind::Data {
                     let src = self.resolve_vreg(result.source);
