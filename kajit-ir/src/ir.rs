@@ -486,6 +486,7 @@ pub struct RegionResult {
 
 /// A region is an ordered set of nodes with input arguments and output results.
 /// Regions nest — a node inside a region may itself contain sub-regions.
+#[derive(Clone)]
 pub struct Region {
     /// Debug-scope provenance for this structured region body.
     pub debug_scope: DebugScopeId,
@@ -513,6 +514,7 @@ impl fmt::Debug for Region {
 // ─── Node ───────────────────────────────────────────────────────────────────
 
 /// A node in the RVSDG.
+#[derive(Clone)]
 pub struct Node {
     /// The containing region.
     pub region: RegionId,
@@ -547,7 +549,7 @@ impl fmt::Debug for Node {
 // r[impl ir.rvsdg.nodes.apply]
 
 /// The type-specific payload of a node.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NodeKind {
     /// A simple node representing a single operation.
     Simple(IrOp),
@@ -923,6 +925,7 @@ const ROOT_REGION: RegionId = Id {
 };
 
 /// The top-level IR container for one compiled shape.
+#[derive(Clone)]
 pub struct IrFunc {
     /// All nodes.
     pub nodes: Arena<Node>,

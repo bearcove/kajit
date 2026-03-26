@@ -53,6 +53,11 @@ enum Command {
         /// Reduce: find minimal CFG-MIR that triggers divergence or SSA breakage
         #[facet(args::named, default)]
         reduce: Option<String>,
+
+        /// Reduce IR: find minimal RVSDG that satisfies a predicate after passes.
+        /// Format: "passes:predicate" e.g. "unroll_const_fold:has_op(Mul)"
+        #[facet(args::named, default)]
+        reduce_ir: Option<String>,
     },
 
     /// Lockstep differential debugger: step interpreter + LLDB in parallel
@@ -96,9 +101,12 @@ fn main() {
             stage,
             input,
             reduce,
+            reduce_ir,
         } => {
             if let Some(pass_name) = reduce {
                 cmd_compile_reduce(&format, &ty, &pass_name);
+            } else if let Some(spec) = reduce_ir {
+                cmd_reduce_ir(&format, &ty, &spec);
             } else {
                 cmd_compile(
                     &format,
@@ -420,6 +428,138 @@ fn resolve_shape(ty: &str) -> &'static facet::Shape {
             std::process::exit(1);
         }
     }
+}
+
+// ─── compile --reduce-ir: minimize RVSDG reproducer ──────────────────────────
+
+fn cmd_reduce_ir(format: &str, ty: &str, spec: &str) {
+    // Parse spec: "passes:predicate" e.g. "unroll_const_fold:has_op(Mul)"
+    let (passes_str, predicate_str) = spec.split_once(':').unwrap_or_else(|| {
+        eprintln!("error: --reduce-ir format is 'passes:predicate'");
+        eprintln!("  passes: comma-separated pass names (or 'none')");
+        eprintln!("  predicates:");
+        eprintln!("    has_op(OpName) — IR contains a node with this op after passes");
+        eprintln!("    node_count_gt(N) — more than N nodes after passes");
+        eprintln!("  example: --reduce-ir 'unroll_const_fold:has_op(Mul)'");
+        std::process::exit(1);
+    });
+
+    let kind = match format {
+        "postcard" => kajit::DecoderKind::Postcard,
+        "json" => kajit::DecoderKind::Json,
+        other => {
+            eprintln!("error: unknown format '{other}'");
+            std::process::exit(1);
+        }
+    };
+
+    let shape = resolve_shape(ty);
+    let registry = std::rc::Rc::new(kajit::symbol_registry_for_shape(shape));
+
+    // Build initial IR by running the pipeline and extracting the initial IR text.
+    let pipeline_opts = kajit::PipelineOptions::from_env();
+    let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
+
+    // Parse the initial (pre-optimization) IR from the timeline.
+    let initial_ir_text = &artifacts.ir_opt_timeline[0].1;
+    let func = kajit_ir_text::parse_ir(initial_ir_text, &registry).unwrap_or_else(|e| {
+        eprintln!("error: failed to parse initial IR: {e}");
+        std::process::exit(1);
+    });
+
+    eprintln!("[reduce-ir] initial: {} nodes", func.nodes.iter().count());
+
+    // Build the pass runner.
+    let pass_names: Vec<&str> = passes_str.split(',').map(|s| s.trim()).collect();
+    let run_passes = move |func: &mut kajit_ir::IrFunc| {
+        for pass_name in &pass_names {
+            match *pass_name {
+                "none" => {}
+                "unroll" => {
+                    kajit_ir::unroll_theta::unroll_bounded_thetas(func);
+                }
+                "const_fold" => {
+                    kajit_ir::const_fold::const_fold(func);
+                }
+                "simplify_gammas" => {
+                    kajit_ir::simplify_gamma::simplify_trivial_gammas(func);
+                }
+                "unroll_const_fold" => {
+                    kajit_ir::unroll_theta::unroll_bounded_thetas(func);
+                    kajit_ir::const_fold::const_fold(func);
+                    kajit_ir::simplify_gamma::simplify_trivial_gammas(func);
+                }
+                "all" => {
+                    for pass in kajit_ir::default_pass_registry() {
+                        pass.run(func);
+                    }
+                }
+                other => {
+                    eprintln!("warning: unknown pass '{other}', skipping");
+                }
+            }
+        }
+    };
+
+    // Build the predicate.
+    let predicate_str = predicate_str.to_string();
+    let reg1 = registry.clone();
+    let is_interesting = move |func: &kajit_ir::IrFunc| -> bool {
+        // Clone via text round-trip for the pass run (don't mutate the candidate).
+        let text = format!("{}", func.display_with_registry(&reg1));
+        let mut test_func = match kajit_ir_text::parse_ir(&text, &reg1) {
+            Ok(f) => f,
+            Err(_) => return false,
+        };
+
+        run_passes(&mut test_func);
+
+        // Check predicate.
+        if let Some(op_name) = predicate_str
+            .strip_prefix("has_op(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            // Check if any node has this op name.
+            test_func.nodes.iter().any(|(_, node)| {
+                let kind_str = format!("{:?}", node.kind);
+                kind_str.contains(op_name)
+            })
+        } else if let Some(n_str) = predicate_str
+            .strip_prefix("node_count_gt(")
+            .and_then(|s| s.strip_suffix(')'))
+        {
+            let n: usize = n_str.parse().unwrap_or(0);
+            test_func.nodes.iter().count() > n
+        } else {
+            eprintln!("error: unknown predicate '{predicate_str}'");
+            false
+        }
+    };
+
+    // Compact via text round-trip to flush orphaned arena entries between rounds.
+    let reg3 = registry.clone();
+    let compact_fn = move |func: &kajit_ir::IrFunc| -> kajit_ir::IrFunc {
+        let text = format!("{}", func.display_with_registry(&reg3));
+        kajit_ir_text::parse_ir(&text, &reg3).expect("compact round-trip failed")
+    };
+
+    let (reduced, stats) = kajit_ir::reduce::reduce_ir(&func, &is_interesting, Some(&compact_fn));
+
+    eprintln!(
+        "[reduce-ir] done: {} → {} nodes ({} candidates, {} reductions)",
+        stats.initial_nodes, stats.final_nodes, stats.candidates_tested, stats.reductions_applied
+    );
+
+    // Output the reduced IR.
+    let output_text = format!("{}", reduced.display_with_registry(&*registry));
+    let output_file = format!(
+        "reduced_{}_{}.vixen-ir",
+        format,
+        ty.replace(['<', '>', ' '], "_")
+    );
+    std::fs::write(&output_file, &output_text).unwrap();
+    eprintln!("[reduce-ir] wrote {output_file}");
+    println!("{output_text}");
 }
 
 // ─── compile --reduce: minimize CFG-MIR reproducer ───────────────────────────

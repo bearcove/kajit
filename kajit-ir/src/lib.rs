@@ -4,6 +4,7 @@ pub mod hints;
 mod ir;
 pub(crate) mod ir_passes;
 pub mod provenance;
+pub mod reduce;
 pub mod simplify_gamma;
 pub mod slot2reg;
 pub mod unroll_theta;
