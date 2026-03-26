@@ -354,7 +354,7 @@ fn region_has_error_exit(func: &IrFunc, region: RegionId) -> bool {
 }
 
 /// Evaluate a pure arithmetic/comparison operation on constant inputs.
-fn evaluate_op(op: &IrOp, inputs: &[u64]) -> Option<u64> {
+pub fn evaluate_op(op: &IrOp, inputs: &[u64]) -> Option<u64> {
     match (op, inputs) {
         (IrOp::Const { value }, []) => Some(*value),
         (IrOp::Add, [a, b]) => Some(a.wrapping_add(*b)),

@@ -1,6 +1,7 @@
 pub mod const_fold;
 mod error;
 pub mod hints;
+pub mod interpret;
 mod ir;
 pub(crate) mod ir_passes;
 pub mod provenance;

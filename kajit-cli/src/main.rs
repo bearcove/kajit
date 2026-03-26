@@ -328,7 +328,25 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         println!("  input:       {} ({})", encode_hex(&input), input.len());
         println!("  output_size: {output_size}");
 
-        // Run interpreter FIRST (it has a step budget and won't hang)
+        // Run RVSDG interpreter (pre-linearization, ideal semantics).
+        let ir_text = &artifacts.ir_opt_timeline[0].1;
+        let ir_registry = kajit::symbol_registry_for_shape(shape);
+        match kajit_ir_text::parse_ir(ir_text, &ir_registry) {
+            Ok(ir_func) => {
+                let ir_result = kajit_ir::interpret::interpret(&ir_func, &input, output_size);
+                match &ir_result.trap {
+                    None => println!(
+                        "  rvsdg out:   {} ({})",
+                        encode_hex(&ir_result.output),
+                        ir_result.output.len()
+                    ),
+                    Some(t) => println!("  rvsdg:       TRAP ({:?})", t.code),
+                }
+            }
+            Err(e) => println!("  rvsdg:       parse error: {e}"),
+        }
+
+        // Run CFG-MIR interpreter (post-linearization)
         let interp_result = kajit_mir::opt::reduce::interpret(&artifacts.cfg_program, &input);
         match &interp_result {
             Some(bytes) => {
