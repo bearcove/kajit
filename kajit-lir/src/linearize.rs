@@ -1421,6 +1421,13 @@ impl<'a> Linearizer<'a> {
             return false;
         }
 
+        // Only apply at top level if there's a chain to exploit.
+        // A single passthrough-exit gamma without chaining just creates a
+        // local landing (same cost as a merge block).
+        if exit_ctx.is_none() && self.find_tail_passthrough_gamma(cont_branch).is_none() {
+            return false;
+        }
+
         let node = &self.func.nodes[node_id];
         let predicate = self.resolve_vreg(node.inputs[0].source);
         let state_count = self.func.state_domains.len();
