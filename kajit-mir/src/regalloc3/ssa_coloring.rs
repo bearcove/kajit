@@ -80,11 +80,12 @@ pub fn allocate(
     // Phase 1: Spill — reduce max pressure at every point to ≤ k
     let spilled = spill_phase(func, liveness, &dom, &loop_info, hints, k, k_callee_saved);
 
-    // Phase 2: Color — domtree preorder walk, assign colors
+    // Phase 2: Color — domtree preorder walk, assign colors (preference-guided)
     let coloring = color_phase(
         func,
         liveness,
         &dom,
+        &loop_info,
         &spilled,
         &allocatable,
         &callee_saved_set,
@@ -402,6 +403,7 @@ fn color_phase(
     func: &Function,
     liveness: &LivenessInfo,
     dom: &DominanceInfo,
+    loop_info: &LoopInfo,
     spilled: &BTreeSet<VReg>,
     allocatable: &[PReg],
     callee_saved_set: &HashSet<PReg>,
@@ -601,12 +603,19 @@ fn color_phase(
                 allocatable
             };
             // Phi affinity: prefer registers of already-colored source vregs.
-            let phi_prefs: Vec<PReg> = param_source_vregs
+            // Weight by loop depth: phi edges inside loops are more valuable
+            // to coalesce (they execute many times).
+            let block_loop_depth = loop_info
+                .loop_for_block(block_id)
+                .map(|l| l.depth + 1)
+                .unwrap_or(0);
+            let phi_weight = WEIGHT_PHI_EDGE + (block_loop_depth as u32) * WEIGHT_PHI_LOOP_BONUS;
+            let phi_prefs: Vec<(PReg, u32)> = param_source_vregs
                 .get(&param)
                 .map(|sources| {
                     sources
                         .iter()
-                        .filter_map(|src| coloring.get(src).copied())
+                        .filter_map(|src| coloring.get(src).copied().map(|p| (p, phi_weight)))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -715,11 +724,17 @@ fn color_phase(
                     allocatable
                 };
 
-                // Collect phi preferences specific to this def.
-                let phi_prefs: Vec<PReg> = edge_arg_prefs
+                // Collect weighted phi preferences specific to this def.
+                let block_loop_depth = loop_info
+                    .loop_for_block(block_id)
+                    .map(|l| l.depth + 1)
+                    .unwrap_or(0);
+                let phi_weight =
+                    WEIGHT_PHI_EDGE + (block_loop_depth as u32) * WEIGHT_PHI_LOOP_BONUS;
+                let phi_prefs: Vec<(PReg, u32)> = edge_arg_prefs
                     .iter()
                     .filter(|(src, _)| *src == *dst)
-                    .map(|(_, tc)| *tc)
+                    .map(|(_, tc)| (*tc, phi_weight))
                     .collect();
 
                 let color = preferred_color(pool, &occupied, &dying_source_colors, &phi_prefs);
@@ -839,30 +854,58 @@ fn lowest_available_color(allocatable: &[PReg], occupied: &HashSet<PReg>) -> Opt
 
 // ─── Preference-guided coloring ─────────────────────────────────────────────
 
-/// Choose the best available register for a vreg, considering preferences.
+/// Preference weights by source type.
+/// These determine the relative importance of different preference sources.
+/// When multiple sources suggest the same register, weights accumulate.
+const WEIGHT_DYING_SOURCE: u32 = 100;
+const WEIGHT_PHI_EDGE: u32 = 40;
+const WEIGHT_PHI_LOOP_BONUS: u32 = 60; // added to PHI_EDGE for edges inside loops
+
+/// Choose the best available register for a vreg using accumulated weighted scoring.
 ///
-/// Preference sources resolved dynamically from current coloring state:
-/// 1. Dying sources at this instruction → their freed registers (highest priority)
+/// Preference sources (resolved dynamically from current coloring state):
+/// 1. Dying sources at this instruction → their freed registers
 /// 2. Edge arg partners already colored → their registers (phi affinity)
-/// 3. Falls back to lowest available if no preference matches
+///
+/// Each source contributes a weight to the registers it suggests. If multiple
+/// sources suggest the same register, weights accumulate. The highest-scoring
+/// available register wins. Falls back to lowest available if no preference
+/// is available.
 fn preferred_color(
     allocatable: &[PReg],
     occupied: &HashSet<PReg>,
     dying_source_colors: &[PReg],
-    phi_partner_colors: &[PReg],
+    phi_prefs: &[(PReg, u32)], // (register, weight) pairs
 ) -> Option<PReg> {
-    // Try dying source registers first (highest value: reuse avoids a mov).
-    for &pref in dying_source_colors {
-        if !occupied.contains(&pref) && allocatable.contains(&pref) {
-            return Some(pref);
+    // Accumulate weights per register.
+    let mut scores: HashMap<PReg, u32> = HashMap::new();
+
+    for &preg in dying_source_colors {
+        *scores.entry(preg).or_insert(0) += WEIGHT_DYING_SOURCE;
+    }
+
+    for &(preg, weight) in phi_prefs {
+        *scores.entry(preg).or_insert(0) += weight;
+    }
+
+    // Pick the highest-scoring available register.
+    let mut best: Option<(PReg, u32)> = None;
+    for (&preg, &score) in &scores {
+        if !occupied.contains(&preg) && allocatable.contains(&preg) {
+            match best {
+                None => best = Some((preg, score)),
+                Some((_, best_score)) if score > best_score => best = Some((preg, score)),
+                Some((best_preg, best_score)) if score == best_score && preg.0 < best_preg.0 => {
+                    // Tie-break by register number for determinism.
+                    best = Some((preg, score));
+                }
+                _ => {}
+            }
         }
     }
 
-    // Try phi partner registers (avoid copy at edge).
-    for &pref in phi_partner_colors {
-        if !occupied.contains(&pref) && allocatable.contains(&pref) {
-            return Some(pref);
-        }
+    if let Some((preg, _)) = best {
+        return Some(preg);
     }
 
     // Fall back to lowest available.
