@@ -963,44 +963,54 @@ fn coalesce_phase(
         }
     }
 
-    // Build phi affinity groups from edge args
-    for edge in &func.edges {
-        if edge.from.0 == u32::MAX {
-            continue; // dead edge
+    // Iterate phi-affinity recoloring to a fixed point.
+    // A single pass can miss opportunities where recoloring A requires
+    // first recoloring B (which blocks A's target color). Multiple passes
+    // allow cascading recolors.
+    let max_rounds = 10;
+    for _round in 0..max_rounds {
+        let mut changed = false;
+
+        for edge in &func.edges {
+            if edge.from.0 == u32::MAX {
+                continue;
+            }
+            for arg in &edge.args {
+                if spilled.contains(&arg.target) || spilled.contains(&arg.source) {
+                    continue;
+                }
+                let target_color = coloring.get(&arg.target).copied();
+                let source_color = coloring.get(&arg.source).copied();
+
+                if target_color == source_color {
+                    continue; // already coalesced
+                }
+
+                let (Some(tc), Some(sc)) = (target_color, source_color) else {
+                    continue;
+                };
+
+                let target_ok =
+                    !must_be_callee_saved.contains(&arg.target) || callee_saved_set.contains(&sc);
+                let source_ok =
+                    !must_be_callee_saved.contains(&arg.source) || callee_saved_set.contains(&tc);
+
+                if target_ok
+                    && can_recolor(arg.target, sc, &coloring, liveness, dom, def_block, spilled)
+                {
+                    coloring.insert(arg.target, sc);
+                    changed = true;
+                } else if source_ok
+                    && can_recolor(arg.source, tc, &coloring, liveness, dom, def_block, spilled)
+                {
+                    coloring.insert(arg.source, tc);
+                    changed = true;
+                }
+            }
         }
-        for arg in &edge.args {
-            if spilled.contains(&arg.target) || spilled.contains(&arg.source) {
-                continue;
-            }
-            let target_color = coloring.get(&arg.target).copied();
-            let source_color = coloring.get(&arg.source).copied();
 
-            if target_color == source_color {
-                continue; // already coalesced
-            }
-
-            let (Some(tc), Some(sc)) = (target_color, source_color) else {
-                continue;
-            };
-
-            // Don't recolor to caller-saved if the vreg must survive a call
-            let target_ok =
-                !must_be_callee_saved.contains(&arg.target) || callee_saved_set.contains(&sc);
-            let source_ok =
-                !must_be_callee_saved.contains(&arg.source) || callee_saved_set.contains(&tc);
-
-            // Try to recolor the target to match the source
-            if target_ok
-                && can_recolor(arg.target, sc, &coloring, liveness, dom, def_block, spilled)
-            {
-                coloring.insert(arg.target, sc);
-            }
-            // Else try to recolor the source to match the target
-            else if source_ok
-                && can_recolor(arg.source, tc, &coloring, liveness, dom, def_block, spilled)
-            {
-                coloring.insert(arg.source, tc);
-            }
+        if !changed {
+            break;
         }
     }
 
