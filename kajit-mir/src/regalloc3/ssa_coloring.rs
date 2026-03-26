@@ -58,8 +58,10 @@ pub fn allocate(
         .count();
 
     // Build def-site map: vreg → (block, inst_index_in_block)
-    // Also build next-use-distance info per block
+    // Block params use DEF_AT_ENTRY (before all instructions).
+    const DEF_AT_ENTRY: u32 = u32::MAX;
     let mut def_block: HashMap<VReg, BlockId> = HashMap::new();
+    let mut def_inst_idx: HashMap<VReg, u32> = HashMap::new();
     for block in &func.blocks {
         if block.dead {
             continue;
@@ -67,12 +69,14 @@ pub fn allocate(
         // Block params are defined at block entry
         for &param in &block.params {
             def_block.insert(param, block.id);
+            def_inst_idx.insert(param, DEF_AT_ENTRY);
         }
         // Instruction defs
-        for &inst_id in &block.insts {
+        for (idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
             inst.op.for_each_def(|dst| {
                 def_block.insert(*dst, block.id);
+                def_inst_idx.insert(*dst, idx as u32);
             });
         }
     }
@@ -82,6 +86,9 @@ pub fn allocate(
 
     // Pre-compute live-across-call set (shared between color + coalesce phases)
     let live_across_call = compute_live_across_call(func, liveness, &spilled);
+
+    // Pre-compute last-use map for precise same-block interference
+    let last_use_map = compute_last_use_map(func);
 
     // Phase 2: Color — domtree preorder walk, assign colors (preference-guided)
     let coloring = color_phase(
@@ -116,7 +123,16 @@ pub fn allocate(
                 }
                 let v1_block = def_block.get(&v1).copied().unwrap_or(BlockId(u32::MAX));
                 let v2_block = def_block.get(&v2).copied().unwrap_or(BlockId(u32::MAX));
-                if interferes(v1, v1_block, v2, v2_block, liveness, &dom) {
+                if interferes(
+                    v1,
+                    v1_block,
+                    v2,
+                    v2_block,
+                    liveness,
+                    &dom,
+                    &last_use_map,
+                    &def_inst_idx,
+                ) {
                     eprintln!(
                         "  CONFLICT: v{} (b{}) and v{} (b{}) both colored p{}",
                         v1.index(),
@@ -144,6 +160,8 @@ pub fn allocate(
             liveness,
             &dom,
             &def_block,
+            &def_inst_idx,
+            &last_use_map,
             coloring,
             &spilled,
             &callee_saved_set,
@@ -392,6 +410,44 @@ fn is_last_use_in_block(
         _ => {}
     }
     true
+}
+
+/// Compute last-use map: (block, vreg) → last instruction index where vreg is used.
+/// u32::MAX means used at/after the terminator (branch condition or edge arg).
+fn compute_last_use_map(func: &Function) -> HashMap<(BlockId, VReg), u32> {
+    let mut map: HashMap<(BlockId, VReg), u32> = HashMap::new();
+    for block in &func.blocks {
+        if block.dead {
+            continue;
+        }
+        // Instruction uses
+        for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
+            let inst = &func.insts[inst_id.0 as usize];
+            inst.op.for_each_use(|src| {
+                map.insert((block.id, *src), inst_idx as u32);
+            });
+        }
+        // Terminator condition uses
+        let term = &func.terms[block.term.0 as usize];
+        match term {
+            cfg_mir::Terminator::BranchIf { cond, .. }
+            | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                map.insert((block.id, *cond), u32::MAX);
+            }
+            _ => {}
+        }
+        // Edge arg source uses (at terminator)
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            if edge.from.0 == u32::MAX {
+                continue;
+            }
+            for arg in &edge.args {
+                map.insert((block.id, arg.source), u32::MAX);
+            }
+        }
+    }
+    map
 }
 
 // ─── Phase 2: Color ──────────────────────────────────────────────────────────
@@ -932,6 +988,8 @@ fn coalesce_phase(
     liveness: &LivenessInfo,
     dom: &DominanceInfo,
     def_block: &HashMap<VReg, BlockId>,
+    def_inst_idx: &HashMap<VReg, u32>,
+    last_use_map: &HashMap<(BlockId, VReg), u32>,
     mut coloring: HashMap<VReg, PReg>,
     spilled: &BTreeSet<VReg>,
     callee_saved_set: &HashSet<PReg>,
@@ -1034,6 +1092,8 @@ fn coalesce_phase(
                         &mut coloring,
                         &mut color_to_vregs,
                         liveness,
+                        last_use_map,
+                        def_inst_idx,
                         dom,
                         def_block,
                         spilled,
@@ -1097,6 +1157,8 @@ fn try_recolor_recursive(
     coloring: &mut HashMap<VReg, PReg>,
     color_to_vregs: &mut HashMap<PReg, BTreeSet<VReg>>,
     liveness: &LivenessInfo,
+    last_use_map: &HashMap<(BlockId, VReg), u32>,
+    def_inst_idx: &HashMap<VReg, u32>,
     dom: &DominanceInfo,
     def_block: &HashMap<VReg, BlockId>,
     spilled: &BTreeSet<VReg>,
@@ -1151,7 +1213,16 @@ fn try_recolor_recursive(
                     let Some(&other_block) = def_block.get(&other) else {
                         return false;
                     };
-                    interferes(vreg, vreg_def_block, other, other_block, liveness, dom)
+                    interferes(
+                        vreg,
+                        vreg_def_block,
+                        other,
+                        other_block,
+                        liveness,
+                        dom,
+                        last_use_map,
+                        def_inst_idx,
+                    )
                 })
                 .copied()
                 .collect()
@@ -1196,6 +1267,8 @@ fn try_recolor_recursive(
                 coloring,
                 color_to_vregs,
                 liveness,
+                last_use_map,
+                def_inst_idx,
                 dom,
                 def_block,
                 spilled,
@@ -1237,7 +1310,16 @@ fn try_recolor_recursive(
                 let Some(&other_block) = def_block.get(&other) else {
                     return false;
                 };
-                interferes(vreg, vreg_def_block, other, other_block, liveness, dom)
+                interferes(
+                    vreg,
+                    vreg_def_block,
+                    other,
+                    other_block,
+                    liveness,
+                    dom,
+                    last_use_map,
+                    def_inst_idx,
+                )
             })
         })
         .unwrap_or(false);
@@ -1272,6 +1354,9 @@ fn try_recolor_recursive(
 ///
 /// In SSA: v and w interfere iff one's definition dominates the other's
 /// AND the dominator is live at the dominated definition point.
+///
+/// For same-block: uses intra-block instruction ordering + last-use tracking
+/// for precise interference (no false positives).
 fn interferes(
     v: VReg,
     v_block: BlockId,
@@ -1279,45 +1364,58 @@ fn interferes(
     w_block: BlockId,
     liveness: &LivenessInfo,
     dom: &DominanceInfo,
+    last_use_map: &HashMap<(BlockId, VReg), u32>,
+    def_inst_idx: &HashMap<VReg, u32>,
 ) -> bool {
     if v_block == w_block {
-        // Same block: they interfere if their live ranges overlap within the block.
-        // Conservative: if both are defined in the same block and either is live-out,
-        // assume they interfere (since we don't track intra-block ordering here).
-        let v_live_out = liveness
+        // Same block: precise check using instruction ordering.
+        // The earlier-defined vreg interferes with the later-defined one
+        // iff the earlier is still alive at the later's def point.
+        let v_idx = def_inst_idx.get(&v).copied().unwrap_or(u32::MAX);
+        let w_idx = def_inst_idx.get(&w).copied().unwrap_or(u32::MAX);
+
+        // Determine which is defined first (block params at u32::MAX = "before all")
+        let (early, early_idx, late_idx) = if v_idx <= w_idx {
+            (v, v_idx, w_idx)
+        } else {
+            (w, w_idx, v_idx)
+        };
+        // If defined at the same point (e.g., both block params), they interfere
+        // iff either is live-out or used after the other.
+        if v_idx == w_idx {
+            return true; // conservative for same-point defs
+        }
+
+        // early is defined before late. They interfere iff early is alive at late's def.
+        // early is alive at late's def iff:
+        //   - early is live-out of this block, OR
+        //   - early has a use at or after late_idx
+        let early_live_out = liveness
             .live_out
             .get(&v_block)
-            .map_or(false, |lo| lo.contains(&v));
-        let w_live_out = liveness
-            .live_out
-            .get(&w_block)
-            .map_or(false, |lo| lo.contains(&w));
-        // If either is live-out, they potentially overlap
-        if v_live_out || w_live_out {
+            .map_or(false, |lo| lo.contains(&early));
+        if early_live_out {
             return true;
         }
-        // Both die in the same block — conservatively assume they interfere
-        // (proper fix: check instruction ordering within the block)
-        return true;
-    }
-
-    if dom.dominates(v_block, w_block) {
-        // v defined before w — interfere if v is live at w's block entry
-        // (live-in means v is alive when w gets defined)
-        return liveness
+        // Check last use of early in this block
+        let early_last_use = last_use_map.get(&(v_block, early)).copied();
+        match early_last_use {
+            // u32::MAX means used at/after terminator (edge arg or branch cond)
+            Some(u32::MAX) => true,
+            Some(last) => last >= late_idx,
+            None => false, // no use in this block after def → dead immediately
+        }
+    } else if dom.dominates(v_block, w_block) {
+        liveness
             .live_in
             .get(&w_block)
-            .map_or(false, |li| li.contains(&v));
-    }
-
-    if dom.dominates(w_block, v_block) {
-        // w defined before v — interfere if w is live at v's block entry
-        return liveness
+            .map_or(false, |li| li.contains(&v))
+    } else if dom.dominates(w_block, v_block) {
+        liveness
             .live_in
             .get(&v_block)
-            .map_or(false, |li| li.contains(&w));
+            .map_or(false, |li| li.contains(&w))
+    } else {
+        false
     }
-
-    // Neither dominates the other — in SSA, they can't interfere
-    false
 }
