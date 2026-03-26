@@ -1070,7 +1070,13 @@ impl<'a> Linearizer<'a> {
     // ─── Gamma (conditional) ─────────────────────────────────────────
 
     fn linearize_gamma(&mut self, node_id: NodeId, regions: &[RegionId]) {
-        // Try the cascade optimization first
+        // Try one-sided gamma lowering: if one branch is terminal (error exit),
+        // emit as conditional branch + inline continuation — no merge block.
+        if self.try_linearize_one_sided_gamma(node_id, regions) {
+            return;
+        }
+
+        // Try the cascade optimization
         if self.try_linearize_gamma_cascade(node_id, regions) {
             return;
         }
@@ -1199,6 +1205,149 @@ impl<'a> Linearizer<'a> {
         }
 
         self.emit(Some(node.debug_scope), LinearOp::Label(merge_label));
+    }
+
+    // ─── One-sided gamma lowering ──────────────────────────────────────
+
+    /// Try to lower a gamma as a conditional exit (no merge block).
+    ///
+    /// Applicable when exactly one branch is terminal (error exit / unreachable)
+    /// and the other branch is the continuation. The terminal branch becomes a
+    /// conditional branch to an error/exit label, and the continuation branch
+    /// is emitted inline. No merge block is created.
+    ///
+    /// The gamma's output vregs are defined by the continuation branch's results
+    /// (via Copy instructions from branch results → gamma outputs).
+    fn try_linearize_one_sided_gamma(&mut self, node_id: NodeId, regions: &[RegionId]) -> bool {
+        if regions.len() != 2 {
+            return false;
+        }
+
+        let branch0_terminal = self.region_is_error_only(regions[0]);
+        let branch1_terminal = self.region_is_error_only(regions[1]);
+
+        // Exactly one branch must be terminal
+        if branch0_terminal == branch1_terminal {
+            return false; // both terminal or neither
+        }
+
+        let (terminal_branch, continue_branch, terminal_is_zero) = if branch0_terminal {
+            (regions[0], regions[1], true) // pred==0 → error, pred!=0 → continue
+        } else {
+            (regions[1], regions[0], false) // pred!=0 → error, pred==0 → continue
+        };
+
+        let node = &self.func.nodes[node_id];
+        let predicate = self.resolve_vreg(node.inputs[0].source);
+        let state_count = self.func.state_domains.len();
+        let passthrough_count = node.inputs.len() - 1 - state_count;
+
+        let data_output_count = node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        // Build entry phis for the terminal branch
+        let terminal_region = &self.func.regions[terminal_branch];
+        let mut terminal_entry_phis = Vec::new();
+        for i in 0..passthrough_count {
+            let src_input = &node.inputs[i + 1];
+            if src_input.kind == PortKind::Data {
+                let arg = &self.func.region_args[terminal_region.args[i]];
+                if let Some(dst_vreg) = arg.vreg {
+                    let src_vreg = self.resolve_vreg(src_input.source);
+                    self.record_vreg_scope(dst_vreg, terminal_region.debug_scope);
+                    terminal_entry_phis.push((src_vreg, dst_vreg));
+                }
+            }
+        }
+
+        // Build entry phis for the continue branch
+        let continue_region = &self.func.regions[continue_branch];
+        let mut continue_entry_phis = Vec::new();
+        for i in 0..passthrough_count {
+            let src_input = &node.inputs[i + 1];
+            if src_input.kind == PortKind::Data {
+                let arg = &self.func.region_args[continue_region.args[i]];
+                if let Some(dst_vreg) = arg.vreg {
+                    let src_vreg = self.resolve_vreg(src_input.source);
+                    self.record_vreg_scope(dst_vreg, continue_region.debug_scope);
+                    continue_entry_phis.push((src_vreg, dst_vreg));
+                }
+            }
+        }
+
+        // Emit conditional branch to the terminal path
+        let terminal_label = self.fresh_label();
+
+        if terminal_is_zero {
+            // pred==0 → terminal (error), pred!=0 → continue (fallthrough)
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIfZero {
+                    cond: predicate,
+                    target: terminal_label,
+                    phi_args: terminal_entry_phis,
+                    fallthrough_phi_args: continue_entry_phis,
+                },
+            );
+        } else {
+            // pred!=0 → terminal (error), pred==0 → continue (fallthrough)
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIf {
+                    cond: predicate,
+                    target: terminal_label,
+                    phi_args: terminal_entry_phis,
+                    fallthrough_phi_args: continue_entry_phis,
+                },
+            );
+        }
+
+        // Emit the continuation branch inline (no label, just fall through)
+        self.linearize_region(continue_branch);
+
+        // Copy continuation results → gamma output vregs
+        let continue_region = &self.func.regions[continue_branch];
+        for i in 0..data_output_count {
+            let result = &self.func.region_results[continue_region.results[i]];
+            if result.kind == PortKind::Data {
+                let src_vreg = self.resolve_vreg(result.source);
+                let dst_vreg = node.outputs[i]
+                    .vreg
+                    .expect("gamma data output must have vreg");
+                self.record_vreg_scope(dst_vreg, node.outputs[i].debug_scope);
+                if src_vreg != dst_vreg {
+                    self.emit(
+                        Some(node.outputs[i].debug_scope),
+                        LinearOp::Copy {
+                            dst: dst_vreg,
+                            src: src_vreg,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Emit the terminal branch body (after the continuation, as a side path)
+        let after_label = self.fresh_label();
+        self.emit(
+            Some(node.debug_scope),
+            LinearOp::Branch {
+                target: after_label,
+                phi_args: vec![],
+            },
+        );
+        self.emit(
+            Some(terminal_region.debug_scope),
+            LinearOp::Label(terminal_label),
+        );
+        self.linearize_region(terminal_branch);
+        // Terminal branch is error-only, no branch to merge needed
+        self.emit(Some(node.debug_scope), LinearOp::Label(after_label));
+
+        true
     }
 
     // ─── Gamma cascade linearization ────────────────────────────────────
@@ -2220,6 +2369,85 @@ fn clone_node_kind(kind: &NodeKind) -> NodeKindRef<'_> {
 
 // ─── VReg assignment pass ────────────────────────────────────────────────────
 
+/// For one-sided gammas (one branch is error-only), unify the gamma's output
+/// vregs with the continuation branch's result vregs. This eliminates the need
+/// for Copy instructions between the continuation result and the gamma output.
+fn unify_one_sided_gamma_vregs(func: &mut IrFunc) {
+    let node_count = func.nodes.len();
+    for i in 0..node_count {
+        let node_id = NodeId::new(i as u32);
+        let NodeKind::Gamma { regions } = &func.nodes[node_id].kind else {
+            continue;
+        };
+        if regions.len() != 2 {
+            continue;
+        }
+        let regions = regions.clone();
+
+        // Check which branch is error-only
+        let b0_error = region_is_error_only_static(func, regions[0]);
+        let b1_error = region_is_error_only_static(func, regions[1]);
+        if b0_error == b1_error {
+            continue; // both or neither
+        }
+        let continue_region = if b0_error { regions[1] } else { regions[0] };
+
+        // For each data output: unify gamma output vreg ← continuation result source vreg
+        let data_outputs: Vec<usize> = (0..func.nodes[node_id].outputs.len())
+            .filter(|&j| func.nodes[node_id].outputs[j].kind == PortKind::Data)
+            .collect();
+
+        let cont_results = func.regions[continue_region].results.clone();
+        for (data_idx, &output_idx) in data_outputs.iter().enumerate() {
+            let gamma_vreg = func.nodes[node_id].outputs[output_idx].vreg;
+            let Some(gamma_vreg) = gamma_vreg else {
+                continue;
+            };
+
+            // Find the continuation result's source vreg
+            let result_id = cont_results[data_idx];
+            let result_source = func.region_results[result_id].source;
+            match result_source {
+                PortSource::Node(out_ref) => {
+                    // The continuation's result comes from a node output.
+                    // Set that node's output vreg to the gamma's output vreg.
+                    let src_vreg = func.nodes[out_ref.node].outputs[out_ref.index as usize].vreg;
+                    if src_vreg != Some(gamma_vreg) {
+                        func.nodes[out_ref.node].outputs[out_ref.index as usize].vreg =
+                            Some(gamma_vreg);
+                    }
+                }
+                PortSource::RegionArg(arg_ref) => {
+                    // The continuation's result is a region arg (pass-through).
+                    // Set the region arg's vreg to the gamma's output vreg.
+                    let arg_vreg = func.region_args[arg_ref.arg].vreg;
+                    if arg_vreg != Some(gamma_vreg) {
+                        func.region_args[arg_ref.arg].vreg = Some(gamma_vreg);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Check if a region is error-only (static version, no Linearizer self needed).
+fn region_is_error_only_static(func: &IrFunc, region_id: RegionId) -> bool {
+    let region = &func.regions[region_id];
+    let has_error = region.nodes.iter().any(|&nid| {
+        matches!(
+            &func.nodes[nid].kind,
+            NodeKind::Simple(IrOp::ErrorExit { .. })
+        )
+    });
+    let has_structured_control = region.nodes.iter().any(|&nid| {
+        matches!(
+            &func.nodes[nid].kind,
+            NodeKind::Gamma { .. } | NodeKind::Theta { .. }
+        )
+    });
+    has_error && !has_structured_control
+}
+
 /// Assign VRegs to all data output ports and region args that don't have one.
 fn assign_vregs(func: &mut IrFunc) {
     // Assign to all node output ports.
@@ -2270,6 +2498,11 @@ struct CascadeLevel {
 pub fn linearize(func: &mut IrFunc) -> LinearIr {
     // Pass 1: ensure all data ports have VRegs.
     assign_vregs(func);
+
+    // Pass 1b: unify vregs for one-sided gammas (error-exit gammas).
+    // This makes the continuation result produce directly into the gamma output vreg,
+    // eliminating copies when the one-sided lowering is used.
+    unify_one_sided_gamma_vregs(func);
 
     // Pass 2: walk the RVSDG and emit linear ops.
     let lambda_nodes = func.lambdas.clone();
