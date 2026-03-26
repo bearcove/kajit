@@ -383,7 +383,7 @@ fn resolve_skip_errors_inner(func: &IrFunc, source: &PortSource, depth: usize) -
 }
 
 /// Check if a region (or any of its sub-regions) contains an ErrorExit node.
-fn region_has_error_exit(func: &IrFunc, region: RegionId) -> bool {
+pub fn region_has_error_exit(func: &IrFunc, region: RegionId) -> bool {
     for &nid in &func.regions[region].nodes {
         match &func.nodes[nid].kind {
             NodeKind::Simple(IrOp::ErrorExit { .. }) => return true,

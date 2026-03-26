@@ -28,6 +28,10 @@
 use crate::ir_passes::{CloneCtx, clone_region_into, remap_source};
 use crate::{IrFunc, NodeId, NodeKind, OutputRef, PortSource, Region, RegionArg};
 
+fn region_has_error_exit(func: &IrFunc, region: crate::RegionId) -> bool {
+    crate::const_fold::region_has_error_exit(func, region)
+}
+
 /// Maximum iterations we're willing to unroll.
 const MAX_UNROLL: u32 = 10;
 
@@ -107,10 +111,22 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
     // Step 1: Inline first iteration's body into parent region
     let current_sources = theta_inputs.clone();
 
+    // Seed the known environment from the theta's initial inputs.
+    let mut known_env: Vec<Option<u64>> = current_sources
+        .iter()
+        .map(|src| crate::const_fold::resolve_to_constant(func, src))
+        .collect();
+
     // We'll build nested gammas. The outermost result sources will replace
     // the theta node's outputs.
-    let final_sources =
-        build_unrolled_cascade(func, body, parent_region, &current_sources, max_iter);
+    let final_sources = build_unrolled_cascade(
+        func,
+        body,
+        parent_region,
+        &current_sources,
+        max_iter,
+        &mut known_env,
+    );
 
     // Step 2: Replace theta outputs with the cascade results
     // We need to rewrite all uses of the theta's outputs to use the cascade's outputs.
@@ -288,12 +304,18 @@ fn topological_sort_region(func: &mut IrFunc, region_id: crate::RegionId) {
 /// Build the unrolled gamma cascade, returning the final output sources.
 ///
 /// This recursively builds: execute body → gamma(pred) { 0: exit, 1: recurse }
+///
+/// `known_env[i]` = Some(v) if input_sources[i] is known to be constant v,
+/// even if the RVSDG structure doesn't reflect this (e.g., after flowing
+/// through gammas where branches disagree). Updated in-place for the next
+/// iteration.
 fn build_unrolled_cascade(
     func: &mut IrFunc,
     body_region: crate::RegionId,
     target_region: crate::RegionId,
     input_sources: &[PortSource],
     remaining_iterations: u32,
+    known_env: &mut Vec<Option<u64>>,
 ) -> Vec<PortSource> {
     if remaining_iterations == 0 {
         // Max iterations reached — just return the current values
@@ -301,24 +323,74 @@ fn build_unrolled_cascade(
         return input_sources.to_vec();
     }
 
-    // Clone the body into target_region, substituting body args with input_sources
-    let cloned_results = clone_body_into_region(func, body_region, target_region, input_sources);
+    // For known-constant loop variables, inject Const nodes in the target region
+    // BEFORE cloning the body. This ensures the body sees constants directly,
+    // bypassing the phase-order problem where values flow through gammas.
+    let debug_scope = func.regions[target_region].debug_scope;
+    let specialized_inputs: Vec<PortSource> = input_sources
+        .iter()
+        .enumerate()
+        .map(|(i, src)| {
+            if let Some(val) = known_env.get(i).copied().flatten() {
+                // Check if the source is already a matching Const.
+                let already_const = matches!(src,
+                    PortSource::Node(out) if matches!(
+                        &func.nodes[out.node].kind,
+                        NodeKind::Simple(crate::IrOp::Const { value }) if *value == val
+                    )
+                );
+                if already_const {
+                    *src
+                } else {
+                    crate::const_fold::create_const_in_region(func, target_region, debug_scope, val)
+                }
+            } else {
+                *src
+            }
+        })
+        .collect();
 
-    // Run const fold on the cloned nodes to evaluate constant expressions
-    // (e.g., Mul(Const(0), Const(7)) → Const(0) for iteration 0).
+    // Clone the body into target_region, substituting body args with specialized inputs
+    let cloned_results =
+        clone_body_into_region(func, body_region, target_region, &specialized_inputs);
+
+    // Run const fold on the cloned nodes to evaluate constant expressions.
     crate::const_fold::fold_nodes_in_region(func, target_region);
 
     // cloned_results[0] = predicate, cloned_results[1..] = updated values
     let predicate = cloned_results[0];
     let updated_values: Vec<PortSource> = cloned_results[1..].to_vec();
 
+    // Update known_env for the next iteration.
+    // First try structural resolution. For values that can't be resolved
+    // structurally (e.g., counter flowing through gammas where branches
+    // disagree), evaluate the original body symbolically with the known_env
+    // to compute what each loop variable becomes.
+    let body_results = &func.regions[body_region].results.clone();
+    let body_args = &func.regions[body_region].args.clone();
+    let next_known: Vec<Option<u64>> = updated_values
+        .iter()
+        .enumerate()
+        .map(|(i, src)| {
+            // Try structural resolution on the cloned result first.
+            if let Some(v) = crate::const_fold::resolve_to_constant(func, src) {
+                return Some(v);
+            }
+            // Fall back to symbolic evaluation of the original body's result
+            // expression under the current known_env.
+            // Body result index is i+1 (skip predicate at index 0).
+            let result_id = body_results[i + 1];
+            let result_source = &func.region_results[result_id].source;
+            eval_source_with_env(func, body_region, body_args, known_env, result_source)
+        })
+        .collect();
+    *known_env = next_known;
+
     if remaining_iterations == 1 {
         // Last iteration — no need for a gamma, just return the values
         return updated_values;
     }
 
-    // Build gamma: check predicate, either exit or continue
-    let debug_scope = func.regions[target_region].debug_scope;
     let _exit_values = updated_values.clone();
 
     // Create gamma with 2 branches:
@@ -379,22 +451,15 @@ fn build_unrolled_cascade(
     });
 
     // Recursively build the remaining iterations inside branch 1.
-    // For values that are evaluable constants (e.g., iteration counter),
-    // inject Const nodes directly into branch1_region instead of using
-    // gamma region args. This enables const_fold to propagate iteration
-    // indices through the cascade.
-    let branch1_input_sources: Vec<PortSource> = updated_values
+    // The branch1 region args correspond to the gamma inputs (= updated_values).
+    // The known_env already has the next iteration's known constants.
+    let branch1_input_sources: Vec<PortSource> = branch1_args
         .iter()
-        .zip(branch1_args.iter())
-        .map(|(src, &arg_id)| {
-            if let Some(val) = crate::const_fold::resolve_to_constant_skip_errors(func, src) {
-                crate::const_fold::create_const_in_region(func, branch1_region, debug_scope, val)
-            } else {
-                PortSource::RegionArg(crate::RegionArgRef {
-                    region: branch1_region,
-                    arg: arg_id,
-                })
-            }
+        .map(|&arg_id| {
+            PortSource::RegionArg(crate::RegionArgRef {
+                region: branch1_region,
+                arg: arg_id,
+            })
         })
         .collect();
     let recursive_results = build_unrolled_cascade(
@@ -403,6 +468,7 @@ fn build_unrolled_cascade(
         branch1_region,
         &branch1_input_sources,
         remaining_iterations - 1,
+        known_env,
     );
 
     // Set branch 1 results
@@ -509,4 +575,165 @@ fn clone_body_into_region(
             remap_source(source, &ctx, func)
         })
         .collect()
+}
+
+/// Symbolically evaluate a source expression in the original body region
+/// under a known environment for the body's args.
+///
+/// This is a mini partial evaluator: it walks the expression tree in the body,
+/// and for each node:
+/// - Const → return its value
+/// - Pure op with all-known inputs → evaluate
+/// - RegionArg → look up in known_env (by arg index in body)
+/// - Gamma → evaluate predicate; if known, recurse into selected branch
+/// - Otherwise → None (unknown)
+fn eval_source_with_env(
+    func: &IrFunc,
+    body_region: crate::RegionId,
+    body_args: &[crate::ArgId],
+    known_env: &[Option<u64>],
+    source: &PortSource,
+) -> Option<u64> {
+    eval_with_env_inner(func, body_region, body_args, known_env, source, 0)
+}
+
+fn eval_with_env_inner(
+    func: &IrFunc,
+    body_region: crate::RegionId,
+    body_args: &[crate::ArgId],
+    known_env: &[Option<u64>],
+    source: &PortSource,
+    depth: usize,
+) -> Option<u64> {
+    if depth > 64 {
+        return None;
+    }
+
+    match source {
+        PortSource::RegionArg(arg_ref) => {
+            // If this arg belongs to the body region, look it up in known_env.
+            if arg_ref.region == body_region {
+                let arg_idx = body_args.iter().position(|a| *a == arg_ref.arg)?;
+                return known_env.get(arg_idx).copied().flatten();
+            }
+            // Otherwise, try to resolve through parent (gamma/theta arg).
+            let region = arg_ref.region;
+            let arg_idx = func.regions[region]
+                .args
+                .iter()
+                .position(|a| *a == arg_ref.arg)?;
+            let owner = func.find_region_owner(region)?;
+            match &func.nodes[owner].kind {
+                NodeKind::Gamma { .. } => {
+                    // Gamma branch arg[K] → gamma input[K+1]
+                    let input = func.nodes[owner].inputs.get(arg_idx + 1)?;
+                    eval_with_env_inner(
+                        func,
+                        body_region,
+                        body_args,
+                        known_env,
+                        &input.source,
+                        depth + 1,
+                    )
+                }
+                NodeKind::Theta { .. } => {
+                    // Theta body arg[K] → theta input[K]
+                    let input = func.nodes[owner].inputs.get(arg_idx)?;
+                    eval_with_env_inner(
+                        func,
+                        body_region,
+                        body_args,
+                        known_env,
+                        &input.source,
+                        depth + 1,
+                    )
+                }
+                _ => None,
+            }
+        }
+        PortSource::Node(out_ref) => {
+            let node = &func.nodes[out_ref.node];
+            match &node.kind {
+                NodeKind::Simple(crate::IrOp::Const { value }) => Some(*value),
+                NodeKind::Simple(op) if !op.has_side_effects() => {
+                    // Pure op: evaluate if all data inputs are known.
+                    let data_inputs: Vec<Option<u64>> = node
+                        .inputs
+                        .iter()
+                        .filter(|inp| inp.kind == crate::PortKind::Data)
+                        .map(|inp| {
+                            eval_with_env_inner(
+                                func,
+                                body_region,
+                                body_args,
+                                known_env,
+                                &inp.source,
+                                depth + 1,
+                            )
+                        })
+                        .collect();
+                    let all_known: Vec<u64> =
+                        data_inputs.into_iter().collect::<Option<Vec<_>>>()?;
+                    crate::const_fold::evaluate_op(op, &all_known)
+                }
+                NodeKind::Gamma { regions } => {
+                    // If predicate is known, evaluate the selected branch.
+                    let pred_source = &node.inputs[0].source;
+                    let pred_val = eval_with_env_inner(
+                        func,
+                        body_region,
+                        body_args,
+                        known_env,
+                        pred_source,
+                        depth + 1,
+                    );
+                    if let Some(pv) = pred_val {
+                        let branch_idx = (pv as usize).min(regions.len() - 1);
+                        let branch_region = regions[branch_idx];
+                        let result_id = *func.regions[branch_region]
+                            .results
+                            .get(out_ref.index as usize)?;
+                        let result_source = &func.region_results[result_id].source;
+                        return eval_with_env_inner(
+                            func,
+                            body_region,
+                            body_args,
+                            known_env,
+                            result_source,
+                            depth + 1,
+                        );
+                    }
+
+                    // Predicate unknown: try all non-error branches. If they
+                    // agree on a value, use it. Error branches are semantically
+                    // unreachable on the success path — the program aborts if
+                    // they're taken, so their output values don't matter.
+                    let output_index = out_ref.index as usize;
+                    let mut common: Option<u64> = None;
+                    for &region_id in regions {
+                        if region_has_error_exit(func, region_id) {
+                            continue;
+                        }
+                        let result_id = *func.regions[region_id].results.get(output_index)?;
+                        let result_source = &func.region_results[result_id].source;
+                        let branch_val = eval_with_env_inner(
+                            func,
+                            body_region,
+                            body_args,
+                            known_env,
+                            result_source,
+                            depth + 1,
+                        )?;
+                        match common {
+                            None => common = Some(branch_val),
+                            Some(v) if v == branch_val => {}
+                            _ => return None,
+                        }
+                    }
+                    common
+                }
+                _ => None,
+            }
+        }
+    }
 }
