@@ -1540,11 +1540,29 @@ impl<'a> Linearizer<'a> {
                         // This result comes from the tail gamma's output.
                         // Map tail gamma output[out_ref.index] → landing_idx.
                         let tail_out_idx = out_ref.index as usize;
-                        // Extend the mapping if needed
                         while tail_output_to_landing.len() <= tail_out_idx {
-                            tail_output_to_landing.push(usize::MAX); // placeholder
+                            tail_output_to_landing.push(usize::MAX);
                         }
                         tail_output_to_landing[tail_out_idx] = landing_idx;
+
+                        // ALSO update state_env to the tail gamma's input for
+                        // this output. Since the exit path is passthrough, when
+                        // the tail gamma exits, it carries its input values.
+                        // The input for data output j is inputs[j+1] (skip pred).
+                        let tail_node = &self.func.nodes[tail_id];
+                        let tail_data_inputs: Vec<usize> = tail_node
+                            .inputs
+                            .iter()
+                            .enumerate()
+                            .skip(1) // skip predicate
+                            .filter(|(_, inp)| inp.kind == PortKind::Data)
+                            .map(|(idx, _)| idx)
+                            .collect();
+                        if tail_out_idx < tail_data_inputs.len() {
+                            let input_idx = tail_data_inputs[tail_out_idx];
+                            state_env[landing_idx] =
+                                self.resolve_vreg(tail_node.inputs[input_idx].source);
+                        }
                     }
                     _ => {
                         // From earlier computation — update state now
@@ -1552,6 +1570,17 @@ impl<'a> Linearizer<'a> {
                     }
                 }
             }
+
+            eprintln!(
+                "[passthrough-exit] chain: tail gamma #{}, tail_output_to_landing={:?}, state_env={:?}",
+                tail_id.index(),
+                tail_output_to_landing,
+                state_env
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| format!("{}→v{}", i, v.index()))
+                    .collect::<Vec<_>>()
+            );
 
             // Keep placeholders — indexing must match tail gamma output positions.
             // Entries with usize::MAX mean "this output doesn't map to any landing param."
