@@ -1,0 +1,102 @@
+state_domains {
+  d0 = cursor
+  d1 = output
+  d2 = memory
+}
+scopes {
+  s0 = lambda_body(@0)
+  s1 = theta_body parent s0
+  s2 = gamma_branch(0) parent s1
+  s3 = gamma_branch(1) parent s1
+  s4 = gamma_branch(0) parent s3
+  s5 = gamma_branch(1) parent s3
+  s6 = gamma_branch(0) parent s5
+  s7 = gamma_branch(1) parent s5
+  s8 = gamma_branch(0) parent s1
+  s9 = gamma_branch(1) parent s1
+  s10 = gamma_branch(0) parent s1
+  s11 = gamma_branch(1) parent s1
+  s12 = gamma_branch(0) parent s11
+  s13 = gamma_branch(1) parent s11
+  s14 = gamma_branch(0) parent s13
+  s15 = gamma_branch(1) parent s13
+  s16 = gamma_branch(0) parent s1
+  s17 = gamma_branch(1) parent s1
+  s18 = gamma_branch(0) parent s17
+  s19 = gamma_branch(1) parent s17
+  s20 = gamma_branch(0) parent s19
+  s21 = gamma_branch(1) parent s19
+  s22 = gamma_branch(0) parent s0
+  s23 = gamma_branch(1) parent s0
+}
+lambda @0 @s0 (shape: "u32") {
+  region @s0 {
+    args: [%cs, %os, %s2]
+    n1 = SaveCursor [%cs:arg] -> [v0, %cs]
+    n2 = SaveInputEnd [%cs:n1] -> [v1, %cs]
+    n3 = Const(0x0) [] -> [v2]
+    n4 = Const(0x0) [] -> [v3]
+    n5 = WriteToSlot(0) [v0, %cs:n2] -> [%cs]
+    n6 = WriteToSlot(1) [v2, %cs:n5] -> [%cs]
+    n7 = WriteToSlot(2) [v3, %cs:n6] -> [%cs]
+    n8 = Const(0x0) [] -> [v4]
+    n9 = WriteToSlot(3) [v4, %cs:n7] -> [%cs]
+    n10 = Const(0x0) [] -> [v5]
+    n11 = WriteToSlot(4) [v5, %cs:n9] -> [%cs]
+    n12 = Const(0x0) [] -> [v6]
+    n13 = WriteToSlot(5) [v6, %cs:n11] -> [%cs]
+    n52 = theta(max=1) [%cs:n13, %os:arg, %s2:arg] {
+      region @s1 {
+        args: [%cs, %os, %s2]
+        n14 = Const(0x1) [] -> [v7]
+        n15 = WriteToSlot(6) [v7, %cs:arg] -> [%cs]
+        n16 = WriteToSlot(7) [v7, %cs:n15] -> [%cs]
+        n17 = ReadFromSlot(6) [%cs:n16] -> [v8, %cs]
+        n18 = ReadFromSlot(6) [%cs:n17] -> [v15, %cs]
+        n19 @s9 = ReadFromSlot(0) [%cs:n18] -> [v16, %cs]
+        n20 @s9 = ReadFromSlot(2) [%cs:n19] -> [v17, %cs]
+        n21 @s9 = Const(0x0) [] -> [v18]
+        n22 @s9 = LoadFromAddr(W1) [v18, %s2:arg] -> [v19, %s2]
+        n23 @s9 = WriteToSlot(5) [v19, %cs:n20] -> [%cs]
+        n24 @s9 = ReadFromSlot(2) [%cs:n23] -> [v20, %cs]
+        n25 @s9 = Const(0x0) [] -> [v22]
+        n26 @s9 = WriteToSlot(2) [v22, %cs:n24] -> [%cs]
+        n27 @s9 = ReadFromSlot(0) [%cs:n26] -> [v23, %cs]
+        n28 @s9 = Const(0x0) [] -> [v24]
+        n29 @s9 = RestoreCursor [v24, %cs:n27] -> [%cs]
+        n30 @s9 = ReadFromSlot(3) [%cs:n29] -> [v25, %cs]
+        n31 @s9 = ReadFromSlot(5) [%cs:n30] -> [v26, %cs]
+        n32 @s9 = ReadFromSlot(4) [%cs:n31] -> [v29, %cs]
+        n33 @s9 = Const(0x7) [] -> [v30]
+        n34 @s9 = Mul [v29, v30] -> [v31]
+        n35 @s9 = Const(0x0) [] -> [v33]
+        n36 @s9 = WriteToSlot(3) [v33, %cs:n32] -> [%cs]
+        n37 @s9 = ReadFromSlot(4) [%cs:n36] -> [v34, %cs]
+        n38 @s9 = Const(0x0) [] -> [v36]
+        n39 @s9 = WriteToSlot(4) [v36, %cs:n37] -> [%cs]
+        n40 = ReadFromSlot(6) [%cs:n39] -> [v37, %cs]
+        n41 = ReadFromSlot(6) [%cs:n40] -> [v45, %cs]
+        n42 = ReadFromSlot(7) [%cs:n41] -> [v50, %cs]
+        n43 = Const(0x0) [] -> [?]
+        n44 = Const(0x0) [] -> [?]
+        n45 = Const(0x0) [] -> [?]
+        n46 = Const(0x0) [] -> [?]
+        n47 = Const(0x0) [] -> [?]
+        n48 = Const(0x0) [] -> [?]
+        n49 = Const(0x0) [] -> [?]
+        n50 = Const(0x0) [] -> [?]
+        n51 = Const(0x0) [] -> [?]
+        results: [v50, %cs:n42, %os:arg, %s2:n22]
+      }
+    } -> [%cs, %os, %s2]
+    n53 = ReadFromSlot(3) [%cs:n52] -> [v51, %cs]
+    n54 = ReadFromSlot(3) [%cs:n53] -> [v56, %cs]
+    n55 = WriteToField(offset=0, W4) [v56, %os:n52] -> [%os]
+    n56 = Const(0x0) [] -> [?]
+    n57 = Const(0x0) [] -> [?]
+    n58 = Const(0x0) [] -> [?]
+    n59 = Const(0x0) [] -> [?]
+    n60 = Const(0x0) [] -> [?]
+    results: [%cs:n54, %os:n55, %s2:n52]
+  }
+}

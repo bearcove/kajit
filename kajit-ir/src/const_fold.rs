@@ -199,6 +199,11 @@ fn resolve_to_constant_inner(func: &IrFunc, source: &PortSource, depth: usize) -
     match source {
         PortSource::Node(out_ref) => match &func.nodes[out_ref.node].kind {
             NodeKind::Simple(IrOp::Const { value }) => Some(*value),
+            NodeKind::Simple(IrOp::ReadFromSlot { slot }) if out_ref.index == 0 => {
+                // Trace backwards along the cursor state chain to find the most
+                // recent WriteToSlot for this slot.
+                resolve_slot_value(func, out_ref.node, slot.index(), depth)
+            }
             NodeKind::Gamma { regions } => {
                 // If all branches produce the same constant at this output index,
                 // the gamma output is that constant regardless of which branch is taken.
@@ -256,6 +261,56 @@ fn resolve_to_constant_inner(func: &IrFunc, source: &PortSource, depth: usize) -
             }
         }
     }
+}
+
+/// Walk backwards along the cursor state chain from a ReadFromSlot node
+/// to find the most recent WriteToSlot for the same slot index.
+/// Returns the constant value if the write's data input is a known constant.
+fn resolve_slot_value(func: &IrFunc, read_node: NodeId, slot: usize, depth: usize) -> Option<u64> {
+    if depth > 64 {
+        return None;
+    }
+
+    // ReadFromSlot's state input (the cursor chain) tells us what happened before.
+    let node = &func.nodes[read_node];
+    let state_input = node.inputs.iter().find(|inp| inp.kind != PortKind::Data)?;
+    let mut current = state_input.source;
+
+    // Walk back through the state chain, looking for WriteToSlot(slot).
+    for _ in 0..256 {
+        match current {
+            PortSource::Node(ref out_ref) => {
+                let prev_node = &func.nodes[out_ref.node];
+                match &prev_node.kind {
+                    NodeKind::Simple(IrOp::WriteToSlot { slot: s }) if s.index() == slot => {
+                        // Found the matching write. Resolve its data input.
+                        let data_input = prev_node
+                            .inputs
+                            .iter()
+                            .find(|inp| inp.kind == PortKind::Data)?;
+                        return resolve_to_constant_inner(func, &data_input.source, depth + 1);
+                    }
+                    _ => {
+                        // Not our slot write — keep walking back along the state chain.
+                        let prev_state_input = prev_node
+                            .inputs
+                            .iter()
+                            .find(|inp| inp.kind != PortKind::Data);
+                        match prev_state_input {
+                            Some(inp) => current = inp.source,
+                            None => return None,
+                        }
+                    }
+                }
+            }
+            PortSource::RegionArg(_) => {
+                // Reached the beginning of the region — try to resolve through parent.
+                return resolve_to_constant_inner(func, &current, depth + 1);
+            }
+        }
+    }
+
+    None
 }
 
 /// Like `resolve_to_constant` but also resolves gamma outputs where the non-error
