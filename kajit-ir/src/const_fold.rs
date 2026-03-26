@@ -74,7 +74,7 @@ fn const_fold_round(func: &mut IrFunc, debug: bool) -> (bool, u32) {
     for rid in regions_preorder {
         let nodes = func.regions[rid].nodes.clone();
         for &nid in &nodes {
-            if try_fold_node(func, nid, debug) {
+            if try_fold_node(func, nid, debug) || try_simplify_node(func, nid) {
                 changed = true;
                 folded += 1;
             }
@@ -167,6 +167,103 @@ fn try_fold_node(func: &mut IrFunc, node_id: NodeId, debug: bool) -> bool {
     true
 }
 
+/// Try algebraic simplification when one input is a known constant.
+///
+/// Identity/absorbing rules:
+///   Shl(x, 0) → x,  Shr(x, 0) → x,  Sar(x, 0) → x
+///   Add(x, 0) → x,  Sub(x, 0) → x
+///   Mul(x, 1) → x,  Mul(x, 0) → 0
+///   Or(x, 0)  → x,  And(x, ~0) → x
+///   And(x, 0) → 0,  Or(x, ~0)  → ~0
+fn try_simplify_node(func: &mut IrFunc, node_id: NodeId) -> bool {
+    let NodeKind::Simple(op) = &func.nodes[node_id].kind else {
+        return false;
+    };
+    if matches!(op, IrOp::Const { .. }) {
+        return false;
+    }
+    let op = op.clone();
+
+    // Only handle binary ops with exactly 2 data inputs.
+    let data_inputs: Vec<(usize, Option<u64>)> = func.nodes[node_id]
+        .inputs
+        .iter()
+        .enumerate()
+        .filter(|(_, inp)| inp.kind == PortKind::Data)
+        .map(|(i, inp)| (i, resolve_to_constant(func, &inp.source)))
+        .collect();
+
+    if data_inputs.len() != 2 {
+        return false;
+    }
+
+    let (idx_a, val_a) = data_inputs[0];
+    let (idx_b, val_b) = data_inputs[1];
+
+    // Try to simplify based on which input(s) are constant.
+    let replacement: Option<SimplifyResult> = match (&op, val_a, val_b) {
+        // Shift by zero → identity
+        (IrOp::Shl | IrOp::Shr | IrOp::Sar, _, Some(0)) => Some(SimplifyResult::PassInput(idx_a)),
+
+        // Add/Sub zero → identity
+        (IrOp::Add, Some(0), _) => Some(SimplifyResult::PassInput(idx_b)),
+        (IrOp::Add | IrOp::Sub, _, Some(0)) => Some(SimplifyResult::PassInput(idx_a)),
+
+        // Mul by 1 → identity; Mul by 0 → zero
+        (IrOp::Mul, Some(1), _) => Some(SimplifyResult::PassInput(idx_b)),
+        (IrOp::Mul, _, Some(1)) => Some(SimplifyResult::PassInput(idx_a)),
+        (IrOp::Mul, Some(0), _) | (IrOp::Mul, _, Some(0)) => Some(SimplifyResult::Const(0)),
+
+        // Or with 0 → identity
+        (IrOp::Or, Some(0), _) => Some(SimplifyResult::PassInput(idx_b)),
+        (IrOp::Or, _, Some(0)) => Some(SimplifyResult::PassInput(idx_a)),
+
+        // And with 0 → zero
+        (IrOp::And, Some(0), _) | (IrOp::And, _, Some(0)) => Some(SimplifyResult::Const(0)),
+
+        // Or with all-ones → all-ones
+        (IrOp::Or, Some(u64::MAX), _) | (IrOp::Or, _, Some(u64::MAX)) => {
+            Some(SimplifyResult::Const(u64::MAX))
+        }
+
+        // And with all-ones → identity
+        (IrOp::And, Some(u64::MAX), _) => Some(SimplifyResult::PassInput(idx_b)),
+        (IrOp::And, _, Some(u64::MAX)) => Some(SimplifyResult::PassInput(idx_a)),
+
+        // Xor with 0 → identity
+        (IrOp::Xor, Some(0), _) => Some(SimplifyResult::PassInput(idx_b)),
+        (IrOp::Xor, _, Some(0)) => Some(SimplifyResult::PassInput(idx_a)),
+
+        _ => None,
+    };
+
+    let Some(replacement) = replacement else {
+        return false;
+    };
+
+    match replacement {
+        SimplifyResult::Const(value) => {
+            func.nodes[node_id].kind = NodeKind::Simple(IrOp::Const { value });
+            func.nodes[node_id].inputs.clear();
+        }
+        SimplifyResult::PassInput(input_idx) => {
+            // Replace this node with an Identity forwarding the specified input.
+            let source = func.nodes[node_id].inputs[input_idx].source;
+            func.nodes[node_id].kind = NodeKind::Simple(IrOp::Identity);
+            func.nodes[node_id].inputs = vec![crate::InputPort {
+                kind: PortKind::Data,
+                source,
+            }];
+        }
+    }
+    true
+}
+
+enum SimplifyResult {
+    Const(u64),
+    PassInput(usize),
+}
+
 /// Fold nodes in a single region (non-recursive).
 /// Used by the unroller to evaluate cloned body nodes after each iteration.
 /// The `resolve_to_constant` function handles tracing through gamma branches,
@@ -176,7 +273,7 @@ pub fn fold_nodes_in_region(func: &mut IrFunc, region: RegionId) {
         let nodes = func.regions[region].nodes.clone();
         let mut changed = false;
         for &nid in &nodes {
-            if try_fold_node(func, nid, false) {
+            if try_fold_node(func, nid, false) || try_simplify_node(func, nid) {
                 changed = true;
             }
         }
