@@ -579,15 +579,11 @@ impl<'a> EmitContext<'a> {
         // Arithmetic/logic: load operands, compute, store
         let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X9);
         let rhs_reg = self.reg_for_vreg_with_temp(rhs, Reg::X10);
-        // Compute directly into dst register when possible
+        // Compute directly into dst register when possible.
+        // On aarch64, ALU instructions read inputs before writing the result,
+        // so rd = rn or rd = rm is safe for single-instruction ops.
         let result_reg = if let Some(preg) = self.preg_for_vreg(dst) {
-            let r = self.preg_to_reg(preg);
-            // Don't clobber an input register
-            if r != lhs_reg && r != rhs_reg {
-                r
-            } else {
-                Reg::X11
-            }
+            self.preg_to_reg(preg)
         } else {
             Reg::X11
         };
