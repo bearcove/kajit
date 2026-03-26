@@ -413,8 +413,8 @@ impl<'a> EmitContext<'a> {
             LinearOp::LoadFromAddr { dst, addr, width } => {
                 let addr_reg = self.reg_for_vreg_with_temp(*addr, Reg::X10);
                 let rd = self.dst_reg_or_temp(*dst, Reg::X9);
-                // Ensure rd != addr_reg (load would clobber the address before reading it)
-                let rd = if rd == addr_reg { Reg::X9 } else { rd };
+                // On aarch64, ldr/ldrb/ldrh read [Xn] before writing Xt,
+                // so rd == addr_reg is safe.
                 match width {
                     kajit_ir::Width::W1 => {
                         self.ectx.emit.emit_ldrb_imm(rd, addr_reg, 0).expect("ldrb");
