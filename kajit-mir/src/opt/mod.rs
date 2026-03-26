@@ -10,6 +10,7 @@
 pub mod block_merge;
 pub mod const_branch_fold;
 pub mod constant_phi_elim;
+pub mod dce;
 pub mod loop_phi_elim;
 pub mod reduce;
 pub mod validate;

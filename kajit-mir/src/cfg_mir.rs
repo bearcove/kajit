@@ -1945,6 +1945,9 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
     }
     if opts.enabled("dce") {
         dead_code_elimination(&mut cfg);
+        for func in &mut cfg.funcs {
+            crate::opt::dce::eliminate_dead_block_params(func);
+        }
         validate_after("dce", &cfg);
     }
     if opts.enabled("const_branch_fold") {
