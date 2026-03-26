@@ -71,6 +71,7 @@ enum AstNode {
     Theta {
         id: u32,
         scope: Option<u32>,
+        max_iterations: Option<u32>,
         inputs: Vec<AstSource>,
         body: AstRegion,
         outputs: Vec<AstScopedOutput>,
@@ -597,27 +598,32 @@ fn region<'src>() -> impl Parser<'src, &'src str, AstRegion, Extra<'src>> + Clon
                 },
             );
 
+        let theta_max_iter = just("(max=")
+            .ignore_then(uint32())
+            .then_ignore(just(")"))
+            .or_not();
+
         let theta_node = just("n")
             .ignore_then(uint32())
             .then(ws().ignore_then(scope_ref()).or_not())
-            .then_ignore(
-                ws().then(just("="))
-                    .then(ws())
-                    .then(just("theta"))
-                    .then(ws()),
-            )
+            .then_ignore(ws().then(just("=")).then(ws()).then(just("theta")))
+            .then(theta_max_iter)
+            .then_ignore(ws())
             .then(bracketed_list(source()))
             .then_ignore(ws().then(just("{")).then(ws()))
             .then(region.clone())
             .then_ignore(ws().then(just("}")).then(ws()).then(just("->")).then(ws()))
             .then(bracketed_list(scoped_output()))
-            .map(|((((id, scope), inputs), body), outputs)| AstNode::Theta {
-                id,
-                scope,
-                inputs,
-                body,
-                outputs,
-            });
+            .map(
+                |(((((id, scope), max_iterations), inputs), body), outputs)| AstNode::Theta {
+                    id,
+                    scope,
+                    max_iterations,
+                    inputs,
+                    body,
+                    outputs,
+                },
+            );
 
         let apply_node = just("n")
             .ignore_then(uint32())
@@ -1236,6 +1242,7 @@ fn resolve_node(
         AstNode::Theta {
             id,
             scope,
+            max_iterations,
             inputs,
             body,
             outputs,
@@ -1361,7 +1368,7 @@ fn resolve_node(
                 outputs: resolved_outputs,
                 kind: NodeKind::Theta {
                     body: body_id,
-                    max_iterations: None,
+                    max_iterations: *max_iterations,
                 },
             });
 

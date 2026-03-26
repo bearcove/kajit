@@ -175,6 +175,16 @@ fn run_unroll_bounded_thetas_pass(func: &mut IrFunc) {
     }
 }
 
+fn run_const_fold_pass(func: &mut IrFunc) {
+    crate::const_fold::const_fold(func);
+    debug_verify(func, "const_fold");
+}
+
+fn run_post_unroll_simplify_pass(func: &mut IrFunc) {
+    crate::simplify_gamma::simplify_trivial_gammas(func);
+    debug_verify(func, "post_unroll_simplify");
+}
+
 fn run_simplify_trivial_gammas_pass(func: &mut IrFunc) {
     crate::simplify_gamma::simplify_trivial_gammas(func);
     debug_verify(func, "simplify_trivial_gammas");
@@ -199,7 +209,7 @@ fn run_slot_to_reg_pass(func: &mut IrFunc) {
     debug_verify(func, "slot_to_reg");
 }
 
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 7] = [
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 9] = [
     DefaultPassSpec {
         name: "slot_to_reg",
         description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
@@ -224,6 +234,16 @@ const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 7] = [
         name: "unroll_bounded_thetas",
         description: "Unroll theta loops with known max iteration count into gamma cascades.",
         run: run_unroll_bounded_thetas_pass,
+    },
+    DefaultPassSpec {
+        name: "const_fold",
+        description: "Evaluate pure operations with all-constant inputs (propagates unrolled iteration indices).",
+        run: run_const_fold_pass,
+    },
+    DefaultPassSpec {
+        name: "post_unroll_simplify",
+        description: "Re-run gamma simplification after constant folding to collapse constant-predicate gammas.",
+        run: run_post_unroll_simplify_pass,
     },
     DefaultPassSpec {
         name: "inline_apply",

@@ -1035,6 +1035,20 @@ impl IrFunc {
         self.regions[region].debug_scope
     }
 
+    /// Find the node that owns a given region (gamma branch, theta body, or lambda body).
+    /// Returns None if the region is the root lambda body or is orphaned.
+    pub fn find_region_owner(&self, region: RegionId) -> Option<NodeId> {
+        self.nodes
+            .iter()
+            .find(|(_, node)| match &node.kind {
+                NodeKind::Gamma { regions } => regions.contains(&region),
+                NodeKind::Theta { body, .. } => *body == region,
+                NodeKind::Lambda { body, .. } => *body == region,
+                _ => false,
+            })
+            .map(|(nid, _)| nid)
+    }
+
     pub fn node_debug_scope(&self, node: NodeId) -> DebugScopeId {
         self.nodes[node].debug_scope
     }
@@ -2499,13 +2513,20 @@ impl IrFunc {
                 }
                 writeln!(f, "]")?;
             }
-            NodeKind::Theta { body, .. } => {
+            NodeKind::Theta {
+                body,
+                max_iterations,
+            } => {
                 write!(f, "{pad}n{}", node_id.index())?;
                 if node.debug_scope != self.regions[node.region].debug_scope {
                     write!(f, " ")?;
                     self.fmt_scope_ref(f, node.debug_scope)?;
                 }
-                write!(f, " = theta [")?;
+                if let Some(max) = max_iterations {
+                    write!(f, " = theta(max={max}) [")?;
+                } else {
+                    write!(f, " = theta [")?;
+                }
                 for (i, inp) in node.inputs.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;

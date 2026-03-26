@@ -31,15 +31,7 @@ fn resolve_constant_source(func: &IrFunc, source: &PortSource) -> Option<usize> 
             let arg_index = func.regions[*region].args.iter().position(|a| a == arg)?;
 
             // Find the node that owns this region (must be a theta or gamma)
-            let owner_node = func
-                .nodes
-                .iter()
-                .find(|(_, node)| match &node.kind {
-                    NodeKind::Theta { body, .. } => *body == *region,
-                    NodeKind::Gamma { regions } => regions.contains(region),
-                    _ => false,
-                })
-                .map(|(nid, _)| nid)?;
+            let owner_node = func.find_region_owner(*region)?;
 
             let node = &func.nodes[owner_node];
             match &node.kind {

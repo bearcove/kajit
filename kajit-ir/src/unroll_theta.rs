@@ -304,6 +304,10 @@ fn build_unrolled_cascade(
     // Clone the body into target_region, substituting body args with input_sources
     let cloned_results = clone_body_into_region(func, body_region, target_region, input_sources);
 
+    // Run const fold on the cloned nodes to evaluate constant expressions
+    // (e.g., Mul(Const(0), Const(7)) → Const(0) for iteration 0).
+    crate::const_fold::fold_nodes_in_region(func, target_region);
+
     // cloned_results[0] = predicate, cloned_results[1..] = updated values
     let predicate = cloned_results[0];
     let updated_values: Vec<PortSource> = cloned_results[1..].to_vec();
@@ -374,14 +378,23 @@ fn build_unrolled_cascade(
         nodes: Vec::new(),
     });
 
-    // Recursively build the remaining iterations inside branch 1
-    let branch1_input_sources: Vec<PortSource> = branch1_args
+    // Recursively build the remaining iterations inside branch 1.
+    // For values that are evaluable constants (e.g., iteration counter),
+    // inject Const nodes directly into branch1_region instead of using
+    // gamma region args. This enables const_fold to propagate iteration
+    // indices through the cascade.
+    let branch1_input_sources: Vec<PortSource> = updated_values
         .iter()
-        .map(|&arg_id| {
-            PortSource::RegionArg(crate::RegionArgRef {
-                region: branch1_region,
-                arg: arg_id,
-            })
+        .zip(branch1_args.iter())
+        .map(|(src, &arg_id)| {
+            if let Some(val) = crate::const_fold::resolve_to_constant_skip_errors(func, src) {
+                crate::const_fold::create_const_in_region(func, branch1_region, debug_scope, val)
+            } else {
+                PortSource::RegionArg(crate::RegionArgRef {
+                    region: branch1_region,
+                    arg: arg_id,
+                })
+            }
         })
         .collect();
     let recursive_results = build_unrolled_cascade(
