@@ -131,14 +131,9 @@ pub fn allocate(
     }
 
     // Phase 3: Coalesce — bounded phi-affinity recoloring
-    // DISABLED: the coalesce phase has a bug where it recolors vregs without
-    // properly checking interference through loop back-edges. This causes
-    // values live across loop bodies to share registers with temporaries
-    // inside the loop. The phi resolution handles non-coalesced copies
-    // correctly, so disabling coalescing is safe (just less efficient).
-    // TODO: fix the interference check in coalesce_phase to handle
-    // block params and loop-carried values correctly.
-    let coloring = if std::env::var("KAJIT_COALESCE").is_ok() {
+    // For each phi edge arg (source→target), try to recolor one side to match
+    // the other, eliminating the copy on that edge.
+    let coloring = if std::env::var("KAJIT_NO_COALESCE").is_err() {
         coalesce_phase(
             func,
             liveness,
