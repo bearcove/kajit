@@ -169,10 +169,8 @@ fn run_dead_code_elimination_pass(func: &mut IrFunc) {
 }
 
 fn run_unroll_bounded_thetas_pass(func: &mut IrFunc) {
-    if std::env::var("KAJIT_UNROLL").is_ok() {
-        crate::unroll_theta::unroll_bounded_thetas(func);
-        debug_verify(func, "unroll_bounded_thetas");
-    }
+    crate::unroll_theta::unroll_bounded_thetas(func);
+    debug_verify(func, "unroll_bounded_thetas");
 }
 
 fn run_const_fold_pass(func: &mut IrFunc) {
