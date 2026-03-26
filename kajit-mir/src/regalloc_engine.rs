@@ -1306,11 +1306,12 @@ pub fn allocate_cfg_program_regalloc3_native(
         .map_err(|err| RegallocEngineError::Checker(err.to_string()))?;
 
     // Get ABI info for current architecture
-    // Reserved: x9-x11 (backend scratch), x18 (platform), x19-x22 (cursor/ctx)
+    // Reserved: x9-x11 (backend scratch), x16 (phi-copy temp), x17 (IP1), x18 (platform), x19-x22 (cursor/ctx)
     let abi = &machine_inst::AbiInfo {
         #[cfg(target_arch = "aarch64")]
         caller_saved_gpr: &[
-            // x0-x8, x12-x17 (excluding x9-x11 scratch, x18 platform)
+            // x0-x8, x12-x15 (excluding x9-x11 scratch, x16 phi-copy temp,
+            // x17 reserved IP1, x18 platform)
             machine_inst::PReg(0),
             machine_inst::PReg(1),
             machine_inst::PReg(2),
@@ -1324,8 +1325,6 @@ pub fn allocate_cfg_program_regalloc3_native(
             machine_inst::PReg(13),
             machine_inst::PReg(14),
             machine_inst::PReg(15),
-            machine_inst::PReg(16),
-            machine_inst::PReg(17),
         ],
         #[cfg(target_arch = "aarch64")]
         callee_saved_gpr: &[
@@ -1411,7 +1410,8 @@ pub fn allocate_cfg_program_regalloc3_native(
             linear_scan::Allocation::Reg(crate::regalloc3::machine_inst::PReg(16)),
         ); // x16 = IP0 scratch
 
-        let force_all_copies = std::env::var("KAJIT_NO_COALESCE").is_ok();
+        let force_all_copies = std::env::var("KAJIT_NO_COALESCE").is_ok()
+            || std::env::var("KAJIT_FORCE_ALL_COPIES").is_ok();
         if force_all_copies {
             critical_edge::split_critical_edges(&mut func_mut);
             phi_resolution::insert_phi_copies(&mut func_mut, temp_vreg);

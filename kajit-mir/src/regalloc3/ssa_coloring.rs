@@ -143,6 +143,7 @@ pub fn allocate(
             coloring,
             &spilled,
             &callee_saved_set,
+            &allocatable,
         )
     } else {
         coloring
@@ -914,10 +915,18 @@ fn preferred_color(
 
 // ─── Phase 3: Coalesce ──────────────────────────────────────────────────────
 
-/// Bounded phi-affinity recoloring.
+/// Bounded depth for recursive recoloring per phi bundle.
+/// Set to 0 to disable recursive displacement (equivalent to the old can_recolor).
+const MAX_RECOLOR_DEPTH: usize = 0;
+/// Maximum blockers to displace at each recursion level.
+const MAX_BLOCKERS_WIDTH: usize = 2;
+
+/// Bounded phi-affinity recoloring (Hack/Grund/Goos style).
 ///
 /// For each edge arg (phi connection), if source and target got different
-/// colors, try to recolor the target to match the source (or vice versa).
+/// colors, try to recolor one to match the other. If direct recoloring is
+/// blocked by an interfering neighbor, recursively try to displace the blocker
+/// to a different color (bounded by depth and width limits).
 fn coalesce_phase(
     func: &Function,
     liveness: &LivenessInfo,
@@ -926,6 +935,7 @@ fn coalesce_phase(
     mut coloring: HashMap<VReg, PReg>,
     spilled: &BTreeSet<VReg>,
     callee_saved_set: &HashSet<PReg>,
+    allocatable: &[PReg],
 ) -> HashMap<VReg, PReg> {
     // Pre-compute: which vregs are live across a clobbering instruction.
     // These must NOT be recolored to caller-saved registers.
@@ -941,7 +951,6 @@ fn coalesce_phase(
         if !has_clobber {
             continue;
         }
-        // Every vreg that's live-out of this block must be callee-saved
         if let Some(live_out) = liveness.live_out.get(&block.id) {
             for &vreg in live_out {
                 if !spilled.contains(&vreg) {
@@ -949,7 +958,6 @@ fn coalesce_phase(
                 }
             }
         }
-        // Edge arg sources must also survive the call
         for &edge_id in &block.succs {
             let edge = &func.edges[edge_id.index()];
             if edge.from.0 == u32::MAX {
@@ -963,10 +971,8 @@ fn coalesce_phase(
         }
     }
 
-    // Iterate phi-affinity recoloring to a fixed point.
-    // A single pass can miss opportunities where recoloring A requires
-    // first recoloring B (which blocks A's target color). Multiple passes
-    // allow cascading recolors.
+    // Iterate phi-affinity recoloring to a fixed point with bounded
+    // recursive recoloring (Hack/Grund/Goos style).
     let max_rounds = 10;
     for _round in 0..max_rounds {
         let mut changed = false;
@@ -983,27 +989,53 @@ fn coalesce_phase(
                 let source_color = coloring.get(&arg.source).copied();
 
                 if target_color == source_color {
-                    continue; // already coalesced
+                    continue;
                 }
 
                 let (Some(tc), Some(sc)) = (target_color, source_color) else {
                     continue;
                 };
 
-                let target_ok =
-                    !must_be_callee_saved.contains(&arg.target) || callee_saved_set.contains(&sc);
-                let source_ok =
-                    !must_be_callee_saved.contains(&arg.source) || callee_saved_set.contains(&tc);
-
-                if target_ok
-                    && can_recolor(arg.target, sc, &coloring, liveness, dom, def_block, spilled)
-                {
-                    coloring.insert(arg.target, sc);
+                // Try to recolor target to match source
+                let mut visited = HashSet::new();
+                let mut recolor_changes = Vec::new();
+                if try_recolor_recursive(
+                    arg.target,
+                    sc,
+                    0,
+                    &mut coloring,
+                    liveness,
+                    dom,
+                    def_block,
+                    spilled,
+                    &must_be_callee_saved,
+                    callee_saved_set,
+                    allocatable,
+                    &mut visited,
+                    &mut recolor_changes,
+                ) {
                     changed = true;
-                } else if source_ok
-                    && can_recolor(arg.source, tc, &coloring, liveness, dom, def_block, spilled)
-                {
-                    coloring.insert(arg.source, tc);
+                    continue;
+                }
+
+                // Try to recolor source to match target
+                visited.clear();
+                recolor_changes.clear();
+                if try_recolor_recursive(
+                    arg.source,
+                    tc,
+                    0,
+                    &mut coloring,
+                    liveness,
+                    dom,
+                    def_block,
+                    spilled,
+                    &must_be_callee_saved,
+                    callee_saved_set,
+                    allocatable,
+                    &mut visited,
+                    &mut recolor_changes,
+                ) {
                     changed = true;
                 }
             }
@@ -1017,47 +1049,151 @@ fn coalesce_phase(
     coloring
 }
 
-/// Check if vreg can be safely recolored to new_color.
+/// Try to recolor `vreg` to `desired_color`, recursively displacing blockers.
 ///
-/// Safe iff no interfering neighbor currently uses new_color.
-/// SSA interference: v and w interfere iff def(v) dominates def(w) and v is
-/// live at def(w), or vice versa.
-///
-/// "Live at def(w)" means:
-/// - v is in live_in of w's block, OR
-/// - v is defined in the SAME block as w, before w, and v is live-out or
-///   used after w's definition point.
-fn can_recolor(
+/// On success, `coloring` is updated and true is returned.
+/// On failure, all speculative changes are rolled back and false is returned.
+fn try_recolor_recursive(
     vreg: VReg,
-    new_color: PReg,
-    coloring: &HashMap<VReg, PReg>,
+    desired_color: PReg,
+    depth: usize,
+    coloring: &mut HashMap<VReg, PReg>,
     liveness: &LivenessInfo,
     dom: &DominanceInfo,
     def_block: &HashMap<VReg, BlockId>,
     spilled: &BTreeSet<VReg>,
+    must_be_callee_saved: &HashSet<VReg>,
+    callee_saved_set: &HashSet<PReg>,
+    allocatable: &[PReg],
+    visited: &mut HashSet<VReg>,
+    changes: &mut Vec<(VReg, PReg)>,
 ) -> bool {
-    let Some(&vreg_def_block) = def_block.get(&vreg) else {
+    if depth > MAX_RECOLOR_DEPTH {
+        return false;
+    }
+
+    let Some(&current_color) = coloring.get(&vreg) else {
         return false;
     };
 
-    // Check all other vregs that have new_color — do any interfere with vreg?
-    for (&other, &other_color) in coloring.iter() {
-        if other == vreg || other_color != new_color {
-            continue;
-        }
-        if spilled.contains(&other) {
-            continue;
-        }
-        let Some(&other_def_block) = def_block.get(&other) else {
-            continue;
-        };
+    if current_color == desired_color {
+        return true;
+    }
 
-        // Check interference using SSA dominance property
-        if interferes(vreg, vreg_def_block, other, other_def_block, liveness, dom) {
+    // Prevent cycles in recursive chain
+    if !visited.insert(vreg) {
+        return false;
+    }
+
+    // Callee-saved constraint
+    if must_be_callee_saved.contains(&vreg) && !callee_saved_set.contains(&desired_color) {
+        visited.remove(&vreg);
+        return false;
+    }
+
+    // Must be an allocatable register
+    if !allocatable.contains(&desired_color) {
+        visited.remove(&vreg);
+        return false;
+    }
+
+    let Some(&vreg_def_block) = def_block.get(&vreg) else {
+        visited.remove(&vreg);
+        return false;
+    };
+
+    // Find interfering neighbors that currently hold desired_color
+    let blockers: Vec<VReg> = coloring
+        .iter()
+        .filter(|&(&other, &color)| {
+            other != vreg && color == desired_color && !spilled.contains(&other)
+        })
+        .filter(|&(&other, _)| {
+            let Some(&other_block) = def_block.get(&other) else {
+                return false;
+            };
+            interferes(vreg, vreg_def_block, other, other_block, liveness, dom)
+        })
+        .map(|(&other, _)| other)
+        .collect();
+
+    // Width budget
+    if blockers.len() > MAX_BLOCKERS_WIDTH {
+        visited.remove(&vreg);
+        return false;
+    }
+
+    if blockers.is_empty() {
+        // No blockers — safe to recolor directly
+        changes.push((vreg, current_color));
+        coloring.insert(vreg, desired_color);
+        return true;
+    }
+
+    // Snapshot for rollback
+    let snapshot = changes.len();
+
+    // Try to displace each blocker to a different color
+    for &blocker in &blockers {
+        let mut moved = false;
+
+        for &alt_color in allocatable {
+            if alt_color == desired_color {
+                continue;
+            }
+            if try_recolor_recursive(
+                blocker,
+                alt_color,
+                depth + 1,
+                coloring,
+                liveness,
+                dom,
+                def_block,
+                spilled,
+                must_be_callee_saved,
+                callee_saved_set,
+                allocatable,
+                visited,
+                changes,
+            ) {
+                moved = true;
+                break;
+            }
+        }
+
+        if !moved {
+            // Failed — rollback all changes since snapshot
+            while changes.len() > snapshot {
+                let (v, old_c) = changes.pop().unwrap();
+                coloring.insert(v, old_c);
+            }
+            visited.remove(&vreg);
             return false;
         }
     }
 
+    // Re-verify: displacing blockers may have moved a vreg INTO desired_color.
+    let still_blocked = coloring.iter().any(|(&other, &color)| {
+        if other == vreg || color != desired_color || spilled.contains(&other) {
+            return false;
+        }
+        let Some(&other_block) = def_block.get(&other) else {
+            return false;
+        };
+        interferes(vreg, vreg_def_block, other, other_block, liveness, dom)
+    });
+    if still_blocked {
+        while changes.len() > snapshot {
+            let (v, old_c) = changes.pop().unwrap();
+            coloring.insert(v, old_c);
+        }
+        visited.remove(&vreg);
+        return false;
+    }
+
+    // All clear — recolor vreg
+    changes.push((vreg, current_color));
+    coloring.insert(vreg, desired_color);
     true
 }
 
