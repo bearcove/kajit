@@ -184,6 +184,7 @@ mod tests {
         liveness::LivenessInfo,
         progpoint::{LiveInterval, ProgPoint},
     };
+    use indexmap::IndexMap;
     use std::collections::HashMap;
 
     const TEST_SCRATCH: ScratchPolicy = ScratchPolicy {

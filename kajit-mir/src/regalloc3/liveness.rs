@@ -344,7 +344,8 @@ impl<'a> LivenessAnalyzer<'a> {
 mod tests {
     use super::*;
     use crate::cfg_mir::{
-        Block, Clobbers, Edge, EdgeArg, Function, Inst, Operand, OperandKind, RegClass, Terminator,
+        Block, Clobbers, Edge, EdgeArg, EdgeId, Function, Inst, Operand, OperandKind, RegClass,
+        Terminator,
     };
     use kajit_lir::LinearOp;
 
