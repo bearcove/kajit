@@ -1,5 +1,6 @@
 #[test]
 #[cfg(target_arch = "aarch64")]
+#[ignore] // requires pre-generated dump files
 fn test_parse_and_roundtrip_scalar_u32() {
     // Find workspace root by walking up from CARGO_MANIFEST_DIR
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
