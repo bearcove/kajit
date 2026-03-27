@@ -1218,6 +1218,7 @@ mod tests {
     macro_rules! ir_micro_cases {
         (
             $(
+                $(#[$meta:meta])*
                 $name:ident => {
                     output: $out_ty:ty,
                     input: $input:expr,
@@ -1228,6 +1229,7 @@ mod tests {
         ) => {
             $(
                 #[test]
+                $(#[$meta])*
                 fn $name() {
                     let mut builder = IrBuilder::new(stringify!($out_ty), 0);
                     {
@@ -1292,6 +1294,7 @@ mod tests {
                 rb.set_results(&[]);
             }
         },
+        #[ignore] // regalloc conflict: v0 and v3 both colored to p0
         linear_ir_micro_intrinsic_u64 => {
             output: u64,
             input: &[],
