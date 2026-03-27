@@ -1099,13 +1099,12 @@ impl<'a> Linearizer<'a> {
             return;
         }
 
-        // Try chain-exit lowering: if we're inside a passthrough-exit chain's
-        // continue branch and this gamma has a passthrough branch, lower the
-        // non-passthrough ("done") branch as a direct exit to the chain's landing.
-        // This eliminates the merge block for control-only flag outputs.
-        // Gated behind KAJIT_CHAIN_EXIT=1 until merge_blocks and simplify_cfg
-        // are fixed to handle the new CFG shape.
-        if std::env::var("KAJIT_CHAIN_EXIT").is_ok() {
+        // Inner chain-exit disabled: the continue branch may not be passthrough,
+        // so copying gamma inputs to outputs produces wrong values. The outer
+        // passthrough-exit chain handles the cascade correctly without this.
+        // TODO: re-enable when inner chain-exit properly linearizes or projects
+        // the continue branch's non-passthrough results.
+        if false {
             if self.try_linearize_inner_chain_exit(node_id, regions) {
                 return;
             }
@@ -1483,7 +1482,6 @@ impl<'a> Linearizer<'a> {
                 let state: Vec<VReg> = (0..data_output_count)
                     .map(|i| self.resolve_vreg(node.inputs[i + 1].source))
                     .collect();
-                // Identity mapping: output j = landing param j
                 let mapping: Vec<usize> = (0..data_output_count).collect();
                 (label, vregs, state, mapping)
             });
@@ -1616,19 +1614,18 @@ impl<'a> Linearizer<'a> {
                 }
             }
 
-            eprintln!(
-                "[passthrough-exit] chain: tail gamma #{}, tail_output_to_landing={:?}, state_env={:?}",
-                tail_id.index(),
-                tail_output_to_landing,
-                state_env
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| format!("{}→v{}", i, v.index()))
-                    .collect::<Vec<_>>()
-            );
-
-            // Keep placeholders — indexing must match tail gamma output positions.
-            // Entries with usize::MAX mean "this output doesn't map to any landing param."
+            if std::env::var("KAJIT_DEBUG_CHAIN_EXIT").is_ok() {
+                eprintln!(
+                    "[passthrough-exit] chain: tail gamma #{}, tail_output_to_landing={:?}, state_env={:?}",
+                    tail_id.index(),
+                    tail_output_to_landing,
+                    state_env
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| format!("{}→v{}", i, v.index()))
+                        .collect::<Vec<_>>()
+                );
+            }
 
             // Recurse with updated state and tail mapping
             let NodeKind::Gamma { regions: tr } = &self.func.nodes[tail_id].kind else {
@@ -1730,11 +1727,22 @@ impl<'a> Linearizer<'a> {
             return false;
         }
 
+        // The passthrough branch = "done" (data unchanged = varint complete).
+        // Exit to landing when the passthrough/done branch is selected.
+        // The non-passthrough branch = "continue" (more data to read).
         let (continue_branch, done_branch, done_on_nonzero) = if b0_pt {
-            (regions[0], regions[1], true)
-        } else {
+            // b0 is passthrough: done when pred=0, exit on zero
             (regions[1], regions[0], false)
+        } else {
+            // b1 is passthrough: done when pred!=0, exit on nonzero
+            (regions[0], regions[1], true)
         };
+
+        // Don't apply chain-exit to bounds-check gammas (where one branch is
+        // error-only). Chain-exit is for is_more checks, not error guards.
+        if self.region_is_error_only(done_branch) || self.region_is_error_only(continue_branch) {
+            return false;
+        }
 
         let node = &self.func.nodes[node_id];
         let state_count = self.func.state_domains.len();

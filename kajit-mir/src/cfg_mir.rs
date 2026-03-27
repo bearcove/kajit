@@ -232,6 +232,96 @@ impl fmt::Display for CfgMirError {
 impl std::error::Error for CfgMirError {}
 
 impl Function {
+    /// Rebuild all blocks' preds and succs lists from the edge list.
+    /// Edges are the source of truth — call this after any structural CFG rewrite.
+    pub fn rebuild_preds_succs(&mut self) {
+        for block in &mut self.blocks {
+            block.preds.clear();
+            block.succs.clear();
+        }
+        for edge in &self.edges {
+            if edge.from.index() < self.blocks.len() {
+                self.blocks[edge.from.index()].succs.push(edge.id);
+            }
+            if edge.to.index() < self.blocks.len() {
+                self.blocks[edge.to.index()].preds.push(edge.id);
+            }
+        }
+    }
+
+    /// Remove edges that no terminator references, then rebuild preds/succs
+    /// and renumber edges to be contiguous. This fixes orphaned edges left by
+    /// block removal or merge operations.
+    pub fn gc_edges(&mut self) {
+        use std::collections::{HashMap, HashSet};
+
+        // Collect all edges referenced by terminators
+        let mut referenced: HashSet<EdgeId> = HashSet::new();
+        for block in &self.blocks {
+            if block.dead {
+                continue;
+            }
+            let term = &self.terms[block.term.index()];
+            for eid in term.successor_edges() {
+                referenced.insert(eid);
+            }
+        }
+
+        // Build new edge list with only referenced edges, renumbered
+        let mut old_to_new: HashMap<EdgeId, EdgeId> = HashMap::new();
+        let mut new_edges = Vec::new();
+        for edge in &self.edges {
+            if referenced.contains(&edge.id) {
+                let new_id = EdgeId::new(new_edges.len() as u32);
+                old_to_new.insert(edge.id, new_id);
+                let mut e = edge.clone();
+                e.id = new_id;
+                new_edges.push(e);
+            }
+        }
+        self.edges = new_edges;
+
+        // Update edge IDs in terminators
+        for term in &mut self.terms {
+            match term {
+                Terminator::Branch { edge } => {
+                    if let Some(&new) = old_to_new.get(edge) {
+                        *edge = new;
+                    }
+                }
+                Terminator::BranchIf {
+                    taken, fallthrough, ..
+                }
+                | Terminator::BranchIfZero {
+                    taken, fallthrough, ..
+                } => {
+                    if let Some(&new) = old_to_new.get(taken) {
+                        *taken = new;
+                    }
+                    if let Some(&new) = old_to_new.get(fallthrough) {
+                        *fallthrough = new;
+                    }
+                }
+                Terminator::JumpTable {
+                    targets, default, ..
+                } => {
+                    for t in targets.iter_mut() {
+                        if let Some(&new) = old_to_new.get(t) {
+                            *t = new;
+                        }
+                    }
+                    if let Some(&new) = old_to_new.get(default) {
+                        *default = new;
+                    }
+                }
+                Terminator::Return | Terminator::ErrorExit { .. } => {}
+            }
+        }
+
+        // Rebuild preds/succs from the cleaned edge list
+        self.rebuild_preds_succs();
+    }
+
     pub fn block(&self, id: BlockId) -> Option<&Block> {
         self.blocks.get(id.index())
     }
@@ -1959,12 +2049,15 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
     if opts.enabled("const_branch_fold") {
         for func in &mut cfg.funcs {
             crate::opt::const_branch_fold::fold_const_branches(func);
+            // GC orphaned edges after branch folding may remove blocks
+            func.gc_edges();
         }
         validate_after("const_branch_fold", &cfg);
     }
     if opts.enabled("simplify_cfg") {
         for func in &mut cfg.funcs {
             crate::opt::simplify_cfg::simplify_cfg(func, &mut cfg.vreg_count);
+            func.gc_edges();
         }
         validate_after("simplify_cfg", &cfg);
     }

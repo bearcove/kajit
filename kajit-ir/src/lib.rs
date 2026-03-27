@@ -4,6 +4,7 @@ pub mod hints;
 pub mod interpret;
 mod ir;
 pub(crate) mod ir_passes;
+pub mod post_unroll_canonicalize;
 pub mod provenance;
 pub mod reduce;
 pub mod simplify_gamma;

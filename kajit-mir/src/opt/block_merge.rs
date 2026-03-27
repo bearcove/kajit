@@ -32,6 +32,7 @@ use kajit_ir::VReg;
 /// Returns true if any changes were made.
 pub fn merge_empty_blocks(func: &mut Function) -> bool {
     let debug = std::env::var("KAJIT_DEBUG_BLOCK_MERGE").is_ok();
+
     let mut total_merged = 0;
 
     loop {
@@ -60,6 +61,11 @@ pub fn merge_empty_blocks(func: &mut Function) -> bool {
     // Physically remove dead blocks immediately to avoid index remapping issues
     if total_merged > 0 {
         remove_unreachable_blocks(func);
+
+        // GC orphaned edges and rebuild preds/succs.
+        // Merging + unreachable removal can leave orphaned edges (from dead
+        // blocks whose edges survived because endpoints were retargeted).
+        func.gc_edges();
 
         // Validate CFG consistency after removal
         if let Err(errors) = crate::opt::validate::validate_cfg(func) {

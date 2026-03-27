@@ -220,11 +220,14 @@ impl<'a> EmitContext<'a> {
 
     /// Emit a single instruction.
     fn emit_inst(&mut self, inst: &Inst) {
-        // Skip instructions whose outputs were fused into bfi
-        if let LinearOp::BinOp { dst, .. } = &inst.op {
-            if self.fused_skip.contains(dst) {
-                return;
+        // Skip instructions whose outputs were fused (bfi, bit-test, etc.)
+        match &inst.op {
+            LinearOp::BinOp { dst, .. } | LinearOp::Const { dst, .. } => {
+                if self.fused_skip.contains(dst) {
+                    return;
+                }
             }
+            _ => {}
         }
         match &inst.op {
             LinearOp::Copy { dst, src } => {
@@ -239,6 +242,12 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::Const { dst, value } => {
+                // Skip immediate-only consts (operands cleared by elim_imm).
+                // The const value is still available via const_of() for
+                // instructions that use immediate encoding.
+                if inst.operands.is_empty() {
+                    return;
+                }
                 if let Some(preg) = self.preg_for_vreg(*dst) {
                     self.emit_load_u64(self.preg_to_reg(preg), *value);
                 } else if self.alloc_func.rematerializable.contains_key(dst) {
@@ -590,22 +599,37 @@ impl<'a> EmitContext<'a> {
                 | BinOpKind::CmpGt
                 | BinOpKind::CmpGe
         ) {
-            let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X9);
-            // Fold rhs constant into cmp immediate
-            if let Some(imm) = self.small_const(rhs) {
+            // Fold rhs constant into cmp immediate.
+            // If lhs is a small const and rhs is not, swap operands and invert
+            // the condition to use cmp imm (e.g., CmpGt(1, x) → cmp x, #1 + Lo).
+            let (cmp_lhs, cmp_rhs, swapped) = if self.small_const(rhs).is_some() {
+                (lhs, rhs, false)
+            } else if self.small_const(lhs).is_some() {
+                (rhs, lhs, true)
+            } else {
+                (lhs, rhs, false)
+            };
+
+            let cmp_lhs_reg = self.reg_for_vreg_with_temp(cmp_lhs, Reg::X9);
+            if let Some(imm) = self.small_const(cmp_rhs) {
                 self.ectx
                     .emit
-                    .emit_cmp_imm(Width::X64, lhs_reg, imm)
+                    .emit_cmp_imm(Width::X64, cmp_lhs_reg, imm)
                     .expect("cmp imm");
             } else {
-                let rhs_reg = self.reg_for_vreg_with_temp(rhs, Reg::X10);
+                let cmp_rhs_reg = self.reg_for_vreg_with_temp(cmp_rhs, Reg::X10);
                 self.ectx
                     .emit
-                    .emit_cmp_reg(Width::X64, lhs_reg, rhs_reg)
+                    .emit_cmp_reg(Width::X64, cmp_lhs_reg, cmp_rhs_reg)
                     .expect("cmp");
             }
             // Skip cset if this comparison is fused with its branch terminator
             if self.fused_cmps.contains_key(&dst) {
+                // Update the fused condition if we swapped operands
+                if swapped {
+                    let cc = self.fused_cmps.get_mut(&dst).unwrap();
+                    *cc = cc.swap_operands();
+                }
                 return;
             }
             let condition = match kind {
@@ -616,6 +640,12 @@ impl<'a> EmitContext<'a> {
                 BinOpKind::CmpGt => Condition::Hi,
                 BinOpKind::CmpGe => Condition::Hs,
                 _ => unreachable!(),
+            };
+            // Swap the condition if we swapped operands
+            let condition = if swapped {
+                condition.swap_operands()
+            } else {
+                condition
             };
             // Emit cset directly into dst register if possible
             let cset_dst = if let Some(preg) = self.preg_for_vreg(dst) {
@@ -696,6 +726,20 @@ impl<'a> EmitContext<'a> {
                     .expect("mul");
             }
             BinOpKind::And => {
+                // Try logical immediate encoding
+                if let Some(&val) = self.const_values.get(&rhs) {
+                    if self
+                        .ectx
+                        .emit
+                        .emit_and_imm(Width::X64, result_reg, lhs_reg, val)
+                        .is_ok()
+                    {
+                        if result_reg == Reg::X11 {
+                            self.store_to_vreg(dst, result_reg);
+                        }
+                        return;
+                    }
+                }
                 self.ectx
                     .emit
                     .emit_and_reg(Width::X64, result_reg, lhs_reg, rhs_reg)
@@ -735,12 +779,38 @@ impl<'a> EmitContext<'a> {
                     .expect("eor");
             }
             BinOpKind::Shl => {
+                // Try immediate encoding for constant shift amounts
+                if let Some(&val) = self.const_values.get(&rhs) {
+                    if val < 64 {
+                        self.ectx
+                            .emit
+                            .emit_lsl_imm(Width::X64, result_reg, lhs_reg, val as u8)
+                            .expect("lsl imm");
+                        if result_reg == Reg::X11 {
+                            self.store_to_vreg(dst, result_reg);
+                        }
+                        return;
+                    }
+                }
                 self.ectx
                     .emit
                     .emit_lsl_reg(Width::X64, result_reg, lhs_reg, rhs_reg)
                     .expect("lsl");
             }
             BinOpKind::Shr => {
+                // Try immediate encoding for constant shift amounts
+                if let Some(&val) = self.const_values.get(&rhs) {
+                    if val < 64 {
+                        self.ectx
+                            .emit
+                            .emit_lsr_imm(Width::X64, result_reg, lhs_reg, val as u8)
+                            .expect("lsr imm");
+                        if result_reg == Reg::X11 {
+                            self.store_to_vreg(dst, result_reg);
+                        }
+                        return;
+                    }
+                }
                 self.ectx
                     .emit
                     .emit_lsr_reg(Width::X64, result_reg, lhs_reg, rhs_reg)
@@ -1265,6 +1335,93 @@ impl<'a> EmitContext<'a> {
         (bfi_map, skip_set)
     }
 
+    /// Detect And-bit-test patterns whose results are only used by terminators.
+    /// Add the And vreg and its power-of-2 mask const vreg to skip_set so they
+    /// don't get emitted as separate instructions (the branch uses tbnz/tbz directly).
+    fn compute_fusable_bit_tests(
+        func: &Function,
+        const_values: &HashMap<kajit_ir::VReg, u64>,
+        skip_set: &mut std::collections::HashSet<kajit_ir::VReg>,
+    ) {
+        // Count uses of each vreg across the entire function
+        let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
+        for block in &func.blocks {
+            if block.dead {
+                continue;
+            }
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id.index()];
+                inst.op.for_each_use(|src| {
+                    *use_counts.entry(*src).or_default() += 1;
+                });
+            }
+            let term = &func.terms[block.term.0 as usize];
+            match term {
+                Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                    *use_counts.entry(*cond).or_default() += 1;
+                }
+                Terminator::JumpTable { predicate, .. } => {
+                    *use_counts.entry(*predicate).or_default() += 1;
+                }
+                _ => {}
+            }
+            for &edge_id in &block.succs {
+                let edge = &func.edges[edge_id.index()];
+                for arg in &edge.args {
+                    *use_counts.entry(arg.source).or_default() += 1;
+                }
+            }
+        }
+        for &vreg in &func.data_results {
+            *use_counts.entry(vreg).or_default() += 1;
+        }
+
+        // Find And(x, power_of_2) patterns whose result vreg has exactly 1 use
+        // (the terminator) and is not already in skip_set.
+        for inst in &func.insts {
+            if let LinearOp::BinOp {
+                op: BinOpKind::And,
+                dst,
+                lhs,
+                rhs,
+            } = &inst.op
+            {
+                if skip_set.contains(dst) {
+                    continue;
+                }
+                let and_use_count = use_counts.get(dst).copied().unwrap_or(0);
+                if and_use_count != 1 {
+                    continue;
+                }
+                // Check if rhs or lhs is a power-of-2 constant
+                let mask_vreg = if let Some(&val) = const_values.get(rhs) {
+                    if val.is_power_of_two() {
+                        Some(*rhs)
+                    } else {
+                        None
+                    }
+                } else if let Some(&val) = const_values.get(lhs) {
+                    if val.is_power_of_two() {
+                        Some(*lhs)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(mask_vreg) = mask_vreg {
+                    // Check that the mask const is also only used by this And
+                    let mask_use_count = use_counts.get(&mask_vreg).copied().unwrap_or(0);
+                    if mask_use_count == 1 {
+                        skip_set.insert(*dst);
+                        skip_set.insert(mask_vreg);
+                    }
+                }
+            }
+        }
+    }
+
     /// Emit a terminator. `next_block` is the block that follows in emission order (for fallthrough elision).
     fn emit_terminator(&mut self, term: &Terminator, next_block: Option<cfg_mir::BlockId>) {
         match term {
@@ -1496,7 +1653,8 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             .collect();
 
         let fused_cmps = EmitContext::compute_fusable_cmps(func);
-        let (fused_bfi, fused_skip) = EmitContext::compute_fusable_bfis(func, &const_values);
+        let (fused_bfi, mut fused_skip) = EmitContext::compute_fusable_bfis(func, &const_values);
+        EmitContext::compute_fusable_bit_tests(func, &const_values, &mut fused_skip);
 
         // For leaf functions: keep output_ptr in x0 and ctx_ptr in x1
         // (avoids saving/restoring x21/x22 and the arg moves).

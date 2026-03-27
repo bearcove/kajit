@@ -240,6 +240,24 @@ impl Condition {
             Self::Le => Self::Gt,
         }
     }
+
+    /// Swap operands: return the condition that tests `b op a` given `a op b`.
+    /// E.g., Hi (a > b unsigned) → Lo (b < a unsigned) ≡ Lo.
+    pub fn swap_operands(self) -> Self {
+        match self {
+            Self::Eq => Self::Eq,
+            Self::Ne => Self::Ne,
+            Self::Hi => Self::Lo,
+            Self::Lo => Self::Hi,
+            Self::Hs => Self::Ls,
+            Self::Ls => Self::Hs,
+            Self::Gt => Self::Lt,
+            Self::Lt => Self::Gt,
+            Self::Ge => Self::Le,
+            Self::Le => Self::Ge,
+            other => other, // Mi/Pl/Vs/Vc don't have swap semantics
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

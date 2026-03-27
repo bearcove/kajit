@@ -173,6 +173,11 @@ fn run_unroll_bounded_thetas_pass(func: &mut IrFunc) {
     debug_verify(func, "unroll_bounded_thetas");
 }
 
+fn run_post_unroll_canonicalize_pass(func: &mut IrFunc) {
+    crate::post_unroll_canonicalize::post_unroll_canonicalize(func);
+    debug_verify(func, "post_unroll_canonicalize");
+}
+
 fn run_const_fold_pass(func: &mut IrFunc) {
     crate::const_fold::const_fold(func);
     debug_verify(func, "const_fold");
@@ -207,7 +212,7 @@ fn run_slot_to_reg_pass(func: &mut IrFunc) {
     debug_verify(func, "slot_to_reg");
 }
 
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 9] = [
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 10] = [
     DefaultPassSpec {
         name: "slot_to_reg",
         description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
@@ -232,6 +237,11 @@ const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 9] = [
         name: "unroll_bounded_thetas",
         description: "Unroll theta loops with known max iteration count into gamma cascades.",
         run: run_unroll_bounded_thetas_pass,
+    },
+    DefaultPassSpec {
+        name: "post_unroll_canonicalize",
+        description: "Environment-driven constant folding and gamma simplification after unrolling.",
+        run: run_post_unroll_canonicalize_pass,
     },
     DefaultPassSpec {
         name: "const_fold",

@@ -96,6 +96,10 @@ fn simplify_in_region(func: &mut IrFunc, region_id: RegionId, debug: bool) -> bo
     let nodes = func.regions[region_id].nodes.clone();
 
     for &node_id in &nodes {
+        // Skip nodes that have been moved to a different region by a previous fold.
+        if func.nodes[node_id].region != region_id {
+            continue;
+        }
         let NodeKind::Gamma { regions } = &func.nodes[node_id].kind else {
             continue;
         };

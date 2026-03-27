@@ -548,6 +548,33 @@ impl fmt::Debug for Node {
 // r[impl ir.rvsdg.nodes.lambda]
 // r[impl ir.rvsdg.nodes.apply]
 
+/// What kind of use a consumer makes of a node output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputUseKind {
+    /// Used as a gamma node's predicate (input 0).
+    GammaPredicate,
+    /// Used as a normal data input to a node.
+    DataInput,
+    /// Used as a region result (value leaving the region).
+    RegionExit,
+}
+
+/// Where a node output is consumed.
+#[derive(Debug, Clone)]
+pub enum ConsumerKind {
+    /// Consumed by another node's input port.
+    NodeInput { node: NodeId, input_index: u16 },
+    /// Consumed by a region result (exits the region).
+    RegionResult { result: ResultId },
+}
+
+/// A consumer of a node output.
+#[derive(Debug, Clone)]
+pub struct OutputConsumer {
+    pub kind: ConsumerKind,
+    pub use_kind: OutputUseKind,
+}
+
 /// The type-specific payload of a node.
 #[derive(Debug, Clone)]
 pub enum NodeKind {
@@ -1015,6 +1042,133 @@ impl IrFunc {
     /// Total number of stack slots allocated.
     pub fn slot_count(&self) -> u32 {
         self.slot_count
+    }
+
+    /// Find all consumers of a specific node output within the node's parent region.
+    ///
+    /// Returns a list of `OutputConsumer` entries describing each use.
+    pub fn find_output_consumers(&self, node_id: NodeId, output_index: u16) -> Vec<OutputConsumer> {
+        let target = PortSource::Node(OutputRef {
+            node: node_id,
+            index: output_index,
+        });
+        let parent_region = self.nodes[node_id].region;
+        let region = &self.regions[parent_region];
+        let mut consumers = Vec::new();
+
+        // Check node inputs in the same region
+        for &nid in &region.nodes {
+            let consumer_node = &self.nodes[nid];
+            for (input_idx, input) in consumer_node.inputs.iter().enumerate() {
+                if input.source == target {
+                    let use_kind = match &consumer_node.kind {
+                        // Input 0 of a gamma is always the predicate
+                        NodeKind::Gamma { .. } if input_idx == 0 => OutputUseKind::GammaPredicate,
+                        _ => OutputUseKind::DataInput,
+                    };
+                    consumers.push(OutputConsumer {
+                        kind: ConsumerKind::NodeInput {
+                            node: nid,
+                            input_index: input_idx as u16,
+                        },
+                        use_kind,
+                    });
+                }
+            }
+        }
+
+        // Check region results (value leaving the region)
+        for &rid in &region.results {
+            let result = &self.region_results[rid];
+            if result.source == target {
+                consumers.push(OutputConsumer {
+                    kind: ConsumerKind::RegionResult { result: rid },
+                    use_kind: OutputUseKind::RegionExit,
+                });
+            }
+        }
+
+        consumers
+    }
+
+    /// Check if a gamma node's data output is "chain-control-only":
+    /// a boolean flag that is {passthrough, const} or {passthrough, another_gamma_output}
+    /// where the other gamma output is itself chain-control-only.
+    ///
+    /// These outputs encode control decisions (is_more, still_running) as data values.
+    /// They can be excluded from passthrough-exit landing tuples.
+    ///
+    /// `depth` limits recursion (transitive check through tail gamma chains).
+    pub fn is_chain_control_only_output(
+        &self,
+        node_id: NodeId,
+        output_index: usize,
+        depth: usize,
+    ) -> bool {
+        if depth > 16 {
+            return false;
+        }
+        let node = &self.nodes[node_id];
+        let NodeKind::Gamma { regions } = &node.kind else {
+            return false;
+        };
+        if regions.len() != 2 {
+            return false;
+        }
+
+        // For each branch, check what the result source is
+        for (branch_idx, &region_id) in regions.iter().enumerate() {
+            let region = &self.regions[region_id];
+            let Some(&result_id) = region.results.get(output_index) else {
+                return false;
+            };
+            let result = &self.region_results[result_id];
+            if result.kind != PortKind::Data {
+                return false;
+            }
+            match result.source {
+                // Passthrough of the corresponding region arg — OK
+                PortSource::RegionArg(arg_ref) => {
+                    if region.args.get(output_index) != Some(&arg_ref.arg) {
+                        return false;
+                    }
+                }
+                // Constant — OK (the control flag value)
+                PortSource::Node(out_ref) => {
+                    let src_node = &self.nodes[out_ref.node];
+                    match &src_node.kind {
+                        NodeKind::Simple(IrOp::Const { .. }) => {
+                            // Direct const — this branch produces a control constant
+                        }
+                        NodeKind::Gamma { .. } => {
+                            // Another gamma's output — transitively check it
+                            if !self.is_chain_control_only_output(
+                                out_ref.node,
+                                out_ref.index as usize,
+                                depth + 1,
+                            ) {
+                                return false;
+                            }
+                        }
+                        _ => return false,
+                    }
+                }
+            }
+        }
+
+        // Both branches are either passthrough or const/transitive-control
+        // At least one must be passthrough (otherwise it's just two constants)
+        let r0 = &self.regions[regions[0]];
+        let r1 = &self.regions[regions[1]];
+        let r0_pt = r0.results.get(output_index).map_or(false, |&rid| {
+            matches!(self.region_results[rid].source,
+                PortSource::RegionArg(a) if r0.args.get(output_index) == Some(&a.arg))
+        });
+        let r1_pt = r1.results.get(output_index).map_or(false, |&rid| {
+            matches!(self.region_results[rid].source,
+                PortSource::RegionArg(a) if r1.args.get(output_index) == Some(&a.arg))
+        });
+        r0_pt || r1_pt
     }
 
     /// Get the body region of the root lambda.
