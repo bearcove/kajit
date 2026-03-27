@@ -1732,13 +1732,6 @@ impl<'a> Linearizer<'a> {
             (regions[1], regions[0], false)
         };
 
-        eprintln!(
-            "[inner-chain-exit] considering gamma #{} (done_branch has {} nodes, {} results)",
-            node_id.index(),
-            self.func.regions[done_branch].nodes.len(),
-            self.func.regions[done_branch].results.len()
-        );
-
         let node = &self.func.nodes[node_id];
         let state_count = self.func.state_domains.len();
         let passthrough_count = node.inputs.len() - 1 - state_count;
@@ -1748,9 +1741,19 @@ impl<'a> Linearizer<'a> {
             .filter(|o| o.kind == PortKind::Data)
             .count();
 
-        // Analytically resolve the done branch's data results.
-        // Each result must be either a region arg (passthrough = gamma input)
-        // or resolvable to a constant. If any result can't be resolved, bail out.
+        // Build the arg environment: map done-branch region args to the VRegs
+        // of the corresponding gamma inputs. This is the "current state" that
+        // passthrough results resolve to.
+        let done_region = &self.func.regions[done_branch];
+        let mut arg_env: HashMap<kajit_ir::ArgId, VReg> = HashMap::new();
+        for i in 0..passthrough_count.min(done_region.args.len()) {
+            let arg_id = done_region.args[i];
+            let input_vreg = self.resolve_vreg(node.inputs[i + 1].source);
+            arg_env.insert(arg_id, input_vreg);
+        }
+
+        // Project each done-branch data result using the path-state projector.
+        // This is transactional: all results must resolve or we bail entirely.
         let done_results = self.func.regions[done_branch].results.clone();
         let done_data_results: Vec<usize> = done_results
             .iter()
@@ -1759,101 +1762,33 @@ impl<'a> Linearizer<'a> {
             .map(|(i, _)| i)
             .collect();
 
-        eprintln!(
-            "[inner-chain-exit]   done_data_results={:?}",
-            done_data_results
-        );
+        let saved_next_vreg = self.next_vreg;
+        let mut pending_consts: Vec<(VReg, u64, DebugScopeId)> = Vec::new();
+        let mut done_exit_vregs: Vec<VReg> = Vec::new();
 
-        // For each done data result, determine the exit value.
-        // Collect results first WITHOUT emitting, then emit only if all succeed.
-        enum DoneExitValue {
-            Passthrough(usize), // index into gamma inputs (+1 for predicate)
-            Const {
-                vreg: VReg,
-                value: u64,
-                scope: Option<DebugScopeId>,
-            },
-        }
-        let mut done_exit_plan: Vec<DoneExitValue> = Vec::new();
-        let mut allocated_region_vregs: usize = 0;
         for &result_idx in &done_data_results {
             let result = &self.func.region_results[done_results[result_idx]];
-            match result.source {
-                PortSource::RegionArg(arg_ref) => {
-                    let arg_pos = self.func.regions[done_branch]
-                        .args
-                        .iter()
-                        .position(|a| *a == arg_ref.arg);
-                    if let Some(pos) = arg_pos {
-                        if pos < passthrough_count {
-                            done_exit_plan.push(DoneExitValue::Passthrough(pos + 1));
-                            continue;
-                        }
-                    }
-                    eprintln!(
-                        "[inner-chain-exit]   result[{}]: RegionArg FAILED (pos={:?}, passthrough_count={})",
-                        result_idx, arg_pos, passthrough_count
-                    );
-                    return false;
-                }
-                PortSource::Node(out_ref) => {
-                    let source_node = &self.func.nodes[out_ref.node];
-                    if let NodeKind::Simple(IrOp::Const { value }) = &source_node.kind {
-                        let vreg = self.fresh_vreg();
-                        done_exit_plan.push(DoneExitValue::Const {
-                            vreg,
-                            value: *value,
-                            scope: None,
-                        });
-                        continue;
-                    }
-                    // Try resolving through the RVSDG (handles nested gammas with known predicates)
-                    if let Some(val) =
-                        kajit_ir::const_fold::resolve_to_constant(self.func, &result.source)
-                    {
-                        let vreg = self.fresh_vreg();
-                        done_exit_plan.push(DoneExitValue::Const {
-                            vreg,
-                            value: val,
-                            scope: None,
-                        });
-                        continue;
-                    }
+            match self.project_source(
+                &result.source,
+                &arg_env,
+                &mut pending_consts,
+                node.debug_scope,
+                0,
+            ) {
+                Some(vreg) => done_exit_vregs.push(vreg),
+                None => {
+                    // Bail: rollback fresh vreg allocations
+                    self.next_vreg = saved_next_vreg;
                     return false;
                 }
             }
         }
 
-        // All done results resolved — now emit const instructions and build exit vregs
-        let mut done_exit_vregs: Vec<VReg> = Vec::new();
-        for plan in &done_exit_plan {
-            match plan {
-                DoneExitValue::Passthrough(input_idx) => {
-                    done_exit_vregs.push(self.resolve_vreg(node.inputs[*input_idx].source));
-                }
-                DoneExitValue::Const { vreg, value, scope } => {
-                    self.record_vreg_scope(*vreg, scope.unwrap_or(node.debug_scope));
-                    self.emit(
-                        Some(node.debug_scope),
-                        LinearOp::Const {
-                            dst: *vreg,
-                            value: *value,
-                        },
-                    );
-                    done_exit_vregs.push(*vreg);
-                }
-            }
+        // Commit: emit pending const instructions
+        for &(vreg, value, scope) in &pending_consts {
+            self.record_vreg_scope(vreg, scope);
+            self.emit(Some(scope), LinearOp::Const { dst: vreg, value });
         }
-
-        eprintln!(
-            "[inner-chain-exit] gamma #{}: done_exit_vregs={:?}, data_output_count={}",
-            node_id.index(),
-            done_exit_vregs
-                .iter()
-                .map(|v| v.index())
-                .collect::<Vec<_>>(),
-            data_output_count
-        );
 
         // All done results resolved. Now emit the lowering.
         let predicate = self.resolve_vreg(node.inputs[0].source);
@@ -1946,6 +1881,115 @@ impl<'a> Linearizer<'a> {
         let v = VReg::new(self.next_vreg);
         self.next_vreg += 1;
         v
+    }
+
+    /// Path-state projector: evaluate a PortSource within a done-branch region
+    /// to produce a VReg (either an existing env VReg or a fresh const).
+    ///
+    /// `arg_env` maps region args to the VRegs of the corresponding gamma inputs.
+    /// `pending_consts` accumulates fresh const instructions to emit on success.
+    /// Returns None if the source can't be projected (caller should bail).
+    fn project_source(
+        &mut self,
+        source: &PortSource,
+        arg_env: &HashMap<kajit_ir::ArgId, VReg>,
+        pending_consts: &mut Vec<(VReg, u64, DebugScopeId)>,
+        fallback_scope: DebugScopeId,
+        depth: usize,
+    ) -> Option<VReg> {
+        if depth > 24 {
+            return None;
+        }
+        match source {
+            PortSource::RegionArg(arg_ref) => {
+                // Direct lookup: this region arg maps to a gamma input VReg
+                if let Some(&vreg) = arg_env.get(&arg_ref.arg) {
+                    return Some(vreg);
+                }
+                // Not in our env — might be from an outer region. Try resolving
+                // through the gamma arg → input chain.
+                let region = arg_ref.region;
+                let arg_idx = self.func.regions[region]
+                    .args
+                    .iter()
+                    .position(|a| *a == arg_ref.arg)?;
+                let owner = self.func.find_region_owner(region)?;
+                match &self.func.nodes[owner].kind {
+                    NodeKind::Gamma { .. } => {
+                        // Gamma branch arg[K] → gamma input[K+1]
+                        let input = self.func.nodes[owner].inputs.get(arg_idx + 1)?;
+                        self.project_source(
+                            &input.source,
+                            arg_env,
+                            pending_consts,
+                            fallback_scope,
+                            depth + 1,
+                        )
+                    }
+                    _ => None,
+                }
+            }
+            PortSource::Node(out_ref) => {
+                let node = &self.func.nodes[out_ref.node];
+                match &node.kind {
+                    NodeKind::Simple(IrOp::Const { value }) => {
+                        let vreg = self.fresh_vreg();
+                        pending_consts.push((vreg, *value, node.debug_scope));
+                        Some(vreg)
+                    }
+                    NodeKind::Gamma { regions } => {
+                        let output_index = out_ref.index as usize;
+
+                        // Try: evaluate predicate to select a specific branch
+                        let pred_source = &node.inputs[0].source;
+                        if let Some(pred_vreg) = self.project_source(
+                            pred_source,
+                            arg_env,
+                            pending_consts,
+                            fallback_scope,
+                            depth + 1,
+                        ) {
+                            // Check if the predicate resolved to a pending const
+                            if let Some(&(_, val, _)) =
+                                pending_consts.iter().find(|(v, _, _)| *v == pred_vreg)
+                            {
+                                let branch_idx = (val as usize).min(regions.len() - 1);
+                                let branch_region = regions[branch_idx];
+                                // Build sub-env for this branch
+                                let mut sub_env = HashMap::new();
+                                let br = &self.func.regions[branch_region];
+                                for (i, &arg_id) in br.args.iter().enumerate() {
+                                    if let Some(input) = node.inputs.get(i + 1) {
+                                        if let Some(v) = self.project_source(
+                                            &input.source,
+                                            arg_env,
+                                            pending_consts,
+                                            fallback_scope,
+                                            depth + 1,
+                                        ) {
+                                            sub_env.insert(arg_id, v);
+                                        }
+                                    }
+                                }
+                                let result_id =
+                                    *self.func.regions[branch_region].results.get(output_index)?;
+                                let result_source = &self.func.region_results[result_id].source;
+                                return self.project_source(
+                                    result_source,
+                                    &sub_env,
+                                    pending_consts,
+                                    fallback_scope,
+                                    depth + 1,
+                                );
+                            }
+                        }
+
+                        None // Predicate couldn't be resolved; bail
+                    }
+                    _ => None, // Side-effecting or unknown — bail
+                }
+            }
+        }
     }
 
     /// Find a tail gamma that feeds all data results and has a passthrough branch.
