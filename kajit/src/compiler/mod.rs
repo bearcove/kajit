@@ -285,7 +285,26 @@ pub fn compile_pipeline(
 
     // Phase 5: CFG-MIR lowering + optimization (ONCE — used for everything)
     let hints = Default::default();
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+
+    // For leaf functions: exclude x0/x1 from allocation (kept for output_ptr/ctx_ptr)
+    #[cfg(target_arch = "aarch64")]
+    {
+        let is_leaf = cfg_program.funcs.iter().all(|func| {
+            func.insts.iter().all(|inst| {
+                !matches!(
+                    inst.op,
+                    kajit_lir::LinearOp::CallIntrinsic { .. }
+                        | kajit_lir::LinearOp::CallPure { .. }
+                        | kajit_lir::LinearOp::CallLambda { .. }
+                )
+            })
+        });
+        if is_leaf {
+            use kajit_mir::regalloc3::machine_inst::PReg;
+            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1)];
+        }
+    }
 
     // Phase 6: Register allocation + backend compilation from the ONE cfg_program
     let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
@@ -728,10 +747,29 @@ fn compile_linear_ir_decoder_with_options(
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
     let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
+    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
 
     // Use regalloc3 by default, opt out with KAJIT_USE_REGALLOC2=1
     let use_regalloc3 = std::env::var("KAJIT_USE_REGALLOC2").is_err();
+
+    // For leaf functions with regalloc3: exclude x0/x1 from allocation
+    #[cfg(target_arch = "aarch64")]
+    if use_regalloc3 {
+        let is_leaf = cfg_program.funcs.iter().all(|func| {
+            func.insts.iter().all(|inst| {
+                !matches!(
+                    inst.op,
+                    kajit_lir::LinearOp::CallIntrinsic { .. }
+                        | kajit_lir::LinearOp::CallPure { .. }
+                        | kajit_lir::LinearOp::CallLambda { .. }
+                )
+            })
+        });
+        if is_leaf {
+            use kajit_mir::regalloc3::machine_inst::PReg;
+            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1)];
+        }
+    }
 
     let (buf, entry, source_map, backend_debug_info, asm_program, regalloc_alloc) = if use_regalloc3
     {

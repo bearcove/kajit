@@ -306,17 +306,40 @@ fn resolve_to_constant_inner(func: &IrFunc, source: &PortSource, depth: usize) -
                 // the gamma output is that constant regardless of which branch is taken.
                 let output_index = out_ref.index as usize;
                 let mut common: Option<u64> = None;
+                let mut all_agree = true;
                 for &region_id in regions {
                     let result_id = *func.regions[region_id].results.get(output_index)?;
                     let result_source = &func.region_results[result_id].source;
-                    let branch_val = resolve_to_constant_inner(func, result_source, depth + 1)?;
-                    match common {
-                        None => common = Some(branch_val),
-                        Some(v) if v == branch_val => {}
-                        _ => return None, // Branches disagree
+                    match resolve_to_constant_inner(func, result_source, depth + 1) {
+                        Some(branch_val) => match common {
+                            None => common = Some(branch_val),
+                            Some(v) if v == branch_val => {}
+                            _ => {
+                                all_agree = false;
+                                break;
+                            }
+                        },
+                        None => {
+                            all_agree = false;
+                            break;
+                        }
                     }
                 }
-                common
+                if all_agree {
+                    return common;
+                }
+                // Branches disagree or some can't be resolved — try evaluating
+                // the gamma predicate. If it resolves to a constant, select the
+                // appropriate branch.
+                let node = &func.nodes[out_ref.node];
+                let pred_source = &node.inputs[0].source;
+                let pred_val = resolve_to_constant_inner(func, pred_source, depth + 1)?;
+                let branch_idx = (pred_val as usize).min(regions.len() - 1);
+                let result_id = *func.regions[regions[branch_idx]]
+                    .results
+                    .get(output_index)?;
+                let result_source = &func.region_results[result_id].source;
+                resolve_to_constant_inner(func, result_source, depth + 1)
             }
             _ => None,
         },

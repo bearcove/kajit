@@ -222,7 +222,7 @@ pub enum Condition {
 }
 
 impl Condition {
-    fn invert(self) -> Self {
+    pub fn invert(self) -> Self {
         match self {
             Self::Eq => Self::Ne,
             Self::Ne => Self::Eq,

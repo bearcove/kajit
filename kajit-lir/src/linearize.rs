@@ -579,6 +579,17 @@ pub struct LinearDebugProvenance {
 
 // ─── Linearizer state ────────────────────────────────────────────────────────
 
+/// Context for the active passthrough-exit chain, passed to inner gammas so
+/// they can emit direct exits to the chain's landing instead of creating
+/// merge blocks for control-only outputs.
+#[derive(Clone)]
+struct ChainExitCtx {
+    landing_label: LabelId,
+    landing_vregs: Vec<VReg>,
+    state_env: Vec<VReg>,
+    output_to_landing: Vec<usize>,
+}
+
 struct Linearizer<'a> {
     func: &'a IrFunc,
     ops: Vec<LinearOp>,
@@ -587,6 +598,12 @@ struct Linearizer<'a> {
     op_values: Vec<Option<DebugValueId>>,
     vreg_scopes: Vec<Option<DebugScopeId>>,
     vreg_values: Vec<Option<DebugValueId>>,
+    /// Active passthrough-exit chain context. When set, inner gammas with a
+    /// passthrough branch can use this to emit direct exits to the chain's
+    /// landing instead of merging control-only flag outputs.
+    chain_exit_ctx: Option<ChainExitCtx>,
+    /// Counter for allocating fresh vregs (starts above all RVSDG vregs).
+    next_vreg: u32,
 }
 
 impl<'a> Linearizer<'a> {
@@ -594,6 +611,8 @@ impl<'a> Linearizer<'a> {
         Self {
             func,
             ops: Vec::new(),
+            chain_exit_ctx: None,
+            next_vreg: func.vreg_count,
             label_count: 0,
             op_scopes: Vec::new(),
             op_values: Vec::new(),
@@ -628,19 +647,17 @@ impl<'a> Linearizer<'a> {
     }
 
     fn record_vreg_scope(&mut self, vreg: VReg, scope: DebugScopeId) {
-        let slot = self
-            .vreg_scopes
-            .get_mut(vreg.index())
-            .expect("vreg scope index must fit");
-        *slot = Some(scope);
+        if vreg.index() >= self.vreg_scopes.len() {
+            self.vreg_scopes.resize(vreg.index() + 1, None);
+        }
+        self.vreg_scopes[vreg.index()] = Some(scope);
     }
 
     fn record_vreg_value(&mut self, vreg: VReg, debug_value: DebugValueId) {
-        let slot = self
-            .vreg_values
-            .get_mut(vreg.index())
-            .expect("vreg value index must fit");
-        *slot = Some(debug_value);
+        if vreg.index() >= self.vreg_values.len() {
+            self.vreg_values.resize(vreg.index() + 1, None);
+        }
+        self.vreg_values[vreg.index()] = Some(debug_value);
     }
 
     fn record_output_scopes(&mut self, node: &Node) {
@@ -1082,6 +1099,14 @@ impl<'a> Linearizer<'a> {
             return;
         }
 
+        // Try chain-exit lowering: if we're inside a passthrough-exit chain's
+        // continue branch and this gamma has a passthrough branch, lower the
+        // non-passthrough ("done") branch as a direct exit to the chain's landing.
+        // This eliminates the merge block for control-only flag outputs.
+        if self.try_linearize_inner_chain_exit(node_id, regions) {
+            return;
+        }
+
         let node = &self.func.nodes[node_id];
         let branch_count = regions.len();
 
@@ -1510,13 +1535,22 @@ impl<'a> Linearizer<'a> {
         // Check for tail passthrough gamma to chain into
         let tail_gamma = self.find_tail_passthrough_gamma(cont_branch);
         if let Some(tail_id) = tail_gamma {
-            // Linearize everything except the tail gamma
+            // Linearize everything except the tail gamma, with chain exit context
+            // so inner gammas can emit direct exits to the landing.
+            let prev_ctx = self.chain_exit_ctx.take();
+            self.chain_exit_ctx = Some(ChainExitCtx {
+                landing_label,
+                landing_vregs: landing_vregs.clone(),
+                state_env: state_env.clone(),
+                output_to_landing: output_to_landing.clone(),
+            });
             let node_ids: Vec<NodeId> = self.func.regions[cont_branch].nodes.clone();
             for &nid in &node_ids {
                 if nid != tail_id {
                     self.linearize_node(nid);
                 }
             }
+            self.chain_exit_ctx = prev_ctx;
 
             // Update state_env for entries that DON'T come from the tail gamma.
             // Build the output_to_landing mapping for the tail gamma.
@@ -1608,8 +1642,16 @@ impl<'a> Linearizer<'a> {
                 )),
             );
         } else {
-            // No chain — linearize full continue region
+            // No chain — linearize full continue region with chain exit context
+            let prev_ctx = self.chain_exit_ctx.take();
+            self.chain_exit_ctx = Some(ChainExitCtx {
+                landing_label,
+                landing_vregs: landing_vregs.clone(),
+                state_env: state_env.clone(),
+                output_to_landing: output_to_landing.clone(),
+            });
             self.linearize_region(cont_branch);
+            self.chain_exit_ctx = prev_ctx;
 
             // Branch to landing with continue region's results mapped to landing params
             let cont_results = self.func.regions[cont_branch].results.clone();
@@ -1654,6 +1696,256 @@ impl<'a> Linearizer<'a> {
             self.emit(Some(node.debug_scope), LinearOp::Label(landing_label));
         }
         true
+    }
+
+    /// Lower an inner gamma as a chain exit: when we're inside a passthrough-exit
+    /// chain's continue branch and this gamma has a passthrough branch ("more data")
+    /// and a non-passthrough branch ("done"), the "done" branch exits directly to
+    /// the chain's landing. The passthrough branch falls through inline.
+    ///
+    /// The done branch's exit values are computed analytically: for each gamma output,
+    /// resolve the done branch's result to either a passthrough (gamma input) or a
+    /// constant. This avoids emitting the done branch body inline and the control
+    /// flow problems that would cause.
+    fn try_linearize_inner_chain_exit(&mut self, node_id: NodeId, regions: &[RegionId]) -> bool {
+        let ctx = match &self.chain_exit_ctx {
+            Some(ctx) => ctx.clone(),
+            None => return false,
+        };
+
+        if regions.len() != 2 {
+            return false;
+        }
+
+        let b0_pt = self.is_data_passthrough_region(regions[0]);
+        let b1_pt = self.is_data_passthrough_region(regions[1]);
+        if !b0_pt && !b1_pt {
+            return false;
+        }
+        if b0_pt && b1_pt {
+            return false;
+        }
+
+        let (continue_branch, done_branch, done_on_nonzero) = if b0_pt {
+            (regions[0], regions[1], true)
+        } else {
+            (regions[1], regions[0], false)
+        };
+
+        eprintln!(
+            "[inner-chain-exit] considering gamma #{} (done_branch has {} nodes, {} results)",
+            node_id.index(),
+            self.func.regions[done_branch].nodes.len(),
+            self.func.regions[done_branch].results.len()
+        );
+
+        let node = &self.func.nodes[node_id];
+        let state_count = self.func.state_domains.len();
+        let passthrough_count = node.inputs.len() - 1 - state_count;
+        let data_output_count = node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        // Analytically resolve the done branch's data results.
+        // Each result must be either a region arg (passthrough = gamma input)
+        // or resolvable to a constant. If any result can't be resolved, bail out.
+        let done_results = self.func.regions[done_branch].results.clone();
+        let done_data_results: Vec<usize> = done_results
+            .iter()
+            .enumerate()
+            .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+            .map(|(i, _)| i)
+            .collect();
+
+        eprintln!(
+            "[inner-chain-exit]   done_data_results={:?}",
+            done_data_results
+        );
+
+        // For each done data result, determine the exit value.
+        // Collect results first WITHOUT emitting, then emit only if all succeed.
+        enum DoneExitValue {
+            Passthrough(usize), // index into gamma inputs (+1 for predicate)
+            Const {
+                vreg: VReg,
+                value: u64,
+                scope: Option<DebugScopeId>,
+            },
+        }
+        let mut done_exit_plan: Vec<DoneExitValue> = Vec::new();
+        let mut allocated_region_vregs: usize = 0;
+        for &result_idx in &done_data_results {
+            let result = &self.func.region_results[done_results[result_idx]];
+            match result.source {
+                PortSource::RegionArg(arg_ref) => {
+                    let arg_pos = self.func.regions[done_branch]
+                        .args
+                        .iter()
+                        .position(|a| *a == arg_ref.arg);
+                    if let Some(pos) = arg_pos {
+                        if pos < passthrough_count {
+                            done_exit_plan.push(DoneExitValue::Passthrough(pos + 1));
+                            continue;
+                        }
+                    }
+                    eprintln!(
+                        "[inner-chain-exit]   result[{}]: RegionArg FAILED (pos={:?}, passthrough_count={})",
+                        result_idx, arg_pos, passthrough_count
+                    );
+                    return false;
+                }
+                PortSource::Node(out_ref) => {
+                    let source_node = &self.func.nodes[out_ref.node];
+                    if let NodeKind::Simple(IrOp::Const { value }) = &source_node.kind {
+                        let vreg = self.fresh_vreg();
+                        done_exit_plan.push(DoneExitValue::Const {
+                            vreg,
+                            value: *value,
+                            scope: None,
+                        });
+                        continue;
+                    }
+                    // Try resolving through the RVSDG (handles nested gammas with known predicates)
+                    if let Some(val) =
+                        kajit_ir::const_fold::resolve_to_constant(self.func, &result.source)
+                    {
+                        let vreg = self.fresh_vreg();
+                        done_exit_plan.push(DoneExitValue::Const {
+                            vreg,
+                            value: val,
+                            scope: None,
+                        });
+                        continue;
+                    }
+                    return false;
+                }
+            }
+        }
+
+        // All done results resolved — now emit const instructions and build exit vregs
+        let mut done_exit_vregs: Vec<VReg> = Vec::new();
+        for plan in &done_exit_plan {
+            match plan {
+                DoneExitValue::Passthrough(input_idx) => {
+                    done_exit_vregs.push(self.resolve_vreg(node.inputs[*input_idx].source));
+                }
+                DoneExitValue::Const { vreg, value, scope } => {
+                    self.record_vreg_scope(*vreg, scope.unwrap_or(node.debug_scope));
+                    self.emit(
+                        Some(node.debug_scope),
+                        LinearOp::Const {
+                            dst: *vreg,
+                            value: *value,
+                        },
+                    );
+                    done_exit_vregs.push(*vreg);
+                }
+            }
+        }
+
+        eprintln!(
+            "[inner-chain-exit] gamma #{}: done_exit_vregs={:?}, data_output_count={}",
+            node_id.index(),
+            done_exit_vregs
+                .iter()
+                .map(|v| v.index())
+                .collect::<Vec<_>>(),
+            data_output_count
+        );
+
+        // All done results resolved. Now emit the lowering.
+        let predicate = self.resolve_vreg(node.inputs[0].source);
+
+        // Build exit phis for the done path → landing
+        let mut exit_phis: Vec<(VReg, VReg)> = Vec::new();
+        let mut used_landing = std::collections::HashSet::new();
+        for (j, &done_vreg) in done_exit_vregs.iter().enumerate() {
+            if j >= ctx.output_to_landing.len() {
+                break;
+            }
+            let landing_idx = ctx.output_to_landing[j];
+            if landing_idx == usize::MAX {
+                continue;
+            }
+            let dst = ctx.landing_vregs[landing_idx];
+            if done_vreg != dst {
+                exit_phis.push((done_vreg, dst));
+            }
+            used_landing.insert(landing_idx);
+        }
+        for (i, &lv) in ctx.landing_vregs.iter().enumerate() {
+            if !used_landing.contains(&i) {
+                let src = ctx.state_env[i];
+                if src != lv {
+                    exit_phis.push((src, lv));
+                }
+            }
+        }
+
+        // Entry phis for the continue branch (passthrough)
+        let cont_region = &self.func.regions[continue_branch];
+        let mut cont_entry_phis = Vec::new();
+        for i in 0..passthrough_count {
+            let src_input = &node.inputs[i + 1];
+            if src_input.kind == PortKind::Data {
+                let arg = &self.func.region_args[cont_region.args[i]];
+                if let Some(dst_vreg) = arg.vreg {
+                    let src_vreg = self.resolve_vreg(src_input.source);
+                    self.record_vreg_scope(dst_vreg, cont_region.debug_scope);
+                    cont_entry_phis.push((src_vreg, dst_vreg));
+                }
+            }
+        }
+
+        // Emit: done path branches to landing, continue path falls through
+        if done_on_nonzero {
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIf {
+                    cond: predicate,
+                    target: ctx.landing_label,
+                    phi_args: exit_phis,
+                    fallthrough_phi_args: cont_entry_phis,
+                },
+            );
+        } else {
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIfZero {
+                    cond: predicate,
+                    target: ctx.landing_label,
+                    phi_args: exit_phis,
+                    fallthrough_phi_args: cont_entry_phis,
+                },
+            );
+        }
+
+        // For the passthrough (continue) branch: gamma outputs = gamma inputs.
+        for i in 0..data_output_count {
+            let out_vreg = node.outputs[i].vreg.expect("gamma output vreg");
+            let in_vreg = self.resolve_vreg(node.inputs[i + 1].source);
+            self.record_vreg_scope(out_vreg, node.outputs[i].debug_scope);
+            if out_vreg != in_vreg {
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::Copy {
+                        dst: out_vreg,
+                        src: in_vreg,
+                    },
+                );
+            }
+        }
+
+        true
+    }
+
+    /// Allocate a fresh vreg (for synthetic instructions like chain-exit consts).
+    fn fresh_vreg(&mut self) -> VReg {
+        let v = VReg::new(self.next_vreg);
+        self.next_vreg += 1;
+        v
     }
 
     /// Find a tail gamma that feeds all data results and has a passthrough branch.
@@ -2608,10 +2900,13 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
     let mut op_values = lin.op_values;
     optimize_linear_ops(&mut ops, &mut op_scopes, &mut op_values);
 
+    // Use the linearizer's next_vreg if it allocated fresh vregs
+    let vreg_count = lin.next_vreg.max(func.vreg_count());
+
     LinearIr {
         ops,
         label_count: lin.label_count,
-        vreg_count: func.vreg_count(),
+        vreg_count,
         slot_count: func.slot_count(),
         debug: LinearDebugProvenance {
             scopes: func.debug_scopes.clone(),

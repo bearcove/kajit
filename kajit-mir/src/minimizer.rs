@@ -789,6 +789,7 @@ mod tests {
             slot_count: 0,
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         }
     }
 
@@ -855,6 +856,7 @@ mod tests {
             slot_count: 0,
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         }
     }
 
@@ -968,6 +970,7 @@ mod tests {
             slot_count: 0,
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         }
     }
 

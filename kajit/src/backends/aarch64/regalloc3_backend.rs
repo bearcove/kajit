@@ -34,6 +34,23 @@ struct EmitContext<'a> {
     line_map: HashMap<cfg_mir::OpId, u32>,
     /// Recorded intrinsic call sites for harness relocation.
     intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
+    /// VRegs whose CmpXx can be fused with the terminator branch (skip cset, emit b.cc).
+    fused_cmps: HashMap<kajit_ir::VReg, Condition>,
+    /// Or vregs that should be emitted as bfi. Maps Or's dst → (byte_src, accum, lsb, width).
+    fused_bfi: HashMap<kajit_ir::VReg, BfiInfo>,
+    /// Output pointer register (x0 for leaf, x21 for non-leaf).
+    output_reg: Reg,
+    /// Context pointer register (x1 for leaf, x22 for non-leaf).
+    ctx_reg: Reg,
+    /// Intermediate vregs (And/Shl results) whose instructions should be skipped.
+    fused_skip: std::collections::HashSet<kajit_ir::VReg>,
+}
+
+struct BfiInfo {
+    byte_src: kajit_ir::VReg,
+    accum: kajit_ir::VReg,
+    lsb: u8,
+    width: u8,
 }
 
 impl<'a> EmitContext<'a> {
@@ -156,6 +173,12 @@ impl<'a> EmitContext<'a> {
 
     /// Emit a single instruction.
     fn emit_inst(&mut self, inst: &Inst) {
+        // Skip instructions whose outputs were fused into bfi
+        if let LinearOp::BinOp { dst, .. } = &inst.op {
+            if self.fused_skip.contains(dst) {
+                return;
+            }
+        }
         match &inst.op {
             LinearOp::Copy { dst, src } => {
                 // Elide copy when src and dst are in the same register
@@ -291,25 +314,25 @@ impl<'a> EmitContext<'a> {
                     kajit_ir::Width::W1 => {
                         self.ectx
                             .emit
-                            .emit_strb_imm(src_reg, Reg::X21, *offset)
+                            .emit_strb_imm(src_reg, self.output_reg, *offset)
                             .expect("strb");
                     }
                     kajit_ir::Width::W2 => {
                         self.ectx
                             .emit
-                            .emit_strh_imm(src_reg, Reg::X21, *offset)
+                            .emit_strh_imm(src_reg, self.output_reg, *offset)
                             .expect("strh");
                     }
                     kajit_ir::Width::W4 => {
                         self.ectx
                             .emit
-                            .emit_str_imm(Width::W32, src_reg, Reg::X21, *offset)
+                            .emit_str_imm(Width::W32, src_reg, self.output_reg, *offset)
                             .expect("str");
                     }
                     kajit_ir::Width::W8 => {
                         self.ectx
                             .emit
-                            .emit_str_imm(Width::X64, src_reg, Reg::X21, *offset)
+                            .emit_str_imm(Width::X64, src_reg, self.output_reg, *offset)
                             .expect("str");
                     }
                 }
@@ -321,25 +344,25 @@ impl<'a> EmitContext<'a> {
                     kajit_ir::Width::W1 => {
                         self.ectx
                             .emit
-                            .emit_ldrb_imm(rd, Reg::X21, *offset)
+                            .emit_ldrb_imm(rd, self.output_reg, *offset)
                             .expect("ldrb");
                     }
                     kajit_ir::Width::W2 => {
                         self.ectx
                             .emit
-                            .emit_ldrh_imm(rd, Reg::X21, *offset)
+                            .emit_ldrh_imm(rd, self.output_reg, *offset)
                             .expect("ldrh");
                     }
                     kajit_ir::Width::W4 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::W32, rd, Reg::X21, *offset)
+                            .emit_ldr_imm(Width::W32, rd, self.output_reg, *offset)
                             .expect("ldr");
                     }
                     kajit_ir::Width::W8 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::X64, rd, Reg::X21, *offset)
+                            .emit_ldr_imm(Width::X64, rd, self.output_reg, *offset)
                             .expect("ldr");
                     }
                 }
@@ -352,7 +375,7 @@ impl<'a> EmitContext<'a> {
                 let rd = self.dst_reg_or_temp(*dst, Reg::X9);
                 self.ectx
                     .emit
-                    .emit_mov_reg(Width::X64, rd, Reg::X21)
+                    .emit_mov_reg(Width::X64, rd, self.output_reg)
                     .expect("mov");
                 if rd == Reg::X9 {
                     self.store_to_vreg(*dst, Reg::X9);
@@ -363,7 +386,7 @@ impl<'a> EmitContext<'a> {
                 let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
                 self.ectx
                     .emit
-                    .emit_mov_reg(Width::X64, Reg::X21, src_reg)
+                    .emit_mov_reg(Width::X64, self.output_reg, src_reg)
                     .expect("mov");
             }
 
@@ -534,6 +557,10 @@ impl<'a> EmitContext<'a> {
                     .emit_cmp_reg(Width::X64, lhs_reg, rhs_reg)
                     .expect("cmp");
             }
+            // Skip cset if this comparison is fused with its branch terminator
+            if self.fused_cmps.contains_key(&dst) {
+                return;
+            }
             let condition = match kind {
                 BinOpKind::CmpEq => Condition::Eq,
                 BinOpKind::CmpNe => Condition::Ne,
@@ -628,10 +655,31 @@ impl<'a> EmitContext<'a> {
                     .expect("and");
             }
             BinOpKind::Or => {
-                self.ectx
-                    .emit
-                    .emit_orr_reg(Width::X64, result_reg, lhs_reg, rhs_reg)
-                    .expect("orr");
+                // Check for bfi fusion: Or(accum, shifted) → bfi(accum, byte_src, lsb, width)
+                let bfi_info = self
+                    .fused_bfi
+                    .get(&dst)
+                    .map(|b| (b.byte_src, b.accum, b.lsb, b.width));
+                if let Some((byte_src, accum, bfi_lsb, bfi_width)) = bfi_info {
+                    let byte_reg = self.reg_for_vreg_with_temp(byte_src, Reg::X9);
+                    let accum_reg = self.reg_for_vreg_with_temp(accum, Reg::X10);
+                    // bfi modifies Rd in place, so ensure result_reg == accum_reg
+                    if result_reg != accum_reg {
+                        self.ectx
+                            .emit
+                            .emit_mov_reg(Width::X64, result_reg, accum_reg)
+                            .expect("mov for bfi");
+                    }
+                    self.ectx
+                        .emit
+                        .emit_bfi(Width::X64, result_reg, byte_reg, bfi_lsb, bfi_width)
+                        .expect("bfi");
+                } else {
+                    self.ectx
+                        .emit
+                        .emit_orr_reg(Width::X64, result_reg, lhs_reg, rhs_reg)
+                        .expect("orr");
+                }
             }
             BinOpKind::Xor => {
                 self.ectx
@@ -744,7 +792,7 @@ impl<'a> EmitContext<'a> {
         // Flush cursor to ctx before call
         self.ectx
             .emit
-            .emit_str_imm(Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+            .emit_str_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
             .expect("str cursor");
 
         // Adjust out_ptr for field offset if needed
@@ -752,7 +800,13 @@ impl<'a> EmitContext<'a> {
             if off > 0 {
                 self.ectx
                     .emit
-                    .emit_add_imm(Width::X64, Reg::X21, Reg::X21, off as u16, false)
+                    .emit_add_imm(
+                        Width::X64,
+                        self.output_reg,
+                        self.output_reg,
+                        off as u16,
+                        false,
+                    )
                     .expect("add out_ptr");
             }
         }
@@ -775,7 +829,7 @@ impl<'a> EmitContext<'a> {
                 let arg_idx = args.len() + 1;
                 self.ectx
                     .emit
-                    .emit_mov_reg(Width::X64, Reg::from_raw(arg_idx as u8), Reg::X21)
+                    .emit_mov_reg(Width::X64, Reg::from_raw(arg_idx as u8), self.output_reg)
                     .expect("mov out_field");
             }
         }
@@ -783,7 +837,7 @@ impl<'a> EmitContext<'a> {
         // x0 = ctx
         self.ectx
             .emit
-            .emit_mov_reg(Width::X64, Reg::X0, Reg::X22)
+            .emit_mov_reg(Width::X64, Reg::X0, self.ctx_reg)
             .expect("mov ctx");
 
         // Load function pointer and call
@@ -800,7 +854,13 @@ impl<'a> EmitContext<'a> {
             if off > 0 {
                 self.ectx
                     .emit
-                    .emit_sub_imm(Width::X64, Reg::X21, Reg::X21, off as u16, false)
+                    .emit_sub_imm(
+                        Width::X64,
+                        self.output_reg,
+                        self.output_reg,
+                        off as u16,
+                        false,
+                    )
                     .expect("sub out_ptr");
             }
         }
@@ -808,13 +868,13 @@ impl<'a> EmitContext<'a> {
         // Reload cursor from ctx after call
         self.ectx
             .emit
-            .emit_ldr_imm(Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+            .emit_ldr_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
             .expect("ldr cursor");
 
         // Check error after call
         self.ectx
             .emit
-            .emit_ldr_imm(Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+            .emit_ldr_imm(Width::W32, Reg::X9, self.ctx_reg, CTX_ERROR_CODE)
             .expect("ldr error");
         self.ectx
             .emit
@@ -889,6 +949,275 @@ impl<'a> EmitContext<'a> {
         None
     }
 
+    /// Emit a conditional branch. When `invert` is false, branches if cond != 0.
+    /// When `invert` is true, branches if cond == 0.
+    fn emit_branch_cond(&mut self, cond: kajit_ir::VReg, target: LabelId, invert: bool) {
+        if let Some(&cc) = self.fused_cmps.get(&cond) {
+            let cc = if invert { cc.invert() } else { cc };
+            self.ectx.emit.emit_b_cond_label(cc, target).expect("b.cc");
+        } else if let Some((src, bit)) = self.is_and_bit_test(cond) {
+            let src_reg = self.reg_for_vreg_with_temp(src, Reg::X9);
+            if invert {
+                self.ectx
+                    .emit
+                    .emit_tbz_label(src_reg, bit, target)
+                    .expect("tbz");
+            } else {
+                self.ectx
+                    .emit
+                    .emit_tbnz_label(src_reg, bit, target)
+                    .expect("tbnz");
+            }
+        } else {
+            let cond_reg = self.reg_for_vreg_with_temp(cond, Reg::X9);
+            if invert {
+                self.ectx
+                    .emit
+                    .emit_cbz_label(Width::X64, cond_reg, target)
+                    .expect("cbz");
+            } else {
+                self.ectx
+                    .emit
+                    .emit_cbnz_label(Width::X64, cond_reg, target)
+                    .expect("cbnz");
+            }
+        }
+    }
+
+    /// Compute which CmpXx vregs can be fused with their branch terminator.
+    /// A cmp is fusable if its result vreg is only used by the block's BranchIf/BranchIfZero.
+    fn compute_fusable_cmps(func: &Function) -> HashMap<kajit_ir::VReg, Condition> {
+        // Count uses of each vreg across the entire function
+        let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
+
+        for block in &func.blocks {
+            if block.dead {
+                continue;
+            }
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id.index()];
+                inst.op.for_each_use(|src| {
+                    *use_counts.entry(*src).or_default() += 1;
+                });
+            }
+            let term = &func.terms[block.term.0 as usize];
+            match term {
+                Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                    *use_counts.entry(*cond).or_default() += 1;
+                }
+                Terminator::JumpTable { predicate, .. } => {
+                    *use_counts.entry(*predicate).or_default() += 1;
+                }
+                _ => {}
+            }
+            for &edge_id in &block.succs {
+                let edge = &func.edges[edge_id.index()];
+                for arg in &edge.args {
+                    *use_counts.entry(arg.source).or_default() += 1;
+                }
+            }
+        }
+        for &vreg in &func.data_results {
+            *use_counts.entry(vreg).or_default() += 1;
+        }
+
+        let mut fusable = HashMap::new();
+
+        for block in &func.blocks {
+            if block.dead {
+                continue;
+            }
+            let term = &func.terms[block.term.0 as usize];
+            let cond = match term {
+                Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => *cond,
+                _ => continue,
+            };
+
+            // Only fuse if the cmp result has exactly 1 use (the terminator)
+            if use_counts.get(&cond).copied().unwrap_or(0) != 1 {
+                continue;
+            }
+
+            // Find the defining CmpXx instruction in this block
+            for &inst_id in block.insts.iter().rev() {
+                let inst = &func.insts[inst_id.index()];
+                if let LinearOp::BinOp { op, dst, .. } = &inst.op {
+                    if *dst == cond {
+                        let condition = match op {
+                            BinOpKind::CmpEq => Some(Condition::Eq),
+                            BinOpKind::CmpNe => Some(Condition::Ne),
+                            BinOpKind::CmpLt => Some(Condition::Lo),
+                            BinOpKind::CmpLe => Some(Condition::Ls),
+                            BinOpKind::CmpGt => Some(Condition::Hi),
+                            BinOpKind::CmpGe => Some(Condition::Hs),
+                            _ => None,
+                        };
+                        if let Some(cc) = condition {
+                            fusable.insert(cond, cc);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        fusable
+    }
+
+    /// Compute which Or instructions can be replaced with bfi.
+    /// Pattern: Or(accum, Shl(And(byte, mask), shift)) where mask has consecutive low bits.
+    fn compute_fusable_bfis(
+        func: &Function,
+        const_values: &HashMap<kajit_ir::VReg, u64>,
+    ) -> (
+        HashMap<kajit_ir::VReg, BfiInfo>,
+        std::collections::HashSet<kajit_ir::VReg>,
+    ) {
+        use std::collections::HashSet;
+
+        // Count uses of each vreg
+        let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
+        for block in &func.blocks {
+            if block.dead {
+                continue;
+            }
+            for &inst_id in &block.insts {
+                let inst = &func.insts[inst_id.index()];
+                inst.op.for_each_use(|src| {
+                    *use_counts.entry(*src).or_default() += 1;
+                });
+            }
+            let term = &func.terms[block.term.0 as usize];
+            match term {
+                Terminator::BranchIf { cond, .. } | Terminator::BranchIfZero { cond, .. } => {
+                    *use_counts.entry(*cond).or_default() += 1;
+                }
+                Terminator::JumpTable { predicate, .. } => {
+                    *use_counts.entry(*predicate).or_default() += 1;
+                }
+                _ => {}
+            }
+            for &edge_id in &block.succs {
+                let edge = &func.edges[edge_id.index()];
+                for arg in &edge.args {
+                    *use_counts.entry(arg.source).or_default() += 1;
+                }
+            }
+        }
+        for &vreg in &func.data_results {
+            *use_counts.entry(vreg).or_default() += 1;
+        }
+
+        // Build def map: vreg → defining BinOp instruction
+        let mut def_map: HashMap<kajit_ir::VReg, &LinearOp> = HashMap::new();
+        for inst in &func.insts {
+            if let LinearOp::BinOp { dst, .. } = &inst.op {
+                def_map.insert(*dst, &inst.op);
+            }
+        }
+
+        let mut bfi_map = HashMap::new();
+        let mut skip_set = HashSet::new();
+
+        for inst in &func.insts {
+            // Look for Or(dst, accum, shifted)
+            if let LinearOp::BinOp {
+                op: BinOpKind::Or,
+                dst,
+                lhs: accum,
+                rhs: shifted,
+            } = &inst.op
+            {
+                // Check: shifted = Shl(masked, shift_const) where shift_const is known
+                let shl_info = if let Some(LinearOp::BinOp {
+                    op: BinOpKind::Shl,
+                    dst: shl_dst,
+                    lhs: masked,
+                    rhs: shift_vreg,
+                }) = def_map.get(shifted).copied()
+                {
+                    if let Some(&shift_val) = const_values.get(shift_vreg) {
+                        if shift_val <= 63 {
+                            Some((*shl_dst, *masked, shift_val as u8))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let Some((shl_dst, masked, lsb)) = shl_info else {
+                    continue;
+                };
+
+                // Check: masked = And(byte, mask_const) where mask_const is (1<<N)-1
+                let and_info = if let Some(LinearOp::BinOp {
+                    op: BinOpKind::And,
+                    dst: and_dst,
+                    lhs: and_lhs,
+                    rhs: and_rhs,
+                }) = def_map.get(&masked).copied()
+                {
+                    // Try rhs as mask constant
+                    if let Some(&mask_val) = const_values.get(and_rhs) {
+                        let width = mask_val.count_ones();
+                        if width > 0 && width <= 32 && mask_val == (1u64 << width) - 1 {
+                            Some((*and_dst, *and_lhs, width as u8))
+                        } else {
+                            None
+                        }
+                    }
+                    // Try lhs as mask constant
+                    else if let Some(&mask_val) = const_values.get(and_lhs) {
+                        let width = mask_val.count_ones();
+                        if width > 0 && width <= 32 && mask_val == (1u64 << width) - 1 {
+                            Some((*and_dst, *and_rhs, width as u8))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let Some((and_dst, byte_src, width)) = and_info else {
+                    continue;
+                };
+
+                // Check that intermediates have single use (consumed only by the chain)
+                let and_uses = use_counts.get(&and_dst).copied().unwrap_or(0);
+                let shl_uses = use_counts.get(&shl_dst).copied().unwrap_or(0);
+                if and_uses != 1 || shl_uses != 1 {
+                    continue;
+                }
+
+                // bfi requires lsb + width <= 64 (for X64)
+                if (lsb as u32) + (width as u32) > 64 {
+                    continue;
+                }
+
+                bfi_map.insert(
+                    *dst,
+                    BfiInfo {
+                        byte_src,
+                        accum: *accum,
+                        lsb,
+                        width,
+                    },
+                );
+                skip_set.insert(and_dst);
+                skip_set.insert(shl_dst);
+            }
+        }
+
+        (bfi_map, skip_set)
+    }
+
     /// Emit a terminator. `next_block` is the block that follows in emission order (for fallthrough elision).
     fn emit_terminator(&mut self, term: &Terminator, next_block: Option<cfg_mir::BlockId>) {
         match term {
@@ -917,26 +1246,25 @@ impl<'a> EmitContext<'a> {
                 let taken_block = self.func.edges[taken.index()].to;
                 let fallthrough_block = self.func.edges[fallthrough.index()].to;
                 let taken_label = self.block_labels[&taken_block];
-                // Try to fuse And(x, power_of_2) + branch_if into tbnz
-                if let Some((src, bit)) = self.is_and_bit_test(*cond) {
-                    let src_reg = self.reg_for_vreg_with_temp(src, Reg::X9);
-                    self.ectx
-                        .emit
-                        .emit_tbnz_label(src_reg, bit, taken_label)
-                        .expect("tbnz");
+                let fallthrough_label = self.block_labels[&fallthrough_block];
+
+                // When taken is the next block, invert the branch to target
+                // fallthrough instead, saving the unconditional `b`.
+                let invert =
+                    Some(taken_block) == next_block && Some(fallthrough_block) != next_block;
+
+                if invert {
+                    // Emit inverted branch to fallthrough, let taken be the fallthrough
+                    self.emit_branch_cond(*cond, fallthrough_label, true);
                 } else {
-                    let cond_reg = self.reg_for_vreg_with_temp(*cond, Reg::X9);
-                    self.ectx
-                        .emit
-                        .emit_cbnz_label(Width::X64, cond_reg, taken_label)
-                        .expect("cbnz");
-                }
-                if Some(fallthrough_block) != next_block {
-                    let fallthrough_label = self.block_labels[&fallthrough_block];
-                    self.ectx
-                        .emit
-                        .emit_b_label(fallthrough_label)
-                        .expect("b fallthrough");
+                    // Normal: branch to taken
+                    self.emit_branch_cond(*cond, taken_label, false);
+                    if Some(fallthrough_block) != next_block {
+                        self.ectx
+                            .emit
+                            .emit_b_label(fallthrough_label)
+                            .expect("b fallthrough");
+                    }
                 }
             }
 
@@ -948,27 +1276,24 @@ impl<'a> EmitContext<'a> {
                 let taken_block = self.func.edges[taken.index()].to;
                 let fallthrough_block = self.func.edges[fallthrough.index()].to;
                 let taken_label = self.block_labels[&taken_block];
-                // Try to fuse And(x, power_of_2) + branch_if_zero into tbz
-                if let Some((src, bit)) = self.is_and_bit_test(*cond) {
-                    let src_reg = self.reg_for_vreg_with_temp(src, Reg::X9);
-                    self.ectx
-                        .emit
-                        .emit_tbz_label(src_reg, bit, taken_label)
-                        .expect("tbz");
+                let fallthrough_label = self.block_labels[&fallthrough_block];
+
+                // When taken is the next block, invert to branch to fallthrough instead
+                let invert =
+                    Some(taken_block) == next_block && Some(fallthrough_block) != next_block;
+
+                if invert {
+                    // BranchIfZero inverted = BranchIf → emit non-inverted branch to fallthrough
+                    self.emit_branch_cond(*cond, fallthrough_label, false);
                 } else {
-                    let cond_reg = self.reg_for_vreg_with_temp(*cond, Reg::X9);
-                    self.ectx
-                        .emit
-                        .emit_cbz_label(Width::X64, cond_reg, taken_label)
-                        .expect("cbz");
-                }
-                // Only emit explicit branch if fallthrough isn't the next block
-                if Some(fallthrough_block) != next_block {
-                    let fallthrough_label = self.block_labels[&fallthrough_block];
-                    self.ectx
-                        .emit
-                        .emit_b_label(fallthrough_label)
-                        .expect("b fallthrough");
+                    // Normal: BranchIfZero = branch to taken when zero
+                    self.emit_branch_cond(*cond, taken_label, true);
+                    if Some(fallthrough_block) != next_block {
+                        self.ectx
+                            .emit
+                            .emit_b_label(fallthrough_label)
+                            .expect("b fallthrough");
+                    }
                 }
             }
 
@@ -1092,8 +1417,13 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
 
+    // Prologue config: for leaf functions, keep output_ptr in x0 and ctx_ptr in x1
+    let prologue_config = crate::arch::PrologueConfig {
+        save_x21_x22: !is_leaf,
+    };
+
     // Emit function prologue
-    let (entry, error_exit) = ectx.begin_func();
+    let (entry, error_exit) = ectx.begin_func_with_config(&prologue_config);
 
     // Create success exit label
     let success_exit = ectx.new_label();
@@ -1118,6 +1448,17 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             .map(|((_, op_id), &line)| (*op_id, line))
             .collect();
 
+        let fused_cmps = EmitContext::compute_fusable_cmps(func);
+        let (fused_bfi, fused_skip) = EmitContext::compute_fusable_bfis(func, &const_values);
+
+        // For leaf functions: keep output_ptr in x0 and ctx_ptr in x1
+        // (avoids saving/restoring x21/x22 and the arg moves).
+        let (output_reg, ctx_reg) = if is_leaf {
+            (Reg::X0, Reg::X1)
+        } else {
+            (Reg::X21, Reg::X22)
+        };
+
         let mut ctx = EmitContext {
             ectx: &mut ectx,
             func,
@@ -1128,6 +1469,11 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             const_values,
             line_map,
             intrinsic_call_sites: Vec::new(),
+            fused_cmps,
+            fused_bfi,
+            fused_skip,
+            output_reg,
+            ctx_reg,
         };
 
         ctx.emit_function();
@@ -1136,7 +1482,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
     // Bind success exit and emit epilogue
     ectx.bind_label(success_exit);
-    ectx.end_func(error_exit);
+    ectx.end_func_with_config(error_exit, &prologue_config);
 
     // Finalize
     let (buf, asm_program) = ectx.finalize();

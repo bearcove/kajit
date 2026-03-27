@@ -568,6 +568,7 @@ pub fn execute_function_with_event_trace(
         slot_count: slot_count as u32,
         debug: Default::default(),
         hints: Default::default(),
+        extra_excluded_regs: vec![],
     };
     execute_program_with_event_trace(&program, input)
 }
@@ -621,6 +622,7 @@ pub fn execute_function_with_trace(
         slot_count: slot_count as u32,
         debug: Default::default(),
         hints: Default::default(),
+        extra_excluded_regs: vec![],
     };
     execute_program_with_trace(&program, input)
 }
@@ -2251,6 +2253,7 @@ mod tests {
             slot_count: 0,
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         }
     }
 
@@ -2348,6 +2351,7 @@ mod tests {
             slot_count: 0,
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         }
     }
 

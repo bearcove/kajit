@@ -13,5 +13,6 @@ pub mod constant_phi_elim;
 pub mod dce;
 pub mod loop_phi_elim;
 pub mod reduce;
+pub mod simplify_cfg;
 pub mod validate;
 pub mod validate_ssa;

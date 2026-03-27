@@ -180,6 +180,9 @@ pub struct Program {
     pub slot_count: u32,
     pub debug: ProgramDebugProvenance,
     pub hints: crate::regalloc3::hints::HintMap,
+    /// Extra physical registers excluded from allocation (e.g., x0/x1 when used
+    /// as fixed output_ptr/ctx_ptr in leaf functions).
+    pub extra_excluded_regs: Vec<crate::regalloc3::machine_inst::PReg>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1831,6 +1834,7 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
             vreg_values: ir.debug.vreg_values.clone(),
         },
         hints,
+        extra_excluded_regs: vec![],
     }
 }
 
@@ -1956,12 +1960,40 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
         }
         validate_after("const_branch_fold", &cfg);
     }
+    if opts.enabled("simplify_cfg") {
+        for func in &mut cfg.funcs {
+            crate::opt::simplify_cfg::simplify_cfg(func, &mut cfg.vreg_count);
+        }
+        validate_after("simplify_cfg", &cfg);
+    }
     if opts.enabled("merge_blocks") {
         for func in &mut cfg.funcs {
             crate::opt::block_merge::merge_empty_blocks(func);
-            // Note: unreachable blocks are left in place, will be cleaned up by later passes
         }
         validate_after("merge_blocks", &cfg);
+    }
+    // Re-run cleanup after CFG simplification
+    if opts.enabled("simplify_cfg") {
+        // DCE after simplify_cfg to remove newly-dead values
+        if opts.enabled("dce") {
+            dead_code_elimination(&mut cfg);
+            for func in &mut cfg.funcs {
+                crate::opt::dce::eliminate_dead_block_params(func);
+            }
+            validate_after("dce_post_simplify", &cfg);
+        }
+        if opts.enabled("const_branch_fold") {
+            for func in &mut cfg.funcs {
+                crate::opt::const_branch_fold::fold_const_branches(func);
+            }
+            validate_after("const_branch_fold_post_simplify", &cfg);
+        }
+        if opts.enabled("merge_blocks") {
+            for func in &mut cfg.funcs {
+                crate::opt::block_merge::merge_empty_blocks(func);
+            }
+            validate_after("merge_blocks_post_simplify", &cfg);
+        }
     }
     // TODO: simplify_trivial_phis needs more work to maintain SSA
     // The basic idea is sound (found 32 trivial phis in scalar_u32)
@@ -4475,6 +4507,7 @@ mod tests {
             ])],
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         };
 
         // Mark v1 as used by adding it to data_results
@@ -4514,6 +4547,7 @@ mod tests {
             ])],
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         };
 
         local_cse(&mut program);
@@ -4549,6 +4583,7 @@ mod tests {
             ])],
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         };
 
         // Mark v2 as used (result)
@@ -4656,6 +4691,7 @@ mod tests {
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         };
 
         // Verify initial state
@@ -4712,6 +4748,7 @@ mod tests {
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         };
 
         let insts_before: usize = program.funcs.iter().map(|f| f.insts.len()).sum();
@@ -5244,6 +5281,7 @@ mod tests {
             ])],
             debug: Default::default(),
             hints: Default::default(),
+            extra_excluded_regs: vec![],
         };
 
         // v3 needs to be defined somewhere (as data_arg)

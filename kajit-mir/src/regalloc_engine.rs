@@ -1392,13 +1392,14 @@ pub fn allocate_cfg_program_regalloc3_native(
                 hints.entry(*dst).or_default().spill_cost = hints::SpillCost::Rematerializable;
             }
         }
-        let mut alloc_result = crate::regalloc3::ssa_coloring::allocate(
+        let mut alloc_result = crate::regalloc3::ssa_coloring::allocate_with_excluded(
             &func_mut,
             &liveness,
             abi,
             scratch,
             &hints,
             &copy_hints,
+            &program.extra_excluded_regs,
         );
 
         // SSA destruction: split critical edges then insert copies for phi edges.
@@ -1455,6 +1456,7 @@ pub fn allocate_cfg_program_regalloc3_native(
         slot_count: program.slot_count,
         debug: program.debug.clone(),
         hints: program.hints.clone(),
+        extra_excluded_regs: program.extra_excluded_regs.clone(),
     };
 
     Ok(AllocatedCfgProgramRa3 {
@@ -3772,6 +3774,7 @@ lambda @0 (shape: "u8") {
                 slot_count: 0,
                 debug: Default::default(),
                 hints: Default::default(),
+                extra_excluded_regs: vec![],
             },
             functions: vec![AllocatedCfgFunction {
                 lambda_id: LambdaId::new(0),

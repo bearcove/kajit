@@ -692,6 +692,7 @@ fn resolve_program(ast: AstProgram, registry: &IntrinsicRegistry) -> Result<Prog
         slot_count: ast.slot_count,
         debug: Default::default(),
         hints: Default::default(),
+        extra_excluded_regs: vec![],
     };
     program.validate().map_err(|err| ParseError {
         message: err.to_string(),

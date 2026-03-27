@@ -33,18 +33,33 @@ pub fn allocate(
     hints: &HintMap,
     _copy_hints: &CopyHints,
 ) -> AllocationResult {
+    allocate_with_excluded(func, liveness, abi, scratch, hints, _copy_hints, &[])
+}
+
+/// Like `allocate`, but with additional registers excluded from allocation.
+/// Used to reserve registers for hardcoded ABI roles (e.g., x0/x1 for output_ptr/ctx_ptr
+/// in leaf functions).
+pub fn allocate_with_excluded(
+    func: &Function,
+    liveness: &LivenessInfo,
+    abi: &AbiInfo,
+    scratch: &ScratchPolicy,
+    hints: &HintMap,
+    _copy_hints: &CopyHints,
+    extra_excluded: &[PReg],
+) -> AllocationResult {
     let dom = DominanceInfo::compute(func);
     let loop_info = LoopInfo::compute(func, &dom);
 
     // Collect allocatable registers
     let mut allocatable: Vec<PReg> = Vec::new();
     for &preg in abi.caller_saved_gpr {
-        if !scratch.reserved.contains(&preg) {
+        if !scratch.reserved.contains(&preg) && !extra_excluded.contains(&preg) {
             allocatable.push(preg);
         }
     }
     for &preg in abi.callee_saved_gpr {
-        if !scratch.reserved.contains(&preg) {
+        if !scratch.reserved.contains(&preg) && !extra_excluded.contains(&preg) {
             allocatable.push(preg);
         }
     }
