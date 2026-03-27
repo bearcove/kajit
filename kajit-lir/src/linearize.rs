@@ -1889,6 +1889,14 @@ impl<'a> Linearizer<'a> {
     /// `arg_env` maps region args to the VRegs of the corresponding gamma inputs.
     /// `pending_consts` accumulates fresh const instructions to emit on success.
     /// Returns None if the source can't be projected (caller should bail).
+    ///
+    /// This projector is environment-driven, NOT graph-crawling. It resolves:
+    /// - RegionArg → lookup in arg_env (O(1))
+    /// - Const → fresh vreg
+    /// - Nested gamma with const predicate → pick taken branch, recurse into result
+    ///
+    /// Sub-envs for nested gammas are built by resolving each gamma input through
+    /// the PARENT arg_env — no recursive projection of inputs.
     fn project_source(
         &mut self,
         source: &PortSource,
@@ -1897,37 +1905,13 @@ impl<'a> Linearizer<'a> {
         fallback_scope: DebugScopeId,
         depth: usize,
     ) -> Option<VReg> {
-        if depth > 24 {
+        if depth > 32 {
             return None;
         }
         match source {
             PortSource::RegionArg(arg_ref) => {
-                // Direct lookup: this region arg maps to a gamma input VReg
-                if let Some(&vreg) = arg_env.get(&arg_ref.arg) {
-                    return Some(vreg);
-                }
-                // Not in our env — might be from an outer region. Try resolving
-                // through the gamma arg → input chain.
-                let region = arg_ref.region;
-                let arg_idx = self.func.regions[region]
-                    .args
-                    .iter()
-                    .position(|a| *a == arg_ref.arg)?;
-                let owner = self.func.find_region_owner(region)?;
-                match &self.func.nodes[owner].kind {
-                    NodeKind::Gamma { .. } => {
-                        // Gamma branch arg[K] → gamma input[K+1]
-                        let input = self.func.nodes[owner].inputs.get(arg_idx + 1)?;
-                        self.project_source(
-                            &input.source,
-                            arg_env,
-                            pending_consts,
-                            fallback_scope,
-                            depth + 1,
-                        )
-                    }
-                    _ => None,
-                }
+                // Direct lookup in the current environment
+                arg_env.get(&arg_ref.arg).copied()
             }
             PortSource::Node(out_ref) => {
                 let node = &self.func.nodes[out_ref.node];
@@ -1940,54 +1924,97 @@ impl<'a> Linearizer<'a> {
                     NodeKind::Gamma { regions } => {
                         let output_index = out_ref.index as usize;
 
-                        // Try: evaluate predicate to select a specific branch
-                        let pred_source = &node.inputs[0].source;
-                        if let Some(pred_vreg) = self.project_source(
-                            pred_source,
+                        // Resolve the predicate to a constant value.
+                        // Use resolve_source_to_const (non-recursive, env-only).
+                        let pred_val = self.resolve_source_to_const(
+                            &node.inputs[0].source,
                             arg_env,
                             pending_consts,
-                            fallback_scope,
-                            depth + 1,
-                        ) {
-                            // Check if the predicate resolved to a pending const
-                            if let Some(&(_, val, _)) =
-                                pending_consts.iter().find(|(v, _, _)| *v == pred_vreg)
-                            {
-                                let branch_idx = (val as usize).min(regions.len() - 1);
-                                let branch_region = regions[branch_idx];
-                                // Build sub-env for this branch
-                                let mut sub_env = HashMap::new();
-                                let br = &self.func.regions[branch_region];
-                                for (i, &arg_id) in br.args.iter().enumerate() {
-                                    if let Some(input) = node.inputs.get(i + 1) {
-                                        if let Some(v) = self.project_source(
-                                            &input.source,
-                                            arg_env,
-                                            pending_consts,
-                                            fallback_scope,
-                                            depth + 1,
-                                        ) {
-                                            sub_env.insert(arg_id, v);
-                                        }
-                                    }
+                        )?;
+
+                        let branch_idx = (pred_val as usize).min(regions.len() - 1);
+                        let branch_region = regions[branch_idx];
+
+                        // Build sub-env: map branch region args to gamma inputs,
+                        // resolved through the PARENT arg_env (no recursive projection).
+                        let br = &self.func.regions[branch_region];
+                        let mut sub_env: HashMap<kajit_ir::ArgId, VReg> = HashMap::new();
+                        for (i, &arg_id) in br.args.iter().enumerate() {
+                            if let Some(input) = node.inputs.get(i + 1) {
+                                // Try direct resolution: RegionArg → arg_env, or
+                                // already-resolved vreg
+                                if let Some(v) =
+                                    self.resolve_source_from_env(&input.source, arg_env)
+                                {
+                                    sub_env.insert(arg_id, v);
                                 }
-                                let result_id =
-                                    *self.func.regions[branch_region].results.get(output_index)?;
-                                let result_source = &self.func.region_results[result_id].source;
-                                return self.project_source(
-                                    result_source,
-                                    &sub_env,
-                                    pending_consts,
-                                    fallback_scope,
-                                    depth + 1,
-                                );
+                                // If we can't resolve from env, the arg just won't
+                                // be in sub_env. If the result needs it, project_source
+                                // will return None.
                             }
                         }
 
-                        None // Predicate couldn't be resolved; bail
+                        let result_id =
+                            *self.func.regions[branch_region].results.get(output_index)?;
+                        let result_source = &self.func.region_results[result_id].source;
+                        self.project_source(
+                            result_source,
+                            &sub_env,
+                            pending_consts,
+                            fallback_scope,
+                            depth + 1,
+                        )
                     }
-                    _ => None, // Side-effecting or unknown — bail
+                    _ => None,
                 }
+            }
+        }
+    }
+
+    /// Resolve a PortSource to a constant u64, using only the environment
+    /// (no recursive graph crawling). Checks arg_env → pending_consts → direct const.
+    fn resolve_source_to_const(
+        &self,
+        source: &PortSource,
+        arg_env: &HashMap<kajit_ir::ArgId, VReg>,
+        pending_consts: &[(VReg, u64, DebugScopeId)],
+    ) -> Option<u64> {
+        match source {
+            PortSource::RegionArg(arg_ref) => {
+                let vreg = arg_env.get(&arg_ref.arg)?;
+                // Check if this vreg is a pending const
+                pending_consts
+                    .iter()
+                    .find(|(v, _, _)| v == vreg)
+                    .map(|(_, val, _)| *val)
+            }
+            PortSource::Node(out_ref) => {
+                let node = &self.func.nodes[out_ref.node];
+                if let NodeKind::Simple(IrOp::Const { value }) = &node.kind {
+                    return Some(*value);
+                }
+                // Also check: is this a ReadFromSlot that we can trace?
+                // Use the existing RVSDG resolver for this single hop.
+                kajit_ir::const_fold::resolve_to_constant(self.func, source)
+            }
+        }
+    }
+
+    /// Resolve a PortSource to an existing VReg from the environment.
+    /// No allocation, no recursion. Just arg_env lookup or resolve_vreg for
+    /// already-linearized nodes.
+    fn resolve_source_from_env(
+        &self,
+        source: &PortSource,
+        arg_env: &HashMap<kajit_ir::ArgId, VReg>,
+    ) -> Option<VReg> {
+        match source {
+            PortSource::RegionArg(arg_ref) => arg_env.get(&arg_ref.arg).copied(),
+            PortSource::Node(out_ref) => {
+                // The node's output vreg should already be assigned
+                let node = &self.func.nodes[out_ref.node];
+                let out = node.outputs.get(out_ref.index as usize)?;
+                out.vreg
             }
         }
     }
