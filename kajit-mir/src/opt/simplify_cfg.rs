@@ -18,19 +18,13 @@ use kajit_lir::LinearOp;
 /// Run CFG simplification: trampoline forwarding + jump-threading.
 /// Returns true if any changes were made.
 pub fn simplify_cfg(func: &mut Function, _vreg_count: &mut u32) -> bool {
-    let mut changed = false;
-    loop {
-        let a = forward_trampolines(func);
-        let b = thread_phi_branches(func);
-        if !a && !b {
-            break;
-        }
-        changed = true;
-    }
-    if changed {
-        crate::opt::block_merge::remove_unreachable_blocks(func);
-    }
-    changed
+    // Disabled: the trampoline forwarding's global vreg replacement is unsound
+    // and interacts badly with thread_phi_branches. The control-only gamma output
+    // elimination in the linearizer (KAJIT_CHAIN_EXIT=1) replaces the need for
+    // CFG-level is_more threading. This pass needs a rewrite with structural edge
+    // forwarding before re-enabling.
+    let _ = func;
+    false
 }
 
 /// Forward through empty trampoline blocks (unconditional Branch, no instructions).
@@ -219,11 +213,11 @@ fn thread_phi_branches(func: &mut Function) -> bool {
         }
         let source_vreg = pred_edge.args[param_idx].source;
 
-        let known_nonzero = if let Some(&val) = const_vals.get(&source_vreg) {
-            Some(val != 0)
-        } else {
-            infer_nonzero_from_predecessor(func, pred_edge_id, source_vreg)
-        };
+        // Only use compile-time constants for now. Branch-condition inference
+        // (infer_nonzero_from_predecessor) enables threading of blocks whose
+        // live-out params create SSA violations. Disabled until the trampoline
+        // forwarding's global replacement is made dominance-safe.
+        let known_nonzero = const_vals.get(&source_vreg).map(|&val| val != 0);
 
         let Some(is_nonzero) = known_nonzero else {
             return false;
@@ -247,48 +241,6 @@ fn thread_phi_branches(func: &mut Function) -> bool {
 
     if pred_targets.is_empty() {
         return false;
-    }
-
-    // Pre-processing: for non-condition params where ALL predecessors supply the
-    // same source vreg, globally replace the param with that source.
-    let block = &func.blocks[block_id.index()];
-    let block_params = block.params.clone();
-    let pred_edges: Vec<EdgeId> = block.preds.clone();
-    {
-        let mut global_subst: HashMap<VReg, VReg> = HashMap::new();
-        for (pi, param) in block_params.iter().enumerate() {
-            if *param == cond {
-                continue;
-            }
-            let mut common_source: Option<VReg> = None;
-            let mut all_same = true;
-            for &pred_edge_id in &pred_edges {
-                let pred_edge = &func.edges[pred_edge_id.index()];
-                if pred_edge.args.len() <= pi {
-                    all_same = false;
-                    break;
-                }
-                let src = pred_edge.args[pi].source;
-                match common_source {
-                    None => common_source = Some(src),
-                    Some(prev) if prev == src => {}
-                    _ => {
-                        all_same = false;
-                        break;
-                    }
-                }
-            }
-            if all_same {
-                if let Some(src) = common_source {
-                    if src != *param {
-                        global_subst.insert(*param, src);
-                    }
-                }
-            }
-        }
-        if !global_subst.is_empty() {
-            crate::opt::constant_phi_elim::replace_vregs_in_function(func, &global_subst);
-        }
     }
 
     let block = &func.blocks[block_id.index()];
