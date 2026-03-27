@@ -1103,8 +1103,12 @@ impl<'a> Linearizer<'a> {
         // continue branch and this gamma has a passthrough branch, lower the
         // non-passthrough ("done") branch as a direct exit to the chain's landing.
         // This eliminates the merge block for control-only flag outputs.
-        if self.try_linearize_inner_chain_exit(node_id, regions) {
-            return;
+        // Gated behind KAJIT_CHAIN_EXIT=1 until merge_blocks and simplify_cfg
+        // are fixed to handle the new CFG shape.
+        if std::env::var("KAJIT_CHAIN_EXIT").is_ok() {
+            if self.try_linearize_inner_chain_exit(node_id, regions) {
+                return;
+            }
         }
 
         let node = &self.func.nodes[node_id];
