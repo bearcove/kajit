@@ -378,8 +378,9 @@ impl EmitCtx {
                 0,
             )
             .expect("movz");
+        let ctx_reg = if self.is_leaf { Reg::X1 } else { Reg::X22 };
         self.emit
-            .emit_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+            .emit_str_imm(aarch64::Width::W32, Reg::X9, ctx_reg, CTX_ERROR_CODE)
             .expect("str");
         let error_exit = self.error_exit;
         self.emit.emit_b_label(error_exit).expect("b");
@@ -387,14 +388,21 @@ impl EmitCtx {
     }
 
     /// Emit an error (write error code to ctx, branch to error_exit).
+    /// Uses X22 as ctx_reg for non-leaf, X1 for leaf.
     pub fn emit_error(&mut self, code: crate::context::ErrorCode) {
+        let ctx_reg = if self.is_leaf { Reg::X1 } else { Reg::X22 };
+        self.emit_error_with_ctx_reg(code, ctx_reg);
+    }
+
+    /// Emit an error with an explicit ctx register.
+    pub fn emit_error_with_ctx_reg(&mut self, code: crate::context::ErrorCode, ctx_reg: Reg) {
         let error_exit = self.error_exit;
         let error_code = code as u32;
         self.emit
             .emit_movz_imm(aarch64::Width::W32, Reg::X9, error_code as u16, 0)
             .expect("movz");
         self.emit
-            .emit_str_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
+            .emit_str_imm(aarch64::Width::W32, Reg::X9, ctx_reg, CTX_ERROR_CODE)
             .expect("str");
         self.emit.emit_b_label(error_exit).expect("b");
     }

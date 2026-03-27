@@ -532,7 +532,7 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ErrorExit { code } => {
-                self.ectx.emit_error(*code);
+                self.ectx.emit_error_with_ctx_reg(*code, self.ctx_reg);
             }
 
             LinearOp::CallIntrinsic {
@@ -1345,7 +1345,7 @@ impl<'a> EmitContext<'a> {
             }
 
             Terminator::ErrorExit { code } => {
-                self.ectx.emit_error(*code);
+                self.ectx.emit_error_with_ctx_reg(*code, self.ctx_reg);
             }
 
             Terminator::JumpTable { .. } => {
