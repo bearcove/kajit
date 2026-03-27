@@ -1245,11 +1245,13 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
             push_use(&mut operands, *src, None);
         }
         LinearOp::CallIntrinsic { args, dst, .. } => {
+            // Args are uses (kept alive until call). The backend handles ABI
+            // marshalling with a parallel move solver to avoid clobbering.
             for &arg in args {
                 push_use(&mut operands, arg, None);
             }
             if let Some(dst) = dst {
-                push_def(&mut operands, *dst, None);
+                push_def(&mut operands, *dst, Some(FixedReg::AbiRet(0)));
             }
             clobbers = Clobbers {
                 caller_saved_gpr: true,
@@ -1260,7 +1262,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
             for &arg in args {
                 push_use(&mut operands, arg, None);
             }
-            push_def(&mut operands, *dst, None);
+            push_def(&mut operands, *dst, Some(FixedReg::AbiRet(0)));
             clobbers = Clobbers {
                 caller_saved_gpr: true,
                 caller_saved_simd: true,

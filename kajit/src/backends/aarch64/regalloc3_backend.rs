@@ -126,6 +126,53 @@ impl<'a> EmitContext<'a> {
         }
     }
 
+    /// Emit a set of parallel register moves using Briggs-style resolution.
+    /// `moves` is a list of (dst, src) pairs. `temp` is a scratch register
+    /// used to break cycles.
+    fn emit_parallel_moves(&mut self, moves: &[(Reg, Reg)], temp: Reg) {
+        // Build dependency map: dst → src
+        let mut deps: HashMap<Reg, Reg> = HashMap::new();
+        for &(dst, src) in moves {
+            if dst != src {
+                deps.insert(dst, src);
+            }
+        }
+
+        while !deps.is_empty() {
+            // Find a ready move: dst whose src is not another move's dst
+            let ready = deps
+                .iter()
+                .find(|(_, src)| !deps.contains_key(src))
+                .map(|(&dst, &src)| (dst, src));
+
+            if let Some((dst, src)) = ready {
+                self.ectx
+                    .emit
+                    .emit_mov_reg(Width::X64, dst, src)
+                    .expect("mov");
+                deps.remove(&dst);
+            } else {
+                // Cycle: break it with temp register
+                let (&cycle_dst, &cycle_src) = deps.iter().next().unwrap();
+                self.ectx
+                    .emit
+                    .emit_mov_reg(Width::X64, temp, cycle_src)
+                    .expect("mov to temp");
+                deps.remove(&cycle_dst);
+                // Update any dep that sourced from cycle_src to source from temp
+                for (_, src) in deps.iter_mut() {
+                    if *src == cycle_src {
+                        *src = temp;
+                    }
+                }
+                self.ectx
+                    .emit
+                    .emit_mov_reg(Width::X64, cycle_dst, temp)
+                    .expect("mov from temp");
+            }
+        }
+    }
+
     /// Load a 64-bit constant into a register.
     fn emit_load_u64(&mut self, rd: Reg, value: u64) {
         let p0 = (value & 0xFFFF) as u16;
@@ -811,19 +858,43 @@ impl<'a> EmitContext<'a> {
             }
         }
 
-        // Load args into x1+ (x0=ctx)
-        for (i, &arg) in args.iter().enumerate() {
-            let target_reg = Reg::from_raw((i + 1) as u8);
-            let src_reg = self.reg_for_vreg_with_temp(arg, Reg::X9);
-            if src_reg != target_reg {
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, target_reg, src_reg)
-                    .expect("mov arg");
+        // Marshal args into ABI registers: x0=ctx, x1=args[0], x2=args[1], ...
+        // First, load any spilled args directly into their target ABI registers.
+        // Then use parallel move solver for register-to-register shuffles.
+        {
+            let mut moves: Vec<(Reg, Reg)> = Vec::new();
+            // ctx → x0
+            if self.ctx_reg != Reg::X0 {
+                moves.push((Reg::X0, self.ctx_reg));
             }
+            // For each arg: if in register, add to parallel move set.
+            // If spilled, load directly into the target ABI register.
+            for (i, &arg) in args.iter().enumerate() {
+                let target = Reg::from_raw((i + 1) as u8);
+                if let Some(preg) = self.preg_for_vreg(arg) {
+                    let src = self.preg_to_reg(preg);
+                    if src != target {
+                        moves.push((target, src));
+                    }
+                } else if let Some(slot) = self.alloc_func.spill_slot_for_vreg(arg) {
+                    // Spilled: load directly into target register
+                    let offset = self.ectx.base_frame + (slot.0 * 8);
+                    self.ectx
+                        .emit
+                        .emit_ldr_imm(Width::X64, target, Reg::SP, offset)
+                        .expect("ldr spill");
+                } else {
+                    // Dead vreg - shouldn't happen for call args, but handle gracefully
+                    self.ectx
+                        .emit
+                        .emit_movz_imm(Width::X64, target, 0, 0)
+                        .expect("movz dead");
+                }
+            }
+            self.emit_parallel_moves(&moves, Reg::X9);
         }
 
-        // If no dst but field_offset, pass x21 (already adjusted) as out_field arg
+        // If no dst but field_offset, pass output_reg (already adjusted) as out_field arg
         if dst.is_none() {
             if field_offset.is_some() {
                 let arg_idx = args.len() + 1;
@@ -833,12 +904,6 @@ impl<'a> EmitContext<'a> {
                     .expect("mov out_field");
             }
         }
-
-        // x0 = ctx
-        self.ectx
-            .emit
-            .emit_mov_reg(Width::X64, Reg::X0, self.ctx_reg)
-            .expect("mov ctx");
 
         // Load function pointer and call
         let call_site_offset = self.ectx.emit.code_len();
@@ -894,16 +959,30 @@ impl<'a> EmitContext<'a> {
         args: &[kajit_ir::VReg],
         dst: kajit_ir::VReg,
     ) {
-        // Load args into x0+
-        for (i, &arg) in args.iter().enumerate() {
-            let target_reg = Reg::from_raw(i as u8);
-            let src_reg = self.reg_for_vreg_with_temp(arg, Reg::X9);
-            if src_reg != target_reg {
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, target_reg, src_reg)
-                    .expect("mov arg");
+        // Marshal args into ABI registers with parallel move solver
+        {
+            let mut moves: Vec<(Reg, Reg)> = Vec::new();
+            for (i, &arg) in args.iter().enumerate() {
+                let target = Reg::from_raw(i as u8);
+                if let Some(preg) = self.preg_for_vreg(arg) {
+                    let src = self.preg_to_reg(preg);
+                    if src != target {
+                        moves.push((target, src));
+                    }
+                } else if let Some(slot) = self.alloc_func.spill_slot_for_vreg(arg) {
+                    let offset = self.ectx.base_frame + (slot.0 * 8);
+                    self.ectx
+                        .emit
+                        .emit_ldr_imm(Width::X64, target, Reg::SP, offset)
+                        .expect("ldr spill");
+                } else {
+                    self.ectx
+                        .emit
+                        .emit_movz_imm(Width::X64, target, 0, 0)
+                        .expect("movz dead");
+                }
             }
+            self.emit_parallel_moves(&moves, Reg::X9);
         }
 
         // Load function pointer and call
