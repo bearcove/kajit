@@ -363,6 +363,8 @@ pub struct Emitter {
     last_recorded_location: Option<SourceLocation>,
     labels: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
+    /// Label aliases: (from, to) — `from` resolves to whatever `to` resolves to.
+    label_aliases: Vec<(LabelId, LabelId)>,
     /// Optional instruction capture for assembly dump/parse
     captured_instructions: Option<Vec<crate::aarch64_asm::Item>>,
 }
@@ -455,6 +457,14 @@ impl Emitter {
         *slot = Some(current_offset);
         self.capture_label(label);
         Ok(())
+    }
+
+    /// Make `from` resolve to the same offset as `to` during finalization.
+    /// Used to eliminate trampoline blocks: instead of emitting a label + `b target`,
+    /// the trampoline's label becomes an alias for the target.
+    /// `to` does not need to be bound yet — the alias is resolved during finalization.
+    pub fn alias_label(&mut self, from: LabelId, to: LabelId) {
+        self.label_aliases.push((from, to));
     }
 
     pub(crate) fn emit_word(&mut self, word: u32) {
@@ -1055,6 +1065,23 @@ impl Emitter {
     }
 
     pub fn finalize(mut self) -> Result<FinalizedEmission, EmitError> {
+        // Resolve label aliases: bind aliased labels to their target's offset.
+        // Iterate to handle transitive aliases (A → B → C).
+        for _ in 0..16 {
+            let mut resolved_any = false;
+            for &(from, to) in &self.label_aliases {
+                if self.labels[from.0 as usize].is_none() {
+                    if let Some(target_offset) = self.labels[to.0 as usize] {
+                        self.labels[from.0 as usize] = Some(target_offset);
+                        resolved_any = true;
+                    }
+                }
+            }
+            if !resolved_any {
+                break;
+            }
+        }
+
         for fixup in self.fixups.iter().copied() {
             let target = self
                 .labels

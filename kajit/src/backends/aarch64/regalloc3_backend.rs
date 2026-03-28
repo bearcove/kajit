@@ -6,6 +6,7 @@ use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::{AllocatedCfgFunctionRa3, AllocatedCfgProgramRa3};
 
 use crate::arch::EmitCtx;
+use crate::context::{CTX_INPUT_END, CTX_INPUT_PTR};
 use crate::ir_backend::LinearBackendResult;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use std::collections::HashMap;
@@ -44,6 +45,12 @@ struct EmitContext<'a> {
     ctx_reg: Reg,
     /// Intermediate vregs (And/Shl results) whose instructions should be skipped.
     fused_skip: std::collections::HashSet<kajit_ir::VReg>,
+    /// Register used by RestoreCursor and the epilogue for cursor writeback.
+    /// x19 for non-leaf, a caller-saved register for leaf.
+    cursor_writeback_reg: Reg,
+    /// Set to true when emitting the last block before the success epilogue.
+    /// Allows Return terminator to fall through instead of branching.
+    is_last_emitted_block: bool,
 }
 
 struct BfiInfo {
@@ -243,8 +250,6 @@ impl<'a> EmitContext<'a> {
 
             LinearOp::Const { dst, value } => {
                 // Skip immediate-only consts (operands cleared by elim_imm).
-                // The const value is still available via const_of() for
-                // instructions that use immediate encoding.
                 if inst.operands.is_empty() {
                     return;
                 }
@@ -269,7 +274,18 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::SaveCursor { dst } => {
-                if let Some(preg) = self.preg_for_vreg(*dst) {
+                // For leaf functions, load cursor directly from context struct
+                // into the regalloc'd register (avoids prologue → x19 → copy).
+                if self.ectx.is_leaf {
+                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X9);
+                    self.ectx
+                        .emit
+                        .emit_ldr_imm(Width::X64, dst_reg, self.ctx_reg, CTX_INPUT_PTR)
+                        .expect("ldr cursor");
+                    if dst_reg == Reg::X9 {
+                        self.store_to_vreg(*dst, Reg::X9);
+                    }
+                } else if let Some(preg) = self.preg_for_vreg(*dst) {
                     let dst_reg = self.preg_to_reg(preg);
                     self.ectx
                         .emit
@@ -285,7 +301,17 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::SaveInputEnd { dst } => {
-                if let Some(preg) = self.preg_for_vreg(*dst) {
+                // For leaf functions, load input_end directly from context struct.
+                if self.ectx.is_leaf {
+                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X9);
+                    self.ectx
+                        .emit
+                        .emit_ldr_imm(Width::X64, dst_reg, self.ctx_reg, CTX_INPUT_END)
+                        .expect("ldr input_end");
+                    if dst_reg == Reg::X9 {
+                        self.store_to_vreg(*dst, Reg::X9);
+                    }
+                } else if let Some(preg) = self.preg_for_vreg(*dst) {
                     let dst_reg = self.preg_to_reg(preg);
                     self.ectx
                         .emit
@@ -302,10 +328,16 @@ impl<'a> EmitContext<'a> {
 
             LinearOp::RestoreCursor { src } => {
                 let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, Reg::X19, src_reg)
-                    .expect("mov");
+                // Write cursor to the writeback register. For leaf functions
+                // with direct context loading, this is a caller-saved register
+                // instead of x19.
+                let cursor_reg = self.cursor_writeback_reg;
+                if cursor_reg != src_reg {
+                    self.ectx
+                        .emit
+                        .emit_mov_reg(Width::X64, cursor_reg, src_reg)
+                        .expect("mov");
+                }
             }
 
             LinearOp::BoundsCheck { count } => {
@@ -1422,21 +1454,45 @@ impl<'a> EmitContext<'a> {
         }
     }
 
+    /// Resolve a block ID through trampoline aliases.
+    /// If `block_id` is a trampoline (no insts, Branch terminator), follow
+    /// the chain to the final non-trampoline target.
+    fn resolve_trampoline(&self, mut block_id: cfg_mir::BlockId) -> cfg_mir::BlockId {
+        for _ in 0..16 {
+            let block = &self.func.blocks[block_id.index()];
+            if !block.insts.is_empty() {
+                break;
+            }
+            let term = &self.func.terms[block.term.0 as usize];
+            if let Terminator::Branch { edge } = term {
+                block_id = self.func.edges[edge.index()].to;
+            } else {
+                break;
+            }
+        }
+        block_id
+    }
+
     /// Emit a terminator. `next_block` is the block that follows in emission order (for fallthrough elision).
     fn emit_terminator(&mut self, term: &Terminator, next_block: Option<cfg_mir::BlockId>) {
         match term {
             Terminator::Return => {
-                let success_exit = self.success_exit;
-                self.ectx
-                    .emit
-                    .emit_b_label(success_exit)
-                    .expect("b success");
+                // Elide the branch if the success epilogue will be emitted
+                // immediately after this block (last_emitted_block flag).
+                if !self.is_last_emitted_block {
+                    let success_exit = self.success_exit;
+                    self.ectx
+                        .emit
+                        .emit_b_label(success_exit)
+                        .expect("b success");
+                }
             }
 
             Terminator::Branch { edge } => {
                 let target_block = self.func.edges[edge.index()].to;
-                // Skip branch if target is the next block in emission order
-                if Some(target_block) != next_block {
+                // Resolve through trampolines for fallthrough elision.
+                let resolved = self.resolve_trampoline(target_block);
+                if Some(resolved) != next_block {
                     let label = self.block_labels[&target_block];
                     self.ectx.emit.emit_b_label(label).expect("branch");
                 }
@@ -1452,18 +1508,17 @@ impl<'a> EmitContext<'a> {
                 let taken_label = self.block_labels[&taken_block];
                 let fallthrough_label = self.block_labels[&fallthrough_block];
 
-                // When taken is the next block, invert the branch to target
-                // fallthrough instead, saving the unconditional `b`.
+                // Resolve through trampolines for fallthrough elision.
+                let resolved_taken = self.resolve_trampoline(taken_block);
+                let resolved_fall = self.resolve_trampoline(fallthrough_block);
                 let invert =
-                    Some(taken_block) == next_block && Some(fallthrough_block) != next_block;
+                    Some(resolved_taken) == next_block && Some(resolved_fall) != next_block;
 
                 if invert {
-                    // Emit inverted branch to fallthrough, let taken be the fallthrough
                     self.emit_branch_cond(*cond, fallthrough_label, true);
                 } else {
-                    // Normal: branch to taken
                     self.emit_branch_cond(*cond, taken_label, false);
-                    if Some(fallthrough_block) != next_block {
+                    if Some(resolved_fall) != next_block {
                         self.ectx
                             .emit
                             .emit_b_label(fallthrough_label)
@@ -1482,9 +1537,10 @@ impl<'a> EmitContext<'a> {
                 let taken_label = self.block_labels[&taken_block];
                 let fallthrough_label = self.block_labels[&fallthrough_block];
 
-                // When taken is the next block, invert to branch to fallthrough instead
+                let resolved_taken = self.resolve_trampoline(taken_block);
+                let resolved_fall = self.resolve_trampoline(fallthrough_block);
                 let invert =
-                    Some(taken_block) == next_block && Some(fallthrough_block) != next_block;
+                    Some(resolved_taken) == next_block && Some(resolved_fall) != next_block;
 
                 if invert {
                     // BranchIfZero inverted = BranchIf → emit non-inverted branch to fallthrough
@@ -1492,7 +1548,7 @@ impl<'a> EmitContext<'a> {
                 } else {
                     // Normal: BranchIfZero = branch to taken when zero
                     self.emit_branch_cond(*cond, taken_label, true);
-                    if Some(fallthrough_block) != next_block {
+                    if Some(resolved_fall) != next_block {
                         self.ectx
                             .emit
                             .emit_b_label(fallthrough_label)
@@ -1519,12 +1575,52 @@ impl<'a> EmitContext<'a> {
             self.block_labels.insert(block.id, label);
         }
 
-        // Emit each block
+        // Alias trampoline blocks: blocks with no instructions and an
+        // unconditional Branch terminator become label aliases for their target.
+        for block in &self.func.blocks {
+            if block.dead || !block.insts.is_empty() {
+                continue;
+            }
+            let term = &self.func.terms[block.term.0 as usize];
+            if let Terminator::Branch { edge } = term {
+                let target_block = self.func.edges[edge.index()].to;
+                let from_label = self.block_labels[&block.id];
+                let to_label = self.block_labels[&target_block];
+                self.ectx.emit.alias_label(from_label, to_label);
+            }
+        }
+
+        // Build emission order: all non-Return blocks first, then Return blocks.
+        // This allows the last Return block to fall through into the success epilogue.
+        let mut emit_order: Vec<usize> = Vec::new();
+        let mut return_blocks: Vec<usize> = Vec::new();
         for block_idx in 0..self.func.blocks.len() {
             let block = &self.func.blocks[block_idx];
             if block.dead {
                 continue;
             }
+            // Skip trampoline blocks (aliased above, no code to emit).
+            if block.insts.is_empty() {
+                let term = &self.func.terms[block.term.0 as usize];
+                if let Terminator::Branch { .. } = term {
+                    continue;
+                }
+            }
+            let term = &self.func.terms[block.term.0 as usize];
+            if matches!(term, Terminator::Return) {
+                return_blocks.push(block_idx);
+            } else {
+                emit_order.push(block_idx);
+            }
+        }
+        emit_order.extend(return_blocks);
+
+        // Emit each block in the computed order
+        for (emit_idx, &block_idx) in emit_order.iter().enumerate() {
+            let block = &self.func.blocks[block_idx];
+
+            // Detect if this is the last block in emission order.
+            self.is_last_emitted_block = emit_idx == emit_order.len() - 1;
 
             // Bind label for this block (except entry which comes after prologue)
             if block.id.0 != 0 {
@@ -1546,11 +1642,10 @@ impl<'a> EmitContext<'a> {
                 self.emit_inst(inst);
             }
 
-            // Find next non-dead block in emission order
-            let next_block_id = self.func.blocks[block_idx + 1..]
-                .iter()
-                .find(|b| !b.dead)
-                .map(|b| b.id);
+            // Find next block in emission order (for fallthrough elision)
+            let next_block_id = emit_order
+                .get(emit_idx + 1)
+                .map(|&idx| self.func.blocks[idx].id);
 
             // Emit terminator with source location
             let term_op = kajit_mir::cfg_mir::OpId::Term(block.term);
@@ -1621,9 +1716,34 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
 
-    // Prologue config: for leaf functions, keep output_ptr in x0 and ctx_ptr in x1
+    // Prologue config: for leaf functions, keep output_ptr in x0 and ctx_ptr in x1.
+    // Also skip loading cursor/end into x19/x20 — SaveCursor/SaveInputEnd load
+    // from the context struct directly.
+    let cursor_writeback_reg = if is_leaf { Reg::X15 } else { Reg::X19 };
+
+    // Check if regalloc actually uses x19 or x20 for anything.
+    let uses_x19_x20 = alloc.functions.iter().any(|f| {
+        f.allocations.values().any(|a| {
+            matches!(a, kajit_mir::regalloc3::linear_scan::Allocation::Reg(p) if p.0 == 19 || p.0 == 20)
+        })
+    });
+    let need_save_x19_x20 = if is_leaf {
+        // Leaf: only save x19/x20 if regalloc uses them.
+        uses_x19_x20
+    } else {
+        // Non-leaf: always save (prologue modifies x19/x20).
+        true
+    };
+
     let prologue_config = crate::arch::PrologueConfig {
         save_x21_x22: !is_leaf,
+        save_x19_x20: need_save_x19_x20,
+        load_cursor_x19_x20: !is_leaf,
+        cursor_writeback_reg: if is_leaf {
+            Some(cursor_writeback_reg)
+        } else {
+            None
+        },
     };
 
     // Emit function prologue
@@ -1679,6 +1799,8 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             fused_skip,
             output_reg,
             ctx_reg,
+            cursor_writeback_reg,
+            is_last_emitted_block: false,
         };
 
         ctx.emit_function();

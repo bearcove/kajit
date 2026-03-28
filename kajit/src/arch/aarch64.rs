@@ -32,11 +32,26 @@ pub struct PrologueConfig {
     /// Whether to save/restore x21/x22 and move args.
     /// When false (leaf optimization), output_ptr stays in x0 and ctx_ptr in x1.
     pub save_x21_x22: bool,
+    /// Whether to save/restore x19/x20. When false, the prologue/epilogue skip
+    /// the stp/ldp for these registers (leaf functions that don't modify them).
+    pub save_x19_x20: bool,
+    /// Whether the prologue loads cursor/end into x19/x20 and the epilogue
+    /// writes x19 back. When false (leaf + regalloc3), SaveCursor/SaveInputEnd
+    /// load from the context struct directly, and the epilogue uses `cursor_writeback_reg`.
+    pub load_cursor_x19_x20: bool,
+    /// Register to read the cursor from for the success-path writeback.
+    /// Only used when `load_cursor_x19_x20` is false.
+    pub cursor_writeback_reg: Option<Reg>,
 }
 
 impl Default for PrologueConfig {
     fn default() -> Self {
-        Self { save_x21_x22: true }
+        Self {
+            save_x21_x22: true,
+            save_x19_x20: true,
+            load_cursor_x19_x20: true,
+            cursor_writeback_reg: None,
+        }
     }
 }
 
@@ -151,8 +166,9 @@ impl EmitCtx {
             BASE_FRAME
         };
 
-        // When not saving x21/x22, reduce the base frame by 16 bytes
-        let effective_base = if config.save_x21_x22 { base } else { base - 16 };
+        // Reduce frame size when skipping x21/x22 save.
+        // Note: x19/x20 space is NOT reclaimed here because base_frame is fixed
+        // at EmitCtx construction and spill slots depend on it.
         let effective_frame_size = if config.save_x21_x22 {
             frame_size
         } else {
@@ -177,10 +193,12 @@ impl EmitCtx {
                 .expect("stp");
             offset += 16;
         }
-        self.emit
-            .emit_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, offset)
-            .expect("stp");
-        offset += 16;
+        if config.save_x19_x20 {
+            self.emit
+                .emit_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, offset)
+                .expect("stp");
+            offset += 16;
+        }
         if config.save_x21_x22 {
             self.emit
                 .emit_stp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, offset)
@@ -224,12 +242,14 @@ impl EmitCtx {
             Reg::X1
         };
 
-        self.emit
-            .emit_ldr_imm(aarch64::Width::X64, Reg::X19, ctx_reg, CTX_INPUT_PTR)
-            .expect("ldr");
-        self.emit
-            .emit_ldr_imm(aarch64::Width::X64, Reg::X20, ctx_reg, CTX_INPUT_END)
-            .expect("ldr");
+        if config.load_cursor_x19_x20 {
+            self.emit
+                .emit_ldr_imm(aarch64::Width::X64, Reg::X19, ctx_reg, CTX_INPUT_PTR)
+                .expect("ldr");
+            self.emit
+                .emit_ldr_imm(aarch64::Width::X64, Reg::X20, ctx_reg, CTX_INPUT_END)
+                .expect("ldr");
+        }
 
         self.error_exit = error_exit;
         (entry, error_exit)
@@ -273,8 +293,9 @@ impl EmitCtx {
                 self.emit.bind_label(error_exit).expect("bind");
             } else {
                 // Write back cursor before returning on success
+                let cursor_reg = config.cursor_writeback_reg.unwrap_or(Reg::X19);
                 self.emit
-                    .emit_str_imm(aarch64::Width::X64, Reg::X19, ctx_reg, CTX_INPUT_PTR)
+                    .emit_str_imm(aarch64::Width::X64, cursor_reg, ctx_reg, CTX_INPUT_PTR)
                     .expect("str");
             }
 
@@ -304,10 +325,12 @@ impl EmitCtx {
                     .emit_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, x21_offset)
                     .expect("ldp");
             }
-            let x19_offset: i16 = if self.is_leaf { 0 } else { 16 };
-            self.emit
-                .emit_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, x19_offset)
-                .expect("ldp");
+            if config.save_x19_x20 {
+                let x19_offset: i16 = if self.is_leaf { 0 } else { 16 };
+                self.emit
+                    .emit_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, x19_offset)
+                    .expect("ldp");
+            }
             if !self.is_leaf {
                 self.emit
                     .emit_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)

@@ -10,7 +10,8 @@ use std::fmt;
 use kajit_ir::ErrorCode;
 use kajit_ir::{
     Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, Id, IntrinsicRegistry, IrFunc, IrOp,
-    LambdaId, Node, NodeId, NodeKind, PortKind, PortSource, RegionId, SlotId, VReg, Width,
+    LambdaId, Node, NodeId, NodeKind, OutputUseKind, PortKind, PortSource, RegionId, SlotId, VReg,
+    Width,
 };
 
 // ─── Label ID ────────────────────────────────────────────────────────────────
@@ -587,6 +588,47 @@ enum SafeExitVal {
     Const(u64),
 }
 
+/// A group of control-only outputs that carry the same logical boolean.
+struct BooleanGroupInfo {
+    output_indices: Vec<usize>,
+    done_value: u64,
+}
+
+/// Classification of a control-only output.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CtrlOutputKind {
+    /// Passthrough on ALL branches — invariant, not a real boolean.
+    Invariant,
+    /// One branch passthrough, other branch const — real boolean control flag.
+    Boolean { done_value: u64 },
+    /// Couldn't determine (complex inner structure).
+    Unknown,
+}
+
+/// Classification of a chain landing position.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ChainOutputClass {
+    /// Real state: carries computation results consumed downstream.
+    RealState,
+    /// Logical boolean control flag with a known done_value constant.
+    ControlBoolean { done_value: u64 },
+    /// Invariant: passthrough on all branches, carries unchanged data.
+    Invariant,
+}
+
+/// State inherited through recursive passthrough-exit chain calls.
+/// Carries the shared landing block info plus output classification.
+struct ChainInheritedState {
+    landing_label: LabelId,
+    landing_vregs: Vec<VReg>,
+    state_env: Vec<VReg>,
+    output_to_landing: Vec<usize>,
+    /// Classification of each landing position. Empty if not computed.
+    output_classes: Vec<ChainOutputClass>,
+    /// If exactly one logical boolean exists, its done_value.
+    control_done_value: Option<u64>,
+}
+
 /// Context for the active passthrough-exit chain, passed to inner gammas so
 /// they can emit direct exits to the chain's landing instead of creating
 /// merge blocks for control-only outputs.
@@ -602,6 +644,27 @@ struct ChainExitCtx {
     /// resolves gamma outputs that may not be defined yet (because the gamma
     /// is still being linearized) into available vregs or constants.
     safe_exit_env: Vec<SafeExitVal>,
+    /// Classification of each landing position: real state, control boolean,
+    /// or invariant. Indexed by landing position (same as landing_vregs).
+    /// Empty if classification was not computed (inner chain without top-level info).
+    #[allow(dead_code)]
+    output_classes: Vec<ChainOutputClass>,
+    /// If exactly one logical boolean control state exists, its done_value.
+    /// None if unsupported or classification was not performed.
+    #[allow(dead_code)]
+    control_done_value: Option<u64>,
+}
+
+/// Info about a control-state fusion: an upstream gamma whose control-only
+/// output feeds a downstream gamma's predicate.
+#[derive(Clone)]
+struct ControlFusionInfo {
+    /// The upstream gamma (deferred from normal linearization).
+    upstream: NodeId,
+    /// Which output of the upstream gamma carries the control boolean.
+    ctrl_output_idx: usize,
+    /// The done_value of the control boolean (e.g. 0 for is_more=false).
+    done_value: u64,
 }
 
 struct Linearizer<'a> {
@@ -624,6 +687,14 @@ struct Linearizer<'a> {
     /// Stack of gamma nodes whose branches are currently being linearized.
     /// Used to detect if a safe_exit_env vreg is from a not-yet-merged gamma.
     gamma_stack: Vec<NodeId>,
+    /// Nodes deferred from normal linearization (handled by a downstream gamma).
+    deferred_nodes: HashSet<NodeId>,
+    /// Fusion info for downstream gammas whose predicate is a control-only output
+    /// of a deferred upstream gamma. Keyed by downstream NodeId.
+    control_fusions: HashMap<NodeId, ControlFusionInfo>,
+    /// Whether fusion has been applied. Only allow one fusion per linearization
+    /// (the root lambda's body). Prevents issues with inner lambda bodies.
+    fusion_applied: bool,
 }
 
 impl<'a> Linearizer<'a> {
@@ -635,6 +706,9 @@ impl<'a> Linearizer<'a> {
             next_vreg: func.vreg_count,
             theta_depth: 0,
             gamma_stack: Vec::new(),
+            deferred_nodes: HashSet::new(),
+            control_fusions: HashMap::new(),
+            fusion_applied: false,
             label_count: 0,
             op_scopes: Vec::new(),
             op_values: Vec::new(),
@@ -832,7 +906,202 @@ impl<'a> Linearizer<'a> {
     fn linearize_region(&mut self, region_id: RegionId) {
         let sorted = self.topo_sort(region_id);
         for node_id in sorted {
+            if self.deferred_nodes.contains(&node_id) {
+                continue;
+            }
             self.linearize_node(node_id);
+        }
+    }
+
+    /// Run the pre-scan for control fusions on the root lambda body only.
+    /// Must be called before linearize_region for the root body.
+    fn pre_scan_root_fusions(&mut self) {
+        let root_body = self.func.root_body();
+        self.pre_scan_control_fusions(root_body);
+    }
+
+    /// Pre-scan: identify upstream gammas whose control-only output feeds a
+    /// downstream gamma's predicate. Defer the upstream gamma and record fusion info.
+    fn pre_scan_control_fusions(&mut self, region_id: RegionId) {
+        let region = &self.func.regions[region_id];
+        for &nid in &region.nodes {
+            let node = &self.func.nodes[nid];
+            let NodeKind::Gamma { regions } = &node.kind else {
+                continue;
+            };
+            if regions.len() != 2 {
+                continue;
+            }
+
+            // Check: is the predicate from a control-only gamma output in this region?
+            let PortSource::Node(pred_ref) = &node.inputs[0].source else {
+                continue;
+            };
+            let upstream_id = pred_ref.node;
+            let ctrl_idx = pred_ref.index as usize;
+
+            // Upstream must be in the same region
+            if self.func.nodes[upstream_id].region != region_id {
+                continue;
+            }
+            // Upstream must be a gamma
+            let NodeKind::Gamma {
+                regions: up_regions,
+            } = &self.func.nodes[upstream_id].kind
+            else {
+                continue;
+            };
+            // Upstream must be a passthrough-exit candidate (has a tail gamma)
+            if up_regions.len() != 2 {
+                continue;
+            }
+            let up_b0_pt = self.is_data_passthrough_region(up_regions[0]);
+            let up_b1_pt = self.is_data_passthrough_region(up_regions[1]);
+            if up_b0_pt == up_b1_pt {
+                continue;
+            }
+            let up_cont = if up_b0_pt {
+                up_regions[1]
+            } else {
+                up_regions[0]
+            };
+            if self.region_is_error_only(up_cont) {
+                continue;
+            }
+            // Upstream output must be control-only
+            if !self
+                .func
+                .is_chain_control_only_output(upstream_id, ctrl_idx, 0)
+            {
+                continue;
+            }
+            // Classify: must be a Boolean (not Invariant)
+            let ctrl_kind = self.classify_ctrl_output(upstream_id, up_regions, ctrl_idx);
+            let done_value = match ctrl_kind {
+                CtrlOutputKind::Boolean { done_value } => done_value,
+                _ => continue,
+            };
+
+            // Downstream must be a passthrough-exit candidate
+            let b0_pt = self.is_data_passthrough_region(regions[0]);
+            let b1_pt = self.is_data_passthrough_region(regions[1]);
+            if b0_pt == b1_pt {
+                continue;
+            }
+
+            // Only fuse if the downstream gamma would start a passthrough-exit chain
+            let ds_cont = if b0_pt { regions[1] } else { regions[0] };
+            if self.region_is_error_only(ds_cont) {
+                continue;
+            }
+            // Must have a chain to exploit (tail gamma in continue branch)
+            if self.find_tail_passthrough_gamma(ds_cont).is_none() {
+                // The downstream gamma might still be a passthrough-exit if
+                // it has an exit_ctx. But for top-level fusion, we require a chain.
+                continue;
+            }
+
+            // ALL data outputs of the upstream must ONLY feed the downstream gamma.
+            let up_data_count = self.func.nodes[upstream_id]
+                .outputs
+                .iter()
+                .filter(|o| o.kind == PortKind::Data)
+                .count();
+            let mut all_outputs_feed_downstream = true;
+            for out_idx in 0..up_data_count {
+                let consumers = self.func.find_output_consumers(upstream_id, out_idx as u16);
+                if !consumers.iter().all(|c| match &c.kind {
+                    kajit_ir::ConsumerKind::NodeInput { node: consumer, .. } => *consumer == nid,
+                    _ => false,
+                }) {
+                    all_outputs_feed_downstream = false;
+                    break;
+                }
+            }
+            if !all_outputs_feed_downstream {
+                continue;
+            }
+
+            // Only fuse in the root lambda body, not inside theta/gamma branches
+            if region_id != self.func.root_body() {
+                continue;
+            }
+            // Don't fuse in regions that contain thetas (vec/loop types).
+            // The fusion may interact poorly with theta linearization.
+            let has_theta = region
+                .nodes
+                .iter()
+                .any(|&nid2| matches!(&self.func.nodes[nid2].kind, NodeKind::Theta { .. }));
+            if has_theta {
+                continue;
+            }
+
+            // Structural validation: the upstream's non-passthrough branch must
+            // contain an inner gamma that produces the control output, and that
+            // inner gamma must have exactly 2 branches with simple structure
+            // (one passthrough, one with constants for the control output).
+            let up_cont_region = &self.func.regions[up_cont];
+            let ctrl_result = &self.func.region_results[up_cont_region.results[ctrl_idx]];
+            let inner_gamma_valid = match ctrl_result.source {
+                PortSource::Node(out_ref) => {
+                    if let NodeKind::Gamma {
+                        regions: ig_regions,
+                    } = &self.func.nodes[out_ref.node].kind
+                    {
+                        // Inner gamma must have exactly 2 branches, one passthrough
+                        ig_regions.len() == 2
+                            && (self.is_data_passthrough_region(ig_regions[0])
+                                || self.is_data_passthrough_region(ig_regions[1]))
+                    } else {
+                        false
+                    }
+                }
+                // Direct constant or passthrough — simple case, ok
+                PortSource::RegionArg(_) => true,
+            };
+            if !inner_gamma_valid {
+                continue;
+            }
+
+            // All checks pass. Record as a candidate.
+            // We'll only commit if there's exactly one candidate (simple type).
+            self.deferred_nodes.insert(upstream_id);
+            self.control_fusions.insert(
+                nid,
+                ControlFusionInfo {
+                    upstream: upstream_id,
+                    ctrl_output_idx: ctrl_idx,
+                    done_value,
+                },
+            );
+
+            if std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
+                eprintln!(
+                    "[fusion] candidate: upstream #{} output {} (done_val={}) → downstream #{} predicate",
+                    upstream_id.index(),
+                    ctrl_idx,
+                    done_value,
+                    nid.index()
+                );
+            }
+        }
+
+        // Safety: only commit fusions if there's exactly one candidate.
+        // Multiple fusions in the same region indicate compound types with
+        // inlined inner decoders — bail to avoid miscompilation.
+        if self.control_fusions.len() > 1 {
+            if std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
+                eprintln!(
+                    "[fusion] {} candidates found, clearing all (compound type safety)",
+                    self.control_fusions.len()
+                );
+            }
+            self.control_fusions.clear();
+            self.deferred_nodes.clear();
+        } else if self.control_fusions.len() == 1 {
+            if std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
+                eprintln!("[fusion] committed: 1 candidate");
+            }
         }
     }
 
@@ -1447,7 +1716,7 @@ impl<'a> Linearizer<'a> {
         &mut self,
         node_id: NodeId,
         regions: &[RegionId],
-        exit_ctx: Option<(LabelId, Vec<VReg>, Vec<VReg>, Vec<usize>)>,
+        exit_ctx: Option<ChainInheritedState>,
     ) -> bool {
         if regions.len() != 2 {
             return false;
@@ -1476,6 +1745,20 @@ impl<'a> Linearizer<'a> {
             return false;
         }
 
+        // Chain control-state analysis (Stage 14.1 diagnostics)
+        if exit_ctx.is_none() && std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
+            self.analyze_chain_control_state(node_id);
+        }
+
+        // Stage 14.3: if this gamma's predicate comes from a deferred upstream
+        // gamma (control-state fusion), linearize the upstream inline with
+        // two-landing routing, eliminating the predicate materialization.
+        if exit_ctx.is_none() {
+            if let Some(fusion) = self.control_fusions.get(&node_id).cloned() {
+                return self.try_linearize_fused_passthrough_exit(node_id, regions, &fusion);
+            }
+        }
+
         let node = &self.func.nodes[node_id];
         let predicate = self.resolve_vreg(node.inputs[0].source);
         let state_count = self.func.state_domains.len();
@@ -1488,23 +1771,49 @@ impl<'a> Linearizer<'a> {
 
         // Create or reuse landing block
         let owns_landing = exit_ctx.is_none();
-        let (landing_label, landing_vregs, mut state_env, output_to_landing) = exit_ctx
-            .unwrap_or_else(|| {
-                let label = self.fresh_label();
-                let vregs: Vec<VReg> = (0..data_output_count)
-                    .map(|i| {
-                        let v = node.outputs[i].vreg.expect("gamma output vreg");
-                        self.record_vreg_scope(v, node.outputs[i].debug_scope);
-                        v
-                    })
-                    .collect();
-                // Initial state = gamma inputs (current environment)
-                let state: Vec<VReg> = (0..data_output_count)
-                    .map(|i| self.resolve_vreg(node.inputs[i + 1].source))
-                    .collect();
-                let mapping: Vec<usize> = (0..data_output_count).collect();
-                (label, vregs, state, mapping)
-            });
+        let inherited = exit_ctx.unwrap_or_else(|| {
+            let label = self.fresh_label();
+            let vregs: Vec<VReg> = (0..data_output_count)
+                .map(|i| {
+                    let v = node.outputs[i].vreg.expect("gamma output vreg");
+                    self.record_vreg_scope(v, node.outputs[i].debug_scope);
+                    v
+                })
+                .collect();
+            // Initial state = gamma inputs (current environment)
+            let state: Vec<VReg> = (0..data_output_count)
+                .map(|i| self.resolve_vreg(node.inputs[i + 1].source))
+                .collect();
+            let mapping: Vec<usize> = (0..data_output_count).collect();
+
+            // Classify each output at top level (Stage 14.2)
+            let (output_classes, control_done_value) =
+                self.classify_chain_outputs(node_id, regions, data_output_count);
+
+            if std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
+                eprintln!(
+                    "[chain-ctx] #{}: classes={:?}, ctrl_done={:?}",
+                    node_id.index(),
+                    output_classes,
+                    control_done_value
+                );
+            }
+
+            ChainInheritedState {
+                landing_label: label,
+                landing_vregs: vregs,
+                state_env: state,
+                output_to_landing: mapping,
+                output_classes,
+                control_done_value,
+            }
+        });
+        let landing_label = inherited.landing_label;
+        let landing_vregs = inherited.landing_vregs;
+        let mut state_env = inherited.state_env;
+        let output_to_landing = inherited.output_to_landing;
+        let output_classes = inherited.output_classes;
+        let control_done_value = inherited.control_done_value;
 
         // Exit phis: project current state_env onto landing params.
         // On the passthrough exit, the state_env already has the right values
@@ -1653,6 +1962,8 @@ impl<'a> Linearizer<'a> {
                 state_env: state_env.clone(),
                 output_to_landing: output_to_landing.clone(),
                 safe_exit_env,
+                output_classes: output_classes.clone(),
+                control_done_value,
             });
             let node_ids: Vec<NodeId> = self.func.regions[cont_branch].nodes.clone();
             for &nid in &node_ids {
@@ -1683,12 +1994,14 @@ impl<'a> Linearizer<'a> {
             self.try_linearize_passthrough_exit(
                 tail_id,
                 &tr,
-                Some((
+                Some(ChainInheritedState {
                     landing_label,
-                    landing_vregs.clone(),
+                    landing_vregs: landing_vregs.clone(),
                     state_env,
-                    tail_output_to_landing,
-                )),
+                    output_to_landing: tail_output_to_landing,
+                    output_classes: output_classes.clone(),
+                    control_done_value,
+                }),
             );
         } else {
             // No chain — linearize full continue region with chain exit context.
@@ -1750,6 +2063,8 @@ impl<'a> Linearizer<'a> {
                 state_env: state_env.clone(),
                 output_to_landing: output_to_landing.clone(),
                 safe_exit_env: safe_env,
+                output_classes: output_classes.clone(),
+                control_done_value,
             });
             self.linearize_region(cont_branch);
             self.chain_exit_ctx = prev_ctx;
@@ -1804,6 +2119,11 @@ impl<'a> Linearizer<'a> {
             Some(ctx) => ctx.clone(),
             None => return false,
         };
+
+        // Stage 14.2 invariant
+        debug_assert!(
+            ctx.output_classes.is_empty() || ctx.output_classes.len() == ctx.landing_vregs.len()
+        );
 
         if regions.len() != 2 {
             return false;
@@ -2160,6 +2480,14 @@ impl<'a> Linearizer<'a> {
             None => return false,
         };
 
+        // Stage 14.2 invariant: classification matches landing size
+        debug_assert!(
+            ctx.output_classes.is_empty() || ctx.output_classes.len() == ctx.landing_vregs.len(),
+            "output_classes length mismatch: {} vs {} landing_vregs",
+            ctx.output_classes.len(),
+            ctx.landing_vregs.len()
+        );
+
         if regions.len() != 2 {
             return false;
         }
@@ -2345,6 +2673,1178 @@ impl<'a> Linearizer<'a> {
         let v = VReg::new(self.next_vreg);
         self.next_vreg += 1;
         v
+    }
+
+    // ─── Chain control-state analysis (Stage 14.1) ────────────────────
+
+    /// Analyze and print control-state information for a passthrough-exit chain.
+    /// Gated by KAJIT_CHAIN_ANALYSIS env var. Prints:
+    /// - real state outputs vs transitive control-only outputs
+    /// - grouping of control-only outputs into logical booleans
+    /// - downstream branch sites that consume each logical boolean
+    fn analyze_chain_control_state(&self, chain_gamma: NodeId) {
+        let node = &self.func.nodes[chain_gamma];
+        let NodeKind::Gamma { regions } = &node.kind else {
+            return;
+        };
+
+        let data_output_count = node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        // 1. Classify each data output as real state or control-only,
+        //    and find downstream consumers of each.
+        let mut real_state_indices = Vec::new();
+        let mut control_only_indices = Vec::new();
+        let mut live_ctrl_indices = Vec::new();
+        let mut live_real_indices = Vec::new();
+        for i in 0..data_output_count {
+            let consumers = self.func.find_output_consumers(chain_gamma, i as u16);
+            let is_live = !consumers.is_empty();
+            let is_ctrl = self.func.is_chain_control_only_output(chain_gamma, i, 0);
+            if is_ctrl {
+                control_only_indices.push(i);
+                if is_live {
+                    live_ctrl_indices.push((i, consumers));
+                }
+            } else {
+                real_state_indices.push(i);
+                if is_live {
+                    live_real_indices.push((i, consumers));
+                }
+            }
+        }
+
+        eprintln!(
+            "[chain-analysis] chain gamma #{} ({} data outputs)",
+            chain_gamma.index(),
+            data_output_count
+        );
+        eprintln!(
+            "  real state: {:?} ({} live)",
+            real_state_indices,
+            live_real_indices.len()
+        );
+        eprintln!(
+            "  control-only: {:?} ({} live)",
+            control_only_indices,
+            live_ctrl_indices.len()
+        );
+
+        // 2. Show live consumers
+        for (idx, consumers) in &live_real_indices {
+            for c in consumers {
+                eprintln!("  output {} (real) → {}", idx, self.format_consumer(c));
+            }
+        }
+        for (idx, consumers) in &live_ctrl_indices {
+            for c in consumers {
+                eprintln!("  output {} (ctrl) → {}", idx, self.format_consumer(c));
+            }
+        }
+
+        // 3. Analyze predicate source — this is the KEY boolean
+        let pred_source = &node.inputs[0].source;
+        let pred_is_ctrl = match pred_source {
+            PortSource::Node(out_ref) => {
+                self.func
+                    .is_chain_control_only_output(out_ref.node, out_ref.index as usize, 0)
+            }
+            _ => false,
+        };
+        self.analyze_predicate_source(chain_gamma, pred_source);
+
+        // 4. Classify control-only outputs: invariant vs boolean vs unknown.
+        let (invariant_indices, boolean_groups) =
+            self.group_control_only_by_boolean(chain_gamma, regions, &control_only_indices);
+
+        if !invariant_indices.is_empty() {
+            eprintln!("  invariant (passthrough-all): {:?}", invariant_indices);
+        }
+
+        // Separate live vs dead boolean groups
+        let mut live_boolean_groups = Vec::new();
+        let mut dead_boolean_groups = Vec::new();
+        for g in &boolean_groups {
+            let any_live = g
+                .output_indices
+                .iter()
+                .any(|idx| live_ctrl_indices.iter().any(|(li, _)| li == idx));
+            if any_live {
+                live_boolean_groups.push(g);
+            } else {
+                dead_boolean_groups.push(g);
+            }
+        }
+
+        for g in &live_boolean_groups {
+            eprintln!(
+                "  LIVE boolean: outputs {:?} (done_val={})",
+                g.output_indices, g.done_value
+            );
+        }
+        if !dead_boolean_groups.is_empty() {
+            let dead_out_count: usize = dead_boolean_groups
+                .iter()
+                .map(|g| g.output_indices.len())
+                .sum();
+            eprintln!(
+                "  dead boolean outputs: {} across {} groups",
+                dead_out_count,
+                dead_boolean_groups.len()
+            );
+        }
+
+        // 5. Walk the chain (follow tail passthrough gammas)
+        self.walk_chain_analysis(chain_gamma, 1);
+
+        // 6. Summary: count distinct logical booleans
+        // The predicate boolean counts as one if it's control-only.
+        // Live boolean groups add additional distinct booleans.
+        // A live boolean group with done_val=0 that matches the predicate's
+        // done_val is the SAME boolean (just carried through as data).
+        let pred_done_val = if pred_is_ctrl {
+            match pred_source {
+                PortSource::Node(out_ref) => {
+                    if let NodeKind::Gamma {
+                        regions: pred_regions,
+                    } = &self.func.nodes[out_ref.node].kind
+                    {
+                        self.classify_ctrl_output(
+                            out_ref.node,
+                            pred_regions,
+                            out_ref.index as usize,
+                        )
+                    } else {
+                        CtrlOutputKind::Unknown
+                    }
+                }
+                _ => CtrlOutputKind::Unknown,
+            }
+        } else {
+            CtrlOutputKind::Unknown
+        };
+
+        // Count distinct booleans:
+        // - Predicate counts as 1 if it's a real Boolean (not Invariant)
+        // - Each live group with a DIFFERENT done_val adds 1
+        // - A live group matching the predicate's done_val is the same boolean
+        let pred_is_real_boolean = matches!(pred_done_val, CtrlOutputKind::Boolean { .. });
+        let mut distinct_count = if pred_is_real_boolean { 1usize } else { 0 };
+        for g in &live_boolean_groups {
+            let same_as_pred = match pred_done_val {
+                CtrlOutputKind::Boolean { done_value } => done_value == g.done_value,
+                _ => false,
+            };
+            if !same_as_pred {
+                distinct_count += 1;
+            }
+        }
+
+        if pred_is_ctrl && !pred_is_real_boolean {
+            eprintln!(
+                "  note: predicate is control-only but {:?} (not a varying boolean)",
+                pred_done_val
+            );
+        }
+
+        eprintln!(
+            "[chain-analysis] summary: {} distinct boolean(s), {} invariant, {} real state",
+            distinct_count,
+            invariant_indices.len(),
+            live_real_indices.len()
+        );
+
+        if distinct_count == 1 {
+            eprintln!("  → SUPPORTED: exactly one logical boolean control state");
+        } else if distinct_count == 0 {
+            eprintln!("  → no boolean control state (nothing to optimize)");
+        } else {
+            eprintln!(
+                "  → UNSUPPORTED: {} distinct boolean control states",
+                distinct_count
+            );
+        }
+    }
+
+    fn format_consumer(&self, c: &kajit_ir::OutputConsumer) -> String {
+        let use_str = match c.use_kind {
+            OutputUseKind::GammaPredicate => "gamma_predicate",
+            OutputUseKind::DataInput => "data_input",
+            OutputUseKind::RegionExit => "region_exit",
+        };
+        match &c.kind {
+            kajit_ir::ConsumerKind::NodeInput {
+                node: cnode,
+                input_index,
+            } => {
+                let ckind = match &self.func.nodes[*cnode].kind {
+                    NodeKind::Simple(op) => format!("{:?}", op),
+                    NodeKind::Gamma { .. } => "Gamma".to_string(),
+                    NodeKind::Theta { .. } => "Theta".to_string(),
+                    _ => "other".to_string(),
+                };
+                format!(
+                    "#{}.input[{}] ({}) as {}",
+                    cnode.index(),
+                    input_index,
+                    ckind,
+                    use_str
+                )
+            }
+            kajit_ir::ConsumerKind::RegionResult { .. } => {
+                format!("region_result as {}", use_str)
+            }
+        }
+    }
+
+    /// Walk the chain recursively, analyzing each tail gamma.
+    fn walk_chain_analysis(&self, gamma_id: NodeId, depth: usize) {
+        let node = &self.func.nodes[gamma_id];
+        let NodeKind::Gamma { regions } = &node.kind else {
+            return;
+        };
+
+        // Find the continue (non-passthrough) branch
+        let cont_branch = if self.is_data_passthrough_region(regions[0]) {
+            regions[1]
+        } else if self.is_data_passthrough_region(regions[1]) {
+            regions[0]
+        } else {
+            return;
+        };
+
+        // Find the tail passthrough gamma in the continue branch
+        let Some(tail_id) = self.find_tail_passthrough_gamma(cont_branch) else {
+            eprintln!(
+                "  [depth {}] no tail gamma in continue branch (chain ends)",
+                depth
+            );
+            return;
+        };
+
+        let tail_node = &self.func.nodes[tail_id];
+        let tail_data_count = tail_node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        let mut tail_real = Vec::new();
+        let mut tail_ctrl = Vec::new();
+        for i in 0..tail_data_count {
+            if self.func.is_chain_control_only_output(tail_id, i, 0) {
+                tail_ctrl.push(i);
+            } else {
+                tail_real.push(i);
+            }
+        }
+
+        eprintln!(
+            "  [depth {}] tail gamma #{} ({} data outputs, {} real, {} ctrl-only)",
+            depth,
+            tail_id.index(),
+            tail_data_count,
+            tail_real.len(),
+            tail_ctrl.len()
+        );
+
+        // Analyze the tail's predicate
+        self.analyze_predicate_source(tail_id, &tail_node.inputs[0].source);
+
+        // Recurse
+        let NodeKind::Gamma { regions: tr } = &self.func.nodes[tail_id].kind else {
+            return;
+        };
+        let tr = tr.clone();
+        let cont = if self.is_data_passthrough_region(tr[0]) {
+            tr[1]
+        } else {
+            tr[0]
+        };
+        if let Some(next_tail) = self.find_tail_passthrough_gamma(cont) {
+            let _ = next_tail;
+            self.walk_chain_analysis(tail_id, depth + 1);
+        } else {
+            eprintln!("  [depth {}] chain ends (no further tail gamma)", depth + 1);
+        }
+    }
+
+    /// Analyze where a gamma's predicate comes from.
+    fn analyze_predicate_source(&self, gamma_id: NodeId, source: &PortSource) {
+        match source {
+            PortSource::Node(out_ref) => {
+                let src_node = &self.func.nodes[out_ref.node];
+                let is_ctrl_only =
+                    self.func
+                        .is_chain_control_only_output(out_ref.node, out_ref.index as usize, 0);
+                let kind_str = match &src_node.kind {
+                    NodeKind::Simple(op) => format!("{:?}", op),
+                    NodeKind::Gamma { .. } => "Gamma".to_string(),
+                    NodeKind::Theta { .. } => "Theta".to_string(),
+                    _ => "other".to_string(),
+                };
+                eprintln!(
+                    "  predicate of #{}: #{}.output[{}] ({}){}",
+                    gamma_id.index(),
+                    out_ref.node.index(),
+                    out_ref.index,
+                    kind_str,
+                    if is_ctrl_only { " [CONTROL-ONLY]" } else { "" }
+                );
+            }
+            PortSource::RegionArg(arg_ref) => {
+                eprintln!(
+                    "  predicate of #{}: region_arg {:?}",
+                    gamma_id.index(),
+                    arg_ref
+                );
+            }
+        }
+    }
+
+    /// Classify a control-only output: invariant (passthrough everywhere),
+    /// boolean (one branch passthrough, other const), or unknown.
+    fn classify_ctrl_output(
+        &self,
+        _gamma_id: NodeId,
+        regions: &[RegionId],
+        output_idx: usize,
+    ) -> CtrlOutputKind {
+        if regions.len() != 2 {
+            return CtrlOutputKind::Unknown;
+        }
+
+        // Check if BOTH branches are passthrough for this output.
+        // A branch is "effectively passthrough" if:
+        // - the result is directly RegionArg at the matching position, OR
+        // - the result comes from an inner gamma whose output is invariant
+        //   (transitively passthrough on all branches)
+        let mut all_passthrough = true;
+        let mut done_value = None;
+
+        for &region_id in regions.iter() {
+            let region = &self.func.regions[region_id];
+            let data_results: Vec<_> = region
+                .results
+                .iter()
+                .enumerate()
+                .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+                .collect();
+            if output_idx >= data_results.len() {
+                return CtrlOutputKind::Unknown;
+            }
+            let (_, &result_id) = data_results[output_idx];
+            let result = &self.func.region_results[result_id];
+            match result.source {
+                PortSource::RegionArg(arg_ref) => {
+                    if region.args.get(output_idx) != Some(&arg_ref.arg) {
+                        all_passthrough = false;
+                    }
+                }
+                PortSource::Node(out_ref) => {
+                    // Check if this is from an inner gamma that's invariant for this output
+                    if self.is_invariant_gamma_output(out_ref.node, out_ref.index as usize) {
+                        // Effectively passthrough — the inner gamma always passes through
+                    } else {
+                        all_passthrough = false;
+                        // Try to extract constant value
+                        let val =
+                            self.extract_const_from_source(out_ref.node, out_ref.index as usize, 0);
+                        if let Some(v) = val {
+                            done_value = Some(v);
+                        }
+                    }
+                }
+            }
+        }
+
+        if all_passthrough {
+            CtrlOutputKind::Invariant
+        } else if let Some(val) = done_value {
+            CtrlOutputKind::Boolean { done_value: val }
+        } else {
+            CtrlOutputKind::Unknown
+        }
+    }
+
+    /// Check if a gamma's output is invariant: passthrough on ALL branches,
+    /// possibly through inner gammas that are themselves invariant.
+    fn is_invariant_gamma_output(&self, node_id: NodeId, output_idx: usize) -> bool {
+        self.is_invariant_gamma_output_inner(node_id, output_idx, 0)
+    }
+
+    fn is_invariant_gamma_output_inner(
+        &self,
+        node_id: NodeId,
+        output_idx: usize,
+        depth: usize,
+    ) -> bool {
+        if depth > 8 {
+            return false;
+        }
+        let NodeKind::Gamma { regions } = &self.func.nodes[node_id].kind else {
+            return false;
+        };
+        for &region_id in regions.iter() {
+            let region = &self.func.regions[region_id];
+            let data_results: Vec<_> = region
+                .results
+                .iter()
+                .enumerate()
+                .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+                .collect();
+            if output_idx >= data_results.len() {
+                return false;
+            }
+            let (_, &result_id) = data_results[output_idx];
+            let result = &self.func.region_results[result_id];
+            match result.source {
+                PortSource::RegionArg(arg_ref) => {
+                    if region.args.get(output_idx) != Some(&arg_ref.arg) {
+                        return false;
+                    }
+                }
+                PortSource::Node(out_ref) => {
+                    // Recursively check inner gamma
+                    if !self.is_invariant_gamma_output_inner(
+                        out_ref.node,
+                        out_ref.index as usize,
+                        depth + 1,
+                    ) {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Extract a constant value from a node output, recursing through inner gammas.
+    fn extract_const_from_source(
+        &self,
+        node_id: NodeId,
+        output_idx: usize,
+        depth: usize,
+    ) -> Option<u64> {
+        if depth > 16 {
+            return None;
+        }
+        let node = &self.func.nodes[node_id];
+        match &node.kind {
+            NodeKind::Simple(IrOp::Const { value }) => Some(*value),
+            NodeKind::Gamma { regions } if regions.len() == 2 => {
+                // Recurse: check the non-passthrough branch of the inner gamma
+                let inner_active = if self.is_data_passthrough_region(regions[0]) {
+                    1
+                } else if self.is_data_passthrough_region(regions[1]) {
+                    0
+                } else {
+                    return None;
+                };
+                let inner_region = &self.func.regions[regions[inner_active]];
+                let data_results: Vec<_> = inner_region
+                    .results
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+                    .collect();
+                if output_idx >= data_results.len() {
+                    return None;
+                }
+                let (_, &result_id) = data_results[output_idx];
+                let result = &self.func.region_results[result_id];
+                match result.source {
+                    PortSource::Node(out_ref) => self.extract_const_from_source(
+                        out_ref.node,
+                        out_ref.index as usize,
+                        depth + 1,
+                    ),
+                    PortSource::RegionArg(_) => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Group control-only outputs by their logical boolean identity.
+    /// Two outputs are in the same boolean group if they have the same done_value.
+    /// Invariant outputs (passthrough on all branches) are reported separately.
+    fn group_control_only_by_boolean(
+        &self,
+        gamma_id: NodeId,
+        regions: &[RegionId],
+        ctrl_indices: &[usize],
+    ) -> (Vec<usize>, Vec<BooleanGroupInfo>) {
+        let mut invariant_indices = Vec::new();
+        let mut groups: Vec<BooleanGroupInfo> = Vec::new();
+
+        for &idx in ctrl_indices {
+            match self.classify_ctrl_output(gamma_id, regions, idx) {
+                CtrlOutputKind::Invariant => {
+                    invariant_indices.push(idx);
+                }
+                CtrlOutputKind::Boolean { done_value } => {
+                    let mut found = false;
+                    for g in &mut groups {
+                        if g.done_value == done_value {
+                            g.output_indices.push(idx);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if !found {
+                        groups.push(BooleanGroupInfo {
+                            output_indices: vec![idx],
+                            done_value,
+                        });
+                    }
+                }
+                CtrlOutputKind::Unknown => {
+                    // Unknown — treat as its own group
+                    groups.push(BooleanGroupInfo {
+                        output_indices: vec![idx],
+                        done_value: u64::MAX,
+                    });
+                }
+            }
+        }
+
+        (invariant_indices, groups)
+    }
+
+    // ─── Fused passthrough-exit (Stage 14.3) ────────────────────────
+
+    /// Linearize a passthrough-exit gamma whose predicate comes from a deferred
+    /// upstream gamma. Instead of materializing the control boolean and branching,
+    /// this linearizes the upstream gamma inline with split exits:
+    /// - exits where the control boolean = done_value → downstream's landing
+    /// - exits where the control boolean ≠ done_value → downstream's continue code
+    fn try_linearize_fused_passthrough_exit(
+        &mut self,
+        downstream_id: NodeId,
+        downstream_regions: &[RegionId],
+        fusion: &ControlFusionInfo,
+    ) -> bool {
+        let ds_node = &self.func.nodes[downstream_id];
+        let state_count = self.func.state_domains.len();
+        let ds_passthrough_count = ds_node.inputs.len() - 1 - state_count;
+        let ds_data_output_count = ds_node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        // Identify the downstream's passthrough vs continue branch
+        let ds_b0_pt = self.is_data_passthrough_region(downstream_regions[0]);
+        let (ds_cont_branch, _ds_exit_on_zero) = if ds_b0_pt {
+            (downstream_regions[1], true)
+        } else {
+            (downstream_regions[0], false)
+        };
+
+        // Create the downstream's landing (where "done" exits go)
+        let ds_landing_label = self.fresh_label();
+        let ds_landing_vregs: Vec<VReg> = (0..ds_data_output_count)
+            .map(|i| {
+                let v = ds_node.outputs[i].vreg.expect("gamma output vreg");
+                self.record_vreg_scope(v, ds_node.outputs[i].debug_scope);
+                v
+            })
+            .collect();
+
+        // Create the "continue" label (where "more" exits go)
+        let continue_label = self.fresh_label();
+
+        // Get the upstream gamma's info
+        let upstream_id = fusion.upstream;
+        let up_node = &self.func.nodes[upstream_id];
+        let NodeKind::Gamma {
+            regions: up_regions,
+        } = &up_node.kind
+        else {
+            return false;
+        };
+        let up_regions = up_regions.clone();
+        let up_predicate = self.resolve_vreg(up_node.inputs[0].source);
+        let up_passthrough_count = up_node.inputs.len() - 1 - state_count;
+        let up_data_output_count = up_node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        // Helper: given upstream output vregs for a specific path, compute
+        // phis for the downstream landing (done path = passthrough of n277 inputs).
+        let compute_done_phis =
+            |lin: &mut Linearizer, up_out_vregs: &[VReg]| -> Vec<(VReg, VReg)> {
+                let mut phis = Vec::new();
+                for i in 0..ds_data_output_count {
+                    let src = &ds_node.inputs[i + 1];
+                    if src.kind != PortKind::Data {
+                        continue;
+                    }
+                    let src_vreg = match src.source {
+                        PortSource::Node(out_ref) if out_ref.node == upstream_id => {
+                            let out_idx = out_ref.index as usize;
+                            if out_idx < up_out_vregs.len() {
+                                up_out_vregs[out_idx]
+                            } else {
+                                lin.resolve_vreg(src.source)
+                            }
+                        }
+                        _ => lin.resolve_vreg(src.source),
+                    };
+                    let dst = ds_landing_vregs[i];
+                    if src_vreg != dst {
+                        phis.push((src_vreg, dst));
+                    }
+                }
+                phis
+            };
+
+        // Helper: given upstream output vregs, compute entry phis for downstream
+        // continue branch (n277 branch 1 region args).
+        let compute_more_phis =
+            |lin: &mut Linearizer, up_out_vregs: &[VReg]| -> Vec<(VReg, VReg)> {
+                let ds_cont_region = &lin.func.regions[ds_cont_branch];
+                let mut phis = Vec::new();
+                for i in 0..ds_passthrough_count {
+                    let src = &ds_node.inputs[i + 1];
+                    if src.kind != PortKind::Data {
+                        continue;
+                    }
+                    let src_vreg = match src.source {
+                        PortSource::Node(out_ref) if out_ref.node == upstream_id => {
+                            let out_idx = out_ref.index as usize;
+                            if out_idx < up_out_vregs.len() {
+                                up_out_vregs[out_idx]
+                            } else {
+                                lin.resolve_vreg(src.source)
+                            }
+                        }
+                        _ => lin.resolve_vreg(src.source),
+                    };
+                    let arg = &lin.func.region_args[ds_cont_region.args[i]];
+                    if let Some(dst_vreg) = arg.vreg {
+                        lin.record_vreg_scope(dst_vreg, ds_cont_region.debug_scope);
+                        phis.push((src_vreg, dst_vreg));
+                    }
+                }
+                phis
+            };
+
+        // Phase 1: Linearize the upstream gamma as a standard 2-branch gamma,
+        // but route each branch's exit to done_landing or continue_label based
+        // on the control boolean value.
+        let branch_count = up_regions.len();
+        debug_assert_eq!(branch_count, 2);
+
+        let branch_labels: Vec<LabelId> = (0..branch_count).map(|_| self.fresh_label()).collect();
+
+        // Entry phis for each branch
+        let mut branch_entry_phis: Vec<Vec<(VReg, VReg)>> = Vec::new();
+        for &region_id in up_regions.iter() {
+            let region = &self.func.regions[region_id];
+            let mut phis = Vec::new();
+            for i in 0..up_passthrough_count {
+                let src_input = &up_node.inputs[i + 1];
+                if src_input.kind == PortKind::Data {
+                    let src_vreg = self.resolve_vreg(src_input.source);
+                    let arg = &self.func.region_args[region.args[i]];
+                    if let Some(dst_vreg) = arg.vreg {
+                        self.record_vreg_scope(dst_vreg, region.debug_scope);
+                        phis.push((src_vreg, dst_vreg));
+                    }
+                }
+            }
+            branch_entry_phis.push(phis);
+        }
+
+        // Emit 2-branch conditional
+        self.emit(
+            Some(up_node.debug_scope),
+            LinearOp::BranchIfZero {
+                cond: up_predicate,
+                target: branch_labels[0],
+                phi_args: branch_entry_phis[0].clone(),
+                fallthrough_phi_args: vec![],
+            },
+        );
+        self.emit(
+            Some(up_node.debug_scope),
+            LinearOp::Branch {
+                target: branch_labels[1],
+                phi_args: branch_entry_phis[1].clone(),
+            },
+        );
+
+        // Emit each branch with routing to done_landing or continue_label.
+        // For branches where the control output is a direct constant or passthrough,
+        // route the entire branch exit. For branches where the control output comes
+        // from an inner gamma, linearize all non-inner-gamma nodes then split the
+        // inner gamma's branches.
+        let ctrl_idx = fusion.ctrl_output_idx;
+        for (branch_idx, &region_id) in up_regions.iter().enumerate() {
+            self.emit(
+                Some(self.func.regions[region_id].debug_scope),
+                LinearOp::Label(branch_labels[branch_idx]),
+            );
+
+            let region = &self.func.regions[region_id];
+            let ctrl_result = &self.func.region_results[region.results[ctrl_idx]];
+
+            // Check if the control output is from an inner gamma (needs recursive split)
+            let inner_gamma = match ctrl_result.source {
+                PortSource::Node(out_ref) => {
+                    if matches!(&self.func.nodes[out_ref.node].kind, NodeKind::Gamma { .. }) {
+                        Some(out_ref.node)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
+            if let Some(inner_gamma_id) = inner_gamma {
+                // Branch contains an inner gamma that produces the control output.
+                // Linearize all other nodes, then handle the inner gamma with split exits.
+                let node_ids: Vec<NodeId> = region.nodes.clone();
+                for &nid in &node_ids {
+                    if nid != inner_gamma_id {
+                        self.linearize_node(nid);
+                    }
+                }
+
+                // Now handle the inner gamma. Its branches determine done vs more.
+                let ig_node = &self.func.nodes[inner_gamma_id];
+                let NodeKind::Gamma {
+                    regions: ig_regions,
+                } = &ig_node.kind
+                else {
+                    return false;
+                };
+                let ig_regions = ig_regions.clone();
+                let ig_pred = self.resolve_vreg(ig_node.inputs[0].source);
+                let ig_pt_count = ig_node.inputs.len() - 1 - state_count;
+
+                let ig_labels: Vec<LabelId> =
+                    (0..ig_regions.len()).map(|_| self.fresh_label()).collect();
+
+                // Inner gamma entry phis
+                let mut ig_entry_phis: Vec<Vec<(VReg, VReg)>> = Vec::new();
+                for &ig_rid in ig_regions.iter() {
+                    let ig_reg = &self.func.regions[ig_rid];
+                    let mut phis = Vec::new();
+                    for i in 0..ig_pt_count {
+                        let src_input = &ig_node.inputs[i + 1];
+                        if src_input.kind == PortKind::Data {
+                            let src_vreg = self.resolve_vreg(src_input.source);
+                            let arg = &self.func.region_args[ig_reg.args[i]];
+                            if let Some(dst_vreg) = arg.vreg {
+                                self.record_vreg_scope(dst_vreg, ig_reg.debug_scope);
+                                phis.push((src_vreg, dst_vreg));
+                            }
+                        }
+                    }
+                    ig_entry_phis.push(phis);
+                }
+
+                self.emit(
+                    Some(ig_node.debug_scope),
+                    LinearOp::BranchIfZero {
+                        cond: ig_pred,
+                        target: ig_labels[0],
+                        phi_args: ig_entry_phis[0].clone(),
+                        fallthrough_phi_args: vec![],
+                    },
+                );
+                self.emit(
+                    Some(ig_node.debug_scope),
+                    LinearOp::Branch {
+                        target: ig_labels[1],
+                        phi_args: ig_entry_phis[1].clone(),
+                    },
+                );
+
+                // Emit each inner gamma branch with routing
+                for (ig_bi, &ig_rid) in ig_regions.iter().enumerate() {
+                    self.emit(
+                        Some(self.func.regions[ig_rid].debug_scope),
+                        LinearOp::Label(ig_labels[ig_bi]),
+                    );
+                    self.linearize_region(ig_rid);
+
+                    // Build upstream output vregs for this path:
+                    // outputs from the parent region (n119 branch 1) results,
+                    // with inner gamma outputs resolved from this specific branch.
+                    let ig_reg = &self.func.regions[ig_rid];
+                    let mut branch_out_vregs: Vec<VReg> = Vec::new();
+                    for i in 0..up_data_output_count {
+                        let parent_result = &self.func.region_results[region.results[i]];
+                        if parent_result.kind != PortKind::Data {
+                            continue;
+                        }
+                        match parent_result.source {
+                            PortSource::Node(out_ref) if out_ref.node == inner_gamma_id => {
+                                // This result comes from the inner gamma — resolve from this branch
+                                let ig_out_idx = out_ref.index as usize;
+                                let ig_data_results: Vec<_> = ig_reg
+                                    .results
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|&(_, &rid)| {
+                                        self.func.region_results[rid].kind == PortKind::Data
+                                    })
+                                    .collect();
+                                if ig_out_idx < ig_data_results.len() {
+                                    let (_, &ig_rid) = ig_data_results[ig_out_idx];
+                                    let ig_result = &self.func.region_results[ig_rid];
+                                    branch_out_vregs.push(self.resolve_vreg(ig_result.source));
+                                } else {
+                                    branch_out_vregs.push(self.resolve_vreg(parent_result.source));
+                                }
+                            }
+                            _ => {
+                                branch_out_vregs.push(self.resolve_vreg(parent_result.source));
+                            }
+                        }
+                    }
+
+                    // Check the control value for this inner gamma branch.
+                    // We need to find what the PARENT region's ctrl output resolves
+                    // to on this inner gamma branch. The parent result at ctrl_idx
+                    // points to inner_gamma.output[N]. So we check inner gamma branch
+                    // result at output index N.
+                    let parent_ctrl_result = &self.func.region_results[region.results[ctrl_idx]];
+                    let ig_out_idx = match parent_ctrl_result.source {
+                        PortSource::Node(out_ref) if out_ref.node == inner_gamma_id => {
+                            Some(out_ref.index as usize)
+                        }
+                        _ => None,
+                    };
+                    let ig_ctrl = if let Some(ig_oi) = ig_out_idx {
+                        // Find the ig_oi-th DATA result in this inner gamma branch
+                        let ig_data_results: Vec<_> = ig_reg
+                            .results
+                            .iter()
+                            .enumerate()
+                            .filter(|&(_, &rid)| {
+                                self.func.region_results[rid].kind == PortKind::Data
+                            })
+                            .collect();
+                        if ig_oi < ig_data_results.len() {
+                            let (_, &rid) = ig_data_results[ig_oi];
+                            let r = &self.func.region_results[rid];
+                            match r.source {
+                                PortSource::Node(out_ref) => matches!(
+                                    &self.func.nodes[out_ref.node].kind,
+                                    NodeKind::Simple(IrOp::Const { value })
+                                        if *value == fusion.done_value
+                                ),
+                                PortSource::RegionArg(_) => false,
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if ig_ctrl {
+                        let phis = compute_done_phis(self, &branch_out_vregs);
+                        self.emit(
+                            Some(self.func.regions[ig_rid].debug_scope),
+                            LinearOp::Branch {
+                                target: ds_landing_label,
+                                phi_args: phis,
+                            },
+                        );
+                    } else {
+                        let phis = compute_more_phis(self, &branch_out_vregs);
+                        self.emit(
+                            Some(self.func.regions[ig_rid].debug_scope),
+                            LinearOp::Branch {
+                                target: continue_label,
+                                phi_args: phis,
+                            },
+                        );
+                    }
+                }
+            } else {
+                // Simple case: no inner gamma. The control output is a direct
+                // constant or passthrough. Linearize and route.
+                self.linearize_region(region_id);
+
+                let mut branch_out_vregs: Vec<VReg> = Vec::new();
+                for i in 0..up_data_output_count {
+                    let result = &self.func.region_results[region.results[i]];
+                    if result.kind == PortKind::Data {
+                        branch_out_vregs.push(self.resolve_vreg(result.source));
+                    }
+                }
+
+                let is_done = match ctrl_result.source {
+                    PortSource::Node(out_ref) => matches!(
+                        &self.func.nodes[out_ref.node].kind,
+                        NodeKind::Simple(IrOp::Const { value }) if *value == fusion.done_value
+                    ),
+                    PortSource::RegionArg(_) => false,
+                };
+
+                if is_done {
+                    let phis = compute_done_phis(self, &branch_out_vregs);
+                    self.emit(
+                        Some(self.func.regions[region_id].debug_scope),
+                        LinearOp::Branch {
+                            target: ds_landing_label,
+                            phi_args: phis,
+                        },
+                    );
+                } else {
+                    let phis = compute_more_phis(self, &branch_out_vregs);
+                    self.emit(
+                        Some(self.func.regions[region_id].debug_scope),
+                        LinearOp::Branch {
+                            target: continue_label,
+                            phi_args: phis,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Phase 2: Emit continue_label + downstream's chain body.
+        self.emit(Some(ds_node.debug_scope), LinearOp::Label(continue_label));
+
+        // Now process the downstream's continue branch as a passthrough-exit chain.
+        let ds_tail = self.find_tail_passthrough_gamma(ds_cont_branch);
+        if let Some(ds_tail_id) = ds_tail {
+            // Compute state_env and classification for the chain
+            let (output_classes, control_done_value) = self.classify_chain_outputs(
+                downstream_id,
+                downstream_regions,
+                ds_data_output_count,
+            );
+
+            let mut ds_state_env: Vec<VReg> = ds_landing_vregs.clone();
+
+            // Pre-compute state_env from downstream continue branch results
+            let ds_cont_results = self.func.regions[ds_cont_branch].results.clone();
+            let ds_cont_data_results: Vec<usize> = ds_cont_results
+                .iter()
+                .enumerate()
+                .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+                .map(|(i, _)| i)
+                .collect();
+
+            let mut ds_tail_output_to_landing: Vec<usize> = Vec::new();
+            let ds_output_to_landing: Vec<usize> = (0..ds_data_output_count).collect();
+            for (j, &result_idx) in ds_cont_data_results.iter().enumerate() {
+                let landing_idx = if j < ds_output_to_landing.len() {
+                    ds_output_to_landing[j]
+                } else {
+                    continue;
+                };
+                let result = &self.func.region_results[ds_cont_results[result_idx]];
+                match result.source {
+                    PortSource::Node(out_ref) if out_ref.node == ds_tail_id => {
+                        let tail_out_idx = out_ref.index as usize;
+                        while ds_tail_output_to_landing.len() <= tail_out_idx {
+                            ds_tail_output_to_landing.push(usize::MAX);
+                        }
+                        ds_tail_output_to_landing[tail_out_idx] = landing_idx;
+
+                        let tail_node = &self.func.nodes[ds_tail_id];
+                        let tail_data_inputs: Vec<usize> = tail_node
+                            .inputs
+                            .iter()
+                            .enumerate()
+                            .skip(1)
+                            .filter(|(_, inp)| inp.kind == PortKind::Data)
+                            .map(|(idx, _)| idx)
+                            .collect();
+                        if tail_out_idx < tail_data_inputs.len() {
+                            let input_idx = tail_data_inputs[tail_out_idx];
+                            ds_state_env[landing_idx] =
+                                self.resolve_vreg(tail_node.inputs[input_idx].source);
+                        }
+                    }
+                    _ => {
+                        ds_state_env[landing_idx] = self.resolve_vreg(result.source);
+                    }
+                }
+            }
+
+            // Build safe_exit_env
+            let non_tail_gammas: HashSet<NodeId> = self.func.regions[ds_cont_branch]
+                .nodes
+                .iter()
+                .filter(|&&nid| {
+                    if nid == ds_tail_id {
+                        return false;
+                    }
+                    let NodeKind::Gamma { regions: gr } = &self.func.nodes[nid].kind else {
+                        return false;
+                    };
+                    gr.iter().any(|&rid| {
+                        self.func.regions[rid].nodes.iter().any(|&child| {
+                            matches!(self.func.nodes[child].kind, NodeKind::Gamma { .. })
+                        })
+                    })
+                })
+                .copied()
+                .collect();
+
+            let safe_exit_env: Vec<SafeExitVal> = if non_tail_gammas.is_empty() {
+                ds_state_env.iter().map(|&v| SafeExitVal::Vreg(v)).collect()
+            } else {
+                ds_state_env
+                    .iter()
+                    .map(|&v| self.resolve_safe_exit_val_from_vreg(v, &non_tail_gammas))
+                    .collect()
+            };
+
+            // Set chain exit context
+            let prev_ctx = self.chain_exit_ctx.take();
+            self.chain_exit_ctx = Some(ChainExitCtx {
+                landing_label: ds_landing_label,
+                landing_vregs: ds_landing_vregs.clone(),
+                state_env: ds_state_env.clone(),
+                output_to_landing: ds_output_to_landing.clone(),
+                safe_exit_env,
+                output_classes: output_classes.clone(),
+                control_done_value,
+            });
+            let node_ids: Vec<NodeId> = self.func.regions[ds_cont_branch].nodes.clone();
+            for &nid in &node_ids {
+                if nid != ds_tail_id {
+                    self.linearize_node(nid);
+                }
+            }
+            self.chain_exit_ctx = prev_ctx;
+
+            // Recurse with the tail gamma
+            let NodeKind::Gamma { regions: tr } = &self.func.nodes[ds_tail_id].kind else {
+                unreachable!()
+            };
+            let tr = tr.clone();
+            self.try_linearize_passthrough_exit(
+                ds_tail_id,
+                &tr,
+                Some(ChainInheritedState {
+                    landing_label: ds_landing_label,
+                    landing_vregs: ds_landing_vregs.clone(),
+                    state_env: ds_state_env,
+                    output_to_landing: ds_tail_output_to_landing,
+                    output_classes,
+                    control_done_value,
+                }),
+            );
+        } else {
+            // No tail gamma — shouldn't happen for our target, bail
+            return false;
+        }
+
+        // Phase 5: Emit downstream's landing label
+        self.emit(Some(ds_node.debug_scope), LinearOp::Label(ds_landing_label));
+
+        true
+    }
+
+    /// Classify all data outputs of a chain gamma into ChainOutputClass.
+    /// Returns (classes, control_done_value).
+    /// control_done_value is Some(val) if exactly one distinct boolean exists.
+    fn classify_chain_outputs(
+        &self,
+        node_id: NodeId,
+        regions: &[RegionId],
+        data_output_count: usize,
+    ) -> (Vec<ChainOutputClass>, Option<u64>) {
+        let mut classes = Vec::with_capacity(data_output_count);
+
+        // First pass: classify each output using the existing machinery
+        let mut ctrl_indices = Vec::new();
+        for i in 0..data_output_count {
+            if self.func.is_chain_control_only_output(node_id, i, 0) {
+                ctrl_indices.push(i);
+            }
+        }
+
+        // Group control-only outputs into invariant vs boolean
+        let (invariant_set, boolean_groups) =
+            self.group_control_only_by_boolean(node_id, regions, &ctrl_indices);
+
+        // Build the per-output classification
+        for i in 0..data_output_count {
+            if !ctrl_indices.contains(&i) {
+                // Not control-only → real state
+                classes.push(ChainOutputClass::RealState);
+            } else if invariant_set.contains(&i) {
+                classes.push(ChainOutputClass::Invariant);
+            } else {
+                // Find which boolean group this belongs to
+                let mut found = false;
+                for g in &boolean_groups {
+                    if g.output_indices.contains(&i) {
+                        classes.push(ChainOutputClass::ControlBoolean {
+                            done_value: g.done_value,
+                        });
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    // Shouldn't happen, but treat as real state for safety
+                    classes.push(ChainOutputClass::RealState);
+                }
+            }
+        }
+
+        // Determine if the predicate is a control-only boolean.
+        // This is the key boolean for the two-landing optimization.
+        // Dead control outputs don't affect this — only the predicate matters.
+        let node = &self.func.nodes[node_id];
+        let control_done_value = match &node.inputs[0].source {
+            PortSource::Node(out_ref) => {
+                let pred_is_ctrl =
+                    self.func
+                        .is_chain_control_only_output(out_ref.node, out_ref.index as usize, 0);
+                if pred_is_ctrl {
+                    if let NodeKind::Gamma {
+                        regions: pred_regions,
+                    } = &self.func.nodes[out_ref.node].kind
+                    {
+                        match self.classify_ctrl_output(
+                            out_ref.node,
+                            pred_regions,
+                            out_ref.index as usize,
+                        ) {
+                            CtrlOutputKind::Boolean { done_value } => Some(done_value),
+                            // Invariant predicate (always same value) — also record it
+                            // as it means the chain entry is unconditional
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        // Debug assertion: every output is classified
+        debug_assert_eq!(
+            classes.len(),
+            data_output_count,
+            "classify_chain_outputs: output count mismatch"
+        );
+
+        (classes, control_done_value)
     }
 
     /// Path-state projector: evaluate a PortSource within a done-branch region
@@ -2761,6 +4261,10 @@ impl<'a> Linearizer<'a> {
                 data_results,
             },
         );
+        if !self.fusion_applied {
+            self.pre_scan_control_fusions(body);
+            self.fusion_applied = true;
+        }
         self.linearize_region(body);
         self.emit(Some(region.debug_scope), LinearOp::FuncEnd);
     }

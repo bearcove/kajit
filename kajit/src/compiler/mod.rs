@@ -302,7 +302,7 @@ pub fn compile_pipeline(
         });
         if is_leaf {
             use kajit_mir::regalloc3::machine_inst::PReg;
-            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1)];
+            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1), PReg(15)];
         }
     }
 
@@ -767,7 +767,10 @@ fn compile_linear_ir_decoder_with_options(
         });
         if is_leaf {
             use kajit_mir::regalloc3::machine_inst::PReg;
-            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1)];
+            // x0/x1: keep output_ptr/ctx_ptr in place (no moves to x21/x22)
+            // x15: reserved for cursor writeback (RestoreCursor writes here
+            //      instead of x19, avoiding callee-save overhead)
+            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1), PReg(15)];
         }
     }
 
