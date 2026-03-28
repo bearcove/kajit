@@ -61,7 +61,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     };
 
     // Skip very large theta bodies to avoid O(n²) scanning.
-    if func.regions[body].nodes.len() > 200 {
+    if func.regions[body].nodes.len() > 50 {
         return 0;
     }
 
@@ -109,6 +109,26 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
     }
 
+    if debug {
+        // Dump body results to diagnose port mapping
+        for i in 0..std::cmp::min(loop_var_count + 1, func.regions[body].results.len()) {
+            let rid = func.regions[body].results[i];
+            let src = &func.region_results[rid].source;
+            let kind_str = match src {
+                PortSource::Node(oref) => format!(
+                    "#{} {:?}",
+                    oref.node.index(),
+                    std::mem::discriminant(&func.nodes[oref.node].kind)
+                ),
+                PortSource::RegionArg(rref) => format!("arg#{}", rref.arg.index()),
+            };
+            eprintln!(
+                "  result[{}]: {} (kind={:?})",
+                i, kind_str, func.region_results[rid].kind
+            );
+        }
+    }
+
     // Phase 1: Find dead ports — input is Const(C) AND output has no consumers.
     // When both hold: the port carries a constant that enters the loop, circulates
     // through the backedge, and exits without anyone reading the exit value.
@@ -126,9 +146,8 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
 
         // The output is unused. But the body arg might still be loop-variant
-        // (e.g., a loop index that increments each iteration). We must also
-        // verify the backedge value is always Const(C), proving the body arg
-        // never carries a meaningful changing value.
+        // (e.g., a loop index that increments each iteration). We must verify
+        // the backedge value is always Const(C) or pass-through of the body arg.
         let result_idx = 1 + p;
         if result_idx >= func.regions[body].results.len() {
             continue;
@@ -137,11 +156,42 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         let result_source = func.region_results[result_id].source;
         let body_arg_id = func.regions[body].args[p];
 
-        if !is_always_const(func, &result_source, const_val, body_arg_id, body, 0) {
+        // Fast path: check if the body result is Identity(this_port's_body_arg).
+        // This is the exact pattern produced by slot2reg's reinit pass-through.
+        let is_identity_passthrough = match &result_source {
+            PortSource::Node(oref) => {
+                let node = &func.nodes[oref.node];
+                matches!(&node.kind, NodeKind::Simple(IrOp::Identity))
+                    && node.inputs.first().map_or(false, |inp| {
+                        inp.source
+                            == PortSource::RegionArg(RegionArgRef {
+                                region: body,
+                                arg: body_arg_id,
+                            })
+                    })
+            }
+            // Direct pass-through (body result = body arg)
+            PortSource::RegionArg(rref) => rref.region == body && rref.arg == body_arg_id,
+        };
+
+        let is_invariant = is_identity_passthrough
+            || is_always_const(func, &result_source, const_val, body_arg_id, body, 0);
+
+        if !is_invariant {
             if debug {
+                let kind_str = match &result_source {
+                    PortSource::Node(oref) => {
+                        format!(
+                            "{:?} kind={:?}",
+                            oref,
+                            std::mem::discriminant(&func.nodes[oref.node].kind)
+                        )
+                    }
+                    PortSource::RegionArg(rref) => format!("RegionArg({:?})", rref),
+                };
                 eprintln!(
-                    "  port {}: Const({}) no consumers but backedge NOT const → KEEP",
-                    p, const_val
+                    "  port {}: Const({}) no consumers, identity_pt={}, result={} → KEEP",
+                    p, const_val, is_identity_passthrough, kind_str
                 );
             }
             continue;
@@ -161,14 +211,15 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             region: body,
             arg: body_arg_id,
         });
-        let mut only_gamma_uses = true;
+        let mut only_passthrough_uses = true;
         for &nid in &func.regions[body].nodes {
             let is_gamma = matches!(func.nodes[nid].kind, NodeKind::Gamma { .. });
+            let is_identity = matches!(func.nodes[nid].kind, NodeKind::Simple(IrOp::Identity));
             for input in &func.nodes[nid].inputs {
-                if input.source == body_arg_source && !is_gamma {
-                    only_gamma_uses = false;
+                if input.source == body_arg_source && !is_gamma && !is_identity {
+                    only_passthrough_uses = false;
                     if debug {
-                        eprintln!("    body arg used by non-gamma node {:?}", nid);
+                        eprintln!("    body arg used by non-passthrough node {:?}", nid);
                     }
                 }
             }
@@ -179,14 +230,17 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
                 // Used in body result → that's the backedge, which we'll handle
             }
         }
-        if !only_gamma_uses {
+        if !only_passthrough_uses {
             if debug {
-                eprintln!("  port {}: SKIPPED — body arg has non-gamma uses", p);
+                eprintln!("  port {}: SKIPPED — body arg has non-passthrough uses", p);
             }
             continue;
         }
 
         dead_ports.push((p, const_val));
+        if dead_ports.len() >= 4 {
+            break;
+        } // TEMP: limiting while debugging
     }
 
     if dead_ports.is_empty() {
