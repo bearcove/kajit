@@ -920,10 +920,43 @@ impl<'a> Linearizer<'a> {
         self.pre_scan_control_fusions(root_body);
     }
 
+    /// Pre-scan a chain's continue branch for a single fusion candidate
+    /// targeting the specified tail gamma. Same safety checks as root-level fusion.
+    fn pre_scan_control_fusions_for_tail(&mut self, cont_branch: RegionId, tail_id: NodeId) {
+        // Reuse the generic pre-scan but restrict to this region.
+        // We temporarily save/restore fusion state to ensure only one candidate.
+        let prev_fusions = self.control_fusions.clone();
+        let prev_deferred = self.deferred_nodes.clone();
+
+        // Run the scan on this specific region
+        self.pre_scan_control_fusions(cont_branch);
+
+        // Check: only keep new fusions that target the tail gamma
+        let new_fusions: HashMap<NodeId, ControlFusionInfo> = self
+            .control_fusions
+            .iter()
+            .filter(|(k, _)| !prev_fusions.contains_key(k) && **k == tail_id)
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+
+        // Restore previous state and add only the valid new fusion
+        self.control_fusions = prev_fusions;
+        self.deferred_nodes = prev_deferred;
+
+        if new_fusions.len() == 1 {
+            for (k, v) in new_fusions {
+                self.deferred_nodes.insert(v.upstream);
+                self.control_fusions.insert(k, v);
+            }
+        }
+    }
+
     /// Pre-scan: identify upstream gammas whose control-only output feeds a
     /// downstream gamma's predicate. Defer the upstream gamma and record fusion info.
     fn pre_scan_control_fusions(&mut self, region_id: RegionId) {
         let region = &self.func.regions[region_id];
+        let initial_count = self.control_fusions.len();
+        let mut new_upstreams: Vec<NodeId> = Vec::new();
         for &nid in &region.nodes {
             let node = &self.func.nodes[nid];
             let NodeKind::Gamma { regions } = &node.kind else {
@@ -1022,12 +1055,7 @@ impl<'a> Linearizer<'a> {
                 continue;
             }
 
-            // Only fuse in the root lambda body, not inside theta/gamma branches
-            if region_id != self.func.root_body() {
-                continue;
-            }
             // Don't fuse in regions that contain thetas (vec/loop types).
-            // The fusion may interact poorly with theta linearization.
             let has_theta = region
                 .nodes
                 .iter()
@@ -1064,7 +1092,7 @@ impl<'a> Linearizer<'a> {
             }
 
             // All checks pass. Record as a candidate.
-            // We'll only commit if there's exactly one candidate (simple type).
+            new_upstreams.push(upstream_id);
             self.deferred_nodes.insert(upstream_id);
             self.control_fusions.insert(
                 nid,
@@ -1086,19 +1114,25 @@ impl<'a> Linearizer<'a> {
             }
         }
 
-        // Safety: only commit fusions if there's exactly one candidate.
-        // Multiple fusions in the same region indicate compound types with
-        // inlined inner decoders — bail to avoid miscompilation.
-        if self.control_fusions.len() > 1 {
+        // Safety: only commit fusions found in THIS scan if there's exactly one
+        // new candidate. Multiple new candidates indicate compound types —
+        // revert only the new ones to avoid miscompilation.
+        let new_count = self.control_fusions.len() - initial_count;
+        if new_count > 1 {
             if std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
                 eprintln!(
-                    "[fusion] {} candidates found, clearing all (compound type safety)",
-                    self.control_fusions.len()
+                    "[fusion] {} new candidates in region, reverting (compound type safety)",
+                    new_count
                 );
             }
-            self.control_fusions.clear();
-            self.deferred_nodes.clear();
-        } else if self.control_fusions.len() == 1 {
+            // Remove only the new candidates
+            for &up in &new_upstreams {
+                self.deferred_nodes.remove(&up);
+            }
+            // Remove fusions added in this scan
+            self.control_fusions
+                .retain(|_, v| !new_upstreams.contains(&v.upstream));
+        } else if new_count == 1 {
             if std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
                 eprintln!("[fusion] committed: 1 candidate");
             }
@@ -1755,7 +1789,8 @@ impl<'a> Linearizer<'a> {
         // two-landing routing, eliminating the predicate materialization.
         if exit_ctx.is_none() {
             if let Some(fusion) = self.control_fusions.get(&node_id).cloned() {
-                return self.try_linearize_fused_passthrough_exit(node_id, regions, &fusion);
+                return self
+                    .try_linearize_fused_passthrough_exit(node_id, regions, &fusion, exit_ctx);
             }
         }
 
@@ -3227,6 +3262,7 @@ impl<'a> Linearizer<'a> {
         downstream_id: NodeId,
         downstream_regions: &[RegionId],
         fusion: &ControlFusionInfo,
+        exit_ctx: Option<ChainInheritedState>,
     ) -> bool {
         let ds_node = &self.func.nodes[downstream_id];
         let state_count = self.func.state_domains.len();
@@ -3245,15 +3281,28 @@ impl<'a> Linearizer<'a> {
             (downstream_regions[0], false)
         };
 
-        // Create the downstream's landing (where "done" exits go)
-        let ds_landing_label = self.fresh_label();
-        let ds_landing_vregs: Vec<VReg> = (0..ds_data_output_count)
-            .map(|i| {
-                let v = ds_node.outputs[i].vreg.expect("gamma output vreg");
-                self.record_vreg_scope(v, ds_node.outputs[i].debug_scope);
-                v
-            })
-            .collect();
+        // Create or reuse landing (where "done" exits go)
+        let owns_landing = exit_ctx.is_none();
+        let (ds_landing_label, ds_landing_vregs, ds_state_env, ds_output_to_landing) =
+            if let Some(inherited) = &exit_ctx {
+                (
+                    inherited.landing_label,
+                    inherited.landing_vregs.clone(),
+                    Some(inherited.state_env.clone()),
+                    inherited.output_to_landing.clone(),
+                )
+            } else {
+                let label = self.fresh_label();
+                let vregs: Vec<VReg> = (0..ds_data_output_count)
+                    .map(|i| {
+                        let v = ds_node.outputs[i].vreg.expect("gamma output vreg");
+                        self.record_vreg_scope(v, ds_node.outputs[i].debug_scope);
+                        v
+                    })
+                    .collect();
+                let mapping: Vec<usize> = (0..ds_data_output_count).collect();
+                (label, vregs, None, mapping)
+            };
 
         // Create the "continue" label (where "more" exits go)
         let continue_label = self.fresh_label();
@@ -3277,29 +3326,75 @@ impl<'a> Linearizer<'a> {
             .count();
 
         // Helper: given upstream output vregs for a specific path, compute
-        // phis for the downstream landing (done path = passthrough of n277 inputs).
+        // phis for the downstream landing (done path = passthrough of ds inputs).
+        // When ds_state_env is set (inner chain), use the chain's state_env for
+        // landing positions not covered by the downstream gamma's outputs.
         let compute_done_phis =
             |lin: &mut Linearizer, up_out_vregs: &[VReg]| -> Vec<(VReg, VReg)> {
                 let mut phis = Vec::new();
-                for i in 0..ds_data_output_count {
-                    let src = &ds_node.inputs[i + 1];
-                    if src.kind != PortKind::Data {
-                        continue;
+                if let Some(ref env) = ds_state_env {
+                    // Inner chain: project onto chain landing via output_to_landing
+                    let mut used = std::collections::HashSet::new();
+                    for i in 0..ds_data_output_count {
+                        if i >= ds_output_to_landing.len() {
+                            break;
+                        }
+                        let landing_idx = ds_output_to_landing[i];
+                        if landing_idx == usize::MAX {
+                            continue;
+                        }
+                        let src = &ds_node.inputs[i + 1];
+                        if src.kind != PortKind::Data {
+                            continue;
+                        }
+                        let src_vreg = match src.source {
+                            PortSource::Node(out_ref) if out_ref.node == upstream_id => {
+                                let out_idx = out_ref.index as usize;
+                                if out_idx < up_out_vregs.len() {
+                                    up_out_vregs[out_idx]
+                                } else {
+                                    lin.resolve_vreg(src.source)
+                                }
+                            }
+                            _ => lin.resolve_vreg(src.source),
+                        };
+                        let dst = ds_landing_vregs[landing_idx];
+                        used.insert(landing_idx);
+                        if src_vreg != dst {
+                            phis.push((src_vreg, dst));
+                        }
                     }
-                    let src_vreg = match src.source {
-                        PortSource::Node(out_ref) if out_ref.node == upstream_id => {
-                            let out_idx = out_ref.index as usize;
-                            if out_idx < up_out_vregs.len() {
-                                up_out_vregs[out_idx]
-                            } else {
-                                lin.resolve_vreg(src.source)
+                    // Carry any landing positions not covered by this gamma's outputs
+                    for (idx, &lv) in ds_landing_vregs.iter().enumerate() {
+                        if !used.contains(&idx) {
+                            let src = env[idx];
+                            if src != lv {
+                                phis.push((src, lv));
                             }
                         }
-                        _ => lin.resolve_vreg(src.source),
-                    };
-                    let dst = ds_landing_vregs[i];
-                    if src_vreg != dst {
-                        phis.push((src_vreg, dst));
+                    }
+                } else {
+                    // Top level: direct 1:1 mapping
+                    for i in 0..ds_data_output_count {
+                        let src = &ds_node.inputs[i + 1];
+                        if src.kind != PortKind::Data {
+                            continue;
+                        }
+                        let src_vreg = match src.source {
+                            PortSource::Node(out_ref) if out_ref.node == upstream_id => {
+                                let out_idx = out_ref.index as usize;
+                                if out_idx < up_out_vregs.len() {
+                                    up_out_vregs[out_idx]
+                                } else {
+                                    lin.resolve_vreg(src.source)
+                                }
+                            }
+                            _ => lin.resolve_vreg(src.source),
+                        };
+                        let dst = ds_landing_vregs[i];
+                        if src_vreg != dst {
+                            phis.push((src_vreg, dst));
+                        }
                     }
                 }
                 phis
@@ -3748,8 +3843,10 @@ impl<'a> Linearizer<'a> {
             return false;
         }
 
-        // Phase 5: Emit downstream's landing label
-        self.emit(Some(ds_node.debug_scope), LinearOp::Label(ds_landing_label));
+        // Phase 5: Emit downstream's landing label (only if we own it)
+        if owns_landing {
+            self.emit(Some(ds_node.debug_scope), LinearOp::Label(ds_landing_label));
+        }
 
         true
     }
