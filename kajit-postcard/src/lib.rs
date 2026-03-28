@@ -2271,15 +2271,16 @@ impl PostcardHirLowerer {
     ) {
         let max_bytes = Self::postcard_varint_max_bytes(bits);
 
-        // byte_index tracks which byte we're on (0..max_bytes)
-        let byte_index_local = self.alloc_local(
-            format!("varint_index_{}", self.locals.len()),
+        // shift tracks the bit shift amount (0, 7, 14, 21, ...)
+        // This replaces the byte_index * 7 multiplication with direct accumulation.
+        let shift_local = self.alloc_local(
+            format!("varint_shift_{}", self.locals.len()),
             hir::Type::u(64),
             hir::LocalKind::Temp,
         );
         self.push_init(
             statements,
-            hir::Place::Local(byte_index_local),
+            hir::Place::Local(shift_local),
             hir::Expr::Literal(hir::Literal::Integer(0)),
         );
 
@@ -2341,21 +2342,16 @@ impl PostcardHirLowerer {
             },
         });
 
-        // acc |= (byte & 0x7f) << (byte_index * 7)
+        // acc |= (byte & 0x7f) << shift
         let low = hir::Expr::Binary {
             op: hir::BinaryOp::BitAnd,
             lhs: Box::new(hir::Expr::Local(raw_local)),
             rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0x7f))),
         };
-        let shift = hir::Expr::Binary {
-            op: hir::BinaryOp::Mul,
-            lhs: Box::new(hir::Expr::Local(byte_index_local)),
-            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(7))),
-        };
         let part = hir::Expr::Binary {
             op: hir::BinaryOp::Shl,
             lhs: Box::new(low),
-            rhs: Box::new(shift),
+            rhs: Box::new(hir::Expr::Local(shift_local)),
         };
         loop_body.push(hir::Stmt {
             id: self.next_stmt_id(),
@@ -2369,15 +2365,15 @@ impl PostcardHirLowerer {
             },
         });
 
-        // byte_index++
+        // shift += 7
         loop_body.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Assign {
-                place: hir::Place::Local(byte_index_local),
+                place: hir::Place::Local(shift_local),
                 value: hir::Expr::Binary {
                     op: hir::BinaryOp::Add,
-                    lhs: Box::new(hir::Expr::Local(byte_index_local)),
-                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
+                    lhs: Box::new(hir::Expr::Local(shift_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(7))),
                 },
             },
         });
@@ -2392,8 +2388,8 @@ impl PostcardHirLowerer {
                 kind: hir::StmtKind::If {
                     condition: hir::Expr::Binary {
                         op: hir::BinaryOp::Eq,
-                        lhs: Box::new(hir::Expr::Local(byte_index_local)),
-                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(max_bytes))),
+                        lhs: Box::new(hir::Expr::Local(shift_local)),
+                        rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(max_bytes * 7))),
                     },
                     then_block: hir::Block {
                         scope: hir::ScopeId::new(0),
@@ -2469,14 +2465,14 @@ impl PostcardHirLowerer {
             },
         });
 
-        // if byte_index == max_bytes { fail InvalidVarint } - can't continue past max
+        // if shift == max_bytes * 7 { fail InvalidVarint } - can't continue past max
         loop_body.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::If {
                 condition: hir::Expr::Binary {
                     op: hir::BinaryOp::Eq,
-                    lhs: Box::new(hir::Expr::Local(byte_index_local)),
-                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(max_bytes))),
+                    lhs: Box::new(hir::Expr::Local(shift_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(max_bytes * 7))),
                 },
                 then_block: hir::Block {
                     scope: hir::ScopeId::new(0),
