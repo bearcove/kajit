@@ -1980,6 +1980,9 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     // Bind success exit and emit epilogue
     ectx.bind_label(success_exit);
     ectx.end_func_with_config(error_exit, &prologue_config);
+    // Emit shared error trampolines after the epilogue (cold, unreachable
+    // from the success/error return paths — only reached via error-site branches)
+    ectx.emit_error_trampolines();
 
     // Finalize
     let (buf, asm_program) = ectx.finalize();

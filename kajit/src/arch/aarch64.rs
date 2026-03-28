@@ -18,6 +18,12 @@ pub struct EmitCtx {
     /// Whether this is a leaf function (no bl instructions).
     /// Leaf functions skip saving x29/x30 and frame pointer setup.
     pub is_leaf: bool,
+    /// Shared error trampoline labels: error code → label.
+    /// Each error site emits `b .Lerr_<code>` instead of the full 3-instruction
+    /// sequence. The shared blocks are emitted near the epilogue.
+    error_trampolines: std::collections::HashMap<u32, LabelId>,
+    /// The ctx register used for error trampolines (set during func emission).
+    error_ctx_reg: Option<Reg>,
 }
 
 // Register assignments (default, all callee-saved):
@@ -79,6 +85,8 @@ impl EmitCtx {
             base_frame,
             frame_size,
             is_leaf,
+            error_trampolines: std::collections::HashMap::new(),
+            error_ctx_reg: None,
         }
     }
 
@@ -426,16 +434,44 @@ impl EmitCtx {
     }
 
     /// Emit an error with an explicit ctx register.
+    /// Uses shared trampolines: each error site emits just `b .Lerr_<code>`,
+    /// and the shared trampoline block is emitted near the epilogue.
     pub fn emit_error_with_ctx_reg(&mut self, code: crate::context::ErrorCode, ctx_reg: Reg) {
-        let error_exit = self.error_exit;
         let error_code = code as u32;
-        self.emit
-            .emit_movz_imm(aarch64::Width::W32, Reg::X9, error_code as u16, 0)
-            .expect("movz");
-        self.emit
-            .emit_str_imm(aarch64::Width::W32, Reg::X9, ctx_reg, CTX_ERROR_CODE)
-            .expect("str");
-        self.emit.emit_b_label(error_exit).expect("b");
+        self.error_ctx_reg = Some(ctx_reg);
+
+        // Get or create the trampoline label for this error code
+        let trampoline_label = if let Some(&label) = self.error_trampolines.get(&error_code) {
+            label
+        } else {
+            let label = self.emit.new_label();
+            self.error_trampolines.insert(error_code, label);
+            label
+        };
+
+        self.emit.emit_b_label(trampoline_label).expect("b");
+    }
+
+    /// Emit shared error trampoline blocks. Called just before the epilogue.
+    /// Each trampoline: `movz w9, #code; str w9, [ctx, #error_code]; b .Lexit`
+    pub fn emit_error_trampolines(&mut self) {
+        let error_exit = self.error_exit;
+        let ctx_reg = self.error_ctx_reg.unwrap_or(Reg::X1);
+
+        // Sort by error code for deterministic output
+        let mut codes: Vec<(u32, LabelId)> = self.error_trampolines.drain().collect();
+        codes.sort_by_key(|(code, _)| *code);
+
+        for (code, label) in codes {
+            self.emit.bind_label(label).expect("bind error trampoline");
+            self.emit
+                .emit_movz_imm(aarch64::Width::W32, Reg::X9, code as u16, 0)
+                .expect("movz");
+            self.emit
+                .emit_str_imm(aarch64::Width::W32, Reg::X9, ctx_reg, CTX_ERROR_CODE)
+                .expect("str");
+            self.emit.emit_b_label(error_exit).expect("b");
+        }
     }
 
     /// Advance the cached cursor by n bytes (inline, no function call).
