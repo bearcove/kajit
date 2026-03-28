@@ -120,9 +120,25 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         };
 
         if output_has_consumer[p] {
+            continue;
+        }
+
+        // The output is unused. But the body arg might still be loop-variant
+        // (e.g., a loop index that increments each iteration). We must also
+        // verify the backedge value is always Const(C), proving the body arg
+        // never carries a meaningful changing value.
+        let result_idx = 1 + p;
+        if result_idx >= func.regions[body].results.len() {
+            continue;
+        }
+        let result_id = func.regions[body].results[result_idx];
+        let result_source = func.region_results[result_id].source;
+        let body_arg_id = func.regions[body].args[p];
+
+        if !is_always_const(func, &result_source, const_val, body_arg_id, body, 0) {
             if debug {
                 eprintln!(
-                    "  port {}: Const({}) but output HAS consumers",
+                    "  port {}: Const({}) no consumers but backedge NOT const → KEEP",
                     p, const_val
                 );
             }
@@ -131,7 +147,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
 
         if debug {
             eprintln!(
-                "  port {}: Const({}) with NO output consumers → DEAD",
+                "  port {}: Const({}) no consumers AND backedge const → DEAD",
                 p, const_val
             );
         }
@@ -169,9 +185,6 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
 
         dead_ports.push((p, const_val));
-        if dead_ports.len() >= 1 {
-            break;
-        } // TEMP: one at a time
     }
 
     if dead_ports.is_empty() {
