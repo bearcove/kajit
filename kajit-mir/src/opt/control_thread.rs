@@ -7,11 +7,37 @@
 //!
 //! 1. **Forwards trampolines**: empty blocks (no instructions) with an unconditional
 //!    branch are collapsed — predecessors are redirected to the final target with
-//!    composed edge args. Only safe when all outgoing edge arg sources are block params.
+//!    composed edge args. Safe when block params are either used in outgoing edge
+//!    arg sources (composable) or not used outside the block (dead).
+//!    Non-param sources in outgoing edges are fine: they dominate the trampoline
+//!    and hence all its predecessors.
 //!
-//! 2. **Threads constant edges**: when a predecessor edge provides a known constant
-//!    for a conditional branch's condition (a block param), that edge is retargeted
-//!    directly to the correct successor, bypassing the branch block entirely.
+//! 2. **Threads break-direction constant edges**: when a predecessor edge provides
+//!    const(0) for a conditional branch's condition (a block param), that edge is
+//!    retargeted directly to the correct successor, bypassing the branch block.
+//!
+//! # Design constraints
+//!
+//! **Break-only threading.** Only the break direction (val=0) is threaded. This
+//! is sufficient because after threading, the branch block becomes single-
+//! predecessor (only the continue edge remains). The post-simplify `const_branch_fold`
+//! pass then propagates the constant through the single-pred edge and folds the
+//! branch into an unconditional jump — eliminating the continue-side test for free.
+//!
+//! **Source block must remain alive.** Threading only one edge ensures the branch
+//! block keeps at least one predecessor, preserving its block params as valid SSA
+//! definitions. This is critical because param lifting adds `source: leaking_param`
+//! to other predecessor edges — if the source block died, those references would
+//! dangle. Threading both edges would kill the block and require full SSA
+//! reconstruction (iterated phi insertion), which is out of scope.
+//!
+//! **Param lifting.** When a branch block has params that reach downstream blocks
+//! through dominance rather than explicit edge args ("leaking params"), the pass
+//! lifts them into successor edge args before threading. This makes the values
+//! composable through the threaded edge. Lifting is only attempted when all
+//! leaking params are exclusively used in the block's direct successor blocks
+//! (instructions, terminators, or edge args) — multi-hop dominance leaks are
+//! rejected to avoid requiring a global SSA updater.
 
 use std::collections::{HashMap, HashSet};
 
