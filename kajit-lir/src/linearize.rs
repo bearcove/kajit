@@ -579,6 +579,14 @@ pub struct LinearDebugProvenance {
 
 // ─── Linearizer state ────────────────────────────────────────────────────────
 
+/// A value in the safe exit environment: either an already-defined vreg
+/// or a constant that needs a fresh vreg emitted at exit time.
+#[derive(Clone, Copy, Debug)]
+enum SafeExitVal {
+    Vreg(VReg),
+    Const(u64),
+}
+
 /// Context for the active passthrough-exit chain, passed to inner gammas so
 /// they can emit direct exits to the chain's landing instead of creating
 /// merge blocks for control-only outputs.
@@ -586,8 +594,14 @@ pub struct LinearDebugProvenance {
 struct ChainExitCtx {
     landing_label: LabelId,
     landing_vregs: Vec<VReg>,
+    #[allow(dead_code)]
     state_env: Vec<VReg>,
+    #[allow(dead_code)]
     output_to_landing: Vec<usize>,
+    /// Safe exit environment for inner chain exits. Unlike state_env, this
+    /// resolves gamma outputs that may not be defined yet (because the gamma
+    /// is still being linearized) into available vregs or constants.
+    safe_exit_env: Vec<SafeExitVal>,
 }
 
 struct Linearizer<'a> {
@@ -604,6 +618,12 @@ struct Linearizer<'a> {
     chain_exit_ctx: Option<ChainExitCtx>,
     /// Counter for allocating fresh vregs (starts above all RVSDG vregs).
     next_vreg: u32,
+    /// Theta nesting depth. Control-only exits are suppressed inside thetas
+    /// to avoid issues with chain exit env scoping across loop iterations.
+    theta_depth: u32,
+    /// Stack of gamma nodes whose branches are currently being linearized.
+    /// Used to detect if a safe_exit_env vreg is from a not-yet-merged gamma.
+    gamma_stack: Vec<NodeId>,
 }
 
 impl<'a> Linearizer<'a> {
@@ -613,6 +633,8 @@ impl<'a> Linearizer<'a> {
             ops: Vec::new(),
             chain_exit_ctx: None,
             next_vreg: func.vreg_count,
+            theta_depth: 0,
+            gamma_stack: Vec::new(),
             label_count: 0,
             op_scopes: Vec::new(),
             op_values: Vec::new(),
@@ -1099,15 +1121,11 @@ impl<'a> Linearizer<'a> {
             return;
         }
 
-        // Inner chain-exit disabled: the continue branch may not be passthrough,
-        // so copying gamma inputs to outputs produces wrong values. The outer
-        // passthrough-exit chain handles the cascade correctly without this.
-        // TODO: re-enable when inner chain-exit properly linearizes or projects
-        // the continue branch's non-passthrough results.
-        if false {
-            if self.try_linearize_inner_chain_exit(node_id, regions) {
-                return;
-            }
+        // Control-only chain exit: if ALL data outputs are control-only booleans
+        // (is_more flags), the "done" branch exits directly to the chain landing
+        // and the "more" (passthrough) branch falls through.
+        if self.try_linearize_control_only_chain_exit(node_id, regions) {
+            return;
         }
 
         let node = &self.func.nodes[node_id];
@@ -1195,8 +1213,10 @@ impl<'a> Linearizer<'a> {
                 self.emit_gamma_entry_copies(node, region_id);
             }
 
-            // Linearize the branch body.
+            // Track that we're inside this gamma during branch linearization.
+            self.gamma_stack.push(node_id);
             self.linearize_region(region_id);
+            self.gamma_stack.pop();
 
             // Skip exit and merge branch if the branch contains an error exit
             // (code after error_exit is unreachable and causes regalloc issues).
@@ -1537,25 +1557,10 @@ impl<'a> Linearizer<'a> {
         // Check for tail passthrough gamma to chain into
         let tail_gamma = self.find_tail_passthrough_gamma(cont_branch);
         if let Some(tail_id) = tail_gamma {
-            // Linearize everything except the tail gamma, with chain exit context
-            // so inner gammas can emit direct exits to the landing.
-            let prev_ctx = self.chain_exit_ctx.take();
-            self.chain_exit_ctx = Some(ChainExitCtx {
-                landing_label,
-                landing_vregs: landing_vregs.clone(),
-                state_env: state_env.clone(),
-                output_to_landing: output_to_landing.clone(),
-            });
-            let node_ids: Vec<NodeId> = self.func.regions[cont_branch].nodes.clone();
-            for &nid in &node_ids {
-                if nid != tail_id {
-                    self.linearize_node(nid);
-                }
-            }
-            self.chain_exit_ctx = prev_ctx;
-
-            // Update state_env for entries that DON'T come from the tail gamma.
-            // Build the output_to_landing mapping for the tail gamma.
+            // Pre-compute state_env and safe_exit_env BEFORE linearizing non-tail
+            // nodes. resolve_vreg uses RVSDG-assigned vregs (not linear IR defs),
+            // so it works before linearization. This lets inner control-only gammas
+            // exit directly to the chain landing with correct post-decode state.
             let cont_results = self.func.regions[cont_branch].results.clone();
             let cont_data_results: Vec<usize> = cont_results
                 .iter()
@@ -1564,8 +1569,6 @@ impl<'a> Linearizer<'a> {
                 .map(|(i, _)| i)
                 .collect();
 
-            // For each data result of the continue region: it maps to
-            // this gamma's output[j], which maps to landing param output_to_landing[j].
             let mut tail_output_to_landing: Vec<usize> = Vec::new();
             for (j, &result_idx) in cont_data_results.iter().enumerate() {
                 let landing_idx = if j < output_to_landing.len() {
@@ -1580,24 +1583,18 @@ impl<'a> Linearizer<'a> {
                 let result = &self.func.region_results[cont_results[result_idx]];
                 match result.source {
                     PortSource::Node(out_ref) if out_ref.node == tail_id => {
-                        // This result comes from the tail gamma's output.
-                        // Map tail gamma output[out_ref.index] → landing_idx.
                         let tail_out_idx = out_ref.index as usize;
                         while tail_output_to_landing.len() <= tail_out_idx {
                             tail_output_to_landing.push(usize::MAX);
                         }
                         tail_output_to_landing[tail_out_idx] = landing_idx;
 
-                        // ALSO update state_env to the tail gamma's input for
-                        // this output. Since the exit path is passthrough, when
-                        // the tail gamma exits, it carries its input values.
-                        // The input for data output j is inputs[j+1] (skip pred).
                         let tail_node = &self.func.nodes[tail_id];
                         let tail_data_inputs: Vec<usize> = tail_node
                             .inputs
                             .iter()
                             .enumerate()
-                            .skip(1) // skip predicate
+                            .skip(1)
                             .filter(|(_, inp)| inp.kind == PortKind::Data)
                             .map(|(idx, _)| idx)
                             .collect();
@@ -1608,11 +1605,62 @@ impl<'a> Linearizer<'a> {
                         }
                     }
                     _ => {
-                        // From earlier computation — update state now
                         state_env[landing_idx] = self.resolve_vreg(result.source);
                     }
                 }
             }
+
+            // Build safe_exit_env: for each state_env entry, resolve gamma outputs
+            // that may not be defined yet (because the gamma is being linearized)
+            // into available vregs or constants. Only resolve through gammas that
+            // contain child gammas (those are the ones that may have inner exits
+            // fire while the gamma's merge block hasn't been emitted yet).
+            let non_tail_gammas: HashSet<NodeId> = self.func.regions[cont_branch]
+                .nodes
+                .iter()
+                .filter(|&&nid| {
+                    if nid == tail_id {
+                        return false;
+                    }
+                    let NodeKind::Gamma { regions: gr } = &self.func.nodes[nid].kind else {
+                        return false;
+                    };
+                    // Only include gammas that have child gammas in their branches
+                    gr.iter().any(|&rid| {
+                        self.func.regions[rid].nodes.iter().any(|&child| {
+                            matches!(self.func.nodes[child].kind, NodeKind::Gamma { .. })
+                        })
+                    })
+                })
+                .copied()
+                .collect();
+
+            let safe_exit_env: Vec<SafeExitVal> = if non_tail_gammas.is_empty() {
+                // No gammas with child gammas → all state_env vregs are safe
+                state_env.iter().map(|&v| SafeExitVal::Vreg(v)).collect()
+            } else {
+                state_env
+                    .iter()
+                    .map(|&v| self.resolve_safe_exit_val_from_vreg(v, &non_tail_gammas))
+                    .collect()
+            };
+
+            // Set chain exit context and linearize non-tail nodes
+            let prev_ctx = self.chain_exit_ctx.take();
+            self.chain_exit_ctx = Some(ChainExitCtx {
+                landing_label,
+                landing_vregs: landing_vregs.clone(),
+                state_env: state_env.clone(),
+                output_to_landing: output_to_landing.clone(),
+                safe_exit_env,
+            });
+            let node_ids: Vec<NodeId> = self.func.regions[cont_branch].nodes.clone();
+            for &nid in &node_ids {
+                if nid != tail_id {
+                    self.linearize_node(nid);
+                }
+            }
+            self.chain_exit_ctx = prev_ctx;
 
             if std::env::var("KAJIT_DEBUG_CHAIN_EXIT").is_ok() {
                 eprintln!(
@@ -1643,18 +1691,9 @@ impl<'a> Linearizer<'a> {
                 )),
             );
         } else {
-            // No chain — linearize full continue region with chain exit context
-            let prev_ctx = self.chain_exit_ctx.take();
-            self.chain_exit_ctx = Some(ChainExitCtx {
-                landing_label,
-                landing_vregs: landing_vregs.clone(),
-                state_env: state_env.clone(),
-                output_to_landing: output_to_landing.clone(),
-            });
-            self.linearize_region(cont_branch);
-            self.chain_exit_ctx = prev_ctx;
-
-            // Branch to landing with continue region's results mapped to landing params
+            // No chain — linearize full continue region with chain exit context.
+            // Pre-compute state_env from continue region results so inner
+            // control-only exits carry post-computation state, not stale parent state.
             let cont_results = self.func.regions[cont_branch].results.clone();
             let cont_data_results: Vec<usize> = cont_results
                 .iter()
@@ -1662,6 +1701,58 @@ impl<'a> Linearizer<'a> {
                 .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
                 .map(|(i, _)| i)
                 .collect();
+
+            // Update state_env with all continue region data results
+            for (j, &result_idx) in cont_data_results.iter().enumerate() {
+                if j >= output_to_landing.len() {
+                    break;
+                }
+                let landing_idx = output_to_landing[j];
+                if landing_idx == usize::MAX {
+                    continue;
+                }
+                let result = &self.func.region_results[cont_results[result_idx]];
+                if result.kind == PortKind::Data {
+                    state_env[landing_idx] = self.resolve_vreg(result.source);
+                }
+            }
+
+            // Build safe_exit_env with resolution through non-tail gammas
+            let non_tail_gammas: HashSet<NodeId> = self.func.regions[cont_branch]
+                .nodes
+                .iter()
+                .filter(|&&nid| {
+                    let NodeKind::Gamma { regions: gr } = &self.func.nodes[nid].kind else {
+                        return false;
+                    };
+                    gr.iter().any(|&rid| {
+                        self.func.regions[rid].nodes.iter().any(|&child| {
+                            matches!(self.func.nodes[child].kind, NodeKind::Gamma { .. })
+                        })
+                    })
+                })
+                .copied()
+                .collect();
+
+            let safe_env: Vec<SafeExitVal> = if non_tail_gammas.is_empty() {
+                state_env.iter().map(|&v| SafeExitVal::Vreg(v)).collect()
+            } else {
+                state_env
+                    .iter()
+                    .map(|&v| self.resolve_safe_exit_val_from_vreg(v, &non_tail_gammas))
+                    .collect()
+            };
+
+            let prev_ctx = self.chain_exit_ctx.take();
+            self.chain_exit_ctx = Some(ChainExitCtx {
+                landing_label,
+                landing_vregs: landing_vregs.clone(),
+                state_env: state_env.clone(),
+                output_to_landing: output_to_landing.clone(),
+                safe_exit_env: safe_env,
+            });
+            self.linearize_region(cont_branch);
+            self.chain_exit_ctx = prev_ctx;
             let mut final_phis = Vec::new();
             for (j, &result_idx) in cont_data_results.iter().enumerate() {
                 if j >= output_to_landing.len() {
@@ -1870,6 +1961,367 @@ impl<'a> Linearizer<'a> {
         }
 
         // For the passthrough (continue) branch: gamma outputs = gamma inputs.
+        for i in 0..data_output_count {
+            let out_vreg = node.outputs[i].vreg.expect("gamma output vreg");
+            let in_vreg = self.resolve_vreg(node.inputs[i + 1].source);
+            self.record_vreg_scope(out_vreg, node.outputs[i].debug_scope);
+            if out_vreg != in_vreg {
+                self.emit(
+                    Some(node.debug_scope),
+                    LinearOp::Copy {
+                        dst: out_vreg,
+                        src: in_vreg,
+                    },
+                );
+            }
+        }
+
+        true
+    }
+
+    /// Resolve a vreg to a SafeExitVal. If the vreg is an output of a gamma
+    /// in `non_tail_gammas` (which may not be fully linearized when inner exits
+    /// fire), trace through the gamma to find an available value.
+    fn resolve_safe_exit_val_from_vreg(
+        &self,
+        vreg: VReg,
+        non_tail_gammas: &HashSet<NodeId>,
+    ) -> SafeExitVal {
+        // Find which node produces this vreg by scanning non-tail gammas
+        for &gid in non_tail_gammas {
+            let gnode = &self.func.nodes[gid];
+            for (out_idx, out) in gnode.outputs.iter().enumerate() {
+                if out.kind == PortKind::Data && out.vreg == Some(vreg) {
+                    return self.resolve_gamma_exit_val(gid, out_idx, non_tail_gammas);
+                }
+            }
+        }
+        // Not from a non-tail gamma → available as-is
+        SafeExitVal::Vreg(vreg)
+    }
+
+    /// Resolve a gamma's data output to a safe exit value by tracing through
+    /// the gamma's non-passthrough (active) branch.
+    fn resolve_gamma_exit_val(
+        &self,
+        gamma_id: NodeId,
+        output_idx: usize,
+        non_tail_gammas: &HashSet<NodeId>,
+    ) -> SafeExitVal {
+        let node = &self.func.nodes[gamma_id];
+        let NodeKind::Gamma { regions } = &node.kind else {
+            return SafeExitVal::Vreg(node.outputs[output_idx].vreg.unwrap());
+        };
+
+        // Find the non-passthrough (active) branch
+        let active_branch = if self.is_data_passthrough_region(regions[0]) {
+            1
+        } else if self.is_data_passthrough_region(regions[1]) {
+            0
+        } else {
+            return SafeExitVal::Vreg(node.outputs[output_idx].vreg.unwrap());
+        };
+
+        let active_region = &self.func.regions[regions[active_branch]];
+        let data_results: Vec<_> = active_region
+            .results
+            .iter()
+            .enumerate()
+            .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+            .collect();
+
+        if output_idx >= data_results.len() {
+            return SafeExitVal::Vreg(node.outputs[output_idx].vreg.unwrap());
+        }
+
+        let (_, &result_id) = data_results[output_idx];
+        let result = &self.func.region_results[result_id];
+
+        match result.source {
+            PortSource::RegionArg(arg_ref) => {
+                // Passthrough in the active branch → resolve to gamma input
+                self.resolve_gamma_arg_to_input(node, active_region, arg_ref.arg, non_tail_gammas)
+            }
+            PortSource::Node(inner_ref) => {
+                let inner_node = &self.func.nodes[inner_ref.node];
+                match &inner_node.kind {
+                    NodeKind::Simple(IrOp::Const { value }) => SafeExitVal::Const(*value),
+                    NodeKind::Gamma {
+                        regions: inner_regions,
+                    } => {
+                        // Inner gamma (e.g. the bit-test gamma): resolve through its
+                        // non-passthrough (done) branch to find const values
+                        let inner_done = if self.is_data_passthrough_region(inner_regions[0]) {
+                            1
+                        } else if self.is_data_passthrough_region(inner_regions[1]) {
+                            0
+                        } else {
+                            return SafeExitVal::Vreg(
+                                inner_node.outputs[inner_ref.index as usize].vreg.unwrap(),
+                            );
+                        };
+
+                        let done_region = &self.func.regions[inner_regions[inner_done]];
+                        let done_data_results: Vec<_> = done_region
+                            .results
+                            .iter()
+                            .enumerate()
+                            .filter(|&(_, &rid)| {
+                                self.func.region_results[rid].kind == PortKind::Data
+                            })
+                            .collect();
+
+                        let idx = inner_ref.index as usize;
+                        if idx >= done_data_results.len() {
+                            return SafeExitVal::Vreg(inner_node.outputs[idx].vreg.unwrap());
+                        }
+
+                        let (_, &done_rid) = done_data_results[idx];
+                        match self.func.region_results[done_rid].source {
+                            PortSource::Node(const_ref) => {
+                                if let NodeKind::Simple(IrOp::Const { value }) =
+                                    &self.func.nodes[const_ref.node].kind
+                                {
+                                    SafeExitVal::Const(*value)
+                                } else {
+                                    SafeExitVal::Vreg(inner_node.outputs[idx].vreg.unwrap())
+                                }
+                            }
+                            PortSource::RegionArg(arg_ref) => {
+                                // Passthrough in done branch → resolve to inner gamma input
+                                self.resolve_gamma_arg_to_input(
+                                    inner_node,
+                                    done_region,
+                                    arg_ref.arg,
+                                    non_tail_gammas,
+                                )
+                            }
+                        }
+                    }
+                    _ => SafeExitVal::Vreg(
+                        inner_node.outputs[inner_ref.index as usize].vreg.unwrap(),
+                    ),
+                }
+            }
+        }
+    }
+
+    /// Map a region arg back to the gamma's corresponding input vreg.
+    fn resolve_gamma_arg_to_input(
+        &self,
+        gamma_node: &Node,
+        branch_region: &kajit_ir::Region,
+        arg_id: kajit_ir::ArgId,
+        non_tail_gammas: &HashSet<NodeId>,
+    ) -> SafeExitVal {
+        let data_args: Vec<_> = branch_region
+            .args
+            .iter()
+            .enumerate()
+            .filter(|&(_, &aid)| self.func.region_args[aid].kind == PortKind::Data)
+            .collect();
+        for (data_idx, &(_, aid)) in data_args.iter().enumerate() {
+            if *aid == arg_id {
+                let data_inputs: Vec<_> = gamma_node
+                    .inputs
+                    .iter()
+                    .enumerate()
+                    .skip(1)
+                    .filter(|&(_, inp)| inp.kind == PortKind::Data)
+                    .collect();
+                if data_idx < data_inputs.len() {
+                    let (input_idx, _) = data_inputs[data_idx];
+                    let v = self.resolve_vreg(gamma_node.inputs[input_idx].source);
+                    // Check if this vreg is itself from a non-tail gamma
+                    return self.resolve_safe_exit_val_from_vreg(v, non_tail_gammas);
+                }
+            }
+        }
+        SafeExitVal::Vreg(VReg::new(0)) // shouldn't reach here
+    }
+
+    /// Lower a control-only gamma as a chain exit. When a gamma inside a
+    /// passthrough-exit chain has ALL data outputs that are control-only
+    /// (is_more flags), its "done" branch (which produces constants) can exit
+    /// directly to the chain landing, and its "more" branch (passthrough)
+    /// falls through with outputs = inputs.
+    fn try_linearize_control_only_chain_exit(
+        &mut self,
+        node_id: NodeId,
+        regions: &[RegionId],
+    ) -> bool {
+        // Control-only exits inside theta bodies are suppressed: the safe_exit_env
+        // resolution doesn't account for loop-scoped vregs correctly.
+        if self.theta_depth > 0 {
+            return false;
+        }
+        let ctx = match &self.chain_exit_ctx {
+            Some(ctx) => ctx.clone(),
+            None => return false,
+        };
+
+        if regions.len() != 2 {
+            return false;
+        }
+
+        let node = &self.func.nodes[node_id];
+        let data_output_count = node
+            .outputs
+            .iter()
+            .filter(|o| o.kind == PortKind::Data)
+            .count();
+
+        if data_output_count == 0 {
+            return false;
+        }
+
+        // All data outputs must be control-only
+        for i in 0..data_output_count {
+            if !self.func.is_chain_control_only_output(node_id, i, 0) {
+                return false;
+            }
+        }
+
+        // One branch must be passthrough (the "more" branch), the other not
+        let b0_pt = self.is_data_passthrough_region(regions[0]);
+        let b1_pt = self.is_data_passthrough_region(regions[1]);
+        if b0_pt == b1_pt {
+            return false;
+        }
+
+        // "more" = passthrough branch (continues), "done" = const branch (exits)
+        let (more_branch, done_branch, done_on_nonzero) = if b0_pt {
+            // Branch 0 = passthrough (more), done when pred != 0
+            (regions[0], regions[1], true)
+        } else {
+            // Branch 1 = passthrough (more), done when pred == 0
+            (regions[1], regions[0], false)
+        };
+
+        // Don't apply to error-only regions
+        if self.region_is_error_only(more_branch) || self.region_is_error_only(done_branch) {
+            return false;
+        }
+
+        // The "done" branch must produce ONLY constants for data outputs (no
+        // inner gammas, no computation). This prevents matching wrapper gammas
+        // (like bounds-check gates) whose non-passthrough branch contains the
+        // actual bit-test computation.
+        let done_region = &self.func.regions[done_branch];
+        let done_has_structural = done_region.nodes.iter().any(|&nid| {
+            matches!(
+                &self.func.nodes[nid].kind,
+                NodeKind::Gamma { .. } | NodeKind::Theta { .. }
+            )
+        });
+        if done_has_structural {
+            return false;
+        }
+        // Verify all data results are constants
+        for &rid in &done_region.results {
+            let result = &self.func.region_results[rid];
+            if result.kind != PortKind::Data {
+                continue;
+            }
+            match result.source {
+                PortSource::Node(out_ref) => {
+                    if !matches!(
+                        &self.func.nodes[out_ref.node].kind,
+                        NodeKind::Simple(IrOp::Const { .. })
+                    ) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+
+        let predicate = self.resolve_vreg(node.inputs[0].source);
+
+        // Build exit phis from safe_exit_env → landing_vregs
+        let mut exit_phis: Vec<(VReg, VReg)> = Vec::new();
+        for (i, &lv) in ctx.landing_vregs.iter().enumerate() {
+            if i >= ctx.safe_exit_env.len() {
+                break;
+            }
+            let src = match ctx.safe_exit_env[i] {
+                SafeExitVal::Vreg(v) => {
+                    // Verify this vreg is NOT from a gamma we're currently
+                    // inside (whose merge block hasn't been emitted yet),
+                    // NOR from this gamma node itself.
+                    for out in &node.outputs {
+                        if out.vreg == Some(v) {
+                            return false;
+                        }
+                    }
+                    for &gid in &self.gamma_stack {
+                        let gnode = &self.func.nodes[gid];
+                        for out in &gnode.outputs {
+                            if out.vreg == Some(v) {
+                                return false;
+                            }
+                        }
+                    }
+                    v
+                }
+                SafeExitVal::Const(val) => {
+                    let v = self.fresh_vreg();
+                    self.record_vreg_scope(v, node.debug_scope);
+                    self.emit(
+                        Some(node.debug_scope),
+                        LinearOp::Const { dst: v, value: val },
+                    );
+                    v
+                }
+            };
+            if src != lv {
+                exit_phis.push((src, lv));
+            }
+        }
+
+        // Entry phis for the "more" (passthrough) branch
+        let state_count = self.func.state_domains.len();
+        let passthrough_count = node.inputs.len() - 1 - state_count;
+        let more_region = &self.func.regions[more_branch];
+        let mut more_entry_phis = Vec::new();
+        for i in 0..passthrough_count {
+            let src_input = &node.inputs[i + 1];
+            if src_input.kind == PortKind::Data {
+                if let Some(&arg_id) = more_region.args.get(i) {
+                    let arg = &self.func.region_args[arg_id];
+                    if let Some(dst_vreg) = arg.vreg {
+                        let src_vreg = self.resolve_vreg(src_input.source);
+                        self.record_vreg_scope(dst_vreg, more_region.debug_scope);
+                        more_entry_phis.push((src_vreg, dst_vreg));
+                    }
+                }
+            }
+        }
+
+        // Emit: done → landing, more → fallthrough
+        if done_on_nonzero {
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIf {
+                    cond: predicate,
+                    target: ctx.landing_label,
+                    phi_args: exit_phis,
+                    fallthrough_phi_args: more_entry_phis,
+                },
+            );
+        } else {
+            self.emit(
+                Some(node.debug_scope),
+                LinearOp::BranchIfZero {
+                    cond: predicate,
+                    target: ctx.landing_label,
+                    phi_args: exit_phis,
+                    fallthrough_phi_args: more_entry_phis,
+                },
+            );
+        }
+
+        // For the "more" (passthrough) branch: gamma outputs = gamma inputs
         for i in 0..data_output_count {
             let out_vreg = node.outputs[i].vreg.expect("gamma output vreg");
             let in_vreg = self.resolve_vreg(node.inputs[i + 1].source);
@@ -2160,6 +2612,11 @@ impl<'a> Linearizer<'a> {
     // ─── Theta (loop) ────────────────────────────────────────────────
 
     fn linearize_theta(&mut self, node_id: NodeId, body: RegionId) {
+        // Track theta depth and clear chain_exit_ctx — theta is a loop, so
+        // inner gammas must NOT exit to an outer chain landing.
+        self.theta_depth += 1;
+        let prev_chain_ctx = self.chain_exit_ctx.take();
+
         let node = &self.func.nodes[node_id];
         let body_region = &self.func.regions[body];
         let state_count = self.func.state_domains.len();
@@ -2261,6 +2718,10 @@ impl<'a> Linearizer<'a> {
         );
 
         self.emit(Some(node.debug_scope), LinearOp::Label(loop_exit));
+
+        // Restore chain_exit_ctx and theta depth after theta body
+        self.chain_exit_ctx = prev_chain_ctx;
+        self.theta_depth -= 1;
     }
 
     // ─── Lambda ──────────────────────────────────────────────────────
