@@ -581,6 +581,23 @@ fn promote_theta(
         }
     }
 
+    // Pre-scan: for unbounded thetas (outer element loops), identify slots
+    // whose first access in the body is a write (re-initialized slots).
+    // Bounded thetas (varint decoders) are unrolled later; their slots become
+    // gamma outputs and don't benefit from this optimization.
+    let max_iterations = match &func.nodes[node_id].kind {
+        NodeKind::Theta { max_iterations, .. } => *max_iterations,
+        _ => None,
+    };
+    // Only scan for reinit slots in unbounded thetas with reasonable body size.
+    // Deep nesting (e.g., deep_struct) can cause exponential scan time.
+    let body_node_count = func.regions[body].nodes.len();
+    let reinit_slots = if max_iterations.is_none() && body_node_count < 200 {
+        find_reinit_slots(func, body, slots_to_thread)
+    } else {
+        BTreeSet::new()
+    };
+
     // Phase 2: Recurse into body (bottom-up: body is fully promoted before
     // we compute the parent theta's output wiring).
     let final_body_values = promote_region(func, body, all_slots, slot_access, body_slot_values);
@@ -597,10 +614,45 @@ fn promote_theta(
     }
 
     // Phase 3: Add body results for all slots.
+    // For slots whose body arg is unused (re-initialized before first read),
+    // use pass-through instead of the computed final value. This makes the
+    // port loop-invariant, enabling later passes to remove it entirely.
     let body_debug_scope = func.regions[body].debug_scope;
     for &slot in slots_to_thread {
         let body_arg = body_arg_sources[&slot];
         let mut final_value = final_body_values.get(&slot).copied().unwrap_or(body_arg);
+
+        // If the slot's first access inside the body is a write (re-initialization),
+        // the body arg value is dead — overwritten before any read. Use pass-through
+        // to make the port loop-invariant, enabling later elimination.
+        // Only make pass-through for reinit slots where the incoming value
+        // is a constant (Const(0)). Non-constant reinit slots (like struct
+        // field temps) might carry meaningful initial values from outer scopes.
+        let is_const_input = matches!(
+            slot_values
+                .get(&slot)
+                .and_then(|s| resolve_to_const_value(func, *s)),
+            Some(0)
+        );
+        // TEMP: limit to first 4 reinit slots for debugging
+        let reinit_count = slots_to_thread
+            .iter()
+            .filter(|s| reinit_slots.contains(s))
+            .count();
+        let reinit_idx = slots_to_thread
+            .iter()
+            .filter(|s| reinit_slots.contains(s))
+            .position(|s| *s == slot);
+        let _ = (reinit_count, reinit_idx); // remove temp limit
+        if final_value != body_arg && reinit_slots.contains(&slot) && is_const_input {
+            if debug_s2r() {
+                eprintln!(
+                    "[s2r]   slot {} body arg unused → pass-through (loop-invariant)",
+                    slot.index(),
+                );
+            }
+            final_value = body_arg;
+        }
         if debug_s2r() {
             let from_map = final_body_values.get(&slot).is_some();
             eprintln!(
@@ -681,6 +733,122 @@ fn promote_theta(
             }
         }
     }
+}
+
+/// Check if a PortSource is used by any NON-GAMMA node input in a region.
+/// Uses in gamma inputs (for break-path pass-through) don't count — those
+/// become dead when the theta output is unused.
+/// Resolve a PortSource to a constant value if it directly references a Const node.
+fn resolve_to_const_value(func: &IrFunc, source: PortSource) -> Option<u64> {
+    match source {
+        PortSource::Node(oref) => match &func.nodes[oref.node].kind {
+            NodeKind::Simple(IrOp::Const { value }) => Some(*value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Find slots whose first access inside the theta body is a WriteToSlot.
+/// These slots are "re-initialized" — their body arg value is dead.
+///
+/// We scan the body's nodes looking for ReadFromSlot/WriteToSlot operations.
+/// For each slot, we track whether its first appearance is a Read or Write.
+/// If Write: the slot is re-initialized before any read → body arg is dead.
+fn find_reinit_slots(
+    func: &IrFunc,
+    body: RegionId,
+    slots_to_thread: &[SlotId],
+) -> BTreeSet<SlotId> {
+    use crate::IrOp;
+    let slot_set: BTreeSet<SlotId> = slots_to_thread.iter().copied().collect();
+    let mut first_access_is_write: BTreeSet<SlotId> = BTreeSet::new();
+    let mut seen: BTreeSet<SlotId> = BTreeSet::new();
+
+    // Scan nodes in the body region. They're in insertion order, which
+    // follows the HIR statement order within the loop body.
+    for &nid in &func.regions[body].nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Simple(IrOp::WriteToSlot { slot, .. }) => {
+                if slot_set.contains(slot) && !seen.contains(slot) {
+                    first_access_is_write.insert(*slot);
+                    seen.insert(*slot);
+                }
+            }
+            NodeKind::Simple(IrOp::ReadFromSlot { slot, .. }) => {
+                if slot_set.contains(slot) && !seen.contains(slot) {
+                    // First access is a read → NOT re-initialized
+                    seen.insert(*slot);
+                }
+            }
+            NodeKind::Gamma { regions, .. } => {
+                // For slots first accessed inside a gamma: check if ALL branches
+                // either (a) don't access the slot, or (b) write before reading.
+                // If so, the slot is re-initialized on every taken path.
+                for &slot in slots_to_thread {
+                    if seen.contains(&slot) || !slot_set.contains(&slot) {
+                        continue;
+                    }
+                    let mut accessed_in_gamma = false;
+                    let mut all_branches_write_first = true;
+                    for &sub_region in regions {
+                        let mut branch_first_is_write = false;
+                        let mut branch_accesses_slot = false;
+                        for &sub_nid in &func.regions[sub_region].nodes {
+                            match &func.nodes[sub_nid].kind {
+                                NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. })
+                                    if *s == slot =>
+                                {
+                                    if !branch_accesses_slot {
+                                        // Only count as reinit if the value
+                                        // written is a known constant.
+                                        let write_source = &func.nodes[sub_nid].inputs[0].source;
+                                        if resolve_to_const_value(func, *write_source).is_some() {
+                                            branch_first_is_write = true;
+                                        }
+                                    }
+                                    branch_accesses_slot = true;
+                                    break;
+                                }
+                                NodeKind::Simple(IrOp::ReadFromSlot { slot: s, .. })
+                                    if *s == slot =>
+                                {
+                                    branch_accesses_slot = true;
+                                    break; // first access is read → not re-init
+                                }
+                                _ => {}
+                            }
+                        }
+                        if branch_accesses_slot {
+                            accessed_in_gamma = true;
+                            if !branch_first_is_write {
+                                all_branches_write_first = false;
+                            }
+                        }
+                    }
+                    if accessed_in_gamma {
+                        seen.insert(slot);
+                        if all_branches_write_first {
+                            first_access_is_write.insert(slot);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if debug_s2r() && !first_access_is_write.is_empty() {
+        eprintln!(
+            "[s2r]   reinit_slots: {:?}",
+            first_access_is_write
+                .iter()
+                .map(|s| s.index())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    first_access_is_write
 }
 
 // ─── Replace uses ────────────────────────────────────────────────────────────

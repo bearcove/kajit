@@ -52,9 +52,6 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             body,
             max_iterations,
         } => {
-            // Only target unbounded thetas (outer loops). Bounded thetas
-            // (varint decoders) will be unrolled later, so their ports
-            // become gamma outputs, not loop-carried values.
             if max_iterations.is_some() {
                 return 0;
             }
@@ -62,6 +59,11 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
         _ => return 0,
     };
+
+    // Skip very large theta bodies to avoid O(n²) scanning.
+    if func.regions[body].nodes.len() > 200 {
+        return 0;
+    }
 
     let state_count = func.nodes[theta_id]
         .inputs
@@ -330,6 +332,21 @@ fn is_always_const(
             let node = &func.nodes[oref.node];
             match &node.kind {
                 NodeKind::Simple(IrOp::Const { value: val }) => *val == expected,
+                NodeKind::Simple(IrOp::Identity) => {
+                    // Trace through identity: check the input source.
+                    if let Some(input) = node.inputs.first() {
+                        is_always_const(
+                            func,
+                            &input.source,
+                            expected,
+                            theta_arg,
+                            theta_body,
+                            depth + 1,
+                        )
+                    } else {
+                        false
+                    }
+                }
                 NodeKind::Gamma { regions, .. } => {
                     for (bi, &region_id) in regions.iter().enumerate() {
                         let region = &func.regions[region_id];
