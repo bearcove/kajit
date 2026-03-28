@@ -3058,6 +3058,8 @@ pub fn eliminate_immediate_only_const_defs(program: &mut Program) {
 }
 
 fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
+    use kajit_lir::BinOpKind;
+
     // Step 1: Build map of const vreg -> value
     let mut const_values: HashMap<VReg, u64> = HashMap::new();
     for inst in &func.insts {
@@ -3118,15 +3120,40 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
     for inst in &func.insts {
         match &inst.op {
             LinearOp::BinOp { op, lhs, rhs, .. } => {
-                // LHS use always requires register
-                if is_const_like(lhs) {
-                    use_kinds.insert(*lhs, UseKind::RequiresRegister);
-                }
-                // RHS can potentially be immediate
-                if let Some(value) = get_const_value(rhs)
-                    && !can_encode_as_immediate(*op, value)
-                {
-                    use_kinds.insert(*rhs, UseKind::RequiresRegister);
+                let is_compare = matches!(
+                    op,
+                    BinOpKind::CmpEq
+                        | BinOpKind::CmpNe
+                        | BinOpKind::CmpLt
+                        | BinOpKind::CmpLe
+                        | BinOpKind::CmpGt
+                        | BinOpKind::CmpGe
+                );
+                if is_compare {
+                    // For compares, EITHER operand can be the immediate —
+                    // the backend swaps operands to put the const on the RHS.
+                    // ARM64 cmp immediate: 12-bit unsigned (0-4095).
+                    if let Some(value) = get_const_value(lhs) {
+                        if value > 4095 {
+                            use_kinds.insert(*lhs, UseKind::RequiresRegister);
+                        }
+                    }
+                    if let Some(value) = get_const_value(rhs) {
+                        if value > 4095 {
+                            use_kinds.insert(*rhs, UseKind::RequiresRegister);
+                        }
+                    }
+                } else {
+                    // Non-compare: LHS always requires register
+                    if is_const_like(lhs) {
+                        use_kinds.insert(*lhs, UseKind::RequiresRegister);
+                    }
+                    // RHS can potentially be immediate
+                    if let Some(value) = get_const_value(rhs)
+                        && !can_encode_as_immediate(*op, value)
+                    {
+                        use_kinds.insert(*rhs, UseKind::RequiresRegister);
+                    }
                 }
             }
             LinearOp::Copy { dst, src } => {
@@ -3217,11 +3244,12 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                 // Also handle if src is immediate-only (shouldn't happen given our logic, but be safe)
                 let _ = src;
             }
-            LinearOp::BinOp { rhs, .. } => {
-                if immediate_only.contains(rhs) {
-                    // Remove the Use operand for the RHS (which is the second operand)
-                    // Operand order is: lhs (Use), rhs (Use), dst (Def)
-                    inst.operands.retain(|op| op.vreg != *rhs);
+            LinearOp::BinOp { lhs, rhs, .. } => {
+                // Remove Use operands for immediate-only consts (LHS for compares, RHS for all)
+                if immediate_only.contains(rhs) || immediate_only.contains(lhs) {
+                    inst.operands.retain(|op| {
+                        !immediate_only.contains(&op.vreg) || op.kind != OperandKind::Use
+                    });
                 }
             }
             _ => {}
