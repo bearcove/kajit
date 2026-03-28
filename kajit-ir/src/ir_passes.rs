@@ -188,9 +188,24 @@ fn run_post_unroll_simplify_pass(func: &mut IrFunc) {
     debug_verify(func, "post_unroll_simplify");
 }
 
+fn run_gamma_output_partition_pass(func: &mut IrFunc) {
+    crate::gamma_output_partition::gamma_output_partition(func);
+    debug_verify(func, "gamma_output_partition");
+}
+
 fn run_simplify_trivial_gammas_pass(func: &mut IrFunc) {
     crate::simplify_gamma::simplify_trivial_gammas(func);
     debug_verify(func, "simplify_trivial_gammas");
+}
+
+fn run_dead_theta_ports_pass(func: &mut IrFunc) {
+    let removed = crate::dead_theta_ports::eliminate_dead_theta_ports(func);
+    if removed > 0 {
+        if std::env::var("KAJIT_DEBUG_DEAD_THETA").is_ok() {
+            eprintln!("[dead_theta_ports] removed {} dead ports total", removed);
+        }
+    }
+    debug_verify(func, "dead_theta_ports");
 }
 
 fn run_slot_to_reg_pass(func: &mut IrFunc) {
@@ -212,11 +227,16 @@ fn run_slot_to_reg_pass(func: &mut IrFunc) {
     debug_verify(func, "slot_to_reg");
 }
 
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 10] = [
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 12] = [
     DefaultPassSpec {
         name: "slot_to_reg",
         description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
         run: run_slot_to_reg_pass,
+    },
+    DefaultPassSpec {
+        name: "dead_theta_ports",
+        description: "Eliminate loop-carried theta ports that are always re-initialized to a constant.",
+        run: run_dead_theta_ports_pass,
     },
     DefaultPassSpec {
         name: "simplify_trivial_gammas",
@@ -252,6 +272,11 @@ const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 10] = [
         name: "post_unroll_simplify",
         description: "Re-run gamma simplification after constant folding to collapse constant-predicate gammas.",
         run: run_post_unroll_simplify_pass,
+    },
+    DefaultPassSpec {
+        name: "gamma_output_partition",
+        description: "Eliminate gamma outputs that are identical on all branches.",
+        run: run_gamma_output_partition_pass,
     },
     DefaultPassSpec {
         name: "inline_apply",

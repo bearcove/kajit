@@ -1,5 +1,7 @@
 pub mod const_fold;
+pub mod dead_theta_ports;
 mod error;
+pub mod gamma_output_partition;
 pub mod hints;
 pub mod interpret;
 mod ir;
