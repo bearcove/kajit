@@ -2090,12 +2090,13 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
             validate_after("merge_blocks_post_simplify", &cfg);
         }
     }
-    // TODO: simplify_trivial_phis needs more work to maintain SSA
-    // The basic idea is sound (found 32 trivial phis in scalar_u32)
-    // but removing them breaks SSA when replacement doesn't dominate uses
-    // if opts.enabled("simplify_phis") {
-    //     simplify_trivial_phis(&mut cfg);
-    // }
+    // Re-run elim_imm after all CFG simplification. Earlier passes (copyprop,
+    // DCE, merge_blocks) may have removed edge-arg uses that prevented consts
+    // from being marked as immediate-only on the first run.
+    if opts.enabled("elim_imm") {
+        eliminate_immediate_only_const_defs(&mut cfg);
+    }
+
     cfg
 }
 
