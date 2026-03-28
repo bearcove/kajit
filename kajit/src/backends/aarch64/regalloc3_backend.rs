@@ -1861,8 +1861,25 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         })
     });
 
-    // Create emission context with stack space for spills + user slots
-    let extra_stack = ((max_spillslots + program.slot_count as usize) * 8) as u32;
+    // Count actually-used slots (slot_count may be stale after slot_to_reg promotion).
+    let actual_slot_count = {
+        let mut max_slot: Option<u32> = None;
+        for func in &program.funcs {
+            for inst in &func.insts {
+                match &inst.op {
+                    LinearOp::WriteToSlot { slot, .. } | LinearOp::ReadFromSlot { slot, .. } => {
+                        let s = slot.index() as u32;
+                        max_slot = Some(max_slot.map_or(s, |m: u32| m.max(s)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        max_slot.map_or(0, |m| m + 1)
+    };
+
+    // Create emission context with stack space for spills + actual slots
+    let extra_stack = ((max_spillslots + actual_slot_count as usize) * 8) as u32;
     let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
 

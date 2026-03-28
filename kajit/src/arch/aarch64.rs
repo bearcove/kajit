@@ -166,14 +166,14 @@ impl EmitCtx {
             BASE_FRAME
         };
 
-        // Reduce frame size when skipping x21/x22 save.
-        // Note: x19/x20 space is NOT reclaimed here because base_frame is fixed
-        // at EmitCtx construction and spill slots depend on it.
-        let effective_frame_size = if config.save_x21_x22 {
-            frame_size
-        } else {
-            frame_size - 16
-        };
+        // Reduce frame size when skipping callee-saved register saves.
+        let mut effective_frame_size = frame_size;
+        if !config.save_x21_x22 {
+            effective_frame_size = effective_frame_size.saturating_sub(16);
+        }
+        if !config.save_x19_x20 {
+            effective_frame_size = effective_frame_size.saturating_sub(16);
+        }
 
         let extra_pairs = ((self.base_frame - base) / 16) as usize;
         assert!(
@@ -269,11 +269,13 @@ impl EmitCtx {
         } else {
             BASE_FRAME
         };
-        let effective_frame_size = if config.save_x21_x22 {
-            frame_size
-        } else {
-            frame_size - 16
-        };
+        let mut effective_frame_size = frame_size;
+        if !config.save_x21_x22 {
+            effective_frame_size = effective_frame_size.saturating_sub(16);
+        }
+        if !config.save_x19_x20 {
+            effective_frame_size = effective_frame_size.saturating_sub(16);
+        }
         let extra_pairs = ((self.base_frame - base) / 16) as usize;
         assert!(
             extra_pairs <= 3,
@@ -300,7 +302,13 @@ impl EmitCtx {
             }
 
             // Restore callee-saved registers in reverse order
-            let restore_base = if config.save_x21_x22 { base } else { base - 16 };
+            let mut restore_base = base;
+            if !config.save_x21_x22 {
+                restore_base -= 16;
+            }
+            if !config.save_x19_x20 {
+                restore_base -= 16;
+            }
             let mut offset: i16 = restore_base as i16 + (extra_pairs as i16 - 1) * 16;
             if extra_pairs >= 3 {
                 self.emit
