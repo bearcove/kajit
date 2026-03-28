@@ -2067,6 +2067,16 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
         }
         validate_after("merge_blocks", &cfg);
     }
+    if opts.enabled("control_thread") {
+        for func in &mut cfg.funcs {
+            if crate::opt::control_thread::control_thread(func, &mut cfg.vreg_count) {
+                // Clean up after control threading: remove dead instructions
+                // and block params that threading made unreachable.
+                crate::opt::dce::eliminate_dead_block_params(func);
+            }
+        }
+        validate_after("control_thread", &cfg);
+    }
     // Re-run cleanup after CFG simplification
     if opts.enabled("simplify_cfg") {
         // DCE after simplify_cfg to remove newly-dead values
