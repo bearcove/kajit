@@ -23,62 +23,33 @@ use kajit_lir::LinearOp;
 pub fn control_thread(func: &mut Function, vreg_count: &mut u32) -> bool {
     let debug = std::env::var("KAJIT_DEBUG_CONTROL_THREAD").is_ok();
     let mut changed = false;
+    let mut threaded_blocks: HashSet<BlockId> = HashSet::new();
 
     if debug {
-        eprintln!("[control_thread] starting: {} blocks", func.blocks.len());
-        for block in &func.blocks {
-            if block.dead {
-                continue;
-            }
-            let term = &func.terms[block.term.index()];
-            let term_str = match term {
-                Terminator::Branch { edge } => format!("branch e{}", edge.index()),
-                Terminator::BranchIf {
-                    cond,
-                    taken,
-                    fallthrough,
-                } => {
-                    format!(
-                        "branch_if v{} -> e{}, fall e{}",
-                        cond.index(),
-                        taken.index(),
-                        fallthrough.index()
-                    )
-                }
-                Terminator::BranchIfZero {
-                    cond,
-                    taken,
-                    fallthrough,
-                } => {
-                    format!(
-                        "branch_if_zero v{} -> e{}, fall e{}",
-                        cond.index(),
-                        taken.index(),
-                        fallthrough.index()
-                    )
-                }
-                Terminator::Return => "return".to_string(),
-                Terminator::ErrorExit { .. } => "error_exit".to_string(),
-                Terminator::JumpTable { .. } => "jump_table".to_string(),
-            };
+        eprintln!(
+            "[control_thread] starting: {} blocks, {} edges",
+            func.blocks.len(),
+            func.edges.len()
+        );
+        // Dump edges with args for the inner loop region (b7-b19 area)
+        for edge in &func.edges {
+            let args_str: Vec<String> = edge
+                .args
+                .iter()
+                .map(|a| {
+                    if a.target == a.source {
+                        format!("v{}", a.source.index())
+                    } else {
+                        format!("v{}=>v{}", a.target.index(), a.source.index())
+                    }
+                })
+                .collect();
             eprintln!(
-                "  b{}: params={:?} insts={} preds=[{}] succs=[{}] {}",
-                block.id.index(),
-                block.params.iter().map(|v| v.index()).collect::<Vec<_>>(),
-                block.insts.len(),
-                block
-                    .preds
-                    .iter()
-                    .map(|e| format!("e{}", e.index()))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                block
-                    .succs
-                    .iter()
-                    .map(|e| format!("e{}", e.index()))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                term_str,
+                "  e{}: b{} -> b{} [{}]",
+                edge.id.index(),
+                edge.from.index(),
+                edge.to.index(),
+                args_str.join(", ")
             );
         }
     }
@@ -95,13 +66,14 @@ pub fn control_thread(func: &mut Function, vreg_count: &mut u32) -> bool {
             round_changed = true;
         }
 
-        // Phase 2: Thread constant-carrying edges past conditional branches.
+        // Phase 2: Thread ONE constant-carrying edge past a conditional branch.
+        // Skip blocks already threaded to preserve the remaining edge path
+        // that keeps the block alive (and its params defined).
         let const_vals = build_const_map(func);
-        loop {
-            let threaded = thread_one_const_edge(func, &const_vals, vreg_count, debug);
-            if !threaded {
-                break;
-            }
+        if let Some(block_id) =
+            thread_one_const_edge(func, &const_vals, &threaded_blocks, vreg_count, debug)
+        {
+            threaded_blocks.insert(block_id);
             round_changed = true;
         }
 
@@ -238,13 +210,14 @@ struct ThreadAction {
 fn thread_one_const_edge(
     func: &mut Function,
     const_vals: &HashMap<VReg, u64>,
+    skip_blocks: &HashSet<BlockId>,
     vreg_count: &mut u32,
     debug: bool,
-) -> bool {
+) -> Option<BlockId> {
     // Phase 1: Find a threadable action (read-only scan)
-    let action = find_thread_action(func, const_vals);
+    let action = find_thread_action(func, const_vals, skip_blocks);
     let Some(action) = action else {
-        return false;
+        return None;
     };
 
     if debug {
@@ -274,18 +247,24 @@ fn thread_one_const_edge(
     }
 
     // Phase 3: Thread the edge (mutates func)
+    let block_id = action.block_id;
     thread_edge(
         func,
         action.pred_edge_id,
         action.block_id,
         action.target_edge,
-    )
+    );
+    Some(block_id)
 }
 
 /// Find a threadable action (read-only).
-fn find_thread_action(func: &Function, const_vals: &HashMap<VReg, u64>) -> Option<ThreadAction> {
+fn find_thread_action(
+    func: &Function,
+    const_vals: &HashMap<VReg, u64>,
+    skip_blocks: &HashSet<BlockId>,
+) -> Option<ThreadAction> {
     for block in &func.blocks {
-        if block.dead || !block.insts.is_empty() {
+        if block.dead || !block.insts.is_empty() || skip_blocks.contains(&block.id) {
             continue;
         }
 
@@ -338,6 +317,9 @@ fn find_thread_action(func: &Function, const_vals: &HashMap<VReg, u64>) -> Optio
             continue;
         }
 
+        // Only thread the "break" direction: for branch_if_zero, thread the
+        // edge carrying val=0 (which takes the "taken" path, skipping work).
+        // This keeps the "continue" edge alive, preserving b13 and its params.
         for &pred_edge_id in &block.preds {
             let pred_edge = &func.edges[pred_edge_id.index()];
             if func.blocks[pred_edge.from.index()].dead {
@@ -353,18 +335,17 @@ fn find_thread_action(func: &Function, const_vals: &HashMap<VReg, u64>) -> Optio
                 continue;
             };
 
+            // Only thread the "break" direction: val=0 for branch_if_zero,
+            // val=0 for branch_if. Skip the "continue" direction.
+            let is_break = val == 0;
+            if !is_break {
+                continue;
+            }
+
             let target_edge = if is_zero_test {
-                if val == 0 {
-                    taken_edge
-                } else {
-                    fallthrough_edge
-                }
+                taken_edge // val=0, branch_if_zero → taken
             } else {
-                if val != 0 {
-                    taken_edge
-                } else {
-                    fallthrough_edge
-                }
+                fallthrough_edge // val=0, branch_if → fallthrough
             };
 
             return Some(ThreadAction {
