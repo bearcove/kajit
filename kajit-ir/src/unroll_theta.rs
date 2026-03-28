@@ -35,27 +35,259 @@ fn region_has_error_exit(func: &IrFunc, region: crate::RegionId) -> bool {
 /// Maximum iterations we're willing to unroll.
 const MAX_UNROLL: u32 = 10;
 
+/// Diagnostic info about a bounded theta considered for unrolling.
+#[derive(Debug)]
+pub struct UnrollCandidate {
+    pub node_id: NodeId,
+    pub max_iterations: u32,
+    pub nesting_depth: u32,
+    pub body_node_count: usize,
+    pub body_gamma_count: usize,
+    pub carried_values: usize,
+    pub has_calls: bool,
+    pub has_inner_bounded_theta: bool,
+    pub estimated_node_growth: usize,
+    pub estimated_carried_cost: usize,
+    pub decision: UnrollDecision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum UnrollDecision {
+    Unroll,
+    Skip,
+}
+
+/// Analyze a theta node to produce unroll diagnostics.
+fn analyze_theta(func: &IrFunc, node_id: NodeId) -> Option<UnrollCandidate> {
+    let NodeKind::Theta {
+        body,
+        max_iterations: Some(max_iter),
+        ..
+    } = &func.nodes[node_id].kind
+    else {
+        return None;
+    };
+    if *max_iter > MAX_UNROLL {
+        return None;
+    }
+
+    let body_region = &func.regions[*body];
+    let body_node_count = count_subtree_nodes(func, *body);
+    let body_gamma_count = count_subtree_gammas(func, *body);
+    let carried_values = body_region.args.len();
+
+    let has_calls = subtree_has_calls(func, *body);
+    let has_inner_bounded_theta = subtree_has_bounded_theta(func, *body);
+
+    // Nesting depth: count how many thetas are above this node
+    let nesting_depth = compute_nesting_depth(func, node_id);
+
+    let estimated_node_growth = body_node_count * (*max_iter as usize);
+    let estimated_carried_cost = carried_values * (*max_iter as usize);
+
+    // Policy: only unroll top-level thetas (depth=0).
+    // Inner thetas (depth>0) are varint decoders inside outer loops
+    // that cause code growth, register pressure, and stack spills
+    // when unrolled.
+    let decision = if nesting_depth == 0 {
+        UnrollDecision::Unroll
+    } else {
+        UnrollDecision::Skip
+    };
+
+    Some(UnrollCandidate {
+        node_id,
+        max_iterations: *max_iter,
+        nesting_depth,
+        body_node_count,
+        body_gamma_count,
+        carried_values,
+        has_calls,
+        has_inner_bounded_theta,
+        estimated_node_growth,
+        estimated_carried_cost,
+        decision,
+    })
+}
+
+fn count_subtree_nodes(func: &IrFunc, region_id: crate::RegionId) -> usize {
+    let region = &func.regions[region_id];
+    let mut count = region.nodes.len();
+    for &nid in &region.nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Gamma { regions } => {
+                for &rid in regions {
+                    count += count_subtree_nodes(func, rid);
+                }
+            }
+            NodeKind::Theta { body, .. } => {
+                count += count_subtree_nodes(func, *body);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+fn count_subtree_gammas(func: &IrFunc, region_id: crate::RegionId) -> usize {
+    let region = &func.regions[region_id];
+    let mut count = 0;
+    for &nid in &region.nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Gamma { regions } => {
+                count += 1;
+                for &rid in regions {
+                    count += count_subtree_gammas(func, rid);
+                }
+            }
+            NodeKind::Theta { body, .. } => {
+                count += count_subtree_gammas(func, *body);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+fn subtree_has_calls(func: &IrFunc, region_id: crate::RegionId) -> bool {
+    let region = &func.regions[region_id];
+    for &nid in &region.nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Apply { .. } => return true,
+            NodeKind::Gamma { regions } => {
+                for &rid in regions {
+                    if subtree_has_calls(func, rid) {
+                        return true;
+                    }
+                }
+            }
+            NodeKind::Theta { body, .. } => {
+                if subtree_has_calls(func, *body) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn subtree_has_bounded_theta(func: &IrFunc, region_id: crate::RegionId) -> bool {
+    let region = &func.regions[region_id];
+    for &nid in &region.nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Theta {
+                max_iterations: Some(_),
+                ..
+            } => return true,
+            NodeKind::Gamma { regions } => {
+                for &rid in regions {
+                    if subtree_has_bounded_theta(func, rid) {
+                        return true;
+                    }
+                }
+            }
+            NodeKind::Theta { body, .. } => {
+                if subtree_has_bounded_theta(func, *body) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn compute_nesting_depth(func: &IrFunc, node_id: NodeId) -> u32 {
+    let mut depth = 0u32;
+    let mut region = func.nodes[node_id].region;
+    // Walk up from the node's region to the root, counting thetas
+    loop {
+        // Find the node that owns this region
+        let owner = func.regions.iter().find_map(|(_, r)| {
+            // Skip: we're looking for a node whose body/branch IS this region
+            None::<NodeId>
+        });
+        // Simpler: check if any node has this region as a body
+        let mut found_owner = false;
+        for (_, r) in func.regions.iter() {
+            for &nid in &r.nodes {
+                match &func.nodes[nid].kind {
+                    NodeKind::Theta { body, .. } if *body == region => {
+                        depth += 1;
+                        region = func.nodes[nid].region;
+                        found_owner = true;
+                    }
+                    NodeKind::Gamma { regions } => {
+                        if regions.contains(&region) {
+                            region = func.nodes[nid].region;
+                            found_owner = true;
+                        }
+                    }
+                    NodeKind::Lambda { body, .. } if *body == region => {
+                        // Reached the lambda root — done
+                        return depth;
+                    }
+                    _ => {}
+                }
+                if found_owner {
+                    break;
+                }
+            }
+            if found_owner {
+                break;
+            }
+        }
+        if !found_owner {
+            return depth;
+        }
+    }
+}
+
 /// Run the bounded-theta unrolling pass.
 ///
 /// Returns true if any theta was unrolled.
 pub fn unroll_bounded_thetas(func: &mut IrFunc) -> bool {
     let mut changed = false;
 
-    // Collect thetas to unroll (can't mutate while iterating)
-    let mut targets: Vec<(NodeId, u32)> = Vec::new();
+    // Collect and analyze all unroll candidates
+    let mut candidates: Vec<UnrollCandidate> = Vec::new();
     for (_region_id, region) in func.regions.iter() {
         for &node_id in &region.nodes {
-            if let NodeKind::Theta {
-                max_iterations: Some(n),
-                ..
-            } = &func.nodes[node_id].kind
-            {
-                if *n <= MAX_UNROLL {
-                    targets.push((node_id, *n));
-                }
+            if let Some(candidate) = analyze_theta(func, node_id) {
+                candidates.push(candidate);
             }
         }
     }
+
+    // Print diagnostics
+    if std::env::var("KAJIT_UNROLL_DIAG").is_ok() || !candidates.is_empty() {
+        for c in &candidates {
+            eprintln!(
+                "[unroll-diag] theta #{}: max_iter={}, depth={}, body_nodes={}, \
+                 gammas={}, carried={}, calls={}, inner_theta={}, \
+                 est_growth={}, est_carried_cost={}, decision={:?}",
+                c.node_id.index(),
+                c.max_iterations,
+                c.nesting_depth,
+                c.body_node_count,
+                c.body_gamma_count,
+                c.carried_values,
+                c.has_calls,
+                c.has_inner_bounded_theta,
+                c.estimated_node_growth,
+                c.estimated_carried_cost,
+                c.decision,
+            );
+        }
+    }
+
+    // Unroll candidates that passed the policy
+    let targets: Vec<(NodeId, u32)> = candidates
+        .iter()
+        .filter(|c| c.decision == UnrollDecision::Unroll)
+        .map(|c| (c.node_id, c.max_iterations))
+        .collect();
 
     for (theta_node_id, max_iter) in targets {
         unroll_one_theta(func, theta_node_id, max_iter);
