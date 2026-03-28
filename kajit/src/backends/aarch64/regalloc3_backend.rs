@@ -45,6 +45,11 @@ struct EmitContext<'a> {
     ctx_reg: Reg,
     /// Intermediate vregs (And/Shl results) whose instructions should be skipped.
     fused_skip: std::collections::HashSet<kajit_ir::VReg>,
+    /// Fused base+offset info for LoadFromAddr/RestoreCursor.
+    /// Maps addr vreg → (base_vreg, offset). When a LoadFromAddr/RestoreCursor
+    /// consumes an addr that was defined by `Add(base, const_offset)`, the Add
+    /// is skipped and the load/restore uses `[base_reg, #offset]` directly.
+    fused_addr_offsets: HashMap<kajit_ir::VReg, (kajit_ir::VReg, u64)>,
     /// Register used by RestoreCursor and the epilogue for cursor writeback.
     /// x19 for non-leaf, a caller-saved register for leaf.
     cursor_writeback_reg: Reg,
@@ -327,16 +332,22 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::RestoreCursor { src } => {
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
-                // Write cursor to the writeback register. For leaf functions
-                // with direct context loading, this is a caller-saved register
-                // instead of x19.
                 let cursor_reg = self.cursor_writeback_reg;
-                if cursor_reg != src_reg {
+                // Check for fused base+offset: emit `add cursor, base, #offset`
+                if let Some(&(base_vreg, offset)) = self.fused_addr_offsets.get(src) {
+                    let base_reg = self.reg_for_vreg_with_temp(base_vreg, Reg::X9);
                     self.ectx
                         .emit
-                        .emit_mov_reg(Width::X64, cursor_reg, src_reg)
-                        .expect("mov");
+                        .emit_add_imm(Width::X64, cursor_reg, base_reg, offset as u16, false)
+                        .expect("add imm for restore_cursor");
+                } else {
+                    let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
+                    if cursor_reg != src_reg {
+                        self.ectx
+                            .emit
+                            .emit_mov_reg(Width::X64, cursor_reg, src_reg)
+                            .expect("mov");
+                    }
                 }
             }
 
@@ -522,27 +533,37 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::LoadFromAddr { dst, addr, width } => {
-                let addr_reg = self.reg_for_vreg_with_temp(*addr, Reg::X10);
+                // Check for fused base+offset: skip the Add, use [base, #offset]
+                let (base_reg, offset) =
+                    if let Some(&(base_vreg, off)) = self.fused_addr_offsets.get(addr) {
+                        (self.reg_for_vreg_with_temp(base_vreg, Reg::X10), off as u32)
+                    } else {
+                        (self.reg_for_vreg_with_temp(*addr, Reg::X10), 0)
+                    };
                 let rd = self.dst_reg_or_temp(*dst, Reg::X9);
-                // On aarch64, ldr/ldrb/ldrh read [Xn] before writing Xt,
-                // so rd == addr_reg is safe.
                 match width {
                     kajit_ir::Width::W1 => {
-                        self.ectx.emit.emit_ldrb_imm(rd, addr_reg, 0).expect("ldrb");
+                        self.ectx
+                            .emit
+                            .emit_ldrb_imm(rd, base_reg, offset)
+                            .expect("ldrb");
                     }
                     kajit_ir::Width::W2 => {
-                        self.ectx.emit.emit_ldrh_imm(rd, addr_reg, 0).expect("ldrh");
+                        self.ectx
+                            .emit
+                            .emit_ldrh_imm(rd, base_reg, offset)
+                            .expect("ldrh");
                     }
                     kajit_ir::Width::W4 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::W32, rd, addr_reg, 0)
+                            .emit_ldr_imm(Width::W32, rd, base_reg, offset)
                             .expect("ldr");
                     }
                     kajit_ir::Width::W8 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::X64, rd, addr_reg, 0)
+                            .emit_ldr_imm(Width::X64, rd, base_reg, offset)
                             .expect("ldr");
                     }
                 }
@@ -1454,6 +1475,135 @@ impl<'a> EmitContext<'a> {
         }
     }
 
+    /// Pre-compute base+offset fusions for LoadFromAddr and RestoreCursor.
+    /// When an Add(base, const) result is consumed ONLY by LoadFromAddr or
+    /// RestoreCursor, we can skip the Add and use `[base_reg, #offset]` directly.
+    fn compute_fusable_addr_offsets(
+        func: &Function,
+        const_values: &HashMap<kajit_ir::VReg, u64>,
+        skip_set: &mut std::collections::HashSet<kajit_ir::VReg>,
+    ) -> HashMap<kajit_ir::VReg, (kajit_ir::VReg, u64)> {
+        use kajit_lir::BinOpKind;
+
+        // Count uses of each vreg across all instructions and edge args
+        let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
+        for inst in &func.insts {
+            for op in &inst.operands {
+                if op.kind == cfg_mir::OperandKind::Use {
+                    *use_counts.entry(op.vreg).or_insert(0) += 1;
+                }
+            }
+        }
+        for block in &func.blocks {
+            let term = &func.terms[block.term.index()];
+            let edge_ids: Vec<cfg_mir::EdgeId> = match term {
+                cfg_mir::Terminator::Branch { edge } => vec![*edge],
+                cfg_mir::Terminator::BranchIf {
+                    taken, fallthrough, ..
+                }
+                | cfg_mir::Terminator::BranchIfZero {
+                    taken, fallthrough, ..
+                } => vec![*taken, *fallthrough],
+                cfg_mir::Terminator::JumpTable { targets, .. } => targets.clone(),
+                _ => vec![],
+            };
+            for eid in edge_ids {
+                let edge = &func.edges[eid.index()];
+                for arg in &edge.args {
+                    *use_counts.entry(arg.source).or_insert(0) += 1;
+                }
+            }
+        }
+
+        // Build a map: vreg → defining Add(base, const) info
+        let mut add_defs: HashMap<kajit_ir::VReg, (kajit_ir::VReg, kajit_ir::VReg)> =
+            HashMap::new();
+        for inst in &func.insts {
+            if let LinearOp::BinOp {
+                op: BinOpKind::Add,
+                dst,
+                lhs,
+                rhs,
+            } = &inst.op
+            {
+                add_defs.insert(*dst, (*lhs, *rhs));
+            }
+        }
+
+        let mut result = HashMap::new();
+
+        // Find LoadFromAddr/RestoreCursor whose addr is defined by Add(base, const)
+        for inst in &func.insts {
+            let addr_vreg = match &inst.op {
+                LinearOp::LoadFromAddr { addr, .. } => *addr,
+                LinearOp::RestoreCursor { src } => *src,
+                _ => continue,
+            };
+
+            // addr must have exactly 1 use (this instruction)
+            let addr_uses = use_counts.get(&addr_vreg).copied().unwrap_or(0);
+            if addr_uses != 1 {
+                if std::env::var("KAJIT_DEBUG_ADDR_FUSION").is_ok() {
+                    eprintln!(
+                        "[addr-fusion] v{} has {} uses, skip",
+                        addr_vreg.index(),
+                        addr_uses
+                    );
+                }
+                continue;
+            }
+            // addr must be defined by an Add
+            let Some(&(base, rhs)) = add_defs.get(&addr_vreg) else {
+                if std::env::var("KAJIT_DEBUG_ADDR_FUSION").is_ok() {
+                    eprintln!("[addr-fusion] v{} not from Add, skip", addr_vreg.index());
+                }
+                continue;
+            };
+            // rhs must be a constant ≤ 4095
+            let Some(&offset) = const_values.get(&rhs) else {
+                if std::env::var("KAJIT_DEBUG_ADDR_FUSION").is_ok() {
+                    eprintln!(
+                        "[addr-fusion] v{} Add rhs v{} not const, skip",
+                        addr_vreg.index(),
+                        rhs.index()
+                    );
+                }
+                continue;
+            };
+            if offset > 4095 {
+                continue;
+            }
+            // The const vreg must be used only by this Add (0 or 1 uses).
+            // 0 uses happens when elim_imm already cleared the const operand.
+            let rhs_uses = use_counts.get(&rhs).copied().unwrap_or(0);
+            if rhs_uses > 1 {
+                if std::env::var("KAJIT_DEBUG_ADDR_FUSION").is_ok() {
+                    eprintln!(
+                        "[addr-fusion] v{} const v{} has {} uses, skip",
+                        addr_vreg.index(),
+                        rhs.index(),
+                        rhs_uses
+                    );
+                }
+                continue;
+            }
+
+            if std::env::var("KAJIT_DEBUG_ADDR_FUSION").is_ok() {
+                eprintln!(
+                    "[addr-fusion] FUSE: v{} = v{} + {} → skip Add+Const",
+                    addr_vreg.index(),
+                    base.index(),
+                    offset
+                );
+            }
+            result.insert(addr_vreg, (base, offset));
+            skip_set.insert(addr_vreg); // skip the Add
+            skip_set.insert(rhs); // skip the Const
+        }
+
+        result
+    }
+
     /// Resolve a block ID through trampoline aliases.
     /// If `block_id` is a trampoline (no insts, Branch terminator), follow
     /// the chain to the final non-trampoline target.
@@ -1775,6 +1925,8 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         let fused_cmps = EmitContext::compute_fusable_cmps(func);
         let (fused_bfi, mut fused_skip) = EmitContext::compute_fusable_bfis(func, &const_values);
         EmitContext::compute_fusable_bit_tests(func, &const_values, &mut fused_skip);
+        let fused_addr_offsets =
+            EmitContext::compute_fusable_addr_offsets(func, &const_values, &mut fused_skip);
 
         // For leaf functions: keep output_ptr in x0 and ctx_ptr in x1
         // (avoids saving/restoring x21/x22 and the arg moves).
@@ -1797,6 +1949,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             fused_cmps,
             fused_bfi,
             fused_skip,
+            fused_addr_offsets,
             output_reg,
             ctx_reg,
             cursor_writeback_reg,
