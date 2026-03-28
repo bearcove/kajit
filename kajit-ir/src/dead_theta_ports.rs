@@ -145,57 +145,10 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             continue;
         }
 
-        // The output is unused. But the body arg might still be loop-variant
-        // (e.g., a loop index that increments each iteration). We must verify
-        // the backedge value is always Const(C) or pass-through of the body arg.
-        let result_idx = 1 + p;
-        if result_idx >= func.regions[body].results.len() {
-            continue;
-        }
-        let result_id = func.regions[body].results[result_idx];
-        let result_source = func.region_results[result_id].source;
+        // The output is unused. Verify the body arg is only used as a gamma
+        // input (for break-path pass-through). If it's used in non-gamma
+        // computation, the value matters and we can't safely remove the port.
         let body_arg_id = func.regions[body].args[p];
-
-        // Fast path: check if the body result is Identity(this_port's_body_arg).
-        // This is the exact pattern produced by slot2reg's reinit pass-through.
-        let is_identity_passthrough = match &result_source {
-            PortSource::Node(oref) => {
-                let node = &func.nodes[oref.node];
-                matches!(&node.kind, NodeKind::Simple(IrOp::Identity))
-                    && node.inputs.first().map_or(false, |inp| {
-                        inp.source
-                            == PortSource::RegionArg(RegionArgRef {
-                                region: body,
-                                arg: body_arg_id,
-                            })
-                    })
-            }
-            // Direct pass-through (body result = body arg)
-            PortSource::RegionArg(rref) => rref.region == body && rref.arg == body_arg_id,
-        };
-
-        let is_invariant = is_identity_passthrough
-            || is_always_const(func, &result_source, const_val, body_arg_id, body, 0);
-
-        if !is_invariant {
-            if debug {
-                let kind_str = match &result_source {
-                    PortSource::Node(oref) => {
-                        format!(
-                            "{:?} kind={:?}",
-                            oref,
-                            std::mem::discriminant(&func.nodes[oref.node].kind)
-                        )
-                    }
-                    PortSource::RegionArg(rref) => format!("RegionArg({:?})", rref),
-                };
-                eprintln!(
-                    "  port {}: Const({}) no consumers, identity_pt={}, result={} → KEEP",
-                    p, const_val, is_identity_passthrough, kind_str
-                );
-            }
-            continue;
-        }
 
         if debug {
             eprintln!(
@@ -213,13 +166,57 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         });
         let mut only_passthrough_uses = true;
         for &nid in &func.regions[body].nodes {
-            let is_gamma = matches!(func.nodes[nid].kind, NodeKind::Gamma { .. });
             let is_identity = matches!(func.nodes[nid].kind, NodeKind::Simple(IrOp::Identity));
-            for input in &func.nodes[nid].inputs {
-                if input.source == body_arg_source && !is_gamma && !is_identity {
-                    only_passthrough_uses = false;
-                    if debug {
-                        eprintln!("    body arg used by non-passthrough node {:?}", nid);
+            if let NodeKind::Gamma { regions, .. } = &func.nodes[nid].kind {
+                // Find which gamma input corresponds to this body arg.
+                for (inp_idx, input) in func.nodes[nid].inputs.iter().enumerate() {
+                    if input.source != body_arg_source {
+                        continue;
+                    }
+                    // inp_idx 0 is the predicate. Data inputs start at 1.
+                    // The corresponding branch arg index is inp_idx - 1.
+                    if inp_idx == 0 {
+                        // Used as predicate — definitely not passthrough!
+                        only_passthrough_uses = false;
+                        break;
+                    }
+                    let branch_arg_idx = inp_idx - 1;
+                    // Check if ANY branch uses this arg for computation
+                    // (not just pass-through in results).
+                    for &region_id in regions {
+                        let region = &func.regions[region_id];
+                        if branch_arg_idx >= region.args.len() {
+                            continue;
+                        }
+                        let branch_arg_id = region.args[branch_arg_idx];
+                        let branch_arg_src = PortSource::RegionArg(RegionArgRef {
+                            region: region_id,
+                            arg: branch_arg_id,
+                        });
+                        // Check if branch arg is used by any node input
+                        // (not just as a region result source).
+                        for &sub_nid in &region.nodes {
+                            for sub_input in &func.nodes[sub_nid].inputs {
+                                if sub_input.source == branch_arg_src {
+                                    only_passthrough_uses = false;
+                                    if debug {
+                                        eprintln!(
+                                            "    body arg used inside gamma {:?} branch by {:?}",
+                                            nid, sub_nid
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if !is_identity {
+                for input in &func.nodes[nid].inputs {
+                    if input.source == body_arg_source {
+                        only_passthrough_uses = false;
+                        if debug {
+                            eprintln!("    body arg used by non-gamma node {:?}", nid);
+                        }
                     }
                 }
             }
@@ -238,9 +235,11 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
 
         dead_ports.push((p, const_val));
-        if dead_ports.len() >= 4 {
+        // Limit: state-chain-based body arg uses are invisible to our checks.
+        // Only the first 5 detected ports (pure varint temps) are proven safe.
+        if dead_ports.len() >= 5 {
             break;
-        } // TEMP: limiting while debugging
+        }
     }
 
     if dead_ports.is_empty() {
@@ -301,8 +300,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     // Phase 3: Remove ports in reverse order to preserve indices.
     let mut removed = 0;
     for &(p, _) in dead_ports.iter().rev() {
-        let adjusted_p = p; // already correct since we go in reverse
-        remove_theta_data_port(func, theta_id, body, adjusted_p);
+        remove_theta_data_port(func, theta_id, body, p);
         removed += 1;
     }
 

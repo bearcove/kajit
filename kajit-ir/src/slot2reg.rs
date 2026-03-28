@@ -622,37 +622,10 @@ fn promote_theta(
         let body_arg = body_arg_sources[&slot];
         let mut final_value = final_body_values.get(&slot).copied().unwrap_or(body_arg);
 
-        // If the slot's first access inside the body is a write (re-initialization),
-        // the body arg value is dead — overwritten before any read. Use pass-through
-        // to make the port loop-invariant, enabling later elimination.
-        // Only make pass-through for reinit slots where the incoming value
-        // is a constant (Const(0)). Non-constant reinit slots (like struct
-        // field temps) might carry meaningful initial values from outer scopes.
-        let is_const_input = matches!(
-            slot_values
-                .get(&slot)
-                .and_then(|s| resolve_to_const_value(func, *s)),
-            Some(0)
-        );
-        // TEMP: limit to first 4 reinit slots for debugging
-        let reinit_count = slots_to_thread
-            .iter()
-            .filter(|s| reinit_slots.contains(s))
-            .count();
-        let reinit_idx = slots_to_thread
-            .iter()
-            .filter(|s| reinit_slots.contains(s))
-            .position(|s| *s == slot);
-        let _ = (reinit_count, reinit_idx); // remove temp limit
-        if final_value != body_arg && reinit_slots.contains(&slot) && is_const_input {
-            if debug_s2r() {
-                eprintln!(
-                    "[s2r]   slot {} body arg unused → pass-through (loop-invariant)",
-                    slot.index(),
-                );
-            }
-            final_value = body_arg;
-        }
+        // Reinit pass-through disabled: dead_theta_ports handles this directly
+        // by removing ports based on (input=Const, no consumers, body arg
+        // only used by gamma/identity nodes). No slot2reg changes needed.
+        let _ = &reinit_slots;
         if debug_s2r() {
             let from_map = final_body_values.get(&slot).is_some();
             eprintln!(
@@ -738,6 +711,100 @@ fn promote_theta(
 /// Check if a PortSource is used by any NON-GAMMA node input in a region.
 /// Uses in gamma inputs (for break-path pass-through) don't count — those
 /// become dead when the theta output is unused.
+/// Check if a region (direct nodes only) contains a WriteToSlot(slot, Const(0)).
+fn has_write_const0_in_region(func: &IrFunc, region: RegionId, slot: SlotId) -> bool {
+    for &nid in &func.regions[region].nodes {
+        if let NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. }) = &func.nodes[nid].kind {
+            if *s == slot {
+                let write_source = &func.nodes[nid].inputs[0].source;
+                if resolve_to_const_value(func, *write_source) == Some(0) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a region (direct nodes only) contains a WriteToSlot for the slot with
+/// a non-zero value (indicating struct field assignment, not pure re-initialization).
+/// Check for non-zero writes to a slot in a region and one level of nested gammas.
+/// Does NOT recurse into thetas (they have their own slot promotion).
+fn has_nonzero_write_shallow(func: &IrFunc, region: RegionId, slot: SlotId) -> bool {
+    for &nid in &func.regions[region].nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. }) if *s == slot => {
+                let src = &func.nodes[nid].inputs[0].source;
+                if resolve_to_const_value(func, *src) != Some(0) {
+                    return true;
+                }
+            }
+            NodeKind::Gamma { regions, .. } => {
+                for &sub in regions {
+                    if has_nonzero_write_shallow(func, sub, slot) {
+                        return true;
+                    }
+                }
+            }
+            // Don't recurse into Theta — those are inner loops with own promotion
+            _ => {}
+        }
+    }
+    false
+}
+
+fn has_nonzero_write_in_region(func: &IrFunc, region: RegionId, slot: SlotId) -> bool {
+    for &nid in &func.regions[region].nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. }) if *s == slot => {
+                let write_source = &func.nodes[nid].inputs[0].source;
+                if resolve_to_const_value(func, *write_source) != Some(0) {
+                    return true;
+                }
+            }
+            NodeKind::Gamma { regions, .. } => {
+                for &sub in regions {
+                    if has_nonzero_write_in_region(func, sub, slot) {
+                        return true;
+                    }
+                }
+            }
+            NodeKind::Theta { body, .. } => {
+                if has_nonzero_write_in_region(func, *body, slot) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Check if a region (or any nested sub-region) contains a ReadFromSlot for the slot.
+fn has_read_in_region_recursive(func: &IrFunc, region: RegionId, slot: SlotId) -> bool {
+    for &nid in &func.regions[region].nodes {
+        match &func.nodes[nid].kind {
+            NodeKind::Simple(IrOp::ReadFromSlot { slot: s, .. }) if *s == slot => {
+                return true;
+            }
+            NodeKind::Gamma { regions, .. } => {
+                for &sub in regions {
+                    if has_read_in_region_recursive(func, sub, slot) {
+                        return true;
+                    }
+                }
+            }
+            NodeKind::Theta { body, .. } => {
+                if has_read_in_region_recursive(func, *body, slot) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
 /// Resolve a PortSource to a constant value if it directly references a Const node.
 fn resolve_to_const_value(func: &IrFunc, source: PortSource) -> Option<u64> {
     match source {
@@ -782,53 +849,33 @@ fn find_reinit_slots(
                 }
             }
             NodeKind::Gamma { regions, .. } => {
-                // For slots first accessed inside a gamma: check if ALL branches
-                // either (a) don't access the slot, or (b) write before reading.
-                // If so, the slot is re-initialized on every taken path.
+                // For slots accessed inside a gamma: only mark as reinit if
+                // the slot has a WriteToSlot(Const(0)) AND NO ReadFromSlot
+                // ANYWHERE in the gamma branch (including nested sub-regions).
+                // This prevents false positives for struct sub-fields that
+                // are written then read within the same gamma branch.
                 for &slot in slots_to_thread {
                     if seen.contains(&slot) || !slot_set.contains(&slot) {
                         continue;
                     }
                     let mut accessed_in_gamma = false;
-                    let mut all_branches_write_first = true;
+                    let mut all_branches_safe = true;
                     for &sub_region in regions {
-                        let mut branch_first_is_write = false;
-                        let mut branch_accesses_slot = false;
-                        for &sub_nid in &func.regions[sub_region].nodes {
-                            match &func.nodes[sub_nid].kind {
-                                NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. })
-                                    if *s == slot =>
-                                {
-                                    if !branch_accesses_slot {
-                                        // Only count as reinit if the value
-                                        // written is a known constant.
-                                        let write_source = &func.nodes[sub_nid].inputs[0].source;
-                                        if resolve_to_const_value(func, *write_source).is_some() {
-                                            branch_first_is_write = true;
-                                        }
-                                    }
-                                    branch_accesses_slot = true;
-                                    break;
-                                }
-                                NodeKind::Simple(IrOp::ReadFromSlot { slot: s, .. })
-                                    if *s == slot =>
-                                {
-                                    branch_accesses_slot = true;
-                                    break; // first access is read → not re-init
-                                }
-                                _ => {}
-                            }
-                        }
-                        if branch_accesses_slot {
+                        let has_write_0 = has_write_const0_in_region(func, sub_region, slot);
+                        let has_nonzero_write = has_nonzero_write_in_region(func, sub_region, slot);
+                        let has_read = has_read_in_region_recursive(func, sub_region, slot);
+                        if has_write_0 || has_nonzero_write || has_read {
                             accessed_in_gamma = true;
-                            if !branch_first_is_write {
-                                all_branches_write_first = false;
+                            // Safe only if: writes Const(0), no non-zero writes,
+                            // and no reads at this gamma level.
+                            if !has_write_0 || has_nonzero_write || has_read {
+                                all_branches_safe = false;
                             }
                         }
                     }
                     if accessed_in_gamma {
                         seen.insert(slot);
-                        if all_branches_write_first {
+                        if all_branches_safe {
                             first_access_is_write.insert(slot);
                         }
                     }
@@ -838,13 +885,101 @@ fn find_reinit_slots(
         }
     }
 
+    // Sanity filter: only include slots that have BOTH WriteToSlot AND
+    // ReadFromSlot somewhere in the theta body. Slots that are only written
+    // (but read via field-based access) are struct sub-fields with complex
+    // access patterns we can't safely optimize.
+    let mut has_read_anywhere: BTreeSet<SlotId> = BTreeSet::new();
+    for &slot in slots_to_thread {
+        if has_read_in_region_recursive(func, body, slot) {
+            has_read_anywhere.insert(slot);
+        }
+    }
+    // Exclude slots that have ReadFromSlot at the gamma branch level
+    // (depth 1). Reads inside nested thetas (depth 2+) are fine — those
+    // thetas get their own slot promotion and don't depend on the outer
+    // theta's body arg.
+    let mut read_at_gamma_level: BTreeSet<SlotId> = BTreeSet::new();
+    for &nid in &func.regions[body].nodes {
+        if let NodeKind::Gamma { regions, .. } = &func.nodes[nid].kind {
+            for &sub_region in regions {
+                for &sub_nid in &func.regions[sub_region].nodes {
+                    // Only check direct ReadFromSlot at the gamma branch level,
+                    // NOT recursively into nested gammas/thetas.
+                    if let NodeKind::Simple(IrOp::ReadFromSlot { slot, .. }) =
+                        &func.nodes[sub_nid].kind
+                    {
+                        read_at_gamma_level.insert(*slot);
+                    }
+                }
+            }
+        }
+    }
+
+    // Also exclude slots with non-zero writes at the gamma branch level.
+    // These are struct sub-fields that get StoreToAddr-based reads we can't
+    // track via ReadFromSlot. Check only at depth 1 (not recursive into
+    // nested thetas, which have their own slot promotion).
+    let mut has_nonzero_write_at_gamma: BTreeSet<SlotId> = BTreeSet::new();
+    for &nid in &func.regions[body].nodes {
+        if let NodeKind::Gamma { regions, .. } = &func.nodes[nid].kind {
+            for &sub_region in regions {
+                for &slot in slots_to_thread {
+                    // Check direct nodes + one level of nested gammas
+                    // (but not into thetas which have their own promotion).
+                    if has_nonzero_write_shallow(func, sub_region, slot) {
+                        has_nonzero_write_at_gamma.insert(slot);
+                    }
+                }
+            }
+        }
+    }
+
+    // Final filter: only retain reinit slots where ALL reads are inside
+    // nested thetas (varint decoder loops with their own slot promotion).
+    // Struct sub-fields have reads inside nested gammas (error checks) and
+    // hidden StoreToAddr writes that our slot-level checks can't detect.
+    let mut has_read_outside_theta: BTreeSet<SlotId> = BTreeSet::new();
+    for &nid in &func.regions[body].nodes {
+        if let NodeKind::Gamma { regions, .. } = &func.nodes[nid].kind {
+            for &sub_region in regions {
+                for &sub_nid in &func.regions[sub_region].nodes {
+                    match &func.nodes[sub_nid].kind {
+                        // ReadFromSlot directly at gamma branch level → not safe
+                        NodeKind::Simple(IrOp::ReadFromSlot { slot, .. }) => {
+                            has_read_outside_theta.insert(*slot);
+                        }
+                        // ReadFromSlot inside nested gamma → not safe
+                        NodeKind::Gamma { regions: inner, .. } => {
+                            for &inner_region in inner {
+                                for &slot in slots_to_thread {
+                                    if has_read_in_region_recursive(func, inner_region, slot) {
+                                        has_read_outside_theta.insert(slot);
+                                    }
+                                }
+                            }
+                        }
+                        // Nested theta: reads are fine (own promotion)
+                        NodeKind::Theta { .. } => {}
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    first_access_is_write
+        .retain(|s| has_read_anywhere.contains(s) && !has_read_outside_theta.contains(s));
+
     if debug_s2r() && !first_access_is_write.is_empty() {
         eprintln!(
-            "[s2r]   reinit_slots: {:?}",
+            "[s2r]   reinit_slots: {:?} (of {} checked, {} seen)",
             first_access_is_write
                 .iter()
                 .map(|s| s.index())
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>(),
+            slots_to_thread.len(),
+            seen.len()
         );
     }
 
