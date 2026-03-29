@@ -2163,7 +2163,7 @@ pub(crate) fn build_structural_hir_ir(
 /// Dispatches to either the structural (destination-writing) path or the
 /// scalar (return-value) path depending on whether the function has a
 /// destination parameter.
-pub(crate) fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
+pub fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
     let (_, function) = module
         .functions
         .iter()

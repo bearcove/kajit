@@ -16,9 +16,8 @@ use crate::intrinsics;
 use crate::ir::{RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;
 
-pub(crate) use hir_to_ir::{
-    build_postcard_decoder_ir_via_hir, build_structural_hir_ir, lower_hir_module,
-};
+pub use hir_to_ir::lower_hir_module;
+pub(crate) use hir_to_ir::{build_postcard_decoder_ir_via_hir, build_structural_hir_ir};
 pub(crate) use kajit_json::{build_json_decoder_hir, supports_json_decoder_hir};
 pub(crate) use kajit_postcard::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 

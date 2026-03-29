@@ -1,4 +1,5 @@
 use facet_testhelpers::test;
+use kajit_hir as hir;
 use kajit_hir_text::parse_hir;
 
 use super::lower_hir_module;
@@ -977,6 +978,51 @@ hir_module {
 "#,
     )
     .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}
+
+/// Acceptance test: construct a VixenTypedFunction, lower to HIR, lower to IR.
+/// This is the path Vixen will use to compile scalar kernels.
+#[test]
+fn vixen_typed_function_add_lowers_to_ir() {
+    use hir::{
+        BinaryOp, Literal, LocalId, Module, Type, VixenTypedExpr, VixenTypedFunction,
+        VixenTypedParam, VixenTypedStmt,
+    };
+
+    let func = VixenTypedFunction {
+        name: "add".to_string(),
+        params: vec![
+            VixenTypedParam {
+                local: LocalId::new(0),
+                name: "a".to_string(),
+                ty: Type::u(64),
+            },
+            VixenTypedParam {
+                local: LocalId::new(1),
+                name: "b".to_string(),
+                ty: Type::u(64),
+            },
+        ],
+        locals: vec![],
+        return_type: Type::u(64),
+        body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Binary {
+            op: BinaryOp::Add,
+            lhs: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+            rhs: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+        }))],
+        comment: Some("scalar add kernel".to_string()),
+    };
+
+    let module = Module::new();
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("VixenTypedFunction should lower to HIR");
 
     let ir = lower_hir_module(&module);
     insta::assert_snapshot!(format!(
