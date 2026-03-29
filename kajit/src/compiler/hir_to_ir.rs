@@ -2395,6 +2395,25 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 }
                 None
             }
+            hir::StmtKind::Expr(hir::Expr::Call(call)) => {
+                let args: Vec<_> = call
+                    .args
+                    .iter()
+                    .map(|arg| self.lower_expr(rb, arg))
+                    .collect();
+                let callable = &self.module.callables[match call.target {
+                    hir::CallTarget::Callable(id) => id,
+                }];
+                let func = match callable.name.as_str() {
+                    "runtime.validate_utf8_range" => crate::ir::IntrinsicFn(
+                        intrinsics::kajit_validate_utf8_range as *const () as usize,
+                    ),
+                    name => panic!("unsupported scalar HIR effect call: {name}"),
+                };
+                rb.call_intrinsic(func, &args, 0, false);
+                None
+            }
+            hir::StmtKind::Expr(_) => None,
             hir::StmtKind::Fail { code } => {
                 rb.error_exit(*code);
                 None
@@ -2638,6 +2657,32 @@ impl<'a> ScalarHirIrLowerer<'a> {
         }
     }
 
+    fn lower_call_expr(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+    ) -> crate::ir::PortSource {
+        let args: Vec<_> = call
+            .args
+            .iter()
+            .map(|arg| self.lower_expr(rb, arg))
+            .collect();
+        let callable = &self.module.callables[match call.target {
+            hir::CallTarget::Callable(id) => id,
+        }];
+        let func = match callable.name.as_str() {
+            "runtime.alloc_persistent" => {
+                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize)
+            }
+            "runtime.string_validate_alloc_copy" => crate::ir::IntrinsicFn(
+                intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
+            ),
+            name => panic!("unsupported scalar HIR call target: {name}"),
+        };
+        rb.call_intrinsic(func, &args, 0, true)
+            .expect("scalar call should return a value")
+    }
+
     fn lower_expr(&self, rb: &mut RegionBuilder<'_>, expr: &hir::Expr) -> crate::ir::PortSource {
         match expr {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
@@ -2681,6 +2726,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 };
                 rb.binop(ir_op, lhs, rhs)
             }
+            hir::Expr::Call(call) => self.lower_call_expr(rb, call),
             other => panic!("unsupported scalar HIR expression: {other:?}"),
         }
     }
