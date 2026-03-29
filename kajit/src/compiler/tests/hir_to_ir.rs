@@ -670,3 +670,174 @@ hir_module {
         ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
     ));
 }
+
+#[test]
+fn scalar_hir_ir_path_lowers_add_function() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types []
+  callables []
+  functions [
+    function f0 "add" {
+      regions []
+      stores []
+      params [
+        l0 param "a": u64
+        l1 param "b": u64
+      ]
+      locals []
+      return u64
+      scopes [
+        scope sc0 parent none comment "scalar add"
+      ]
+      body @sc0 {
+        stmt0: return binary add(l0, l1)
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}
+
+#[test]
+fn scalar_hir_ir_path_lowers_function_with_local() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types []
+  callables []
+  functions [
+    function f0 "add_one" {
+      regions []
+      stores []
+      params [
+        l0 param "x": u64
+      ]
+      locals [
+        l1 let "tmp": u64
+      ]
+      return u64
+      scopes [
+        scope sc0 parent none comment "scalar with local"
+      ]
+      body @sc0 {
+        stmt0: init l1 = binary add(l0, 0x1)
+        stmt1: return l1
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}
+
+#[test]
+fn scalar_hir_ir_path_lowers_struct_field_access() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types [
+    type t0 "Point" size=16 = struct {
+      "x": u64 @0
+      "y": u64 @8
+    }
+  ]
+  callables []
+  functions [
+    function f0 "sum_fields" {
+      regions []
+      stores []
+      params [
+        l0 param "p": t0
+      ]
+      locals []
+      return u64
+      scopes [
+        scope sc0 parent none comment "struct field access"
+      ]
+      body @sc0 {
+        stmt0: return binary add(field(l0, "x"), field(l0, "y"))
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}
+
+#[test]
+fn scalar_hir_ir_path_lowers_struct_field_write() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types [
+    type t0 "Point" size=16 = struct {
+      "x": u64 @0
+      "y": u64 @8
+    }
+  ]
+  callables []
+  functions [
+    function f0 "make_point" {
+      regions []
+      stores []
+      params [
+        l0 param "a": u64
+        l1 param "b": u64
+      ]
+      locals [
+        l2 let "result": t0
+      ]
+      return u64
+      scopes [
+        scope sc0 parent none comment "struct field write"
+      ]
+      body @sc0 {
+        stmt0: init field(l2, "x") = l0
+        stmt1: init field(l2, "y") = l1
+        stmt2: return binary add(field(l2, "x"), field(l2, "y"))
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}

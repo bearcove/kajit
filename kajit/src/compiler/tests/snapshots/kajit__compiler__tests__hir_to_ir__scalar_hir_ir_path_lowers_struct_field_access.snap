@@ -1,0 +1,20 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "sum_fields") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 = ReadFromSlot(0) [%cs:arg] -> [v0, %cs]
+    n2 = ReadFromSlot(1) [%cs:n1] -> [v1, %cs]
+    n3 = Add [v0, v1] -> [v2]
+    results: [v2, %cs:n2, %os:arg]
+  }
+}

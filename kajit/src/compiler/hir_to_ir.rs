@@ -2158,10 +2158,310 @@ pub(crate) fn build_structural_hir_ir(
 }
 
 /// Lower HIR to IR without any facet Shape. All layout info must come from
-/// HIR annotations. Panics if the lowerer encounters Option or Vec types
-/// without init_fn/offset annotations in the HIR.
+/// HIR annotations.
+///
+/// Dispatches to either the structural (destination-writing) path or the
+/// scalar (return-value) path depending on whether the function has a
+/// destination parameter.
 pub(crate) fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
-    build_structural_hir_ir_impl(module, None)
+    let (_, function) = module
+        .functions
+        .iter()
+        .next()
+        .expect("HIR module should contain at least one function");
+    if function.destination_param().is_some() {
+        build_structural_hir_ir_impl(module, None)
+    } else {
+        build_scalar_hir_ir(module, function)
+    }
+}
+
+/// Lower a plain scalar HIR function into IR.
+///
+/// This is the clean lowering path for functions that take ordinary params
+/// and return a value — no cursor, no destination, no decoder-specific
+/// machinery. All params get slots, all locals get slots, expressions lower
+/// to IR operations, and `return expr` sets the region result.
+fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate::ir::IrFunc {
+    let mut builder = crate::ir::IrBuilder::new(&function.name, 0);
+    {
+        let mut rb = builder.root_region();
+        let lowerer = ScalarHirIrLowerer::new(&mut rb, module, function);
+        let ret = lowerer.lower_block(&mut rb, &function.body.statements);
+        if let Some(ret_val) = ret {
+            rb.set_results(&[ret_val]);
+        } else {
+            rb.set_results(&[]);
+        }
+    }
+    builder.finish()
+}
+
+struct ScalarHirIrLowerer<'a> {
+    module: &'a hir::Module,
+    /// Base slot for each local (params and locals alike). Multi-field types
+    /// occupy consecutive slots starting at the base.
+    local_base_slots: std::collections::HashMap<hir::LocalId, crate::ir::SlotId>,
+    /// Type of each local, for field resolution.
+    local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
+}
+
+/// A resolved place in the scalar lowerer — always a local with a slot offset.
+struct ResolvedScalarPlace<'a> {
+    ty: &'a hir::Type,
+    base_slot: crate::ir::SlotId,
+    slot_offset: usize,
+}
+
+impl<'a> ScalarHirIrLowerer<'a> {
+    fn new(
+        rb: &mut RegionBuilder<'_>,
+        module: &'a hir::Module,
+        function: &'a hir::Function,
+    ) -> Self {
+        let mut local_base_slots = std::collections::HashMap::new();
+        let mut local_types = std::collections::HashMap::new();
+        for param in &function.params {
+            let base_slot = Self::alloc_local(rb, module, &param.ty);
+            local_base_slots.insert(param.local, base_slot);
+            local_types.insert(param.local, &param.ty);
+        }
+        for local in &function.locals {
+            let base_slot = Self::alloc_local(rb, module, &local.ty);
+            local_base_slots.insert(local.local, base_slot);
+            local_types.insert(local.local, &local.ty);
+        }
+        Self {
+            module,
+            local_base_slots,
+            local_types,
+        }
+    }
+
+    fn alloc_local(
+        rb: &mut RegionBuilder<'_>,
+        module: &hir::Module,
+        ty: &hir::Type,
+    ) -> crate::ir::SlotId {
+        let slot_count = Self::slot_count_for_type(module, ty);
+        let base_slot = rb.alloc_slot();
+        if slot_count > 1 {
+            rb.func().multi_slot_group.insert(base_slot);
+            for _ in 1..slot_count {
+                let sub_slot = rb.alloc_slot();
+                rb.func().multi_slot_group.insert(sub_slot);
+            }
+        } else {
+            rb.func().scalar_temp_slots.insert(base_slot);
+        }
+        base_slot
+    }
+
+    fn slot_count_for_type(module: &hir::Module, ty: &hir::Type) -> usize {
+        match ty {
+            hir::Type::Unit
+            | hir::Type::Bool
+            | hir::Type::Integer(_)
+            | hir::Type::Address { .. }
+            | hir::Type::Handle { .. } => 1,
+            hir::Type::Str { .. } | hir::Type::Slice { .. } => 2,
+            hir::Type::Array { element, len } => Self::slot_count_for_type(module, element)
+                .saturating_mul(*len)
+                .max(1),
+            hir::Type::Named { def, .. } => match &module.type_defs[*def].kind {
+                hir::TypeDefKind::Struct { fields } => fields
+                    .iter()
+                    .map(|f| Self::slot_count_for_type(module, &f.ty))
+                    .sum::<usize>()
+                    .max(1),
+                hir::TypeDefKind::Enum { variants, .. } => {
+                    let payload_slots = variants
+                        .iter()
+                        .map(|v| {
+                            v.fields
+                                .iter()
+                                .map(|f| Self::slot_count_for_type(module, &f.ty))
+                                .sum::<usize>()
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    (1 + payload_slots).max(1)
+                }
+            },
+        }
+    }
+
+    fn slot_at(base: crate::ir::SlotId, offset: usize) -> crate::ir::SlotId {
+        crate::ir::SlotId::new(base.index() as u32 + offset as u32)
+    }
+
+    fn resolve_place(&self, place: &hir::Place) -> ResolvedScalarPlace<'a> {
+        match place {
+            hir::Place::Local(local) => ResolvedScalarPlace {
+                ty: self.local_types[local],
+                base_slot: self.local_base_slots[local],
+                slot_offset: 0,
+            },
+            hir::Place::Field { base, field } => {
+                let parent = self.resolve_place(base);
+                let hir::Type::Named { def, .. } = parent.ty else {
+                    panic!(
+                        "field access requires a named struct type, got {:?}",
+                        parent.ty
+                    );
+                };
+                let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind else {
+                    panic!("field access requires a struct type def");
+                };
+                let mut running_slots = 0usize;
+                let (field_ty, field_slot_offset) = fields
+                    .iter()
+                    .find_map(|candidate| {
+                        let found = (candidate.name == field.as_str())
+                            .then_some((&candidate.ty, running_slots));
+                        running_slots += Self::slot_count_for_type(self.module, &candidate.ty);
+                        found
+                    })
+                    .unwrap_or_else(|| panic!("missing struct field {field}"));
+                ResolvedScalarPlace {
+                    ty: field_ty,
+                    base_slot: parent.base_slot,
+                    slot_offset: parent.slot_offset + field_slot_offset,
+                }
+            }
+            hir::Place::Index { base, index } => {
+                let hir::Expr::Literal(hir::Literal::Integer(index)) = &**index else {
+                    panic!("array index must be an integer literal");
+                };
+                let index = *index as usize;
+                let parent = self.resolve_place(base);
+                let hir::Type::Array { element, len } = parent.ty else {
+                    panic!("index access requires an array type, got {:?}", parent.ty);
+                };
+                assert!(
+                    index < *len,
+                    "array index {index} out of bounds for len {len}"
+                );
+                let elem_slots = Self::slot_count_for_type(self.module, element);
+                ResolvedScalarPlace {
+                    ty: element,
+                    base_slot: parent.base_slot,
+                    slot_offset: parent.slot_offset + index * elem_slots,
+                }
+            }
+        }
+    }
+
+    fn lower_block(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        statements: &[hir::Stmt],
+    ) -> Option<crate::ir::PortSource> {
+        for stmt in statements {
+            if let Some(ret) = self.lower_stmt(rb, stmt) {
+                return Some(ret);
+            }
+        }
+        None
+    }
+
+    fn lower_stmt(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        stmt: &hir::Stmt,
+    ) -> Option<crate::ir::PortSource> {
+        match &stmt.kind {
+            hir::StmtKind::Init { place, value } | hir::StmtKind::Assign { place, value } => {
+                let resolved = self.resolve_place(place);
+                let slot_count = Self::slot_count_for_type(self.module, resolved.ty);
+                if slot_count == 1 {
+                    let val = self.lower_expr(rb, value);
+                    rb.write_to_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset), val);
+                } else {
+                    // Multi-slot assignment: the value must also be a place (local/field)
+                    // so we copy slot-by-slot.
+                    let source = self.expr_to_place(value);
+                    let src_resolved = self.resolve_place(&source);
+                    for i in 0..slot_count {
+                        let val = rb.read_from_slot(Self::slot_at(
+                            src_resolved.base_slot,
+                            src_resolved.slot_offset + i,
+                        ));
+                        rb.write_to_slot(
+                            Self::slot_at(resolved.base_slot, resolved.slot_offset + i),
+                            val,
+                        );
+                    }
+                }
+                None
+            }
+            hir::StmtKind::Return(Some(expr)) => Some(self.lower_expr(rb, expr)),
+            hir::StmtKind::Return(None) => None,
+            other => panic!("unsupported scalar HIR statement: {other:?}"),
+        }
+    }
+
+    fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {
+        match expr {
+            hir::Expr::Local(local) => hir::Place::Local(*local),
+            hir::Expr::Field { base, field } => hir::Place::Field {
+                base: Box::new(self.expr_to_place(base)),
+                field: field.clone(),
+            },
+            hir::Expr::Index { base, index } => hir::Place::Index {
+                base: Box::new(self.expr_to_place(base)),
+                index: Box::new(*index.clone()),
+            },
+            other => panic!("cannot convert expression to place: {other:?}"),
+        }
+    }
+
+    fn lower_expr(&self, rb: &mut RegionBuilder<'_>, expr: &hir::Expr) -> crate::ir::PortSource {
+        match expr {
+            hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
+            hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
+            hir::Expr::Local(local) => {
+                let base_slot = self.local_base_slots[local];
+                rb.read_from_slot(base_slot)
+            }
+            hir::Expr::Field { .. } | hir::Expr::Index { .. } => {
+                let place = self.expr_to_place(expr);
+                let resolved = self.resolve_place(&place);
+                assert_eq!(
+                    Self::slot_count_for_type(self.module, resolved.ty),
+                    1,
+                    "scalar read requires single-slot type"
+                );
+                rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset))
+            }
+            hir::Expr::Binary { op, lhs, rhs } => {
+                let lhs = self.lower_expr(rb, lhs);
+                let rhs = self.lower_expr(rb, rhs);
+                let ir_op = match op {
+                    hir::BinaryOp::Add => crate::ir::IrOp::Add,
+                    hir::BinaryOp::Sub => crate::ir::IrOp::Sub,
+                    hir::BinaryOp::Mul => crate::ir::IrOp::Mul,
+                    hir::BinaryOp::BitAnd => crate::ir::IrOp::And,
+                    hir::BinaryOp::BitOr => crate::ir::IrOp::Or,
+                    hir::BinaryOp::Xor => crate::ir::IrOp::Xor,
+                    hir::BinaryOp::Shl => crate::ir::IrOp::Shl,
+                    hir::BinaryOp::Shr => crate::ir::IrOp::Shr,
+                    hir::BinaryOp::Sar => crate::ir::IrOp::Sar,
+                    hir::BinaryOp::Eq => crate::ir::IrOp::CmpEq,
+                    hir::BinaryOp::Ne => crate::ir::IrOp::CmpNe,
+                    hir::BinaryOp::Lt => crate::ir::IrOp::CmpLt,
+                    hir::BinaryOp::Le => crate::ir::IrOp::CmpLe,
+                    hir::BinaryOp::Gt => crate::ir::IrOp::CmpGt,
+                    hir::BinaryOp::Ge => crate::ir::IrOp::CmpGe,
+                    hir::BinaryOp::And => crate::ir::IrOp::And,
+                    hir::BinaryOp::Or => crate::ir::IrOp::Or,
+                    other => panic!("unsupported scalar HIR binary op: {other:?}"),
+                };
+                rb.binop(ir_op, lhs, rhs)
+            }
+            other => panic!("unsupported scalar HIR expression: {other:?}"),
+        }
+    }
 }
 
 fn build_structural_hir_ir_impl(

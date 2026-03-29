@@ -1,0 +1,22 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+}
+scopes {
+  s0 = lambda_body(@0)
+}
+lambda @0 @s0 (shape: "add_one") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 = ReadFromSlot(0) [%cs:arg] -> [v0, %cs]
+    n2 = Const(0x1) [] -> [v1]
+    n3 = Add [v0, v1] -> [v2]
+    n4 = WriteToSlot(1) [v2, %cs:n1] -> [%cs]
+    n5 = ReadFromSlot(1) [%cs:n4] -> [v3, %cs]
+    results: [v3, %cs:n5, %os:arg]
+  }
+}
