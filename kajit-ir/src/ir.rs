@@ -970,6 +970,19 @@ pub struct IrFunc {
     pub vreg_count: u32,
     /// Next stack slot to allocate.
     pub slot_count: u32,
+    /// Slots that are part of a multi-slot group (struct sub-fields).
+    pub multi_slot_group: std::collections::BTreeSet<SlotId>,
+    /// Slots that are scalar temporaries from HIR locals (not struct sub-fields,
+    /// not control-flow slots, not cursor shadow slots). Safe for dead-port
+    /// elimination when other conditions are met.
+    pub scalar_temp_slots: std::collections::BTreeSet<SlotId>,
+    /// For each theta: maps theta port index to the slot it was promoted from.
+    /// Populated by slot_to_reg, consumed by dead_theta_ports.
+    pub theta_port_slots: std::collections::HashMap<NodeId, Vec<SlotId>>,
+    /// For each theta: set of slots that are pure zero-init temps (written
+    /// with Const(0) first, never written with non-zero, not read at gamma
+    /// level). Populated by slot_to_reg, consumed by dead_theta_ports.
+    pub theta_reinit_slots: std::collections::HashMap<NodeId, std::collections::BTreeSet<SlotId>>,
     /// Lambda registry: maps LambdaId to the NodeId of the lambda node.
     pub lambdas: Vec<NodeId>,
     /// All debug scopes.
@@ -1235,6 +1248,10 @@ impl IrBuilder {
             vreg_count: 0,
             slot_count: 0,
             lambdas: Vec::new(),
+            multi_slot_group: std::collections::BTreeSet::new(),
+            scalar_temp_slots: std::collections::BTreeSet::new(),
+            theta_port_slots: std::collections::HashMap::new(),
+            theta_reinit_slots: std::collections::HashMap::new(),
             debug_scopes: Arena::new(),
             debug_values: Arena::new(),
             root_debug_scope: DebugScopeId::new(0), // placeholder, set below

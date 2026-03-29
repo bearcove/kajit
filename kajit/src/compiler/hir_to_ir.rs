@@ -120,8 +120,18 @@ impl<'a> StructuralHirIrLowerer<'a> {
     ) -> StructuralLocalStorage {
         let slot_count = Self::slot_count_for_type(module, ty);
         let base_slot = rb.alloc_slot();
-        for _ in 1..slot_count {
-            let _ = rb.alloc_slot();
+        if slot_count > 1 {
+            rb.func().multi_slot_group.insert(base_slot);
+            for _ in 1..slot_count {
+                let sub_slot = rb.alloc_slot();
+                rb.func().multi_slot_group.insert(sub_slot);
+            }
+        } else {
+            // Single-slot scalar local — eligible for dead-port elimination.
+            rb.func().scalar_temp_slots.insert(base_slot);
+            for _ in 1..slot_count {
+                let _ = rb.alloc_slot();
+            }
         }
         StructuralLocalStorage { base_slot }
     }

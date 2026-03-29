@@ -667,6 +667,12 @@ fn promote_theta(
         insert_data_region_result(func, body, final_value);
     }
 
+    // Record slot → port mapping and reinit slots for dead_theta_ports.
+    func.theta_port_slots
+        .insert(node_id, slots_to_thread.to_vec());
+    func.theta_reinit_slots
+        .insert(node_id, reinit_slots.clone());
+
     // Phase 4: Batch insert all data outputs at once — single shift.
     let new_output_indices =
         batch_insert_data_outputs(func, node_id, slots_to_thread.len(), debug_scope);

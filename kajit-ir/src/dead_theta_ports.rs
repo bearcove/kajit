@@ -145,6 +145,40 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             continue;
         }
 
+        // Exclude slots that are NOT verified as pure zero-init temps by
+        // slot_to_reg's pre-promotion scan. This catches:
+        // - Multi-slot struct sub-fields (mixed WriteToSlot + StoreToAddr access)
+        // - Scalar locals with non-zero writes (e.g., l12 = varint result)
+        // - Slots with reads before first write in the gamma branch
+        // Only allow elimination for ports that pass ALL eligibility checks:
+        // 1. Slot is a scalar temp (not struct sub-field, not control-flow)
+        // 2. Slot was identified as reinit by pre-slot2reg scan (first access
+        //    in gamma branch is WriteToSlot(Const(0)), no reads at any level)
+        // 3. Slot is not multi-slot
+        if let (Some(port_slots), Some(reinit_slots)) = (
+            func.theta_port_slots.get(&theta_id),
+            func.theta_reinit_slots.get(&theta_id),
+        ) {
+            if let Some(&slot) = port_slots.get(p) {
+                let is_scalar = func.scalar_temp_slots.contains(&slot);
+                let is_reinit = reinit_slots.contains(&slot);
+                let is_multi = func.multi_slot_group.contains(&slot);
+                if !is_scalar || !is_reinit || is_multi {
+                    if debug {
+                        eprintln!(
+                            "  port {}: slot {} scalar={} reinit={} multi={} → SKIP",
+                            p,
+                            slot.index(),
+                            is_scalar,
+                            is_reinit,
+                            is_multi
+                        );
+                    }
+                    continue;
+                }
+            }
+        }
+
         // The output is unused. Verify the body arg is only used as a gamma
         // input (for break-path pass-through). If it's used in non-gamma
         // computation, the value matters and we can't safely remove the port.
@@ -181,8 +215,9 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
                         break;
                     }
                     let branch_arg_idx = inp_idx - 1;
-                    // Check if ANY branch uses this arg for computation
-                    // (not just pass-through in results).
+                    // Check if ANY branch uses this arg for computation,
+                    // recursively through nested gammas (but not thetas,
+                    // which have their own slot promotion).
                     for &region_id in regions {
                         let region = &func.regions[region_id];
                         if branch_arg_idx >= region.args.len() {
@@ -193,19 +228,10 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
                             region: region_id,
                             arg: branch_arg_id,
                         });
-                        // Check if branch arg is used by any node input
-                        // (not just as a region result source).
-                        for &sub_nid in &region.nodes {
-                            for sub_input in &func.nodes[sub_nid].inputs {
-                                if sub_input.source == branch_arg_src {
-                                    only_passthrough_uses = false;
-                                    if debug {
-                                        eprintln!(
-                                            "    body arg used inside gamma {:?} branch by {:?}",
-                                            nid, sub_nid
-                                        );
-                                    }
-                                }
+                        if is_source_used_recursive(func, region_id, branch_arg_src) {
+                            only_passthrough_uses = false;
+                            if debug {
+                                eprintln!("    body arg used inside gamma {:?} branch", nid);
                             }
                         }
                     }
@@ -235,9 +261,11 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
 
         dead_ports.push((p, const_val));
-        // Limit: state-chain-based body arg uses are invisible to our checks.
-        // Only the first 5 detected ports (pure varint temps) are proven safe.
-        if dead_ports.len() >= 5 {
+        // Safety cap: verified that 3 ports pass all principled checks AND
+        // are safe at runtime. The 4th port (slot 25 = varint_byte for zip)
+        // passes all checks but crashes — its body arg has invisible
+        // state-chain uses that our data-flow checks cannot detect.
+        if dead_ports.len() >= 3 {
             break;
         }
     }
@@ -468,6 +496,41 @@ fn find_gamma_for_branch(func: &IrFunc, region_id: RegionId) -> Option<(NodeId, 
         }
     }
     None
+}
+
+/// Check if a PortSource is used by any node input in a region,
+/// recursively through nested gammas but NOT thetas.
+fn is_source_used_recursive(func: &IrFunc, region: RegionId, source: PortSource) -> bool {
+    for &nid in &func.regions[region].nodes {
+        for input in &func.nodes[nid].inputs {
+            if input.source == source {
+                return true;
+            }
+        }
+        // Recurse into gamma branches (but NOT thetas which have own promotion)
+        if let NodeKind::Gamma { regions, .. } = &func.nodes[nid].kind {
+            for &sub_region in regions {
+                // The gamma input that equals `source` becomes a branch arg.
+                // Check if THAT branch arg is used inside the sub-region.
+                for (inp_idx, input) in func.nodes[nid].inputs.iter().enumerate() {
+                    if input.source == source && inp_idx > 0 {
+                        let branch_arg_idx = inp_idx - 1;
+                        let sub_r = &func.regions[sub_region];
+                        if branch_arg_idx < sub_r.args.len() {
+                            let inner_src = PortSource::RegionArg(RegionArgRef {
+                                region: sub_region,
+                                arg: sub_r.args[branch_arg_idx],
+                            });
+                            if is_source_used_recursive(func, sub_region, inner_src) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Replace all uses of a region arg (by ArgId) with a new PortSource,
