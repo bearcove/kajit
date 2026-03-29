@@ -39,8 +39,10 @@ fn resolve_constant_source(func: &IrFunc, source: &PortSource) -> Option<usize> 
                     // Theta: arg[K] corresponds to input[K]
                     let input = node.inputs.get(arg_index)?;
                     // Check that the theta result at this position passes the same arg through
-                    // (loop-invariant: result[K] == RegionArg(body, arg[K]))
-                    let result_id = func.regions[*body].results.get(arg_index)?;
+                    // (loop-invariant: result[K+1] == RegionArg(body, arg[K]))
+                    // +1 to skip predicate: body.results[0] is the predicate,
+                    // data results start at body.results[1].
+                    let result_id = func.regions[*body].results.get(arg_index + 1)?;
                     let result_source = &func.region_results[*result_id].source;
                     let is_loop_invariant = matches!(
                         result_source,
