@@ -150,33 +150,37 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         // - Multi-slot struct sub-fields (mixed WriteToSlot + StoreToAddr access)
         // - Scalar locals with non-zero writes (e.g., l12 = varint result)
         // - Slots with reads before first write in the gamma branch
-        // Only allow elimination for ports that pass ALL eligibility checks:
-        // 1. Slot is a scalar temp (not struct sub-field, not control-flow)
-        // 2. Slot was identified as reinit by pre-slot2reg scan (first access
-        //    in gamma branch is WriteToSlot(Const(0)), no reads at any level)
-        // 3. Slot is not multi-slot
-        if let (Some(port_slots), Some(reinit_slots)) = (
-            func.theta_port_slots.get(&theta_id),
-            func.theta_reinit_slots.get(&theta_id),
-        ) {
-            if let Some(&slot) = port_slots.get(p) {
-                let is_scalar = func.scalar_temp_slots.contains(&slot);
-                let is_reinit = reinit_slots.contains(&slot);
-                let is_multi = func.multi_slot_group.contains(&slot);
-                if !is_scalar || !is_reinit || is_multi {
-                    if debug {
-                        eprintln!(
-                            "  port {}: slot {} scalar={} reinit={} multi={} → SKIP",
-                            p,
-                            slot.index(),
-                            is_scalar,
-                            is_reinit,
-                            is_multi
-                        );
-                    }
-                    continue;
-                }
+        // Check 1: promotion-time truth — if the body arg has zero
+        // references after slot2reg, the slot is trivially dead.
+        let promotion_dead = func
+            .theta_reinit_slots
+            .get(&theta_id)
+            .and_then(|dead_args| {
+                func.theta_port_slots
+                    .get(&theta_id)
+                    .and_then(|port_slots| port_slots.get(p))
+                    .map(|slot| dead_args.contains(slot))
+            })
+            .unwrap_or(false);
+        // Check 2: scalar temp + not multi-slot (structural safety).
+        let structurally_eligible = func
+            .theta_port_slots
+            .get(&theta_id)
+            .and_then(|port_slots| port_slots.get(p))
+            .map(|slot| {
+                func.scalar_temp_slots.contains(slot) && !func.multi_slot_group.contains(slot)
+            })
+            .unwrap_or(false);
+
+        // Require BOTH: promotion-time truth for control-flow slots,
+        // OR structural eligibility (scalar temp + not multi-slot) for
+        // slots that pass the gamma-interior check later.
+        // For now, use promotion-dead as the ONLY gate — it's the ground truth.
+        if !promotion_dead {
+            if debug {
+                eprintln!("  port {}: body arg not dead at promotion time → SKIP", p);
             }
+            continue;
         }
 
         // The output is unused. Verify the body arg is only used as a gamma
@@ -261,13 +265,6 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
 
         dead_ports.push((p, const_val));
-        // Safety cap: verified that 3 ports pass all principled checks AND
-        // are safe at runtime. The 4th port (slot 25 = varint_byte for zip)
-        // passes all checks but crashes — its body arg has invisible
-        // state-chain uses that our data-flow checks cannot detect.
-        if dead_ports.len() >= 3 {
-            break;
-        }
     }
 
     if dead_ports.is_empty() {

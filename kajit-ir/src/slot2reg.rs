@@ -613,19 +613,37 @@ fn promote_theta(
         }
     }
 
+    // Post-promotion safety analysis: for each slot, check if the body_arg
+    // has ANY remaining references in the entire IR (across all regions).
+    // If zero references: the body_arg was never read during promotion —
+    // the slot was overwritten before any read. Tag these as safe for
+    // dead-port elimination.
+    let mut dead_body_args: BTreeSet<SlotId> = BTreeSet::new();
+    if max_iterations.is_none() && body_node_count < 200 {
+        for &slot in slots_to_thread {
+            let body_arg_src = body_arg_sources[&slot];
+            if !is_port_source_referenced_anywhere(func, body_arg_src) {
+                dead_body_args.insert(slot);
+            }
+        }
+        if !dead_body_args.is_empty() {
+            func.theta_reinit_slots
+                .insert(node_id, dead_body_args.clone());
+            if debug_s2r() {
+                eprintln!(
+                    "[s2r]   dead_body_args (promotion-time): {:?}",
+                    dead_body_args.iter().map(|s| s.index()).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
     // Phase 3: Add body results for all slots.
-    // For slots whose body arg is unused (re-initialized before first read),
-    // use pass-through instead of the computed final value. This makes the
-    // port loop-invariant, enabling later passes to remove it entirely.
     let body_debug_scope = func.regions[body].debug_scope;
     for &slot in slots_to_thread {
         let body_arg = body_arg_sources[&slot];
         let mut final_value = final_body_values.get(&slot).copied().unwrap_or(body_arg);
-
-        // Reinit pass-through disabled: dead_theta_ports handles this directly
-        // by removing ports based on (input=Const, no consumers, body arg
-        // only used by gamma/identity nodes). No slot2reg changes needed.
-        let _ = &reinit_slots;
+        let _ = &reinit_slots; // legacy, superseded by dead_body_args
         if debug_s2r() {
             let from_map = final_body_values.get(&slot).is_some();
             eprintln!(
@@ -667,11 +685,10 @@ fn promote_theta(
         insert_data_region_result(func, body, final_value);
     }
 
-    // Record slot → port mapping and reinit slots for dead_theta_ports.
+    // Record slot → port mapping for dead_theta_ports.
     func.theta_port_slots
         .insert(node_id, slots_to_thread.to_vec());
-    func.theta_reinit_slots
-        .insert(node_id, reinit_slots.clone());
+    // theta_reinit_slots is set above from dead_body_args (promotion-time truth).
 
     // Phase 4: Batch insert all data outputs at once — single shift.
     let new_output_indices =
@@ -734,6 +751,24 @@ fn has_write_const0_in_region(func: &IrFunc, region: RegionId, slot: SlotId) -> 
 
 /// Check if a region (direct nodes only) contains a WriteToSlot for the slot with
 /// a non-zero value (indicating struct field assignment, not pure re-initialization).
+/// Check if a PortSource has ANY references in the entire IR (all nodes, all regions).
+/// Gamma inputs count because they may feed computation inside the branches.
+fn is_port_source_referenced_anywhere(func: &IrFunc, source: PortSource) -> bool {
+    for (_nid, node) in func.nodes.iter() {
+        for input in &node.inputs {
+            if input.source == source {
+                return true;
+            }
+        }
+    }
+    for (_rid, result) in func.region_results.iter() {
+        if result.source == source {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check for non-zero writes to a slot in a region and one level of nested gammas.
 /// Does NOT recurse into thetas (they have their own slot promotion).
 fn has_nonzero_write_shallow(func: &IrFunc, region: RegionId, slot: SlotId) -> bool {
