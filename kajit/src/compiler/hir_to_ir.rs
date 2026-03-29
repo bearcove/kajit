@@ -2295,6 +2295,15 @@ impl<'a> ScalarHirIrLowerer<'a> {
         crate::ir::SlotId::new(base.index() as u32 + offset as u32)
     }
 
+    fn ir_width(width: hir::MemoryWidth) -> crate::ir::Width {
+        match width {
+            hir::MemoryWidth::W1 => crate::ir::Width::W1,
+            hir::MemoryWidth::W2 => crate::ir::Width::W2,
+            hir::MemoryWidth::W4 => crate::ir::Width::W4,
+            hir::MemoryWidth::W8 => crate::ir::Width::W8,
+        }
+    }
+
     fn resolve_place(&self, place: &hir::Place) -> ResolvedScalarPlace<'a> {
         match place {
             hir::Place::Local(local) => ResolvedScalarPlace {
@@ -2414,6 +2423,12 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 None
             }
             hir::StmtKind::Expr(_) => None,
+            hir::StmtKind::Store { addr, width, value } => {
+                let addr = self.lower_expr(rb, addr);
+                let value = self.lower_expr(rb, value);
+                rb.store_to_addr(addr, value, Self::ir_width(*width));
+                None
+            }
             hir::StmtKind::Fail { code } => {
                 rb.error_exit(*code);
                 None
@@ -2690,6 +2705,20 @@ impl<'a> ScalarHirIrLowerer<'a> {
             hir::Expr::Local(local) => {
                 let base_slot = self.local_base_slots[local];
                 rb.read_from_slot(base_slot)
+            }
+            hir::Expr::Load { addr, width } => {
+                let addr = self.lower_expr(rb, addr);
+                rb.load_from_addr(addr, Self::ir_width(*width))
+            }
+            hir::Expr::SliceData { value } => {
+                let place = self.expr_to_place(value);
+                let resolved = self.resolve_place(&place);
+                rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset))
+            }
+            hir::Expr::SliceLen { value } => {
+                let place = self.expr_to_place(value);
+                let resolved = self.resolve_place(&place);
+                rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset + 1))
             }
             hir::Expr::Field { .. } | hir::Expr::Index { .. } => {
                 let place = self.expr_to_place(expr);
