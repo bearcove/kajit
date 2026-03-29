@@ -357,23 +357,24 @@ impl<'a> EmitContext<'a> {
 
             LinearOp::ReadBytes { dst, count } => {
                 let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let cursor = self.ectx.cursor_reg;
                 match count {
                     1 => {
-                        self.ectx.emit.emit_ldrb_imm(rd, Reg::X19, 0).expect("ldrb");
+                        self.ectx.emit.emit_ldrb_imm(rd, cursor, 0).expect("ldrb");
                     }
                     2 => {
-                        self.ectx.emit.emit_ldrh_imm(rd, Reg::X19, 0).expect("ldrh");
+                        self.ectx.emit.emit_ldrh_imm(rd, cursor, 0).expect("ldrh");
                     }
                     4 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::W32, rd, Reg::X19, 0)
+                            .emit_ldr_imm(Width::W32, rd, cursor, 0)
                             .expect("ldr");
                     }
                     8 => {
                         self.ectx
                             .emit
-                            .emit_ldr_imm(Width::X64, rd, Reg::X19, 0)
+                            .emit_ldr_imm(Width::X64, rd, cursor, 0)
                             .expect("ldr");
                     }
                     _ => {
@@ -388,7 +389,8 @@ impl<'a> EmitContext<'a> {
 
             LinearOp::PeekByte { dst } => {
                 let rd = self.dst_reg_or_temp(*dst, Reg::X9);
-                self.ectx.emit.emit_ldrb_imm(rd, Reg::X19, 0).expect("ldrb");
+                let cursor = self.ectx.cursor_reg;
+                self.ectx.emit.emit_ldrb_imm(rd, cursor, 0).expect("ldrb");
                 if rd == Reg::X9 {
                     self.store_to_vreg(*dst, Reg::X9);
                 }
@@ -399,10 +401,11 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::AdvanceCursorBy { src } => {
+                let cursor = self.ectx.cursor_reg;
                 let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
                 self.ectx
                     .emit
-                    .emit_add_reg(Width::X64, Reg::X19, Reg::X19, src_reg)
+                    .emit_add_reg(Width::X64, cursor, cursor, src_reg)
                     .expect("add");
             }
 
@@ -1883,10 +1886,29 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
 
-    // Prologue config: for leaf functions, keep output_ptr in x0 and ctx_ptr in x1.
-    // Also skip loading cursor/end into x19/x20 — SaveCursor/SaveInputEnd load
-    // from the context struct directly.
-    let cursor_writeback_reg = if is_leaf { Reg::X15 } else { Reg::X19 };
+    // Check if the program uses cursor operations (BoundsCheck, ReadBytes, etc.)
+    // that require the cursor to live in a fixed register.
+    let uses_cursor_ops = program.funcs.iter().any(|func| {
+        func.insts.iter().any(|inst| {
+            matches!(
+                inst.op,
+                kajit_lir::LinearOp::BoundsCheck { .. }
+                    | kajit_lir::LinearOp::ReadBytes { .. }
+                    | kajit_lir::LinearOp::PeekByte { .. }
+                    | kajit_lir::LinearOp::AdvanceCursor { .. }
+                    | kajit_lir::LinearOp::AdvanceCursorBy { .. }
+            )
+        })
+    });
+
+    // For leaf functions with cursor ops, we still need x19/x20 for the cursor
+    // and input end — just skip the callee-save overhead since we're a leaf.
+    let leaf_needs_cursor = is_leaf && uses_cursor_ops;
+    let cursor_writeback_reg = if is_leaf && !leaf_needs_cursor {
+        Reg::X15
+    } else {
+        Reg::X19
+    };
 
     // Check if regalloc actually uses x19 or x20 for anything.
     let uses_x19_x20 = alloc.functions.iter().any(|f| {
@@ -1895,8 +1917,8 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         })
     });
     let need_save_x19_x20 = if is_leaf {
-        // Leaf: only save x19/x20 if regalloc uses them.
-        uses_x19_x20
+        // Leaf: save x19/x20 if regalloc uses them, or if we load cursor into them.
+        uses_x19_x20 || leaf_needs_cursor
     } else {
         // Non-leaf: always save (prologue modifies x19/x20).
         true
@@ -1905,8 +1927,8 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     let prologue_config = crate::arch::PrologueConfig {
         save_x21_x22: !is_leaf,
         save_x19_x20: need_save_x19_x20,
-        load_cursor_x19_x20: !is_leaf,
-        cursor_writeback_reg: if is_leaf {
+        load_cursor_x19_x20: !is_leaf || leaf_needs_cursor,
+        cursor_writeback_reg: if is_leaf && !leaf_needs_cursor {
             Some(cursor_writeback_reg)
         } else {
             None

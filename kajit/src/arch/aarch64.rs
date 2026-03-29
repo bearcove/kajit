@@ -18,6 +18,13 @@ pub struct EmitCtx {
     /// Whether this is a leaf function (no bl instructions).
     /// Leaf functions skip saving x29/x30 and frame pointer setup.
     pub is_leaf: bool,
+    /// The register holding the current cursor position (input_ptr).
+    /// x19 for non-leaf, x19 for leaf when prologue loads it, or
+    /// whatever register the leaf SaveCursor loaded into.
+    pub cursor_reg: Reg,
+    /// The register holding the input end pointer.
+    /// x20 for non-leaf, x20 for leaf when prologue loads it.
+    pub end_reg: Reg,
     /// Shared error trampoline labels: error code → label.
     /// Each error site emits `b .Lerr_<code>` instead of the full 3-instruction
     /// sequence. The shared blocks are emitted near the epilogue.
@@ -85,6 +92,8 @@ impl EmitCtx {
             base_frame,
             frame_size,
             is_leaf,
+            cursor_reg: Reg::X19,
+            end_reg: Reg::X20,
             error_trampolines: std::collections::HashMap::new(),
             error_ctx_reg: None,
         }
@@ -387,16 +396,18 @@ impl EmitCtx {
     /// input buffer. Branches to the error exit with UnexpectedEof on failure.
     pub fn emit_bounds_check(&mut self, count: u32) {
         let eof_label = self.emit.new_label();
+        let cursor = self.cursor_reg;
+        let end = self.end_reg;
         if count == 1 {
             self.emit
-                .emit_cmp_reg(aarch64::Width::X64, Reg::X19, Reg::X20)
+                .emit_cmp_reg(aarch64::Width::X64, cursor, end)
                 .expect("cmp");
             self.emit
                 .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
                 .expect("b.hs");
         } else {
             self.emit
-                .emit_sub_reg(aarch64::Width::X64, Reg::X9, Reg::X20, Reg::X19)
+                .emit_sub_reg(aarch64::Width::X64, Reg::X9, end, cursor)
                 .expect("sub");
             self.emit
                 .emit_cmp_imm(aarch64::Width::X64, Reg::X9, count as u16)
@@ -476,8 +487,9 @@ impl EmitCtx {
 
     /// Advance the cached cursor by n bytes (inline, no function call).
     pub fn emit_advance_cursor_by(&mut self, n: u32) {
+        let cursor = self.cursor_reg;
         self.emit
-            .emit_add_imm(aarch64::Width::X64, Reg::X19, Reg::X19, n as u16, false)
+            .emit_add_imm(aarch64::Width::X64, cursor, cursor, n as u16, false)
             .expect("add");
     }
 
