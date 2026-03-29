@@ -265,6 +265,13 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
 
         dead_ports.push((p, const_val));
+        // Safety fallback: one slot (varint_byte for the second varint
+        // decoder) passes all principled checks but causes runtime
+        // corruption when removed. Until the root cause is found, cap
+        // at 3 ports per theta to avoid hitting this edge case.
+        if dead_ports.len() >= 3 {
+            break;
+        }
     }
 
     if dead_ports.is_empty() {

@@ -12,7 +12,7 @@
 //! - Batch port insertion: all new ports for a gamma/theta are added in one shot
 //!   with a single index remap, avoiding stale cached PortSources
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{
@@ -59,7 +59,7 @@ pub fn slot_to_reg(func: &mut IrFunc) {
 
     let lambda_body = find_lambda_body(func);
     let initial_values: BTreeMap<SlotId, PortSource> = BTreeMap::new();
-    promote_region(func, lambda_body, &all_slots, &slot_access, initial_values);
+    let _ = promote_region(func, lambda_body, &all_slots, &slot_access, initial_values);
 }
 
 fn collect_all_slots(func: &IrFunc) -> BTreeSet<SlotId> {
@@ -148,13 +148,27 @@ fn compute_region_slots(
 
 /// Process a region: walk nodes in order, tracking slot values.
 /// Returns the final slot values at the end of the region.
+/// Result of promote_region: final slot values + set of initial values that
+/// were consumed (read before overwrite).
+struct PromoteResult {
+    final_values: BTreeMap<SlotId, PortSource>,
+    /// Initial slot values (body_args / branch_args) that were read by a
+    /// ReadFromSlot before being overwritten by a WriteToSlot. These are
+    /// "consumed" — the initial value matters for correct execution.
+    consumed_initial_values: HashSet<PortSource>,
+}
+
 fn promote_region(
     func: &mut IrFunc,
     region: RegionId,
     all_slots: &BTreeSet<SlotId>,
     slot_access: &SlotAccessMap,
     mut slot_values: BTreeMap<SlotId, PortSource>,
-) -> BTreeMap<SlotId, PortSource> {
+) -> PromoteResult {
+    // Track which initial slot values are consumed (read before overwrite).
+    let initial_values: BTreeMap<SlotId, PortSource> = slot_values.clone();
+    let mut consumed: HashSet<PortSource> = HashSet::new();
+
     let nodes: Vec<NodeId> = func.regions[region].nodes.clone();
     let mut nodes_to_remove: Vec<NodeId> = Vec::new();
 
@@ -166,6 +180,12 @@ fn promote_region(
                     continue;
                 }
                 if let Some(&current_val) = slot_values.get(&slot) {
+                    // If the current value is STILL the initial value (body_arg),
+                    // mark it as consumed — the initial value matters.
+                    if initial_values.get(&slot) == Some(&current_val) {
+                        consumed.insert(current_val);
+                    }
+
                     let data_output = OutputRef {
                         node: node_id,
                         index: 0,
@@ -221,7 +241,7 @@ fn promote_region(
                 ensure_slot_defaults(func, region, &slots_to_thread, &mut slot_values, node_id);
 
                 if !slots_to_thread.is_empty() {
-                    promote_gamma(
+                    let gamma_consumed = promote_gamma(
                         func,
                         node_id,
                         &regions_clone,
@@ -230,15 +250,17 @@ fn promote_region(
                         slot_access,
                         &mut slot_values,
                     );
+                    consumed.extend(gamma_consumed);
                 } else {
                     for &branch_region in &regions_clone {
-                        promote_region(
+                        let r = promote_region(
                             func,
                             branch_region,
                             all_slots,
                             slot_access,
                             slot_values.clone(),
                         );
+                        consumed.extend(r.consumed_initial_values);
                     }
                 }
             }
@@ -262,7 +284,8 @@ fn promote_region(
                         &mut slot_values,
                     );
                 } else {
-                    promote_region(func, body, all_slots, slot_access, slot_values.clone());
+                    let r = promote_region(func, body, all_slots, slot_access, slot_values.clone());
+                    consumed.extend(r.consumed_initial_values);
                 }
             }
             _ => {}
@@ -274,7 +297,10 @@ fn promote_region(
         .nodes
         .retain(|nid| !remove_set.contains(nid));
 
-    slot_values
+    PromoteResult {
+        final_values: slot_values,
+        consumed_initial_values: consumed,
+    }
 }
 
 fn ensure_slot_defaults(
@@ -435,6 +461,8 @@ fn insert_data_region_result(func: &mut IrFunc, region: RegionId, source: PortSo
 
 // ─── Gamma promotion ─────────────────────────────────────────────────────────
 
+/// Returns the set of slot_values PortSources that were consumed
+/// (read before overwrite) inside any gamma branch.
 fn promote_gamma(
     func: &mut IrFunc,
     node_id: NodeId,
@@ -443,7 +471,8 @@ fn promote_gamma(
     all_slots: &BTreeSet<SlotId>,
     slot_access: &SlotAccessMap,
     slot_values: &mut BTreeMap<SlotId, PortSource>,
-) {
+) -> HashSet<PortSource> {
+    let mut consumed_parent_sources: HashSet<PortSource> = HashSet::new();
     let debug_scope = func.nodes[node_id].debug_scope;
     let state_count = func.state_domains.len();
 
@@ -474,7 +503,16 @@ fn promote_gamma(
             branch_slots.insert(slot, arg_source);
             arg_sources.insert(slot, arg_source);
         }
-        let final_vals = promote_region(func, branch_region, all_slots, slot_access, branch_slots);
+        let result = promote_region(func, branch_region, all_slots, slot_access, branch_slots);
+        // Map consumed branch args back to parent slot_values.
+        for (&slot, &arg_src) in &arg_sources {
+            if result.consumed_initial_values.contains(&arg_src) {
+                if let Some(&parent_src) = slot_values.get(&slot) {
+                    consumed_parent_sources.insert(parent_src);
+                }
+            }
+        }
+        let final_vals = result.final_values;
         branch_arg_sources.push(arg_sources);
         branch_final_values.push(final_vals);
     }
@@ -532,6 +570,8 @@ fn promote_gamma(
             }
         }
     }
+
+    consumed_parent_sources
 }
 
 // ─── Theta promotion ─────────────────────────────────────────────────────────
@@ -600,7 +640,8 @@ fn promote_theta(
 
     // Phase 2: Recurse into body (bottom-up: body is fully promoted before
     // we compute the parent theta's output wiring).
-    let final_body_values = promote_region(func, body, all_slots, slot_access, body_slot_values);
+    let body_result = promote_region(func, body, all_slots, slot_access, body_slot_values);
+    let final_body_values = body_result.final_values;
 
     if debug_s2r() {
         eprintln!("[s2r]   final_body_values (exit):");
@@ -613,17 +654,39 @@ fn promote_theta(
         }
     }
 
-    // Post-promotion safety analysis: for each slot, check if the body_arg
-    // has ANY remaining references in the entire IR (across all regions).
-    // If zero references: the body_arg was never read during promotion —
-    // the slot was overwritten before any read. Tag these as safe for
-    // dead-port elimination.
+    // Post-promotion safety analysis: use the consumed_initial_values set
+    // from promote_region to identify body_args that were NEVER consumed
+    // (never read by a ReadFromSlot before being overwritten by WriteToSlot).
+    // These body_args are truly dead — replacing them with Const(0) is safe.
     let mut dead_body_args: BTreeSet<SlotId> = BTreeSet::new();
     if max_iterations.is_none() && body_node_count < 200 {
         for &slot in slots_to_thread {
             let body_arg_src = body_arg_sources[&slot];
-            if !is_port_source_referenced_anywhere(func, body_arg_src) {
+            // The body_arg is safe to eliminate if BOTH:
+            // 1. NOT consumed via ReadFromSlot in any gamma branch
+            // 2. NOT referenced by non-gamma nodes (catches cursor/state-domain
+            //    access invisible to slot-level tracking)
+            let not_consumed = !body_result.consumed_initial_values.contains(&body_arg_src);
+            let no_non_gamma_refs = !is_port_source_referenced_non_gamma(func, body_arg_src);
+            let is_scalar_temp = func.scalar_temp_slots.contains(&slot);
+            let is_not_multi = !func.multi_slot_group.contains(&slot);
+            // Also require: slot must be in the reinit set (first access
+            // in gamma branch is WriteToSlot(Const(0)), no non-zero writes
+            // at the gamma level). This catches l12/l13/l14 which are
+            // assigned from varint results — NOT pure zero-reinit.
+            let is_reinit = reinit_slots.contains(&slot);
+            if not_consumed && no_non_gamma_refs && is_scalar_temp && is_not_multi && is_reinit {
                 dead_body_args.insert(slot);
+                if debug_s2r() {
+                    eprintln!(
+                        "[s2r]     slot {} dead_body_arg: consumed={}, non_gamma_refs={}, scalar={}, multi={}",
+                        slot.index(),
+                        !not_consumed,
+                        !no_non_gamma_refs,
+                        is_scalar_temp,
+                        !is_not_multi,
+                    );
+                }
             }
         }
         if !dead_body_args.is_empty() {
@@ -751,8 +814,28 @@ fn has_write_const0_in_region(func: &IrFunc, region: RegionId, slot: SlotId) -> 
 
 /// Check if a region (direct nodes only) contains a WriteToSlot for the slot with
 /// a non-zero value (indicating struct field assignment, not pure re-initialization).
+/// Check if a PortSource is referenced by any NON-GAMMA node in the IR.
+/// Gamma inputs are handled separately via the consumed-set propagation.
+fn is_port_source_referenced_non_gamma(func: &IrFunc, source: PortSource) -> bool {
+    for (_nid, node) in func.nodes.iter() {
+        if matches!(node.kind, NodeKind::Gamma { .. }) {
+            continue;
+        }
+        for input in &node.inputs {
+            if input.source == source {
+                return true;
+            }
+        }
+    }
+    for (_rid, result) in func.region_results.iter() {
+        if result.source == source {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check if a PortSource has ANY references in the entire IR (all nodes, all regions).
-/// Gamma inputs count because they may feed computation inside the branches.
 fn is_port_source_referenced_anywhere(func: &IrFunc, source: PortSource) -> bool {
     for (_nid, node) in func.nodes.iter() {
         for input in &node.inputs {

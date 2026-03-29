@@ -430,7 +430,7 @@ pub struct OutputRef {
 }
 
 /// A reference to a region argument.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RegionArgRef {
     pub region: RegionId,
     pub arg: ArgId,
@@ -440,7 +440,7 @@ pub struct RegionArgRef {
 ///
 /// Every input port has exactly one source (RVSDG invariant). Edges are
 /// implicit — stored inline in the input port rather than as separate objects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortSource {
     /// Connected to an output of a node within the same region.
     Node(OutputRef),
