@@ -2295,6 +2295,62 @@ impl<'a> ScalarHirIrLowerer<'a> {
         crate::ir::SlotId::new(base.index() as u32 + offset as u32)
     }
 
+    /// If the outermost place is a dynamic (non-literal) index, return the
+    /// base place and index expression. Otherwise return None.
+    fn dynamic_index_place<'p>(place: &'p hir::Place) -> Option<(&'p hir::Place, &'p hir::Expr)> {
+        if let hir::Place::Index { base, index } = place {
+            if !matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_))) {
+                return Some((base, index));
+            }
+        }
+        None
+    }
+
+    /// Compute the runtime address for a dynamic array index.
+    /// Returns (element_type, address).
+    fn lower_dynamic_index_addr(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        base_place: &hir::Place,
+        index: &hir::Expr,
+    ) -> (&'a hir::Type, crate::ir::PortSource) {
+        let resolved = self.resolve_place(base_place);
+        let hir::Type::Array { element, .. } = resolved.ty else {
+            panic!("dynamic index requires array type, got {:?}", resolved.ty);
+        };
+        let index = self.lower_expr(rb, index);
+        let elem_slots = Self::slot_count_for_type(self.module, element);
+        let total_slots = Self::slot_count_for_type(self.module, resolved.ty);
+        let base_addr = rb.slot_addr(
+            Self::slot_at(resolved.base_slot, resolved.slot_offset),
+            total_slots as u32,
+        );
+        let stride = elem_slots * crate::ir::SLOT_ADDR_STRIDE_BYTES;
+        let addr = if stride == 1 {
+            rb.binop(crate::ir::IrOp::Add, base_addr, index)
+        } else {
+            let stride_val = rb.const_val(stride as u64);
+            let scaled = rb.binop(crate::ir::IrOp::Mul, index, stride_val);
+            rb.binop(crate::ir::IrOp::Add, base_addr, scaled)
+        };
+        (element, addr)
+    }
+
+    fn scalar_width_for_hir_type(ty: &hir::Type) -> crate::ir::Width {
+        match ty {
+            hir::Type::Bool => crate::ir::Width::W1,
+            hir::Type::Integer(kind) => match kind.bits {
+                8 => crate::ir::Width::W1,
+                16 => crate::ir::Width::W2,
+                32 => crate::ir::Width::W4,
+                64 => crate::ir::Width::W8,
+                other => panic!("unsupported integer width: {other}"),
+            },
+            hir::Type::Address { .. } | hir::Type::Handle { .. } => crate::ir::Width::W8,
+            _ => panic!("unsupported scalar type for width: {ty:?}"),
+        }
+    }
+
     fn ir_width(width: hir::MemoryWidth) -> crate::ir::Width {
         match width {
             hir::MemoryWidth::W1 => crate::ir::Width::W1,
@@ -2381,6 +2437,14 @@ impl<'a> ScalarHirIrLowerer<'a> {
     ) -> Option<crate::ir::PortSource> {
         match &stmt.kind {
             hir::StmtKind::Init { place, value } | hir::StmtKind::Assign { place, value } => {
+                // Check for dynamic index write (non-literal index in the place).
+                if let Some((base, index)) = Self::dynamic_index_place(place) {
+                    let val = self.lower_expr(rb, value);
+                    let (elem_ty, addr) = self.lower_dynamic_index_addr(rb, base, index);
+                    let width = Self::scalar_width_for_hir_type(elem_ty);
+                    rb.store_to_addr(addr, val, width);
+                    return None;
+                }
                 let resolved = self.resolve_place(place);
                 let slot_count = Self::slot_count_for_type(self.module, resolved.ty);
                 if slot_count == 1 {
@@ -2720,7 +2784,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 let resolved = self.resolve_place(&place);
                 rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset + 1))
             }
-            hir::Expr::Field { .. } | hir::Expr::Index { .. } => {
+            hir::Expr::Field { .. } => {
                 let place = self.expr_to_place(expr);
                 let resolved = self.resolve_place(&place);
                 assert_eq!(
@@ -2729,6 +2793,25 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     "scalar read requires single-slot type"
                 );
                 rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset))
+            }
+            hir::Expr::Index { base, index } => {
+                if matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_))) {
+                    // Static index — resolve to a slot directly.
+                    let place = self.expr_to_place(expr);
+                    let resolved = self.resolve_place(&place);
+                    assert_eq!(
+                        Self::slot_count_for_type(self.module, resolved.ty),
+                        1,
+                        "scalar read requires single-slot type"
+                    );
+                    rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset))
+                } else {
+                    // Dynamic index — compute address at runtime.
+                    let base_place = self.expr_to_place(base);
+                    let (elem_ty, addr) = self.lower_dynamic_index_addr(rb, &base_place, index);
+                    let width = Self::scalar_width_for_hir_type(elem_ty);
+                    rb.load_from_addr(addr, width)
+                }
             }
             hir::Expr::Binary { op, lhs, rhs } => {
                 let lhs = self.lower_expr(rb, lhs);
