@@ -2395,10 +2395,232 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 }
                 None
             }
+            hir::StmtKind::Fail { code } => {
+                rb.error_exit(*code);
+                None
+            }
+            hir::StmtKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let predicate = self.lower_expr(rb, condition);
+                let else_block = else_block
+                    .as_ref()
+                    .expect("scalar HIR if requires else branch");
+                let _ = rb.gamma(predicate, &[], 2, |branch_idx, branch| {
+                    match branch_idx {
+                        0 => {
+                            self.lower_block(branch, &else_block.statements);
+                        }
+                        1 => {
+                            self.lower_block(branch, &then_block.statements);
+                        }
+                        _ => unreachable!(),
+                    }
+                    branch.set_results(&[]);
+                });
+                None
+            }
+            hir::StmtKind::Match { scrutinee, arms } => {
+                let predicate = self.lower_expr(rb, scrutinee);
+                for (expected, arm) in arms.iter().enumerate() {
+                    let hir::Pattern::Integer(value) = arm.pattern else {
+                        panic!("scalar HIR only supports integer match patterns");
+                    };
+                    assert_eq!(
+                        value, expected as u64,
+                        "scalar HIR requires contiguous integer match arms starting at 0"
+                    );
+                }
+                let _ = rb.gamma(predicate, &[], arms.len(), |branch_idx, branch| {
+                    self.lower_block(branch, &arms[branch_idx].body.statements);
+                    branch.set_results(&[]);
+                });
+                None
+            }
+            hir::StmtKind::Loop {
+                body,
+                max_iterations,
+                ..
+            } => {
+                let active_slot = rb.alloc_slot();
+                let continue_slot = rb.alloc_slot();
+                let build_body = |body_rb: &mut kajit_ir::RegionBuilder<'_>| {
+                    let one = body_rb.const_val(1);
+                    body_rb.write_to_slot(active_slot, one);
+                    body_rb.write_to_slot(continue_slot, one);
+                    self.lower_loop_block(body_rb, &body.statements, active_slot, continue_slot);
+                    let predicate = body_rb.read_from_slot(continue_slot);
+                    body_rb.set_results(&[predicate]);
+                };
+                if let Some(max_iter) = max_iterations {
+                    let _ = rb.theta_bounded(&[], *max_iter, build_body);
+                } else {
+                    let _ = rb.theta(&[], build_body);
+                }
+                None
+            }
             hir::StmtKind::Return(Some(expr)) => Some(self.lower_expr(rb, expr)),
             hir::StmtKind::Return(None) => None,
             other => panic!("unsupported scalar HIR statement: {other:?}"),
         }
+    }
+
+    fn lower_loop_block(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        statements: &[hir::Stmt],
+        active_slot: crate::ir::SlotId,
+        continue_slot: crate::ir::SlotId,
+    ) {
+        let mut i = 0;
+        while i < statements.len() {
+            // Batch consecutive non-control-flow statements into a single guard.
+            let start = i;
+            while i < statements.len() && !Self::is_loop_control_flow(&statements[i]) {
+                i += 1;
+            }
+            if start < i {
+                self.with_active_guard(rb, active_slot, |guard_rb| {
+                    for stmt in &statements[start..i] {
+                        self.lower_stmt(guard_rb, stmt);
+                    }
+                });
+            }
+            // Lower the control-flow statement in its own guard.
+            if i < statements.len() {
+                self.lower_loop_control_flow_stmt(rb, &statements[i], active_slot, continue_slot);
+                i += 1;
+            }
+        }
+    }
+
+    fn is_loop_control_flow(stmt: &hir::Stmt) -> bool {
+        matches!(
+            stmt.kind,
+            hir::StmtKind::Break
+                | hir::StmtKind::Continue
+                | hir::StmtKind::If { .. }
+                | hir::StmtKind::Match { .. }
+                | hir::StmtKind::Loop { .. }
+        )
+    }
+
+    fn lower_loop_control_flow_stmt(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        stmt: &hir::Stmt,
+        active_slot: crate::ir::SlotId,
+        continue_slot: crate::ir::SlotId,
+    ) {
+        self.with_active_guard(rb, active_slot, |guard_rb| match &stmt.kind {
+            hir::StmtKind::Break => {
+                let zero = guard_rb.const_val(0);
+                guard_rb.write_to_slot(active_slot, zero);
+                guard_rb.write_to_slot(continue_slot, zero);
+            }
+            hir::StmtKind::Continue => {
+                let zero = guard_rb.const_val(0);
+                let one = guard_rb.const_val(1);
+                guard_rb.write_to_slot(active_slot, zero);
+                guard_rb.write_to_slot(continue_slot, one);
+            }
+            hir::StmtKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                let predicate = self.lower_expr(guard_rb, condition);
+                let else_block = else_block
+                    .as_ref()
+                    .expect("scalar HIR loop if requires else branch");
+                let _ = guard_rb.gamma(predicate, &[], 2, |branch_idx, branch| {
+                    match branch_idx {
+                        0 => self.lower_loop_block(
+                            branch,
+                            &else_block.statements,
+                            active_slot,
+                            continue_slot,
+                        ),
+                        1 => self.lower_loop_block(
+                            branch,
+                            &then_block.statements,
+                            active_slot,
+                            continue_slot,
+                        ),
+                        _ => unreachable!(),
+                    }
+                    branch.set_results(&[]);
+                });
+            }
+            hir::StmtKind::Match { scrutinee, arms } => {
+                let predicate = self.lower_expr(guard_rb, scrutinee);
+                for (expected, arm) in arms.iter().enumerate() {
+                    let hir::Pattern::Integer(value) = arm.pattern else {
+                        panic!("scalar HIR loop only supports integer match patterns");
+                    };
+                    assert_eq!(
+                        value, expected as u64,
+                        "scalar HIR loop requires contiguous integer match arms starting at 0"
+                    );
+                }
+                let _ = guard_rb.gamma(predicate, &[], arms.len(), |branch_idx, branch| {
+                    self.lower_loop_block(
+                        branch,
+                        &arms[branch_idx].body.statements,
+                        active_slot,
+                        continue_slot,
+                    );
+                    branch.set_results(&[]);
+                });
+            }
+            hir::StmtKind::Loop {
+                body,
+                max_iterations,
+                ..
+            } => {
+                let nested_active = guard_rb.alloc_slot();
+                let nested_continue = guard_rb.alloc_slot();
+                let build_body = |body_rb: &mut kajit_ir::RegionBuilder<'_>| {
+                    let one = body_rb.const_val(1);
+                    body_rb.write_to_slot(nested_active, one);
+                    body_rb.write_to_slot(nested_continue, one);
+                    self.lower_loop_block(
+                        body_rb,
+                        &body.statements,
+                        nested_active,
+                        nested_continue,
+                    );
+                    let predicate = body_rb.read_from_slot(nested_continue);
+                    body_rb.set_results(&[predicate]);
+                };
+                if let Some(max_iter) = max_iterations {
+                    let _ = guard_rb.theta_bounded(&[], *max_iter, build_body);
+                } else {
+                    let _ = guard_rb.theta(&[], build_body);
+                }
+            }
+            other => {
+                panic!("is_loop_control_flow returned true for non-control-flow: {other:?}")
+            }
+        });
+    }
+
+    fn with_active_guard(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        active_slot: crate::ir::SlotId,
+        f: impl FnOnce(&mut RegionBuilder<'_>),
+    ) {
+        let active = rb.read_from_slot(active_slot);
+        let mut f = Some(f);
+        let _ = rb.gamma(active, &[], 2, |branch_idx, branch| {
+            if branch_idx == 1 {
+                f.take().expect("active branch should lower exactly once")(branch);
+            }
+            branch.set_results(&[]);
+        });
     }
 
     fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {

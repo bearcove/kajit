@@ -841,3 +841,146 @@ hir_module {
         ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
     ));
 }
+
+#[test]
+fn scalar_hir_ir_path_lowers_if_else() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types []
+  callables []
+  functions [
+    function f0 "abs_diff" {
+      regions []
+      stores []
+      params [
+        l0 param "a": u64
+        l1 param "b": u64
+      ]
+      locals [
+        l2 let "result": u64
+      ]
+      return u64
+      scopes [
+        scope sc0 parent none comment "if-else"
+      ]
+      body @sc0 {
+        stmt0: if binary gt(l0, l1) @sc0 {
+          stmt1: init l2 = binary sub(l0, l1)
+        } else @sc0 {
+          stmt2: init l2 = binary sub(l1, l0)
+        }
+        stmt3: return l2
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}
+
+#[test]
+fn scalar_hir_ir_path_lowers_loop_with_break() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types []
+  callables []
+  functions [
+    function f0 "count_to_five" {
+      regions []
+      stores []
+      params []
+      locals [
+        l0 let "i": u64
+      ]
+      return u64
+      scopes [
+        scope sc0 parent none comment "loop with break"
+      ]
+      body @sc0 {
+        stmt0: init l0 = 0x0
+        stmt1: loop @sc0 {
+          stmt2: if binary eq(l0, 0x5) @sc0 {
+            stmt3: break
+          } else @sc0 {
+          }
+          stmt4: assign l0 = binary add(l0, 0x1)
+        }
+        stmt5: return l0
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}
+
+#[test]
+fn scalar_hir_ir_path_lowers_match() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types []
+  callables []
+  functions [
+    function f0 "classify" {
+      regions []
+      stores []
+      params [
+        l0 param "tag": u64
+      ]
+      locals [
+        l1 let "result": u64
+      ]
+      return u64
+      scopes [
+        scope sc0 parent none comment "match"
+      ]
+      body @sc0 {
+        stmt0: match l0 {
+          arm 0x0 @sc0 {
+            stmt1: init l1 = 0xa
+          }
+          arm 0x1 @sc0 {
+            stmt2: init l1 = 0xb
+          }
+          arm 0x2 @sc0 {
+            stmt3: init l1 = 0xc
+          }
+        }
+        stmt4: return l1
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    insta::assert_snapshot!(format!(
+        "{}",
+        ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
+    ));
+}

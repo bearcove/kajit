@@ -1,0 +1,47 @@
+---
+source: kajit/src/compiler/tests/hir_to_ir.rs
+expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
+---
+state_domains {
+  d0 = cursor
+  d1 = output
+}
+scopes {
+  s0 = lambda_body(@0)
+  s1 = gamma_branch(0) parent s0
+  s2 = gamma_branch(1) parent s0
+}
+lambda @0 @s0 (shape: "abs_diff") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 = ReadFromSlot(0) [%cs:arg] -> [v0, %cs]
+    n2 = ReadFromSlot(1) [%cs:n1] -> [v1, %cs]
+    n3 = CmpGt [v0, v1] -> [v2]
+    n12 = gamma [
+      pred: v2
+      in0: %cs:n2
+      in1: %os:arg
+    ] {
+      branch 0:
+        region @s1 {
+          args: [%cs, %os]
+          n4 = ReadFromSlot(1) [%cs:arg] -> [v3, %cs]
+          n5 = ReadFromSlot(0) [%cs:n4] -> [v4, %cs]
+          n6 = Sub [v3, v4] -> [v5]
+          n7 = WriteToSlot(2) [v5, %cs:n5] -> [%cs]
+          results: [%cs:n7, %os:arg]
+        }
+      branch 1:
+        region @s2 {
+          args: [%cs, %os]
+          n8 = ReadFromSlot(0) [%cs:arg] -> [v6, %cs]
+          n9 = ReadFromSlot(1) [%cs:n8] -> [v7, %cs]
+          n10 = Sub [v6, v7] -> [v8]
+          n11 = WriteToSlot(2) [v8, %cs:n9] -> [%cs]
+          results: [%cs:n11, %os:arg]
+        }
+    } -> [%cs, %os]
+    n13 = ReadFromSlot(2) [%cs:n12] -> [v9, %cs]
+    results: [v9, %cs:n13, %os:n12]
+  }
+}
