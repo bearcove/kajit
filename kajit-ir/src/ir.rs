@@ -970,6 +970,11 @@ pub struct IrFunc {
     pub vreg_count: u32,
     /// Next stack slot to allocate.
     pub slot_count: u32,
+    /// Number of function parameters that occupy the first N slots.
+    /// When > 0, the backend emits a scalar-function prologue that stores
+    /// argument registers (x0..xN-1) into slots 0..N-1 instead of the
+    /// decoder-style prologue.
+    pub param_slot_count: u32,
     /// Slots that are part of a multi-slot group (struct sub-fields).
     pub multi_slot_group: std::collections::BTreeSet<SlotId>,
     /// Slots that are scalar temporaries from HIR locals (not struct sub-fields,
@@ -1247,6 +1252,7 @@ impl IrBuilder {
             root: NodeId::new(0), // placeholder, set below
             vreg_count: 0,
             slot_count: 0,
+            param_slot_count: 0,
             lambdas: Vec::new(),
             multi_slot_group: std::collections::BTreeSet::new(),
             scalar_temp_slots: std::collections::BTreeSet::new(),

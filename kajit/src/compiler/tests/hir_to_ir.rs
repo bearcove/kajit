@@ -1030,3 +1030,55 @@ fn vixen_typed_function_add_lowers_to_ir() {
         ir.display_with_registry(&crate::ir::IntrinsicRegistry::empty())
     ));
 }
+
+/// End-to-end test: construct a VixenTypedFunction, compile to machine code, call it.
+#[test]
+fn vixen_typed_function_add_compiles_and_runs() {
+    use hir::{
+        BinaryOp, LocalId, Module, Type, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
+    };
+
+    let func = VixenTypedFunction {
+        name: "add".to_string(),
+        params: vec![
+            VixenTypedParam {
+                local: LocalId::new(0),
+                name: "a".to_string(),
+                ty: Type::u(64),
+            },
+            VixenTypedParam {
+                local: LocalId::new(1),
+                name: "b".to_string(),
+                ty: Type::u(64),
+            },
+        ],
+        locals: vec![],
+        return_type: Type::u(64),
+        body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Binary {
+            op: BinaryOp::Add,
+            lhs: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+            rhs: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+        }))],
+        comment: Some("scalar add kernel".to_string()),
+    };
+
+    let module = Module::new();
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("VixenTypedFunction should lower to HIR");
+
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    // Call the JIT'd function.
+    let add: unsafe extern "C" fn(u64, u64) -> u64 =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+    let result = unsafe { add(30, 12) };
+    assert_eq!(result, 42);
+
+    let result = unsafe { add(0, 0) };
+    assert_eq!(result, 0);
+
+    let result = unsafe { add(u64::MAX, 1) };
+    assert_eq!(result, 0); // wrapping add
+}

@@ -372,6 +372,7 @@ mod tests {
             }],
             vreg_count: 1,
             slot_count: 0,
+            param_slot_count: 0,
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],

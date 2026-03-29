@@ -36,6 +36,43 @@ pub struct CompiledDecoder {
     asm_program: Option<kajit_emit::aarch64_asm::Program>,
 }
 
+/// A compiled scalar function. Owns the executable buffer containing JIT'd machine code.
+/// Uses standard calling convention: args in x0..x7, return value in x0.
+pub struct CompiledFunction {
+    #[cfg(target_arch = "x86_64")]
+    buf: kajit_emit::x64::FinalizedEmission,
+    #[cfg(target_arch = "aarch64")]
+    buf: kajit_emit::aarch64::FinalizedEmission,
+    entry: usize,
+}
+
+impl CompiledFunction {
+    /// Get the entry point as a raw function pointer.
+    /// The caller is responsible for casting to the correct signature.
+    pub fn as_ptr(&self) -> *const u8 {
+        #[cfg(target_arch = "aarch64")]
+        {
+            unsafe { self.buf.code_ptr().add(self.entry) }
+        }
+        #[cfg(target_arch = "x86_64")]
+        {
+            unsafe { self.buf.exec.as_ptr().add(self.entry) }
+        }
+    }
+
+    /// The raw executable code buffer.
+    pub fn code(&self) -> &[u8] {
+        #[cfg(target_arch = "x86_64")]
+        {
+            return self.buf.exec.as_ref();
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            &self.buf.code
+        }
+    }
+}
+
 impl CompiledDecoder {
     pub(crate) fn func(&self) -> unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) {
         self.func
@@ -247,6 +284,41 @@ pub struct PipelineArtifacts {
     pub decoder: CompiledDecoder,
 }
 
+/// Compile an HIR module into a callable scalar function.
+///
+/// This is the entry point for Vixen: takes an HIR `Module` containing a
+/// plain scalar function (params, locals, return value — no cursor or
+/// destination), runs it through the full pipeline (IR → passes → linearize
+/// → CFG-MIR → regalloc → backend), and returns executable machine code
+/// with standard calling convention.
+pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
+    // Phase 1: HIR → IR
+    let mut func = lower_hir_module(module);
+
+    // Phase 2: IR optimization passes
+    crate::ir_passes::run_default_passes(&mut func);
+
+    // Phase 3: Linearize
+    let linear = crate::linearize::linearize(&mut func);
+
+    // Phase 4: CFG-MIR lowering + optimization
+    let hints = Default::default();
+    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+
+    // Phase 5: Register allocation
+    let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
+        .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
+
+    // Phase 6: Backend compilation
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
+    let entry = result.entry as usize;
+
+    CompiledFunction {
+        buf: result.buf,
+        entry,
+    }
+}
+
 /// Run the full compilation pipeline, producing all artifacts in one pass.
 pub fn compile_pipeline(
     shape: &'static Shape,
@@ -286,9 +358,11 @@ pub fn compile_pipeline(
     let hints = Default::default();
     let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
 
-    // For leaf functions: exclude x0/x1 from allocation (kept for output_ptr/ctx_ptr)
+    // For leaf decoder functions: exclude x0/x1 from allocation (kept for output_ptr/ctx_ptr).
+    // Scalar functions (param_slot_count > 0) don't need this — args are stored to slots
+    // in the prologue, so x0/x1 are free for regalloc.
     #[cfg(target_arch = "aarch64")]
-    {
+    if cfg_program.param_slot_count == 0 {
         let is_leaf = cfg_program.funcs.iter().all(|func| {
             func.insts.iter().all(|inst| {
                 !matches!(
@@ -906,6 +980,7 @@ fn compile_cfg_mir_decoder_with_options(
         label_count: 0,
         vreg_count: cfg_program.vreg_count,
         slot_count: cfg_program.slot_count,
+        param_slot_count: cfg_program.param_slot_count,
         debug: Default::default(),
     };
     let (buf, entry, source_map, backend_debug_info, asm_program) = {

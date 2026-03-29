@@ -563,6 +563,9 @@ pub struct LinearIr {
     pub vreg_count: u32,
     /// Total number of stack slots.
     pub slot_count: u32,
+    /// Number of function parameters occupying the first N slots.
+    /// When > 0, this is a scalar function (not a decoder).
+    pub param_slot_count: u32,
     /// Preserved debug scope provenance copied from RVSDG.
     pub debug: LinearDebugProvenance,
 }
@@ -5064,6 +5067,7 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
         label_count: lin.label_count,
         vreg_count,
         slot_count: func.slot_count(),
+        param_slot_count: func.param_slot_count,
         debug: LinearDebugProvenance {
             scopes: func.debug_scopes.clone(),
             values: func.debug_values.clone(),

@@ -2184,6 +2184,7 @@ pub fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
 /// to IR operations, and `return expr` sets the region result.
 fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate::ir::IrFunc {
     let mut builder = crate::ir::IrBuilder::new(&function.name, 0);
+    let param_count = function.params.len() as u32;
     {
         let mut rb = builder.root_region();
         let lowerer = ScalarHirIrLowerer::new(&mut rb, module, function);
@@ -2194,7 +2195,9 @@ fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate:
             rb.set_results(&[]);
         }
     }
-    builder.finish()
+    let mut func = builder.finish();
+    func.param_slot_count = param_count;
+    func
 }
 
 struct ScalarHirIrLowerer<'a> {

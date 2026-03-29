@@ -27,7 +27,8 @@ pub mod regalloc_engine;
 pub mod solver;
 
 pub use compiler::{
-    CompiledDecoder, PipelineArtifacts, compile_pipeline, compile_pre_opt_cfg, lower_hir_module,
+    CompiledDecoder, CompiledFunction, PipelineArtifacts, compile_hir_module, compile_pipeline,
+    compile_pre_opt_cfg, lower_hir_module,
 };
 use context::{DeserContext, ErrorCode};
 pub use format::DecoderKind;

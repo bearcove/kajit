@@ -1935,8 +1935,30 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         },
     };
 
+    let is_scalar_function = program.param_slot_count > 0;
+
     // Emit function prologue
-    let (entry, error_exit) = ectx.begin_func_with_config(&prologue_config);
+    let (entry, error_exit) = if is_scalar_function {
+        // Scalar function: minimal prologue — just frame setup + store args to slots.
+        let entry = ectx.emit.current_offset() as u32;
+        let error_exit = ectx.emit.new_label();
+        let frame_size = ectx.frame_size;
+        if frame_size > 0 {
+            ectx.emit_sub_imm_any(Reg::SP, Reg::SP, frame_size);
+        }
+        // Store argument registers into their corresponding slots.
+        for i in 0..program.param_slot_count.min(8) {
+            let arg_reg = Reg::from_raw(i as u8); // x0, x1, x2, ...
+            let off = slot_base + i * 8;
+            ectx.emit
+                .emit_str_imm(Width::X64, arg_reg, Reg::SP, off)
+                .expect("str arg to slot");
+        }
+        ectx.error_exit = error_exit;
+        (entry, error_exit)
+    } else {
+        ectx.begin_func_with_config(&prologue_config)
+    };
 
     // Create success exit label
     let success_exit = ectx.new_label();
@@ -2001,10 +2023,52 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
     // Bind success exit and emit epilogue
     ectx.bind_label(success_exit);
-    ectx.end_func_with_config(error_exit, &prologue_config);
-    // Emit shared error trampolines after the epilogue (cold, unreachable
-    // from the success/error return paths — only reached via error-site branches)
-    ectx.emit_error_trampolines();
+    if is_scalar_function {
+        // Scalar function epilogue: move data_result to x0, restore frame, ret.
+        // The data_result vreg should already be in some register from regalloc.
+        if let Some(func) = program.funcs.first() {
+            if let Some(&result_vreg) = func.data_results.first() {
+                if let Some(alloc_func) = alloc.functions.first() {
+                    if let Some(preg) = alloc_func.preg_for_vreg(result_vreg) {
+                        let result_reg = Reg::from_raw(preg.0);
+                        if result_reg != Reg::X0 {
+                            ectx.emit
+                                .emit_mov_reg(Width::X64, Reg::X0, result_reg)
+                                .expect("mov result to x0");
+                        }
+                    } else {
+                        // Spilled — load from spill slot into x0.
+                        if let Some(slot) = alloc_func.spill_slot_for_vreg(result_vreg) {
+                            let offset = ectx.base_frame + (slot.0 * 8);
+                            ectx.emit
+                                .emit_ldr_imm(Width::X64, Reg::X0, Reg::SP, offset)
+                                .expect("ldr result from spill");
+                        }
+                    }
+                }
+            }
+        }
+        let frame_size = ectx.frame_size;
+        if frame_size > 0 {
+            ectx.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
+        }
+        ectx.emit.emit_ret().expect("ret");
+        // Bind error exit (just returns 0 for now).
+        ectx.emit.bind_label(error_exit).expect("bind error_exit");
+        let zero = Reg::XZR;
+        ectx.emit
+            .emit_mov_reg(Width::X64, Reg::X0, zero)
+            .expect("mov x0, xzr");
+        if frame_size > 0 {
+            ectx.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
+        }
+        ectx.emit.emit_ret().expect("ret");
+    } else {
+        ectx.end_func_with_config(error_exit, &prologue_config);
+        // Emit shared error trampolines after the epilogue (cold, unreachable
+        // from the success/error return paths — only reached via error-site branches)
+        ectx.emit_error_trampolines();
+    }
 
     // Finalize
     let (buf, asm_program) = ectx.finalize();

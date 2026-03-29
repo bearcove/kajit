@@ -178,6 +178,10 @@ pub struct Program {
     pub funcs: Vec<Function>,
     pub vreg_count: u32,
     pub slot_count: u32,
+    /// Number of function parameters occupying the first N slots.
+    /// When > 0, this is a scalar function — the backend emits a plain
+    /// calling-convention prologue/epilogue instead of decoder ABI.
+    pub param_slot_count: u32,
     pub debug: ProgramDebugProvenance,
     pub hints: crate::regalloc3::hints::HintMap,
     /// Extra physical registers excluded from allocation (e.g., x0/x1 when used
@@ -1916,6 +1920,7 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
         funcs,
         vreg_count: ir.vreg_count,
         slot_count: ir.slot_count,
+        param_slot_count: ir.param_slot_count,
         debug: ProgramDebugProvenance {
             scopes: ir.debug.scopes.clone(),
             values: ir.debug.values.clone(),
@@ -4642,6 +4647,7 @@ mod tests {
         let mut program = Program {
             vreg_count: 2,
             slot_count: 0,
+            param_slot_count: 0,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 99),
@@ -4681,6 +4687,7 @@ mod tests {
         let mut program = Program {
             vreg_count: 3,
             slot_count: 0,
+            param_slot_count: 0,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 42),
@@ -4717,6 +4724,7 @@ mod tests {
         let mut program = Program {
             vreg_count: 3,
             slot_count: 0,
+            param_slot_count: 0,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 42),
@@ -4829,6 +4837,7 @@ mod tests {
         let mut program = Program {
             vreg_count: 2,
             slot_count: 0,
+            param_slot_count: 0,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
@@ -4886,6 +4895,7 @@ mod tests {
         let mut program = Program {
             vreg_count: 2,
             slot_count: 0,
+            param_slot_count: 0,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
@@ -5351,6 +5361,7 @@ mod tests {
         let mut program = Program {
             vreg_count: 4,
             slot_count: 0,
+            param_slot_count: 0,
             funcs: vec![single_block_func(vec![
                 Inst {
                     id: InstId(0),

@@ -105,11 +105,11 @@ impl EmitCtx {
     // calls in the JIT: flushing/reloading the cached cursor, loading a
     // function pointer, and checking the error flag.
 
-    fn emit_add_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
+    pub(crate) fn emit_add_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
         self.emit_add_sub_imm_chunks(rd, rn, imm, false);
     }
 
-    fn emit_sub_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
+    pub(crate) fn emit_sub_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
         self.emit_add_sub_imm_chunks(rd, rn, imm, true);
     }
 

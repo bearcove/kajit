@@ -1429,6 +1429,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 0,
+        param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -1662,6 +1663,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 0,
+        param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -1870,6 +1872,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 0,
+        param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -2099,6 +2102,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         funcs: vec![func],
         vreg_count: 0,
         slot_count: 0,
+        param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
@@ -2255,6 +2259,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         funcs: vec![func],
         vreg_count: 1,
         slot_count: 0,
+        param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
@@ -2427,6 +2432,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 0,
+        param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
