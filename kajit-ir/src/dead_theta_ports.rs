@@ -265,10 +265,9 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         }
 
         dead_ports.push((p, const_val));
-        // Safety fallback: one slot (varint_byte for the second varint
-        // decoder) passes all principled checks but causes runtime
-        // corruption when removed. Until the root cause is found, cap
-        // at 3 ports per theta to avoid hitting this edge case.
+        // Safety cap: adjacent port removal (e.g., 20+21) triggers a bug
+        // in Phase 2+3 interaction that hasn't been root-caused yet. Cap at 3
+        // as fallback — matches the previous validated set (17, 18, 20).
         if dead_ports.len() >= 3 {
             break;
         }
@@ -289,30 +288,29 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     }
 
     // Phase 2: For each dead port, replace uses and prepare for removal.
-    // Collect replacement info before mutating.
     let parent_region = func.nodes[theta_id].region;
-
-    for &(p, const_val) in &dead_ports {
-        let body_arg_id = func.regions[body].args[p];
-
-        // Create a Const(C) node inside the theta body to replace body arg uses.
-        let debug_scope = func.regions[body].debug_scope;
-        let remat_node = func.nodes.push(Node {
-            region: body,
+    // Create a SINGLE shared Const(0) node for all dead port replacements.
+    // Using one node prevents theta_loop_invariant_hoist from hoisting
+    // multiple orphaned Const(0) copies as separate theta ports.
+    let debug_scope = func.regions[body].debug_scope;
+    let shared_remat = func.nodes.push(Node {
+        region: body,
+        debug_scope,
+        debug_value: None,
+        inputs: vec![],
+        outputs: vec![OutputPort {
+            kind: PortKind::Data,
+            vreg: None,
             debug_scope,
-            debug_value: None,
-            inputs: vec![],
-            outputs: vec![OutputPort {
-                kind: PortKind::Data,
-                vreg: None,
-                debug_scope,
-            }],
-            kind: NodeKind::Simple(IrOp::Const { value: const_val }),
-        });
-        // Insert at the beginning so it's topologically before all uses.
-        func.regions[body].nodes.insert(0, remat_node);
+        }],
+        kind: NodeKind::Simple(IrOp::Const { value: 0 }),
+    });
+    func.regions[body].nodes.insert(0, shared_remat);
+
+    for &(p, _const_val) in &dead_ports {
+        let body_arg_id = func.regions[body].args[p];
         let remat_source = PortSource::Node(OutputRef {
-            node: remat_node,
+            node: shared_remat,
             index: 0,
         });
 
@@ -334,6 +332,24 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     for &(p, _) in dead_ports.iter().rev() {
         remove_theta_data_port(func, theta_id, body, p);
         removed += 1;
+    }
+
+    // Phase 4: If the shared remat Const(0) has no remaining uses after port
+    // removal, remove it to prevent theta_loop_invariant_hoist from hoisting it.
+    let remat_ref = PortSource::Node(OutputRef {
+        node: shared_remat,
+        index: 0,
+    });
+    let has_uses = func
+        .nodes
+        .iter()
+        .any(|(_, n)| n.inputs.iter().any(|inp| inp.source == remat_ref))
+        || func
+            .region_results
+            .iter()
+            .any(|(_, r)| r.source == remat_ref);
+    if !has_uses {
+        func.regions[body].nodes.retain(|n| *n != shared_remat);
     }
 
     removed

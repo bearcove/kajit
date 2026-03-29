@@ -1092,6 +1092,18 @@ fn find_reinit_slots(
         }
     }
 
+    if debug_s2r() {
+        for &s in &first_access_is_write {
+            let read_any = has_read_anywhere.contains(&s);
+            let read_out = has_read_outside_theta.contains(&s);
+            eprintln!(
+                "[s2r]   slot {} pre-retain: read_anywhere={} read_outside_theta={}",
+                s.index(),
+                read_any,
+                read_out
+            );
+        }
+    }
     first_access_is_write
         .retain(|s| has_read_anywhere.contains(s) && !has_read_outside_theta.contains(s));
 

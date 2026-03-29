@@ -4267,6 +4267,7 @@ impl<'a> Linearizer<'a> {
         // the feedback values explicitly. No Copy instruction redefines the body
         // arg vregs, preserving SSA (one def per vreg at the block param).
         let mut feedback_phi_args = Vec::new();
+        let debug_theta = std::env::var("KAJIT_DEBUG_THETA_LIN").is_ok();
         for i in 0..loop_var_count {
             let result = &self.func.region_results[body_region.results[i + 1]]; // +1 to skip predicate
             if result.kind == PortKind::Data {
@@ -4276,6 +4277,16 @@ impl<'a> Linearizer<'a> {
                     && src_vreg != dst_vreg
                 {
                     feedback_phi_args.push((src_vreg, dst_vreg));
+                } else if debug_theta {
+                    eprintln!(
+                        "[theta-lin] DROPPED feedback phi theta={:?} i={}/{}: src=v{} dst={:?} (eq={})",
+                        node_id,
+                        i,
+                        loop_var_count,
+                        src_vreg.index(),
+                        arg.vreg.map(|v| v.index()),
+                        arg.vreg.map_or(false, |v| v == src_vreg)
+                    );
                 }
             }
         }

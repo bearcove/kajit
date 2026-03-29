@@ -2107,6 +2107,13 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
         eliminate_immediate_only_const_defs(&mut cfg);
     }
 
+    // Debug: dump round-trip CFG-MIR to file for MCP interpreter debugging
+    if let Ok(path) = std::env::var("KAJIT_DUMP_CFG_ROUNDTRIP") {
+        let text = format!("{}", cfg);
+        std::fs::write(&path, &text).unwrap();
+        eprintln!("[debug] wrote round-trip CFG to {path}");
+    }
+
     cfg
 }
 
