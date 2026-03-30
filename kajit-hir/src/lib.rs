@@ -243,6 +243,13 @@ pub enum VixenCallableRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VixenTypedExpr {
     Literal(Literal),
+    /// Literal with an explicit type annotation from the caller.
+    /// Used when the literal's type cannot be inferred structurally
+    /// (e.g. string literals whose target type is a user-defined Str struct).
+    TypedLiteral {
+        literal: Literal,
+        ty: Type,
+    },
     Local(LocalId),
     Field {
         base: Box<VixenTypedExpr>,
@@ -270,6 +277,13 @@ pub enum VixenTypedExpr {
         receiver: Box<VixenTypedExpr>,
         method: String,
         args: Vec<VixenTypedExpr>,
+    },
+    /// Expression-form conditional. Desugared to statement-form `If` during lowering.
+    /// Only valid in statement-level positions (Return, Let, Expr).
+    If {
+        condition: Box<VixenTypedExpr>,
+        then_expr: Box<VixenTypedExpr>,
+        else_expr: Box<VixenTypedExpr>,
     },
 }
 
@@ -339,6 +353,11 @@ pub enum VixenLoweringError {
     CannotInferExprType {
         expr: &'static str,
     },
+    IfBranchTypeMismatch {
+        then_ty: Type,
+        else_ty: Type,
+    },
+    NonStatementIfExpr,
 }
 
 impl Module {
@@ -620,6 +639,7 @@ impl Module {
     ) -> Result<Expr, VixenLoweringError> {
         match expr {
             VixenTypedExpr::Literal(literal) => Ok(Expr::Literal(literal.clone())),
+            VixenTypedExpr::TypedLiteral { literal, .. } => Ok(Expr::Literal(literal.clone())),
             VixenTypedExpr::Local(local) => Ok(Expr::Local(*local)),
             VixenTypedExpr::Field { base, field } => Ok(Expr::Field {
                 base: Box::new(self.lower_vixen_typed_expr_with_locals(base, local_types)?),
@@ -689,6 +709,7 @@ impl Module {
                     args: lowered_args,
                 }))
             }
+            VixenTypedExpr::If { .. } => Err(VixenLoweringError::NonStatementIfExpr),
         }
     }
 
@@ -778,6 +799,40 @@ impl Module {
         Ok(Block { scope, statements })
     }
 
+    /// Desugar a statement containing a `VixenTypedExpr::If` in value position
+    /// into a `VixenTypedStmt::If` with the enclosing statement pushed into both branches.
+    ///
+    /// - `return if c { a } else { b }` → `if c { return a } else { return b }`
+    /// - `(if c { a } else { b })` as expr-stmt → `if c { a } else { b }` as expr-stmts
+    ///
+    /// NOTE: `let x = if c { a } else { b }` is NOT supported — the scalar HIR→IR
+    /// lowerer cannot flow Init values out of gamma branches. Use statement-form `If`
+    /// with explicit writes instead. The `Let` case falls through to
+    /// `lower_vixen_typed_expr_with_locals` which returns `NonStatementIfExpr`.
+    fn desugar_if_expr(stmt: &VixenTypedStmt) -> Option<VixenTypedStmt> {
+        match stmt {
+            VixenTypedStmt::Return(Some(VixenTypedExpr::If {
+                condition,
+                then_expr,
+                else_expr,
+            })) => Some(VixenTypedStmt::If {
+                condition: *condition.clone(),
+                then_body: vec![VixenTypedStmt::Return(Some(*then_expr.clone()))],
+                else_body: vec![VixenTypedStmt::Return(Some(*else_expr.clone()))],
+            }),
+            VixenTypedStmt::Expr(VixenTypedExpr::If {
+                condition,
+                then_expr,
+                else_expr,
+            }) => Some(VixenTypedStmt::If {
+                condition: *condition.clone(),
+                then_body: vec![VixenTypedStmt::Expr(*then_expr.clone())],
+                else_body: vec![VixenTypedStmt::Expr(*else_expr.clone())],
+            }),
+            _ => None,
+        }
+    }
+
     fn lower_vixen_typed_stmt(
         &self,
         stmt: &VixenTypedStmt,
@@ -785,6 +840,11 @@ impl Module {
         next_stmt: &mut u32,
         local_types: &BTreeMap<LocalId, Type>,
     ) -> Result<Stmt, VixenLoweringError> {
+        // Desugar expression-form If in statement positions before lowering.
+        if let Some(desugared) = Self::desugar_if_expr(stmt) {
+            return self.lower_vixen_typed_stmt(&desugared, scope, next_stmt, local_types);
+        }
+
         let id = StmtId::new(*next_stmt);
         *next_stmt += 1;
         let kind = match stmt {
@@ -881,6 +941,7 @@ impl Module {
                     expr: "string literal",
                 })
             }
+            VixenTypedExpr::TypedLiteral { ty, .. } => Ok(ty.clone()),
             VixenTypedExpr::Local(local) => local_types
                 .get(local)
                 .cloned()
@@ -931,6 +992,18 @@ impl Module {
                     .first()
                     .cloned()
                     .unwrap_or_else(Type::unit))
+            }
+            VixenTypedExpr::If {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                let then_ty = self.vixen_expr_type(then_expr, local_types)?;
+                let else_ty = self.vixen_expr_type(else_expr, local_types)?;
+                if then_ty != else_ty {
+                    return Err(VixenLoweringError::IfBranchTypeMismatch { then_ty, else_ty });
+                }
+                Ok(then_ty)
             }
         }
     }

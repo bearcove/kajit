@@ -1447,3 +1447,161 @@ fn vixen_typed_function_string_literal_conditional() {
     let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
     assert_eq!(slice, b"two");
 }
+
+/// End-to-end: expression-form if returning a scalar.
+/// `fn choose(flag: u64) -> u64 { return if flag == 1 { 10 } else { 20 }; }`
+#[test]
+fn vixen_typed_function_if_expr_scalar() {
+    use hir::{
+        BinaryOp, Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
+    };
+
+    let module = Module::new();
+
+    let func = VixenTypedFunction {
+        name: "choose".to_string(),
+        params: vec![VixenTypedParam {
+            local: LocalId::new(0),
+            name: "flag".to_string(),
+            ty: hir::Type::u(64),
+        }],
+        locals: vec![],
+        return_type: hir::Type::u(64),
+        body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::If {
+            condition: Box::new(VixenTypedExpr::Binary {
+                op: BinaryOp::Eq,
+                lhs: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                rhs: Box::new(VixenTypedExpr::Literal(Literal::Integer(1))),
+            }),
+            then_expr: Box::new(VixenTypedExpr::Literal(Literal::Integer(10))),
+            else_expr: Box::new(VixenTypedExpr::Literal(Literal::Integer(20))),
+        }))],
+        comment: Some("if-expr scalar return".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    let choose: unsafe extern "C" fn(u64) -> u64 =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    assert_eq!(unsafe { choose(1) }, 10);
+    assert_eq!(unsafe { choose(0) }, 20);
+    assert_eq!(unsafe { choose(99) }, 20);
+}
+
+/// End-to-end: expression-form if returning string literals via TypedLiteral.
+/// `fn choose(flag: u64) -> Str { return if flag == 1 { "yes" } else { "no" }; }`
+#[test]
+fn vixen_typed_function_if_expr_typed_string_literal() {
+    use hir::{
+        BinaryOp, Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (_str_def, str_ty) = define_str_struct(&mut module);
+
+    let func = VixenTypedFunction {
+        name: "choose".to_string(),
+        params: vec![VixenTypedParam {
+            local: LocalId::new(0),
+            name: "flag".to_string(),
+            ty: hir::Type::u(64),
+        }],
+        locals: vec![],
+        return_type: str_ty.clone(),
+        body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::If {
+            condition: Box::new(VixenTypedExpr::Binary {
+                op: BinaryOp::Eq,
+                lhs: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                rhs: Box::new(VixenTypedExpr::Literal(Literal::Integer(1))),
+            }),
+            then_expr: Box::new(VixenTypedExpr::TypedLiteral {
+                literal: Literal::String("yes".to_string()),
+                ty: str_ty.clone(),
+            }),
+            else_expr: Box::new(VixenTypedExpr::TypedLiteral {
+                literal: Literal::String("no".to_string()),
+                ty: str_ty,
+            }),
+        }))],
+        comment: Some("if-expr typed string literal return".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    let choose: unsafe extern "C" fn(u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    // flag=1 → "yes"
+    let (ptr, len) = unsafe { choose(1) };
+    assert_eq!(len, 3);
+    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(slice, b"yes");
+
+    // flag=0 → "no"
+    let (ptr, len) = unsafe { choose(0) };
+    assert_eq!(len, 2);
+    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(slice, b"no");
+}
+
+/// End-to-end: TypedLiteral string in direct return (no conditional).
+/// Proves string literal materializes correctly at runtime.
+/// `fn one(_dummy: u64) -> Str { return "1"; }`
+#[test]
+fn vixen_typed_function_typed_literal_string_return() {
+    use hir::{
+        Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (_str_def, str_ty) = define_str_struct(&mut module);
+
+    let func = VixenTypedFunction {
+        name: "one".to_string(),
+        params: vec![VixenTypedParam {
+            local: LocalId::new(0),
+            name: "_dummy".to_string(),
+            ty: hir::Type::u(64),
+        }],
+        locals: vec![],
+        return_type: str_ty.clone(),
+        body: vec![VixenTypedStmt::Return(Some(
+            VixenTypedExpr::TypedLiteral {
+                literal: Literal::String("1".to_string()),
+                ty: str_ty,
+            },
+        ))],
+        comment: Some("typed literal string return".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    let one: unsafe extern "C" fn(u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    let (ptr, len) = unsafe { one(0) };
+    assert_eq!(len, 1, "len should be 1 for '1'");
+    assert_ne!(ptr, 0, "ptr should be non-null");
+    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(slice, b"1");
+}
+
+// NOTE: `let x = if cond { a } else { b }` desugaring is not yet supported end-to-end.
+// The desugaring produces `if cond { let x = a } else { let x = b }`, which hits an
+// RVSDG scoping issue: Init inside gamma branches doesn't flow values out of the gamma.
+// Supporting this requires teaching the scalar HIR→IR lowerer to emit gamma results for
+// local writes inside branches. For now, Vixen should use statement-form `if` with
+// explicit `let` + assignment, or `return if ...` which works correctly.
