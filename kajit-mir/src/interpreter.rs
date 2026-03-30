@@ -669,7 +669,8 @@ fn execute_function_inner(
             match &inst.op {
                 LinearOp::Const { dst, value } => state.write_vreg(dst.index(), *value),
                 LinearOp::DataAddr { dst, blob_id } => {
-                    state.write_vreg(dst.index(), 0xDEAD_DA7A_0000_0000 | *blob_id as u64);
+                    let blob = &program.data_blobs[*blob_id as usize];
+                    state.write_vreg(dst.index(), blob.as_ptr() as u64);
                 }
                 LinearOp::Copy { dst, src } => {
                     let value = state.read_vreg(src.index());

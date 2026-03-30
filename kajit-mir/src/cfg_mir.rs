@@ -3242,6 +3242,13 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
         }
     }
 
+    // Also check data_results - consts used as function results require registers
+    for vreg in &func.data_results {
+        if is_const_like(vreg) {
+            use_kinds.insert(*vreg, UseKind::RequiresRegister);
+        }
+    }
+
     // Step 3: Propagate RequiresRegister from copies back to original consts
     // If a copy-of-const requires a register, the original const also needs one.
     for (copy_vreg, (original_const, _)) in &copy_to_const {

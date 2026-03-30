@@ -118,6 +118,11 @@ impl ExecutableBuffer {
             pthread_jit_write_protect_np(0);
         }
 
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
+        }
+
         // Patch the imm16 fields of the 4 instructions.
         // movz: bits [20:5] = imm16
         // movk: bits [20:5] = imm16
@@ -136,10 +141,6 @@ impl ExecutableBuffer {
 
         #[cfg(not(target_os = "macos"))]
         unsafe {
-            // Linux: temporarily make writable, patch, restore.
-            // The mmap was already set to RX by allocate(). We need RW temporarily.
-            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
-            // patching already done above
             mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
         }
     }

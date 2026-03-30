@@ -179,6 +179,8 @@ pub struct DebuggerSession {
     pub input_end_addr: Option<u64>,
     /// When set, SaveOutPtr returns this value instead of an abstract offset.
     pub output_base_addr: Option<u64>,
+    /// Embedded constant data blobs (string literals, etc.).
+    data_blobs: Vec<Vec<u8>>,
 }
 
 impl DebuggerSession {
@@ -206,6 +208,7 @@ impl DebuggerSession {
             input_base_addr: None,
             input_end_addr: None,
             output_base_addr: None,
+            data_blobs: program.data_blobs.clone(),
         })
     }
 
@@ -443,7 +446,8 @@ impl DebuggerSession {
         match op {
             LinearOp::Const { dst, value } => self.write_vreg(dst.index(), *value),
             LinearOp::DataAddr { dst, blob_id } => {
-                self.write_vreg(dst.index(), 0xDEAD_DA7A_0000_0000 | *blob_id as u64);
+                let blob = &self.data_blobs[*blob_id as usize];
+                self.write_vreg(dst.index(), blob.as_ptr() as u64);
             }
             LinearOp::Copy { dst, src } => {
                 let value = self.read_vreg(src.index());
