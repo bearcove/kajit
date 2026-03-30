@@ -24,6 +24,7 @@ impl LinearOpDst for LinearOp {
         match self {
             Self::Copy { dst, .. }
             | Self::Const { dst, .. }
+            | Self::DataAddr { dst, .. }
             | Self::BinOp { dst, .. }
             | Self::UnaryOp { dst, .. }
             | Self::LoadFromAddr { dst, .. }

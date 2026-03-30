@@ -249,6 +249,11 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
         IrOp::Const { value } => {
             env.set_output(node_id, 0, *value);
         }
+        IrOp::DataAddr { blob_id } => {
+            // Interpreter sentinel: data addresses are not resolvable without
+            // a JIT buffer. Use a tagged sentinel value for debugging.
+            env.set_output(node_id, 0, 0xDEAD_DA7A_0000_0000 | *blob_id as u64);
+        }
         IrOp::Add
         | IrOp::Sub
         | IrOp::Mul

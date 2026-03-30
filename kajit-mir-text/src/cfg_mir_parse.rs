@@ -194,6 +194,7 @@ enum AstOp {
     SimdStringScan,
     SimdWsSkip,
     ErrorExit(ErrorCode),
+    DataAddr(u32),
 }
 
 fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
@@ -272,6 +273,10 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(error_code())
             .then_ignore(just(")"))
             .map(AstOp::ErrorExit),
+        just("data_addr(")
+            .ignore_then(uint32())
+            .then_ignore(just(")"))
+            .map(AstOp::DataAddr),
     ));
 
     let binops = choice((
@@ -691,9 +696,11 @@ fn resolve_program(ast: AstProgram, registry: &IntrinsicRegistry) -> Result<Prog
         vreg_count: ast.vreg_count,
         slot_count: ast.slot_count,
         param_slot_count: 0,
+        is_scalar: false,
         debug: Default::default(),
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     program.validate().map_err(|err| ParseError {
         message: err.to_string(),
@@ -1023,6 +1030,12 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
         }
         AstOp::SimdWsSkip => LinearOp::SimdWhitespaceSkip,
         AstOp::ErrorExit(code) => LinearOp::ErrorExit { code: *code },
+        AstOp::DataAddr(blob_id) => LinearOp::DataAddr {
+            dst: dst.ok_or_else(|| ParseError {
+                message: format!("inst i{} data_addr missing dst", ast.id.0),
+            })?,
+            blob_id: *blob_id,
+        },
     };
 
     Ok(Inst {

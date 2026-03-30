@@ -2203,6 +2203,7 @@ fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate:
     }
     let mut func = builder.finish();
     func.param_slot_count = param_word_count as u32;
+    func.is_scalar = true;
     func
 }
 
@@ -2392,6 +2393,13 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     result.extend(self.lower_expr_multi(rb, expr));
                 }
                 result
+            }
+            hir::Expr::Literal(hir::Literal::String(s)) => {
+                // String literal → (ptr, len) where ptr is a DataAddr relocation.
+                let blob_id = rb.add_data_blob(s.as_bytes().to_vec());
+                let ptr = rb.data_addr(blob_id);
+                let len = rb.const_val(s.len() as u64);
+                vec![ptr, len]
             }
             _ => vec![self.lower_expr(rb, expr)],
         }

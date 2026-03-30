@@ -567,9 +567,11 @@ pub fn execute_function_with_event_trace(
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
         param_slot_count: 0,
+        is_scalar: false,
         debug: Default::default(),
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     execute_program_with_event_trace(&program, input)
 }
@@ -622,9 +624,11 @@ pub fn execute_function_with_trace(
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
         param_slot_count: 0,
+        is_scalar: false,
         debug: Default::default(),
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     execute_program_with_trace(&program, input)
 }
@@ -664,6 +668,9 @@ fn execute_function_inner(
                 .ok_or(InterpreterError::UnknownInst { inst: inst_id })?;
             match &inst.op {
                 LinearOp::Const { dst, value } => state.write_vreg(dst.index(), *value),
+                LinearOp::DataAddr { dst, blob_id } => {
+                    state.write_vreg(dst.index(), 0xDEAD_DA7A_0000_0000 | *blob_id as u64);
+                }
                 LinearOp::Copy { dst, src } => {
                     let value = state.read_vreg(src.index());
                     state.write_vreg(dst.index(), value);
@@ -2254,9 +2261,11 @@ mod tests {
             vreg_count: 1,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         }
     }
 
@@ -2353,9 +2362,11 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         }
     }
 

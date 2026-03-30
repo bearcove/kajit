@@ -225,6 +225,7 @@ pub(crate) fn materialize_backend_result(
         backend_debug_info,
         asm_program,
         intrinsic_call_sites: _,
+        data_relocs: _,
     } = result;
     (
         buf,
@@ -359,10 +360,10 @@ pub fn compile_pipeline(
     let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
 
     // For leaf decoder functions: exclude x0/x1 from allocation (kept for output_ptr/ctx_ptr).
-    // Scalar functions (param_slot_count > 0) don't need this — args are stored to slots
+    // Scalar functions don't need this — args are stored to slots
     // in the prologue, so x0/x1 are free for regalloc.
     #[cfg(target_arch = "aarch64")]
-    if cfg_program.param_slot_count == 0 {
+    if !cfg_program.is_scalar {
         let is_leaf = cfg_program.funcs.iter().all(|func| {
             func.insts.iter().all(|inst| {
                 !matches!(
@@ -981,7 +982,9 @@ fn compile_cfg_mir_decoder_with_options(
         vreg_count: cfg_program.vreg_count,
         slot_count: cfg_program.slot_count,
         param_slot_count: cfg_program.param_slot_count,
+        is_scalar: cfg_program.is_scalar,
         debug: Default::default(),
+        data_blobs: cfg_program.data_blobs.clone(),
     };
     let (buf, entry, source_map, backend_debug_info, asm_program) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(

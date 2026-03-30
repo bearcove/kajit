@@ -1276,7 +1276,7 @@ pub fn allocate_cfg_program(
         algorithm: regalloc2::Algorithm::Ion,
     };
 
-    let abi_arg_offset: u8 = if program.param_slot_count > 0 { 0 } else { 2 };
+    let abi_arg_offset: u8 = if program.is_scalar { 0 } else { 2 };
     let mut functions = Vec::with_capacity(program.funcs.len());
     for func in &program.funcs {
         functions.push(allocate_cfg_function(
@@ -1376,7 +1376,7 @@ pub fn allocate_cfg_program_regalloc3_native(
     let mut functions = Vec::with_capacity(program.funcs.len());
     let mut modified_funcs = Vec::with_capacity(program.funcs.len());
 
-    let abi_arg_offset: u8 = if program.param_slot_count > 0 { 0 } else { 2 };
+    let abi_arg_offset: u8 = if program.is_scalar { 0 } else { 2 };
 
     for func in &program.funcs {
         let mut func_mut = func.clone();
@@ -1471,9 +1471,11 @@ pub fn allocate_cfg_program_regalloc3_native(
         vreg_count: program.vreg_count,
         slot_count: program.slot_count,
         param_slot_count: program.param_slot_count,
+        is_scalar: program.is_scalar,
         debug: program.debug.clone(),
         hints: program.hints.clone(),
         extra_excluded_regs: program.extra_excluded_regs.clone(),
+        data_blobs: program.data_blobs.clone(),
     };
 
     Ok(AllocatedCfgProgramRa3 {
@@ -2072,6 +2074,21 @@ fn execute_sim_linear_op(
                 linear_op_index,
             )?;
             write_allocation(regs, spills, dst_alloc, *value);
+        }
+        LinearOp::DataAddr { dst, blob_id } => {
+            let dst_alloc = find_operand_alloc(
+                inst_operands,
+                inst_allocs,
+                *dst,
+                RaOperandKind::Def,
+                linear_op_index,
+            )?;
+            write_allocation(
+                regs,
+                spills,
+                dst_alloc,
+                0xDEAD_DA7A_0000_0000 | *blob_id as u64,
+            );
         }
         LinearOp::Copy { dst, src } => {
             let src_alloc = find_operand_alloc(
@@ -3791,9 +3808,11 @@ lambda @0 (shape: "u8") {
                 vreg_count: 32,
                 slot_count: 0,
                 param_slot_count: 0,
+                is_scalar: false,
                 debug: Default::default(),
                 hints: Default::default(),
                 extra_excluded_regs: vec![],
+                data_blobs: vec![],
             },
             functions: vec![AllocatedCfgFunction {
                 lambda_id: LambdaId::new(0),

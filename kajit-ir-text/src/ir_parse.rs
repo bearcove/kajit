@@ -782,9 +782,11 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
         theta_port_slots: std::collections::HashMap::new(),
         theta_reinit_slots: std::collections::HashMap::new(),
         param_slot_count: 0,
+        is_scalar: false,
         debug_scopes: Arena::new(),
         debug_values: Arena::new(),
         root_debug_scope: DebugScopeId::new(0),
+        data_blobs: Vec::new(),
     };
 
     if !program.state_domains.is_empty() {

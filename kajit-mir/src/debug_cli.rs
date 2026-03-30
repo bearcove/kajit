@@ -373,9 +373,11 @@ mod tests {
             vreg_count: 1,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         }
     }
 

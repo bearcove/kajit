@@ -331,6 +331,14 @@ impl Lowerer {
                 self.emit_store_def_r10(*dst, 0);
                 self.set_const(*dst, Some(*value));
             }
+            LinearOp::DataAddr { dst, blob_id } => {
+                let sentinel = 0xDEAD_DA7A_0000_0000u64 | *blob_id as u64;
+                self.ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_mov_r64_imm64(10, sentinel, buf))
+                    .expect("mov");
+                self.emit_store_def_r10(*dst, 0);
+            }
             LinearOp::Copy { dst, src } => {
                 let from = self.current_alloc(0);
                 let to = self.current_alloc(1);

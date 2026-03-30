@@ -688,6 +688,21 @@ impl Lowerer<'_> {
                 }
                 self.set_const(*dst, Some(*value));
             }
+            LinearOp::DataAddr { dst, blob_id } => {
+                // Load the runtime address of the embedded data blob.
+                // For now, produce a sentinel value (matching the interpreter).
+                let sentinel = 0xDEAD_DA7A_0000_0000u64 | *blob_id as u64;
+                let dst_alloc = self.alloc_for_vreg(*dst);
+                if let Some(alloc) = dst_alloc
+                    && let Some(reg) = alloc.as_reg()
+                    && reg.class() == regalloc2::RegClass::Int
+                {
+                    self.emit_load_u64_reg(Reg::from_raw(reg.hw_enc() as u8), sentinel);
+                } else {
+                    self.emit_load_u64_x9(sentinel);
+                    self.emit_store_def_x9(*dst, 0);
+                }
+            }
             LinearOp::Copy { dst, src } => {
                 let from = self
                     .alloc_for_vreg(*src)
@@ -1082,6 +1097,7 @@ impl Lowerer<'_> {
             backend_debug_info: Some(self.backend_debug_info),
             asm_program,
             intrinsic_call_sites: Vec::new(),
+            data_relocs: Vec::new(),
         }
     }
 }

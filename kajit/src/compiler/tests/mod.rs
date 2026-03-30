@@ -1430,6 +1430,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
+        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -1451,6 +1452,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         },
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
@@ -1664,6 +1666,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
+        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -1685,6 +1688,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         },
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
     #[cfg(target_arch = "aarch64")]
@@ -1873,6 +1877,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
+        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -1894,6 +1899,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         },
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
@@ -2103,6 +2109,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         vreg_count: 0,
         slot_count: 0,
         param_slot_count: 0,
+        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
@@ -2117,6 +2124,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         },
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
@@ -2260,6 +2268,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         vreg_count: 1,
         slot_count: 0,
         param_slot_count: 0,
+        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
@@ -2274,6 +2283,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         },
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
@@ -2433,6 +2443,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
+        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
@@ -2452,6 +2463,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         },
         hints: Default::default(),
         extra_excluded_regs: vec![],
+        data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);

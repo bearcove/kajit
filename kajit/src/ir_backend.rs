@@ -37,6 +37,7 @@ pub struct LinearBackendResult {
     pub asm_program: Option<kajit_emit::aarch64_asm::Program>,
     pub intrinsic_call_sites:
         Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
+    pub data_relocs: Vec<crate::backends::aarch64::regalloc3_backend::DataRelocInfo>,
 }
 
 pub fn compile_linear_ir_with_alloc_and_mode(

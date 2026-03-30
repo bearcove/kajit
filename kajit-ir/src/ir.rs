@@ -708,6 +708,11 @@ pub enum IrOp {
     /// Inputs: []. Outputs: [Data].
     Const { value: u64 },
 
+    /// Load the runtime address of an embedded data blob.
+    /// The blob is stored in IrFunc::data_blobs[blob_id].
+    /// Inputs: []. Outputs: [Data].
+    DataAddr { blob_id: u32 },
+
     /// Binary addition.
     /// Inputs: [Data, Data]. Outputs: [Data].
     Add,
@@ -865,6 +870,7 @@ impl IrOp {
         let (effect, cursor_advance) = match self {
             // Pure ops
             IrOp::Const { .. }
+            | IrOp::DataAddr { .. }
             | IrOp::Add
             | IrOp::Sub
             | IrOp::Mul
@@ -970,11 +976,10 @@ pub struct IrFunc {
     pub vreg_count: u32,
     /// Next stack slot to allocate.
     pub slot_count: u32,
-    /// Number of function parameters that occupy the first N slots.
-    /// When > 0, the backend emits a scalar-function prologue that stores
-    /// argument registers (x0..xN-1) into slots 0..N-1 instead of the
-    /// decoder-style prologue.
+    /// Number of data args passed in calling-convention registers.
     pub param_slot_count: u32,
+    /// True for scalar functions (plain calling convention, no decoder ABI).
+    pub is_scalar: bool,
     /// Slots that are part of a multi-slot group (struct sub-fields).
     pub multi_slot_group: std::collections::BTreeSet<SlotId>,
     /// Slots that are scalar temporaries from HIR locals (not struct sub-fields,
@@ -990,6 +995,9 @@ pub struct IrFunc {
     pub theta_reinit_slots: std::collections::HashMap<NodeId, std::collections::BTreeSet<SlotId>>,
     /// Lambda registry: maps LambdaId to the NodeId of the lambda node.
     pub lambdas: Vec<NodeId>,
+    /// Embedded constant data blobs (string literals, etc.).
+    /// Indexed by blob_id in IrOp::DataAddr.
+    pub data_blobs: Vec<Vec<u8>>,
     /// All debug scopes.
     pub debug_scopes: Arena<DebugScope>,
     /// Semantic debug values carried through lowering.
@@ -1253,7 +1261,9 @@ impl IrBuilder {
             vreg_count: 0,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             lambdas: Vec::new(),
+            data_blobs: Vec::new(),
             multi_slot_group: std::collections::BTreeSet::new(),
             scalar_temp_slots: std::collections::BTreeSet::new(),
             theta_port_slots: std::collections::HashMap::new(),
@@ -1593,6 +1603,27 @@ impl<'a> RegionBuilder<'a> {
             inputs: vec![],
             outputs: vec![out],
             kind: NodeKind::Simple(IrOp::Const { value }),
+        });
+        PortSource::Node(OutputRef { node, index: 0 })
+    }
+
+    /// Register a constant data blob and return its blob_id.
+    pub fn add_data_blob(&mut self, bytes: Vec<u8>) -> u32 {
+        let id = self.func.data_blobs.len() as u32;
+        self.func.data_blobs.push(bytes);
+        id
+    }
+
+    /// Add a DataAddr node that produces the runtime address of a data blob.
+    pub fn data_addr(&mut self, blob_id: u32) -> PortSource {
+        let out = self.data_output();
+        let node = self.add_node(Node {
+            region: self.region,
+            debug_scope: self.debug_scope,
+            debug_value: self.debug_value,
+            inputs: vec![],
+            outputs: vec![out],
+            kind: NodeKind::Simple(IrOp::DataAddr { blob_id }),
         });
         PortSource::Node(OutputRef { node, index: 0 })
     }
@@ -2857,6 +2888,10 @@ impl IrFunc {
             IrOp::LoadFromAddr { width } => write!(f, "LoadFromAddr({width})"),
             IrOp::WriteToSlot { slot } => write!(f, "WriteToSlot({})", slot.index()),
             IrOp::ReadFromSlot { slot } => write!(f, "ReadFromSlot({})", slot.index()),
+            IrOp::DataAddr { blob_id } => {
+                write!(f, "DataAddr(blob_id={blob_id})")?;
+                Ok(())
+            }
             IrOp::Const { value } => {
                 write!(f, "Const(")?;
                 Self::fmt_const(f, *value, registry)?;

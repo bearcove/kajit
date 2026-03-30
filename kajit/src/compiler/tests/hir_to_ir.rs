@@ -1341,3 +1341,109 @@ fn vixen_typed_function_str_conditional_return() {
     assert_eq!(ptr, 101);
     assert_eq!(len, 4);
 }
+
+/// End-to-end: function returning a string literal.
+/// Tests data blob embedding and relocation.
+/// Takes a dummy param because zero-param scalar functions are a separate issue.
+#[test]
+fn vixen_typed_function_string_literal_return() {
+    use hir::{
+        Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (_str_def, str_ty) = define_str_struct(&mut module);
+
+    // fn greeting(_dummy: u64) -> Str { return "hello"; }
+    let func = VixenTypedFunction {
+        name: "greeting".to_string(),
+        params: vec![VixenTypedParam {
+            local: LocalId::new(0),
+            name: "_dummy".to_string(),
+            ty: hir::Type::u(64),
+        }],
+        locals: vec![],
+        return_type: str_ty,
+        body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Literal(
+            Literal::String("hello".to_string()),
+        )))],
+        comment: Some("return string literal".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    let greeting: unsafe extern "C" fn(u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    let (ptr, len) = unsafe { greeting(0) };
+    assert_eq!(len, 5, "len should be 5 for 'hello'");
+    assert_ne!(ptr, 0, "ptr should be non-null");
+
+    // Verify the bytes at the returned pointer match "hello".
+    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(slice, b"hello");
+}
+
+/// End-to-end: conditional return of different string literals.
+#[test]
+fn vixen_typed_function_string_literal_conditional() {
+    use hir::{
+        BinaryOp, Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (_str_def, str_ty) = define_str_struct(&mut module);
+
+    // fn choose(flag: u64) -> Str {
+    //     if flag == 1 { return "one"; } else { return "two"; }
+    // }
+    let func = VixenTypedFunction {
+        name: "choose".to_string(),
+        params: vec![VixenTypedParam {
+            local: LocalId::new(0),
+            name: "flag".to_string(),
+            ty: hir::Type::u(64),
+        }],
+        locals: vec![],
+        return_type: str_ty,
+        body: vec![VixenTypedStmt::If {
+            condition: VixenTypedExpr::Binary {
+                op: BinaryOp::Eq,
+                lhs: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                rhs: Box::new(VixenTypedExpr::Literal(Literal::Integer(1))),
+            },
+            then_body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Literal(
+                Literal::String("one".to_string()),
+            )))],
+            else_body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Literal(
+                Literal::String("two".to_string()),
+            )))],
+        }],
+        comment: Some("conditional string literal return".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    let choose: unsafe extern "C" fn(u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    // flag=1 → "one"
+    let (ptr, len) = unsafe { choose(1) };
+    assert_eq!(len, 3);
+    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(slice, b"one");
+
+    // flag=0 → "two"
+    let (ptr, len) = unsafe { choose(0) };
+    assert_eq!(len, 3);
+    let slice = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(slice, b"two");
+}

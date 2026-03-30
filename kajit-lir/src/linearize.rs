@@ -68,6 +68,11 @@ pub enum LinearOp {
         dst: VReg,
         value: u64,
     },
+    /// Load the runtime address of an embedded data blob (relocation target).
+    DataAddr {
+        dst: VReg,
+        blob_id: u32,
+    },
     BinOp {
         op: BinOpKind,
         dst: VReg,
@@ -233,7 +238,7 @@ impl LinearOp {
         use LinearOp::*;
         match self {
             // Values
-            Const { .. } => {}
+            Const { .. } | DataAddr { .. } => {}
             BinOp { lhs, rhs, .. } => {
                 f(lhs);
                 f(rhs);
@@ -350,6 +355,7 @@ impl LinearOp {
         use LinearOp::*;
         match self {
             Const { dst, .. }
+            | DataAddr { dst, .. }
             | BinOp { dst, .. }
             | UnaryOp { dst, .. }
             | Copy { dst, .. }
@@ -428,7 +434,7 @@ impl LinearOp {
     pub fn for_each_vreg_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
         use LinearOp::*;
         match self {
-            Const { dst, .. } => f(dst),
+            Const { dst, .. } | DataAddr { dst, .. } => f(dst),
             BinOp { dst, lhs, rhs, .. } => {
                 f(dst);
                 f(lhs);
@@ -563,11 +569,14 @@ pub struct LinearIr {
     pub vreg_count: u32,
     /// Total number of stack slots.
     pub slot_count: u32,
-    /// Number of function parameters occupying the first N slots.
-    /// When > 0, this is a scalar function (not a decoder).
+    /// Number of data args passed in calling-convention registers.
     pub param_slot_count: u32,
+    /// True for scalar functions (plain calling convention, no decoder ABI).
+    pub is_scalar: bool,
     /// Preserved debug scope provenance copied from RVSDG.
     pub debug: LinearDebugProvenance,
+    /// Embedded constant data blobs (string literals, etc.).
+    pub data_blobs: Vec<Vec<u8>>,
 }
 
 #[derive(Clone, Default)]
@@ -1189,6 +1198,15 @@ impl<'a> Linearizer<'a> {
                     LinearOp::Const {
                         dst: data_dst(0),
                         value: *value,
+                    },
+                );
+            }
+            IrOp::DataAddr { blob_id } => {
+                self.emit_node(
+                    node,
+                    LinearOp::DataAddr {
+                        dst: data_dst(0),
+                        blob_id: *blob_id,
                     },
                 );
             }
@@ -4469,6 +4487,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::CallLambda { args, .. } => args.clone(),
         LinearOp::FuncEnd => func_end_uses.unwrap_or_default().to_vec(),
         LinearOp::Const { .. }
+        | LinearOp::DataAddr { .. }
         | LinearOp::BoundsCheck { .. }
         | LinearOp::ReadBytes { .. }
         | LinearOp::PeekByte { .. }
@@ -4488,7 +4507,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
 
 fn op_defs(op: &LinearOp) -> Vec<VReg> {
     match op {
-        LinearOp::Const { dst, .. } => vec![*dst],
+        LinearOp::Const { dst, .. } | LinearOp::DataAddr { dst, .. } => vec![*dst],
         LinearOp::BinOp { dst, .. } => vec![*dst],
         LinearOp::UnaryOp { dst, .. } => vec![*dst],
         LinearOp::Copy { dst, .. } => vec![*dst],
@@ -4602,6 +4621,7 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
             rewrite(kind, &mut resolve);
         }
         LinearOp::Const { .. }
+        | LinearOp::DataAddr { .. }
         | LinearOp::BoundsCheck { .. }
         | LinearOp::ReadBytes { .. }
         | LinearOp::PeekByte { .. }
@@ -5068,6 +5088,8 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
         vreg_count,
         slot_count: func.slot_count(),
         param_slot_count: func.param_slot_count,
+        is_scalar: func.is_scalar,
+        data_blobs: func.data_blobs.clone(),
         debug: LinearDebugProvenance {
             scopes: func.debug_scopes.clone(),
             values: func.debug_values.clone(),
@@ -5150,6 +5172,10 @@ fn fmt_op(
             fmt_vreg(f, *dst)?;
             write!(f, " = const ")?;
             fmt_const(f, *value, registry)
+        }
+        LinearOp::DataAddr { dst, blob_id } => {
+            fmt_vreg(f, *dst)?;
+            write!(f, " = data_addr({blob_id})")
         }
         LinearOp::BinOp { op, dst, lhs, rhs } => {
             fmt_vreg(f, *dst)?;

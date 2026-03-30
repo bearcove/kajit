@@ -442,6 +442,9 @@ impl DebuggerSession {
     fn execute_op(&mut self, block: cfg_mir::BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
         match op {
             LinearOp::Const { dst, value } => self.write_vreg(dst.index(), *value),
+            LinearOp::DataAddr { dst, blob_id } => {
+                self.write_vreg(dst.index(), 0xDEAD_DA7A_0000_0000 | *blob_id as u64);
+            }
             LinearOp::Copy { dst, src } => {
                 let value = self.read_vreg(src.index());
                 self.write_vreg(dst.index(), value);
@@ -1021,9 +1024,11 @@ mod tests {
             vreg_count: 1,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         }
     }
 
@@ -1053,9 +1058,11 @@ mod tests {
             vreg_count: 0,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         }
     }
 

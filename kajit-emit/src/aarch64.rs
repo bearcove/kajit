@@ -94,6 +94,56 @@ impl ExecutableBuffer {
         self.ptr
     }
 
+    /// Patch a fixed 4-instruction movz/movk/movk/movk sequence at `offset`
+    /// to load the given 64-bit `value`. Used for data address relocations
+    /// after the buffer is mmap'd and the runtime base address is known.
+    ///
+    /// # Safety
+    /// `offset` must point to a valid 16-byte movz/movk sequence within the buffer.
+    pub unsafe fn patch_u64_load(&self, offset: usize, value: u64) {
+        assert!(
+            offset + 16 <= self.len,
+            "patch_u64_load: offset {offset} + 16 > len {}",
+            self.len
+        );
+        let p0 = (value & 0xFFFF) as u16;
+        let p1 = ((value >> 16) & 0xFFFF) as u16;
+        let p2 = ((value >> 32) & 0xFFFF) as u16;
+        let p3 = ((value >> 48) & 0xFFFF) as u16;
+
+        let ptr = self.ptr.add(offset);
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            pthread_jit_write_protect_np(0);
+        }
+
+        // Patch the imm16 fields of the 4 instructions.
+        // movz: bits [20:5] = imm16
+        // movk: bits [20:5] = imm16
+        for (i, imm) in [p0, p1, p2, p3].iter().enumerate() {
+            let inst_ptr = ptr.add(i * 4) as *mut u32;
+            let word = inst_ptr.read_unaligned();
+            let patched = (word & !(0xFFFF << 5)) | ((*imm as u32) << 5);
+            inst_ptr.write_unaligned(patched);
+        }
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            sys_icache_invalidate(ptr, 16);
+            pthread_jit_write_protect_np(1);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            // Linux: temporarily make writable, patch, restore.
+            // The mmap was already set to RX by allocate(). We need RW temporarily.
+            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
+            // patching already done above
+            mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }
@@ -377,6 +427,11 @@ impl Emitter {
     /// Current code buffer length (offset of next emitted instruction).
     pub fn code_len(&self) -> usize {
         self.buf.len()
+    }
+
+    /// Append raw bytes to the code buffer (for data sections appended after code).
+    pub fn emit_raw_bytes(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
     }
 
     /// Enable instruction capture for assembly dump/parse workflow

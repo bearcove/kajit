@@ -178,15 +178,17 @@ pub struct Program {
     pub funcs: Vec<Function>,
     pub vreg_count: u32,
     pub slot_count: u32,
-    /// Number of function parameters occupying the first N slots.
-    /// When > 0, this is a scalar function — the backend emits a plain
-    /// calling-convention prologue/epilogue instead of decoder ABI.
+    /// Number of data args passed in calling-convention registers.
     pub param_slot_count: u32,
+    /// True for scalar functions (plain calling convention, no decoder ABI).
+    pub is_scalar: bool,
     pub debug: ProgramDebugProvenance,
     pub hints: crate::regalloc3::hints::HintMap,
     /// Extra physical registers excluded from allocation (e.g., x0/x1 when used
     /// as fixed output_ptr/ctx_ptr in leaf functions).
     pub extra_excluded_regs: Vec<crate::regalloc3::machine_inst::PReg>,
+    /// Embedded constant data blobs (string literals, etc.).
+    pub data_blobs: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -885,6 +887,7 @@ fn fmt_cfg_op_name(
             fmt_const(f, *value, registry)?;
             write!(f, ")")
         }
+        LinearOp::DataAddr { blob_id, .. } => write!(f, "data_addr({blob_id})"),
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::Copy { .. } => write!(f, "copy"),
@@ -929,6 +932,7 @@ fn fmt_cfg_op_name(
 fn linearop_dst(op: &LinearOp) -> Option<VReg> {
     match op {
         LinearOp::Const { dst, .. }
+        | LinearOp::DataAddr { dst, .. }
         | LinearOp::BinOp { dst, .. }
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
@@ -1291,6 +1295,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
 
     match &op {
         LinearOp::Const { dst, .. }
+        | LinearOp::DataAddr { dst, .. }
         | LinearOp::ReadBytes { dst, .. }
         | LinearOp::PeekByte { dst }
         | LinearOp::SaveCursor { dst }
@@ -1926,6 +1931,7 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
         vreg_count: ir.vreg_count,
         slot_count: ir.slot_count,
         param_slot_count: ir.param_slot_count,
+        is_scalar: ir.is_scalar,
         debug: ProgramDebugProvenance {
             scopes: ir.debug.scopes.clone(),
             values: ir.debug.values.clone(),
@@ -1937,6 +1943,7 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
         },
         hints,
         extra_excluded_regs: vec![],
+        data_blobs: ir.data_blobs.clone(),
     }
 }
 
@@ -4653,6 +4660,7 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 99),
@@ -4660,6 +4668,7 @@ mod tests {
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         };
 
         // Mark v1 as used by adding it to data_results
@@ -4693,6 +4702,7 @@ mod tests {
             vreg_count: 3,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 42),
@@ -4701,6 +4711,7 @@ mod tests {
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         };
 
         local_cse(&mut program);
@@ -4730,6 +4741,7 @@ mod tests {
             vreg_count: 3,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 42),
@@ -4738,6 +4750,7 @@ mod tests {
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         };
 
         // Mark v2 as used (result)
@@ -4843,10 +4856,12 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         };
 
         // Verify initial state
@@ -4901,10 +4916,12 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         };
 
         let insts_before: usize = program.funcs.iter().map(|f| f.insts.len()).sum();
@@ -5367,6 +5384,7 @@ mod tests {
             vreg_count: 4,
             slot_count: 0,
             param_slot_count: 0,
+            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 Inst {
                     id: InstId(0),
@@ -5439,6 +5457,7 @@ mod tests {
             debug: Default::default(),
             hints: Default::default(),
             extra_excluded_regs: vec![],
+            data_blobs: vec![],
         };
 
         // v3 needs to be defined somewhere (as data_arg)

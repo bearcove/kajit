@@ -20,6 +20,15 @@ pub struct IntrinsicCallSiteInfo {
     pub func: kajit_ir::IntrinsicFn,
 }
 
+/// Recorded data blob address site for relocation.
+#[derive(Debug, Clone)]
+pub struct DataRelocInfo {
+    /// Offset in the code buffer of the first `movz` instruction (4-instruction fixed sequence).
+    pub code_offset: usize,
+    /// Index into data_blobs.
+    pub blob_id: u32,
+}
+
 /// Context for emitting a single function.
 struct EmitContext<'a> {
     ectx: &'a mut EmitCtx,
@@ -35,6 +44,8 @@ struct EmitContext<'a> {
     line_map: HashMap<cfg_mir::OpId, u32>,
     /// Recorded intrinsic call sites for harness relocation.
     intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
+    /// Recorded data blob address sites for relocation.
+    data_relocs: Vec<DataRelocInfo>,
     /// VRegs whose CmpXx can be fused with the terminator branch (skip cset, emit b.cc).
     fused_cmps: HashMap<kajit_ir::VReg, Condition>,
     /// Or vregs that should be emitted as bfi. Maps Or's dst → (byte_src, accum, lsb, width).
@@ -215,6 +226,31 @@ impl<'a> EmitContext<'a> {
         }
     }
 
+    /// Load a 64-bit value into a register using exactly 4 instructions
+    /// (movz + 3 movk). The fixed 16-byte size makes the sequence relocatable.
+    fn emit_load_u64_fixed(&mut self, rd: Reg, value: u64) {
+        let p0 = (value & 0xFFFF) as u16;
+        let p1 = ((value >> 16) & 0xFFFF) as u16;
+        let p2 = ((value >> 32) & 0xFFFF) as u16;
+        let p3 = ((value >> 48) & 0xFFFF) as u16;
+        self.ectx
+            .emit
+            .emit_movz_imm(Width::X64, rd, p0, 0)
+            .expect("movz");
+        self.ectx
+            .emit
+            .emit_movk_imm(Width::X64, rd, p1, 16)
+            .expect("movk");
+        self.ectx
+            .emit
+            .emit_movk_imm(Width::X64, rd, p2, 32)
+            .expect("movk");
+        self.ectx
+            .emit
+            .emit_movk_imm(Width::X64, rd, p3, 48)
+            .expect("movk");
+    }
+
     /// If vreg is a known constant that fits in a 12-bit immediate, return its value.
     fn small_const(&self, vreg: kajit_ir::VReg) -> Option<u16> {
         let value = self.const_values.get(&vreg)?;
@@ -234,7 +270,9 @@ impl<'a> EmitContext<'a> {
     fn emit_inst(&mut self, inst: &Inst) {
         // Skip instructions whose outputs were fused (bfi, bit-test, etc.)
         match &inst.op {
-            LinearOp::BinOp { dst, .. } | LinearOp::Const { dst, .. } => {
+            LinearOp::BinOp { dst, .. }
+            | LinearOp::Const { dst, .. }
+            | LinearOp::DataAddr { dst, .. } => {
                 if self.fused_skip.contains(dst) {
                     return;
                 }
@@ -266,6 +304,25 @@ impl<'a> EmitContext<'a> {
                 } else {
                     // Spilled - load into x9, store to spill slot
                     self.emit_load_u64(Reg::X9, *value);
+                    self.store_to_vreg(*dst, Reg::X9);
+                }
+            }
+
+            LinearOp::DataAddr { dst, blob_id } => {
+                // Emit a fixed 4-instruction movz/movk sequence with placeholder 0.
+                // The actual address will be patched after JIT finalization.
+                let code_offset = self.ectx.emit.code_len();
+                let dest_reg = if let Some(preg) = self.preg_for_vreg(*dst) {
+                    self.preg_to_reg(preg)
+                } else {
+                    Reg::X9
+                };
+                self.emit_load_u64_fixed(dest_reg, 0);
+                self.data_relocs.push(DataRelocInfo {
+                    code_offset,
+                    blob_id: *blob_id,
+                });
+                if self.preg_for_vreg(*dst).is_none() {
                     self.store_to_vreg(*dst, Reg::X9);
                 }
             }
@@ -1935,7 +1992,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         },
     };
 
-    let is_scalar_function = program.param_slot_count > 0;
+    let is_scalar_function = program.is_scalar;
 
     // Emit function prologue
     let (entry, error_exit) = if is_scalar_function {
@@ -1959,6 +2016,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
     // Compile first function
     let mut intrinsic_call_sites = Vec::new();
+    let mut data_relocs = Vec::<DataRelocInfo>::new();
     if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
         // Build constant value map for immediate folding
         let mut const_values = HashMap::new();
@@ -2001,6 +2059,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             const_values,
             line_map,
             intrinsic_call_sites: Vec::new(),
+            data_relocs: Vec::new(),
             fused_cmps,
             fused_bfi,
             fused_skip,
@@ -2013,6 +2072,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
         ctx.emit_function();
         intrinsic_call_sites = ctx.intrinsic_call_sites.clone();
+        data_relocs = ctx.data_relocs.clone();
     }
 
     // Bind success exit and emit epilogue
@@ -2119,8 +2179,42 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         ectx.emit_error_trampolines();
     }
 
-    // Finalize
+    // Append data section to the code buffer (before finalization so it's
+    // included in the mmap'd executable buffer).
+    let mut data_blob_offsets = Vec::new();
+    if !program.data_blobs.is_empty() {
+        // Align data section start to 8 bytes.
+        let code_end = ectx.emit.code_len();
+        let padding = (8 - (code_end % 8)) % 8;
+        if padding > 0 {
+            ectx.emit.emit_raw_bytes(&vec![0u8; padding]);
+        }
+        for blob in &program.data_blobs {
+            let offset = ectx.emit.code_len();
+            data_blob_offsets.push(offset);
+            ectx.emit.emit_raw_bytes(blob);
+            // Align each blob to 8 bytes.
+            let blob_padding = (8 - (blob.len() % 8)) % 8;
+            if blob_padding > 0 {
+                ectx.emit.emit_raw_bytes(&vec![0u8; blob_padding]);
+            }
+        }
+    }
+
+    // Finalize (resolves branch fixups, creates executable buffer)
     let (buf, asm_program) = ectx.finalize();
+
+    // Patch data address relocations with actual runtime addresses.
+    if !data_relocs.is_empty() {
+        let base = buf.exec.as_ptr() as u64;
+        for reloc in &data_relocs {
+            let blob_offset = data_blob_offsets[reloc.blob_id as usize];
+            let addr = base + blob_offset as u64;
+            unsafe {
+                buf.exec.patch_u64_load(reloc.code_offset, addr);
+            }
+        }
+    }
 
     let source_map = buf.source_map.clone();
     LinearBackendResult {
@@ -2134,6 +2228,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         backend_debug_info: None,
         asm_program,
         intrinsic_call_sites,
+        data_relocs,
     }
 }
 
