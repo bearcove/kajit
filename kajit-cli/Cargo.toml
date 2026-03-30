@@ -12,9 +12,13 @@ path = "src/main.rs"
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[features]
+default = []
+lldb = ["dep:lldb"]
+
 [dependencies]
 kajit = { path = "../kajit" }
-lldb = { path = "../vendor/lldb-rs" }
+lldb = { path = "../vendor/lldb-rs", optional = true }
 kajit-ir = { path = "../kajit-ir" }
 kajit-ir-text = { path = "../kajit-ir-text" }
 kajit-lir = { path = "../kajit-lir" }
