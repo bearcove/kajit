@@ -1311,6 +1311,36 @@ impl IrBuilder {
         IrBuilder { func }
     }
 
+    /// Create a new builder with data args on the root lambda.
+    /// Returns the builder plus the `PortSource` for each data arg.
+    pub fn new_with_data_args(
+        label: impl Into<String>,
+        output_size: usize,
+        data_arg_count: usize,
+    ) -> (Self, Vec<PortSource>) {
+        let mut builder = Self::new(label, output_size);
+        let body = builder.func.lambda_body(LambdaId::new(0));
+        // Insert data args before the existing state domain args.
+        let existing_args = builder.func.regions[body].args.clone();
+        let mut new_args = Vec::with_capacity(data_arg_count + existing_args.len());
+        let mut data_sources = Vec::with_capacity(data_arg_count);
+        for _ in 0..data_arg_count {
+            let arg_id = builder.func.region_args.push(RegionArg {
+                kind: PortKind::Data,
+                vreg: None,
+                debug_value: None,
+            });
+            data_sources.push(PortSource::RegionArg(RegionArgRef {
+                region: body,
+                arg: arg_id,
+            }));
+            new_args.push(arg_id);
+        }
+        new_args.extend(existing_args);
+        builder.func.regions[body].args = new_args;
+        (builder, data_sources)
+    }
+
     /// Get a [`RegionBuilder`] for the root lambda's body.
     pub fn root_region(&mut self) -> RegionBuilder<'_> {
         self.lambda_region(LambdaId::new(0))

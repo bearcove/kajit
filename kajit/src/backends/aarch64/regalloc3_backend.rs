@@ -1939,20 +1939,14 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
     // Emit function prologue
     let (entry, error_exit) = if is_scalar_function {
-        // Scalar function: minimal prologue — just frame setup + store args to slots.
+        // Scalar function: minimal prologue — just frame setup.
+        // Parameters arrive in arg registers and flow through the RVSDG
+        // as data ports — no slot stores needed.
         let entry = ectx.emit.current_offset() as u32;
         let error_exit = ectx.emit.new_label();
         let frame_size = ectx.frame_size;
         if frame_size > 0 {
             ectx.emit_sub_imm_any(Reg::SP, Reg::SP, frame_size);
-        }
-        // Store argument registers into their corresponding slots.
-        for i in 0..program.param_slot_count.min(8) {
-            let arg_reg = Reg::from_raw(i as u8); // x0, x1, x2, ...
-            let off = slot_base + i * 8;
-            ectx.emit
-                .emit_str_imm(Width::X64, arg_reg, Reg::SP, off)
-                .expect("str arg to slot");
         }
         ectx.error_exit = error_exit;
         (entry, error_exit)
@@ -2024,26 +2018,81 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     // Bind success exit and emit epilogue
     ectx.bind_label(success_exit);
     if is_scalar_function {
-        // Scalar function epilogue: move data_result to x0, restore frame, ret.
-        // The data_result vreg should already be in some register from regalloc.
+        // Scalar function epilogue: move data_results to x0, x1, ..., restore frame, ret.
         if let Some(func) = program.funcs.first() {
-            if let Some(&result_vreg) = func.data_results.first() {
-                if let Some(alloc_func) = alloc.functions.first() {
-                    if let Some(preg) = alloc_func.preg_for_vreg(result_vreg) {
-                        let result_reg = Reg::from_raw(preg.0);
-                        if result_reg != Reg::X0 {
-                            ectx.emit
-                                .emit_mov_reg(Width::X64, Reg::X0, result_reg)
-                                .expect("mov result to x0");
-                        }
-                    } else {
-                        // Spilled — load from spill slot into x0.
-                        if let Some(slot) = alloc_func.spill_slot_for_vreg(result_vreg) {
+            if let Some(alloc_func) = alloc.functions.first() {
+                // Resolve each result vreg to its physical location.
+                let result_regs: Vec<Option<Reg>> = func
+                    .data_results
+                    .iter()
+                    .map(|&vreg| {
+                        if let Some(preg) = alloc_func.preg_for_vreg(vreg) {
+                            Some(Reg::from_raw(preg.0))
+                        } else if let Some(slot) = alloc_func.spill_slot_for_vreg(vreg) {
+                            // Load spilled values into scratch first.
                             let offset = ectx.base_frame + (slot.0 * 8);
                             ectx.emit
-                                .emit_ldr_imm(Width::X64, Reg::X0, Reg::SP, offset)
+                                .emit_ldr_imm(Width::X64, Reg::X9, Reg::SP, offset)
                                 .expect("ldr result from spill");
+                            Some(Reg::X9)
+                        } else {
+                            None
                         }
+                    })
+                    .collect();
+
+                // Emit parallel move: check if any target is a source for a
+                // later move and use x9 as scratch to break cycles.
+                let n = result_regs.len();
+                let mut done = vec![false; n];
+                for round in 0..n + 1 {
+                    let mut progress = false;
+                    for i in 0..n {
+                        if done[i] {
+                            continue;
+                        }
+                        let target = Reg::from_raw(i as u8);
+                        let Some(src) = result_regs[i] else {
+                            done[i] = true;
+                            continue;
+                        };
+                        if src == target {
+                            done[i] = true;
+                            progress = true;
+                            continue;
+                        }
+                        // Check if target is needed as source by an undone move.
+                        let blocked =
+                            (0..n).any(|j| !done[j] && j != i && result_regs[j] == Some(target));
+                        if !blocked || round == n {
+                            // If blocked on last round, use scratch to break cycle.
+                            if blocked {
+                                // Save the blocking value through scratch.
+                                let blocker = (0..n)
+                                    .find(|&j| !done[j] && j != i && result_regs[j] == Some(target))
+                                    .unwrap();
+                                ectx.emit
+                                    .emit_mov_reg(Width::X64, Reg::X9, target)
+                                    .expect("mov scratch");
+                                ectx.emit
+                                    .emit_mov_reg(Width::X64, target, src)
+                                    .expect("mov result");
+                                ectx.emit
+                                    .emit_mov_reg(Width::X64, Reg::from_raw(blocker as u8), Reg::X9)
+                                    .expect("mov from scratch");
+                                done[i] = true;
+                                done[blocker] = true;
+                            } else {
+                                ectx.emit
+                                    .emit_mov_reg(Width::X64, target, src)
+                                    .expect("mov result to return reg");
+                                done[i] = true;
+                            }
+                            progress = true;
+                        }
+                    }
+                    if done.iter().all(|&d| d) || !progress {
+                        break;
                     }
                 }
             }

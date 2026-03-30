@@ -33,12 +33,24 @@ pub fn allocate(
     hints: &HintMap,
     _copy_hints: &CopyHints,
 ) -> AllocationResult {
-    allocate_with_excluded(func, liveness, abi, scratch, hints, _copy_hints, &[])
+    allocate_with_excluded(
+        func,
+        liveness,
+        abi,
+        scratch,
+        hints,
+        _copy_hints,
+        &[],
+        &HashMap::new(),
+    )
 }
 
 /// Like `allocate`, but with additional registers excluded from allocation.
 /// Used to reserve registers for hardcoded ABI roles (e.g., x0/x1 for output_ptr/ctx_ptr
 /// in leaf functions).
+///
+/// `fixed_colors`: VRegs that must be assigned to specific physical registers
+/// (e.g., function parameters that arrive in ABI argument registers).
 pub fn allocate_with_excluded(
     func: &Function,
     liveness: &LivenessInfo,
@@ -47,6 +59,7 @@ pub fn allocate_with_excluded(
     hints: &HintMap,
     _copy_hints: &CopyHints,
     extra_excluded: &[PReg],
+    fixed_colors: &HashMap<VReg, PReg>,
 ) -> AllocationResult {
     let dom = DominanceInfo::compute(func);
     let loop_info = LoopInfo::compute(func, &dom);
@@ -77,6 +90,14 @@ pub fn allocate_with_excluded(
     const DEF_AT_ENTRY: u32 = u32::MAX;
     let mut def_block: HashMap<VReg, BlockId> = HashMap::new();
     let mut def_inst_idx: HashMap<VReg, u32> = HashMap::new();
+
+    // Function data_args are defined at the entry block (before all instructions),
+    // just like block params.
+    for &arg in &func.data_args {
+        def_block.insert(arg, func.entry);
+        def_inst_idx.insert(arg, DEF_AT_ENTRY);
+    }
+
     for block in &func.blocks {
         if block.dead {
             continue;
@@ -115,6 +136,7 @@ pub fn allocate_with_excluded(
         &allocatable,
         &callee_saved_set,
         &live_across_call,
+        fixed_colors,
     );
 
     if std::env::var("KAJIT_RA_DEBUG").is_ok() {
@@ -550,8 +572,10 @@ fn color_phase(
     allocatable: &[PReg],
     callee_saved_set: &HashSet<PReg>,
     live_across_call: &HashSet<VReg>,
+    fixed_colors: &HashMap<VReg, PReg>,
 ) -> HashMap<VReg, PReg> {
-    let mut coloring: HashMap<VReg, PReg> = HashMap::new();
+    // Start with fixed colorings (e.g., function parameters in ABI registers).
+    let mut coloring: HashMap<VReg, PReg> = fixed_colors.clone();
 
     // Walk domtree in preorder
     let preorder = domtree_preorder(func.entry, dom);

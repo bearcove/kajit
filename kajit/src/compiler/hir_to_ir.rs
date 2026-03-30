@@ -2183,84 +2183,72 @@ pub fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
 /// machinery. All params get slots, all locals get slots, expressions lower
 /// to IR operations, and `return expr` sets the region result.
 fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate::ir::IrFunc {
-    let mut builder = crate::ir::IrBuilder::new(&function.name, 0);
-    let param_count = function.params.len() as u32;
+    // Count the total number of u64-sized words across all params.
+    let param_word_count: usize = function
+        .params
+        .iter()
+        .map(|p| ScalarHirIrLowerer::word_count_for_type(module, &p.ty))
+        .sum();
+
+    let (mut builder, data_arg_sources) =
+        crate::ir::IrBuilder::new_with_data_args(&function.name, 0, param_word_count);
     {
         let mut rb = builder.root_region();
-        let lowerer = ScalarHirIrLowerer::new(&mut rb, module, function);
+        let mut lowerer = ScalarHirIrLowerer::new(module, function, &data_arg_sources);
         let ret = lowerer.lower_block(&mut rb, &function.body.statements);
-        if let Some(ret_val) = ret {
-            rb.set_results(&[ret_val]);
-        } else {
-            rb.set_results(&[]);
+        match ret {
+            Some(ret_vals) => rb.set_results(&ret_vals),
+            None => rb.set_results(&[]),
         }
     }
     let mut func = builder.finish();
-    func.param_slot_count = param_count;
+    func.param_slot_count = param_word_count as u32;
     func
 }
 
 struct ScalarHirIrLowerer<'a> {
     module: &'a hir::Module,
-    /// Base slot for each local (params and locals alike). Multi-field types
-    /// occupy consecutive slots starting at the base.
-    local_base_slots: std::collections::HashMap<hir::LocalId, crate::ir::SlotId>,
+    /// Port sources for each local (params and locals). Multi-word types
+    /// have multiple port sources (one per u64 word).
+    local_values: std::collections::HashMap<hir::LocalId, Vec<crate::ir::PortSource>>,
     /// Type of each local, for field resolution.
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
 }
 
-/// A resolved place in the scalar lowerer — always a local with a slot offset.
-struct ResolvedScalarPlace<'a> {
-    ty: &'a hir::Type,
-    base_slot: crate::ir::SlotId,
-    slot_offset: usize,
-}
-
 impl<'a> ScalarHirIrLowerer<'a> {
     fn new(
-        rb: &mut RegionBuilder<'_>,
         module: &'a hir::Module,
         function: &'a hir::Function,
+        data_arg_sources: &[crate::ir::PortSource],
     ) -> Self {
-        let mut local_base_slots = std::collections::HashMap::new();
+        let mut local_values = std::collections::HashMap::new();
         let mut local_types = std::collections::HashMap::new();
+
+        // Params: consume data arg port sources in order.
+        let mut arg_cursor = 0;
         for param in &function.params {
-            let base_slot = Self::alloc_local(rb, module, &param.ty);
-            local_base_slots.insert(param.local, base_slot);
+            let word_count = Self::word_count_for_type(module, &param.ty);
+            let sources = data_arg_sources[arg_cursor..arg_cursor + word_count].to_vec();
+            arg_cursor += word_count;
+            local_values.insert(param.local, sources);
             local_types.insert(param.local, &param.ty);
         }
+        assert_eq!(arg_cursor, data_arg_sources.len());
+
+        // Locals: register types. Values are populated by Let or field writes.
         for local in &function.locals {
-            let base_slot = Self::alloc_local(rb, module, &local.ty);
-            local_base_slots.insert(local.local, base_slot);
             local_types.insert(local.local, &local.ty);
         }
+
         Self {
             module,
-            local_base_slots,
+            local_values,
             local_types,
         }
     }
 
-    fn alloc_local(
-        rb: &mut RegionBuilder<'_>,
-        module: &hir::Module,
-        ty: &hir::Type,
-    ) -> crate::ir::SlotId {
-        let slot_count = Self::slot_count_for_type(module, ty);
-        let base_slot = rb.alloc_slot();
-        if slot_count > 1 {
-            rb.func().multi_slot_group.insert(base_slot);
-            for _ in 1..slot_count {
-                let sub_slot = rb.alloc_slot();
-                rb.func().multi_slot_group.insert(sub_slot);
-            }
-        } else {
-            rb.func().scalar_temp_slots.insert(base_slot);
-        }
-        base_slot
-    }
-
-    fn slot_count_for_type(module: &hir::Module, ty: &hir::Type) -> usize {
+    /// Number of u64-sized words needed to represent a type.
+    fn word_count_for_type(module: &hir::Module, ty: &hir::Type) -> usize {
         match ty {
             hir::Type::Unit
             | hir::Type::Bool
@@ -2268,163 +2256,104 @@ impl<'a> ScalarHirIrLowerer<'a> {
             | hir::Type::Address { .. }
             | hir::Type::Handle { .. } => 1,
             hir::Type::Str { .. } | hir::Type::Slice { .. } => 2,
-            hir::Type::Array { element, len } => Self::slot_count_for_type(module, element)
+            hir::Type::Array { element, len } => Self::word_count_for_type(module, element)
                 .saturating_mul(*len)
                 .max(1),
             hir::Type::Named { def, .. } => match &module.type_defs[*def].kind {
                 hir::TypeDefKind::Struct { fields } => fields
                     .iter()
-                    .map(|f| Self::slot_count_for_type(module, &f.ty))
+                    .map(|f| Self::word_count_for_type(module, &f.ty))
                     .sum::<usize>()
                     .max(1),
                 hir::TypeDefKind::Enum { variants, .. } => {
-                    let payload_slots = variants
+                    let payload_words = variants
                         .iter()
                         .map(|v| {
                             v.fields
                                 .iter()
-                                .map(|f| Self::slot_count_for_type(module, &f.ty))
+                                .map(|f| Self::word_count_for_type(module, &f.ty))
                                 .sum::<usize>()
                         })
                         .max()
                         .unwrap_or(0);
-                    (1 + payload_slots).max(1)
+                    (1 + payload_words).max(1)
                 }
             },
         }
     }
 
-    fn slot_at(base: crate::ir::SlotId, offset: usize) -> crate::ir::SlotId {
-        crate::ir::SlotId::new(base.index() as u32 + offset as u32)
-    }
-
-    /// If the outermost place is a dynamic (non-literal) index, return the
-    /// base place and index expression. Otherwise return None.
-    fn dynamic_index_place<'p>(place: &'p hir::Place) -> Option<(&'p hir::Place, &'p hir::Expr)> {
-        if let hir::Place::Index { base, index } = place {
-            if !matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_))) {
-                return Some((base, index));
-            }
-        }
-        None
-    }
-
-    /// Compute the runtime address for a dynamic array index.
-    /// Returns (element_type, address).
-    fn lower_dynamic_index_addr(
+    /// Resolve a local + field path to the type and word offset within the
+    /// local's port source vector.
+    fn resolve_local_field(
         &self,
-        rb: &mut RegionBuilder<'_>,
-        base_place: &hir::Place,
-        index: &hir::Expr,
-    ) -> (&'a hir::Type, crate::ir::PortSource) {
-        let resolved = self.resolve_place(base_place);
-        let hir::Type::Array { element, .. } = resolved.ty else {
-            panic!("dynamic index requires array type, got {:?}", resolved.ty);
-        };
-        let index = self.lower_expr(rb, index);
-        let elem_slots = Self::slot_count_for_type(self.module, element);
-        let total_slots = Self::slot_count_for_type(self.module, resolved.ty);
-        let base_addr = rb.slot_addr(
-            Self::slot_at(resolved.base_slot, resolved.slot_offset),
-            total_slots as u32,
-        );
-        let stride = elem_slots * crate::ir::SLOT_ADDR_STRIDE_BYTES;
-        let addr = if stride == 1 {
-            rb.binop(crate::ir::IrOp::Add, base_addr, index)
-        } else {
-            let stride_val = rb.const_val(stride as u64);
-            let scaled = rb.binop(crate::ir::IrOp::Mul, index, stride_val);
-            rb.binop(crate::ir::IrOp::Add, base_addr, scaled)
-        };
-        (element, addr)
+        local: hir::LocalId,
+        fields: &[(String, &hir::Type)],
+    ) -> (usize, &'a hir::Type) {
+        let mut offset = 0usize;
+        let mut ty = self.local_types[&local];
+        for (field_name, _) in fields {
+            let hir::Type::Named { def, .. } = ty else {
+                panic!("field access requires a named struct type, got {:?}", ty);
+            };
+            let hir::TypeDefKind::Struct { fields: field_defs } = &self.module.type_defs[*def].kind
+            else {
+                panic!("field access requires a struct type def");
+            };
+            let mut running = 0usize;
+            let (field_ty, field_offset) = field_defs
+                .iter()
+                .find_map(|candidate| {
+                    let found =
+                        (candidate.name == field_name.as_str()).then_some((&candidate.ty, running));
+                    running += Self::word_count_for_type(self.module, &candidate.ty);
+                    found
+                })
+                .unwrap_or_else(|| panic!("missing struct field {field_name}"));
+            offset += field_offset;
+            ty = field_ty;
+        }
+        (offset, ty)
     }
 
-    fn scalar_width_for_hir_type(ty: &hir::Type) -> crate::ir::Width {
-        match ty {
-            hir::Type::Bool => crate::ir::Width::W1,
-            hir::Type::Integer(kind) => match kind.bits {
-                8 => crate::ir::Width::W1,
-                16 => crate::ir::Width::W2,
-                32 => crate::ir::Width::W4,
-                64 => crate::ir::Width::W8,
-                other => panic!("unsupported integer width: {other}"),
-            },
-            hir::Type::Address { .. } | hir::Type::Handle { .. } => crate::ir::Width::W8,
-            _ => panic!("unsupported scalar type for width: {ty:?}"),
+    /// Collect the chain of field accesses from an expression.
+    /// Returns (base local, list of field names with types).
+    fn expr_field_chain(expr: &hir::Expr) -> (hir::LocalId, Vec<(String, &hir::Type)>) {
+        match expr {
+            hir::Expr::Local(local) => (*local, vec![]),
+            hir::Expr::Field { base, field } => {
+                let (local, mut chain) = Self::expr_field_chain(base);
+                chain.push((field.clone(), &hir::Type::Unit));
+                (local, chain)
+            }
+            other => panic!("expected local or field chain, got {other:?}"),
         }
     }
 
-    fn ir_width(width: hir::MemoryWidth) -> crate::ir::Width {
-        match width {
-            hir::MemoryWidth::W1 => crate::ir::Width::W1,
-            hir::MemoryWidth::W2 => crate::ir::Width::W2,
-            hir::MemoryWidth::W4 => crate::ir::Width::W4,
-            hir::MemoryWidth::W8 => crate::ir::Width::W8,
-        }
-    }
-
-    fn resolve_place(&self, place: &hir::Place) -> ResolvedScalarPlace<'a> {
+    /// Collect the chain of field accesses from a place.
+    fn place_field_chain(place: &hir::Place) -> (hir::LocalId, Vec<(String, &hir::Type)>) {
         match place {
-            hir::Place::Local(local) => ResolvedScalarPlace {
-                ty: self.local_types[local],
-                base_slot: self.local_base_slots[local],
-                slot_offset: 0,
-            },
+            hir::Place::Local(local) => (*local, vec![]),
             hir::Place::Field { base, field } => {
-                let parent = self.resolve_place(base);
-                let hir::Type::Named { def, .. } = parent.ty else {
-                    panic!(
-                        "field access requires a named struct type, got {:?}",
-                        parent.ty
-                    );
-                };
-                let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind else {
-                    panic!("field access requires a struct type def");
-                };
-                let mut running_slots = 0usize;
-                let (field_ty, field_slot_offset) = fields
-                    .iter()
-                    .find_map(|candidate| {
-                        let found = (candidate.name == field.as_str())
-                            .then_some((&candidate.ty, running_slots));
-                        running_slots += Self::slot_count_for_type(self.module, &candidate.ty);
-                        found
-                    })
-                    .unwrap_or_else(|| panic!("missing struct field {field}"));
-                ResolvedScalarPlace {
-                    ty: field_ty,
-                    base_slot: parent.base_slot,
-                    slot_offset: parent.slot_offset + field_slot_offset,
-                }
+                let (local, mut chain) = Self::place_field_chain(base);
+                chain.push((field.clone(), &hir::Type::Unit));
+                (local, chain)
             }
-            hir::Place::Index { base, index } => {
-                let hir::Expr::Literal(hir::Literal::Integer(index)) = &**index else {
-                    panic!("array index must be an integer literal");
-                };
-                let index = *index as usize;
-                let parent = self.resolve_place(base);
-                let hir::Type::Array { element, len } = parent.ty else {
-                    panic!("index access requires an array type, got {:?}", parent.ty);
-                };
-                assert!(
-                    index < *len,
-                    "array index {index} out of bounds for len {len}"
-                );
-                let elem_slots = Self::slot_count_for_type(self.module, element);
-                ResolvedScalarPlace {
-                    ty: element,
-                    base_slot: parent.base_slot,
-                    slot_offset: parent.slot_offset + index * elem_slots,
-                }
-            }
+            other => panic!("expected local or field place, got {other:?}"),
         }
+    }
+
+    /// Get the port sources for an expression (one per word).
+    fn get_local_values(&self, local: hir::LocalId) -> &[crate::ir::PortSource] {
+        self.local_values
+            .get(&local)
+            .unwrap_or_else(|| panic!("local {local:?} not yet defined"))
     }
 
     fn lower_block(
-        &self,
+        &mut self,
         rb: &mut RegionBuilder<'_>,
         statements: &[hir::Stmt],
-    ) -> Option<crate::ir::PortSource> {
+    ) -> Option<Vec<crate::ir::PortSource>> {
         for stmt in statements {
             if let Some(ret) = self.lower_stmt(rb, stmt) {
                 return Some(ret);
@@ -2433,41 +2362,72 @@ impl<'a> ScalarHirIrLowerer<'a> {
         None
     }
 
-    fn lower_stmt(
+    /// Lower an expression into one or more port sources (one per word).
+    fn lower_expr_multi(
         &self,
         rb: &mut RegionBuilder<'_>,
+        expr: &hir::Expr,
+    ) -> Vec<crate::ir::PortSource> {
+        match expr {
+            hir::Expr::Local(local) => self.get_local_values(*local).to_vec(),
+            hir::Expr::Field { .. } => {
+                let (local, chain) = Self::expr_field_chain(expr);
+                let values = self.get_local_values(local);
+                let (offset, ty) = self.resolve_local_field(local, &chain);
+                let word_count = Self::word_count_for_type(self.module, ty);
+                values[offset..offset + word_count].to_vec()
+            }
+            hir::Expr::Struct { def, fields } => {
+                let hir::TypeDefKind::Struct { fields: field_defs } =
+                    &self.module.type_defs[*def].kind
+                else {
+                    panic!("Expr::Struct requires a struct type def");
+                };
+                let mut result = Vec::new();
+                for field_def in field_defs {
+                    let (_, expr) = fields
+                        .iter()
+                        .find(|(name, _)| name == &field_def.name)
+                        .unwrap_or_else(|| panic!("missing struct field {}", field_def.name));
+                    result.extend(self.lower_expr_multi(rb, expr));
+                }
+                result
+            }
+            _ => vec![self.lower_expr(rb, expr)],
+        }
+    }
+
+    fn lower_stmt(
+        &mut self,
+        rb: &mut RegionBuilder<'_>,
         stmt: &hir::Stmt,
-    ) -> Option<crate::ir::PortSource> {
+    ) -> Option<Vec<crate::ir::PortSource>> {
         match &stmt.kind {
             hir::StmtKind::Init { place, value } | hir::StmtKind::Assign { place, value } => {
-                // Check for dynamic index write (non-literal index in the place).
-                if let Some((base, index)) = Self::dynamic_index_place(place) {
-                    let val = self.lower_expr(rb, value);
-                    let (elem_ty, addr) = self.lower_dynamic_index_addr(rb, base, index);
-                    let width = Self::scalar_width_for_hir_type(elem_ty);
-                    rb.store_to_addr(addr, val, width);
-                    return None;
-                }
-                let resolved = self.resolve_place(place);
-                let slot_count = Self::slot_count_for_type(self.module, resolved.ty);
-                if slot_count == 1 {
-                    let val = self.lower_expr(rb, value);
-                    rb.write_to_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset), val);
-                } else {
-                    // Multi-slot assignment: the value must also be a place (local/field)
-                    // so we copy slot-by-slot.
-                    let source = self.expr_to_place(value);
-                    let src_resolved = self.resolve_place(&source);
-                    for i in 0..slot_count {
-                        let val = rb.read_from_slot(Self::slot_at(
-                            src_resolved.base_slot,
-                            src_resolved.slot_offset + i,
-                        ));
-                        rb.write_to_slot(
-                            Self::slot_at(resolved.base_slot, resolved.slot_offset + i),
-                            val,
-                        );
+                let new_values = self.lower_expr_multi(rb, value);
+                match place {
+                    hir::Place::Local(local) => {
+                        self.local_values.insert(*local, new_values);
                     }
+                    hir::Place::Field { .. } => {
+                        // Field write: update specific words within the local's vector.
+                        let (local, chain) = Self::place_field_chain(place);
+                        let (offset, ty) = self.resolve_local_field(local, &chain);
+                        let word_count = Self::word_count_for_type(self.module, ty);
+                        assert_eq!(new_values.len(), word_count);
+                        // Lazily initialize the local with zero constants if needed.
+                        if !self.local_values.contains_key(&local) {
+                            let local_ty = self.local_types[&local];
+                            let total_words = Self::word_count_for_type(self.module, local_ty);
+                            let zero = rb.const_val(0);
+                            self.local_values.insert(local, vec![zero; total_words]);
+                        }
+                        let values = self.local_values.get_mut(&local).unwrap();
+                        for (i, val) in new_values.into_iter().enumerate() {
+                            values[offset + i] = val;
+                        }
+                    }
+                    other => panic!("unsupported scalar HIR place: {other:?}"),
                 }
                 None
             }
@@ -2490,12 +2450,6 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 None
             }
             hir::StmtKind::Expr(_) => None,
-            hir::StmtKind::Store { addr, width, value } => {
-                let addr = self.lower_expr(rb, addr);
-                let value = self.lower_expr(rb, value);
-                rb.store_to_addr(addr, value, Self::ir_width(*width));
-                None
-            }
             hir::StmtKind::Fail { code } => {
                 rb.error_exit(*code);
                 None
@@ -2509,19 +2463,32 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 let else_block = else_block
                     .as_ref()
                     .expect("scalar HIR if requires else branch");
-                let _ = rb.gamma(predicate, &[], 2, |branch_idx, branch| {
-                    match branch_idx {
-                        0 => {
-                            self.lower_block(branch, &else_block.statements);
-                        }
-                        1 => {
-                            self.lower_block(branch, &then_block.statements);
-                        }
+                let mut branch_ret_count: Option<usize> = None;
+                let gamma_outputs = rb.gamma(predicate, &[], 2, |branch_idx, branch| {
+                    let block = match branch_idx {
+                        0 => &else_block.statements,
+                        1 => &then_block.statements,
                         _ => unreachable!(),
+                    };
+                    if let Some(vals) = self.lower_block(branch, block) {
+                        if let Some(expected) = branch_ret_count {
+                            assert_eq!(
+                                vals.len(),
+                                expected,
+                                "gamma branches must return same number of values"
+                            );
+                        }
+                        branch_ret_count = Some(vals.len());
+                        branch.set_results(&vals);
+                    } else {
+                        branch.set_results(&[]);
                     }
-                    branch.set_results(&[]);
                 });
-                None
+                if branch_ret_count.is_some() {
+                    Some(gamma_outputs)
+                } else {
+                    None
+                }
             }
             hir::StmtKind::Match { scrutinee, arms } => {
                 let predicate = self.lower_expr(rb, scrutinee);
@@ -2534,11 +2501,28 @@ impl<'a> ScalarHirIrLowerer<'a> {
                         "scalar HIR requires contiguous integer match arms starting at 0"
                     );
                 }
-                let _ = rb.gamma(predicate, &[], arms.len(), |branch_idx, branch| {
-                    self.lower_block(branch, &arms[branch_idx].body.statements);
-                    branch.set_results(&[]);
+                let mut branch_ret_count: Option<usize> = None;
+                let gamma_outputs = rb.gamma(predicate, &[], arms.len(), |branch_idx, branch| {
+                    if let Some(vals) = self.lower_block(branch, &arms[branch_idx].body.statements)
+                    {
+                        if let Some(expected) = branch_ret_count {
+                            assert_eq!(
+                                vals.len(),
+                                expected,
+                                "gamma branches must return same number of values"
+                            );
+                        }
+                        branch_ret_count = Some(vals.len());
+                        branch.set_results(&vals);
+                    } else {
+                        branch.set_results(&[]);
+                    }
                 });
-                None
+                if branch_ret_count.is_some() {
+                    Some(gamma_outputs)
+                } else {
+                    None
+                }
             }
             hir::StmtKind::Loop {
                 body,
@@ -2562,14 +2546,14 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 }
                 None
             }
-            hir::StmtKind::Return(Some(expr)) => Some(self.lower_expr(rb, expr)),
+            hir::StmtKind::Return(Some(expr)) => Some(self.lower_expr_multi(rb, expr)),
             hir::StmtKind::Return(None) => None,
             other => panic!("unsupported scalar HIR statement: {other:?}"),
         }
     }
 
     fn lower_loop_block(
-        &self,
+        &mut self,
         rb: &mut RegionBuilder<'_>,
         statements: &[hir::Stmt],
         active_slot: crate::ir::SlotId,
@@ -2577,19 +2561,17 @@ impl<'a> ScalarHirIrLowerer<'a> {
     ) {
         let mut i = 0;
         while i < statements.len() {
-            // Batch consecutive non-control-flow statements into a single guard.
             let start = i;
             while i < statements.len() && !Self::is_loop_control_flow(&statements[i]) {
                 i += 1;
             }
             if start < i {
-                self.with_active_guard(rb, active_slot, |guard_rb| {
+                self.with_active_guard(rb, active_slot, |guard_rb, this| {
                     for stmt in &statements[start..i] {
-                        self.lower_stmt(guard_rb, stmt);
+                        this.lower_stmt(guard_rb, stmt);
                     }
                 });
             }
-            // Lower the control-flow statement in its own guard.
             if i < statements.len() {
                 self.lower_loop_control_flow_stmt(rb, &statements[i], active_slot, continue_slot);
                 i += 1;
@@ -2609,13 +2591,13 @@ impl<'a> ScalarHirIrLowerer<'a> {
     }
 
     fn lower_loop_control_flow_stmt(
-        &self,
+        &mut self,
         rb: &mut RegionBuilder<'_>,
         stmt: &hir::Stmt,
         active_slot: crate::ir::SlotId,
         continue_slot: crate::ir::SlotId,
     ) {
-        self.with_active_guard(rb, active_slot, |guard_rb| match &stmt.kind {
+        self.with_active_guard(rb, active_slot, |guard_rb, this| match &stmt.kind {
             hir::StmtKind::Break => {
                 let zero = guard_rb.const_val(0);
                 guard_rb.write_to_slot(active_slot, zero);
@@ -2632,19 +2614,19 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 then_block,
                 else_block,
             } => {
-                let predicate = self.lower_expr(guard_rb, condition);
+                let predicate = this.lower_expr(guard_rb, condition);
                 let else_block = else_block
                     .as_ref()
                     .expect("scalar HIR loop if requires else branch");
                 let _ = guard_rb.gamma(predicate, &[], 2, |branch_idx, branch| {
                     match branch_idx {
-                        0 => self.lower_loop_block(
+                        0 => this.lower_loop_block(
                             branch,
                             &else_block.statements,
                             active_slot,
                             continue_slot,
                         ),
-                        1 => self.lower_loop_block(
+                        1 => this.lower_loop_block(
                             branch,
                             &then_block.statements,
                             active_slot,
@@ -2656,7 +2638,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 });
             }
             hir::StmtKind::Match { scrutinee, arms } => {
-                let predicate = self.lower_expr(guard_rb, scrutinee);
+                let predicate = this.lower_expr(guard_rb, scrutinee);
                 for (expected, arm) in arms.iter().enumerate() {
                     let hir::Pattern::Integer(value) = arm.pattern else {
                         panic!("scalar HIR loop only supports integer match patterns");
@@ -2667,7 +2649,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     );
                 }
                 let _ = guard_rb.gamma(predicate, &[], arms.len(), |branch_idx, branch| {
-                    self.lower_loop_block(
+                    this.lower_loop_block(
                         branch,
                         &arms[branch_idx].body.statements,
                         active_slot,
@@ -2687,7 +2669,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     let one = body_rb.const_val(1);
                     body_rb.write_to_slot(nested_active, one);
                     body_rb.write_to_slot(nested_continue, one);
-                    self.lower_loop_block(
+                    this.lower_loop_block(
                         body_rb,
                         &body.statements,
                         nested_active,
@@ -2709,34 +2691,19 @@ impl<'a> ScalarHirIrLowerer<'a> {
     }
 
     fn with_active_guard(
-        &self,
+        &mut self,
         rb: &mut RegionBuilder<'_>,
         active_slot: crate::ir::SlotId,
-        f: impl FnOnce(&mut RegionBuilder<'_>),
+        f: impl FnOnce(&mut RegionBuilder<'_>, &mut Self),
     ) {
         let active = rb.read_from_slot(active_slot);
         let mut f = Some(f);
         let _ = rb.gamma(active, &[], 2, |branch_idx, branch| {
             if branch_idx == 1 {
-                f.take().expect("active branch should lower exactly once")(branch);
+                f.take().expect("active branch should lower exactly once")(branch, self);
             }
             branch.set_results(&[]);
         });
-    }
-
-    fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {
-        match expr {
-            hir::Expr::Local(local) => hir::Place::Local(*local),
-            hir::Expr::Field { base, field } => hir::Place::Field {
-                base: Box::new(self.expr_to_place(base)),
-                field: field.clone(),
-            },
-            hir::Expr::Index { base, index } => hir::Place::Index {
-                base: Box::new(self.expr_to_place(base)),
-                index: Box::new(*index.clone()),
-            },
-            other => panic!("cannot convert expression to place: {other:?}"),
-        }
     }
 
     fn lower_call_expr(
@@ -2770,51 +2737,34 @@ impl<'a> ScalarHirIrLowerer<'a> {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
             hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
             hir::Expr::Local(local) => {
-                let base_slot = self.local_base_slots[local];
-                rb.read_from_slot(base_slot)
+                let values = self.get_local_values(*local);
+                assert_eq!(values.len(), 1, "lower_expr on multi-word local");
+                values[0]
             }
             hir::Expr::Load { addr, width } => {
                 let addr = self.lower_expr(rb, addr);
                 rb.load_from_addr(addr, Self::ir_width(*width))
             }
             hir::Expr::SliceData { value } => {
-                let place = self.expr_to_place(value);
-                let resolved = self.resolve_place(&place);
-                rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset))
+                let values = self.lower_expr_multi(rb, value);
+                assert!(values.len() >= 2, "SliceData requires 2-word type");
+                values[0]
             }
             hir::Expr::SliceLen { value } => {
-                let place = self.expr_to_place(value);
-                let resolved = self.resolve_place(&place);
-                rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset + 1))
+                let values = self.lower_expr_multi(rb, value);
+                assert!(values.len() >= 2, "SliceLen requires 2-word type");
+                values[1]
             }
             hir::Expr::Field { .. } => {
-                let place = self.expr_to_place(expr);
-                let resolved = self.resolve_place(&place);
+                let (local, chain) = Self::expr_field_chain(expr);
+                let values = self.get_local_values(local);
+                let (offset, ty) = self.resolve_local_field(local, &chain);
                 assert_eq!(
-                    Self::slot_count_for_type(self.module, resolved.ty),
+                    Self::word_count_for_type(self.module, ty),
                     1,
-                    "scalar read requires single-slot type"
+                    "lower_expr on multi-word field"
                 );
-                rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset))
-            }
-            hir::Expr::Index { base, index } => {
-                if matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_))) {
-                    // Static index — resolve to a slot directly.
-                    let place = self.expr_to_place(expr);
-                    let resolved = self.resolve_place(&place);
-                    assert_eq!(
-                        Self::slot_count_for_type(self.module, resolved.ty),
-                        1,
-                        "scalar read requires single-slot type"
-                    );
-                    rb.read_from_slot(Self::slot_at(resolved.base_slot, resolved.slot_offset))
-                } else {
-                    // Dynamic index — compute address at runtime.
-                    let base_place = self.expr_to_place(base);
-                    let (elem_ty, addr) = self.lower_dynamic_index_addr(rb, &base_place, index);
-                    let width = Self::scalar_width_for_hir_type(elem_ty);
-                    rb.load_from_addr(addr, width)
-                }
+                values[offset]
             }
             hir::Expr::Binary { op, lhs, rhs } => {
                 let lhs = self.lower_expr(rb, lhs);
@@ -2843,6 +2793,15 @@ impl<'a> ScalarHirIrLowerer<'a> {
             }
             hir::Expr::Call(call) => self.lower_call_expr(rb, call),
             other => panic!("unsupported scalar HIR expression: {other:?}"),
+        }
+    }
+
+    fn ir_width(width: hir::MemoryWidth) -> crate::ir::Width {
+        match width {
+            hir::MemoryWidth::W1 => crate::ir::Width::W1,
+            hir::MemoryWidth::W2 => crate::ir::Width::W2,
+            hir::MemoryWidth::W4 => crate::ir::Width::W4,
+            hir::MemoryWidth::W8 => crate::ir::Width::W8,
         }
     }
 }

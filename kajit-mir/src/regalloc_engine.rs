@@ -619,6 +619,7 @@ impl AdapterFunction {
         num_vregs: usize,
         mut blocks: Vec<WorkBlock>,
         edge_infos: Vec<Option<EdgeBlockInfo>>,
+        abi_arg_offset: u8,
     ) -> Self {
         let trace_self_loop = std::env::var_os("KAJIT_TRACE_SELF_LOOP").is_some();
         let mut adapter_insts = Vec::<AdapterInst>::new();
@@ -632,7 +633,7 @@ impl AdapterFunction {
             if block_index == 0 {
                 let mut entry_operands = Vec::new();
                 for (arg_idx, &arg) in data_args.iter().enumerate() {
-                    let fixed = fixed_preg(FixedReg::AbiArg((arg_idx + 2) as u8))
+                    let fixed = fixed_preg(FixedReg::AbiArg(arg_idx as u8 + abi_arg_offset))
                         .expect("entry data arg has unsupported ABI register index");
                     entry_operands.push(Operand::new(
                         int_vreg(arg),
@@ -792,6 +793,7 @@ impl AdapterFunction {
     fn from_cfg(
         func: &cfg_mir::Function,
         mut num_vregs: usize,
+        abi_arg_offset: u8,
     ) -> Result<Self, RegallocEngineError> {
         let (blocks, edge_infos) = split_critical_edges_cfg(func, &mut num_vregs)?;
         Ok(Self::from_work_blocks(
@@ -800,6 +802,7 @@ impl AdapterFunction {
             num_vregs,
             blocks,
             edge_infos,
+            abi_arg_offset,
         ))
     }
 }
@@ -878,8 +881,9 @@ fn allocate_cfg_function(
     vreg_count: usize,
     env: &MachineEnv,
     options: &RegallocOptions,
+    abi_arg_offset: u8,
 ) -> Result<AllocatedCfgFunction, RegallocEngineError> {
-    let adapter = AdapterFunction::from_cfg(func, vreg_count)?;
+    let adapter = AdapterFunction::from_cfg(func, vreg_count, abi_arg_offset)?;
     let dump = std::env::var_os("KAJIT_DUMP_ADAPTER").is_some();
     if dump {
         adapter.dump_regalloc2_view();
@@ -1272,6 +1276,7 @@ pub fn allocate_cfg_program(
         algorithm: regalloc2::Algorithm::Ion,
     };
 
+    let abi_arg_offset: u8 = if program.param_slot_count > 0 { 0 } else { 2 };
     let mut functions = Vec::with_capacity(program.funcs.len());
     for func in &program.funcs {
         functions.push(allocate_cfg_function(
@@ -1279,6 +1284,7 @@ pub fn allocate_cfg_program(
             program.vreg_count as usize,
             &env,
             &options,
+            abi_arg_offset,
         )?);
     }
 
@@ -1370,6 +1376,8 @@ pub fn allocate_cfg_program_regalloc3_native(
     let mut functions = Vec::with_capacity(program.funcs.len());
     let mut modified_funcs = Vec::with_capacity(program.funcs.len());
 
+    let abi_arg_offset: u8 = if program.param_slot_count > 0 { 0 } else { 2 };
+
     for func in &program.funcs {
         let mut func_mut = func.clone();
 
@@ -1392,6 +1400,13 @@ pub fn allocate_cfg_program_regalloc3_native(
                 hints.entry(*dst).or_default().spill_cost = hints::SpillCost::Rematerializable;
             }
         }
+
+        // Pre-color data_args to their ABI argument registers.
+        let mut fixed_colors = std::collections::HashMap::new();
+        for (i, &arg_vreg) in func.data_args.iter().enumerate() {
+            fixed_colors.insert(arg_vreg, machine_inst::PReg(i as u8 + abi_arg_offset));
+        }
+
         let mut alloc_result = crate::regalloc3::ssa_coloring::allocate_with_excluded(
             &func_mut,
             &liveness,
@@ -1400,6 +1415,7 @@ pub fn allocate_cfg_program_regalloc3_native(
             &hints,
             &copy_hints,
             &program.extra_excluded_regs,
+            &fixed_colors,
         );
 
         // SSA destruction: split critical edges then insert copies for phi edges.
@@ -3671,8 +3687,8 @@ lambda @0 (shape: "u8") {
             algorithm: regalloc2::Algorithm::Ion,
         };
 
-        let adapter =
-            AdapterFunction::from_cfg(&cfg.funcs[0], cfg.vreg_count as usize).expect("valid cfg");
+        let adapter = AdapterFunction::from_cfg(&cfg.funcs[0], cfg.vreg_count as usize, 2)
+            .expect("valid cfg");
         let mut out = regalloc2::run(&adapter, &env, &options).expect("allocation should succeed");
         if !out.allocs.is_empty() {
             // Corrupt the first allocation with the wrong register class on purpose.

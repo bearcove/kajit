@@ -11,10 +11,8 @@ scopes {
 }
 lambda @0 @s0 (shape: "add") {
   region @s0 {
-    args: [%cs, %os]
-    n1 = ReadFromSlot(0) [%cs:arg] -> [v0, %cs]
-    n2 = ReadFromSlot(1) [%cs:n1] -> [v1, %cs]
-    n3 = Add [v0, v1] -> [v2]
-    results: [v2, %cs:n2, %os:arg]
+    args: [arg0, arg1, %cs, %os]
+    n1 = Add [arg0, arg1] -> [v0]
+    results: [v0, %cs:arg, %os:arg]
   }
 }

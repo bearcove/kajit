@@ -561,6 +561,11 @@ impl Function {
             // Track definitions available at each point in the block
             let mut defs_available: HashSet<VReg> = HashSet::new();
 
+            // Function data_args are implicitly defined at entry
+            for &arg in &self.data_args {
+                defs_available.insert(arg);
+            }
+
             // Block params are defined at entry
             for &param in &block.params {
                 defs_available.insert(param);

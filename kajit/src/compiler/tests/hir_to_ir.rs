@@ -1082,3 +1082,262 @@ fn vixen_typed_function_add_compiles_and_runs() {
     let result = unsafe { add(u64::MAX, 1) };
     assert_eq!(result, 0); // wrapping add
 }
+
+/// Helper: define a Str struct type (ptr: u64, len: u64) on a module and return
+/// the TypeDefId + the Named type.
+fn define_str_struct(module: &mut hir::Module) -> (hir::TypeDefId, hir::Type) {
+    let str_def = module.add_type_def(hir::TypeDef {
+        name: "Str".to_string(),
+        generic_params: vec![],
+        kind: hir::TypeDefKind::Struct {
+            fields: vec![
+                hir::FieldDef {
+                    name: "ptr".to_string(),
+                    ty: hir::Type::u(64),
+                    offset: None,
+                },
+                hir::FieldDef {
+                    name: "len".to_string(),
+                    ty: hir::Type::u(64),
+                    offset: None,
+                },
+            ],
+        },
+        size: None,
+        transparent: false,
+    });
+    let str_ty = hir::Type::named(str_def, vec![]);
+    (str_def, str_ty)
+}
+
+/// End-to-end: str_len(s: Str) -> u64 returns s.len
+#[test]
+fn vixen_typed_function_str_len_compiles_and_runs() {
+    use hir::{
+        LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam, VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (_str_def, str_ty) = define_str_struct(&mut module);
+
+    let func = VixenTypedFunction {
+        name: "str_len".to_string(),
+        params: vec![VixenTypedParam {
+            local: LocalId::new(0),
+            name: "s".to_string(),
+            ty: str_ty,
+        }],
+        locals: vec![],
+        return_type: hir::Type::u(64),
+        body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Field {
+            base: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+            field: "len".to_string(),
+        }))],
+        comment: Some("return string length".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    // Str is (ptr, len) — passed as two u64 args.
+    let str_len: unsafe extern "C" fn(u64, u64) -> u64 =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    // ptr=0xDEAD, len=42
+    let result = unsafe { str_len(0xDEAD, 42) };
+    assert_eq!(result, 42);
+
+    // ptr=0, len=0
+    let result = unsafe { str_len(0, 0) };
+    assert_eq!(result, 0);
+
+    // ptr=1, len=u64::MAX
+    let result = unsafe { str_len(1, u64::MAX) };
+    assert_eq!(result, u64::MAX);
+}
+
+/// End-to-end: str_slice(s: Str, start: u64, end: u64) -> Str
+/// Returns Str { ptr: s.ptr + start, len: end - start }
+#[test]
+fn vixen_typed_function_str_slice_compiles_and_runs() {
+    use hir::{
+        BinaryOp, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedLocal,
+        VixenTypedParam, VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (str_def, str_ty) = define_str_struct(&mut module);
+
+    // fn str_slice(s: Str, start: u64, end: u64) -> Str {
+    //     let result = Str { ptr: s.ptr + start, len: end - start };
+    //     return result;
+    // }
+    let func = VixenTypedFunction {
+        name: "str_slice".to_string(),
+        params: vec![
+            VixenTypedParam {
+                local: LocalId::new(0),
+                name: "s".to_string(),
+                ty: str_ty.clone(),
+            },
+            VixenTypedParam {
+                local: LocalId::new(1),
+                name: "start".to_string(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedParam {
+                local: LocalId::new(2),
+                name: "end".to_string(),
+                ty: hir::Type::u(64),
+            },
+        ],
+        locals: vec![VixenTypedLocal {
+            local: LocalId::new(3),
+            name: "result".to_string(),
+            ty: str_ty.clone(),
+        }],
+        return_type: str_ty,
+        body: vec![
+            VixenTypedStmt::Let {
+                local: LocalId::new(3),
+                value: VixenTypedExpr::Struct {
+                    def: str_def,
+                    fields: vec![
+                        (
+                            "ptr".to_string(),
+                            VixenTypedExpr::Binary {
+                                op: BinaryOp::Add,
+                                lhs: Box::new(VixenTypedExpr::Field {
+                                    base: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                                    field: "ptr".to_string(),
+                                }),
+                                rhs: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+                            },
+                        ),
+                        (
+                            "len".to_string(),
+                            VixenTypedExpr::Binary {
+                                op: BinaryOp::Sub,
+                                lhs: Box::new(VixenTypedExpr::Local(LocalId::new(2))),
+                                rhs: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+                            },
+                        ),
+                    ],
+                },
+            },
+            VixenTypedStmt::Return(Some(VixenTypedExpr::Local(LocalId::new(3)))),
+        ],
+        comment: Some("slice a string".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    // Str{ptr,len} + start + end → 4 args, returns (ptr, len) in (x0, x1).
+    let str_slice: unsafe extern "C" fn(u64, u64, u64, u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    // slice("hello"[ptr=100, len=5], 1, 4) → (101, 3)
+    let (ptr, len) = unsafe { str_slice(100, 5, 1, 4) };
+    assert_eq!(ptr, 101);
+    assert_eq!(len, 3);
+
+    // slice(ptr=0, len=0, 0, 0) → (0, 0)
+    let (ptr, len) = unsafe { str_slice(0, 0, 0, 0) };
+    assert_eq!(ptr, 0);
+    assert_eq!(len, 0);
+}
+
+/// End-to-end: function with if/else returning Str from different branches.
+/// Tests gamma propagation of multi-slot return values.
+#[test]
+fn vixen_typed_function_str_conditional_return() {
+    use hir::{
+        BinaryOp, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (str_def, str_ty) = define_str_struct(&mut module);
+
+    // fn pick(s: Str, flag: u64) -> Str {
+    //     if flag == 1 {
+    //         return Str { ptr: s.ptr + 1, len: s.len - 1 };
+    //     } else {
+    //         return s;
+    //     }
+    // }
+    let func = VixenTypedFunction {
+        name: "pick".to_string(),
+        params: vec![
+            VixenTypedParam {
+                local: LocalId::new(0),
+                name: "s".to_string(),
+                ty: str_ty.clone(),
+            },
+            VixenTypedParam {
+                local: LocalId::new(1),
+                name: "flag".to_string(),
+                ty: hir::Type::u(64),
+            },
+        ],
+        locals: vec![],
+        return_type: str_ty.clone(),
+        body: vec![VixenTypedStmt::If {
+            condition: VixenTypedExpr::Binary {
+                op: BinaryOp::Eq,
+                lhs: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+                rhs: Box::new(VixenTypedExpr::Literal(hir::Literal::Integer(1))),
+            },
+            then_body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Struct {
+                def: str_def,
+                fields: vec![
+                    (
+                        "ptr".to_string(),
+                        VixenTypedExpr::Binary {
+                            op: BinaryOp::Add,
+                            lhs: Box::new(VixenTypedExpr::Field {
+                                base: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                                field: "ptr".to_string(),
+                            }),
+                            rhs: Box::new(VixenTypedExpr::Literal(hir::Literal::Integer(1))),
+                        },
+                    ),
+                    (
+                        "len".to_string(),
+                        VixenTypedExpr::Binary {
+                            op: BinaryOp::Sub,
+                            lhs: Box::new(VixenTypedExpr::Field {
+                                base: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                                field: "len".to_string(),
+                            }),
+                            rhs: Box::new(VixenTypedExpr::Literal(hir::Literal::Integer(1))),
+                        },
+                    ),
+                ],
+            }))],
+            else_body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::Local(
+                LocalId::new(0),
+            )))],
+        }],
+        comment: Some("conditional str return".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    // Str{ptr,len} + flag → 3 args, returns (ptr, len).
+    let pick: unsafe extern "C" fn(u64, u64, u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    // flag=1: advance by 1
+    let (ptr, len) = unsafe { pick(100, 5, 1) };
+    assert_eq!(ptr, 101);
+    assert_eq!(len, 4);
+}
