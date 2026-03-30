@@ -313,7 +313,7 @@ impl SBProcess {
         let mut dst: Vec<u8> = Vec::with_capacity(dst_len);
         loop {
             let out_len =
-                unsafe { sys::SBProcessGetSTDOUT(self.raw, dst.as_mut_ptr() as *mut i8, dst_len) };
+                unsafe { sys::SBProcessGetSTDOUT(self.raw, dst.as_mut_ptr().cast(), dst_len) };
             if out_len == 0 {
                 break;
             }
@@ -330,7 +330,7 @@ impl SBProcess {
         let mut dst: Vec<u8> = Vec::with_capacity(dst_len);
 
         let out_len =
-            unsafe { sys::SBProcessGetSTDOUT(self.raw, dst.as_mut_ptr() as *mut i8, dst_len) };
+            unsafe { sys::SBProcessGetSTDOUT(self.raw, dst.as_mut_ptr().cast(), dst_len) };
 
         unsafe { dst.set_len(out_len) };
         String::from_utf8(dst).ok()
@@ -343,7 +343,7 @@ impl SBProcess {
         let mut dst: Vec<u8> = Vec::with_capacity(dst_len);
         loop {
             let out_len =
-                unsafe { sys::SBProcessGetSTDERR(self.raw, dst.as_mut_ptr() as *mut i8, dst_len) };
+                unsafe { sys::SBProcessGetSTDERR(self.raw, dst.as_mut_ptr().cast(), dst_len) };
             if out_len == 0 {
                 break;
             }
@@ -360,7 +360,7 @@ impl SBProcess {
         let mut dst: Vec<u8> = Vec::with_capacity(dst_len);
 
         let out_len =
-            unsafe { sys::SBProcessGetSTDERR(self.raw, dst.as_mut_ptr() as *mut i8, dst_len) };
+            unsafe { sys::SBProcessGetSTDERR(self.raw, dst.as_mut_ptr().cast(), dst_len) };
 
         unsafe { dst.set_len(out_len) };
         String::from_utf8(dst).ok()
