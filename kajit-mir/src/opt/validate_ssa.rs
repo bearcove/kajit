@@ -36,7 +36,8 @@ impl LinearOpDst for LinearOp {
             | Self::SlotAddr { dst, .. }
             | Self::SaveOutPtr { dst, .. }
             | Self::ReadFromSlot { dst, .. }
-            | Self::CallPure { dst, .. } => Some(*dst),
+            | Self::CallPure { dst, .. }
+            | Self::CallEffect { dst, .. } => Some(*dst),
             Self::CallIntrinsic { dst, .. } => *dst,
             Self::CallLambda { .. } => None,
             Self::SimdStringScan { .. } => None,

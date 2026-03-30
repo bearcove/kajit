@@ -112,7 +112,8 @@ impl<'a> LivenessAnalyzer<'a> {
                 | LinearOp::SlotAddr { dst, .. }
                 | LinearOp::LoadFromAddr { dst, .. }
                 | LinearOp::ReadFromSlot { dst, .. }
-                | LinearOp::CallPure { dst, .. } => vec![*dst],
+                | LinearOp::CallPure { dst, .. }
+                | LinearOp::CallEffect { dst, .. } => vec![*dst],
                 LinearOp::CallIntrinsic { dst, .. } => {
                     if let Some(dst) = dst {
                         vec![*dst]
@@ -136,6 +137,7 @@ impl<'a> LivenessAnalyzer<'a> {
                 LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
                 LinearOp::CallIntrinsic { args, .. }
                 | LinearOp::CallPure { args, .. }
+                | LinearOp::CallEffect { args, .. }
                 | LinearOp::CallLambda { args, .. } => args.clone(),
                 _ => vec![],
             };
@@ -205,6 +207,12 @@ impl<'a> LivenessAnalyzer<'a> {
                     crate::cfg_mir::Terminator::BranchIf { cond, .. }
                     | crate::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
                         live_out.insert(*cond);
+                    }
+                    crate::cfg_mir::Terminator::Return => {
+                        // data_results are live at the function return.
+                        for &result in &self.func.data_results {
+                            live_out.insert(result);
+                        }
                     }
                     _ => {}
                 }

@@ -177,6 +177,7 @@ mod tests {
                 map
             },
             spilled: vec![VReg::new(2), VReg::new(3)],
+            edits: vec![],
         };
 
         let mut func = Function {
@@ -220,6 +221,7 @@ mod tests {
                 map
             },
             spilled: vec![],
+            edits: vec![],
         };
 
         let mut func = Function {

@@ -666,7 +666,8 @@ impl<'a> EmitContext<'a> {
                 self.emit_call_intrinsic(*func, args, *dst, Some(*field_offset));
             }
 
-            LinearOp::CallPure { func, args, dst } => {
+            LinearOp::CallPure { func, args, dst }
+            | LinearOp::CallEffect { func, args, dst } => {
                 self.emit_call_pure(*func, args, *dst);
             }
 
@@ -1117,26 +1118,17 @@ impl<'a> EmitContext<'a> {
         }
     }
 
-    /// Emit a call to a pure function (no ctx, no cursor flush).
+    /// Emit a call to a pure/effect function (no ctx, no cursor flush).
+    /// The RA has colored args, and edits move them to ABI registers.
     fn emit_call_pure(
         &mut self,
         func: kajit_ir::IntrinsicFn,
-        args: &[kajit_ir::VReg],
+        _args: &[kajit_ir::VReg],
         dst: kajit_ir::VReg,
     ) {
-        // Load args into x0+
-        for (i, &arg) in args.iter().enumerate() {
-            let target_reg = Reg::from_raw(i as u8);
-            let src_reg = self.reg_for_vreg_with_temp(arg, Reg::X9);
-            if src_reg != target_reg {
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, target_reg, src_reg)
-                    .expect("mov arg");
-            }
-        }
+        // Args are already in their ABI registers thanks to RA coloring +
+        // OperandEdit moves emitted before this instruction. Just call.
 
-        // Load function pointer and call
         let call_site_offset = self.ectx.emit.code_len();
         self.emit_load_u64(Reg::X16, func.0 as u64);
         self.ectx.emit.emit_blr(Reg::X16).expect("blr");
@@ -1145,7 +1137,6 @@ impl<'a> EmitContext<'a> {
             func,
         });
 
-        // Store result (return value is in x0)
         self.store_to_vreg(dst, Reg::X0);
     }
 
@@ -1840,6 +1831,52 @@ impl<'a> EmitContext<'a> {
 
             // Emit instructions with source location tracking
             for &inst_id in &block.insts {
+                // Emit OperandEdits (register moves) required before this instruction
+                // to satisfy fixed-register operand constraints.
+                // Collect all edits for this instruction and emit as a parallel move.
+                let edits_here: Vec<(Reg, Reg)> = self.alloc_func.edits
+                    .iter()
+                    .filter(|e| e.before_inst == inst_id)
+                    .map(|e| (Reg::from_raw(e.from.0), Reg::from_raw(e.to.0)))
+                    .collect();
+                if !edits_here.is_empty() {
+                    // Topological parallel move: emit moves whose target is not
+                    // a source of another pending move first, use X16 for cycles.
+                    let mut done = vec![false; edits_here.len()];
+                    for _ in 0..edits_here.len() + 1 {
+                        let mut progress = false;
+                        for i in 0..edits_here.len() {
+                            if done[i] { continue; }
+                            let (from, to) = edits_here[i];
+                            if from == to { done[i] = true; progress = true; continue; }
+                            let blocked = edits_here.iter().enumerate().any(|(j, &(f, _))| {
+                                !done[j] && j != i && f == to
+                            });
+                            if !blocked {
+                                self.ectx.emit.emit_mov_reg(Width::X64, to, from)
+                                    .expect("mov edit");
+                                done[i] = true;
+                                progress = true;
+                            }
+                        }
+                        if done.iter().all(|&d| d) { break; }
+                        if !progress {
+                            // Cycle: break with X16 scratch
+                            for i in 0..edits_here.len() {
+                                if !done[i] {
+                                    let (from, to) = edits_here[i];
+                                    self.ectx.emit.emit_mov_reg(Width::X64, Reg::X16, from)
+                                        .expect("mov cycle save");
+                                    self.ectx.emit.emit_mov_reg(Width::X64, to, Reg::X16)
+                                        .expect("mov cycle restore");
+                                    done[i] = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
                 let op_id = kajit_mir::cfg_mir::OpId::Inst(inst_id);
                 if let Some(&line) = self.line_map.get(&op_id) {
                     self.ectx.set_source_location(kajit_emit::SourceLocation {
@@ -1882,6 +1919,7 @@ pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
                 inst.op,
                 LinearOp::CallIntrinsic { .. }
                     | LinearOp::CallPure { .. }
+                    | LinearOp::CallEffect { .. }
                     | LinearOp::CallLambda { .. }
             )
         })
@@ -1916,6 +1954,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
                 inst.op,
                 LinearOp::CallIntrinsic { .. }
                     | LinearOp::CallPure { .. }
+                    | LinearOp::CallEffect { .. }
                     | LinearOp::CallLambda { .. }
             )
         })
@@ -1996,15 +2035,59 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
     // Emit function prologue
     let (entry, error_exit) = if is_scalar_function {
-        // Scalar function: minimal prologue — just frame setup.
-        // Parameters arrive in arg registers and flow through the RVSDG
-        // as data ports — no slot stores needed.
+        // Scalar function prologue: frame setup, callee-saved register
+        // save, and data_arg moves from ABI registers to RA-assigned registers.
         let entry = ectx.emit.current_offset() as u32;
         let error_exit = ectx.emit.new_label();
         let frame_size = ectx.frame_size;
+
+        let saved_pairs: [(Reg, Reg); 3] = [
+            (Reg::X23, Reg::X24),
+            (Reg::X25, Reg::X26),
+            (Reg::X27, Reg::X28),
+        ];
+        let pairs_to_save = extra_saved_pairs as usize;
+
+        // Allocate frame: sub sp, sp, total_size
+        // Frame layout (low to high):
+        //   [sp+0]:  FP/LR save (16 bytes, if non-leaf)
+        //   [sp+16]: callee-saved pairs (pairs_to_save * 16 bytes)
+        //   [sp+16+pairs*16]: spill slots + user slots (frame_size already accounts for these)
         if frame_size > 0 {
             ectx.emit_sub_imm_any(Reg::SP, Reg::SP, frame_size);
         }
+
+        // Save FP/LR (needed for calls)
+        let mut offset: i16 = 0;
+        ectx.emit
+            .emit_stp(Width::X64, Reg::X29, Reg::X30, Reg::SP, offset)
+            .expect("stp fp,lr");
+        offset += 16;
+
+        // Save callee-saved pairs
+        for i in 0..pairs_to_save {
+            ectx.emit
+                .emit_stp(Width::X64, saved_pairs[i].0, saved_pairs[i].1, Reg::SP, offset)
+                .expect("stp callee-saved");
+            offset += 16;
+        }
+
+        // Move data_args from ABI registers to RA-assigned registers.
+        if let Some(alloc_func) = alloc.functions.first() {
+            if let Some(func) = program.funcs.first() {
+                for (i, &arg) in func.data_args.iter().enumerate() {
+                    let abi_reg = Reg::from_raw(i as u8);
+                    if let Some(preg) = alloc_func.preg_for_vreg(arg) {
+                        let assigned = Reg::from_raw(preg.0);
+                        if assigned != abi_reg {
+                            ectx.emit.emit_mov_reg(Width::X64, assigned, abi_reg)
+                                .expect("mov data_arg");
+                        }
+                    }
+                }
+            }
+        }
+
         ectx.error_exit = error_exit;
         (entry, error_exit)
     } else {
@@ -2157,21 +2240,42 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
                 }
             }
         }
+        // Restore callee-saved registers and tear down frame.
+        let saved_pairs: [(Reg, Reg); 3] = [
+            (Reg::X23, Reg::X24),
+            (Reg::X25, Reg::X26),
+            (Reg::X27, Reg::X28),
+        ];
+        let pairs_to_save = extra_saved_pairs as usize;
         let frame_size = ectx.frame_size;
-        if frame_size > 0 {
-            ectx.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
-        }
-        ectx.emit.emit_ret().expect("ret");
+
+        let emit_scalar_epilogue = |ectx: &mut EmitCtx| {
+            let mut offset: i16 = 0;
+            ectx.emit
+                .emit_ldp(Width::X64, Reg::X29, Reg::X30, Reg::SP, offset)
+                .expect("ldp fp,lr");
+            offset += 16;
+            for i in 0..pairs_to_save {
+                ectx.emit
+                    .emit_ldp(Width::X64, saved_pairs[i].0, saved_pairs[i].1, Reg::SP, offset)
+                    .expect("ldp callee-saved");
+                offset += 16;
+            }
+            if frame_size > 0 {
+                ectx.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
+            }
+            ectx.emit.emit_ret().expect("ret");
+        };
+
+        emit_scalar_epilogue(&mut ectx);
+
         // Bind error exit (just returns 0 for now).
         ectx.emit.bind_label(error_exit).expect("bind error_exit");
         let zero = Reg::XZR;
         ectx.emit
             .emit_mov_reg(Width::X64, Reg::X0, zero)
             .expect("mov x0, xzr");
-        if frame_size > 0 {
-            ectx.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
-        }
-        ectx.emit.emit_ret().expect("ret");
+        emit_scalar_epilogue(&mut ectx);
     } else {
         ectx.end_func_with_config(error_exit, &prologue_config);
         // Emit shared error trampolines after the epilogue (cold, unreachable

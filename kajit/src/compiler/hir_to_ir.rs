@@ -2182,6 +2182,71 @@ pub fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
 /// and return a value — no cursor, no destination, no decoder-specific
 /// machinery. All params get slots, all locals get slots, expressions lower
 /// to IR operations, and `return expr` sets the region result.
+/// Check if an HIR function body uses any effect callables (runtime.alloc_transient,
+/// runtime.memcpy, runtime.free_transient) that require the MEMORY state domain.
+fn hir_function_uses_effect_calls(module: &hir::Module, function: &hir::Function) -> bool {
+    fn expr_uses_effects(module: &hir::Module, expr: &hir::Expr) -> bool {
+        match expr {
+            hir::Expr::Call(call) => {
+                let id = match call.target {
+                    hir::CallTarget::Callable(id) => id,
+                };
+                let name = &module.callables[id].name;
+                if matches!(
+                    name.as_str(),
+                    "runtime.alloc_transient" | "runtime.memcpy" | "runtime.free_transient"
+                ) {
+                    return true;
+                }
+                call.args.iter().any(|a| expr_uses_effects(module, a))
+            }
+            hir::Expr::Binary { lhs, rhs, .. } => {
+                expr_uses_effects(module, lhs) || expr_uses_effects(module, rhs)
+            }
+            hir::Expr::Unary { value, .. } => expr_uses_effects(module, value),
+            hir::Expr::Field { base, .. } => expr_uses_effects(module, base),
+            hir::Expr::Index { base, index } => {
+                expr_uses_effects(module, base) || expr_uses_effects(module, index)
+            }
+            hir::Expr::Struct { fields, .. } | hir::Expr::Variant { fields, .. } => {
+                fields.iter().any(|(_, e)| expr_uses_effects(module, e))
+            }
+            _ => false,
+        }
+    }
+    fn block_uses_effects(module: &hir::Module, stmts: &[hir::Stmt]) -> bool {
+        stmts.iter().any(|stmt| match &stmt.kind {
+            hir::StmtKind::Init { value, .. }
+            | hir::StmtKind::Assign { value, .. }
+            | hir::StmtKind::Expr(value) => expr_uses_effects(module, value),
+            hir::StmtKind::Store { addr, value, .. } => {
+                expr_uses_effects(module, addr) || expr_uses_effects(module, value)
+            }
+            hir::StmtKind::Return(Some(e)) => expr_uses_effects(module, e),
+            hir::StmtKind::If {
+                condition,
+                then_block,
+                else_block,
+            } => {
+                expr_uses_effects(module, condition)
+                    || block_uses_effects(module, &then_block.statements)
+                    || else_block
+                        .as_ref()
+                        .map_or(false, |b| block_uses_effects(module, &b.statements))
+            }
+            hir::StmtKind::Loop { body, .. } => block_uses_effects(module, &body.statements),
+            hir::StmtKind::Match { scrutinee, arms } => {
+                expr_uses_effects(module, scrutinee)
+                    || arms
+                        .iter()
+                        .any(|arm| block_uses_effects(module, &arm.body.statements))
+            }
+            _ => false,
+        })
+    }
+    block_uses_effects(module, &function.body.statements)
+}
+
 fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate::ir::IrFunc {
     // Count the total number of u64-sized words across all params.
     let param_word_count: usize = function
@@ -2192,6 +2257,10 @@ fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate:
 
     let (mut builder, data_arg_sources) =
         crate::ir::IrBuilder::new_with_data_args(&function.name, 0, param_word_count);
+    // Only add the MEMORY state domain when the function uses effect calls.
+    if hir_function_uses_effect_calls(module, function) {
+        let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
+    }
     {
         let mut rb = builder.root_region();
         let mut lowerer = ScalarHirIrLowerer::new(module, function, &data_arg_sources);
@@ -2449,12 +2518,13 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     hir::CallTarget::Callable(id) => id,
                 }];
                 let func = match callable.name.as_str() {
-                    "runtime.validate_utf8_range" => crate::ir::IntrinsicFn(
-                        intrinsics::kajit_validate_utf8_range as *const () as usize,
+                    "runtime.free_transient" => crate::ir::IntrinsicFn(
+                        intrinsics::kajit_free_transient as *const () as usize,
                     ),
                     name => panic!("unsupported scalar HIR effect call: {name}"),
                 };
-                rb.call_intrinsic(func, &args, 0, false);
+                // Void-returning effectful call: use call_effect but ignore result.
+                let _result = rb.call_effect(func, &args);
                 None
             }
             hir::StmtKind::Expr(_) => None,
@@ -2728,16 +2798,15 @@ impl<'a> ScalarHirIrLowerer<'a> {
             hir::CallTarget::Callable(id) => id,
         }];
         let func = match callable.name.as_str() {
-            "runtime.alloc_persistent" => {
-                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize)
-            }
-            "runtime.string_validate_alloc_copy" => crate::ir::IntrinsicFn(
-                intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
+            "runtime.alloc_transient" => crate::ir::IntrinsicFn(
+                intrinsics::kajit_alloc_transient as *const () as usize,
             ),
+            "runtime.memcpy" => {
+                crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize)
+            }
             name => panic!("unsupported scalar HIR call target: {name}"),
         };
-        rb.call_intrinsic(func, &args, 0, true)
-            .expect("scalar call should return a value")
+        rb.call_effect(func, &args)
     }
 
     fn lower_expr(&self, rb: &mut RegionBuilder<'_>, expr: &hir::Expr) -> crate::ir::PortSource {
@@ -2839,7 +2908,9 @@ fn build_structural_hir_ir_impl(
         .map(|l| l.size())
         .unwrap_or(0);
     let mut builder = crate::ir::IrBuilder::new(label, output_size);
-    let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
+    if hir_function_uses_effect_calls(module, function) {
+        let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
+    }
     {
         let mut rb = builder.root_region();
         let lowerer =

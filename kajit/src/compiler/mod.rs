@@ -370,6 +370,7 @@ pub fn compile_pipeline(
                     inst.op,
                     kajit_lir::LinearOp::CallIntrinsic { .. }
                         | kajit_lir::LinearOp::CallPure { .. }
+                        | kajit_lir::LinearOp::CallEffect { .. }
                         | kajit_lir::LinearOp::CallLambda { .. }
                 )
             })
@@ -835,6 +836,7 @@ fn compile_linear_ir_decoder_with_options(
                     inst.op,
                     kajit_lir::LinearOp::CallIntrinsic { .. }
                         | kajit_lir::LinearOp::CallPure { .. }
+                        | kajit_lir::LinearOp::CallEffect { .. }
                         | kajit_lir::LinearOp::CallLambda { .. }
                 )
             })

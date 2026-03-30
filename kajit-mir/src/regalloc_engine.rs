@@ -293,7 +293,7 @@ fn abi_ret_int(idx: usize) -> Option<PReg> {
     ORDER.get(idx).copied().map(preg_int)
 }
 
-fn fixed_preg(fixed: FixedReg) -> Option<PReg> {
+pub(crate) fn fixed_preg(fixed: FixedReg) -> Option<PReg> {
     match fixed {
         FixedReg::AbiArg(i) => abi_arg_int(i as usize),
         FixedReg::AbiRet(i) => abi_ret_int(i as usize),
@@ -1407,6 +1407,7 @@ pub fn allocate_cfg_program_regalloc3_native(
             fixed_colors.insert(arg_vreg, machine_inst::PReg(i as u8 + abi_arg_offset));
         }
 
+
         let mut alloc_result = crate::regalloc3::ssa_coloring::allocate_with_excluded(
             &func_mut,
             &liveness,
@@ -1460,6 +1461,7 @@ pub fn allocate_cfg_program_regalloc3_native(
             allocations: alloc_result.allocations.clone(),
             spill_slots,
             rematerializable,
+            edits: alloc_result.edits,
         });
 
         modified_funcs.push(func_mut);
@@ -2435,7 +2437,7 @@ fn execute_sim_linear_op(
                 write_allocation(regs, spills, dst_alloc, ret);
             }
         }
-        LinearOp::CallPure { func, args, dst } => {
+        LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
             let mut args_values = Vec::with_capacity(args.len());
             for arg in args {
                 let arg_alloc = find_operand_alloc(

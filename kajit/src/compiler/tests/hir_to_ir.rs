@@ -1599,6 +1599,179 @@ fn vixen_typed_function_typed_literal_string_return() {
     assert_eq!(slice, b"1");
 }
 
+/// End-to-end: concat(a: Str, b: Str) -> Str.
+/// Allocates fresh memory, copies both inputs, returns the concatenated result.
+/// Exercises CallEffect (runtime.alloc_transient + runtime.memcpy).
+#[test]
+fn vixen_typed_function_str_concat_compiles_and_runs() {
+    use hir::{
+        BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
+        VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (str_def, str_ty) = define_str_struct(&mut module);
+    let _callables = module.install_runtime_memory_callables();
+
+    // fn concat(a: Str, b: Str) -> Str {
+    //     let total_len = a.len + b.len;
+    //     let buf = runtime.alloc_transient(total_len, 1);
+    //     let mid = runtime.memcpy(buf, a.ptr, a.len);
+    //     let _ = runtime.memcpy(mid, b.ptr, b.len);
+    //     return Str { ptr: buf, len: total_len };
+    // }
+    let func = VixenTypedFunction {
+        name: "concat".to_string(),
+        params: vec![
+            VixenTypedParam {
+                local: LocalId::new(0),
+                name: "a".to_string(),
+                ty: str_ty.clone(),
+            },
+            VixenTypedParam {
+                local: LocalId::new(1),
+                name: "b".to_string(),
+                ty: str_ty.clone(),
+            },
+        ],
+        locals: vec![
+            VixenTypedLocal {
+                local: LocalId::new(2),
+                name: "total_len".to_string(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(3),
+                name: "buf".to_string(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(4),
+                name: "mid".to_string(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(5),
+                name: "_end".to_string(),
+                ty: hir::Type::u(64),
+            },
+        ],
+        return_type: str_ty.clone(),
+        body: vec![
+            // let total_len = a.len + b.len
+            VixenTypedStmt::Let {
+                local: LocalId::new(2),
+                value: VixenTypedExpr::Binary {
+                    op: BinaryOp::Add,
+                    lhs: Box::new(VixenTypedExpr::Field {
+                        base: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                        field: "len".to_string(),
+                    }),
+                    rhs: Box::new(VixenTypedExpr::Field {
+                        base: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+                        field: "len".to_string(),
+                    }),
+                },
+            },
+            // let buf = runtime.alloc_transient(total_len, 1)
+            VixenTypedStmt::Let {
+                local: LocalId::new(3),
+                value: VixenTypedExpr::Call {
+                    callee: VixenCallableRef::Named("runtime.alloc_transient".to_owned()),
+                    args: vec![
+                        VixenTypedExpr::Local(LocalId::new(2)),
+                        VixenTypedExpr::Literal(hir::Literal::Integer(1)),
+                    ],
+                },
+            },
+            // let mid = runtime.memcpy(buf, a.ptr, a.len)
+            VixenTypedStmt::Let {
+                local: LocalId::new(4),
+                value: VixenTypedExpr::Call {
+                    callee: VixenCallableRef::Named("runtime.memcpy".to_owned()),
+                    args: vec![
+                        VixenTypedExpr::Local(LocalId::new(3)),
+                        VixenTypedExpr::Field {
+                            base: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                            field: "ptr".to_string(),
+                        },
+                        VixenTypedExpr::Field {
+                            base: Box::new(VixenTypedExpr::Local(LocalId::new(0))),
+                            field: "len".to_string(),
+                        },
+                    ],
+                },
+            },
+            // let _end = runtime.memcpy(mid, b.ptr, b.len)
+            VixenTypedStmt::Let {
+                local: LocalId::new(5),
+                value: VixenTypedExpr::Call {
+                    callee: VixenCallableRef::Named("runtime.memcpy".to_owned()),
+                    args: vec![
+                        VixenTypedExpr::Local(LocalId::new(4)),
+                        VixenTypedExpr::Field {
+                            base: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+                            field: "ptr".to_string(),
+                        },
+                        VixenTypedExpr::Field {
+                            base: Box::new(VixenTypedExpr::Local(LocalId::new(1))),
+                            field: "len".to_string(),
+                        },
+                    ],
+                },
+            },
+            // return Str { ptr: buf, len: total_len }
+            VixenTypedStmt::Return(Some(VixenTypedExpr::Struct {
+                def: str_def,
+                fields: vec![
+                    ("ptr".to_string(), VixenTypedExpr::Local(LocalId::new(3))),
+                    ("len".to_string(), VixenTypedExpr::Local(LocalId::new(2))),
+                ],
+            })),
+        ],
+        comment: Some("string concatenation via alloc + memcpy".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+
+    let compiled = crate::compiler::compile_hir_module(&module);
+
+    // Str{ptr,len} + Str{ptr,len} → 4 args, returns (ptr, len) in (x0, x1).
+    let concat: unsafe extern "C" fn(u64, u64, u64, u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    let a = b"hello";
+    let b = b" world";
+    let (ptr, len) = unsafe {
+        concat(
+            a.as_ptr() as u64,
+            a.len() as u64,
+            b.as_ptr() as u64,
+            b.len() as u64,
+        )
+    };
+    assert_eq!(len, 11, "expected total len 11");
+    assert_ne!(ptr, 0, "expected non-null pointer");
+    let result = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(result, b"hello world");
+
+    // Free the allocated memory.
+    unsafe {
+        std::alloc::dealloc(
+            ptr as *mut u8,
+            std::alloc::Layout::from_size_align(len as usize, 1).unwrap(),
+        );
+    }
+
+    // Test with empty strings.
+    let (ptr, len) = unsafe { concat(1, 0, 1, 0) };
+    assert_eq!(len, 0, "empty concat should return len 0");
+    // Zero-length allocation returns a sentinel; do not free it.
+    let _ = ptr;
+}
+
 // NOTE: `let x = if cond { a } else { b }` desugaring is not yet supported end-to-end.
 // The desugaring produces `if cond { let x = a } else { let x = b }`, which hits an
 // RVSDG scoping issue: Init inside gamma branches doesn't flow values out of the gamma.

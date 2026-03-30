@@ -129,7 +129,7 @@ impl AllocationMap {
 pub struct LocationMap {
     /// Static allocation for each vreg (same data as AllocationMap.locations).
     pub static_locations: HashMap<u32, VRegLocation>,
-    /// DWARF lines that contain call instructions (CallIntrinsic, CallPure, CallLambda).
+    /// DWARF lines that contain call instructions (CallIntrinsic, CallPure, CallEffect, CallLambda).
     /// At these lines, caller-saved registers are clobbered after execution.
     pub call_lines: std::collections::HashSet<u32>,
     /// For each call line, the return value vreg index (if any).
@@ -190,7 +190,8 @@ impl LocationMap {
                                 call_return_vregs.insert(next_line, dst.index() as u32);
                             }
                         }
-                        LinearOp::CallPure { dst, .. } => {
+                        LinearOp::CallPure { dst, .. }
+                        | LinearOp::CallEffect { dst, .. } => {
                             call_lines.insert(next_line);
                             call_return_vregs.insert(next_line, dst.index() as u32);
                         }

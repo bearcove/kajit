@@ -834,6 +834,70 @@ pub unsafe extern "C" fn kajit_alloc_persistent(
     buf
 }
 
+// --- Context-free allocation intrinsics (for scalar/VixenTypedFunction code) ---
+
+/// Allocate heap memory without a runtime context.
+///
+/// Returns a heap pointer owned by the caller. Free with `kajit_free_transient`.
+///
+/// # Zero-length contract
+/// `size == 0` returns `align` as a non-null aligned sentinel. Must NOT be freed.
+///
+/// # Safety
+/// - `align` must be a power of two and accepted by `Layout::from_size_align`
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kajit_alloc_transient(size: usize, align: usize) -> *mut u8 {
+    if size == 0 {
+        return align as *mut u8;
+    }
+    let layout = match std::alloc::Layout::from_size_align(size, align) {
+        Ok(layout) => layout,
+        Err(_) => return core::ptr::null_mut(),
+    };
+    unsafe { std::alloc::alloc(layout) }
+}
+
+/// Copy `len` bytes from `src` to `dst` (non-overlapping).
+///
+/// Returns `dst.add(len)` — the pointer just past the copied bytes.
+/// This return convention creates a data dependency chain that preserves
+/// ordering of successive copies in the RVSDG.
+///
+/// # Safety
+/// - `dst` and `src` must be valid for `len` bytes
+/// - Regions must not overlap
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kajit_memcpy(
+    dst: *mut u8,
+    src: *const u8,
+    len: usize,
+) -> *mut u8 {
+    if len > 0 {
+        unsafe { core::ptr::copy_nonoverlapping(src, dst, len) };
+    }
+    unsafe { dst.add(len) }
+}
+
+/// Free heap memory allocated by `kajit_alloc_transient`.
+///
+/// # Zero-length contract
+/// `size == 0` or `ptr.is_null()` is a no-op.
+///
+/// # Safety
+/// - `ptr` must have been returned by `kajit_alloc_transient(size, align)`
+/// - Must not be called on the zero-length sentinel
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kajit_free_transient(ptr: *mut u8, size: usize, align: usize) {
+    if size == 0 || ptr.is_null() {
+        return;
+    }
+    let layout = match std::alloc::Layout::from_size_align(size, align) {
+        Ok(layout) => layout,
+        Err(_) => return,
+    };
+    unsafe { std::alloc::dealloc(ptr, layout) };
+}
+
 // --- Vec intrinsics ---
 
 // r[impl seq.malum.alloc-compat]
@@ -1337,6 +1401,18 @@ pub fn known_intrinsics() -> Vec<(&'static str, crate::ir::IntrinsicFn)> {
         (
             "kajit_alloc_persistent",
             IntrinsicFn(kajit_alloc_persistent as *const () as usize),
+        ),
+        (
+            "kajit_alloc_transient",
+            IntrinsicFn(kajit_alloc_transient as *const () as usize),
+        ),
+        (
+            "kajit_memcpy",
+            IntrinsicFn(kajit_memcpy as *const () as usize),
+        ),
+        (
+            "kajit_free_transient",
+            IntrinsicFn(kajit_free_transient as *const () as usize),
         ),
         (
             "kajit_vec_alloc",

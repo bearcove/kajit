@@ -840,7 +840,8 @@ fn execute_function_inner(
                         state.write_vreg(dst.index(), ret);
                     }
                 }
-                LinearOp::CallPure { func, args, dst } => {
+                LinearOp::CallPure { func, args, dst }
+                | LinearOp::CallEffect { func, args, dst } => {
                     let args_values: Vec<u64> =
                         args.iter().map(|v| state.read_vreg(v.index())).collect();
                     let ret = run_call_pure(func.0, &args_values);
@@ -1465,7 +1466,8 @@ fn execute_function_inner_with_event_trace(
                         );
                     }
                 }
-                LinearOp::CallPure { func, args, dst } => {
+                LinearOp::CallPure { func, args, dst }
+                | LinearOp::CallEffect { func, args, dst } => {
                     let args_values: Vec<u64> =
                         args.iter().map(|v| state.read_vreg(v.index())).collect();
                     let ret = run_call_pure(func.0, &args_values);

@@ -207,6 +207,8 @@ pub struct RuntimeMemoryCallables {
     pub string_validate_alloc_copy: CallableId,
     pub vec_from_raw_parts: CallableId,
     pub vec_from_chunks: CallableId,
+    pub memcpy: CallableId,
+    pub free_transient: CallableId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -486,6 +488,45 @@ impl Module {
             ),
         });
 
+        let memcpy = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.memcpy".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::u(64), Type::u(64), Type::u(64)],
+                returns: vec![Type::u(64)],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![DomainEffect {
+                    domain: "transient_heap".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::Returns,
+                capabilities: vec!["runtime.memcpy".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some(
+                "Copy len bytes from src to dst (non-overlapping). Returns dst + len.".to_owned(),
+            ),
+        });
+        let free_transient = self.add_callable(CallableSpec {
+            kind: CallableKind::Host,
+            name: "runtime.free_transient".to_owned(),
+            signature: CallSignature {
+                params: vec![Type::u(64), Type::u(64), Type::u(64)],
+                returns: vec![],
+                effect_class: EffectClass::Mutates,
+                domain_effects: vec![DomainEffect {
+                    domain: "transient_heap".to_owned(),
+                    access: DomainAccess::Mutate,
+                }],
+                control: ControlTransfer::Returns,
+                capabilities: vec!["runtime.alloc".to_owned()],
+                safety: CallSafety::OpaqueHost,
+            },
+            docs: Some(
+                "Free heap memory allocated by runtime.alloc_transient.".to_owned(),
+            ),
+        });
+
         RuntimeMemoryCallables {
             alloc_transient,
             alloc_persistent,
@@ -493,6 +534,8 @@ impl Module {
             string_validate_alloc_copy,
             vec_from_raw_parts,
             vec_from_chunks,
+            memcpy,
+            free_transient,
         }
     }
 

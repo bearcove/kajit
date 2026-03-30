@@ -203,6 +203,7 @@ mod tests {
                 map
             },
             spilled: vec![],
+            edits: vec![],
         };
 
         let liveness = LivenessInfo {
@@ -246,6 +247,7 @@ mod tests {
                 map
             },
             spilled: vec![],
+            edits: vec![],
         };
 
         let liveness = LivenessInfo {
@@ -292,6 +294,7 @@ mod tests {
                 map
             },
             spilled: vec![],
+            edits: vec![],
         };
 
         let liveness = LivenessInfo {
@@ -326,6 +329,7 @@ mod tests {
         let alloc = AllocationResult {
             allocations: HashMap::new(), // EMPTY!
             spilled: vec![],
+            edits: vec![],
         };
 
         let liveness = LivenessInfo {

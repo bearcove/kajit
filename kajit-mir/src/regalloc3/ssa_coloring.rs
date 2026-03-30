@@ -13,11 +13,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::analysis::dominance::DominanceInfo;
 use crate::analysis::loops::LoopInfo;
-use crate::cfg_mir::{self, BlockId, Function};
+use crate::cfg_mir::{self, BlockId, FixedReg, Function, OperandKind};
 use kajit_ir::VReg;
 
 use super::hints::{HintMap, SpillCost};
-use super::linear_scan::{Allocation, AllocationResult, CopyHints};
+use super::linear_scan::{Allocation, AllocationResult, CopyHints, OperandEdit};
 use super::liveness::LivenessInfo;
 use super::machine_inst::{AbiInfo, PReg, ScratchPolicy};
 
@@ -213,6 +213,11 @@ pub fn allocate_with_excluded(
     // values defined BY the call instruction. The color_phase already ensures values
     // in live_across_call get callee-saved registers.)
 
+    // Resolve fixed-register operand constraints into edits.
+    // When a use operand requires a specific register but the vreg is
+    // colored elsewhere, record a move the backend must emit.
+    let edits = resolve_fixed_use_constraints(func, &coloring, &spilled);
+
     // Build result
     let mut allocations = HashMap::new();
     for (&vreg, &preg) in &coloring {
@@ -225,6 +230,7 @@ pub fn allocate_with_excluded(
     AllocationResult {
         allocations,
         spilled: spilled.into_iter().collect(),
+        edits,
     }
 }
 
@@ -523,6 +529,20 @@ fn compute_live_across_call(
                 }
             }
 
+            // Function data_args (live-in to entry but not in live_in set)
+            if block.id == func.entry {
+                for &arg in &func.data_args {
+                    if spilled.contains(&arg) {
+                        continue;
+                    }
+                    let used_after = has_use_after_inst(func, block, arg, inst_idx)
+                        || live_out.map_or(false, |lo| lo.contains(&arg));
+                    if used_after {
+                        live_across_call.insert(arg);
+                    }
+                }
+            }
+
             // Block params
             for &param in &block.params {
                 if spilled.contains(&param) {
@@ -575,7 +595,17 @@ fn color_phase(
     fixed_colors: &HashMap<VReg, PReg>,
 ) -> HashMap<VReg, PReg> {
     // Start with fixed colorings (e.g., function parameters in ABI registers).
-    let mut coloring: HashMap<VReg, PReg> = fixed_colors.clone();
+    // Exclude fixed colors for vregs that are live across calls and pre-colored
+    // to caller-saved registers — those need callee-saved registers instead.
+    // The backend prologue will move from the ABI register to the assigned register.
+    let mut coloring: HashMap<VReg, PReg> = HashMap::new();
+    for (&vreg, &preg) in fixed_colors {
+        if live_across_call.contains(&vreg) && !callee_saved_set.contains(&preg) {
+            // Skip: let the coloring phase assign a callee-saved register.
+            continue;
+        }
+        coloring.insert(vreg, preg);
+    }
 
     // Walk domtree in preorder
     let preorder = domtree_preorder(func.entry, dom);
@@ -665,6 +695,20 @@ fn color_phase(
             }
         }
 
+        // Mark data_args' colors as occupied in the entry block.
+        // Data_args are like block params but defined at function level — they
+        // don't appear in live_in, so their occupied colors must be added explicitly.
+        if block_id == func.entry {
+            for &arg in &func.data_args {
+                if spilled.contains(&arg) {
+                    continue;
+                }
+                if let Some(&preg) = coloring.get(&arg) {
+                    occupied.insert(preg);
+                }
+            }
+        }
+
         // Pre-compute: for each block param, find edge arg sources that feed it.
         // The param should prefer the register of its sources (phi affinity).
         let mut param_source_vregs: HashMap<VReg, Vec<VReg>> = HashMap::new();
@@ -728,6 +772,26 @@ fn color_phase(
                 }
                 coloring.insert(param, color);
                 occupied.insert(color);
+            }
+        }
+
+        // Color data_args that weren't pre-colored (e.g., because they're
+        // live across a call and their ABI register is caller-saved).
+        if block_id == func.entry {
+            for &arg in &func.data_args {
+                if spilled.contains(&arg) || coloring.contains_key(&arg) {
+                    continue;
+                }
+                let pool = if live_across_call.contains(&arg) {
+                    &callee_saved_allocatable
+                } else {
+                    allocatable
+                };
+                let color = preferred_color(pool, &occupied, &[], &[]);
+                if let Some(color) = color {
+                    coloring.insert(arg, color);
+                    occupied.insert(color);
+                }
             }
         }
 
@@ -878,6 +942,99 @@ fn color_phase(
     }
 
     coloring
+}
+
+/// Convert a `FixedReg` constraint to a regalloc3 `PReg`.
+#[cfg(target_arch = "aarch64")]
+fn fixed_to_preg(fixed: FixedReg) -> Option<PReg> {
+    match fixed {
+        FixedReg::AbiArg(i) if i <= 7 => Some(PReg(i)),
+        FixedReg::AbiRet(i) if i <= 1 => Some(PReg(i)),
+        FixedReg::HwReg(enc) => Some(PReg(enc)),
+        _ => None,
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", not(windows)))]
+fn fixed_to_preg(fixed: FixedReg) -> Option<PReg> {
+    match fixed {
+        // SysV: rdi=7, rsi=6, rdx=2, rcx=1, r8=8, r9=9
+        FixedReg::AbiArg(i) => {
+            const ORDER: [u8; 6] = [7, 6, 2, 1, 8, 9];
+            ORDER.get(i as usize).map(|&enc| PReg(enc))
+        }
+        FixedReg::AbiRet(i) => {
+            const ORDER: [u8; 2] = [0, 2]; // rax, rdx
+            ORDER.get(i as usize).map(|&enc| PReg(enc))
+        }
+        FixedReg::HwReg(enc) => Some(PReg(enc)),
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", windows))]
+fn fixed_to_preg(fixed: FixedReg) -> Option<PReg> {
+    match fixed {
+        // Win64: rcx=1, rdx=2, r8=8, r9=9
+        FixedReg::AbiArg(i) => {
+            const ORDER: [u8; 4] = [1, 2, 8, 9];
+            ORDER.get(i as usize).map(|&enc| PReg(enc))
+        }
+        FixedReg::AbiRet(i) => {
+            const ORDER: [u8; 2] = [0, 2]; // rax, rdx
+            ORDER.get(i as usize).map(|&enc| PReg(enc))
+        }
+        FixedReg::HwReg(enc) => Some(PReg(enc)),
+    }
+}
+
+/// Resolve fixed-register operand constraints into backend edits.
+///
+/// After coloring, each vreg has a single assigned register. But a use operand
+/// may require the value in a *different* register (e.g., `AbiArg(0)` requires x0).
+/// When the vreg's color doesn't match, we emit an `OperandEdit` telling the
+/// backend to insert a `mov` before the instruction.
+fn resolve_fixed_use_constraints(
+    func: &Function,
+    coloring: &HashMap<VReg, PReg>,
+    spilled: &BTreeSet<VReg>,
+) -> Vec<OperandEdit> {
+    let mut edits = Vec::new();
+    for block in &func.blocks {
+        if block.dead {
+            continue;
+        }
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.0 as usize];
+            for operand in &inst.operands {
+                if operand.kind != OperandKind::Use {
+                    continue;
+                }
+                let fixed = match operand.fixed {
+                    Some(f) => f,
+                    None => continue,
+                };
+                let required_preg = match fixed_to_preg(fixed) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                if spilled.contains(&operand.vreg) {
+                    // Spilled vreg — the spill/reload pass will handle loading
+                    // it into the required register.
+                    continue;
+                }
+                if let Some(&actual_preg) = coloring.get(&operand.vreg) {
+                    if actual_preg != required_preg {
+                        edits.push(OperandEdit {
+                            before_inst: inst_id,
+                            from: actual_preg,
+                            to: required_preg,
+                        });
+                    }
+                }
+            }
+        }
+    }
+    edits
 }
 
 /// Check if a vreg has any use strictly after `inst_idx` in the given block.

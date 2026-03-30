@@ -90,6 +90,18 @@ pub enum Allocation {
     Spill,
 }
 
+/// A move the backend must emit before an instruction to satisfy a
+/// fixed-register use constraint.
+#[derive(Debug, Clone)]
+pub struct OperandEdit {
+    /// The instruction before which the move must be emitted.
+    pub before_inst: crate::cfg_mir::InstId,
+    /// Move from this register...
+    pub from: PReg,
+    /// ...to this register.
+    pub to: PReg,
+}
+
 /// Allocation result
 #[derive(Debug)]
 pub struct AllocationResult {
@@ -98,6 +110,11 @@ pub struct AllocationResult {
 
     /// Spilled vregs (for spill/reload pass)
     pub spilled: Vec<VReg>,
+
+    /// Moves the backend must emit before specific instructions to satisfy
+    /// fixed-register operand constraints. When a vreg is colored to register A
+    /// but a use requires it in register B, the allocator records `from: A, to: B`.
+    pub edits: Vec<OperandEdit>,
 }
 
 /// Linear scan allocator
@@ -191,6 +208,7 @@ impl<'a> LinearScanAllocator<'a> {
         AllocationResult {
             allocations: self.allocations,
             spilled: self.spilled,
+            edits: Vec::new(),
         }
     }
 

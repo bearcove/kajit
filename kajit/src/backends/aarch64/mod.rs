@@ -227,6 +227,7 @@ impl Lowerer<'_> {
                 let args_len = match &inst.op {
                     LinearOp::CallIntrinsic { args, .. } => args.len(),
                     LinearOp::CallPure { args, .. } => args.len(),
+                    LinearOp::CallEffect { args, .. } => args.len(),
                     LinearOp::CallLambda { args, .. } => args.len(),
                     _ => 0,
                 };
@@ -817,7 +818,8 @@ impl Lowerer<'_> {
                     self.set_const(*dst, None);
                 }
             }
-            LinearOp::CallPure { func, args, dst } => {
+            LinearOp::CallPure { func, args, dst }
+            | LinearOp::CallEffect { func, args, dst } => {
                 self.emit_call_pure(*func, args, *dst);
                 self.set_const(*dst, None);
             }

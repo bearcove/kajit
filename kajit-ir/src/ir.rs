@@ -798,6 +798,12 @@ pub enum IrOp {
     /// Inputs: [Data * arg_count]. Outputs: [Data].
     CallPure { func: IntrinsicFn, arg_count: u8 },
 
+    /// Call an extern "C" function with side effects but no runtime context.
+    /// Same ABI as CallPure (direct args in registers, no DeserContext).
+    /// Threaded on MEMORY state domain to prevent reordering/DCE/CSE.
+    /// Inputs: [Data * arg_count, StateMemory]. Outputs: [Data, StateMemory].
+    CallEffect { func: IntrinsicFn, arg_count: u8 },
+
     // ── Error ops ───────────────────────────────────────────────────
     // r[impl ir.ops.error]
     /// Set error code and abort the containing region.
@@ -890,6 +896,8 @@ impl IrOp {
             | IrOp::SignExtend { .. }
             | IrOp::SlotAddr { .. }
             | IrOp::CallPure { .. } => (Effect::Pure, None),
+
+            IrOp::CallEffect { .. } => (Effect::Domain(MEMORY_STATE_DOMAIN), None),
 
             // Cursor ops
             IrOp::ReadBytes { count } => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(*count)),
@@ -2174,6 +2182,42 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
+    /// Call an effectful function with no runtime context. Same ABI as
+    /// `call_pure` (direct args in registers), but threaded on the MEMORY
+    /// state domain so calls cannot be reordered, DCE'd, or CSE'd.
+    /// Returns the data result.
+    pub fn call_effect(&mut self, func: IntrinsicFn, args: &[PortSource]) -> PortSource {
+        let mut inputs: Vec<InputPort> = args
+            .iter()
+            .map(|&src| InputPort {
+                kind: PortKind::Data,
+                source: src,
+            })
+            .collect();
+        inputs.push(InputPort {
+            kind: MEMORY_STATE_PORT,
+            source: self.state_source(MEMORY_STATE_DOMAIN),
+        });
+        let data_out = self.data_output();
+        let state_out = Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope);
+        let node = self.add_node(Node {
+            region: self.region,
+            debug_scope: self.debug_scope,
+            debug_value: self.debug_value,
+            inputs,
+            outputs: vec![data_out, state_out],
+            kind: NodeKind::Simple(IrOp::CallEffect {
+                func,
+                arg_count: args.len() as u8,
+            }),
+        });
+        self.set_state_source(
+            MEMORY_STATE_DOMAIN,
+            PortSource::Node(OutputRef { node, index: 1 }),
+        );
+        PortSource::Node(OutputRef { node, index: 0 })
+    }
+
     // ── Error ───────────────────────────────────────────────────────
 
     /// Emit an error exit. Consumes cursor state (for byte offset recording).
@@ -2926,6 +2970,11 @@ impl IrFunc {
                 Self::fmt_intrinsic(f, *func, registry)?;
                 write!(f, ")")
             }
+            IrOp::CallEffect { func, .. } => {
+                write!(f, "CallEffect(")?;
+                Self::fmt_intrinsic(f, *func, registry)?;
+                write!(f, ")")
+            }
             IrOp::ErrorExit { code } => write!(f, "ErrorExit({code:?})"),
             IrOp::SimdStringScan => write!(f, "SimdStringScan"),
             IrOp::SimdWhitespaceSkip => write!(f, "SimdWhitespaceSkip"),
@@ -3235,6 +3284,22 @@ mod tests {
             }
             .effect(),
             Effect::Barrier
+        );
+
+        assert_eq!(
+            IrOp::CallEffect {
+                func: IntrinsicFn(0),
+                arg_count: 0,
+            }
+            .effect(),
+            MEMORY_EFFECT
+        );
+        assert!(
+            IrOp::CallEffect {
+                func: IntrinsicFn(0),
+                arg_count: 0,
+            }
+            .has_side_effects()
         );
     }
 

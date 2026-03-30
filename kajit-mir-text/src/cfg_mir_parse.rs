@@ -190,6 +190,7 @@ enum AstOp {
     ReadSlot(u32),
     CallIntrinsic(IntrinsicRef, u32),
     CallPure(IntrinsicRef),
+    CallEffect(IntrinsicRef),
     CallLambda(u32),
     SimdStringScan,
     SimdWsSkip,
@@ -265,6 +266,10 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(intrinsic_ref())
             .then_ignore(just(")"))
             .map(AstOp::CallPure),
+        just("call_effect(")
+            .ignore_then(intrinsic_ref())
+            .then_ignore(just(")"))
+            .map(AstOp::CallEffect),
         just("call_lambda(@")
             .ignore_then(uint32())
             .then_ignore(just(")"))
@@ -1010,6 +1015,13 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
             args: ast.body.uses.iter().map(|(v, _, _)| *v).collect(),
             dst: dst.ok_or_else(|| ParseError {
                 message: format!("inst i{} call_pure missing dst", ast.id.0),
+            })?,
+        },
+        AstOp::CallEffect(func) => LinearOp::CallEffect {
+            func: resolve_intrinsic(func, registry)?,
+            args: ast.body.uses.iter().map(|(v, _, _)| *v).collect(),
+            dst: dst.ok_or_else(|| ParseError {
+                message: format!("inst i{} call_effect missing dst", ast.id.0),
             })?,
         },
         AstOp::CallLambda(target) => LinearOp::CallLambda {

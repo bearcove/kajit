@@ -485,6 +485,10 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(intrinsic_ref())
             .then_ignore(just(")"))
             .map(|func| AstOp::CallPure { func }),
+        just("CallEffect(")
+            .ignore_then(intrinsic_ref())
+            .then_ignore(just(")"))
+            .map(|func| AstOp::CallEffect { func }),
         just("ErrorExit(")
             .ignore_then(error_code())
             .then_ignore(just(")"))
@@ -507,6 +511,9 @@ enum AstOp {
         field_offset: u32,
     },
     CallPure {
+        func: IntrinsicRef,
+    },
+    CallEffect {
         func: IntrinsicRef,
     },
 }
@@ -1163,6 +1170,16 @@ fn resolve_node(
                         arg_count: arg_count as u8,
                     }
                 }
+                IrOp::CallEffect { func: f, .. } => {
+                    let data_inputs = resolved_inputs
+                        .iter()
+                        .filter(|i| i.kind == PortKind::Data)
+                        .count();
+                    IrOp::CallEffect {
+                        func: f,
+                        arg_count: data_inputs as u8,
+                    }
+                }
                 other => other,
             };
 
@@ -1572,6 +1589,13 @@ fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseErr
         AstOp::CallPure { func } => {
             let intrinsic = resolve_intrinsic(func, registry)?;
             Ok(IrOp::CallPure {
+                func: intrinsic,
+                arg_count: 0, // patched later
+            })
+        }
+        AstOp::CallEffect { func } => {
+            let intrinsic = resolve_intrinsic(func, registry)?;
+            Ok(IrOp::CallEffect {
                 func: intrinsic,
                 arg_count: 0, // patched later
             })

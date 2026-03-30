@@ -171,6 +171,13 @@ pub enum LinearOp {
         args: Vec<VReg>,
         dst: VReg,
     },
+    /// Effectful call with direct ABI (no runtime context). Same calling
+    /// convention as CallPure but must not be CSE'd or DCE'd.
+    CallEffect {
+        func: IntrinsicFn,
+        args: Vec<VReg>,
+        dst: VReg,
+    },
 
     // ── Control flow ──
     Label(LabelId),
@@ -272,7 +279,7 @@ impl LinearOp {
                     f(arg);
                 }
             }
-            CallPure { args, .. } => {
+            CallPure { args, .. } | CallEffect { args, .. } => {
                 for arg in args {
                     f(arg);
                 }
@@ -368,7 +375,8 @@ impl LinearOp {
             | SlotAddr { dst, .. }
             | LoadFromAddr { dst, .. }
             | ReadFromSlot { dst, .. }
-            | CallPure { dst, .. } => f(dst),
+            | CallPure { dst, .. }
+            | CallEffect { dst, .. } => f(dst),
 
             CallIntrinsic { dst, .. } => {
                 if let Some(dst) = dst {
@@ -478,7 +486,7 @@ impl LinearOp {
                     f(dst);
                 }
             }
-            CallPure { args, dst, .. } => {
+            CallPure { args, dst, .. } | CallEffect { args, dst, .. } => {
                 for arg in args {
                     f(arg);
                 }
@@ -1385,6 +1393,17 @@ impl<'a> Linearizer<'a> {
                 self.emit_node(
                     node,
                     LinearOp::CallPure {
+                        func: *func,
+                        args,
+                        dst: data_dst(0),
+                    },
+                );
+            }
+            IrOp::CallEffect { func, arg_count } => {
+                let args: Vec<VReg> = (0..*arg_count as usize).map(&data_in).collect();
+                self.emit_node(
+                    node,
+                    LinearOp::CallEffect {
                         func: *func,
                         args,
                         dst: data_dst(0),
@@ -4458,7 +4477,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
         LinearOp::WriteToSlot { src, .. } => vec![*src],
         LinearOp::CallIntrinsic { args, .. } => args.clone(),
-        LinearOp::CallPure { args, .. } => args.clone(),
+        LinearOp::CallPure { args, .. } | LinearOp::CallEffect { args, .. } => args.clone(),
         LinearOp::BranchIf {
             cond,
             phi_args,
@@ -4521,7 +4540,7 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::LoadFromAddr { dst, .. } => vec![*dst],
         LinearOp::ReadFromSlot { dst, .. } => vec![*dst],
         LinearOp::CallIntrinsic { dst, .. } => dst.iter().copied().collect(),
-        LinearOp::CallPure { dst, .. } => vec![*dst],
+        LinearOp::CallPure { dst, .. } | LinearOp::CallEffect { dst, .. } => vec![*dst],
         LinearOp::SimdStringScan { pos, kind } => vec![*pos, *kind],
         LinearOp::FuncStart { data_args, .. } => data_args.clone(),
         LinearOp::CallLambda { results, .. } => results.clone(),
@@ -4585,6 +4604,7 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         LinearOp::WriteToSlot { src, .. } => rewrite(src, &mut resolve),
         LinearOp::CallIntrinsic { args, .. }
         | LinearOp::CallPure { args, .. }
+        | LinearOp::CallEffect { args, .. }
         | LinearOp::CallLambda { args, .. } => {
             for arg in args {
                 rewrite(arg, &mut resolve);
@@ -5283,6 +5303,19 @@ fn fmt_op(
         LinearOp::CallPure { func, args, dst } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = call_pure ")?;
+            fmt_intrinsic(f, *func, registry)?;
+            write!(f, "(")?;
+            for (i, a) in args.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                fmt_vreg(f, *a)?;
+            }
+            write!(f, ")")
+        }
+        LinearOp::CallEffect { func, args, dst } => {
+            fmt_vreg(f, *dst)?;
+            write!(f, " = call_effect ")?;
             fmt_intrinsic(f, *func, registry)?;
             write!(f, "(")?;
             for (i, a) in args.iter().enumerate() {

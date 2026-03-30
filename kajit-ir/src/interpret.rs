@@ -440,7 +440,7 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
         }
 
         // ─── Call ops (stub) ───
-        IrOp::CallIntrinsic { .. } | IrOp::CallPure { .. } => {
+        IrOp::CallIntrinsic { .. } | IrOp::CallPure { .. } | IrOp::CallEffect { .. } => {
             // Intrinsics can't be interpreted without the function pointers.
             // Set outputs to 0.
             for i in 0..node.outputs.len() {

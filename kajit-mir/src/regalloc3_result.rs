@@ -21,6 +21,10 @@ pub struct AllocatedCfgFunctionRa3 {
 
     /// VReg → constant value (for rematerialization of spilled constants)
     pub rematerializable: HashMap<VReg, u64>,
+
+    /// Moves the backend must emit before specific instructions to satisfy
+    /// fixed-register operand constraints (e.g., call ABI arg registers).
+    pub edits: Vec<linear_scan::OperandEdit>,
 }
 
 /// Allocation result for entire CFG program (regalloc3 native format).

@@ -920,6 +920,11 @@ fn fmt_cfg_op_name(
             fmt_intrinsic(f, *func, registry)?;
             write!(f, ")")
         }
+        LinearOp::CallEffect { func, .. } => {
+            write!(f, "call_effect(")?;
+            fmt_intrinsic(f, *func, registry)?;
+            write!(f, ")")
+        }
         LinearOp::CallLambda { target, .. } => write!(f, "call_lambda(@{})", target.index()),
         LinearOp::SimdStringScan { .. } => write!(f, "simd_string_scan"),
         LinearOp::SimdWhitespaceSkip => write!(f, "simd_ws_skip"),
@@ -945,7 +950,8 @@ fn linearop_dst(op: &LinearOp) -> Option<VReg> {
         | LinearOp::SlotAddr { dst, .. }
         | LinearOp::LoadFromAddr { dst, .. }
         | LinearOp::ReadFromSlot { dst, .. }
-        | LinearOp::CallPure { dst, .. } => Some(*dst),
+        | LinearOp::CallPure { dst, .. }
+        | LinearOp::CallEffect { dst, .. } => Some(*dst),
         LinearOp::CallIntrinsic { dst, .. } => *dst,
         _ => None,
     }
@@ -966,6 +972,7 @@ fn linearop_uses(op: &LinearOp) -> Vec<VReg> {
         LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
         LinearOp::CallIntrinsic { args, .. }
         | LinearOp::CallPure { args, .. }
+        | LinearOp::CallEffect { args, .. }
         | LinearOp::CallLambda { args, .. } => args.clone(),
         _ => vec![],
     }
@@ -1362,9 +1369,9 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
                 caller_saved_simd: true,
             };
         }
-        LinearOp::CallPure { args, dst, .. } => {
-            for &arg in args {
-                push_use(&mut operands, arg, None);
+        LinearOp::CallPure { args, dst, .. } | LinearOp::CallEffect { args, dst, .. } => {
+            for (i, &arg) in args.iter().enumerate() {
+                push_use(&mut operands, arg, Some(FixedReg::AbiArg(i as u8)));
             }
             push_def(&mut operands, *dst, Some(FixedReg::AbiRet(0)));
             clobbers = Clobbers {
@@ -2862,6 +2869,7 @@ fn global_copy_propagation(func: &mut Function) {
                 }
                 LinearOp::CallIntrinsic { args, .. }
                 | LinearOp::CallPure { args, .. }
+                | LinearOp::CallEffect { args, .. }
                 | LinearOp::CallLambda { args, .. } => {
                     for arg in args.iter_mut() {
                         changed |= rewrite_use(arg);
@@ -4076,7 +4084,8 @@ fn get_def_vreg(op: &LinearOp) -> Option<VReg> {
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
         | LinearOp::SlotAddr { dst, .. }
-        | LinearOp::CallPure { dst, .. } => Some(*dst),
+        | LinearOp::CallPure { dst, .. }
+        | LinearOp::CallEffect { dst, .. } => Some(*dst),
         _ => None,
     }
 }
