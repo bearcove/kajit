@@ -313,18 +313,26 @@ fn find_thread_action(
             continue;
         }
 
-        // Find leaking params.
-        let mut succ_arg_sources: HashSet<VReg> = HashSet::new();
-        for &edge_id in &block.succs {
-            for arg in &func.edges[edge_id.index()].args {
-                succ_arg_sources.insert(arg.source);
-            }
-        }
+        // Find leaking params: a param leaks if ANY successor block uses it
+        // without receiving it through that edge's args.
         let leaking_params: Vec<VReg> = block
             .params
             .iter()
             .filter(|p| {
-                !succ_arg_sources.contains(p) && is_vreg_used_outside_block(func, **p, block.id)
+                // Check each successor edge individually: if any successor
+                // doesn't carry this param via edge args but uses it, it leaks.
+                for &edge_id in &block.succs {
+                    let edge_sources: HashSet<VReg> =
+                        func.edges[edge_id.index()].args.iter().map(|a| a.source).collect();
+                    if !edge_sources.contains(p) {
+                        let target = func.edges[edge_id.index()].to;
+                        if is_vreg_used_outside_block(func, **p, block.id) {
+                            return true;
+                        }
+                        let _ = target;
+                    }
+                }
+                false
             })
             .copied()
             .collect();

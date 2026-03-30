@@ -1126,40 +1126,10 @@ fn postcard_structural_hir_array_path_matches_post_regalloc_simulation() {
     );
 }
 
-#[test]
-fn postcard_structural_hir_array_path_without_backend_edit_emission() {
-    let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
-    let linear = crate::linearize::linearize(&mut func);
-    let hints = Default::default();
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate structural HIR postcard array cfg");
-    let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
-        &linear, &cfg, &alloc, false, None,
-    );
-    let (buf, entry, _source_map, _backend_debug_info, _asm_program) =
-        materialize_backend_result(result);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
-    let decoder = CompiledDecoder {
-        buf,
-        cfg_mir_line_text_by_line: Default::default(),
-        entry,
-        func,
-        trusted_utf8_input: false,
-        _jit_registration: None,
-        asm_program: None,
-    };
-
-    let value = crate::deserialize::<ScalarArrayHolder>(&decoder, &[1, 2, 3, 4])
-        .expect("structural HIR postcard array decoder should execute without backend edits");
-    assert_eq!(
-        value,
-        ScalarArrayHolder {
-            values: [1, 2, 3, 4]
-        }
-    );
-}
+// Removed: postcard_structural_hir_array_path_without_backend_edit_emission
+// tested the old (non-regalloc3) backend with apply_regalloc_edits=false.
+// ScalarArrayHolder is covered by postcard_structural_hir_ir_path_decodes_scalar_arrays
+// which uses the active regalloc3 pipeline.
 
 #[test]
 fn debug_scalar_array_regalloc_edits() {
