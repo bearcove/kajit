@@ -266,6 +266,11 @@ fn spill_phase(
         for &param in &block.params {
             live.insert(param);
         }
+        if block.id == func.entry {
+            for &arg in &func.data_args {
+                live.insert(arg);
+            }
+        }
 
         // Remove already-spilled values from live set
         live.retain(|v| !spilled.contains(v));
@@ -1621,12 +1626,10 @@ fn interferes(
         match w_last_use {
             Some(u32::MAX) => true,
             Some(last) => last >= v_def_idx,
-            None => {
-                liveness
-                    .live_out
-                    .get(&v_block)
-                    .map_or(false, |lo| lo.contains(&w))
-            }
+            None => liveness
+                .live_out
+                .get(&v_block)
+                .map_or(false, |lo| lo.contains(&w)),
         }
     } else {
         false

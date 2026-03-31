@@ -2051,9 +2051,21 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             offset += 16;
         }
 
-        // Move data_args from ABI registers to RA-assigned registers.
+        // Materialize scalar data_args from ABI registers into their assigned homes.
+        // Spilled args must be stored before any register shuffles so later moves
+        // cannot clobber their ABI source registers.
         if let Some(alloc_func) = alloc.functions.first() {
             if let Some(func) = program.funcs.first() {
+                for (i, &arg) in func.data_args.iter().enumerate() {
+                    let abi_reg = Reg::from_raw(i as u8);
+                    if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
+                        let offset = ectx.base_frame + (slot.0 * 8);
+                        ectx.emit
+                            .emit_str_imm(Width::X64, abi_reg, Reg::SP, offset)
+                            .expect("str spilled data_arg");
+                    }
+                }
+
                 let mut arg_moves = Vec::new();
                 for (i, &arg) in func.data_args.iter().enumerate() {
                     let abi_reg = Reg::from_raw(i as u8);
