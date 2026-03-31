@@ -179,19 +179,20 @@ impl<'a> EmitContext<'a> {
                 let (&cycle_dst, &cycle_src) = deps.iter().next().unwrap();
                 self.ectx
                     .emit
-                    .emit_mov_reg(Width::X64, temp, cycle_src)
+                    .emit_mov_reg(Width::X64, temp, cycle_dst)
                     .expect("mov to temp");
                 deps.remove(&cycle_dst);
-                // Update any dep that sourced from cycle_src to source from temp
+                // Any remaining move that needs the old value of cycle_dst must
+                // now read it from the scratch register.
                 for (_, src) in deps.iter_mut() {
-                    if *src == cycle_src {
+                    if *src == cycle_dst {
                         *src = temp;
                     }
                 }
                 self.ectx
                     .emit
-                    .emit_mov_reg(Width::X64, cycle_dst, temp)
-                    .expect("mov from temp");
+                    .emit_mov_reg(Width::X64, cycle_dst, cycle_src)
+                    .expect("mov cycle edge");
             }
         }
     }
@@ -666,8 +667,7 @@ impl<'a> EmitContext<'a> {
                 self.emit_call_intrinsic(*func, args, *dst, Some(*field_offset));
             }
 
-            LinearOp::CallPure { func, args, dst }
-            | LinearOp::CallEffect { func, args, dst } => {
+            LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
                 self.emit_call_pure(*func, args, *dst);
             }
 
@@ -1834,47 +1834,15 @@ impl<'a> EmitContext<'a> {
                 // Emit OperandEdits (register moves) required before this instruction
                 // to satisfy fixed-register operand constraints.
                 // Collect all edits for this instruction and emit as a parallel move.
-                let edits_here: Vec<(Reg, Reg)> = self.alloc_func.edits
+                let edits_here: Vec<(Reg, Reg)> = self
+                    .alloc_func
+                    .edits
                     .iter()
                     .filter(|e| e.before_inst == inst_id)
-                    .map(|e| (Reg::from_raw(e.from.0), Reg::from_raw(e.to.0)))
+                    .map(|e| (Reg::from_raw(e.to.0), Reg::from_raw(e.from.0)))
                     .collect();
                 if !edits_here.is_empty() {
-                    // Topological parallel move: emit moves whose target is not
-                    // a source of another pending move first, use X16 for cycles.
-                    let mut done = vec![false; edits_here.len()];
-                    for _ in 0..edits_here.len() + 1 {
-                        let mut progress = false;
-                        for i in 0..edits_here.len() {
-                            if done[i] { continue; }
-                            let (from, to) = edits_here[i];
-                            if from == to { done[i] = true; progress = true; continue; }
-                            let blocked = edits_here.iter().enumerate().any(|(j, &(f, _))| {
-                                !done[j] && j != i && f == to
-                            });
-                            if !blocked {
-                                self.ectx.emit.emit_mov_reg(Width::X64, to, from)
-                                    .expect("mov edit");
-                                done[i] = true;
-                                progress = true;
-                            }
-                        }
-                        if done.iter().all(|&d| d) { break; }
-                        if !progress {
-                            // Cycle: break with X16 scratch
-                            for i in 0..edits_here.len() {
-                                if !done[i] {
-                                    let (from, to) = edits_here[i];
-                                    self.ectx.emit.emit_mov_reg(Width::X64, Reg::X16, from)
-                                        .expect("mov cycle save");
-                                    self.ectx.emit.emit_mov_reg(Width::X64, to, Reg::X16)
-                                        .expect("mov cycle restore");
-                                    done[i] = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    self.emit_parallel_moves(&edits_here, Reg::X16);
                 }
 
                 let op_id = kajit_mir::cfg_mir::OpId::Inst(inst_id);
@@ -2067,7 +2035,13 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         // Save callee-saved pairs
         for i in 0..pairs_to_save {
             ectx.emit
-                .emit_stp(Width::X64, saved_pairs[i].0, saved_pairs[i].1, Reg::SP, offset)
+                .emit_stp(
+                    Width::X64,
+                    saved_pairs[i].0,
+                    saved_pairs[i].1,
+                    Reg::SP,
+                    offset,
+                )
                 .expect("stp callee-saved");
             offset += 16;
         }
@@ -2080,7 +2054,8 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
                     if let Some(preg) = alloc_func.preg_for_vreg(arg) {
                         let assigned = Reg::from_raw(preg.0);
                         if assigned != abi_reg {
-                            ectx.emit.emit_mov_reg(Width::X64, assigned, abi_reg)
+                            ectx.emit
+                                .emit_mov_reg(Width::X64, assigned, abi_reg)
                                 .expect("mov data_arg");
                         }
                     }
@@ -2257,7 +2232,13 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             offset += 16;
             for i in 0..pairs_to_save {
                 ectx.emit
-                    .emit_ldp(Width::X64, saved_pairs[i].0, saved_pairs[i].1, Reg::SP, offset)
+                    .emit_ldp(
+                        Width::X64,
+                        saved_pairs[i].0,
+                        saved_pairs[i].1,
+                        Reg::SP,
+                        offset,
+                    )
                     .expect("ldp callee-saved");
                 offset += 16;
             }
