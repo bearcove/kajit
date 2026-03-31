@@ -2908,9 +2908,8 @@ fn build_structural_hir_ir_impl(
         .map(|l| l.size())
         .unwrap_or(0);
     let mut builder = crate::ir::IrBuilder::new(label, output_size);
-    if hir_function_uses_effect_calls(module, function) {
-        let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
-    }
+    // Structural path always needs the memory domain — load_from_addr/store_to_addr thread on it.
+    let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();
         let lowerer =
