@@ -76,6 +76,43 @@ struct BfiInfo {
     width: u8,
 }
 
+fn emit_parallel_reg_moves(ectx: &mut EmitCtx, moves: &[(Reg, Reg)], temp: Reg) {
+    // Build dependency map: dst -> src.
+    let mut deps: HashMap<Reg, Reg> = HashMap::new();
+    for &(dst, src) in moves {
+        if dst != src {
+            deps.insert(dst, src);
+        }
+    }
+
+    while !deps.is_empty() {
+        let ready = deps
+            .iter()
+            .find(|(dst, _)| !deps.values().any(|src| src == *dst))
+            .map(|(&dst, &src)| (dst, src));
+
+        if let Some((dst, src)) = ready {
+            ectx.emit.emit_mov_reg(Width::X64, dst, src).expect("mov");
+            deps.remove(&dst);
+            continue;
+        }
+
+        let (&cycle_dst, &cycle_src) = deps.iter().next().unwrap();
+        ectx.emit
+            .emit_mov_reg(Width::X64, temp, cycle_dst)
+            .expect("mov to temp");
+        deps.remove(&cycle_dst);
+        for (_, src) in deps.iter_mut() {
+            if *src == cycle_dst {
+                *src = temp;
+            }
+        }
+        ectx.emit
+            .emit_mov_reg(Width::X64, cycle_dst, cycle_src)
+            .expect("mov cycle edge");
+    }
+}
+
 impl<'a> EmitContext<'a> {
     /// Get physical register for a vreg, or None if spilled/dead.
     fn preg_for_vreg(&self, vreg: kajit_ir::VReg) -> Option<PReg> {
@@ -153,48 +190,7 @@ impl<'a> EmitContext<'a> {
     /// `moves` is a list of (dst, src) pairs. `temp` is a scratch register
     /// used to break cycles.
     fn emit_parallel_moves(&mut self, moves: &[(Reg, Reg)], temp: Reg) {
-        // Build dependency map: dst → src
-        let mut deps: HashMap<Reg, Reg> = HashMap::new();
-        for &(dst, src) in moves {
-            if dst != src {
-                deps.insert(dst, src);
-            }
-        }
-
-        while !deps.is_empty() {
-            // Find a ready move: dst whose src is not another move's dst
-            let ready = deps
-                .iter()
-                .find(|(_, src)| !deps.contains_key(src))
-                .map(|(&dst, &src)| (dst, src));
-
-            if let Some((dst, src)) = ready {
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, dst, src)
-                    .expect("mov");
-                deps.remove(&dst);
-            } else {
-                // Cycle: break it with temp register
-                let (&cycle_dst, &cycle_src) = deps.iter().next().unwrap();
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, temp, cycle_dst)
-                    .expect("mov to temp");
-                deps.remove(&cycle_dst);
-                // Any remaining move that needs the old value of cycle_dst must
-                // now read it from the scratch register.
-                for (_, src) in deps.iter_mut() {
-                    if *src == cycle_dst {
-                        *src = temp;
-                    }
-                }
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, cycle_dst, cycle_src)
-                    .expect("mov cycle edge");
-            }
-        }
+        emit_parallel_reg_moves(self.ectx, moves, temp);
     }
 
     /// Load a 64-bit constant into a register.
@@ -2049,16 +2045,18 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         // Move data_args from ABI registers to RA-assigned registers.
         if let Some(alloc_func) = alloc.functions.first() {
             if let Some(func) = program.funcs.first() {
+                let mut arg_moves = Vec::new();
                 for (i, &arg) in func.data_args.iter().enumerate() {
                     let abi_reg = Reg::from_raw(i as u8);
                     if let Some(preg) = alloc_func.preg_for_vreg(arg) {
                         let assigned = Reg::from_raw(preg.0);
                         if assigned != abi_reg {
-                            ectx.emit
-                                .emit_mov_reg(Width::X64, assigned, abi_reg)
-                                .expect("mov data_arg");
+                            arg_moves.push((assigned, abi_reg));
                         }
                     }
+                }
+                if !arg_moves.is_empty() {
+                    emit_parallel_reg_moves(&mut ectx, &arg_moves, Reg::X16);
                 }
             }
         }
