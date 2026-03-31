@@ -799,45 +799,16 @@ fn color_phase(
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
 
-            // Before processing this instruction's defs, free colors of values
-            // whose last use was at a PREVIOUS instruction and are NOT live-out.
-            // (We free after last use, not at last use, to avoid freeing a color
-            // that this instruction reads and another def wants.)
-            let mut to_free = Vec::new();
-            for (&_preg, _) in occupied.iter().map(|p| (p, ())) {
-                // Find which vreg holds this color
-                // (linear scan through coloring — could be optimized with reverse map)
-            }
-            // Simpler approach: collect all uses of this instruction, then free
-            // any previously-used vregs that are dead after this point.
+            // Collect uses of this instruction.
             let mut uses_here: Vec<VReg> = Vec::new();
             inst.op.for_each_use(|src| {
                 uses_here.push(*src);
             });
 
-            // Free colors of vregs whose last use in this block is at inst_idx
-            // and that are NOT live-out
-            for &vreg in &uses_here {
-                if spilled.contains(&vreg) {
-                    continue;
-                }
-                let last = last_use_in_block.get(&(block_id, vreg)).copied();
-                if last == Some(inst_idx as u32) && !live_out.map_or(false, |lo| lo.contains(&vreg))
-                {
-                    if let Some(&preg) = coloring.get(&vreg) {
-                        to_free.push(preg);
-                    }
-                }
-            }
-            let freed_debug: Vec<u8> = to_free.iter().map(|p| p.0).collect();
-            for preg in to_free {
-                occupied.remove(&preg);
-            }
-
-            // Compute dying source preferences: sources whose last use is this
-            // instruction and that are not live-out. Their registers are about
-            // to be freed, so new defs should prefer reusing them.
+            // Identify dying sources: vregs whose last use is this instruction
+            // and that are NOT live-out.
             let mut dying_source_colors: Vec<PReg> = Vec::new();
+            let mut to_free = Vec::new();
             for &vreg in &uses_here {
                 if spilled.contains(&vreg) {
                     continue;
@@ -848,8 +819,21 @@ fn color_phase(
                 if is_dying {
                     if let Some(&preg) = coloring.get(&vreg) {
                         dying_source_colors.push(preg);
+                        // For non-clobbering instructions, free dying source
+                        // colors so defs can reuse them (the def logically
+                        // happens after uses at the same instruction).
+                        // For clobbering instructions (calls), don't free —
+                        // the call clobbers caller-saved regs and the def goes
+                        // into the ABI return register, not the dying source's.
+                        if !inst.clobbers.caller_saved_gpr {
+                            to_free.push(preg);
+                        }
                     }
                 }
+            }
+            let freed_debug: Vec<u8> = to_free.iter().map(|p| p.0).collect();
+            for preg in to_free {
+                occupied.remove(&preg);
             }
 
             // Edge arg preferences: if this def will be used as an edge arg source,
@@ -916,22 +900,21 @@ fn color_phase(
             });
 
             // Call clobber handling: after a clobbering instruction, caller-saved
-            // registers are destroyed. Any value still live past this point that
-            // was assigned a caller-saved register has a conflict — the spill phase
-            // should have ensured this doesn't happen, but as a safety net we
-            // re-color or evict here.
-            //
-            // The correct effect: after the call, caller-saved colors are "free"
-            // (the call killed them), and only callee-saved colors of surviving
-            // live values remain occupied.
+            // registers are destroyed. Free caller-saved colors from occupied,
+            // EXCEPT colors that belong to this instruction's own defs — those
+            // survive the clobber (the return value is written after the call).
             if inst.clobbers.caller_saved_gpr {
-                // Free all caller-saved colors from occupied set — the call killed them.
-                // Values that were using caller-saved registers and are still live
-                // should have been spilled by the spill phase. If they weren't, they're
-                // dead after this instruction (their last use was the call args).
+                // Collect colors of this instruction's defs (they survive the clobber).
+                let mut def_colors: HashSet<PReg> = HashSet::new();
+                inst.op.for_each_def(|dst| {
+                    if let Some(&preg) = coloring.get(dst) {
+                        def_colors.insert(preg);
+                    }
+                });
+
                 let caller_saved_to_free: Vec<PReg> = occupied
                     .iter()
-                    .filter(|p| !callee_saved_set.contains(p))
+                    .filter(|p| !callee_saved_set.contains(p) && !def_colors.contains(p))
                     .copied()
                     .collect();
                 for preg in caller_saved_to_free {
@@ -1593,7 +1576,7 @@ fn interferes(
         if early_live_out {
             return true;
         }
-        // Check last use of early in this block
+        // Check last use of early in this block.
         let early_last_use = last_use_map.get(&(v_block, early)).copied();
         match early_last_use {
             // u32::MAX means used at/after terminator (edge arg or branch cond)
@@ -1602,15 +1585,49 @@ fn interferes(
             None => false, // no use in this block after def → dead immediately
         }
     } else if dom.dominates(v_block, w_block) {
-        liveness
+        // v's block dominates w's block. v interferes with w iff v is
+        // live-in to w's block AND still alive at w's def point.
+        let v_live_in = liveness
             .live_in
             .get(&w_block)
-            .map_or(false, |li| li.contains(&v))
+            .map_or(false, |li| li.contains(&v));
+        if !v_live_in {
+            return false;
+        }
+        // Refine: if v dies before w's def in w's block, they don't interfere.
+        let v_last_use = last_use_map.get(&(w_block, v)).copied();
+        let w_def_idx = def_inst_idx.get(&w).copied().unwrap_or(u32::MAX);
+        match v_last_use {
+            Some(u32::MAX) => true,
+            Some(last) => last >= w_def_idx,
+            None => {
+                // v is live-in but has no use in w's block — check live-out.
+                liveness
+                    .live_out
+                    .get(&w_block)
+                    .map_or(false, |lo| lo.contains(&v))
+            }
+        }
     } else if dom.dominates(w_block, v_block) {
-        liveness
+        let w_live_in = liveness
             .live_in
             .get(&v_block)
-            .map_or(false, |li| li.contains(&w))
+            .map_or(false, |li| li.contains(&w));
+        if !w_live_in {
+            return false;
+        }
+        let w_last_use = last_use_map.get(&(v_block, w)).copied();
+        let v_def_idx = def_inst_idx.get(&v).copied().unwrap_or(u32::MAX);
+        match w_last_use {
+            Some(u32::MAX) => true,
+            Some(last) => last >= v_def_idx,
+            None => {
+                liveness
+                    .live_out
+                    .get(&v_block)
+                    .map_or(false, |lo| lo.contains(&w))
+            }
+        }
     } else {
         false
     }

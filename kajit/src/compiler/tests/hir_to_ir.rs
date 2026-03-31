@@ -2005,7 +2005,7 @@ fn field_projection_from_call_returning_str() {
 ///     return Str { ptr: buf, len: total }
 /// }
 #[test]
-#[ignore = "RA conflict: too many calls for SSA coloring to handle without conflicts (8 conflicts)"]
+#[ignore = "operand edit ordering: memcpy args clobbered by sequential moves (needs parallel-move solver)"]
 fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
     use hir::{
         BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,

@@ -231,9 +231,16 @@ impl<'a> LivenessAnalyzer<'a> {
                     }
                 }
 
-                // Add block params (defined at block entry)
+                // Remove block params (defined at block entry)
                 for param in &block.params {
                     live_in.remove(param);
+                }
+
+                // Remove data_args (defined at function entry, like block params)
+                if block.id == self.func.entry {
+                    for &arg in &self.func.data_args {
+                        live_in.remove(&arg);
+                    }
                 }
 
                 // Update sets
