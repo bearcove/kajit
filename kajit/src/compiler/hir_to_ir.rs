@@ -2399,6 +2399,136 @@ impl<'a> ScalarHirIrLowerer<'a> {
         }
     }
 
+    /// Non-panicking version of `expr_field_chain`. Returns `None` when the
+    /// base is not a local-rooted field chain.
+    fn try_expr_field_chain(expr: &hir::Expr) -> Option<(hir::LocalId, Vec<(String, &hir::Type)>)> {
+        match expr {
+            hir::Expr::Local(local) => Some((*local, vec![])),
+            hir::Expr::Field { base, field } => {
+                let (local, mut chain) = Self::try_expr_field_chain(base)?;
+                chain.push((field.clone(), &hir::Type::Unit));
+                Some((local, chain))
+            }
+            _ => None,
+        }
+    }
+
+    /// Infer the type of an HIR expression. Used by the type-driven field
+    /// projection fallback when the base is not a local-rooted chain.
+    fn infer_expr_type(&self, expr: &hir::Expr) -> hir::Type {
+        match expr {
+            hir::Expr::Local(id) => self.local_types[id].clone(),
+            hir::Expr::Literal(hir::Literal::Bool(_)) => hir::Type::Bool,
+            hir::Expr::Literal(hir::Literal::Integer(_)) => hir::Type::u(64),
+            hir::Expr::Literal(hir::Literal::String(_)) => {
+                // String literals produce (ptr, len) — a built-in Str type.
+                hir::Type::Str {
+                    region: hir::RegionId::new(0),
+                }
+            }
+            hir::Expr::Literal(hir::Literal::Unit) => hir::Type::Unit,
+            hir::Expr::Struct { def, .. } => hir::Type::Named {
+                def: *def,
+                args: vec![],
+            },
+            hir::Expr::Field { base, field } => {
+                let base_ty = self.infer_expr_type(base);
+                self.resolve_field_type_in(&base_ty, field)
+            }
+            hir::Expr::Binary { op, .. } => {
+                // Comparison ops produce bool, arithmetic ops produce u64.
+                match op {
+                    hir::BinaryOp::Eq
+                    | hir::BinaryOp::Ne
+                    | hir::BinaryOp::Lt
+                    | hir::BinaryOp::Le
+                    | hir::BinaryOp::Gt
+                    | hir::BinaryOp::Ge => hir::Type::Bool,
+                    _ => hir::Type::u(64),
+                }
+            }
+            hir::Expr::Unary { .. } => hir::Type::u(64),
+            hir::Expr::Call(call) => {
+                let callable = &self.module.callables[match call.target {
+                    hir::CallTarget::Callable(id) => id,
+                }];
+                callable
+                    .signature
+                    .returns
+                    .first()
+                    .cloned()
+                    .unwrap_or(hir::Type::Unit)
+            }
+            hir::Expr::SliceData { .. } | hir::Expr::SliceLen { .. } => hir::Type::u(64),
+            hir::Expr::Load { .. } => hir::Type::u(64),
+            other => panic!(
+                "infer_expr_type: cannot infer type of expression: {other:?}"
+            ),
+        }
+    }
+
+    /// Resolve the type of a field within a parent type.
+    fn resolve_field_type_in(&self, ty: &hir::Type, field: &str) -> hir::Type {
+        match ty {
+            hir::Type::Named { def, .. } => {
+                let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind else {
+                    panic!("field access on non-struct named type: {:?}", ty);
+                };
+                fields
+                    .iter()
+                    .find(|f| f.name == field)
+                    .map(|f| f.ty.clone())
+                    .unwrap_or_else(|| panic!("field '{field}' not found in struct"))
+            }
+            hir::Type::Str { .. } => match field {
+                "ptr" | "data" => hir::Type::u(64),
+                "len" => hir::Type::u(64),
+                _ => panic!("unknown Str field: '{field}'"),
+            },
+            hir::Type::Slice { .. } => match field {
+                "data" | "ptr" => hir::Type::u(64),
+                "len" => hir::Type::u(64),
+                _ => panic!("unknown Slice field: '{field}'"),
+            },
+            _ => panic!("field access on type that has no fields: {:?}", ty),
+        }
+    }
+
+    /// Compute the word offset and word count of a field within a type.
+    /// Returns `(word_offset, field_word_count)`.
+    fn field_offset_in_type(&self, ty: &hir::Type, field_name: &str) -> (usize, usize) {
+        match ty {
+            hir::Type::Named { def, .. } => {
+                let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind else {
+                    panic!("field_offset_in_type: not a struct: {:?}", ty);
+                };
+                let mut offset = 0;
+                for f in fields {
+                    let wc = Self::word_count_for_type(self.module, &f.ty);
+                    if f.name == field_name {
+                        return (offset, wc);
+                    }
+                    offset += wc;
+                }
+                panic!("field '{field_name}' not found in struct {:?}", def);
+            }
+            hir::Type::Str { .. } => match field_name {
+                "ptr" | "data" => (0, 1),
+                "len" => (1, 1),
+                _ => panic!("unknown Str field: '{field_name}'"),
+            },
+            hir::Type::Slice { .. } => match field_name {
+                "data" | "ptr" => (0, 1),
+                "len" => (1, 1),
+                _ => panic!("unknown Slice field: '{field_name}'"),
+            },
+            _ => panic!(
+                "field_offset_in_type: type {:?} has no field '{}'",
+                ty, field_name
+            ),
+        }
+    }
+
     /// Collect the chain of field accesses from a place.
     fn place_field_chain(place: &hir::Place) -> (hir::LocalId, Vec<(String, &hir::Type)>) {
         match place {
@@ -2440,12 +2570,19 @@ impl<'a> ScalarHirIrLowerer<'a> {
     ) -> Vec<crate::ir::PortSource> {
         match expr {
             hir::Expr::Local(local) => self.get_local_values(*local).to_vec(),
-            hir::Expr::Field { .. } => {
-                let (local, chain) = Self::expr_field_chain(expr);
-                let values = self.get_local_values(local);
-                let (offset, ty) = self.resolve_local_field(local, &chain);
-                let word_count = Self::word_count_for_type(self.module, ty);
-                values[offset..offset + word_count].to_vec()
+            hir::Expr::Field { base, field } => {
+                // Fast path: local-rooted field chain (most common case).
+                if let Some((local, chain)) = Self::try_expr_field_chain(expr) {
+                    let values = self.get_local_values(local);
+                    let (offset, ty) = self.resolve_local_field(local, &chain);
+                    let word_count = Self::word_count_for_type(self.module, ty);
+                    return values[offset..offset + word_count].to_vec();
+                }
+                // Type-driven fallback: evaluate base to word vector, project field.
+                let words = self.lower_expr_multi(rb, base);
+                let base_ty = self.infer_expr_type(base);
+                let (offset, count) = self.field_offset_in_type(&base_ty, field);
+                words[offset..offset + count].to_vec()
             }
             hir::Expr::Struct { def, fields } => {
                 let hir::TypeDefKind::Struct { fields: field_defs } =
@@ -2832,16 +2969,24 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 assert!(values.len() >= 2, "SliceLen requires 2-word type");
                 values[1]
             }
-            hir::Expr::Field { .. } => {
-                let (local, chain) = Self::expr_field_chain(expr);
-                let values = self.get_local_values(local);
-                let (offset, ty) = self.resolve_local_field(local, &chain);
-                assert_eq!(
-                    Self::word_count_for_type(self.module, ty),
-                    1,
-                    "lower_expr on multi-word field"
-                );
-                values[offset]
+            hir::Expr::Field { base, field } => {
+                // Fast path: local-rooted field chain (most common case).
+                if let Some((local, chain)) = Self::try_expr_field_chain(expr) {
+                    let values = self.get_local_values(local);
+                    let (offset, ty) = self.resolve_local_field(local, &chain);
+                    assert_eq!(
+                        Self::word_count_for_type(self.module, ty),
+                        1,
+                        "lower_expr on multi-word field"
+                    );
+                    return values[offset];
+                }
+                // Type-driven fallback: evaluate base to word vector, project field.
+                let words = self.lower_expr_multi(rb, base);
+                let base_ty = self.infer_expr_type(base);
+                let (offset, count) = self.field_offset_in_type(&base_ty, field);
+                assert_eq!(count, 1, "lower_expr on multi-word field projection");
+                words[offset]
             }
             hir::Expr::Binary { op, lhs, rhs } => {
                 let lhs = self.lower_expr(rb, lhs);

@@ -852,17 +852,70 @@ impl Module {
     /// lowerer cannot flow Init values out of gamma branches. Use statement-form `If`
     /// with explicit writes instead. The `Let` case falls through to
     /// `lower_vixen_typed_expr_with_locals` which returns `NonStatementIfExpr`.
+    /// Recursively distribute Field projections into If branches and then
+    /// desugar the resulting If. Returns the simplified expression if any
+    /// Field-of-If distribution was applied.
+    fn distribute_field_into_if(expr: &VixenTypedExpr) -> Option<VixenTypedExpr> {
+        match expr {
+            VixenTypedExpr::Field { base, field } => {
+                // First, recursively distribute inside the base.
+                let base = if let Some(simplified) = Self::distribute_field_into_if(base) {
+                    simplified
+                } else {
+                    *base.clone()
+                };
+                // If the (possibly simplified) base is an If, distribute the field.
+                if let VixenTypedExpr::If {
+                    condition,
+                    then_expr,
+                    else_expr,
+                } = &base
+                {
+                    Some(VixenTypedExpr::If {
+                        condition: condition.clone(),
+                        then_expr: Box::new(VixenTypedExpr::Field {
+                            base: then_expr.clone(),
+                            field: field.clone(),
+                        }),
+                        else_expr: Box::new(VixenTypedExpr::Field {
+                            base: else_expr.clone(),
+                            field: field.clone(),
+                        }),
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     fn desugar_if_expr(stmt: &VixenTypedStmt) -> Option<VixenTypedStmt> {
         match stmt {
-            VixenTypedStmt::Return(Some(VixenTypedExpr::If {
-                condition,
-                then_expr,
-                else_expr,
-            })) => Some(VixenTypedStmt::If {
-                condition: *condition.clone(),
-                then_body: vec![VixenTypedStmt::Return(Some(*then_expr.clone()))],
-                else_body: vec![VixenTypedStmt::Return(Some(*else_expr.clone()))],
-            }),
+            // return <expr-with-if> → distribute Field-of-If, then desugar
+            VixenTypedStmt::Return(Some(expr)) => {
+                // Try to distribute Field-of-If in the return expression.
+                let expr = if let Some(distributed) = Self::distribute_field_into_if(expr) {
+                    distributed
+                } else {
+                    expr.clone()
+                };
+                // Now desugar the (possibly rewritten) expression.
+                if let VixenTypedExpr::If {
+                    condition,
+                    then_expr,
+                    else_expr,
+                } = &expr
+                {
+                    Some(VixenTypedStmt::If {
+                        condition: *condition.clone(),
+                        then_body: vec![VixenTypedStmt::Return(Some(*then_expr.clone()))],
+                        else_body: vec![VixenTypedStmt::Return(Some(*else_expr.clone()))],
+                    })
+                } else {
+                    None
+                }
+            }
             VixenTypedStmt::Expr(VixenTypedExpr::If {
                 condition,
                 then_expr,
