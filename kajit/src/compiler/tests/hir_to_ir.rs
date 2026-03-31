@@ -1575,12 +1575,10 @@ fn vixen_typed_function_typed_literal_string_return() {
         }],
         locals: vec![],
         return_type: str_ty.clone(),
-        body: vec![VixenTypedStmt::Return(Some(
-            VixenTypedExpr::TypedLiteral {
-                literal: Literal::String("1".to_string()),
-                ty: str_ty,
-            },
-        ))],
+        body: vec![VixenTypedStmt::Return(Some(VixenTypedExpr::TypedLiteral {
+            literal: Literal::String("1".to_string()),
+            ty: str_ty,
+        }))],
         comment: Some("typed literal string return".to_string()),
     };
 
@@ -1785,9 +1783,7 @@ fn vixen_typed_function_str_concat_compiles_and_runs() {
 /// `fn get_lit_len() -> u64 { return TypedLiteral("hello", Str).len }`
 #[test]
 fn field_projection_from_typed_literal() {
-    use hir::{
-        LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedStmt,
-    };
+    use hir::{LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedStmt};
 
     let mut module = Module::new();
     let (_str_def, str_ty) = define_str_struct(&mut module);
@@ -1877,10 +1873,26 @@ fn field_projection_from_if_expr() {
     let a = b"hello";
     let b = b"hi";
     // c != 0 → pick a → len 5
-    let result = unsafe { pick_len(1, a.as_ptr() as u64, a.len() as u64, b.as_ptr() as u64, b.len() as u64) };
+    let result = unsafe {
+        pick_len(
+            1,
+            a.as_ptr() as u64,
+            a.len() as u64,
+            b.as_ptr() as u64,
+            b.len() as u64,
+        )
+    };
     assert_eq!(result, 5);
     // c == 0 → pick b → len 2
-    let result = unsafe { pick_len(0, a.as_ptr() as u64, a.len() as u64, b.as_ptr() as u64, b.len() as u64) };
+    let result = unsafe {
+        pick_len(
+            0,
+            a.as_ptr() as u64,
+            a.len() as u64,
+            b.as_ptr() as u64,
+            b.len() as u64,
+        )
+    };
     assert_eq!(result, 2);
 }
 
@@ -1889,8 +1901,8 @@ fn field_projection_from_if_expr() {
 #[test]
 fn field_projection_from_call_returning_str() {
     use hir::{
-        LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
-        VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+        LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction, VixenTypedLocal,
+        VixenTypedParam, VixenTypedStmt,
     };
 
     let mut module = Module::new();
@@ -1922,13 +1934,11 @@ fn field_projection_from_call_returning_str() {
     let func = VixenTypedFunction {
         name: "alloc_and_wrap_len".to_string(),
         params: vec![],
-        locals: vec![
-            VixenTypedLocal {
-                local: LocalId::new(0),
-                name: "buf".to_string(),
-                ty: hir::Type::u(64),
-            },
-        ],
+        locals: vec![VixenTypedLocal {
+            local: LocalId::new(0),
+            name: "buf".to_string(),
+            ty: hir::Type::u(64),
+        }],
         return_type: hir::Type::u(64),
         body: vec![
             // let buf = runtime.alloc_transient(16, 1)
@@ -2005,7 +2015,6 @@ fn field_projection_from_call_returning_str() {
 ///     return Str { ptr: buf, len: total }
 /// }
 #[test]
-#[ignore = "operand edit ordering: memcpy args clobbered by sequential moves (needs parallel-move solver)"]
 fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
     use hir::{
         BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
@@ -2073,13 +2082,41 @@ fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
             ty: str_ty.clone(),
         }],
         locals: vec![
-            VixenTypedLocal { local: LocalId::new(1), name: "len".into(), ty: hir::Type::u(64) },
-            VixenTypedLocal { local: LocalId::new(2), name: "sl_ptr".into(), ty: hir::Type::u(64) },
-            VixenTypedLocal { local: LocalId::new(3), name: "buf".into(), ty: hir::Type::u(64) },
-            VixenTypedLocal { local: LocalId::new(4), name: "mid".into(), ty: hir::Type::u(64) },
-            VixenTypedLocal { local: LocalId::new(5), name: "_end".into(), ty: hir::Type::u(64) },
-            VixenTypedLocal { local: LocalId::new(6), name: "s2_ptr".into(), ty: hir::Type::u(64) },
-            VixenTypedLocal { local: LocalId::new(7), name: "m2".into(), ty: hir::Type::u(64) },
+            VixenTypedLocal {
+                local: LocalId::new(1),
+                name: "len".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(2),
+                name: "sl_ptr".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(3),
+                name: "buf".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(4),
+                name: "mid".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(5),
+                name: "_end".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(6),
+                name: "s2_ptr".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(7),
+                name: "m2".into(),
+                ty: hir::Type::u(64),
+            },
         ],
         return_type: str_ty.clone(),
         body: vec![
@@ -2206,7 +2243,8 @@ fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
             &[]
         };
         assert_eq!(
-            result, expected,
+            result,
+            expected,
             "sparse_prefix({:?}) = {:?}, expected {:?}",
             std::str::from_utf8(input).unwrap(),
             std::str::from_utf8(result).unwrap_or("<invalid>"),
@@ -2233,4 +2271,141 @@ fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
     check(b"ab", b"2");
     check(b"abc", b"3/a");
     check(b"serde", b"se/rd");
+}
+
+#[test]
+fn vixen_typed_function_tail_concat_compiles_and_runs() {
+    use hir::{
+        BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
+        VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+    };
+
+    let mut module = Module::new();
+    let (str_def, str_ty) = define_str_struct(&mut module);
+    let _callables = module.install_runtime_memory_callables();
+
+    let int = |n: u64| VixenTypedExpr::Literal(hir::Literal::Integer(n));
+    let local = |id: u32| VixenTypedExpr::Local(LocalId::new(id));
+    let add = |a: VixenTypedExpr, b: VixenTypedExpr| VixenTypedExpr::Binary {
+        op: BinaryOp::Add,
+        lhs: Box::new(a),
+        rhs: Box::new(b),
+    };
+    let alloc = |size: VixenTypedExpr| VixenTypedExpr::Call {
+        callee: VixenCallableRef::Named("runtime.alloc_transient".to_owned()),
+        args: vec![size, int(1)],
+    };
+    let memcpy =
+        |dst: VixenTypedExpr, src: VixenTypedExpr, len: VixenTypedExpr| VixenTypedExpr::Call {
+            callee: VixenCallableRef::Named("runtime.memcpy".to_owned()),
+            args: vec![dst, src, len],
+        };
+    let str_lit_ptr = |s: &str| VixenTypedExpr::Field {
+        base: Box::new(VixenTypedExpr::TypedLiteral {
+            literal: hir::Literal::String(s.to_owned()),
+            ty: str_ty.clone(),
+        }),
+        field: "ptr".to_string(),
+    };
+    let mk_str = |ptr: VixenTypedExpr, len: VixenTypedExpr| VixenTypedExpr::Struct {
+        def: str_def,
+        fields: vec![("ptr".to_string(), ptr), ("len".to_string(), len)],
+    };
+
+    let func = VixenTypedFunction {
+        name: "tail_concat".to_string(),
+        params: vec![VixenTypedParam {
+            local: LocalId::new(0),
+            name: "name".to_string(),
+            ty: str_ty.clone(),
+        }],
+        locals: vec![
+            VixenTypedLocal {
+                local: LocalId::new(1),
+                name: "sl_ptr".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(2),
+                name: "s2_ptr".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(3),
+                name: "buf".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(4),
+                name: "mid".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(5),
+                name: "_end".into(),
+                ty: hir::Type::u(64),
+            },
+            VixenTypedLocal {
+                local: LocalId::new(6),
+                name: "m2".into(),
+                ty: hir::Type::u(64),
+            },
+        ],
+        return_type: str_ty.clone(),
+        body: vec![
+            VixenTypedStmt::Let {
+                local: LocalId::new(1),
+                value: VixenTypedExpr::Field {
+                    base: Box::new(local(0)),
+                    field: "ptr".to_string(),
+                },
+            },
+            VixenTypedStmt::Let {
+                local: LocalId::new(2),
+                value: add(
+                    VixenTypedExpr::Field {
+                        base: Box::new(local(0)),
+                        field: "ptr".to_string(),
+                    },
+                    int(2),
+                ),
+            },
+            VixenTypedStmt::Let {
+                local: LocalId::new(3),
+                value: alloc(int(5)),
+            },
+            VixenTypedStmt::Let {
+                local: LocalId::new(4),
+                value: memcpy(local(3), local(1), int(2)),
+            },
+            VixenTypedStmt::Let {
+                local: LocalId::new(6),
+                value: memcpy(local(4), str_lit_ptr("/"), int(1)),
+            },
+            VixenTypedStmt::Let {
+                local: LocalId::new(5),
+                value: memcpy(local(6), local(2), int(2)),
+            },
+            VixenTypedStmt::Return(Some(mk_str(local(3), int(5)))),
+        ],
+        comment: Some("tail concat reproducer".to_string()),
+    };
+
+    let module = module
+        .lower_vixen_typed_function_into_module(&func)
+        .expect("should lower");
+    let compiled = crate::compiler::compile_hir_module(&module);
+    let tail_concat: unsafe extern "C" fn(u64, u64) -> (u64, u64) =
+        unsafe { core::mem::transmute(compiled.as_ptr()) };
+
+    let input = b"serde";
+    let (ptr, len) = unsafe { tail_concat(input.as_ptr() as u64, input.len() as u64) };
+    let result = unsafe { std::slice::from_raw_parts(ptr as *const u8, len as usize) };
+    assert_eq!(result, b"se/rd");
+    unsafe {
+        std::alloc::dealloc(
+            ptr as *mut u8,
+            std::alloc::Layout::from_size_align(len as usize, 1).unwrap(),
+        );
+    }
 }

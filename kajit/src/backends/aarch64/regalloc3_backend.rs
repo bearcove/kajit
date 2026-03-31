@@ -1119,11 +1119,20 @@ impl<'a> EmitContext<'a> {
     fn emit_call_pure(
         &mut self,
         func: kajit_ir::IntrinsicFn,
-        _args: &[kajit_ir::VReg],
+        args: &[kajit_ir::VReg],
         dst: kajit_ir::VReg,
     ) {
-        // Args are already in their ABI registers thanks to RA coloring +
-        // OperandEdit moves emitted before this instruction. Just call.
+        // In-register args are already in their ABI registers thanks to RA
+        // coloring + OperandEdit moves emitted before this instruction.
+        //
+        // Spilled/rematerializable args need explicit materialization here:
+        // the native regalloc3 path has no separate spill/reload pass.
+        for (i, &arg) in args.iter().enumerate() {
+            if self.preg_for_vreg(arg).is_none() {
+                let abi_reg = Reg::from_raw(i as u8);
+                let _ = self.reg_for_vreg_with_temp(arg, abi_reg);
+            }
+        }
 
         let call_site_offset = self.ectx.emit.code_len();
         self.emit_load_u64(Reg::X16, func.0 as u64);
