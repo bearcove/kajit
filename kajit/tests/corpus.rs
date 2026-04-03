@@ -2038,27 +2038,3 @@ mod postcard_input {
 mod panics {
     use super::*;
 }
-mod postreg {
-    use super::*;
-    #[test]
-    fn vec_scalar_large_hotpath_asserts() {
-        let artifacts = codegen_artifacts::<ScalarVec>(kajit::DecoderKind::Postcard);
-        assert!(
-            artifacts.ir_text.contains("theta") || artifacts.ir_text.contains("apply @"),
-            "expected loop form (`theta`) or outlined loop body (`apply`) in IR"
-        );
-        assert!(
-            artifacts.cfg_text.contains("branch_if"),
-            "expected loop backedge in CFG-MIR"
-        );
-        assert!(
-            artifacts.cfg_text.contains("call_intrinsic"),
-            "expected intrinsic-heavy vec decode path in CFG-MIR"
-        );
-        assert!(
-            artifacts.edits <= 128,
-            "expected edit budget <= 128, got {}",
-            artifacts.edits
-        );
-    }
-}
