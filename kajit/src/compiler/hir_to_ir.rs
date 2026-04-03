@@ -70,7 +70,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             );
             local_types.insert(local.local, &local.ty);
         }
-        let _ = Self::initialize_cursor_shadow(rb, module, function, &local_slots, &local_types);
         Self {
             module,
             local_slots,
@@ -100,76 +99,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             }
         }
         StructuralLocalStorage { base_slot }
-    }
-
-    fn initialize_cursor_shadow(
-        rb: &mut RegionBuilder<'_>,
-        module: &'a hir::Module,
-        function: &'a hir::Function,
-        local_slots: &std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
-        local_types: &std::collections::HashMap<hir::LocalId, &'a hir::Type>,
-    ) -> (
-        Option<crate::ir::SlotId>,
-        Option<crate::ir::SlotId>,
-        Option<crate::ir::SlotId>,
-    ) {
-        let Some(cursor_param) = function.runtime_cursor_param() else {
-            return (None, None, None);
-        };
-        let hir::ParameterBinding::RuntimeCursor(binding) = cursor_param
-            .binding
-            .as_ref()
-            .expect("runtime cursor param should carry binding metadata");
-        let cursor_local = cursor_param.local;
-        let Some(cursor_ty) = local_types.get(&cursor_local).copied() else {
-            return (None, None, None);
-        };
-        let Some(storage) = local_slots.get(&cursor_local).copied() else {
-            return (None, None, None);
-        };
-        let bytes_offset =
-            match Self::struct_field_slot_offset(module, cursor_ty, &binding.bytes_field) {
-                Some(offset) => offset,
-                None => return (None, None, None),
-            };
-        let pos_offset = match Self::struct_field_slot_offset(module, cursor_ty, &binding.pos_field)
-        {
-            Some(offset) => offset,
-            None => return (None, None, None),
-        };
-
-        let bytes_ptr_slot = Self::slot_at(storage, bytes_offset);
-        let bytes_len_slot = Self::slot_at(storage, bytes_offset + 1);
-        let pos_slot = Self::slot_at(storage, pos_offset);
-        let base = rb.save_cursor();
-        let end = rb.save_input_end();
-        let len = rb.binop(crate::ir::IrOp::Sub, end, base);
-        let zero = rb.const_val(0);
-        rb.write_to_slot(bytes_ptr_slot, base);
-        rb.write_to_slot(bytes_len_slot, len);
-        rb.write_to_slot(pos_slot, zero);
-        (Some(bytes_ptr_slot), Some(bytes_len_slot), Some(pos_slot))
-    }
-
-    fn struct_field_slot_offset(
-        module: &'a hir::Module,
-        ty: &hir::Type,
-        field_name: &str,
-    ) -> Option<usize> {
-        let hir::Type::Named { def, .. } = ty else {
-            return None;
-        };
-        let hir::TypeDefKind::Struct { fields } = &module.type_defs[*def].kind else {
-            return None;
-        };
-        let mut slot_offset = 0usize;
-        for field in fields {
-            if field.name == field_name {
-                return Some(slot_offset);
-            }
-            slot_offset += Self::slot_count_for_type(module, &field.ty);
-        }
-        None
     }
 
     fn slot_count_for_type(module: &'a hir::Module, ty: &hir::Type) -> usize {
@@ -1208,6 +1137,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
             .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
         let func = match self.callable_intrinsic(call) {
+            Some(hir::RuntimeIntrinsic::SaveCursor) => return rb.save_cursor(),
+            Some(hir::RuntimeIntrinsic::SaveInputEnd) => return rb.save_input_end(),
             Some(hir::RuntimeIntrinsic::AllocPersistent) => {
                 crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize)
             }
@@ -1591,34 +1522,49 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         storage,
                         slot_offset,
                     } => {
-                        let hir::Type::Named { def, .. } = ty else {
-                            panic!(
-                                "local field place requires a named struct type, got {ty:?} for field {field}"
-                            );
-                        };
-                        let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind
-                        else {
-                            panic!("local field place requires a struct type");
-                        };
-                        let mut running_slots = 0usize;
-                        let field_info = fields
-                            .iter()
-                            .find_map(|candidate| {
-                                let found = (candidate.name == field.as_str())
-                                    .then_some((&candidate.ty, running_slots));
-                                running_slots +=
-                                    Self::slot_count_for_type(self.module, &candidate.ty);
-                                found
-                            })
-                            .unwrap_or_else(|| {
+                        let (field_ty, field_offset) = match ty {
+                            hir::Type::Named { def, .. } => {
+                                let hir::TypeDefKind::Struct { fields } =
+                                    &self.module.type_defs[*def].kind
+                                else {
+                                    panic!("local field place requires a struct type");
+                                };
+                                let mut running_slots = 0usize;
+                                fields
+                                    .iter()
+                                    .find_map(|candidate| {
+                                        let found = (candidate.name == field.as_str())
+                                            .then_some((&candidate.ty, running_slots));
+                                        running_slots +=
+                                            Self::slot_count_for_type(self.module, &candidate.ty);
+                                        found
+                                    })
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "missing HIR struct field {field} while resolving local place"
+                                        )
+                                    })
+                            }
+                            hir::Type::Slice { .. } | hir::Type::Str { .. } => {
+                                let (field_offset, field_ty) = match field.as_str() {
+                                    "ptr" | "data" => (0, hir::Type::u(64)),
+                                    "len" => (1, hir::Type::u(64)),
+                                    _ => panic!(
+                                        "local field place requires a known slice-like field, got {field}"
+                                    ),
+                                };
+                                (Box::leak(Box::new(field_ty)) as &'a hir::Type, field_offset)
+                            }
+                            _ => {
                                 panic!(
-                                    "missing HIR struct field {field} while resolving local place"
-                                )
-                            });
+                                    "local field place requires a struct-like type, got {ty:?} for field {field}"
+                                );
+                            }
+                        };
                         ResolvedStructuralPlace::Local {
-                            ty: field_info.0,
+                            ty: field_ty,
                             storage,
-                            slot_offset: slot_offset + field_info.1,
+                            slot_offset: slot_offset + field_offset,
                         }
                     }
                 }

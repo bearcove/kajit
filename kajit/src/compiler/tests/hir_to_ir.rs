@@ -122,7 +122,41 @@ hir_module {
       "value": u32 @0
     }
   ]
-  callables []
+  callables [
+    callable c0 host "runtime.save_cursor" {
+      params []
+      intrinsic save_cursor
+      returns [u64]
+      effect reads
+      domains ["input":read]
+      control returns
+      capabilities ["runtime.cursor"]
+      safety opaque_host
+      docs "Read the current absolute decoder cursor address."
+    }
+    callable c1 host "runtime.save_input_end" {
+      params []
+      intrinsic save_input_end
+      returns [u64]
+      effect reads
+      domains ["input":read]
+      control returns
+      capabilities ["runtime.cursor"]
+      safety opaque_host
+      docs "Read the absolute end address of the decoder input."
+    }
+    callable c2 host "runtime.cursor_restore" {
+      params [u64]
+      intrinsic cursor_restore
+      returns []
+      effect mutates
+      domains ["input":mutate]
+      control returns
+      capabilities ["runtime.cursor"]
+      safety opaque_host
+      docs "Synchronize the physical decoder cursor to an absolute input address."
+    }
+  ]
   functions [
     function f0 "temp_after_cursor_sync" {
       regions [r0]
@@ -139,10 +173,14 @@ hir_module {
         scope sc0 parent none comment "temp survives cursor sync"
       ]
       body @sc0 {
-        stmt0: init l2 = load w1(slice_data(field(l0, "bytes")))
-        stmt1: assign field(l0, "pos") = 0x1
-        stmt2: init field(l1, "value") = l2
-        stmt3: return
+        stmt0: assign field(field(l0, "bytes"), "ptr") = call c0()
+        stmt1: assign field(field(l0, "bytes"), "len") = binary sub(call c1(), field(field(l0, "bytes"), "ptr"))
+        stmt2: assign field(l0, "pos") = 0x0
+        stmt3: init l2 = load w1(slice_data(field(l0, "bytes")))
+        stmt4: assign field(l0, "pos") = 0x1
+        stmt5: expr call c2(binary add(slice_data(field(l0, "bytes")), field(l0, "pos")))
+        stmt6: init field(l1, "value") = l2
+        stmt7: return
       }
     }
   ]
