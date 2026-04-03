@@ -524,32 +524,6 @@ fn local_decl<'src>() -> impl Parser<'src, &'src str, LocalDecl, Extra<'src>> + 
         })
 }
 
-fn parameter_binding<'src>()
--> impl Parser<'src, &'src str, Option<kajit_hir::ParameterBinding>, Extra<'src>> + Clone {
-    choice((
-        token("bind")
-            .ignore_then(token("runtime_cursor"))
-            .ignore_then(token("("))
-            .ignore_then(token("bytes"))
-            .ignore_then(token("="))
-            .ignore_then(quoted_string())
-            .then_ignore(token(","))
-            .then_ignore(token("pos"))
-            .then_ignore(token("="))
-            .then(quoted_string())
-            .then_ignore(token(")"))
-            .map(|(bytes_field, pos_field)| {
-                Some(kajit_hir::ParameterBinding::RuntimeCursor(
-                    kajit_hir::CursorBinding {
-                        bytes_field,
-                        pos_field,
-                    },
-                ))
-            }),
-        empty().to(None),
-    ))
-}
-
 fn parameter_decl<'src>() -> impl Parser<'src, &'src str, kajit_hir::Parameter, Extra<'src>> + Clone
 {
     local_id()
@@ -557,16 +531,12 @@ fn parameter_decl<'src>() -> impl Parser<'src, &'src str, kajit_hir::Parameter, 
         .then(quoted_string())
         .then_ignore(token(":"))
         .then(ty())
-        .then(parameter_binding())
-        .map(
-            |((((local, kind), name), ty), binding)| kajit_hir::Parameter {
-                local,
-                name,
-                ty,
-                kind,
-                binding,
-            },
-        )
+        .map(|(((local, kind), name), ty)| kajit_hir::Parameter {
+            local,
+            name,
+            ty,
+            kind,
+        })
 }
 
 fn scope<'src>() -> impl Parser<'src, &'src str, Scope, Extra<'src>> + Clone {
@@ -1318,19 +1288,12 @@ mod tests {
                     name: "cursor".to_owned(),
                     ty: Type::named(cursor, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Param,
-                    binding: Some(kajit_hir::ParameterBinding::RuntimeCursor(
-                        kajit_hir::CursorBinding {
-                            bytes_field: "bytes".to_owned(),
-                            pos_field: "pos".to_owned(),
-                        },
-                    )),
                 },
                 kajit_hir::Parameter {
                     local: LocalId::new(1),
                     name: "out".to_owned(),
                     ty: Type::named(record, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Destination,
-                    binding: None,
                 },
             ],
             locals: vec![
@@ -1593,7 +1556,6 @@ hir_module {
                 name: "addr".to_owned(),
                 ty: Type::persistent_addr(),
                 kind: LocalKind::Param,
-                binding: None,
             }],
             locals: vec![LocalDecl {
                 local: LocalId::new(1),
@@ -1711,7 +1673,6 @@ hir_module {
                 name: "x".to_owned(),
                 ty: Type::u(32),
                 kind: LocalKind::Param,
-                binding: None,
             }],
             locals: vec![LocalDecl {
                 local: LocalId::new(1),
