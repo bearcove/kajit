@@ -597,6 +597,21 @@ impl fmt::Display for TypeDisplay<'_> {
                 crate::Signedness::Signed => write!(f, "i{}", int.bits),
                 crate::Signedness::Unsigned => write!(f, "u{}", int.bits),
             },
+            Type::Ref { mutable, pointee } => {
+                if *mutable {
+                    write!(f, "&mut ")?;
+                } else {
+                    write!(f, "&")?;
+                }
+                write!(
+                    f,
+                    "{}",
+                    TypeDisplay {
+                        module: self.module,
+                        ty: pointee
+                    }
+                )
+            }
             Type::Address { domain } => match domain {
                 AllocationDomain::Transient => write!(f, "addr<transient>"),
                 AllocationDomain::Persistent => write!(f, "addr<persistent>"),
@@ -667,6 +682,14 @@ impl fmt::Display for PlaceDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.place {
             Place::Local(local) => write!(f, "l{}", local.index()),
+            Place::Deref { base } => write!(
+                f,
+                "deref({})",
+                ExprDisplay {
+                    module: self.module,
+                    expr: base
+                }
+            ),
             Place::Field { base, field } => {
                 write!(
                     f,
@@ -709,6 +732,14 @@ impl fmt::Display for ExprDisplay<'_> {
                 Literal::String(value) => write!(f, "{}", quoted(value)),
             },
             Expr::Local(local) => write!(f, "l{}", local.index()),
+            Expr::Deref(base) => write!(
+                f,
+                "deref({})",
+                ExprDisplay {
+                    module: self.module,
+                    expr: base
+                }
+            ),
             Expr::Load { addr, width } => write!(
                 f,
                 "load {}({})",

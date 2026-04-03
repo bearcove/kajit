@@ -12,17 +12,18 @@ scopes {
 }
 lambda @0 @s0 (shape: "scratch_summary", output_size: 8) {
   region @s0 {
-    args: [%cs, %os, %s2]
-    n1 = Const(0xf) [] -> [v0]
-    n2 = WriteToSlot(1) [v0, %cs:arg] -> [%cs]
-    n3 = ReadFromSlot(1) [%cs:n2] -> [v1, %cs]
-    n4 = Const(0x3) [] -> [v2]
-    n5 = And [v1, v2] -> [v3]
-    n6 = WriteToSlot(2) [v3, %cs:n3] -> [%cs]
-    n7 = ReadFromSlot(1) [%cs:n6] -> [v4, %cs]
-    n8 = WriteToField(offset=0, W4) [v4, %os:arg] -> [%os]
-    n9 = ReadFromSlot(2) [%cs:n7] -> [v5, %cs]
-    n10 = WriteToField(offset=4, W4) [v5, %os:n8] -> [%os]
-    results: [%cs:n9, %os:n10, %s2:arg]
+    args: [arg0, %cs, %os, %s2]
+    n1 = WriteToSlot(0) [arg0, %cs:arg] -> [%cs]
+    n2 = Const(0xf) [] -> [v0]
+    n3 = WriteToSlot(1) [v0, %cs:n1] -> [%cs]
+    n4 = ReadFromSlot(1) [%cs:n3] -> [v1, %cs]
+    n5 = Const(0x3) [] -> [v2]
+    n6 = And [v1, v2] -> [v3]
+    n7 = WriteToSlot(2) [v3, %cs:n4] -> [%cs]
+    n8 = ReadFromSlot(1) [%cs:n7] -> [v4, %cs]
+    n9 = WriteToField(offset=0, W4) [v4, %os:arg] -> [%os]
+    n10 = ReadFromSlot(2) [%cs:n8] -> [v5, %cs]
+    n11 = WriteToField(offset=4, W4) [v5, %os:n9] -> [%os]
+    results: [%cs:n10, %os:n11, %s2:arg]
   }
 }

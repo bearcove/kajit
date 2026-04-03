@@ -1231,6 +1231,10 @@ pub enum Type {
     Unit,
     Bool,
     Integer(IntegerType),
+    Ref {
+        mutable: bool,
+        pointee: Box<Type>,
+    },
     Address {
         domain: AllocationDomain,
     },
@@ -1262,6 +1266,20 @@ impl Type {
 
     pub const fn bool() -> Self {
         Self::Bool
+    }
+
+    pub fn r#ref(pointee: Type) -> Self {
+        Self::Ref {
+            mutable: false,
+            pointee: Box::new(pointee),
+        }
+    }
+
+    pub fn mut_ref(pointee: Type) -> Self {
+        Self::Ref {
+            mutable: true,
+            pointee: Box::new(pointee),
+        }
     }
 
     pub const fn address(domain: AllocationDomain) -> Self {
@@ -1455,6 +1473,7 @@ pub enum Pattern {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Place {
     Local(LocalId),
+    Deref { base: Box<Expr> },
     Field { base: Box<Place>, field: String },
     Index { base: Box<Place>, index: Box<Expr> },
 }
@@ -1518,6 +1537,7 @@ pub enum BinaryOp {
 pub enum Expr {
     Literal(Literal),
     Local(LocalId),
+    Deref(Box<Expr>),
     Load {
         addr: Box<Expr>,
         width: MemoryWidth,
@@ -1875,6 +1895,7 @@ mod tests {
             Type::address(AllocationDomain::Transient),
             Type::transient_addr()
         );
+        assert_eq!(Type::mut_ref(Type::u(64)), Type::mut_ref(Type::u(64)));
     }
 
     #[test]
@@ -2936,6 +2957,67 @@ mod tests {
 
         let text = module.to_string();
         assert!(text.contains("load w4(l0)"));
+    }
+
+    #[test]
+    fn ref_types_and_deref_places_render_in_text() {
+        let mut module = Module::new();
+        let cursor = module.add_type_def(TypeDef {
+            name: "Cursor".to_owned(),
+            generic_params: vec![],
+            kind: TypeDefKind::Struct {
+                fields: vec![FieldDef {
+                    name: "pos".to_owned(),
+                    ty: Type::u(64),
+                    offset: Some(0),
+                }],
+            },
+            size: Some(8),
+            transparent: false,
+        });
+        module.add_function(Function {
+            name: "ref_demo".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![Parameter {
+                local: LocalId::new(0),
+                name: "cursor".to_owned(),
+                ty: Type::mut_ref(Type::named(cursor, Vec::new())),
+                kind: LocalKind::Param,
+            }],
+            locals: vec![],
+            return_type: Type::unit(),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: None,
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![
+                    Stmt {
+                        id: StmtId::new(0),
+                        kind: StmtKind::Assign {
+                            place: Place::Field {
+                                base: Box::new(Place::Deref {
+                                    base: Box::new(Expr::Local(LocalId::new(0))),
+                                }),
+                                field: "pos".to_owned(),
+                            },
+                            value: Expr::Literal(Literal::Integer(1)),
+                        },
+                    },
+                    Stmt {
+                        id: StmtId::new(1),
+                        kind: StmtKind::Return(None),
+                    },
+                ],
+            },
+        });
+
+        let text = module.to_string();
+        assert!(text.contains("&mut t0"));
+        assert!(text.contains("field(deref(l0), \"pos\")"));
     }
 
     #[test]

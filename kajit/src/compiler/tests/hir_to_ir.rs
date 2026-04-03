@@ -197,6 +197,97 @@ hir_module {
 }
 
 #[test]
+fn structural_hir_ir_initializes_non_destination_params_from_data_args() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types []
+  callables []
+  functions [
+    function f0 "copy_param" {
+      regions []
+      stores []
+      params [
+        l0 param "value": u64
+        l1 destination "out": u64
+      ]
+      locals []
+      return unit
+      scopes [
+        scope sc0 parent none comment "root"
+      ]
+      body @sc0 {
+        stmt0: init l1 = l0
+        stmt1: return
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    let rendered = format!("{ir}");
+    assert!(
+        rendered.contains("arg0"),
+        "structural HIR lowering should expose non-destination params as data args:\n{rendered}"
+    );
+}
+
+#[test]
+fn structural_hir_ir_lowers_ref_params_via_indirect_places() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types [
+    type t0 "Cursor" size=8 = struct {
+      "pos": u64 @0
+    }
+  ]
+  callables []
+  functions [
+    function f0 "cursor_ref" {
+      regions []
+      stores []
+      params [
+        l0 param "cursor": &mut t0
+        l1 destination "out": u64
+      ]
+      locals []
+      return unit
+      scopes [
+        scope sc0 parent none comment "root"
+      ]
+      body @sc0 {
+        stmt0: assign field(deref(l0), "pos") = 0x1
+        stmt1: init l1 = field(deref(l0), "pos")
+        stmt2: return
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let ir = lower_hir_module(&module);
+    let rendered = format!("{ir}");
+    assert!(
+        rendered.contains("StoreToAddr(W8)"),
+        "ref-param field writes should lower through StoreToAddr:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("LoadFromAddr(W8)"),
+        "ref-param field reads should lower through LoadFromAddr:\n{rendered}"
+    );
+}
+
+#[test]
 fn structural_hir_ir_path_executes_loop_break_and_continue() {
     let module = parse_hir(
         r#"
