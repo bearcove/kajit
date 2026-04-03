@@ -123,9 +123,9 @@ hir_module {
     }
   ]
   callables [
-    callable c0 host "runtime.save_cursor" {
+    callable c0 host "abi.load_input_ptr" {
       params []
-      intrinsic save_cursor
+      intrinsic load_input_ptr
       returns [u64]
       effect reads
       domains ["input":read]
@@ -134,9 +134,9 @@ hir_module {
       safety opaque_host
       docs "Read the current absolute decoder cursor address."
     }
-    callable c1 host "runtime.save_input_end" {
+    callable c1 host "abi.load_input_end" {
       params []
-      intrinsic save_input_end
+      intrinsic load_input_end
       returns [u64]
       effect reads
       domains ["input":read]
@@ -145,9 +145,9 @@ hir_module {
       safety opaque_host
       docs "Read the absolute end address of the decoder input."
     }
-    callable c2 host "runtime.cursor_restore" {
+    callable c2 host "abi.store_input_ptr" {
       params [u64]
-      intrinsic cursor_restore
+      intrinsic store_input_ptr
       returns []
       effect mutates
       domains ["input":mutate]

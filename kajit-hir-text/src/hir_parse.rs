@@ -399,8 +399,8 @@ fn domain_access<'src>() -> impl Parser<'src, &'src str, DomainAccess, Extra<'sr
 
 fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>> + Clone {
     let runtime_intrinsic = choice((
-        token("save_cursor").to(kajit_hir::RuntimeIntrinsic::SaveCursor),
-        token("save_input_end").to(kajit_hir::RuntimeIntrinsic::SaveInputEnd),
+        token("load_input_ptr").to(kajit_hir::RuntimeIntrinsic::LoadInputPtr),
+        token("load_input_end").to(kajit_hir::RuntimeIntrinsic::LoadInputEnd),
         token("option_init_none").to(kajit_hir::RuntimeIntrinsic::OptionInitNone),
         token("option_init_some").to(kajit_hir::RuntimeIntrinsic::OptionInitSome),
         token("alloc_transient").to(kajit_hir::RuntimeIntrinsic::AllocTransient),
@@ -409,7 +409,7 @@ fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>>
         token("validate_utf8_range").to(kajit_hir::RuntimeIntrinsic::ValidateUtf8Range),
         token("string_validate_alloc_copy")
             .to(kajit_hir::RuntimeIntrinsic::StringValidateAllocCopy),
-        token("cursor_restore").to(kajit_hir::RuntimeIntrinsic::CursorRestore),
+        token("store_input_ptr").to(kajit_hir::RuntimeIntrinsic::StoreInputPtr),
         token("memcpy").to(kajit_hir::RuntimeIntrinsic::Memcpy),
         token("free_transient").to(kajit_hir::RuntimeIntrinsic::FreeTransient),
     ));

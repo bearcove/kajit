@@ -1615,8 +1615,8 @@ pub enum CallableKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeIntrinsic {
-    SaveCursor,
-    SaveInputEnd,
+    LoadInputPtr,
+    LoadInputEnd,
     OptionInitNone,
     OptionInitSome,
     AllocTransient,
@@ -1624,7 +1624,7 @@ pub enum RuntimeIntrinsic {
     VecFromRawParts,
     ValidateUtf8Range,
     StringValidateAllocCopy,
-    CursorRestore,
+    StoreInputPtr,
     Memcpy,
     FreeTransient,
 }

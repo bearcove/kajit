@@ -108,6 +108,21 @@ Runtime calls remain appropriate for true runtime boundaries such as allocation
 and host-value materialization. They are not the place to hide format semantics
 that should live in generated HIR programs.
 
+One current exception is the decoder entry ABI.
+
+Today the generated postcard HIR still uses explicit ABI load/store helpers to
+read and write the incoming `input_ptr` / `input_end` state. Those calls are
+not postcard semantics and they are not generic HIR semantics either. They are
+an implementation seam caused by the current JIT ABI, which still keeps decoder
+cursor state privileged below HIR.
+
+The intended direction is:
+
+- model the cursor as an ordinary HIR struct definition
+- pass it through ordinary parameter/storage mechanisms
+- remove ABI cursor helpers once typed address/projection support is strong
+  enough to express that honestly
+
 ## Place Pressure Point
 
 The current `Place<T>` spelling is under pressure.

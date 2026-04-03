@@ -539,7 +539,7 @@ impl PostcardHirLowerer {
         cursor_local: hir::LocalId,
         new_pos: hir::Expr,
     ) {
-        let restore_cursor = self.ensure_runtime_cursor_restore();
+        let store_input_ptr = self.ensure_abi_store_input_ptr();
         statements.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Assign {
@@ -560,7 +560,7 @@ impl PostcardHirLowerer {
         statements.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
-                target: hir::CallTarget::Callable(restore_cursor),
+                target: hir::CallTarget::Callable(store_input_ptr),
                 args: vec![absolute],
             })),
         });
@@ -571,8 +571,8 @@ impl PostcardHirLowerer {
         statements: &mut Vec<hir::Stmt>,
         cursor_local: hir::LocalId,
     ) {
-        let save_cursor = self.ensure_runtime_save_cursor();
-        let save_input_end = self.ensure_runtime_save_input_end();
+        let load_input_ptr = self.ensure_abi_load_input_ptr();
+        let load_input_end = self.ensure_abi_load_input_end();
 
         statements.push(hir::Stmt {
             id: self.next_stmt_id(),
@@ -585,7 +585,7 @@ impl PostcardHirLowerer {
                     field: "ptr".to_owned(),
                 },
                 value: hir::Expr::Call(hir::CallExpr {
-                    target: hir::CallTarget::Callable(save_cursor),
+                    target: hir::CallTarget::Callable(load_input_ptr),
                     args: vec![],
                 }),
             },
@@ -603,7 +603,7 @@ impl PostcardHirLowerer {
                 value: hir::Expr::Binary {
                     op: hir::BinaryOp::Sub,
                     lhs: Box::new(hir::Expr::Call(hir::CallExpr {
-                        target: hir::CallTarget::Callable(save_input_end),
+                        target: hir::CallTarget::Callable(load_input_end),
                         args: vec![],
                     })),
                     rhs: Box::new(hir::Expr::Field {
@@ -1580,8 +1580,8 @@ impl PostcardHirLowerer {
         callable_id
     }
 
-    fn ensure_runtime_save_cursor(&mut self) -> hir::CallableId {
-        const NAME: &str = "runtime.save_cursor";
+    fn ensure_abi_load_input_ptr(&mut self) -> hir::CallableId {
+        const NAME: &str = "abi.load_input_ptr";
         if let Some(existing) = self.callables_by_name.get(NAME).copied() {
             return existing;
         }
@@ -1589,7 +1589,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::SaveCursor),
+            intrinsic: Some(hir::RuntimeIntrinsic::LoadInputPtr),
             signature: hir::CallSignature {
                 params: vec![],
                 returns: vec![hir::Type::u(64)],
@@ -1602,15 +1602,15 @@ impl PostcardHirLowerer {
                 capabilities: vec!["runtime.cursor".to_owned()],
                 safety: hir::CallSafety::OpaqueHost,
             },
-            docs: Some("Read the current absolute decoder cursor address.".to_owned()),
+            docs: Some("Read the current decoder input pointer from the entry ABI.".to_owned()),
         };
         let callable_id = self.module.add_callable(callable);
         self.callables_by_name.insert(NAME, callable_id);
         callable_id
     }
 
-    fn ensure_runtime_save_input_end(&mut self) -> hir::CallableId {
-        const NAME: &str = "runtime.save_input_end";
+    fn ensure_abi_load_input_end(&mut self) -> hir::CallableId {
+        const NAME: &str = "abi.load_input_end";
         if let Some(existing) = self.callables_by_name.get(NAME).copied() {
             return existing;
         }
@@ -1618,7 +1618,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::SaveInputEnd),
+            intrinsic: Some(hir::RuntimeIntrinsic::LoadInputEnd),
             signature: hir::CallSignature {
                 params: vec![],
                 returns: vec![hir::Type::u(64)],
@@ -1631,15 +1631,15 @@ impl PostcardHirLowerer {
                 capabilities: vec!["runtime.cursor".to_owned()],
                 safety: hir::CallSafety::OpaqueHost,
             },
-            docs: Some("Read the absolute end address of the decoder input.".to_owned()),
+            docs: Some("Read the decoder input end pointer from the entry ABI.".to_owned()),
         };
         let callable_id = self.module.add_callable(callable);
         self.callables_by_name.insert(NAME, callable_id);
         callable_id
     }
 
-    fn ensure_runtime_cursor_restore(&mut self) -> hir::CallableId {
-        const NAME: &str = "runtime.cursor_restore";
+    fn ensure_abi_store_input_ptr(&mut self) -> hir::CallableId {
+        const NAME: &str = "abi.store_input_ptr";
         if let Some(existing) = self.callables_by_name.get(NAME).copied() {
             return existing;
         }
@@ -1647,7 +1647,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::CursorRestore),
+            intrinsic: Some(hir::RuntimeIntrinsic::StoreInputPtr),
             signature: hir::CallSignature {
                 params: vec![hir::Type::u(64)],
                 returns: vec![],
@@ -1661,7 +1661,7 @@ impl PostcardHirLowerer {
                 safety: hir::CallSafety::OpaqueHost,
             },
             docs: Some(
-                "Synchronize the physical decoder cursor to an absolute input address.".to_owned(),
+                "Write the current decoder input pointer back through the entry ABI.".to_owned(),
             ),
         };
         let callable_id = self.module.add_callable(callable);
