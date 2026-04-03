@@ -3,7 +3,7 @@
 
 use super::*;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct StructuralLocalStorage {
     base_slot: crate::ir::SlotId,
 }
@@ -15,6 +15,7 @@ struct StructuralHirIrLowerer<'a> {
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
+#[derive(Debug)]
 enum ResolvedStructuralPlace<'a> {
     Destination {
         /// The HIR type at this destination position.
@@ -27,8 +28,13 @@ enum ResolvedStructuralPlace<'a> {
         storage: StructuralLocalStorage,
         slot_offset: usize,
     },
+    Indirect {
+        ty: &'a hir::Type,
+        addr: crate::ir::PortSource,
+    },
 }
 
+#[derive(Debug)]
 enum ResolvedDynamicIndex<'a> {
     Destination {
         /// The HIR type at this destination position.
@@ -196,7 +202,7 @@ impl RuntimeDialectLowerer {
         );
         let init_fn = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
         if let hir::Expr::AddrOf(place) = &call.args[1] {
-            match lowerer.resolve_place(place, dest_local, dest_ty) {
+            match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
@@ -208,7 +214,8 @@ impl RuntimeDialectLowerer {
                     );
                     return;
                 }
-                ResolvedStructuralPlace::Local { .. } => {}
+                ResolvedStructuralPlace::Local { .. }
+                | ResolvedStructuralPlace::Indirect { .. } => {}
             }
         }
         let out_addr = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
@@ -233,7 +240,7 @@ impl RuntimeDialectLowerer {
         let init_fn = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
         let payload_addr = lowerer.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
         if let hir::Expr::AddrOf(place) = &call.args[1] {
-            match lowerer.resolve_place(place, dest_local, dest_ty) {
+            match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
@@ -245,7 +252,8 @@ impl RuntimeDialectLowerer {
                     );
                     return;
                 }
-                ResolvedStructuralPlace::Local { .. } => {}
+                ResolvedStructuralPlace::Local { .. }
+                | ResolvedStructuralPlace::Indirect { .. } => {}
             }
         }
         let out_addr = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
@@ -261,6 +269,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         module: &'a hir::Module,
         function: &'a hir::Function,
+        data_arg_sources: &[crate::ir::PortSource],
     ) -> Self {
         let mut local_slots = std::collections::HashMap::new();
         let mut local_types = std::collections::HashMap::new();
@@ -280,12 +289,40 @@ impl<'a> StructuralHirIrLowerer<'a> {
             );
             local_types.insert(local.local, &local.ty);
         }
-        Self {
+        let lowerer = Self {
             module,
             local_slots,
             local_types,
             _marker: std::marker::PhantomData,
+        };
+        lowerer.initialize_params(rb, function, data_arg_sources);
+        lowerer
+    }
+
+    fn initialize_params(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        function: &'a hir::Function,
+        data_arg_sources: &[crate::ir::PortSource],
+    ) {
+        let mut arg_cursor = 0usize;
+        for param in &function.params {
+            if param.is_destination() {
+                continue;
+            }
+            let storage = self.local_slots[&param.local];
+            let slot_count = Self::slot_count_for_type(self.module, &param.ty);
+            let arg_slice = &data_arg_sources[arg_cursor..arg_cursor + slot_count];
+            for (slot_offset, source) in arg_slice.iter().enumerate() {
+                rb.write_to_slot(Self::slot_at(storage, slot_offset), *source);
+            }
+            arg_cursor += slot_count;
         }
+        assert_eq!(
+            arg_cursor,
+            data_arg_sources.len(),
+            "destination-writing HIR parameter count should match data args"
+        );
     }
 
     fn alloc_local_storage(
@@ -316,6 +353,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Type::Unit
             | hir::Type::Bool
             | hir::Type::Integer(_)
+            | hir::Type::Ref { .. }
             | hir::Type::Address { .. } => 1,
             hir::Type::Array { element, len } => Self::slot_count_for_type(module, element)
                 .saturating_mul(*len)
@@ -792,7 +830,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             }
             return;
         }
-        let resolved = self.resolve_place(place, dest_local, dest_ty);
+        let resolved = self.resolve_place(rb, place, dest_local, dest_ty);
         match value {
             hir::Expr::Local(local) => match resolved {
                 ResolvedStructuralPlace::Destination { ty, offset } => {
@@ -804,6 +842,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     slot_offset,
                 } => {
                     self.copy_local_into_local(rb, *local, ty, storage, slot_offset);
+                }
+                ResolvedStructuralPlace::Indirect { ty, addr } => {
+                    self.copy_local_into_addr(rb, *local, ty, addr);
                 }
             },
             hir::Expr::Call(_) => {
@@ -824,6 +865,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             "structural local scalar write requires single-slot type"
                         );
                         rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
+                    }
+                    ResolvedStructuralPlace::Indirect { ty, addr } => {
+                        let width = self.scalar_width_for_hir_type(ty);
+                        rb.store_to_addr(addr, scalar, width);
                     }
                 }
             }
@@ -851,6 +896,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
                     rb.write_to_slot(Self::slot_at(storage, slot_offset), data);
                     rb.write_to_slot(Self::slot_at(storage, slot_offset + 1), len);
+                }
+                ResolvedStructuralPlace::Indirect { ty, addr } => {
+                    assert!(
+                        matches!(ty, hir::Type::Str { .. }),
+                        "str materialization requires an indirect str type, got {ty:?}"
+                    );
+                    let data = self.lower_scalar_expr(rb, data, dest_local, dest_ty);
+                    let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
+                    rb.store_to_addr(addr, data, crate::ir::Width::W8);
+                    let len_addr = self.add_byte_offset(rb, addr, 8);
+                    rb.store_to_addr(len_addr, len, crate::ir::Width::W8);
                 }
             },
             hir::Expr::Variant {
@@ -927,6 +983,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 ResolvedStructuralPlace::Local { .. } => {
                     panic!("local enum writes are not supported yet");
                 }
+                ResolvedStructuralPlace::Indirect { .. } => {
+                    panic!("indirect enum writes are not supported yet");
+                }
             },
             hir::Expr::Index { .. } => match resolved {
                 ResolvedStructuralPlace::Destination { ty, offset } => {
@@ -944,6 +1003,11 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         "structural local indexed write requires single-slot type"
                     );
                     rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
+                }
+                ResolvedStructuralPlace::Indirect { ty, addr } => {
+                    let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
+                    let width = self.scalar_width_for_hir_type(ty);
+                    rb.store_to_addr(addr, scalar, width);
                 }
             },
             hir::Expr::Literal(hir::Literal::Unit) => {}
@@ -965,6 +1029,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             "structural local scalar write requires single-slot type"
                         );
                         rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
+                    }
+                    ResolvedStructuralPlace::Indirect { ty, addr } => {
+                        let width = self.scalar_width_for_hir_type(ty);
+                        rb.store_to_addr(addr, scalar, width);
                     }
                 }
             }
@@ -996,6 +1064,41 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
+    fn copy_local_into_addr(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        source_local: hir::LocalId,
+        dest_ty: &hir::Type,
+        dest_addr: crate::ir::PortSource,
+    ) {
+        let source_storage = self.local_slots[&source_local];
+        let source_ty = self.local_types[&source_local];
+        let size = self.hir_type_size(dest_ty);
+        assert_eq!(
+            self.hir_type_size(source_ty),
+            size,
+            "indirect local copy requires matching byte sizes"
+        );
+        let full_words = size / 8;
+        let remainder = size % 8;
+        for word_index in 0..full_words {
+            let value = rb.read_from_slot(Self::slot_at(source_storage, word_index));
+            let addr = self.add_byte_offset(rb, dest_addr, word_index * 8);
+            rb.store_to_addr(addr, value, crate::ir::Width::W8);
+        }
+        if remainder != 0 {
+            let value = rb.read_from_slot(Self::slot_at(source_storage, full_words));
+            let width = match remainder {
+                1 => crate::ir::Width::W1,
+                2 => crate::ir::Width::W2,
+                4 => crate::ir::Width::W4,
+                _ => panic!("unsupported indirect remainder width {remainder}"),
+            };
+            let addr = self.add_byte_offset(rb, dest_addr, full_words * 8);
+            rb.store_to_addr(addr, value, width);
+        }
+    }
+
     fn lower_value_into_dest_offset(
         &self,
         rb: &mut RegionBuilder<'_>,
@@ -1019,7 +1122,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         base: Box::new(base),
                         index: index.clone(),
                     };
-                    match self.resolve_place(&place, dest_local, dest_ty) {
+                    match self.resolve_place(rb, &place, dest_local, dest_ty) {
                         ResolvedStructuralPlace::Destination {
                             ty: source_ty,
                             offset: source_offset,
@@ -1045,6 +1148,34 @@ impl<'a> StructuralHirIrLowerer<'a> {
                                     (offset + slot_index * 8) as u32,
                                     crate::ir::Width::W8,
                                 );
+                            }
+                        }
+                        ResolvedStructuralPlace::Indirect {
+                            ty: source_ty,
+                            addr,
+                        } => {
+                            let size = self.hir_type_size(source_ty);
+                            let full_words = size / 8;
+                            let remainder = size % 8;
+                            for word_index in 0..full_words {
+                                let src_addr = self.add_byte_offset(rb, addr, word_index * 8);
+                                let value = rb.load_from_addr(src_addr, crate::ir::Width::W8);
+                                rb.write_to_field(
+                                    value,
+                                    (offset + word_index * 8) as u32,
+                                    crate::ir::Width::W8,
+                                );
+                            }
+                            if remainder != 0 {
+                                let src_addr = self.add_byte_offset(rb, addr, full_words * 8);
+                                let width = match remainder {
+                                    1 => crate::ir::Width::W1,
+                                    2 => crate::ir::Width::W2,
+                                    4 => crate::ir::Width::W4,
+                                    _ => panic!("unsupported indirect remainder width {remainder}"),
+                                };
+                                let value = rb.load_from_addr(src_addr, width);
+                                rb.write_to_field(value, (offset + full_words * 8) as u32, width);
                             }
                         }
                     }
@@ -1175,6 +1306,18 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let slot = self.local_slots[local].base_slot;
                 rb.read_from_slot(slot)
             }
+            hir::Expr::Deref(_) => {
+                let place = self.expr_to_place(expr);
+                match self.resolve_place(rb, &place, dest_local, dest_ty) {
+                    ResolvedStructuralPlace::Indirect { ty, addr } => {
+                        let width = self.scalar_width_for_hir_type(ty);
+                        rb.load_from_addr(addr, width)
+                    }
+                    other => {
+                        panic!("deref expression should lower to an indirect place, got {other:?}")
+                    }
+                }
+            }
             hir::Expr::AddrOf(place) => self.lower_place_addr(rb, place, dest_local, dest_ty),
             hir::Expr::Load { addr, width } => {
                 let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_ty);
@@ -1193,7 +1336,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 {
                     return self.lower_dynamic_index_read(rb, base, index, dest_local, dest_ty);
                 }
-                match self.resolve_place(&place, dest_local, dest_ty) {
+                match self.resolve_place(rb, &place, dest_local, dest_ty) {
                     ResolvedStructuralPlace::Destination { ty, offset } => {
                         let width = self.scalar_width_for_hir_type(ty);
                         rb.read_from_field(offset as u32, width)
@@ -1209,6 +1352,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             "structural local scalar read requires single-slot type"
                         );
                         rb.read_from_slot(Self::slot_at(storage, slot_offset))
+                    }
+                    ResolvedStructuralPlace::Indirect { ty, addr } => {
+                        let width = self.scalar_width_for_hir_type(ty);
+                        rb.load_from_addr(addr, width)
                     }
                 }
             }
@@ -1280,6 +1427,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
     fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {
         match expr {
             hir::Expr::Local(local) => hir::Place::Local(*local),
+            hir::Expr::Deref(base) => hir::Place::Deref { base: base.clone() },
             hir::Expr::Field { base, field } => hir::Place::Field {
                 base: Box::new(self.expr_to_place(base)),
                 field: field.clone(),
@@ -1301,7 +1449,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_ty: &'a hir::Type,
     ) -> crate::ir::PortSource {
         let place = self.expr_to_place(value);
-        match self.resolve_place(&place, dest_local, dest_ty) {
+        match self.resolve_place(rb, &place, dest_local, dest_ty) {
             ResolvedStructuralPlace::Local {
                 ty,
                 storage,
@@ -1319,6 +1467,14 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     "slice_data/slice_len require a slice-like destination, got {ty:?}"
                 );
                 rb.read_from_field((offset + word_index * 8) as u32, crate::ir::Width::W8)
+            }
+            ResolvedStructuralPlace::Indirect { ty, addr } => {
+                assert!(
+                    matches!(ty, hir::Type::Str { .. } | hir::Type::Slice { .. }),
+                    "slice_data/slice_len require a slice-like indirect place, got {ty:?}"
+                );
+                let addr = self.add_byte_offset(rb, addr, word_index * 8);
+                rb.load_from_addr(addr, crate::ir::Width::W8)
             }
         }
     }
@@ -1391,7 +1547,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             };
         }
 
-        match self.resolve_place(place, dest_local, dest_ty) {
+        match self.resolve_place(rb, place, dest_local, dest_ty) {
             ResolvedStructuralPlace::Destination { offset, .. } => {
                 let base = rb.save_out_ptr();
                 self.add_byte_offset(rb, base, offset)
@@ -1404,6 +1560,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let num_slots = Self::slot_count_for_type(self.module, ty) as u32;
                 rb.slot_addr(Self::slot_at(storage, slot_offset), num_slots)
             }
+            ResolvedStructuralPlace::Indirect { addr, .. } => addr,
         }
     }
 
@@ -1524,7 +1681,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_ty: &'a hir::Type,
     ) -> ResolvedDynamicIndex<'a> {
         let index = self.lower_scalar_expr(rb, index, dest_local, dest_ty);
-        match self.resolve_place(base, dest_local, dest_ty) {
+        match self.resolve_place(rb, base, dest_local, dest_ty) {
             ResolvedStructuralPlace::Destination { ty, offset } => {
                 let hir::Type::Array { element, .. } = ty else {
                     panic!(
@@ -1560,11 +1717,19 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 );
                 ResolvedDynamicIndex::Local { ty: element, addr }
             }
+            ResolvedStructuralPlace::Indirect { ty, addr } => {
+                let hir::Type::Array { element, .. } = ty else {
+                    panic!("dynamic indexed indirect place requires an array type");
+                };
+                let addr = self.add_scaled_index(rb, addr, index, self.hir_type_size(element));
+                ResolvedDynamicIndex::Destination { ty: element, addr }
+            }
         }
     }
 
     fn resolve_place(
         &self,
+        rb: &mut RegionBuilder<'_>,
         place: &hir::Place,
         dest_local: hir::LocalId,
         dest_ty: &'a hir::Type,
@@ -1584,8 +1749,19 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     }
                 }
             }
+            hir::Place::Deref { base } => {
+                let base_ty = self.infer_expr_type(base);
+                let hir::Type::Ref { pointee, .. } = base_ty else {
+                    panic!("deref place requires a ref-typed base, got {base_ty:?}");
+                };
+                let addr = self.lower_scalar_expr(rb, base, dest_local, dest_ty);
+                ResolvedStructuralPlace::Indirect {
+                    ty: Box::leak(pointee) as &'a hir::Type,
+                    addr,
+                }
+            }
             hir::Place::Field { base, field } => {
-                match self.resolve_place(base, dest_local, dest_ty) {
+                match self.resolve_place(rb, base, dest_local, dest_ty) {
                     ResolvedStructuralPlace::Destination { ty, offset } => {
                         let mut ty = ty;
                         let mut offset = offset;
@@ -1690,6 +1866,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             slot_offset: slot_offset + field_offset,
                         }
                     }
+                    ResolvedStructuralPlace::Indirect { ty, addr } => {
+                        let (field_ty, field_offset) = self.resolve_indirect_field(ty, field);
+                        ResolvedStructuralPlace::Indirect {
+                            ty: field_ty,
+                            addr: self.add_byte_offset(rb, addr, field_offset),
+                        }
+                    }
                 }
             }
             hir::Place::Index { base, index } => {
@@ -1697,7 +1880,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     panic!("structural HIR array indices must be integer literals");
                 };
                 let index = usize::try_from(*index).expect("array index must fit in usize");
-                match self.resolve_place(base, dest_local, dest_ty) {
+                match self.resolve_place(rb, base, dest_local, dest_ty) {
                     ResolvedStructuralPlace::Destination { ty, offset } => {
                         let hir::Type::Array { element, len } = ty else {
                             panic!(
@@ -1733,8 +1916,131 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             slot_offset: slot_offset + index * elem_slots,
                         }
                     }
+                    ResolvedStructuralPlace::Indirect { ty, addr } => {
+                        let hir::Type::Array { element, len } = ty else {
+                            panic!("indexed indirect place requires an HIR array type");
+                        };
+                        assert!(
+                            index < *len,
+                            "indirect array index {index} out of bounds for {len}"
+                        );
+                        ResolvedStructuralPlace::Indirect {
+                            ty: element,
+                            addr: self.add_byte_offset(
+                                rb,
+                                addr,
+                                index * self.hir_type_size(element),
+                            ),
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    fn resolve_indirect_field(&self, ty: &'a hir::Type, field: &str) -> (&'a hir::Type, usize) {
+        match ty {
+            hir::Type::Named { def, .. } => {
+                let type_def = &self.module.type_defs[*def];
+                let hir::TypeDefKind::Struct { fields } = &type_def.kind else {
+                    panic!("indirect field place requires a struct type");
+                };
+                let field_offset = self.find_field_byte_offset(fields, field);
+                let field_def = fields
+                    .iter()
+                    .find(|candidate| candidate.name == field)
+                    .unwrap_or_else(|| {
+                        panic!("missing indirect field {field} in {}", type_def.name)
+                    });
+                (&field_def.ty, field_offset)
+            }
+            hir::Type::Slice { .. } | hir::Type::Str { .. } => {
+                let (field_offset, field_ty) = match field {
+                    "ptr" | "data" => (0, hir::Type::u(64)),
+                    "len" => (8, hir::Type::u(64)),
+                    _ => panic!("unknown slice-like indirect field {field}"),
+                };
+                (Box::leak(Box::new(field_ty)) as &'a hir::Type, field_offset)
+            }
+            _ => panic!("indirect field access requires a struct-like type, got {ty:?}"),
+        }
+    }
+
+    fn infer_expr_type(&self, expr: &hir::Expr) -> hir::Type {
+        match expr {
+            hir::Expr::Local(id) => self.local_types[id].clone(),
+            hir::Expr::Deref(base) => match self.infer_expr_type(base) {
+                hir::Type::Ref { pointee, .. } => *pointee,
+                other => panic!("cannot deref non-ref expression of type {other:?}"),
+            },
+            hir::Expr::Field { base, field } => {
+                let base_ty = self.infer_expr_type(base);
+                match base_ty {
+                    hir::Type::Ref { pointee, .. } => self.resolve_field_type_in(&pointee, field),
+                    other => self.resolve_field_type_in(&other, field),
+                }
+            }
+            hir::Expr::Literal(hir::Literal::Bool(_)) => hir::Type::Bool,
+            hir::Expr::Literal(hir::Literal::Integer(_)) => hir::Type::u(64),
+            hir::Expr::Literal(hir::Literal::String(_)) => hir::Type::Str {
+                region: hir::RegionId::new(0),
+            },
+            hir::Expr::Literal(hir::Literal::Unit) => hir::Type::Unit,
+            hir::Expr::Str { .. } => hir::Type::Str {
+                region: hir::RegionId::new(0),
+            },
+            hir::Expr::Struct { def, .. } => hir::Type::Named {
+                def: *def,
+                args: vec![],
+            },
+            hir::Expr::SliceData { .. } | hir::Expr::SliceLen { .. } | hir::Expr::Load { .. } => {
+                hir::Type::u(64)
+            }
+            hir::Expr::Binary { op, .. } => match op {
+                hir::BinaryOp::Eq
+                | hir::BinaryOp::Ne
+                | hir::BinaryOp::Lt
+                | hir::BinaryOp::Le
+                | hir::BinaryOp::Gt
+                | hir::BinaryOp::Ge => hir::Type::Bool,
+                _ => hir::Type::u(64),
+            },
+            hir::Expr::Unary { .. } => hir::Type::u(64),
+            hir::Expr::Call(call) => {
+                let callable = &self.module.callables[match call.target {
+                    hir::CallTarget::Callable(id) => id,
+                }];
+                callable
+                    .signature
+                    .returns
+                    .first()
+                    .cloned()
+                    .unwrap_or(hir::Type::Unit)
+            }
+            hir::Expr::Index { .. } | hir::Expr::AddrOf(_) | hir::Expr::Variant { .. } => {
+                panic!("infer_expr_type: cannot infer type of expression: {expr:?}")
+            }
+        }
+    }
+
+    fn resolve_field_type_in(&self, ty: &hir::Type, field: &str) -> hir::Type {
+        match ty {
+            hir::Type::Ref { pointee, .. } => self.resolve_field_type_in(pointee, field),
+            hir::Type::Named { def, .. } => {
+                let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind else {
+                    panic!("field access on non-struct named type: {:?}", ty);
+                };
+                fields
+                    .iter()
+                    .find(|f| f.name == field)
+                    .map(|f| f.ty.clone())
+                    .unwrap_or_else(|| panic!("field '{field}' not found in struct"))
+            }
+            hir::Type::Str { .. } | hir::Type::Slice { .. } => match field {
+                "ptr" | "data" | "len" => hir::Type::u(64),
+                _ => panic!("unknown slice-like field: '{field}'"),
+            },
+            _ => panic!("field access on type that has no fields: {:?}", ty),
         }
     }
 
@@ -1748,6 +2054,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 64 => crate::ir::Width::W8,
                 other => panic!("unsupported structural HIR integer width: {other}"),
             },
+            hir::Type::Ref { .. } => crate::ir::Width::W8,
             hir::Type::Address { .. } => crate::ir::Width::W8,
             _ => panic!("unsupported structural HIR scalar local type: {ty:?}"),
         }
@@ -1768,6 +2075,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             ty,
             hir::Type::Bool
                 | hir::Type::Integer(_)
+                | hir::Type::Ref { .. }
                 | hir::Type::Address { .. }
                 | hir::Type::Handle { .. }
         )
@@ -1780,6 +2088,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Type::Unit => 0,
             hir::Type::Bool => 1,
             hir::Type::Integer(kind) => (kind.bits as usize) / 8,
+            hir::Type::Ref { .. } => core::mem::size_of::<usize>(),
             hir::Type::Address { .. } => core::mem::size_of::<usize>(),
             hir::Type::Handle { .. } => core::mem::size_of::<usize>(),
             hir::Type::Str { .. } | hir::Type::Slice { .. } => core::mem::size_of::<usize>() * 2,
@@ -2089,6 +2398,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
             hir::Type::Unit
             | hir::Type::Bool
             | hir::Type::Integer(_)
+            | hir::Type::Ref { .. }
             | hir::Type::Address { .. }
             | hir::Type::Handle { .. } => 1,
             hir::Type::Str { .. } | hir::Type::Slice { .. } => 2,
@@ -2184,6 +2494,13 @@ impl<'a> ScalarHirIrLowerer<'a> {
     fn infer_expr_type(&self, expr: &hir::Expr) -> hir::Type {
         match expr {
             hir::Expr::Local(id) => self.local_types[id].clone(),
+            hir::Expr::Deref(base) => {
+                let base_ty = self.infer_expr_type(base);
+                match base_ty {
+                    hir::Type::Ref { pointee, .. } => *pointee,
+                    other => panic!("cannot deref non-ref expression of type {other:?}"),
+                }
+            }
             hir::Expr::Literal(hir::Literal::Bool(_)) => hir::Type::Bool,
             hir::Expr::Literal(hir::Literal::Integer(_)) => hir::Type::u(64),
             hir::Expr::Literal(hir::Literal::String(_)) => {
@@ -2234,6 +2551,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
     /// Resolve the type of a field within a parent type.
     fn resolve_field_type_in(&self, ty: &hir::Type, field: &str) -> hir::Type {
         match ty {
+            hir::Type::Ref { pointee, .. } => self.resolve_field_type_in(pointee, field),
             hir::Type::Named { def, .. } => {
                 let hir::TypeDefKind::Struct { fields } = &self.module.type_defs[*def].kind else {
                     panic!("field access on non-struct named type: {:?}", ty);
@@ -2804,12 +3122,19 @@ fn build_structural_hir_ir_impl(module: &hir::Module) -> crate::ir::IrFunc {
 
     let label = &function.name;
     let output_size = structural_hir_type_size(module, dest_ty);
-    let mut builder = crate::ir::IrBuilder::new(label, output_size);
+    let param_word_count = function
+        .params
+        .iter()
+        .filter(|param| !param.is_destination())
+        .map(|param| StructuralHirIrLowerer::slot_count_for_type(module, &param.ty))
+        .sum();
+    let (mut builder, data_arg_sources) =
+        crate::ir::IrBuilder::new_with_data_args(label, output_size, param_word_count);
     // Structural path always needs the memory domain — load_from_addr/store_to_addr thread on it.
     let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();
-        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function);
+        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function, &data_arg_sources);
         lowerer.lower_block(&mut rb, &function.body.statements, dest_local, dest_ty);
         rb.set_results(&[]);
     }
@@ -2821,7 +3146,9 @@ fn structural_hir_type_size(module: &hir::Module, ty: &hir::Type) -> usize {
         hir::Type::Unit => 0,
         hir::Type::Bool => 1,
         hir::Type::Integer(kind) => (kind.bits as usize) / 8,
-        hir::Type::Address { .. } | hir::Type::Handle { .. } => core::mem::size_of::<usize>(),
+        hir::Type::Ref { .. } | hir::Type::Address { .. } | hir::Type::Handle { .. } => {
+            core::mem::size_of::<usize>()
+        }
         hir::Type::Str { .. } | hir::Type::Slice { .. } => core::mem::size_of::<usize>() * 2,
         hir::Type::Array { element, len } => structural_hir_type_size(module, element) * len,
         hir::Type::Named { def, .. } => {

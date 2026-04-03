@@ -219,6 +219,17 @@ fn ty<'src>() -> impl Parser<'src, &'src str, Type, Extra<'src>> + Clone {
             .map(|(def, args)| Type::named(def, args.unwrap_or_default()));
 
         choice((
+            just("&")
+                .padded_by(ws())
+                .ignore_then(token("mut").or_not())
+                .then(ty.clone())
+                .map(|(mutable, pointee)| {
+                    if mutable.is_some() {
+                        Type::mut_ref(pointee)
+                    } else {
+                        Type::r#ref(pointee)
+                    }
+                }),
             token("unit").to(Type::unit()),
             token("bool").to(Type::bool()),
             just("u")
@@ -649,6 +660,12 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
                 len: Box::new(len),
             });
 
+        let deref_expr = token("deref")
+            .ignore_then(token("("))
+            .ignore_then(expr.clone())
+            .then_ignore(token(")"))
+            .map(|base| Expr::Deref(Box::new(base)));
+
         let field_expr = token("field")
             .ignore_then(token("("))
             .ignore_then(expr.clone())
@@ -761,6 +778,7 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
             slice_data_expr,
             slice_len_expr,
             str_expr,
+            deref_expr,
             load_expr,
             call,
             field_expr,
@@ -785,6 +803,13 @@ where
     recursive(move |place| {
         choice((
             local_id().map(Place::Local),
+            token("deref")
+                .ignore_then(token("("))
+                .ignore_then(expr.clone())
+                .then_ignore(token(")"))
+                .map(|base| Place::Deref {
+                    base: Box::new(base),
+                }),
             token("field")
                 .ignore_then(token("("))
                 .ignore_then(place.clone())
@@ -1525,6 +1550,45 @@ hir_module {
         let module = parse_hir(text).expect("address types should parse");
         let round_trip = module.to_string();
         let reparsed = parse_hir(&round_trip).expect("round-tripped address types should parse");
+        assert_eq!(module, reparsed);
+    }
+
+    #[test]
+    fn round_trip_ref_types_and_deref_places() {
+        let text = r#"
+hir_module {
+  regions []
+  stores []
+  types [
+    type t0 "Cursor" size=8 = struct {
+      "pos": u64 @0
+    }
+  ]
+  callables []
+  functions [
+    function f0 "ref_demo" {
+      regions []
+      stores []
+      params [
+        l0 param "cursor": &mut t0
+      ]
+      locals []
+      return unit
+      scopes [
+        scope sc0 parent none comment none
+      ]
+      body @sc0 {
+        stmt0: assign field(deref(l0), "pos") = 0x1
+        stmt1: return
+      }
+    }
+  ]
+}
+"#;
+
+        let module = parse_hir(text).expect("ref types should parse");
+        let round_trip = module.to_string();
+        let reparsed = parse_hir(&round_trip).expect("round-tripped ref types should parse");
         assert_eq!(module, reparsed);
     }
 
