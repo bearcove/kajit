@@ -33,6 +33,18 @@ use context::{DeserContext, ErrorCode};
 pub use format::DecoderKind;
 pub use pipeline_opts::PipelineOptions;
 
+#[repr(C)]
+struct RuntimeSliceU8 {
+    ptr: *const u8,
+    len: usize,
+}
+
+#[repr(C)]
+struct RuntimeCursorArg {
+    bytes: RuntimeSliceU8,
+    pos: u64,
+}
+
 /// Compile a deserializer for the given shape and format.
 pub fn compile_decoder(shape: &'static facet::Shape, kind: DecoderKind) -> CompiledDecoder {
     compiler::compile_decoder(shape, kind)
@@ -373,9 +385,7 @@ pub fn deserialize_raw(
     let mut ctx = DeserContext::from_bytes(input);
     let mut output = vec![0u8; output_size];
 
-    unsafe {
-        (deser.func())(output.as_mut_ptr(), &mut ctx);
-    }
+    invoke_decoder(deser, output.as_mut_ptr(), &mut ctx);
 
     if ctx.error.code != 0 {
         let code: ErrorCode = unsafe { core::mem::transmute(ctx.error.code) };
@@ -395,9 +405,7 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
     // Allocate output on the stack as MaybeUninit
     let mut output = core::mem::MaybeUninit::<T>::uninit();
 
-    unsafe {
-        (deser.func())(output.as_mut_ptr() as *mut u8, ctx);
-    }
+    invoke_decoder(deser, output.as_mut_ptr() as *mut u8, ctx);
 
     if ctx.error.code != 0 {
         let code: ErrorCode = unsafe { core::mem::transmute(ctx.error.code) };
@@ -408,6 +416,29 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
     }
 
     Ok(unsafe { output.assume_init() })
+}
+
+fn invoke_decoder(deser: &CompiledDecoder, output: *mut u8, ctx: &mut DeserContext) {
+    unsafe {
+        match deser.root_data_abi() {
+            crate::compiler::RootDecoderDataAbi::None => {
+                (deser.func())(output, ctx);
+            }
+            crate::compiler::RootDecoderDataAbi::CursorRef => {
+                let mut cursor = RuntimeCursorArg {
+                    bytes: RuntimeSliceU8 {
+                        ptr: ctx.input_ptr,
+                        len: ctx.remaining(),
+                    },
+                    pos: 0,
+                };
+                let func: unsafe extern "C" fn(*mut u8, *mut DeserContext, *mut RuntimeCursorArg) =
+                    core::mem::transmute(deser.func());
+                func(output, ctx, &mut cursor);
+                ctx.input_ptr = cursor.bytes.ptr.wrapping_add(cursor.pos as usize);
+            }
+        }
+    }
 }
 
 /// Error returned by `deserialize`.

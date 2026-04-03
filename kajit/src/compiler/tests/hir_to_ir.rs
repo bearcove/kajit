@@ -288,6 +288,56 @@ hir_module {
 }
 
 #[test]
+fn decoder_entry_can_receive_root_data_args_after_output_and_ctx() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions []
+  stores []
+  types []
+  callables []
+  functions [
+    function f0 "copy_root_arg" {
+      regions []
+      stores []
+      params [
+        l0 param "value": u64
+        l1 destination "out": u64
+      ]
+      locals []
+      return unit
+      scopes [
+        scope sc0 parent none comment "root"
+      ]
+      body @sc0 {
+        stmt0: init l1 = l0
+        stmt1: return
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("HIR text should parse");
+
+    let mut func = lower_hir_module(&module);
+    crate::ir_passes::run_default_passes(&mut func);
+    let linear = crate::linearize::linearize(&mut func);
+    let decoder = crate::compiler::compile_linear_ir_decoder(&linear, false);
+    let mut out = 0u64;
+    let mut ctx = crate::context::DeserContext::from_bytes(&[]);
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext, u64) =
+        unsafe { core::mem::transmute(decoder.func()) };
+
+    unsafe {
+        func(&mut out as *mut u64 as *mut u8, &mut ctx, 0x2a);
+    }
+
+    assert_eq!(ctx.error.code, 0);
+    assert_eq!(out, 0x2a);
+}
+
+#[test]
 fn structural_hir_ir_path_executes_loop_break_and_continue() {
     let module = parse_hir(
         r#"

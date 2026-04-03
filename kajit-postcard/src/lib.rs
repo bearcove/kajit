@@ -473,10 +473,10 @@ impl PostcardHirLowerer {
             name: name.to_owned(),
             intrinsic: None,
             signature: hir::CallSignature {
-                params: vec![hir::Type::named(
+                params: vec![hir::Type::mut_ref(hir::Type::named(
                     self.cursor_type,
                     vec![hir::GenericArg::Region(self.input_region)],
-                )],
+                ))],
                 returns,
                 effect_class: hir::EffectClass::Mutates,
                 domain_effects: vec![hir::DomainEffect {
@@ -521,14 +521,14 @@ impl PostcardHirLowerer {
 
     fn cursor_bytes_expr(&self, cursor_local: hir::LocalId) -> hir::Expr {
         hir::Expr::Field {
-            base: Box::new(hir::Expr::Local(cursor_local)),
+            base: Box::new(hir::Expr::Deref(Box::new(hir::Expr::Local(cursor_local)))),
             field: "bytes".to_owned(),
         }
     }
 
     fn cursor_pos_expr(&self, cursor_local: hir::LocalId) -> hir::Expr {
         hir::Expr::Field {
-            base: Box::new(hir::Expr::Local(cursor_local)),
+            base: Box::new(hir::Expr::Deref(Box::new(hir::Expr::Local(cursor_local)))),
             field: "pos".to_owned(),
         }
     }
@@ -539,88 +539,16 @@ impl PostcardHirLowerer {
         cursor_local: hir::LocalId,
         new_pos: hir::Expr,
     ) {
-        let store_input_ptr = self.ensure_abi_store_input_ptr();
         statements.push(hir::Stmt {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Assign {
                 place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
+                    base: Box::new(hir::Place::Deref {
+                        base: Box::new(hir::Expr::Local(cursor_local)),
+                    }),
                     field: "pos".to_owned(),
                 },
                 value: new_pos,
-            },
-        });
-        let absolute = hir::Expr::Binary {
-            op: hir::BinaryOp::Add,
-            lhs: Box::new(hir::Expr::SliceData {
-                value: Box::new(self.cursor_bytes_expr(cursor_local)),
-            }),
-            rhs: Box::new(self.cursor_pos_expr(cursor_local)),
-        };
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
-                target: hir::CallTarget::Callable(store_input_ptr),
-                args: vec![absolute],
-            })),
-        });
-    }
-
-    fn push_cursor_shadow_init(
-        &mut self,
-        statements: &mut Vec<hir::Stmt>,
-        cursor_local: hir::LocalId,
-    ) {
-        let load_input_ptr = self.ensure_abi_load_input_ptr();
-        let load_input_end = self.ensure_abi_load_input_end();
-
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Field {
-                        base: Box::new(hir::Place::Local(cursor_local)),
-                        field: "bytes".to_owned(),
-                    }),
-                    field: "ptr".to_owned(),
-                },
-                value: hir::Expr::Call(hir::CallExpr {
-                    target: hir::CallTarget::Callable(load_input_ptr),
-                    args: vec![],
-                }),
-            },
-        });
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Field {
-                        base: Box::new(hir::Place::Local(cursor_local)),
-                        field: "bytes".to_owned(),
-                    }),
-                    field: "len".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Sub,
-                    lhs: Box::new(hir::Expr::Call(hir::CallExpr {
-                        target: hir::CallTarget::Callable(load_input_end),
-                        args: vec![],
-                    })),
-                    rhs: Box::new(hir::Expr::Field {
-                        base: Box::new(self.cursor_bytes_expr(cursor_local)),
-                        field: "ptr".to_owned(),
-                    }),
-                },
-            },
-        });
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Literal(hir::Literal::Integer(0)),
             },
         });
     }
@@ -1574,95 +1502,6 @@ impl PostcardHirLowerer {
                 safety: hir::CallSafety::OpaqueHost,
             },
             docs: Some("Validate that a borrowed byte range is UTF-8.".to_owned()),
-        };
-        let callable_id = self.module.add_callable(callable);
-        self.callables_by_name.insert(NAME, callable_id);
-        callable_id
-    }
-
-    fn ensure_abi_load_input_ptr(&mut self) -> hir::CallableId {
-        const NAME: &str = "abi.load_input_ptr";
-        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
-            return existing;
-        }
-
-        let callable = hir::CallableSpec {
-            kind: hir::CallableKind::Host,
-            name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::LoadInputPtr),
-            signature: hir::CallSignature {
-                params: vec![],
-                returns: vec![hir::Type::u(64)],
-                effect_class: hir::EffectClass::Reads,
-                domain_effects: vec![hir::DomainEffect {
-                    domain: "input".to_owned(),
-                    access: hir::DomainAccess::Read,
-                }],
-                control: hir::ControlTransfer::Returns,
-                capabilities: vec!["runtime.cursor".to_owned()],
-                safety: hir::CallSafety::OpaqueHost,
-            },
-            docs: Some("Read the current decoder input pointer from the entry ABI.".to_owned()),
-        };
-        let callable_id = self.module.add_callable(callable);
-        self.callables_by_name.insert(NAME, callable_id);
-        callable_id
-    }
-
-    fn ensure_abi_load_input_end(&mut self) -> hir::CallableId {
-        const NAME: &str = "abi.load_input_end";
-        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
-            return existing;
-        }
-
-        let callable = hir::CallableSpec {
-            kind: hir::CallableKind::Host,
-            name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::LoadInputEnd),
-            signature: hir::CallSignature {
-                params: vec![],
-                returns: vec![hir::Type::u(64)],
-                effect_class: hir::EffectClass::Reads,
-                domain_effects: vec![hir::DomainEffect {
-                    domain: "input".to_owned(),
-                    access: hir::DomainAccess::Read,
-                }],
-                control: hir::ControlTransfer::Returns,
-                capabilities: vec!["runtime.cursor".to_owned()],
-                safety: hir::CallSafety::OpaqueHost,
-            },
-            docs: Some("Read the decoder input end pointer from the entry ABI.".to_owned()),
-        };
-        let callable_id = self.module.add_callable(callable);
-        self.callables_by_name.insert(NAME, callable_id);
-        callable_id
-    }
-
-    fn ensure_abi_store_input_ptr(&mut self) -> hir::CallableId {
-        const NAME: &str = "abi.store_input_ptr";
-        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
-            return existing;
-        }
-
-        let callable = hir::CallableSpec {
-            kind: hir::CallableKind::Host,
-            name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::StoreInputPtr),
-            signature: hir::CallSignature {
-                params: vec![hir::Type::u(64)],
-                returns: vec![],
-                effect_class: hir::EffectClass::Mutates,
-                domain_effects: vec![hir::DomainEffect {
-                    domain: "input".to_owned(),
-                    access: hir::DomainAccess::Mutate,
-                }],
-                control: hir::ControlTransfer::Returns,
-                capabilities: vec!["runtime.cursor".to_owned()],
-                safety: hir::CallSafety::OpaqueHost,
-            },
-            docs: Some(
-                "Write the current decoder input pointer back through the entry ABI.".to_owned(),
-            ),
         };
         let callable_id = self.module.add_callable(callable);
         self.callables_by_name.insert(NAME, callable_id);
@@ -3249,7 +3088,6 @@ pub fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
     let out_local = lowerer.next_local();
     let root_scope = hir::ScopeId::new(0);
     let mut statements = Vec::new();
-    lowerer.push_cursor_shadow_init(&mut statements, cursor_local);
     lowerer.lower_shape_into_place(
         &mut statements,
         cursor_local,
@@ -3270,10 +3108,10 @@ pub fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
             hir::Parameter {
                 local: cursor_local,
                 name: "cursor".to_owned(),
-                ty: hir::Type::named(
+                ty: hir::Type::mut_ref(hir::Type::named(
                     lowerer.cursor_type,
                     vec![hir::GenericArg::Region(lowerer.input_region)],
-                ),
+                )),
                 kind: hir::LocalKind::Param,
             },
             hir::Parameter {
