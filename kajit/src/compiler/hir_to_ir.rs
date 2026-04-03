@@ -41,6 +41,209 @@ enum ResolvedDynamicIndex<'a> {
     },
 }
 
+struct RuntimeDialectLowerer;
+
+impl RuntimeDialectLowerer {
+    fn requires_memory_state(intrinsic: Option<hir::RuntimeIntrinsic>) -> bool {
+        matches!(
+            intrinsic,
+            Some(
+                hir::RuntimeIntrinsic::AllocTransient
+                    | hir::RuntimeIntrinsic::Memcpy
+                    | hir::RuntimeIntrinsic::FreeTransient
+            )
+        )
+    }
+
+    fn lower_destination_scalar_call<'a>(
+        lowerer: &StructuralHirIrLowerer<'a>,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) -> Option<crate::ir::PortSource> {
+        let args = call
+            .args
+            .iter()
+            .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
+            .collect::<Vec<_>>();
+        match lowerer.callable_intrinsic(call) {
+            Some(hir::RuntimeIntrinsic::SaveCursor) => Some(rb.save_cursor()),
+            Some(hir::RuntimeIntrinsic::SaveInputEnd) => Some(rb.save_input_end()),
+            Some(hir::RuntimeIntrinsic::AllocPersistent) => rb.call_intrinsic(
+                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize),
+                &args,
+                0,
+                true,
+            ),
+            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => rb.call_intrinsic(
+                crate::ir::IntrinsicFn(
+                    intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
+                ),
+                &args,
+                0,
+                true,
+            ),
+            _ => None,
+        }
+    }
+
+    fn lower_destination_effect_call<'a>(
+        lowerer: &StructuralHirIrLowerer<'a>,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) -> bool {
+        match lowerer.callable_intrinsic(call) {
+            Some(hir::RuntimeIntrinsic::OptionInitNone) => {
+                Self::lower_option_init_none_call(lowerer, rb, call, dest_local, dest_ty);
+                true
+            }
+            Some(hir::RuntimeIntrinsic::OptionInitSome) => {
+                Self::lower_option_init_some_call(lowerer, rb, call, dest_local, dest_ty);
+                true
+            }
+            Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
+                    .collect::<Vec<_>>();
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_validate_utf8_range as *const () as usize,
+                    ),
+                    &args,
+                    0,
+                    false,
+                );
+                true
+            }
+            Some(hir::RuntimeIntrinsic::CursorRestore) => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    args.len(),
+                    1,
+                    "runtime.cursor_restore expects one absolute cursor address"
+                );
+                rb.restore_cursor(args[0]);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn lower_scalar_value_call(
+        rb: &mut RegionBuilder<'_>,
+        callable: &hir::CallableSpec,
+        args: &[crate::ir::PortSource],
+    ) -> Option<crate::ir::PortSource> {
+        let func = match callable.intrinsic {
+            Some(hir::RuntimeIntrinsic::AllocTransient) => {
+                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_transient as *const () as usize)
+            }
+            Some(hir::RuntimeIntrinsic::Memcpy) => {
+                crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize)
+            }
+            _ => return None,
+        };
+        Some(rb.call_effect(func, args))
+    }
+
+    fn lower_scalar_effect_call(
+        rb: &mut RegionBuilder<'_>,
+        callable: &hir::CallableSpec,
+        args: &[crate::ir::PortSource],
+    ) -> bool {
+        let func = match callable.intrinsic {
+            Some(hir::RuntimeIntrinsic::FreeTransient) => {
+                crate::ir::IntrinsicFn(intrinsics::kajit_free_transient as *const () as usize)
+            }
+            _ => return false,
+        };
+        let _ = rb.call_effect(func, args);
+        true
+    }
+
+    fn lower_option_init_none_call<'a>(
+        lowerer: &StructuralHirIrLowerer<'a>,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) {
+        assert_eq!(
+            call.args.len(),
+            2,
+            "runtime.option_init_none expects init_fn and out addr"
+        );
+        let init_fn = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
+        if let hir::Expr::AddrOf(place) = &call.args[1] {
+            match lowerer.resolve_place(place, dest_local, dest_ty) {
+                ResolvedStructuralPlace::Destination { offset, .. } => {
+                    rb.call_intrinsic(
+                        crate::ir::IntrinsicFn(
+                            intrinsics::kajit_option_init_none_ctx as *const () as usize,
+                        ),
+                        &[init_fn],
+                        offset as u32,
+                        false,
+                    );
+                    return;
+                }
+                ResolvedStructuralPlace::Local { .. } => {}
+            }
+        }
+        let out_addr = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let _ = rb.call_effect(
+            crate::ir::IntrinsicFn(intrinsics::kajit_option_init_none as *const () as usize),
+            &[init_fn, out_addr],
+        );
+    }
+
+    fn lower_option_init_some_call<'a>(
+        lowerer: &StructuralHirIrLowerer<'a>,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) {
+        assert_eq!(
+            call.args.len(),
+            3,
+            "runtime.option_init_some expects init_fn, out addr, and payload addr"
+        );
+        let init_fn = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
+        let payload_addr = lowerer.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
+        if let hir::Expr::AddrOf(place) = &call.args[1] {
+            match lowerer.resolve_place(place, dest_local, dest_ty) {
+                ResolvedStructuralPlace::Destination { offset, .. } => {
+                    rb.call_intrinsic(
+                        crate::ir::IntrinsicFn(
+                            intrinsics::kajit_option_init_some_ctx as *const () as usize,
+                        ),
+                        &[init_fn, payload_addr],
+                        offset as u32,
+                        false,
+                    );
+                    return;
+                }
+                ResolvedStructuralPlace::Local { .. } => {}
+            }
+        }
+        let out_addr = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let _ = rb.call_effect(
+            crate::ir::IntrinsicFn(intrinsics::kajit_option_init_some as *const () as usize),
+            &[init_fn, out_addr, payload_addr],
+        );
+    }
+}
+
 impl<'a> StructuralHirIrLowerer<'a> {
     fn new(
         rb: &mut RegionBuilder<'_>,
@@ -1034,27 +1237,14 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_local: hir::LocalId,
         dest_ty: &'a hir::Type,
     ) -> crate::ir::PortSource {
-        let args = call
-            .args
-            .iter()
-            .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
-            .collect::<Vec<_>>();
-        let func = match self.callable_intrinsic(call) {
-            Some(hir::RuntimeIntrinsic::SaveCursor) => return rb.save_cursor(),
-            Some(hir::RuntimeIntrinsic::SaveInputEnd) => return rb.save_input_end(),
-            Some(hir::RuntimeIntrinsic::AllocPersistent) => {
-                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize)
-            }
-            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => crate::ir::IntrinsicFn(
-                intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
-            ),
-            other => panic!(
-                "unsupported structural HIR scalar call {} ({other:?})",
-                self.callable_name(call)
-            ),
-        };
-        rb.call_intrinsic(func, &args, 0, true)
-            .expect("scalar intrinsic call should return a value")
+        RuntimeDialectLowerer::lower_destination_scalar_call(self, rb, call, dest_local, dest_ty)
+            .unwrap_or_else(|| {
+                panic!(
+                    "unsupported structural HIR scalar call {} ({:?})",
+                    self.callable_name(call),
+                    self.callable_intrinsic(call)
+                )
+            })
     }
 
     fn lower_effect_call(
@@ -1064,123 +1254,15 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_local: hir::LocalId,
         dest_ty: &'a hir::Type,
     ) {
-        match self.callable_intrinsic(call) {
-            Some(hir::RuntimeIntrinsic::OptionInitNone) => {
-                self.lower_option_init_none_call(rb, call, dest_local, dest_ty);
-                return;
-            }
-            Some(hir::RuntimeIntrinsic::OptionInitSome) => {
-                self.lower_option_init_some_call(rb, call, dest_local, dest_ty);
-                return;
-            }
-            Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
-                let args = call
-                    .args
-                    .iter()
-                    .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
-                    .collect::<Vec<_>>();
-                rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_validate_utf8_range as *const () as usize,
-                    ),
-                    &args,
-                    0,
-                    false,
-                );
-                return;
-            }
-            Some(hir::RuntimeIntrinsic::CursorRestore) => {
-                let args = call
-                    .args
-                    .iter()
-                    .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
-                    .collect::<Vec<_>>();
-                assert_eq!(
-                    args.len(),
-                    1,
-                    "runtime.cursor_restore expects one absolute cursor address"
-                );
-                rb.restore_cursor(args[0]);
-                return;
-            }
-            other => panic!(
-                "unsupported structural HIR effect call {} ({other:?})",
-                self.callable_name(call)
-            ),
+        if !RuntimeDialectLowerer::lower_destination_effect_call(
+            self, rb, call, dest_local, dest_ty,
+        ) {
+            panic!(
+                "unsupported structural HIR effect call {} ({:?})",
+                self.callable_name(call),
+                self.callable_intrinsic(call)
+            );
         }
-    }
-
-    fn lower_option_init_none_call(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        call: &hir::CallExpr,
-        dest_local: hir::LocalId,
-        dest_ty: &'a hir::Type,
-    ) {
-        assert_eq!(
-            call.args.len(),
-            2,
-            "runtime.option_init_none expects init_fn and out addr"
-        );
-        let init_fn = self.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
-        if let hir::Expr::AddrOf(place) = &call.args[1] {
-            match self.resolve_place(place, dest_local, dest_ty) {
-                ResolvedStructuralPlace::Destination { offset, .. } => {
-                    rb.call_intrinsic(
-                        crate::ir::IntrinsicFn(
-                            intrinsics::kajit_option_init_none_ctx as *const () as usize,
-                        ),
-                        &[init_fn],
-                        offset as u32,
-                        false,
-                    );
-                    return;
-                }
-                ResolvedStructuralPlace::Local { .. } => {}
-            }
-        }
-        let out_addr = self.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
-        let _ = rb.call_effect(
-            crate::ir::IntrinsicFn(intrinsics::kajit_option_init_none as *const () as usize),
-            &[init_fn, out_addr],
-        );
-    }
-
-    fn lower_option_init_some_call(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        call: &hir::CallExpr,
-        dest_local: hir::LocalId,
-        dest_ty: &'a hir::Type,
-    ) {
-        assert_eq!(
-            call.args.len(),
-            3,
-            "runtime.option_init_some expects init_fn, out addr, and payload addr"
-        );
-        let init_fn = self.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
-        let payload_addr = self.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
-        if let hir::Expr::AddrOf(place) = &call.args[1] {
-            match self.resolve_place(place, dest_local, dest_ty) {
-                ResolvedStructuralPlace::Destination { offset, .. } => {
-                    rb.call_intrinsic(
-                        crate::ir::IntrinsicFn(
-                            intrinsics::kajit_option_init_some_ctx as *const () as usize,
-                        ),
-                        &[init_fn, payload_addr],
-                        offset as u32,
-                        false,
-                    );
-                    return;
-                }
-                ResolvedStructuralPlace::Local { .. } => {}
-            }
-        }
-        let out_addr = self.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
-        let _ = rb.call_effect(
-            crate::ir::IntrinsicFn(intrinsics::kajit_option_init_some as *const () as usize),
-            &[init_fn, out_addr, payload_addr],
-        );
     }
 
     fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {
@@ -1867,14 +1949,7 @@ fn hir_function_uses_effect_calls(module: &hir::Module, function: &hir::Function
                 let id = match call.target {
                     hir::CallTarget::Callable(id) => id,
                 };
-                if matches!(
-                    module.callables[id].intrinsic,
-                    Some(
-                        hir::RuntimeIntrinsic::AllocTransient
-                            | hir::RuntimeIntrinsic::Memcpy
-                            | hir::RuntimeIntrinsic::FreeTransient
-                    )
-                ) {
+                if RuntimeDialectLowerer::requires_memory_state(module.callables[id].intrinsic) {
                     return true;
                 }
                 call.args.iter().any(|a| expr_uses_effects(module, a))
@@ -2331,17 +2406,12 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 let callable = &self.module.callables[match call.target {
                     hir::CallTarget::Callable(id) => id,
                 }];
-                let func = match callable.intrinsic {
-                    Some(hir::RuntimeIntrinsic::FreeTransient) => crate::ir::IntrinsicFn(
-                        intrinsics::kajit_free_transient as *const () as usize,
-                    ),
-                    other => panic!(
-                        "unsupported scalar HIR effect call: {} ({other:?})",
-                        callable.name
-                    ),
-                };
-                // Void-returning effectful call: use call_effect but ignore result.
-                let _result = rb.call_effect(func, &args);
+                if !RuntimeDialectLowerer::lower_scalar_effect_call(rb, callable, &args) {
+                    panic!(
+                        "unsupported scalar HIR effect call: {} ({:?})",
+                        callable.name, callable.intrinsic
+                    );
+                }
                 None
             }
             hir::StmtKind::Expr(_) => None,
@@ -2614,19 +2684,12 @@ impl<'a> ScalarHirIrLowerer<'a> {
         let callable = &self.module.callables[match call.target {
             hir::CallTarget::Callable(id) => id,
         }];
-        let func = match callable.intrinsic {
-            Some(hir::RuntimeIntrinsic::AllocTransient) => {
-                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_transient as *const () as usize)
-            }
-            Some(hir::RuntimeIntrinsic::Memcpy) => {
-                crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize)
-            }
-            other => panic!(
-                "unsupported scalar HIR call target: {} ({other:?})",
-                callable.name
-            ),
-        };
-        rb.call_effect(func, &args)
+        RuntimeDialectLowerer::lower_scalar_value_call(rb, callable, &args).unwrap_or_else(|| {
+            panic!(
+                "unsupported scalar HIR call target: {} ({:?})",
+                callable.name, callable.intrinsic
+            )
+        })
     }
 
     fn lower_expr(&self, rb: &mut RegionBuilder<'_>, expr: &hir::Expr) -> crate::ir::PortSource {
