@@ -5,7 +5,7 @@ use super::*;
 
 pub(crate) fn build_postcard_decoder_ir_via_hir(shape: &'static Shape) -> crate::ir::IrFunc {
     let module = build_postcard_decoder_hir(shape);
-    build_structural_hir_ir(shape, &module)
+    build_structural_hir_ir(&module)
 }
 
 #[derive(Clone, Copy)]
@@ -15,16 +15,9 @@ struct StructuralLocalStorage {
 
 struct StructuralHirIrLowerer<'a> {
     module: &'a hir::Module,
-    /// Cached Option vtable defs discovered from the Shape tree.
-    /// Each entry pairs the OptionDef with its inner type's Shape for matching.
-    option_defs: Vec<(&'static Shape, OptionDef)>,
-    /// Cached Vec offsets discovered from the Shape tree, keyed by
-    /// the type_identifier of the shape that contained the ListDef.
-    vec_offsets: std::collections::HashMap<&'static str, crate::malum::VecOffsets>,
     cursor_local: hir::LocalId,
     local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
-    cursor_bytes_ptr_slot: Option<crate::ir::SlotId>,
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
@@ -59,16 +52,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         module: &'a hir::Module,
         function: &'a hir::Function,
-        root_shape: &'static Shape,
-    ) -> Self {
-        Self::new_with_optional_shape(rb, module, function, Some(root_shape))
-    }
-
-    fn new_with_optional_shape(
-        rb: &mut RegionBuilder<'_>,
-        module: &'a hir::Module,
-        function: &'a hir::Function,
-        root_shape: Option<&'static Shape>,
     ) -> Self {
         let cursor_local = function
             .params
@@ -94,21 +77,13 @@ impl<'a> StructuralHirIrLowerer<'a> {
             );
             local_types.insert(local.local, &local.ty);
         }
-        let (cursor_bytes_ptr_slot, _cursor_bytes_len_slot, _cursor_pos_slot) =
+        let _ =
             Self::initialize_cursor_shadow(rb, module, cursor_local, &local_slots, &local_types);
-        let mut option_defs = Vec::new();
-        let mut vec_offsets = std::collections::HashMap::new();
-        if let Some(shape) = root_shape {
-            Self::collect_shape_defs(shape, &mut option_defs, &mut vec_offsets);
-        }
         Self {
             module,
-            option_defs,
-            vec_offsets,
             cursor_local,
             local_slots,
             local_types,
-            cursor_bytes_ptr_slot,
             _marker: std::marker::PhantomData,
         }
     }
@@ -714,7 +689,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             "structural local scalar write requires single-slot type"
                         );
                         rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
-                        self.maybe_sync_cursor_position(rb, place, scalar);
                     }
                 }
             }
@@ -861,7 +835,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             "structural local scalar write requires single-slot type"
                         );
                         rb.write_to_slot(Self::slot_at(storage, slot_offset), scalar);
-                        self.maybe_sync_cursor_position(rb, place, scalar);
                     }
                 }
             }
@@ -891,31 +864,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 value,
             );
         }
-    }
-
-    fn maybe_sync_cursor_position(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        place: &hir::Place,
-        value: crate::ir::PortSource,
-    ) {
-        let Some(bytes_ptr_slot) = self.cursor_bytes_ptr_slot else {
-            return;
-        };
-        if !self.is_cursor_pos_place(place) {
-            return;
-        }
-        let base = rb.read_from_slot(bytes_ptr_slot);
-        let absolute = rb.binop(crate::ir::IrOp::Add, base, value);
-        rb.restore_cursor(absolute);
-    }
-
-    fn is_cursor_pos_place(&self, place: &hir::Place) -> bool {
-        matches!(
-            place,
-            hir::Place::Field { base, field }
-                if field == "pos" && matches!(&**base, hir::Place::Local(local) if *local == self.cursor_local)
-        )
     }
 
     fn lower_value_into_dest_offset(
@@ -1099,24 +1047,31 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_local: hir::LocalId,
         dest_ty: &'a hir::Type,
     ) {
-        // Try to get ptr/len/cap offsets from the HIR type def
-        let (ptr_offset, len_offset, cap_offset) = if let hir::Type::Named { def, .. } = ty {
-            let type_def = &self.module.type_defs[*def];
-            if let hir::TypeDefKind::Struct { fields } = &type_def.kind {
-                let find =
-                    |name: &str| -> Option<u32> { fields.iter().find(|f| f.name == name)?.offset };
-                if let (Some(p), Some(l), Some(c)) = (find("ptr"), find("len"), find("cap")) {
-                    (p, l, c)
-                } else {
-                    self.lookup_vec_offsets(&type_def.name)
-                }
-            } else {
-                self.lookup_vec_offsets_any()
-            }
-        } else {
-            // Not a named type — look up from Shape-based cache
-            self.lookup_vec_offsets_any()
+        let hir::Type::Named { def, .. } = ty else {
+            panic!("runtime.vec_from_raw_parts requires a named Vec-like destination type");
         };
+        let type_def = &self.module.type_defs[*def];
+        let hir::TypeDefKind::Struct { fields } = &type_def.kind else {
+            panic!(
+                "runtime.vec_from_raw_parts requires a struct destination type, got {}",
+                type_def.name
+            );
+        };
+        let find = |name: &str| -> u32 {
+            fields
+                .iter()
+                .find(|f| f.name == name)
+                .and_then(|f| f.offset)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "runtime.vec_from_raw_parts requires explicit `{name}` field offset on {}",
+                        type_def.name
+                    )
+                })
+        };
+        let ptr_offset = find("ptr");
+        let len_offset = find("len");
+        let cap_offset = find("cap");
 
         assert_eq!(
             call.args.len(),
@@ -1268,6 +1223,15 @@ impl<'a> StructuralHirIrLowerer<'a> {
         let func = match self.callable_name(call) {
             "runtime.validate_utf8_range" => {
                 crate::ir::IntrinsicFn(intrinsics::kajit_validate_utf8_range as *const () as usize)
+            }
+            "runtime.cursor_restore" => {
+                assert_eq!(
+                    args.len(),
+                    1,
+                    "runtime.cursor_restore expects one absolute cursor address"
+                );
+                rb.restore_cursor(args[0]);
+                return;
             }
             other => panic!("unsupported structural HIR effect call {other}"),
         };
@@ -1812,176 +1776,11 @@ impl<'a> StructuralHirIrLowerer<'a> {
         panic!("field {field_name} not found in struct fields");
     }
 
-    /// Look up Vec offsets by matching a type name against cached Shape-based offsets.
-    fn lookup_vec_offsets(&self, type_name: &str) -> (u32, u32, u32) {
-        for (type_id, offsets) in &self.vec_offsets {
-            if type_id.contains(type_name) {
-                return (offsets.ptr_offset, offsets.len_offset, offsets.cap_offset);
-            }
-        }
-        // Use the first available vec offsets (there's usually only one Vec type)
-        self.lookup_vec_offsets_any()
-    }
-
-    /// Return any cached Vec offsets (for when the HIR type doesn't identify the Vec).
-    fn lookup_vec_offsets_any(&self) -> (u32, u32, u32) {
-        if let Some(offsets) = self.vec_offsets.values().next() {
-            (offsets.ptr_offset, offsets.len_offset, offsets.cap_offset)
-        } else {
-            // Ultimate fallback if no Vec shapes were found
-            (0, 8, 16)
-        }
-    }
-
-    /// Check if an HIR type matches a Shape by comparing structural properties.
-    fn hir_type_matches_shape(&self, ty: &hir::Type, shape: &'static Shape) -> bool {
-        match ty {
-            hir::Type::Bool => shape.scalar_type() == Some(ScalarType::Bool),
-            hir::Type::Unit => shape.scalar_type() == Some(ScalarType::Unit),
-            hir::Type::Integer(kind) => match (kind.bits, kind.signedness) {
-                (8, hir::Signedness::Unsigned) => shape.scalar_type() == Some(ScalarType::U8),
-                (8, hir::Signedness::Signed) => shape.scalar_type() == Some(ScalarType::I8),
-                (16, hir::Signedness::Unsigned) => shape.scalar_type() == Some(ScalarType::U16),
-                (16, hir::Signedness::Signed) => shape.scalar_type() == Some(ScalarType::I16),
-                (32, hir::Signedness::Unsigned) => {
-                    matches!(
-                        shape.scalar_type(),
-                        Some(ScalarType::U32 | ScalarType::Char | ScalarType::F32)
-                    )
-                }
-                (32, hir::Signedness::Signed) => shape.scalar_type() == Some(ScalarType::I32),
-                (64, hir::Signedness::Unsigned) => {
-                    matches!(
-                        shape.scalar_type(),
-                        Some(ScalarType::U64 | ScalarType::USize | ScalarType::F64)
-                    )
-                }
-                (64, hir::Signedness::Signed) => {
-                    matches!(
-                        shape.scalar_type(),
-                        Some(ScalarType::I64 | ScalarType::ISize)
-                    )
-                }
-                _ => false,
-            },
-            hir::Type::Str { .. } => matches!(
-                shape.scalar_type(),
-                Some(ScalarType::Str | ScalarType::CowStr)
-            ),
-            hir::Type::Named { def, .. } => {
-                let type_def = &self.module.type_defs[*def];
-                // Direct name match
-                if shape.type_identifier == type_def.name {
-                    return true;
-                }
-                // Special case: HostStringRaw maps to String scalar type
-                if type_def.name == "HostStringRaw" {
-                    return shape.scalar_type() == Some(ScalarType::String);
-                }
-                // Special case: Bits128Raw maps to U128/I128
-                if type_def.name == "Bits128Raw" {
-                    return matches!(
-                        shape.scalar_type(),
-                        Some(ScalarType::U128 | ScalarType::I128)
-                    );
-                }
-                // Match by comparing the byte sizes
-                if let Some(size) = type_def.size {
-                    if let Ok(layout) = shape.layout.sized_layout() {
-                        return layout.size() == size as usize;
-                    }
-                }
-                false
-            }
-            _ => false,
-        }
-    }
-
     /// Check if an enum's variants match the Option pattern (None + Some).
     fn is_option_like_enum(&self, variants: &[hir::VariantDef]) -> bool {
         variants.len() == 2
             && variants.iter().any(|v| v.name == "None")
             && variants.iter().any(|v| v.name == "Some")
-    }
-
-    /// Recursively walk a Shape tree collecting OptionDef and VecOffsets entries.
-    fn collect_shape_defs(
-        shape: &'static Shape,
-        option_map: &mut Vec<(&'static Shape, OptionDef)>,
-        vec_map: &mut std::collections::HashMap<&'static str, crate::malum::VecOffsets>,
-    ) {
-        if let Some(opt_def) = get_option_def(shape) {
-            option_map.push((shape, *opt_def));
-        }
-        // Recurse into sub-shapes
-        match &shape.def {
-            Def::Scalar => {}
-            Def::List(list_def) => {
-                vec_map
-                    .entry(shape.type_identifier)
-                    .or_insert_with(|| crate::malum::discover_vec_offsets(list_def, shape));
-                Self::collect_shape_defs(list_def.t, option_map, vec_map);
-            }
-            Def::Array(array_def) => {
-                Self::collect_shape_defs(array_def.t, option_map, vec_map);
-            }
-            Def::Option(opt_def) => {
-                Self::collect_shape_defs(opt_def.t, option_map, vec_map);
-            }
-            _ => {
-                if let Type::User(UserType::Struct(struct_type)) = &shape.ty {
-                    for field in struct_type.fields {
-                        Self::collect_shape_defs(field.shape.get(), option_map, vec_map);
-                    }
-                } else if let Type::User(UserType::Enum(enum_type)) = &shape.ty {
-                    for variant in enum_type.variants {
-                        for field in variant.data.fields {
-                            Self::collect_shape_defs(field.shape.get(), option_map, vec_map);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Look up the OptionDef for an HIR type by matching the inner payload type
-    /// against the collected Shape-based option defs.
-    fn find_option_def(&self, ty: &hir::Type) -> Option<OptionDef> {
-        let hir::Type::Named { def, .. } = ty else {
-            return None;
-        };
-        let type_def = &self.module.type_defs[*def];
-        let hir::TypeDefKind::Enum { variants, .. } = &type_def.kind else {
-            return None;
-        };
-        // Get the "Some" variant's payload type to match against Shape inner types
-        let some_variant = variants.iter().find(|v| v.name == "Some")?;
-        let payload_ty = some_variant.fields.first().map(|f| &f.ty);
-
-        // If there's only one option def, use it
-        if self.option_defs.len() == 1 {
-            return Some(self.option_defs[0].1);
-        }
-
-        // Match by comparing the inner type's Shape type_identifier
-        // against the HIR payload type
-        if let Some(payload_ty) = payload_ty {
-            for (_shape, opt_def) in &self.option_defs {
-                if self.hir_type_matches_shape(payload_ty, opt_def.t) {
-                    return Some(*opt_def);
-                }
-            }
-        } else {
-            // Unit payload (Option<()>) — match by shape name
-            for (_shape, opt_def) in &self.option_defs {
-                if opt_def.t.type_identifier == "()" {
-                    return Some(*opt_def);
-                }
-            }
-        }
-
-        // Last resort: use the first one
-        self.option_defs.first().map(|(_, def)| *def)
     }
 
     /// Lower an Option-like variant write using init_fn from HIR variant annotations.
@@ -2005,24 +1804,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
             .find(|v| v.name == variant)
             .unwrap_or_else(|| panic!("missing Option variant {variant}"));
 
-        // Try to get init_fn from the HIR annotation first, fall back to Shape cache.
-        let init_fn_ptr = if let Some(ptr) = variant_def.init_fn {
-            ptr
-        } else {
-            // Fallback: look up from cached OptionDef (Shape-based).
-            let opt_def = self.find_option_def(ty).unwrap_or_else(|| {
-                panic!(
-                    "Option variant '{variant}' on '{}' has no init_fn annotation \
-                     and no OptionDef found in Shape cache",
-                    type_def.name
-                )
-            });
-            match variant {
-                "None" => opt_def.vtable.init_none as *const () as usize as u64,
-                "Some" => opt_def.vtable.init_some as *const () as usize as u64,
-                _ => panic!("unsupported Option variant {variant}"),
-            }
-        };
+        let init_fn_ptr = variant_def.init_fn.unwrap_or_else(|| {
+            panic!(
+                "Option variant '{variant}' on '{}' requires an init_fn annotation in HIR",
+                type_def.name
+            )
+        });
 
         let offset = offset as u32;
         match variant {
@@ -2150,11 +1937,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
     }
 }
 
-pub(crate) fn build_structural_hir_ir(
-    shape: &'static Shape,
-    module: &hir::Module,
-) -> crate::ir::IrFunc {
-    build_structural_hir_ir_impl(module, Some(shape))
+pub(crate) fn build_structural_hir_ir(module: &hir::Module) -> crate::ir::IrFunc {
+    build_structural_hir_ir_impl(module)
 }
 
 /// Lower HIR to IR without any facet Shape. All layout info must come from
@@ -2170,7 +1954,7 @@ pub fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
         .next()
         .expect("HIR module should contain at least one function");
     if function.destination_param().is_some() {
-        build_structural_hir_ir_impl(module, None)
+        build_structural_hir_ir_impl(module)
     } else {
         build_scalar_hir_ir(module, function)
     }
@@ -2461,9 +2245,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
             }
             hir::Expr::SliceData { .. } | hir::Expr::SliceLen { .. } => hir::Type::u(64),
             hir::Expr::Load { .. } => hir::Type::u(64),
-            other => panic!(
-                "infer_expr_type: cannot infer type of expression: {other:?}"
-            ),
+            other => panic!("infer_expr_type: cannot infer type of expression: {other:?}"),
         }
     }
 
@@ -2935,9 +2717,9 @@ impl<'a> ScalarHirIrLowerer<'a> {
             hir::CallTarget::Callable(id) => id,
         }];
         let func = match callable.name.as_str() {
-            "runtime.alloc_transient" => crate::ir::IntrinsicFn(
-                intrinsics::kajit_alloc_transient as *const () as usize,
-            ),
+            "runtime.alloc_transient" => {
+                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_transient as *const () as usize)
+            }
             "runtime.memcpy" => {
                 crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize)
             }
@@ -3028,10 +2810,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
     }
 }
 
-fn build_structural_hir_ir_impl(
-    module: &hir::Module,
-    shape: Option<&'static Shape>,
-) -> crate::ir::IrFunc {
+fn build_structural_hir_ir_impl(module: &hir::Module) -> crate::ir::IrFunc {
     let (_, function) = module
         .functions
         .iter()
@@ -3047,20 +2826,77 @@ fn build_structural_hir_ir_impl(
         .expect("structural HIR function should have a destination param")
         .ty;
 
-    let label = shape.map(|s| s.type_identifier).unwrap_or(&function.name);
-    let output_size = shape
-        .and_then(|s| s.layout.sized_layout().ok())
-        .map(|l| l.size())
-        .unwrap_or(0);
+    let label = &function.name;
+    let output_size = structural_hir_type_size(module, dest_ty);
     let mut builder = crate::ir::IrBuilder::new(label, output_size);
     // Structural path always needs the memory domain — load_from_addr/store_to_addr thread on it.
     let _ = builder.add_state_domain(crate::ir::MEMORY_STATE_DOMAIN_NAME);
     {
         let mut rb = builder.root_region();
-        let lowerer =
-            StructuralHirIrLowerer::new_with_optional_shape(&mut rb, module, function, shape);
+        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function);
         lowerer.lower_block(&mut rb, &function.body.statements, dest_local, dest_ty);
         rb.set_results(&[]);
     }
     builder.finish()
+}
+
+fn structural_hir_type_size(module: &hir::Module, ty: &hir::Type) -> usize {
+    match ty {
+        hir::Type::Unit => 0,
+        hir::Type::Bool => 1,
+        hir::Type::Integer(kind) => (kind.bits as usize) / 8,
+        hir::Type::Address { .. } | hir::Type::Handle { .. } => core::mem::size_of::<usize>(),
+        hir::Type::Str { .. } | hir::Type::Slice { .. } => core::mem::size_of::<usize>() * 2,
+        hir::Type::Array { element, len } => structural_hir_type_size(module, element) * len,
+        hir::Type::Named { def, .. } => {
+            let type_def = &module.type_defs[*def];
+            if let Some(size) = type_def.size {
+                return size as usize;
+            }
+            structural_hir_type_def_size(module, type_def)
+        }
+    }
+}
+
+fn structural_hir_type_def_size(module: &hir::Module, type_def: &hir::TypeDef) -> usize {
+    match &type_def.kind {
+        hir::TypeDefKind::Struct { fields } => {
+            let mut max_end = 0usize;
+            for field in fields {
+                let field_size = structural_hir_type_size(module, &field.ty);
+                if let Some(offset) = field.offset {
+                    max_end = max_end.max(offset as usize + field_size);
+                } else {
+                    max_end += field_size;
+                }
+            }
+            max_end
+        }
+        hir::TypeDefKind::Enum {
+            variants,
+            discriminant_width,
+        } => {
+            let disc_size = discriminant_width.unwrap_or(1) as usize;
+            let max_payload = variants
+                .iter()
+                .map(|variant| {
+                    variant
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            let field_size = structural_hir_type_size(module, &field.ty);
+                            if let Some(offset) = field.offset {
+                                offset as usize + field_size
+                            } else {
+                                field_size
+                            }
+                        })
+                        .max()
+                        .unwrap_or(0)
+                })
+                .max()
+                .unwrap_or(0);
+            disc_size + max_payload
+        }
+    }
 }

@@ -1,6 +1,5 @@
 ---
 source: kajit/src/compiler/tests/hir_to_ir.rs
-assertion_line: 45
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
@@ -11,7 +10,7 @@ state_domains {
 scopes {
   s0 = lambda_body(@0)
 }
-lambda @0 @s0 (shape: "const_number") {
+lambda @0 @s0 (shape: "const_number", output_size: 4) {
   region @s0 {
     args: [%cs, %os, %s2]
     n1 = Const(0x2a) [] -> [v0]

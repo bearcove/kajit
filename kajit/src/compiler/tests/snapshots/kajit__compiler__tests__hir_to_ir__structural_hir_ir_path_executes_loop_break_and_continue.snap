@@ -27,7 +27,7 @@ scopes {
   s16 = gamma_branch(0) parent s1
   s17 = gamma_branch(1) parent s1
 }
-lambda @0 @s0 (shape: "loop_break_continue") {
+lambda @0 @s0 (shape: "loop_break_continue", output_size: 4) {
   region @s0 {
     args: [%cs, %os, %s2]
     n1 = Const(0x0) [] -> [v0]

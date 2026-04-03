@@ -198,7 +198,8 @@ pub(crate) fn compile_structural_hir_decoder(
     shape: &'static Shape,
     module: &hir::Module,
 ) -> CompiledDecoder {
-    let mut func = build_structural_hir_ir(shape, module);
+    let _ = shape;
+    let mut func = build_structural_hir_ir(module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     compile_linear_ir_decoder(&linear, false)
@@ -2360,7 +2361,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
 #[ignore]
 fn postcard_option_scalar_matches_differential_harness() {
     let module = build_postcard_decoder_hir(<MaybeCount>::SHAPE);
-    let mut func = build_structural_hir_ir(<MaybeCount>::SHAPE, &module);
+    let mut func = build_structural_hir_ir(&module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     let output_size = std::mem::size_of::<MaybeCount>();

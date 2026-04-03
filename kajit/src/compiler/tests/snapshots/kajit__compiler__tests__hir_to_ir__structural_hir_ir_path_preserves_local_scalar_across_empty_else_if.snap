@@ -12,7 +12,7 @@ scopes {
   s1 = gamma_branch(0) parent s0
   s2 = gamma_branch(1) parent s0
 }
-lambda @0 @s0 (shape: "local_across_if") {
+lambda @0 @s0 (shape: "local_across_if", output_size: 4) {
   region @s0 {
     args: [%cs, %os, %s2]
     n1 = Const(0x2) [] -> [v0]

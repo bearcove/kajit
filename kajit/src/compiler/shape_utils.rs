@@ -6,9 +6,7 @@
 use super::*;
 
 // Re-export everything from kajit-format's shape_utils.
-pub(super) use kajit_format::{
-    get_option_def, instantiated_shape_symbol_key, is_string_like_scalar,
-};
+pub(super) use kajit_format::{instantiated_shape_symbol_key, is_string_like_scalar};
 
 /// Collect fields using kajit's intrinsic trampolines for default resolution.
 pub(super) fn collect_fields(shape: &'static Shape) -> (Vec<FieldEmitInfo>, Vec<SkippedFieldInfo>) {
