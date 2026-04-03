@@ -3033,12 +3033,17 @@ pub fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
                     vec![hir::GenericArg::Region(lowerer.input_region)],
                 ),
                 kind: hir::LocalKind::Param,
+                binding: Some(hir::ParameterBinding::RuntimeCursor(hir::CursorBinding {
+                    bytes_field: "bytes".to_owned(),
+                    pos_field: "pos".to_owned(),
+                })),
             },
             hir::Parameter {
                 local: out_local,
                 name: "out".to_owned(),
                 ty: root_type,
                 kind: hir::LocalKind::Destination,
+                binding: None,
             },
         ],
         locals,

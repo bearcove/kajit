@@ -398,6 +398,17 @@ fn domain_access<'src>() -> impl Parser<'src, &'src str, DomainAccess, Extra<'sr
 }
 
 fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>> + Clone {
+    let runtime_intrinsic = choice((
+        token("alloc_transient").to(kajit_hir::RuntimeIntrinsic::AllocTransient),
+        token("alloc_persistent").to(kajit_hir::RuntimeIntrinsic::AllocPersistent),
+        token("vec_from_raw_parts").to(kajit_hir::RuntimeIntrinsic::VecFromRawParts),
+        token("validate_utf8_range").to(kajit_hir::RuntimeIntrinsic::ValidateUtf8Range),
+        token("string_validate_alloc_copy")
+            .to(kajit_hir::RuntimeIntrinsic::StringValidateAllocCopy),
+        token("cursor_restore").to(kajit_hir::RuntimeIntrinsic::CursorRestore),
+        token("memcpy").to(kajit_hir::RuntimeIntrinsic::Memcpy),
+        token("free_transient").to(kajit_hir::RuntimeIntrinsic::FreeTransient),
+    ));
     token("callable")
         .ignore_then(callable_id())
         .then(choice((
@@ -407,6 +418,13 @@ fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>>
         .then(quoted_string())
         .then_ignore(token("{"))
         .then(token("params").ignore_then(list_of(ty())))
+        .then(
+            token("intrinsic")
+                .ignore_then(runtime_intrinsic)
+                .map(Some)
+                .or_not()
+                .map(|v| v.flatten()),
+        )
         .then(token("returns").ignore_then(list_of(ty())))
         .then(token("effect").ignore_then(effect_class()))
         .then(
@@ -446,6 +464,7 @@ fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>>
             let (data, domain_effects) = data;
             let (data, effect_class) = data;
             let (data, returns) = data;
+            let (data, intrinsic) = data;
             let (data, params) = data;
             let ((id, kind), name) = data;
             ParsedCallable {
@@ -453,7 +472,7 @@ fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>>
                 callable: CallableSpec {
                     kind,
                     name,
-                    intrinsic: None,
+                    intrinsic,
                     signature: CallSignature {
                         params,
                         returns,
@@ -499,6 +518,51 @@ fn local_decl<'src>() -> impl Parser<'src, &'src str, LocalDecl, Extra<'src>> + 
             ty,
             kind,
         })
+}
+
+fn parameter_binding<'src>()
+-> impl Parser<'src, &'src str, Option<kajit_hir::ParameterBinding>, Extra<'src>> + Clone {
+    choice((
+        token("bind")
+            .ignore_then(token("runtime_cursor"))
+            .ignore_then(token("("))
+            .ignore_then(token("bytes"))
+            .ignore_then(token("="))
+            .ignore_then(quoted_string())
+            .then_ignore(token(","))
+            .then_ignore(token("pos"))
+            .then_ignore(token("="))
+            .then(quoted_string())
+            .then_ignore(token(")"))
+            .map(|(bytes_field, pos_field)| {
+                Some(kajit_hir::ParameterBinding::RuntimeCursor(
+                    kajit_hir::CursorBinding {
+                        bytes_field,
+                        pos_field,
+                    },
+                ))
+            }),
+        empty().to(None),
+    ))
+}
+
+fn parameter_decl<'src>() -> impl Parser<'src, &'src str, kajit_hir::Parameter, Extra<'src>> + Clone
+{
+    local_id()
+        .then(local_kind())
+        .then(quoted_string())
+        .then_ignore(token(":"))
+        .then(ty())
+        .then(parameter_binding())
+        .map(
+            |((((local, kind), name), ty), binding)| kajit_hir::Parameter {
+                local,
+                name,
+                ty,
+                kind,
+                binding,
+            },
+        )
 }
 
 fn scope<'src>() -> impl Parser<'src, &'src str, Scope, Extra<'src>> + Clone {
@@ -931,7 +995,7 @@ fn function<'src>() -> impl Parser<'src, &'src str, ParsedFunction, Extra<'src>>
         .then(
             token("params").ignore_then(
                 token("[")
-                    .ignore_then(local_decl().repeated().collect::<Vec<_>>())
+                    .ignore_then(parameter_decl().repeated().collect::<Vec<_>>())
                     .then_ignore(token("]")),
             ),
         )
@@ -966,15 +1030,7 @@ fn function<'src>() -> impl Parser<'src, &'src str, ParsedFunction, Extra<'src>>
                         name,
                         region_params,
                         store_params,
-                        params: params
-                            .into_iter()
-                            .map(|local| kajit_hir::Parameter {
-                                local: local.local,
-                                name: local.name,
-                                ty: local.ty,
-                                kind: local.kind,
-                            })
-                            .collect(),
+                        params,
                         locals,
                         return_type,
                         scopes,
@@ -1207,6 +1263,7 @@ mod tests {
         let read_tag = module.add_callable(CallableSpec {
             kind: CallableKind::Builtin,
             name: "postcard.read_option_tag".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![Type::named(cursor, vec![GenericArg::Region(r_input)])],
                 returns: vec![Type::bool()],
@@ -1224,6 +1281,7 @@ mod tests {
         let read_str = module.add_callable(CallableSpec {
             kind: CallableKind::Builtin,
             name: "postcard.read_str".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![Type::named(cursor, vec![GenericArg::Region(r_input)])],
                 returns: vec![Type::str(r_input)],
@@ -1249,12 +1307,19 @@ mod tests {
                     name: "cursor".to_owned(),
                     ty: Type::named(cursor, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Param,
+                    binding: Some(kajit_hir::ParameterBinding::RuntimeCursor(
+                        kajit_hir::CursorBinding {
+                            bytes_field: "bytes".to_owned(),
+                            pos_field: "pos".to_owned(),
+                        },
+                    )),
                 },
                 kajit_hir::Parameter {
                     local: LocalId::new(1),
                     name: "out".to_owned(),
                     ty: Type::named(record, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Destination,
+                    binding: None,
                 },
             ],
             locals: vec![
@@ -1517,6 +1582,7 @@ hir_module {
                 name: "addr".to_owned(),
                 ty: Type::persistent_addr(),
                 kind: LocalKind::Param,
+                binding: None,
             }],
             locals: vec![LocalDecl {
                 local: LocalId::new(1),
@@ -1634,6 +1700,7 @@ hir_module {
                 name: "x".to_owned(),
                 ty: Type::u(32),
                 kind: LocalKind::Param,
+                binding: None,
             }],
             locals: vec![LocalDecl {
                 local: LocalId::new(1),
