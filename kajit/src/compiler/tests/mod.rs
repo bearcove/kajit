@@ -297,15 +297,61 @@ fn postcard_hir_models_owned_output_strings() {
     let module = build_postcard_decoder_hir(<OwnedHeader>::SHAPE);
     let (_, function) = module.functions.iter().next().unwrap();
 
+    fn block_contains_call_named(module: &hir::Module, block: &hir::Block, name: &str) -> bool {
+        block.statements.iter().any(|stmt| match &stmt.kind {
+            hir::StmtKind::Init {
+                value:
+                    hir::Expr::Call(hir::CallExpr {
+                        target: hir::CallTarget::Callable(callable_id),
+                        ..
+                    }),
+                ..
+            }
+            | hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                target: hir::CallTarget::Callable(callable_id),
+                ..
+            })) => module.callables[*callable_id].name == name,
+            hir::StmtKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                block_contains_call_named(module, then_block, name)
+                    || else_block
+                        .as_ref()
+                        .is_some_and(|block| block_contains_call_named(module, block, name))
+            }
+            hir::StmtKind::Loop { body, .. } => block_contains_call_named(module, body, name),
+            hir::StmtKind::Match { arms, .. } => arms
+                .iter()
+                .any(|arm| block_contains_call_named(module, &arm.body, name)),
+            _ => false,
+        })
+    }
+
     assert!(
         module
             .callable_named("runtime.string_validate_alloc_copy")
-            .is_some(),
-        "owned string lowering should install the raw string allocation helper"
+            .is_none(),
+        "owned string lowering should not rely on the combined string helper"
     );
     assert!(
         module.callable_named("postcard.read_str").is_none(),
         "owned string lowering should not use postcard.read_str"
+    );
+    assert!(
+        module
+            .callable_named("runtime.validate_utf8_range")
+            .is_some(),
+        "owned string lowering should validate UTF-8 explicitly"
+    );
+    assert!(
+        module.callable_named("runtime.alloc_persistent").is_some(),
+        "owned string lowering should allocate string storage explicitly"
+    );
+    assert!(
+        module.callable_named("runtime.memcpy").is_some(),
+        "owned string lowering should copy string bytes explicitly"
     );
     assert!(
         function
@@ -315,17 +361,16 @@ fn postcard_hir_models_owned_output_strings() {
         "owned string lowering should allocate a persistent data pointer local"
     );
     assert!(
-        function.body.statements.iter().any(|stmt| matches!(
-            &stmt.kind,
-            hir::StmtKind::Init {
-                value: hir::Expr::Call(hir::CallExpr {
-                    target: hir::CallTarget::Callable(callable_id),
-                    ..
-                }),
-                ..
-            } if module.callables[*callable_id].name == "runtime.string_validate_alloc_copy"
-        )),
-        "owned string lowering should compute string storage through the lean helper"
+        block_contains_call_named(&module, &function.body, "runtime.validate_utf8_range"),
+        "owned string lowering should validate the borrowed byte range"
+    );
+    assert!(
+        block_contains_call_named(&module, &function.body, "runtime.alloc_persistent"),
+        "owned string lowering should allocate storage explicitly"
+    );
+    assert!(
+        block_contains_call_named(&module, &function.body, "runtime.memcpy"),
+        "owned string lowering should copy string bytes explicitly"
     );
 }
 
