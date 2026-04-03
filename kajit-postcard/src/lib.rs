@@ -471,6 +471,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Builtin,
             name: name.to_owned(),
+            intrinsic: None,
             signature: hir::CallSignature {
                 params: vec![hir::Type::named(
                     self.cursor_type,
@@ -1493,6 +1494,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::ValidateUtf8Range),
             signature: hir::CallSignature {
                 params: vec![hir::Type::u(64), hir::Type::u(32)],
                 returns: vec![],
@@ -1521,6 +1523,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::CursorRestore),
             signature: hir::CallSignature {
                 params: vec![hir::Type::u(64)],
                 returns: vec![],
@@ -1551,6 +1554,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::StringValidateAllocCopy),
             signature: hir::CallSignature {
                 params: vec![hir::Type::u(64), hir::Type::u(32)],
                 returns: vec![hir::Type::persistent_addr()],
@@ -1587,6 +1591,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::AllocPersistent),
             signature: hir::CallSignature {
                 params: vec![hir::Type::u(64), hir::Type::u(64)],
                 returns: vec![hir::Type::persistent_addr()],
@@ -1614,6 +1619,7 @@ impl PostcardHirLowerer {
         let callable = hir::CallableSpec {
             kind: hir::CallableKind::Host,
             name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::VecFromRawParts),
             signature: hir::CallSignature {
                 params: vec![
                     hir::Type::persistent_addr(),
