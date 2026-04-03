@@ -399,6 +399,8 @@ fn domain_access<'src>() -> impl Parser<'src, &'src str, DomainAccess, Extra<'sr
 
 fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>> + Clone {
     let runtime_intrinsic = choice((
+        token("save_cursor").to(kajit_hir::RuntimeIntrinsic::SaveCursor),
+        token("save_input_end").to(kajit_hir::RuntimeIntrinsic::SaveInputEnd),
         token("alloc_transient").to(kajit_hir::RuntimeIntrinsic::AllocTransient),
         token("alloc_persistent").to(kajit_hir::RuntimeIntrinsic::AllocPersistent),
         token("vec_from_raw_parts").to(kajit_hir::RuntimeIntrinsic::VecFromRawParts),

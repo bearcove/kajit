@@ -269,6 +269,8 @@ fn fmt_callables(module: &Module, f: &mut fmt::Formatter<'_>, indent: usize) -> 
 
 fn fmt_runtime_intrinsic(intrinsic: RuntimeIntrinsic) -> &'static str {
     match intrinsic {
+        RuntimeIntrinsic::SaveCursor => "save_cursor",
+        RuntimeIntrinsic::SaveInputEnd => "save_input_end",
         RuntimeIntrinsic::AllocTransient => "alloc_transient",
         RuntimeIntrinsic::AllocPersistent => "alloc_persistent",
         RuntimeIntrinsic::VecFromRawParts => "vec_from_raw_parts",

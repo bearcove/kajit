@@ -566,6 +566,65 @@ impl PostcardHirLowerer {
         });
     }
 
+    fn push_cursor_shadow_init(
+        &mut self,
+        statements: &mut Vec<hir::Stmt>,
+        cursor_local: hir::LocalId,
+    ) {
+        let save_cursor = self.ensure_runtime_save_cursor();
+        let save_input_end = self.ensure_runtime_save_input_end();
+
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Field {
+                    base: Box::new(hir::Place::Field {
+                        base: Box::new(hir::Place::Local(cursor_local)),
+                        field: "bytes".to_owned(),
+                    }),
+                    field: "ptr".to_owned(),
+                },
+                value: hir::Expr::Call(hir::CallExpr {
+                    target: hir::CallTarget::Callable(save_cursor),
+                    args: vec![],
+                }),
+            },
+        });
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Field {
+                    base: Box::new(hir::Place::Field {
+                        base: Box::new(hir::Place::Local(cursor_local)),
+                        field: "bytes".to_owned(),
+                    }),
+                    field: "len".to_owned(),
+                },
+                value: hir::Expr::Binary {
+                    op: hir::BinaryOp::Sub,
+                    lhs: Box::new(hir::Expr::Call(hir::CallExpr {
+                        target: hir::CallTarget::Callable(save_input_end),
+                        args: vec![],
+                    })),
+                    rhs: Box::new(hir::Expr::Field {
+                        base: Box::new(self.cursor_bytes_expr(cursor_local)),
+                        field: "ptr".to_owned(),
+                    }),
+                },
+            },
+        });
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Field {
+                    base: Box::new(hir::Place::Local(cursor_local)),
+                    field: "pos".to_owned(),
+                },
+                value: hir::Expr::Literal(hir::Literal::Integer(0)),
+            },
+        });
+    }
+
     fn push_cursor_bounds_check(
         &mut self,
         statements: &mut Vec<hir::Stmt>,
@@ -1508,6 +1567,64 @@ impl PostcardHirLowerer {
                 safety: hir::CallSafety::OpaqueHost,
             },
             docs: Some("Validate that a borrowed byte range is UTF-8.".to_owned()),
+        };
+        let callable_id = self.module.add_callable(callable);
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
+    fn ensure_runtime_save_cursor(&mut self) -> hir::CallableId {
+        const NAME: &str = "runtime.save_cursor";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+
+        let callable = hir::CallableSpec {
+            kind: hir::CallableKind::Host,
+            name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::SaveCursor),
+            signature: hir::CallSignature {
+                params: vec![],
+                returns: vec![hir::Type::u(64)],
+                effect_class: hir::EffectClass::Reads,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "input".to_owned(),
+                    access: hir::DomainAccess::Read,
+                }],
+                control: hir::ControlTransfer::Returns,
+                capabilities: vec!["runtime.cursor".to_owned()],
+                safety: hir::CallSafety::OpaqueHost,
+            },
+            docs: Some("Read the current absolute decoder cursor address.".to_owned()),
+        };
+        let callable_id = self.module.add_callable(callable);
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
+    fn ensure_runtime_save_input_end(&mut self) -> hir::CallableId {
+        const NAME: &str = "runtime.save_input_end";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+
+        let callable = hir::CallableSpec {
+            kind: hir::CallableKind::Host,
+            name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::SaveInputEnd),
+            signature: hir::CallSignature {
+                params: vec![],
+                returns: vec![hir::Type::u(64)],
+                effect_class: hir::EffectClass::Reads,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "input".to_owned(),
+                    access: hir::DomainAccess::Read,
+                }],
+                control: hir::ControlTransfer::Returns,
+                capabilities: vec!["runtime.cursor".to_owned()],
+                safety: hir::CallSafety::OpaqueHost,
+            },
+            docs: Some("Read the absolute end address of the decoder input.".to_owned()),
         };
         let callable_id = self.module.add_callable(callable);
         self.callables_by_name.insert(NAME, callable_id);
@@ -3008,6 +3125,7 @@ pub fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
     let out_local = lowerer.next_local();
     let root_scope = hir::ScopeId::new(0);
     let mut statements = Vec::new();
+    lowerer.push_cursor_shadow_init(&mut statements, cursor_local);
     lowerer.lower_shape_into_place(
         &mut statements,
         cursor_local,

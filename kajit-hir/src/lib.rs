@@ -1633,6 +1633,8 @@ pub enum CallableKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeIntrinsic {
+    SaveCursor,
+    SaveInputEnd,
     AllocTransient,
     AllocPersistent,
     VecFromRawParts,
