@@ -1669,6 +1669,64 @@ impl PostcardHirLowerer {
         callable_id
     }
 
+    fn ensure_runtime_option_init_none(&mut self) -> hir::CallableId {
+        const NAME: &str = "runtime.option_init_none";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+        let callable = hir::CallableSpec {
+            kind: hir::CallableKind::Host,
+            name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::OptionInitNone),
+            signature: hir::CallSignature {
+                params: vec![hir::Type::u(64), hir::Type::u(64)],
+                returns: vec![],
+                effect_class: hir::EffectClass::Barrier,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "output".to_owned(),
+                    access: hir::DomainAccess::Mutate,
+                }],
+                control: hir::ControlTransfer::Returns,
+                capabilities: vec!["runtime.option".to_owned()],
+                safety: hir::CallSafety::OpaqueHost,
+            },
+            docs: Some("Initialize an Option destination with None via its vtable.".to_owned()),
+        };
+        let callable_id = self.module.add_callable(callable);
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
+    fn ensure_runtime_option_init_some(&mut self) -> hir::CallableId {
+        const NAME: &str = "runtime.option_init_some";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+        let callable = hir::CallableSpec {
+            kind: hir::CallableKind::Host,
+            name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::OptionInitSome),
+            signature: hir::CallSignature {
+                params: vec![hir::Type::u(64), hir::Type::u(64), hir::Type::u(64)],
+                returns: vec![],
+                effect_class: hir::EffectClass::Barrier,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "output".to_owned(),
+                    access: hir::DomainAccess::Mutate,
+                }],
+                control: hir::ControlTransfer::Returns,
+                capabilities: vec!["runtime.option".to_owned()],
+                safety: hir::CallSafety::OpaqueHost,
+            },
+            docs: Some(
+                "Initialize an Option destination with Some(payload) via its vtable.".to_owned(),
+            ),
+        };
+        let callable_id = self.module.add_callable(callable);
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
     fn ensure_runtime_string_validate_alloc_copy(&mut self) -> hir::CallableId {
         const NAME: &str = "runtime.string_validate_alloc_copy";
         if let Some(existing) = self.callables_by_name.get(NAME).copied() {
@@ -2818,12 +2876,13 @@ impl PostcardHirLowerer {
         }
 
         if let Some(opt_def) = get_option_def(shape) {
-            let option_def = self.ensure_type_def(shape);
             let tag_local = self.alloc_local(
                 format!("option_is_some_{}", self.locals.len()),
                 hir::Type::bool(),
                 hir::LocalKind::Temp,
             );
+            let option_init_none = self.ensure_runtime_option_init_none();
+            let option_init_some = self.ensure_runtime_option_init_some();
             self.lower_postcard_option_tag_into_local(statements, cursor_local, tag_local);
 
             let mut then_block = hir::Block {
@@ -2832,15 +2891,29 @@ impl PostcardHirLowerer {
             };
 
             if is_unit(opt_def.t) {
+                let payload_local = self.alloc_local(
+                    format!("option_value_{}", self.locals.len()),
+                    hir::Type::unit(),
+                    hir::LocalKind::Temp,
+                );
                 self.push_init(
                     &mut then_block.statements,
-                    place.clone(),
-                    hir::Expr::Variant {
-                        def: option_def,
-                        variant: "Some".to_owned(),
-                        fields: vec![("value".to_owned(), hir::Expr::Literal(hir::Literal::Unit))],
-                    },
+                    hir::Place::Local(payload_local),
+                    hir::Expr::Literal(hir::Literal::Unit),
                 );
+                then_block.statements.push(hir::Stmt {
+                    id: self.next_stmt_id(),
+                    kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                        target: hir::CallTarget::Callable(option_init_some),
+                        args: vec![
+                            hir::Expr::Literal(hir::Literal::Integer(
+                                opt_def.vtable.init_some as *const () as usize as u64,
+                            )),
+                            hir::Expr::AddrOf(Box::new(place.clone())),
+                            hir::Expr::AddrOf(Box::new(hir::Place::Local(payload_local))),
+                        ],
+                    })),
+                });
             } else {
                 let payload_ty = self.lower_type(opt_def.t);
                 let payload_local = self.alloc_local(
@@ -2854,30 +2927,37 @@ impl PostcardHirLowerer {
                     hir::Place::Local(payload_local),
                     opt_def.t,
                 );
-                self.push_init(
-                    &mut then_block.statements,
-                    place.clone(),
-                    hir::Expr::Variant {
-                        def: option_def,
-                        variant: "Some".to_owned(),
-                        fields: vec![("value".to_owned(), hir::Expr::Local(payload_local))],
-                    },
-                );
+                then_block.statements.push(hir::Stmt {
+                    id: self.next_stmt_id(),
+                    kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                        target: hir::CallTarget::Callable(option_init_some),
+                        args: vec![
+                            hir::Expr::Literal(hir::Literal::Integer(
+                                opt_def.vtable.init_some as *const () as usize as u64,
+                            )),
+                            hir::Expr::AddrOf(Box::new(place.clone())),
+                            hir::Expr::AddrOf(Box::new(hir::Place::Local(payload_local))),
+                        ],
+                    })),
+                });
             }
 
             let mut else_block = hir::Block {
                 scope: hir::ScopeId::new(0),
                 statements: Vec::new(),
             };
-            self.push_init(
-                &mut else_block.statements,
-                place,
-                hir::Expr::Variant {
-                    def: option_def,
-                    variant: "None".to_owned(),
-                    fields: Vec::new(),
-                },
-            );
+            else_block.statements.push(hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                    target: hir::CallTarget::Callable(option_init_none),
+                    args: vec![
+                        hir::Expr::Literal(hir::Literal::Integer(
+                            opt_def.vtable.init_none as *const () as usize as u64,
+                        )),
+                        hir::Expr::AddrOf(Box::new(place)),
+                    ],
+                })),
+            });
 
             statements.push(hir::Stmt {
                 id: self.next_stmt_id(),

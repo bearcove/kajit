@@ -454,30 +454,28 @@ fn postcard_hir_models_option_borrowed_fields() {
         "borrowed option payload should validate UTF-8 explicitly"
     );
 
-    let value = then_block
-            .statements
-            .iter()
-            .find_map(|stmt| match &stmt.kind {
-                hir::StmtKind::Init { value, .. }
-                    if matches!(value, hir::Expr::Variant { variant, .. } if variant == "Some") =>
-                {
-                    Some(value)
-                }
-                _ => None,
-            })
-            .expect("expected Some variant init");
-    let hir::Expr::Variant {
-        def,
-        variant,
-        fields,
-    } = value
-    else {
-        panic!("expected Some variant expression");
+    let (some_args, some_callable) = then_block
+        .statements
+        .iter()
+        .find_map(|stmt| match &stmt.kind {
+            hir::StmtKind::Expr(hir::Expr::Call(call)) => {
+                let hir::CallTarget::Callable(callable_id) = call.target;
+                (module.callables[callable_id].name == "runtime.option_init_some")
+                    .then_some((&call.args, callable_id))
+            }
+            _ => None,
+        })
+        .expect("expected explicit Option::Some init call");
+    assert_eq!(
+        module.callables[some_callable].intrinsic,
+        Some(hir::RuntimeIntrinsic::OptionInitSome)
+    );
+    assert_eq!(some_args.len(), 3);
+    let hir::Expr::AddrOf(payload_place) = &some_args[2] else {
+        panic!("expected Some payload addr");
     };
-    assert_eq!(variant, "Some");
-    assert_eq!(fields.len(), 1);
-    let hir::Expr::Local(payload_local) = &fields[0].1 else {
-        panic!("expected Some variant payload local");
+    let hir::Place::Local(payload_local) = &**payload_place else {
+        panic!("expected Some payload local");
     };
     assert_eq!(
         function
@@ -489,33 +487,23 @@ fn postcard_hir_models_option_borrowed_fields() {
         *payload_local
     );
 
-    let hir::TypeDefKind::Enum { variants, .. } = &module.type_defs[*def].kind else {
-        panic!("expected Option HIR enum type");
-    };
-    assert_eq!(variants[0].name, "None");
-    assert_eq!(variants[1].name, "Some");
-    assert_eq!(variants[1].fields[0].ty, hir::Type::str(input_region));
-
-    let value = else_block
-            .statements
-            .iter()
-            .find_map(|stmt| match &stmt.kind {
-                hir::StmtKind::Init { value, .. }
-                    if matches!(value, hir::Expr::Variant { variant, .. } if variant == "None") =>
-                {
-                    Some(value)
-                }
-                _ => None,
-            })
-            .expect("expected None variant init");
-    let hir::Expr::Variant {
-        variant, fields, ..
-    } = value
-    else {
-        panic!("expected None variant expression");
-    };
-    assert_eq!(variant, "None");
-    assert!(fields.is_empty());
+    let (none_args, none_callable) = else_block
+        .statements
+        .iter()
+        .find_map(|stmt| match &stmt.kind {
+            hir::StmtKind::Expr(hir::Expr::Call(call)) => {
+                let hir::CallTarget::Callable(callable_id) = call.target;
+                (module.callables[callable_id].name == "runtime.option_init_none")
+                    .then_some((&call.args, callable_id))
+            }
+            _ => None,
+        })
+        .expect("expected explicit Option::None init call");
+    assert_eq!(
+        module.callables[none_callable].intrinsic,
+        Some(hir::RuntimeIntrinsic::OptionInitNone)
+    );
+    assert_eq!(none_args.len(), 2);
 }
 
 // pre-existing: HIR round-trip mismatch on max_iterations

@@ -970,6 +970,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let slot = self.local_slots[local].base_slot;
                 rb.read_from_slot(slot)
             }
+            hir::Expr::AddrOf(place) => self.lower_place_addr(rb, place, dest_local, dest_ty),
             hir::Expr::Load { addr, width } => {
                 let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_ty);
                 rb.load_from_addr(addr, self.ir_width_for_memory_width(*width))
@@ -1073,16 +1074,37 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_local: hir::LocalId,
         dest_ty: &'a hir::Type,
     ) {
-        let args = call
-            .args
-            .iter()
-            .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
-            .collect::<Vec<_>>();
-        let func = match self.callable_intrinsic(call) {
+        match self.callable_intrinsic(call) {
+            Some(hir::RuntimeIntrinsic::OptionInitNone) => {
+                self.lower_option_init_none_call(rb, call, dest_local, dest_ty);
+                return;
+            }
+            Some(hir::RuntimeIntrinsic::OptionInitSome) => {
+                self.lower_option_init_some_call(rb, call, dest_local, dest_ty);
+                return;
+            }
             Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
-                crate::ir::IntrinsicFn(intrinsics::kajit_validate_utf8_range as *const () as usize)
+                let args = call
+                    .args
+                    .iter()
+                    .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
+                    .collect::<Vec<_>>();
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_validate_utf8_range as *const () as usize,
+                    ),
+                    &args,
+                    0,
+                    false,
+                );
+                return;
             }
             Some(hir::RuntimeIntrinsic::CursorRestore) => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
+                    .collect::<Vec<_>>();
                 assert_eq!(
                     args.len(),
                     1,
@@ -1095,8 +1117,80 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 "unsupported structural HIR effect call {} ({other:?})",
                 self.callable_name(call)
             ),
-        };
-        rb.call_intrinsic(func, &args, 0, false);
+        }
+    }
+
+    fn lower_option_init_none_call(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) {
+        assert_eq!(
+            call.args.len(),
+            2,
+            "runtime.option_init_none expects init_fn and out addr"
+        );
+        let init_fn = self.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
+        if let hir::Expr::AddrOf(place) = &call.args[1] {
+            match self.resolve_place(place, dest_local, dest_ty) {
+                ResolvedStructuralPlace::Destination { offset, .. } => {
+                    rb.call_intrinsic(
+                        crate::ir::IntrinsicFn(
+                            intrinsics::kajit_option_init_none_ctx as *const () as usize,
+                        ),
+                        &[init_fn],
+                        offset as u32,
+                        false,
+                    );
+                    return;
+                }
+                ResolvedStructuralPlace::Local { .. } => {}
+            }
+        }
+        let out_addr = self.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let _ = rb.call_effect(
+            crate::ir::IntrinsicFn(intrinsics::kajit_option_init_none as *const () as usize),
+            &[init_fn, out_addr],
+        );
+    }
+
+    fn lower_option_init_some_call(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        call: &hir::CallExpr,
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) {
+        assert_eq!(
+            call.args.len(),
+            3,
+            "runtime.option_init_some expects init_fn, out addr, and payload addr"
+        );
+        let init_fn = self.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
+        let payload_addr = self.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
+        if let hir::Expr::AddrOf(place) = &call.args[1] {
+            match self.resolve_place(place, dest_local, dest_ty) {
+                ResolvedStructuralPlace::Destination { offset, .. } => {
+                    rb.call_intrinsic(
+                        crate::ir::IntrinsicFn(
+                            intrinsics::kajit_option_init_some_ctx as *const () as usize,
+                        ),
+                        &[init_fn, payload_addr],
+                        offset as u32,
+                        false,
+                    );
+                    return;
+                }
+                ResolvedStructuralPlace::Local { .. } => {}
+            }
+        }
+        let out_addr = self.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let _ = rb.call_effect(
+            crate::ir::IntrinsicFn(intrinsics::kajit_option_init_some as *const () as usize),
+            &[init_fn, out_addr, payload_addr],
+        );
     }
 
     fn expr_to_place(&self, expr: &hir::Expr) -> hir::Place {
@@ -1192,6 +1286,39 @@ impl<'a> StructuralHirIrLowerer<'a> {
             ResolvedDynamicIndex::Local { ty, addr } => {
                 let width = self.scalar_width_for_hir_type(ty);
                 rb.load_from_addr(addr, width)
+            }
+        }
+    }
+
+    fn lower_place_addr(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        place: &hir::Place,
+        dest_local: hir::LocalId,
+        dest_ty: &'a hir::Type,
+    ) -> crate::ir::PortSource {
+        if let hir::Place::Index { base, index } = place
+            && !matches!(**index, hir::Expr::Literal(hir::Literal::Integer(_)))
+        {
+            let resolved = self.lower_dynamic_index_addr(rb, base, index, dest_local, dest_ty);
+            return match resolved {
+                ResolvedDynamicIndex::Destination { addr, .. }
+                | ResolvedDynamicIndex::Local { addr, .. } => addr,
+            };
+        }
+
+        match self.resolve_place(place, dest_local, dest_ty) {
+            ResolvedStructuralPlace::Destination { offset, .. } => {
+                let base = rb.save_out_ptr();
+                self.add_byte_offset(rb, base, offset)
+            }
+            ResolvedStructuralPlace::Local {
+                ty,
+                storage,
+                slot_offset,
+            } => {
+                let num_slots = Self::slot_count_for_type(self.module, ty) as u32;
+                rb.slot_addr(Self::slot_at(storage, slot_offset), num_slots)
             }
         }
     }

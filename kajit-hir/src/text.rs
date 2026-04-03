@@ -271,6 +271,8 @@ fn fmt_runtime_intrinsic(intrinsic: RuntimeIntrinsic) -> &'static str {
     match intrinsic {
         RuntimeIntrinsic::SaveCursor => "save_cursor",
         RuntimeIntrinsic::SaveInputEnd => "save_input_end",
+        RuntimeIntrinsic::OptionInitNone => "option_init_none",
+        RuntimeIntrinsic::OptionInitSome => "option_init_some",
         RuntimeIntrinsic::AllocTransient => "alloc_transient",
         RuntimeIntrinsic::AllocPersistent => "alloc_persistent",
         RuntimeIntrinsic::VecFromRawParts => "vec_from_raw_parts",
@@ -775,6 +777,14 @@ impl fmt::Display for ExprDisplay<'_> {
                 ExprDisplay {
                     module: self.module,
                     expr: index
+                }
+            ),
+            Expr::AddrOf(place) => write!(
+                f,
+                "addr_of({})",
+                PlaceDisplay {
+                    module: self.module,
+                    place,
                 }
             ),
             Expr::Struct { def, fields } => {
