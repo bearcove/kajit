@@ -801,6 +801,7 @@ impl Module {
                     name: param.name.clone(),
                     ty: param.ty.clone(),
                     kind: LocalKind::Param,
+                    binding: None,
                 })
                 .collect(),
             locals: function
@@ -1339,6 +1340,12 @@ impl Function {
     pub fn destination_param(&self) -> Option<&Parameter> {
         self.params.iter().find(|param| param.is_destination())
     }
+
+    pub fn runtime_cursor_param(&self) -> Option<&Parameter> {
+        self.params
+            .iter()
+            .find(|param| matches!(param.binding, Some(ParameterBinding::RuntimeCursor(_))))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1354,12 +1361,24 @@ pub struct Parameter {
     pub name: String,
     pub ty: Type,
     pub kind: LocalKind,
+    pub binding: Option<ParameterBinding>,
 }
 
 impl Parameter {
     pub fn is_destination(&self) -> bool {
         self.kind == LocalKind::Destination
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParameterBinding {
+    RuntimeCursor(CursorBinding),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorBinding {
+    pub bytes_field: String,
+    pub pos_field: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1833,12 +1852,14 @@ mod tests {
                     name: "cursor".to_owned(),
                     ty: Type::named(cursor, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Param,
+                    binding: None,
                 },
                 Parameter {
                     local: LocalId::new(1),
                     name: "out".to_owned(),
                     ty: Type::named(header, vec![GenericArg::Region(r_input)]),
                     kind: LocalKind::Destination,
+                    binding: None,
                 },
             ],
             locals: vec![],
@@ -2029,6 +2050,7 @@ mod tests {
                 name: "result".to_owned(),
                 ty: Type::named(result_u32, Vec::new()),
                 kind: LocalKind::Param,
+                binding: None,
             }],
             locals: vec![
                 LocalDecl {
@@ -2895,6 +2917,7 @@ mod tests {
                 name: "addr".to_owned(),
                 ty: Type::persistent_addr(),
                 kind: LocalKind::Param,
+                binding: None,
             }],
             locals: vec![LocalDecl {
                 local: LocalId::new(1),
@@ -2968,6 +2991,7 @@ mod tests {
                 name: "cursor".to_owned(),
                 ty: Type::named(cursor, vec![GenericArg::Region(r0)]),
                 kind: LocalKind::Param,
+                binding: None,
             }],
             locals: vec![],
             return_type: Type::unit(),

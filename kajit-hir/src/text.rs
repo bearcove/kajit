@@ -3,8 +3,9 @@ use std::fmt;
 use crate::{
     AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallTarget, CallableKind,
     ControlTransfer, DomainAccess, EffectClass, ErrorCode, Expr, Function, GenericArg,
-    GenericParam, Literal, LocalId, LocalKind, MatchArm, Module, Pattern, PatternField, Place,
-    Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
+    GenericParam, Literal, LocalId, LocalKind, MatchArm, Module, Parameter, ParameterBinding,
+    Pattern, PatternField, Place, RuntimeIntrinsic, Scope, Stmt, StmtKind, Type, TypeDef,
+    TypeDefKind, UnaryOp, VariantDef,
 };
 
 impl fmt::Display for Module {
@@ -188,6 +189,14 @@ fn fmt_callables(module: &Module, f: &mut fmt::Formatter<'_>, indent: usize) -> 
             pad,
             fmt_type_list(module, &callable.signature.params)
         )?;
+        if let Some(intrinsic) = callable.intrinsic {
+            writeln!(
+                f,
+                "{}    intrinsic {}",
+                pad,
+                fmt_runtime_intrinsic(intrinsic)
+            )?;
+        }
         writeln!(
             f,
             "{}    returns {}",
@@ -258,6 +267,19 @@ fn fmt_callables(module: &Module, f: &mut fmt::Formatter<'_>, indent: usize) -> 
     writeln!(f, "{pad}]")
 }
 
+fn fmt_runtime_intrinsic(intrinsic: RuntimeIntrinsic) -> &'static str {
+    match intrinsic {
+        RuntimeIntrinsic::AllocTransient => "alloc_transient",
+        RuntimeIntrinsic::AllocPersistent => "alloc_persistent",
+        RuntimeIntrinsic::VecFromRawParts => "vec_from_raw_parts",
+        RuntimeIntrinsic::ValidateUtf8Range => "validate_utf8_range",
+        RuntimeIntrinsic::StringValidateAllocCopy => "string_validate_alloc_copy",
+        RuntimeIntrinsic::CursorRestore => "cursor_restore",
+        RuntimeIntrinsic::Memcpy => "memcpy",
+        RuntimeIntrinsic::FreeTransient => "free_transient",
+    }
+}
+
 fn fmt_functions(module: &Module, f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Result {
     let pad = pad(indent);
     writeln!(f, "{pad}functions [")?;
@@ -294,15 +316,7 @@ fn fmt_function(
     writeln!(f, "]")?;
     writeln!(f, "{}  params [", pad)?;
     for param in &function.params {
-        fmt_local_decl(
-            module,
-            param.local,
-            &param.name,
-            &param.ty,
-            param.kind,
-            f,
-            indent + 2,
-        )?;
+        fmt_param_decl(module, param, f, indent + 2)?;
     }
     writeln!(f, "{}  ]", pad)?;
     writeln!(f, "{}  locals [", pad)?;
@@ -490,6 +504,44 @@ fn fmt_match_arm(
         }
     )?;
     fmt_block(module, &arm.body, f, indent)?;
+    writeln!(f)
+}
+
+fn fmt_param_decl(
+    module: &Module,
+    param: &Parameter,
+    f: &mut fmt::Formatter<'_>,
+    indent: usize,
+) -> fmt::Result {
+    let pad = pad(indent);
+    write!(
+        f,
+        "{pad}l{} {} {}: {}",
+        param.local.index(),
+        match param.kind {
+            LocalKind::Param => "param",
+            LocalKind::Let => "let",
+            LocalKind::Temp => "temp",
+            LocalKind::Destination => "destination",
+        },
+        quoted(&param.name),
+        TypeDisplay {
+            module,
+            ty: &param.ty
+        }
+    )?;
+    if let Some(binding) = &param.binding {
+        match binding {
+            ParameterBinding::RuntimeCursor(cursor) => {
+                write!(
+                    f,
+                    " bind runtime_cursor(bytes={}, pos={})",
+                    quoted(&cursor.bytes_field),
+                    quoted(&cursor.pos_field)
+                )?;
+            }
+        }
+    }
     writeln!(f)
 }
 

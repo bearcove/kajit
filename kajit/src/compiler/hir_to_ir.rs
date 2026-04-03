@@ -15,7 +15,6 @@ struct StructuralLocalStorage {
 
 struct StructuralHirIrLowerer<'a> {
     module: &'a hir::Module,
-    cursor_local: hir::LocalId,
     local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
     _marker: std::marker::PhantomData<&'a hir::Module>,
@@ -53,12 +52,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         module: &'a hir::Module,
         function: &'a hir::Function,
     ) -> Self {
-        let cursor_local = function
-            .params
-            .iter()
-            .find(|param| param.kind == hir::LocalKind::Param)
-            .map(|param| param.local)
-            .expect("structural HIR function should have a cursor param");
         let mut local_slots = std::collections::HashMap::new();
         let mut local_types = std::collections::HashMap::new();
         for param in &function.params {
@@ -77,11 +70,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
             );
             local_types.insert(local.local, &local.ty);
         }
-        let _ =
-            Self::initialize_cursor_shadow(rb, module, cursor_local, &local_slots, &local_types);
+        let _ = Self::initialize_cursor_shadow(rb, module, function, &local_slots, &local_types);
         Self {
             module,
-            cursor_local,
             local_slots,
             local_types,
             _marker: std::marker::PhantomData,
@@ -114,7 +105,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
     fn initialize_cursor_shadow(
         rb: &mut RegionBuilder<'_>,
         module: &'a hir::Module,
-        cursor_local: hir::LocalId,
+        function: &'a hir::Function,
         local_slots: &std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
         local_types: &std::collections::HashMap<hir::LocalId, &'a hir::Type>,
     ) -> (
@@ -122,17 +113,27 @@ impl<'a> StructuralHirIrLowerer<'a> {
         Option<crate::ir::SlotId>,
         Option<crate::ir::SlotId>,
     ) {
+        let Some(cursor_param) = function.runtime_cursor_param() else {
+            return (None, None, None);
+        };
+        let hir::ParameterBinding::RuntimeCursor(binding) = cursor_param
+            .binding
+            .as_ref()
+            .expect("runtime cursor param should carry binding metadata");
+        let cursor_local = cursor_param.local;
         let Some(cursor_ty) = local_types.get(&cursor_local).copied() else {
             return (None, None, None);
         };
         let Some(storage) = local_slots.get(&cursor_local).copied() else {
             return (None, None, None);
         };
-        let bytes_offset = match Self::struct_field_slot_offset(module, cursor_ty, "bytes") {
-            Some(offset) => offset,
-            None => return (None, None, None),
-        };
-        let pos_offset = match Self::struct_field_slot_offset(module, cursor_ty, "pos") {
+        let bytes_offset =
+            match Self::struct_field_slot_offset(module, cursor_ty, &binding.bytes_field) {
+                Some(offset) => offset,
+                None => return (None, None, None),
+            };
+        let pos_offset = match Self::struct_field_slot_offset(module, cursor_ty, &binding.pos_field)
+        {
             Some(offset) => offset,
             None => return (None, None, None),
         };
