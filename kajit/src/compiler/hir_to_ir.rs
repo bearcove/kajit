@@ -68,8 +68,8 @@ impl RuntimeDialectLowerer {
             .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
         match lowerer.callable_intrinsic(call) {
-            Some(hir::RuntimeIntrinsic::SaveCursor) => Some(rb.save_cursor()),
-            Some(hir::RuntimeIntrinsic::SaveInputEnd) => Some(rb.save_input_end()),
+            Some(hir::RuntimeIntrinsic::LoadInputPtr) => Some(rb.save_cursor()),
+            Some(hir::RuntimeIntrinsic::LoadInputEnd) => Some(rb.save_input_end()),
             Some(hir::RuntimeIntrinsic::AllocPersistent) => rb.call_intrinsic(
                 crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize),
                 &args,
@@ -120,7 +120,7 @@ impl RuntimeDialectLowerer {
                 );
                 true
             }
-            Some(hir::RuntimeIntrinsic::CursorRestore) => {
+            Some(hir::RuntimeIntrinsic::StoreInputPtr) => {
                 let args = call
                     .args
                     .iter()
@@ -129,7 +129,7 @@ impl RuntimeDialectLowerer {
                 assert_eq!(
                     args.len(),
                     1,
-                    "runtime.cursor_restore expects one absolute cursor address"
+                    "abi.store_input_ptr expects one absolute input pointer"
                 );
                 rb.restore_cursor(args[0]);
                 true

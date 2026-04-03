@@ -269,8 +269,8 @@ fn fmt_callables(module: &Module, f: &mut fmt::Formatter<'_>, indent: usize) -> 
 
 fn fmt_runtime_intrinsic(intrinsic: RuntimeIntrinsic) -> &'static str {
     match intrinsic {
-        RuntimeIntrinsic::SaveCursor => "save_cursor",
-        RuntimeIntrinsic::SaveInputEnd => "save_input_end",
+        RuntimeIntrinsic::LoadInputPtr => "load_input_ptr",
+        RuntimeIntrinsic::LoadInputEnd => "load_input_end",
         RuntimeIntrinsic::OptionInitNone => "option_init_none",
         RuntimeIntrinsic::OptionInitSome => "option_init_some",
         RuntimeIntrinsic::AllocTransient => "alloc_transient",
@@ -278,7 +278,7 @@ fn fmt_runtime_intrinsic(intrinsic: RuntimeIntrinsic) -> &'static str {
         RuntimeIntrinsic::VecFromRawParts => "vec_from_raw_parts",
         RuntimeIntrinsic::ValidateUtf8Range => "validate_utf8_range",
         RuntimeIntrinsic::StringValidateAllocCopy => "string_validate_alloc_copy",
-        RuntimeIntrinsic::CursorRestore => "cursor_restore",
+        RuntimeIntrinsic::StoreInputPtr => "store_input_ptr",
         RuntimeIntrinsic::Memcpy => "memcpy",
         RuntimeIntrinsic::FreeTransient => "free_transient",
     }
