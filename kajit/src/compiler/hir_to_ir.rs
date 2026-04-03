@@ -661,11 +661,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             type_def.name
                         );
                     };
-                    // Check if this is an Option-like type (has None and Some variants)
-                    if self.is_option_like_enum(hir_variants) {
-                        self.lower_option_variant_write_hir(rb, offset, ty, variant, fields);
-                        return;
-                    }
                     let hir_variant = hir_variants
                         .iter()
                         .find(|v| v.name == variant.as_str())
@@ -1779,102 +1774,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         panic!("field {field_name} not found in struct fields");
     }
 
-    /// Check if an enum's variants match the Option pattern (None + Some).
-    fn is_option_like_enum(&self, variants: &[hir::VariantDef]) -> bool {
-        variants.len() == 2
-            && variants.iter().any(|v| v.name == "None")
-            && variants.iter().any(|v| v.name == "Some")
-    }
-
-    /// Lower an Option-like variant write using init_fn from HIR variant annotations.
-    fn lower_option_variant_write_hir(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        offset: usize,
-        ty: &hir::Type,
-        variant: &str,
-        fields: &[(String, hir::Expr)],
-    ) {
-        let hir::Type::Named { def, .. } = ty else {
-            panic!("Option variant write requires a Named type, got {ty:?}");
-        };
-        let type_def = &self.module.type_defs[*def];
-        let hir::TypeDefKind::Enum { variants, .. } = &type_def.kind else {
-            panic!("Option variant write requires an Enum type def");
-        };
-        let variant_def = variants
-            .iter()
-            .find(|v| v.name == variant)
-            .unwrap_or_else(|| panic!("missing Option variant {variant}"));
-
-        let init_fn_ptr = variant_def.init_fn.unwrap_or_else(|| {
-            panic!(
-                "Option variant '{variant}' on '{}' requires an init_fn annotation in HIR",
-                type_def.name
-            )
-        });
-
-        let offset = offset as u32;
-        match variant {
-            "None" => {
-                assert!(
-                    fields.is_empty(),
-                    "Option::None should not carry payload fields"
-                );
-                let init_fn = rb.const_val(init_fn_ptr);
-                rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_option_init_none_ctx as *const () as usize,
-                    ),
-                    &[init_fn],
-                    offset,
-                    false,
-                );
-            }
-            "Some" => {
-                assert_eq!(
-                    fields.len(),
-                    1,
-                    "Option::Some should carry exactly one payload field"
-                );
-                let payload_ptr = match &fields[0].1 {
-                    hir::Expr::Local(local) => {
-                        let num_slots =
-                            Self::slot_count_for_type(self.module, self.local_types[local]) as u32;
-                        rb.slot_addr(self.local_slots[local].base_slot, num_slots)
-                    }
-                    hir::Expr::Literal(hir::Literal::Unit) => {
-                        let slot = rb.alloc_slot();
-                        rb.slot_addr(slot, 1)
-                    }
-                    hir::Expr::Literal(hir::Literal::Bool(value)) => {
-                        let slot = rb.alloc_slot();
-                        let value = rb.const_val(u64::from(*value));
-                        rb.write_to_slot(slot, value);
-                        rb.slot_addr(slot, 1)
-                    }
-                    hir::Expr::Literal(hir::Literal::Integer(value)) => {
-                        let slot = rb.alloc_slot();
-                        let value = rb.const_val(*value);
-                        rb.write_to_slot(slot, value);
-                        rb.slot_addr(slot, 1)
-                    }
-                    other => panic!("unsupported structural Option payload: {other:?}"),
-                };
-                let init_fn = rb.const_val(init_fn_ptr);
-                rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_option_init_some_ctx as *const () as usize,
-                    ),
-                    &[init_fn, payload_ptr],
-                    offset,
-                    false,
-                );
-            }
-            other => panic!("unsupported structural Option variant {other}"),
-        }
-    }
-
     /// Lower a nested variant write (e.g. variant payload containing another variant).
     fn lower_nested_variant_write(
         &self,
@@ -1900,10 +1799,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 type_def.name
             );
         };
-        if self.is_option_like_enum(variants) {
-            self.lower_option_variant_write_hir(rb, offset, ty, variant, fields);
-            return;
-        }
         let hir_variant = variants
             .iter()
             .find(|v| v.name == variant)
