@@ -596,20 +596,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     self.copy_local_into_local(rb, *local, ty, storage, slot_offset);
                 }
             },
-            hir::Expr::Call(call) => {
-                if self.is_vec_from_raw_parts(call) {
-                    match resolved {
-                        ResolvedStructuralPlace::Destination { ty, offset } => {
-                            self.lower_vec_from_raw_parts_at_offset(
-                                rb, call, ty, offset, dest_local, dest_ty,
-                            );
-                        }
-                        ResolvedStructuralPlace::Local { .. } => {
-                            panic!("local vec materialization is not supported yet");
-                        }
-                    }
-                    return;
-                }
+            hir::Expr::Call(_) => {
                 let scalar = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
                 match resolved {
                     ResolvedStructuralPlace::Destination { ty, offset } => {
@@ -814,9 +801,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         dest_ty: &'a hir::Type,
     ) {
         match expr {
-            hir::Expr::Call(call) if self.is_vec_from_raw_parts(call) => {
-                self.lower_vec_from_raw_parts_at_offset(rb, call, ty, offset, dest_local, dest_ty);
-            }
             hir::Expr::Call(_) => {
                 let scalar = self.lower_scalar_expr(rb, expr, dest_local, dest_ty);
                 let width = self.scalar_width_for_hir_type(ty);
@@ -970,78 +954,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             };
             rb.write_to_field(value, (offset + full_slots * 8) as u32, width);
         }
-    }
-
-    fn is_vec_from_raw_parts(&self, call: &hir::CallExpr) -> bool {
-        matches!(
-            self.callable_intrinsic(call),
-            Some(hir::RuntimeIntrinsic::VecFromRawParts)
-        )
-    }
-
-    fn lower_vec_from_raw_parts_at_offset(
-        &self,
-        rb: &mut RegionBuilder<'_>,
-        call: &hir::CallExpr,
-        ty: &hir::Type,
-        offset: usize,
-        dest_local: hir::LocalId,
-        dest_ty: &'a hir::Type,
-    ) {
-        let hir::Type::Named { def, .. } = ty else {
-            panic!("runtime.vec_from_raw_parts requires a named Vec-like destination type");
-        };
-        let type_def = &self.module.type_defs[*def];
-        let hir::TypeDefKind::Struct { fields } = &type_def.kind else {
-            panic!(
-                "runtime.vec_from_raw_parts requires a struct destination type, got {}",
-                type_def.name
-            );
-        };
-        let find = |name: &str| -> u32 {
-            fields
-                .iter()
-                .find(|f| f.name == name)
-                .and_then(|f| f.offset)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "runtime.vec_from_raw_parts requires explicit `{name}` field offset on {}",
-                        type_def.name
-                    )
-                })
-        };
-        let ptr_offset = find("ptr");
-        let len_offset = find("len");
-        let cap_offset = find("cap");
-
-        assert_eq!(
-            call.args.len(),
-            4,
-            "runtime.vec_from_raw_parts expects ptr, len, cap, align"
-        );
-        let ptr = self.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
-        let len = self.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
-        let cap = self.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
-        let align = self.lower_scalar_expr(rb, &call.args[3], dest_local, dest_ty);
-        let usize_width = if core::mem::size_of::<usize>() == 8 {
-            crate::ir::Width::W8
-        } else {
-            crate::ir::Width::W4
-        };
-
-        let zero = rb.const_val(0);
-        let cap_nonzero = rb.binop(crate::ir::IrOp::CmpNe, cap, zero);
-        rb.gamma(cap_nonzero, &[], 2, |branch_idx, branch| {
-            let ptr_value = match branch_idx {
-                0 => align,
-                1 => ptr,
-                _ => unreachable!(),
-            };
-            branch.write_to_field(ptr_value, (offset as u32) + ptr_offset, usize_width);
-            branch.write_to_field(len, (offset as u32) + len_offset, usize_width);
-            branch.write_to_field(cap, (offset as u32) + cap_offset, usize_width);
-            branch.set_results(&[]);
-        });
     }
 
     fn lower_scalar_expr(

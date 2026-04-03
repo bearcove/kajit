@@ -792,6 +792,13 @@ impl PostcardHirLowerer {
         }
     }
 
+    fn field_place(&self, base: hir::Place, field: &str) -> hir::Place {
+        hir::Place::Field {
+            base: Box::new(base),
+            field: field.to_owned(),
+        }
+    }
+
     fn postcard_varint128_finish_into_place(
         &mut self,
         statements: &mut Vec<hir::Stmt>,
@@ -1728,39 +1735,6 @@ impl PostcardHirLowerer {
         callable_id
     }
 
-    fn ensure_runtime_vec_from_raw_parts(&mut self) -> hir::CallableId {
-        const NAME: &str = "runtime.vec_from_raw_parts";
-        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
-            return existing;
-        }
-        let callable = hir::CallableSpec {
-            kind: hir::CallableKind::Host,
-            name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::VecFromRawParts),
-            signature: hir::CallSignature {
-                params: vec![
-                    hir::Type::persistent_addr(),
-                    hir::Type::u(64),
-                    hir::Type::u(64),
-                    hir::Type::u(64),
-                ],
-                returns: vec![hir::Type::u(64)],
-                effect_class: hir::EffectClass::Barrier,
-                domain_effects: vec![hir::DomainEffect {
-                    domain: "persistent_heap".to_owned(),
-                    access: hir::DomainAccess::Mutate,
-                }],
-                control: hir::ControlTransfer::MayFail,
-                capabilities: vec!["runtime.alloc".to_owned()],
-                safety: hir::CallSafety::OpaqueHost,
-            },
-            docs: Some("Materialize a Vec-like host value from persistent raw parts.".to_owned()),
-        };
-        let callable_id = self.module.add_callable(callable);
-        self.callables_by_name.insert(NAME, callable_id);
-        callable_id
-    }
-
     fn lower_postcard_str_into_place(
         &mut self,
         statements: &mut Vec<hir::Stmt>,
@@ -2125,7 +2099,7 @@ impl PostcardHirLowerer {
         cursor_local: hir::LocalId,
         place: hir::Place,
         list_def: &ListDef,
-        _shape: &'static Shape,
+        shape: &'static Shape,
     ) {
         let elem_layout = list_def
             .t
@@ -2262,20 +2236,43 @@ impl PostcardHirLowerer {
             },
         });
 
-        let vec_from_raw_parts = self.ensure_runtime_vec_from_raw_parts();
-        self.push_init(
-            statements,
-            place,
-            hir::Expr::Call(hir::CallExpr {
-                target: hir::CallTarget::Callable(vec_from_raw_parts),
-                args: vec![
-                    hir::Expr::Local(ptr_local),
+        let offsets = kajit_malum::discover_vec_offsets(list_def, shape);
+        let mut vec_fields = [
+            ("ptr", offsets.ptr_offset),
+            ("len", offsets.len_offset),
+            ("cap", offsets.cap_offset),
+        ];
+        vec_fields.sort_by_key(|(_, offset)| *offset);
+
+        for (field, _) in vec_fields {
+            match field {
+                "ptr" => self.push_init(
+                    statements,
+                    self.field_place(place.clone(), "ptr"),
+                    hir::Expr::Binary {
+                        op: hir::BinaryOp::Add,
+                        lhs: Box::new(hir::Expr::Local(ptr_local)),
+                        rhs: Box::new(hir::Expr::Binary {
+                            op: hir::BinaryOp::Mul,
+                            lhs: Box::new(hir::Expr::Binary {
+                                op: hir::BinaryOp::Eq,
+                                lhs: Box::new(hir::Expr::Local(len_local)),
+                                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                            }),
+                            rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(
+                                elem_layout.align() as u64,
+                            ))),
+                        }),
+                    },
+                ),
+                "len" | "cap" => self.push_init(
+                    statements,
+                    self.field_place(place.clone(), field),
                     hir::Expr::Local(len_local),
-                    hir::Expr::Local(len_local),
-                    hir::Expr::Literal(hir::Literal::Integer(elem_layout.align() as u64)),
-                ],
-            }),
-        );
+                ),
+                _ => unreachable!(),
+            }
+        }
     }
 
     fn postcard_varint_max_bytes(bits: u32) -> u64 {
