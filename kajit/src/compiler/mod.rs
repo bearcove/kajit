@@ -16,8 +16,9 @@ use crate::intrinsics;
 use crate::ir::{RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;
 
+#[cfg(test)]
+pub(crate) use hir_to_ir::build_structural_hir_ir;
 pub use hir_to_ir::lower_hir_module;
-pub(crate) use hir_to_ir::{build_postcard_decoder_ir_via_hir, build_structural_hir_ir};
 pub(crate) use kajit_postcard::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
@@ -328,12 +329,11 @@ pub fn compile_pipeline(
     let registry = symbol_registry_for_shape(shape);
 
     // Phase 1: HIR
-    let _ = kind;
-    let module = build_postcard_decoder_hir(shape);
+    let module = build_decoder_hir(shape, kind);
     let hir_text = module.to_string();
 
     // Phase 2: IR + passes with timeline
-    let mut func = build_structural_hir_ir(&module);
+    let mut func = lower_hir_module(&module);
     let mut ir_opt_timeline = vec![(
         "initial".to_string(),
         format!("{}", func.display_with_registry(&registry)),
@@ -446,11 +446,10 @@ pub fn compile_pre_opt_cfg(
     pipeline_opts: &PipelineOptions,
 ) -> kajit_mir::cfg_mir::Program {
     // Phase 1: HIR
-    let _ = kind;
-    let module = build_postcard_decoder_hir(shape);
+    let module = build_decoder_hir(shape, kind);
 
     // Phase 2: IR + passes
-    let mut func = build_structural_hir_ir(&module);
+    let mut func = lower_hir_module(&module);
     run_configured_default_passes_with_observer(&mut func, pipeline_opts, |_, _| {});
 
     // Phase 3: Linearize
@@ -546,7 +545,8 @@ pub fn regalloc_edit_count_with_options(
     if !pipeline_opts.resolve_regalloc(true) {
         return 0;
     }
-    let mut func = build_decoder_ir_via_hir(shape, kind);
+    let module = build_decoder_hir(shape, kind);
+    let mut func = lower_hir_module(&module);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
@@ -574,7 +574,8 @@ pub fn regalloc_edits_text_with_options(
     kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> String {
-    let mut func = build_decoder_ir_via_hir(shape, kind);
+    let module = build_decoder_hir(shape, kind);
+    let mut func = lower_hir_module(&module);
     run_configured_default_passes(&mut func, pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
@@ -640,16 +641,9 @@ pub(crate) fn format_allocated_regalloc_edits(
     out
 }
 
-/// Build decoder IR through HIR.
-pub(crate) fn build_decoder_ir_via_hir(
-    shape: &'static Shape,
-    kind: DecoderKind,
-) -> crate::ir::IrFunc {
+pub(crate) fn build_decoder_hir(shape: &'static Shape, kind: DecoderKind) -> hir::Module {
     match kind {
-        DecoderKind::Postcard => {
-            let module = build_postcard_decoder_hir(shape);
-            build_structural_hir_ir(&module)
-        }
+        DecoderKind::Postcard => build_postcard_decoder_hir(shape),
     }
 }
 
@@ -659,7 +653,7 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
 ) -> CompiledDecoder {
     let registry = symbol_registry_for_shape(shape);
     let module = build_postcard_decoder_hir(shape);
-    let mut func = build_structural_hir_ir(&module);
+    let mut func = lower_hir_module(&module);
     run_configured_default_passes(&mut func, &pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     compile_linear_ir_decoder_with_options(

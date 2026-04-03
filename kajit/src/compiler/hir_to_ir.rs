@@ -3,11 +3,6 @@
 
 use super::*;
 
-pub(crate) fn build_postcard_decoder_ir_via_hir(shape: &'static Shape) -> crate::ir::IrFunc {
-    let module = build_postcard_decoder_hir(shape);
-    build_structural_hir_ir(&module)
-}
-
 #[derive(Clone, Copy)]
 struct StructuralLocalStorage {
     base_slot: crate::ir::SlotId,
