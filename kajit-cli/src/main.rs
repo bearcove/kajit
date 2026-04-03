@@ -35,7 +35,7 @@ enum Command {
 
     /// Compile a type and dump pipeline stages
     Compile {
-        /// Format: postcard or json
+        /// Format: postcard
         #[facet(args::positional)]
         format: String,
 
@@ -63,7 +63,7 @@ enum Command {
 
     /// Lockstep differential debugger: step interpreter + LLDB in parallel
     DebugDiff {
-        /// Format: postcard or json
+        /// Format: postcard
         #[facet(args::positional)]
         format: String,
 
@@ -188,9 +188,8 @@ fn print_interpreter_state(state: &kajit_mir::DebuggerState) {
 fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
     let kind = match format {
         "postcard" => kajit::DecoderKind::Postcard,
-        "json" => kajit::DecoderKind::Json,
         other => {
-            eprintln!("error: unknown format '{other}', expected 'postcard' or 'json'");
+            eprintln!("error: unknown format '{other}', expected 'postcard'");
             std::process::exit(1);
         }
     };
@@ -465,7 +464,6 @@ fn cmd_reduce_ir(format: &str, ty: &str, spec: &str) {
 
     let kind = match format {
         "postcard" => kajit::DecoderKind::Postcard,
-        "json" => kajit::DecoderKind::Json,
         other => {
             eprintln!("error: unknown format '{other}'");
             std::process::exit(1);
@@ -588,9 +586,8 @@ fn cmd_compile_reduce(format: &str, ty: &str, mode: &str) {
 
     let kind = match format {
         "postcard" => kajit::DecoderKind::Postcard,
-        "json" => kajit::DecoderKind::Json,
         other => {
-            eprintln!("error: unknown format '{other}', expected 'postcard' or 'json'");
+            eprintln!("error: unknown format '{other}', expected 'postcard'");
             std::process::exit(1);
         }
     };
@@ -721,12 +718,6 @@ fn make_test_input(format: &str, ty: &str) -> Vec<u8> {
             }
             _ => vec![0x80, 0x01], // default: 2-byte varint
         },
-        "json" => match ty {
-            "u32" | "u64" | "i32" | "i64" | "u16" | "i16" | "u8" | "i8" => b"128".to_vec(),
-            "bool" => b"true".to_vec(),
-            "String" | "string" => b"\"hello\"".to_vec(),
-            _ => b"128".to_vec(),
-        },
         _ => vec![0x80, 0x01],
     }
 }
@@ -736,7 +727,6 @@ fn make_test_input(format: &str, ty: &str) -> Vec<u8> {
 fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
     let kind = match format {
         "postcard" => kajit::DecoderKind::Postcard,
-        "json" => kajit::DecoderKind::Json,
         other => {
             eprintln!("error: unknown format '{other}'");
             std::process::exit(1);

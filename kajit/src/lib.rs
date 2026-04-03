@@ -17,7 +17,6 @@ pub mod ir_passes;
 pub mod jit_debug;
 pub mod jit_dwarf;
 pub mod jit_f64;
-pub mod json_intrinsics;
 pub mod linearize;
 pub mod lockstep;
 pub mod malum;
@@ -217,28 +216,12 @@ pub fn debug_postcard_hir_text(shape: &'static facet::Shape) -> String {
     debug_postcard_hir(shape).to_string()
 }
 
-/// Build the current prototype JSON HIR for a shape.
-///
-/// This currently supports only a deliberately narrow subset: root `bool`
-/// decoding expressed as low-level HIR over bytes, bounds checks, cursor
-/// updates, and control flow.
-pub fn debug_json_hir(shape: &'static facet::Shape) -> kajit_hir::Module {
-    compiler::build_json_decoder_hir(shape)
-}
-
-/// Build the current prototype JSON HIR and render it in canonical text form.
-pub fn debug_json_hir_text(shape: &'static facet::Shape) -> String {
-    debug_json_hir(shape).to_string()
-}
-
 /// Build HIR for a decoder and render it in canonical text form.
 ///
 /// Dispatches to the appropriate HIR builder based on the decoder kind.
 pub fn debug_hir_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
-    match kind {
-        DecoderKind::Postcard => debug_postcard_hir_text(shape),
-        DecoderKind::Json => debug_json_hir_text(shape),
-    }
+    let _ = kind;
+    debug_postcard_hir_text(shape)
 }
 
 /// Build postcard RVSDG by first lowering through the prototype HIR path.
@@ -257,14 +240,6 @@ pub fn debug_postcard_ir_via_hir_text(shape: &'static facet::Shape) -> String {
 /// producer and HIR->RVSDG lowerer.
 pub fn compile_postcard_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
     compiler::compile_postcard_decoder_via_hir_with_options(shape, PipelineOptions::from_env())
-}
-
-/// Compile a JSON decoder by lowering through the prototype HIR path.
-///
-/// This currently supports only the narrow JSON subset covered by the
-/// prototype HIR producer and structural HIR lowerer.
-pub fn compile_json_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
-    compiler::compile_json_decoder_via_hir_with_options(shape, PipelineOptions::from_env())
 }
 
 /// Compile a postcard decoder via the structural HIR lowering subset.
@@ -336,9 +311,6 @@ pub fn known_intrinsic_registry() -> ir::IntrinsicRegistry {
     for (name, func) in intrinsics::known_intrinsics() {
         registry.register(name, func);
     }
-    for (name, func) in json_intrinsics::known_intrinsics() {
-        registry.register(name, func);
-    }
     registry
 }
 
@@ -383,17 +355,12 @@ pub fn from_bytes<'input, T: facet::Facet<'input>>(
 }
 
 /// Deserialize a value of type `T` from UTF-8 input text.
-///
-/// Trusted UTF-8 mode is enabled only when the compiled format supports it.
 pub fn from_str<'input, T: facet::Facet<'input>>(
     deser: &CompiledDecoder,
     input: &'input str,
 ) -> Result<T, DeserError> {
-    let mut ctx = if deser.supports_trusted_utf8_input() {
-        DeserContext::from_str(input)
-    } else {
-        DeserContext::from_bytes(input.as_bytes())
-    };
+    let _ = deser;
+    let mut ctx = DeserContext::from_bytes(input.as_bytes());
     deserialize_with_ctx(deser, &mut ctx)
 }
 

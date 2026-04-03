@@ -1771,26 +1771,7 @@ fn input_cases() -> Vec<Case> {
 }
 
 fn panic_cases() -> Vec<PanicCase> {
-    vec![PanicCase {
-        name: "flatten_name_collision",
-        expected: "field name collision",
-        ignore: Some("json struct HIR lowering not implemented yet"),
-        body: quote! {
-            #[derive(Facet)]
-            struct Collider {
-                x: u32,
-            }
-
-            #[derive(Facet)]
-            struct HasCollision {
-                x: u32,
-                #[facet(flatten)]
-                inner: Collider,
-            }
-
-            kajit::compile_decoder(HasCollision::SHAPE, kajit::DecoderKind::Json);
-        },
-    }]
+    Vec::new()
 }
 
 pub(crate) fn render_bench_file() -> String {
@@ -1801,7 +1782,6 @@ pub(crate) fn render_bench_file() -> String {
         .filter_map(|case| {
             let value = case.values.first()?.clone();
             let sample_name = case.name.to_string();
-            let enable_json_kajit = unsupported_reason_for_format(case, WireFormat::Json).is_none();
             let enable_postcard_kajit =
                 unsupported_reason_for_format(case, WireFormat::Postcard).is_none();
             Some(quote! {
@@ -1809,7 +1789,6 @@ pub(crate) fn render_bench_file() -> String {
                     &mut v,
                     #sample_name,
                     #value,
-                    #enable_json_kajit,
                     #enable_postcard_kajit,
                 );
             })
@@ -1907,7 +1886,6 @@ pub(crate) fn render_bench_file() -> String {
             v: &mut Vec<harness::Bench>,
             group: &str,
             value: T,
-            enable_json_kajit: bool,
             enable_postcard_kajit: bool,
         )
         where
@@ -1920,13 +1898,7 @@ pub(crate) fn render_bench_file() -> String {
 
             // For --list mode, just register names without JIT compilation
             if harness::is_list_mode() {
-                let json_prefix = format!("{group}/json");
                 let postcard_prefix = format!("{group}/postcard");
-                v.push(harness::Bench { name: format!("{json_prefix}/serde/deser"), func: Box::new(|_| {}) });
-                if enable_json_kajit {
-                    v.push(harness::Bench { name: format!("{json_prefix}/kajit/deser"), func: Box::new(|_| {}) });
-                }
-                v.push(harness::Bench { name: format!("{json_prefix}/serde/ser"), func: Box::new(|_| {}) });
                 v.push(harness::Bench { name: format!("{postcard_prefix}/serde/deser"), func: Box::new(|_| {}) });
                 if enable_postcard_kajit {
                     v.push(harness::Bench { name: format!("{postcard_prefix}/kajit/deser"), func: Box::new(|_| {}) });
@@ -1971,89 +1943,9 @@ pub(crate) fn render_bench_file() -> String {
                 return;
             }
 
-            let json_data = Arc::new(serde_json::to_string(&value).unwrap());
             let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
             let value = Arc::new(value);
-
-            let json_prefix = format!("{group}/json");
             let postcard_prefix = format!("{group}/postcard");
-
-            v.push(harness::Bench {
-                name: format!("{json_prefix}/serde/deser"),
-                func: Box::new({
-                    let data = Arc::clone(&json_data);
-                    move |runner| {
-                        runner.run(|| {
-                            black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
-                        });
-                    }
-                }),
-            });
-            if enable_json_kajit {
-                let json_decoder =
-                    match catch_unwind(AssertUnwindSafe(|| {
-                        kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json)
-                    })) {
-                        Ok(decoder) => Some(Arc::new(decoder)),
-                        Err(payload) => {
-                            eprintln!(
-                                "skipping {json_prefix}/kajit/deser: compile unsupported ({})",
-                                panic_payload_to_string(&payload)
-                            );
-                            None
-                        }
-                    };
-
-                if let Some(decoder) = json_decoder {
-                    match catch_unwind(AssertUnwindSafe(|| {
-                        kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
-                    })) {
-                        Ok(Ok(_)) => {
-                            v.push(harness::Bench {
-                                name: format!("{json_prefix}/kajit/deser"),
-                        func: Box::new({
-                            let data = Arc::clone(&json_data);
-                            let decoder = Arc::clone(&decoder);
-                            move |runner| {
-                                let decoder = decoder.as_ref();
-                                runner.run(|| {
-                                    black_box(
-                                        kajit::from_str::<T>(
-                                            decoder,
-                                            black_box(data.as_str()),
-                                        )
-                                        .unwrap(),
-                                    );
-                                });
-                                    }
-                                }),
-                            });
-                        }
-                        Ok(Err(err)) => {
-                            eprintln!(
-                                "skipping {json_prefix}/kajit/deser: preflight decode failed ({err:?})"
-                            );
-                        }
-                        Err(payload) => {
-                            eprintln!(
-                                "skipping {json_prefix}/kajit/deser: preflight panic ({})",
-                                panic_payload_to_string(&payload)
-                            );
-                        }
-                    }
-                }
-            }
-            v.push(harness::Bench {
-                name: format!("{json_prefix}/serde/ser"),
-                func: Box::new({
-                    let value = Arc::clone(&value);
-                    move |runner| {
-                        runner.run(|| {
-                            black_box(serde_json::to_vec(black_box(&*value)).unwrap());
-                        });
-                    }
-                }),
-            });
 
             v.push(harness::Bench {
                 name: format!("{postcard_prefix}/serde/deser"),
@@ -2228,118 +2120,6 @@ pub(crate) fn render_test_file() -> String {
     let cases = all_cases();
     let panic_cases = panic_cases();
     let types = types_rs();
-    let json_tests: Vec<TokenStream> = cases
-        .iter()
-        .flat_map(|case| {
-            case.values.iter().enumerate().map(|(sample_idx, value)| {
-                let test_name = if case.values.len() == 1 {
-                    format_ident!("{}", case.name)
-                } else {
-                    format_ident!("{}_v{}", case.name, sample_idx)
-                };
-                let value = value.clone();
-                let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
-                quote! {
-                    #[test]
-                    #ignore_attr
-                    fn #test_name() {
-                        let value = #value;
-                        assert_json_case(value);
-                    }
-                }
-            })
-        })
-        .collect();
-    let _json_rvsdg_tests: Vec<TokenStream> = cases
-        .iter()
-        .flat_map(|case| {
-            case.values
-                .iter()
-                .enumerate()
-                .map(|(sample_idx, value)| {
-                    let test_name = if case.values.len() == 1 {
-                        format_ident!("{}", case.name)
-                    } else {
-                        format_ident!("{}_v{}", case.name, sample_idx)
-                    };
-                    let case_name = if case.values.len() == 1 {
-                        case.name.to_string()
-                    } else {
-                        format!("{}__v{}", case.name, sample_idx)
-                    };
-                    let value = value.clone();
-                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
-                    quote! {
-                        #[test]
-                        #ignore_attr
-                        fn #test_name() {
-                            let value = #value;
-                            assert_codegen_rvsdg_snapshot("json", #case_name, kajit::DecoderKind::Json, &value);
-                        }
-                    }
-                })
-        })
-        .collect();
-    let _json_ra_mir_tests: Vec<TokenStream> = cases
-        .iter()
-        .flat_map(|case| {
-            case.values
-                .iter()
-                .enumerate()
-                .map(|(sample_idx, value)| {
-                    let test_name = if case.values.len() == 1 {
-                        format_ident!("{}", case.name)
-                    } else {
-                        format_ident!("{}_v{}", case.name, sample_idx)
-                    };
-                    let case_name = if case.values.len() == 1 {
-                        case.name.to_string()
-                    } else {
-                        format!("{}__v{}", case.name, sample_idx)
-                    };
-                    let value = value.clone();
-                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
-                    quote! {
-                        #[test]
-                        #ignore_attr
-                        fn #test_name() {
-                            let value = #value;
-                            assert_codegen_ra_mir_snapshot("json", #case_name, kajit::DecoderKind::Json, &value);
-                        }
-                    }
-                })
-        })
-        .collect();
-    let _json_postreg_edits_tests: Vec<TokenStream> = cases
-        .iter()
-        .flat_map(|case| {
-            case.values
-                .iter()
-                .enumerate()
-                .map(|(sample_idx, value)| {
-                    let test_name = if case.values.len() == 1 {
-                        format_ident!("{}", case.name)
-                    } else {
-                        format_ident!("{}_v{}", case.name, sample_idx)
-                    };
-                    let case_name = if case.values.len() == 1 {
-                        case.name.to_string()
-                    } else {
-                        format!("{}__v{}", case.name, sample_idx)
-                    };
-                    let value = value.clone();
-                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
-                    quote! {
-                        #[test]
-                        #ignore_attr
-                        fn #test_name() {
-                            let value = #value;
-                            assert_codegen_edits_snapshot("json", #case_name, kajit::DecoderKind::Json, &value);
-                        }
-                    }
-                })
-        })
-        .collect();
     let postcard_tests: Vec<TokenStream> = cases
         .iter()
         .flat_map(|case| {
@@ -2471,55 +2251,6 @@ pub(crate) fn render_test_file() -> String {
                     assert_prop_case(&marker);
                 }
             }
-        })
-        .collect();
-    let json_input_tests: Vec<TokenStream> = cases
-        .iter()
-        .flat_map(|case| {
-            case.inputs
-                .iter()
-                .filter(|input| input.format == WireFormat::Json)
-                .map(|input| {
-                    let test_name = if case.inputs.len() == 1 {
-                        format_ident!("{}", case.name)
-                    } else {
-                        format_ident!("{}_{}", case.name, input.name)
-                    };
-                    let ty = case.ty.clone();
-                    let input_bytes = LitByteStr::new(input.input, Span::call_site());
-                    let ignore_attr = ignore_attr_for_format(case, WireFormat::Json);
-                    match &input.expect {
-                        DecodeExpectation::Ok(expected) => {
-                            let expected = expected.clone();
-                            quote! {
-                                #[test]
-                                #ignore_attr
-                                fn #test_name() {
-                                    assert_json_input_case::<#ty>(#input_bytes, #expected);
-                                }
-                            }
-                        }
-                        DecodeExpectation::Err(expected_error_code) => {
-                            let expected_error_code = expected_error_code.clone();
-                            quote! {
-                                #[test]
-                                #ignore_attr
-                                fn #test_name() {
-                                    assert_json_input_err_code::<#ty>(#input_bytes, #expected_error_code);
-                                }
-                            }
-                        }
-                        DecodeExpectation::AnyErr => {
-                            quote! {
-                                #[test]
-                                #ignore_attr
-                                fn #test_name() {
-                                    assert_json_input_err::<#ty>(#input_bytes);
-                                }
-                            }
-                        }
-                    }
-                })
         })
         .collect();
     let postcard_input_tests: Vec<TokenStream> = cases
@@ -2914,76 +2645,6 @@ pub(crate) fn render_test_file() -> String {
             panic!("KAJIT_SHOW_ASM: printed disassembly above");
         }
 
-        fn maybe_show_json_asm<T>(encoded: &str) -> bool
-        where
-            for<'input> T: Facet<'input> + serde::de::DeserializeOwned,
-        {
-            if std::env::var_os(SHOW_ASM_ENV).is_none() {
-                return false;
-            }
-
-            // Compile kajit decoder and disassemble
-            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
-            let code = decoder.code();
-            let entry = decoder.entry_offset();
-            let base_addr = code.as_ptr() as usize;
-
-            println!("=== KAJIT JIT CODE ({} bytes, entry at +{entry:#x}) ===", code.len());
-            for line in disassemble_code(&code[entry..], base_addr + entry) {
-                println!("{line}");
-            }
-
-            // Disassemble serde path via inline(never) wrapper
-            #[inline(never)]
-            fn serde_json_deser<U: serde::de::DeserializeOwned>(data: &str) -> U {
-                serde_json::from_str(data).unwrap()
-            }
-
-            let serde_fn_ptr = serde_json_deser::<T> as *const u8;
-            let serde_code = unsafe { std::slice::from_raw_parts(serde_fn_ptr, 4096) };
-
-            println!();
-            println!("=== SERDE JSON CODE (showing first ~4KB from {:p}) ===", serde_fn_ptr);
-            let mut lines = disassemble_code(serde_code, serde_fn_ptr as usize);
-            // Stop at first ret instruction
-            if let Some(ret_idx) = lines.iter().position(|l| l.contains("ret")) {
-                lines.truncate(ret_idx + 1);
-            }
-            for line in &lines {
-                println!("{line}");
-            }
-
-            panic!("KAJIT_SHOW_ASM: printed disassembly above");
-        }
-
-        fn assert_json_case<T>(value: T)
-        where
-            for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
-        {
-            let encoded = serde_json::to_string(&value).unwrap();
-            maybe_print_case_input(encoded.as_bytes());
-            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
-            if maybe_debug_case_cfg_mir::<T>(encoded.as_bytes()) {
-                return;
-            }
-            if maybe_minimize_case_cfg_mir::<T>(encoded.as_bytes()) {
-                return;
-            }
-            if maybe_show_json_asm::<T>(&encoded) {
-                return;
-            }
-            let expected: T = serde_json::from_str(&encoded).unwrap();
-            maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
-            let case = runtime_case_name();
-            if dumps_enabled_for_case("json", &case) {
-                let artifacts = codegen_artifacts::<T>(kajit::DecoderKind::Json);
-                maybe_dump_codegen_artifacts("json", &case, &artifacts);
-            }
-            let got: T = kajit::from_str(&decoder, &encoded).unwrap();
-            assert_eq!(got, expected);
-        }
-
         fn assert_postcard_case<T>(value: T)
         where
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
@@ -3010,64 +2671,6 @@ pub(crate) fn render_test_file() -> String {
             }
             let got: T = kajit::deserialize(&decoder, &encoded).unwrap();
             assert_eq!(got, expected);
-        }
-
-        fn assert_json_input_case<T>(input: &[u8], expected: T)
-        where
-            for<'input> T: Facet<'input> + PartialEq + std::fmt::Debug,
-        {
-            maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
-            if maybe_debug_case_cfg_mir::<T>(input) {
-                return;
-            }
-            if maybe_minimize_case_cfg_mir::<T>(input) {
-                return;
-            }
-            maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
-            let got: T = kajit::deserialize(&decoder, input).unwrap();
-            assert_eq!(got, expected);
-        }
-
-        fn assert_json_input_err<T>(input: &[u8])
-        where
-            for<'input> T: Facet<'input>,
-        {
-            maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
-            if maybe_debug_case_cfg_mir::<T>(input) {
-                return;
-            }
-            if maybe_minimize_case_cfg_mir::<T>(input) {
-                return;
-            }
-            maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
-            let out = kajit::deserialize::<T>(&decoder, input);
-            assert!(out.is_err(), "expected json decode failure");
-        }
-
-        fn assert_json_input_err_code<T>(input: &[u8], expected_code: kajit::context::ErrorCode)
-        where
-            for<'input> T: Facet<'input>,
-        {
-            maybe_print_case_input(input);
-            maybe_print_case_cfg_mir::<T>(kajit::DecoderKind::Json);
-            if maybe_debug_case_cfg_mir::<T>(input) {
-                return;
-            }
-            if maybe_minimize_case_cfg_mir::<T>(input) {
-                return;
-            }
-            maybe_wait_for_debugger();
-            let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
-            let out = kajit::deserialize::<T>(&decoder, input);
-            let err = match out {
-                Ok(_) => panic!("expected json decode failure"),
-                Err(err) => err,
-            };
-            assert_eq!(err.code, expected_code);
         }
 
         fn assert_postcard_input_case<T>(input: &[u8], expected: T)
@@ -3137,7 +2740,6 @@ pub(crate) fn render_test_file() -> String {
             for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug + Arbitrary + 'static,
         {
             maybe_wait_for_debugger();
-            let json_decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json);
             let postcard_decoder =
                 kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
             let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {
@@ -3147,11 +2749,6 @@ pub(crate) fn render_test_file() -> String {
             let strategy = proptest::arbitrary::any::<T>();
             runner
                 .run(&strategy, |value| {
-                    let json_encoded = serde_json::to_string(&value).unwrap();
-                    let json_expected: T = serde_json::from_str(&json_encoded).unwrap();
-                    let json_got: T = kajit::from_str(&json_decoder, &json_encoded).unwrap();
-                    assert_eq!(json_got, json_expected);
-
                     let postcard_encoded = ::postcard::to_allocvec(&value).unwrap();
                     let postcard_expected: T = ::postcard::from_bytes(&postcard_encoded).unwrap();
                     let postcard_got: T =
@@ -3322,11 +2919,6 @@ pub(crate) fn render_test_file() -> String {
             }
         }
 
-        mod json {
-            use super::*;
-            #(#json_tests)*
-        }
-
         mod postcard {
             use super::*;
             #(#postcard_tests)*
@@ -3335,11 +2927,6 @@ pub(crate) fn render_test_file() -> String {
         mod prop {
             use super::*;
             #(#prop_tests)*
-        }
-
-        mod json_input {
-            use super::*;
-            #(#json_input_tests)*
         }
 
         mod postcard_input {

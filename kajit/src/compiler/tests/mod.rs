@@ -8,8 +8,8 @@ use serde::Serialize;
 
 use super::{
     CompiledDecoder, build_decoder_ir_via_hir, build_jit_debug_info_from_source_map,
-    build_json_decoder_hir, build_postcard_decoder_hir, build_postcard_decoder_ir_via_hir,
-    build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
+    build_postcard_decoder_hir, build_postcard_decoder_ir_via_hir, build_structural_hir_ir,
+    cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
     cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, compile_linear_ir_decoder,
     deser_dwarf_variables, dwarf_expr_for_out_field, format_allocated_regalloc_edits,
     jit_dwarf_target_arch, lower_hir_module, materialize_backend_result,
@@ -289,110 +289,6 @@ fn postcard_hir_models_borrowed_output_structs() {
             } if field == "name"
         )),
         "borrowed string lowering should materialize a str value directly into the destination"
-    );
-}
-
-#[test]
-fn json_hir_models_root_bool_without_reader_calls() {
-    let module = build_json_decoder_hir(<bool>::SHAPE);
-    let (_, function) = module.functions.iter().next().unwrap();
-
-    assert!(
-        module.callable_named("postcard.read_bool").is_none(),
-        "json root bool HIR should not mention postcard bool readers"
-    );
-    assert!(
-        module.callable_named("kajit_json_read_bool").is_none(),
-        "json root bool HIR should not call the old JSON bool intrinsic"
-    );
-    assert!(
-        module.callables.is_empty(),
-        "root bool HIR should be leaf-free"
-    );
-    assert!(
-        function
-            .body
-            .statements
-            .iter()
-            .any(|stmt| matches!(&stmt.kind, hir::StmtKind::Loop { .. })),
-        "json root bool HIR should spell out whitespace skipping as control flow"
-    );
-    assert!(
-        function
-            .body
-            .statements
-            .iter()
-            .any(|stmt| matches!(&stmt.kind, hir::StmtKind::If { .. })),
-        "json root bool HIR should spell out token dispatch as control flow"
-    );
-}
-
-#[test]
-fn json_hir_models_root_u32_without_reader_calls() {
-    let module = build_json_decoder_hir(<u32>::SHAPE);
-    let (_, function) = module.functions.iter().next().unwrap();
-
-    assert!(
-        module.callable_named("postcard.read_u32").is_none(),
-        "json root u32 HIR should not mention postcard integer readers"
-    );
-    assert!(
-        module.callable_named("kajit_json_read_u32").is_none(),
-        "json root u32 HIR should not call the old JSON u32 intrinsic"
-    );
-    assert!(
-        module.callables.is_empty(),
-        "root u32 HIR should be leaf-free"
-    );
-    assert!(
-        function
-            .body
-            .statements
-            .iter()
-            .any(|stmt| matches!(&stmt.kind, hir::StmtKind::Loop { .. })),
-        "json root u32 HIR should spell out whitespace and digit scanning as control flow"
-    );
-}
-
-#[test]
-fn json_hir_models_root_u64_without_reader_calls() {
-    let module = build_json_decoder_hir(<u64>::SHAPE);
-    let (_, function) = module.functions.iter().next().unwrap();
-
-    assert!(
-        module.callable_named("postcard.read_u64").is_none(),
-        "json root u64 HIR should not mention postcard integer readers"
-    );
-    assert!(
-        module.callable_named("kajit_json_read_u64").is_none(),
-        "json root u64 HIR should not call the old JSON u64 intrinsic"
-    );
-    assert!(
-        module.callables.is_empty(),
-        "root u64 HIR should be leaf-free"
-    );
-    assert!(
-        function
-            .body
-            .statements
-            .iter()
-            .any(|stmt| matches!(&stmt.kind, hir::StmtKind::Loop { .. })),
-        "json root u64 HIR should spell out whitespace and digit scanning as control flow"
-    );
-}
-
-#[test]
-fn compile_decoder_prefers_hir_for_supported_json_root_u32() {
-    let decoder = crate::compile_decoder(<u32>::SHAPE, crate::DecoderKind::Json);
-    let listing = decoder.cfg_mir_line_text_by_line.join("\n");
-
-    assert!(
-        !listing.contains("kajit_json_read_u32"),
-        "supported JSON shapes should compile through the HIR path"
-    );
-    assert!(
-        listing.contains("branch_if_zero") || listing.contains("branch "),
-        "HIR JSON lowering should still produce explicit control flow"
     );
 }
 
@@ -1150,97 +1046,6 @@ fn debug_scalar_array_emission_trace() {
         decoder
             .emission_trace_text()
             .expect("emission trace should render")
-    );
-}
-
-#[test]
-#[ignore = "json struct HIR lowering not implemented yet"]
-fn json_bool_true_false_matches_post_regalloc_simulation() {
-    #[derive(Debug, PartialEq, Eq, Facet, serde::Serialize, serde::Deserialize)]
-    struct Bools {
-        a: bool,
-        b: bool,
-    }
-
-    let value = Bools { a: true, b: false };
-    let input = serde_json::to_vec(&value).expect("serialize json input");
-    let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, crate::DecoderKind::Json);
-    run_default_passes_from_env(&mut func);
-    let linear = crate::linearize::linearize(&mut func);
-    let hints = Default::default();
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate json bool cfg");
-    let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &input);
-    assert!(
-        matches!(
-            result,
-            crate::regalloc_engine::DifferentialCheckResult::Match { .. }
-        ),
-        "unexpected interpreter/post-regalloc mismatch: {result:?}"
-    );
-}
-
-#[test]
-#[ignore = "json struct HIR lowering not implemented yet"]
-fn json_bool_true_false_without_backend_edit_emission() {
-    #[derive(Debug, PartialEq, Eq, Facet, serde::Serialize, serde::Deserialize)]
-    struct Bools {
-        a: bool,
-        b: bool,
-    }
-
-    let value = Bools { a: true, b: false };
-    let input = serde_json::to_vec(&value).expect("serialize json input");
-    let expected: Bools = serde_json::from_slice(&input).expect("decode reference json");
-    let mut func = build_decoder_ir_via_hir(<Bools>::SHAPE, crate::DecoderKind::Json);
-    run_default_passes_from_env(&mut func);
-    let linear = crate::linearize::linearize(&mut func);
-    let hints = Default::default();
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate json bool cfg");
-    let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
-        &linear, &cfg, &alloc, false, None,
-    );
-    let (buf, entry, _source_map, _backend_debug_info, _asm_program) =
-        materialize_backend_result(result);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
-    let decoder = CompiledDecoder {
-        buf,
-        cfg_mir_line_text_by_line: Default::default(),
-        entry,
-        func,
-        trusted_utf8_input: false,
-        _jit_registration: None,
-        asm_program: None,
-    };
-
-    let got = crate::from_str::<Bools>(&decoder, core::str::from_utf8(&input).unwrap())
-        .expect("json bool decoder should execute without backend edits");
-    assert_eq!(got, expected);
-}
-
-#[test]
-#[ignore = "non-HIR path disabled"]
-fn json_bool_true_false_with_backend_edit_emission() {
-    #[derive(Debug, PartialEq, Eq, Facet, serde::Serialize, serde::Deserialize)]
-    struct Bools {
-        a: bool,
-        b: bool,
-    }
-
-    let value = Bools { a: true, b: false };
-    let input = serde_json::to_vec(&value).expect("serialize json input");
-    let expected: Bools = serde_json::from_slice(&input).expect("decode reference json");
-    let decoder = crate::compile_decoder(<Bools>::SHAPE, crate::DecoderKind::Json);
-    let got = crate::from_str::<Bools>(&decoder, core::str::from_utf8(&input).unwrap())
-        .expect("json bool decoder should execute with backend edits");
-    assert_eq!(got, expected);
-    assert!(
-        crate::regalloc_edit_count(<Bools>::SHAPE, crate::DecoderKind::Json) > 0,
-        "expected this regression test to exercise backend edit emission"
     );
 }
 
@@ -2032,7 +1837,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
                 id: inst_a,
                 op: crate::linearize::LinearOp::CallIntrinsic {
                     func: crate::ir::IntrinsicFn(
-                        crate::json_intrinsics::kajit_json_read_bool as *const () as usize,
+                        crate::intrinsics::kajit_read_bool as *const () as usize,
                     ),
                     args: Vec::new(),
                     dst: None,
@@ -2045,7 +1850,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
                 id: inst_b,
                 op: crate::linearize::LinearOp::CallIntrinsic {
                     func: crate::ir::IntrinsicFn(
-                        crate::json_intrinsics::kajit_json_read_bool as *const () as usize,
+                        crate::intrinsics::kajit_read_bool as *const () as usize,
                     ),
                     args: Vec::new(),
                     dst: None,

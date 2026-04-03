@@ -55,9 +55,6 @@ pub(crate) fn symbol_registry_for_shape(shape: &'static Shape) -> crate::ir::Int
     for (name, func) in crate::intrinsics::known_intrinsics() {
         registry.register(name, func);
     }
-    for (name, func) in crate::json_intrinsics::known_intrinsics() {
-        registry.register(name, func);
-    }
 
     let mut seen = HashSet::new();
     collect_shape_symbols(shape, &mut seen, &mut registry);
@@ -81,11 +78,6 @@ fn collect_shape_symbols(
                 continue;
             }
 
-            let name = field.effective_name();
-            registry.register_const(
-                format!("json_key_ptr.{}", encode_symbol_bytes(name)),
-                name.as_ptr() as u64,
-            );
             collect_shape_symbols(field.shape(), seen, registry);
         }
     } else if let Type::User(UserType::Enum(enum_type)) = &shape.ty {
@@ -130,15 +122,6 @@ fn collect_shape_symbols(
         Def::Undefined | Def::Scalar | Def::DynamicValue(_) => {}
         _ => {}
     }
-}
-
-fn encode_symbol_bytes(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() * 2);
-    for byte in text.as_bytes() {
-        use core::fmt::Write as _;
-        write!(&mut out, "{byte:02x}").expect("writing to String should not fail");
-    }
-    out
 }
 
 /// Width of a discriminant field in IR representation.

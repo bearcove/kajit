@@ -32,7 +32,6 @@ kajit-emit = { path = "../kajit-emit" }
 kajit-emit-text = { path = "../kajit-emit-text" }
 kajit-format = { path = "../kajit-format" }
 kajit-hir = { path = "../kajit-hir" }
-kajit-json = { path = "../kajit-json" }
 kajit-malum = { path = "../kajit-malum" }
 kajit-postcard = { path = "../kajit-postcard" }
 
@@ -54,16 +53,4 @@ proptest-derive = "0.5"
 
 [[bench]]
 name = "synthetic"
-harness = false
-
-[[bench]]
-name = "canada"
-harness = false
-
-[[bench]]
-name = "twitter"
-harness = false
-
-[[bench]]
-name = "citm_catalog"
 harness = false

@@ -4,11 +4,6 @@ const POSTCARD_U32_V0_RVSDG_SNAPSHOT: &str =
     include_str!("snapshots/corpus__generated_rvsdg_postcard_scalar_u32__v0_x86_64.snap");
 
 #[derive(Debug, PartialEq, Facet)]
-struct JsonFieldStruct {
-    x: u32,
-}
-
-#[derive(Debug, PartialEq, Facet)]
 struct PostcardOptionStruct {
     x: Option<u32>,
 }
@@ -33,21 +28,6 @@ fn compile_and_run_from_ir_text_snapshot_u32() {
 }
 
 #[test]
-#[ignore = "pre-existing: CFG-MIR text format changed"]
-fn compile_and_run_from_cfg_mir_text_with_named_intrinsics_u32() {
-    let cfg_text = kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, kajit::DecoderKind::Json);
-    assert!(
-        cfg_text.contains("@kajit_json_read_u32"),
-        "expected named intrinsic in CFG-MIR text, got:\n{cfg_text}"
-    );
-
-    let registry = kajit::symbol_registry_for_shape(<u32 as Facet>::SHAPE);
-    let decoder = kajit::compile_decoder_from_cfg_mir_text(&cfg_text, &registry, false);
-    let out: u32 = kajit::deserialize(&decoder, b"42").expect("decode should succeed");
-    assert_eq!(out, 42);
-}
-
-#[test]
 #[ignore = "pre-existing: stale IR text snapshot"]
 fn deserialize_from_ir_text_helper_u32() {
     let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
@@ -65,23 +45,6 @@ fn deserialize_from_cfg_mir_text_helper_u32() {
     let out: u32 = kajit::deserialize_from_cfg_mir_text(&cfg_text, &[0xac, 0x02])
         .expect("decode should succeed");
     assert_eq!(out, 300);
-}
-
-#[test]
-#[ignore = "json struct HIR lowering not implemented yet"]
-fn deserialize_from_ir_text_with_named_json_key_ptr_const() {
-    let (ir_text, _) =
-        kajit::debug_ir_and_cfg_mir_text(JsonFieldStruct::SHAPE, kajit::DecoderKind::Json);
-    assert!(
-        ir_text.contains("@json_key_ptr.78"),
-        "expected named JSON key pointer const in IR text, got:\n{ir_text}"
-    );
-
-    let registry = kajit::symbol_registry_for_shape(JsonFieldStruct::SHAPE);
-    let out: JsonFieldStruct =
-        kajit::deserialize_from_ir_text(&ir_text, &registry, false, br#"{"x":42}"#)
-            .expect("decode should succeed");
-    assert_eq!(out, JsonFieldStruct { x: 42 });
 }
 
 #[test]

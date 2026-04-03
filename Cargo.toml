@@ -5,7 +5,6 @@ members = [
   "kajit-emit-text",
   "kajit-format",
   "kajit-hir",
-  "kajit-json",
   "kajit-malum",
   "kajit-postcard",
   "kajit-hir-text",

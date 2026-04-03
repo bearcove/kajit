@@ -436,7 +436,6 @@ fn register_bench_case<T>(
     v: &mut Vec<harness::Bench>,
     group: &str,
     value: T,
-    enable_json_kajit: bool,
     enable_postcard_kajit: bool,
 ) where
     for<'input> T: Facet<'input>
@@ -450,22 +449,7 @@ fn register_bench_case<T>(
         return;
     }
     if harness::is_list_mode() {
-        let json_prefix = format!("{group}/json");
         let postcard_prefix = format!("{group}/postcard");
-        v.push(harness::Bench {
-            name: format!("{json_prefix}/serde/deser"),
-            func: Box::new(|_| {}),
-        });
-        if enable_json_kajit {
-            v.push(harness::Bench {
-                name: format!("{json_prefix}/kajit/deser"),
-                func: Box::new(|_| {}),
-            });
-        }
-        v.push(harness::Bench {
-            name: format!("{json_prefix}/serde/ser"),
-            func: Box::new(|_| {}),
-        });
         v.push(harness::Bench {
             name: format!("{postcard_prefix}/serde/deser"),
             func: Box::new(|_| {}),
@@ -515,96 +499,16 @@ fn register_bench_case<T>(
         }
         return;
     }
-    let json_data = Arc::new(serde_json::to_string(&value).unwrap());
     let postcard_data = Arc::new(postcard::to_allocvec(&value).unwrap());
     let value = Arc::new(value);
-    let json_prefix = format!("{group}/json");
     let postcard_prefix = format!("{group}/postcard");
-    v.push(harness::Bench {
-        name: format!("{json_prefix}/serde/deser"),
-        func: Box::new({
-            let data = Arc::clone(&json_data);
-            move |runner| {
-                runner.run(|| {
-                    black_box(serde_json::from_str::<T>(black_box(data.as_str())).unwrap());
-                });
-            }
-        }),
-    });
-    if enable_json_kajit {
-        let json_decoder = match catch_unwind(AssertUnwindSafe(|| {
-            kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Json)
-        })) {
-            Ok(decoder) => Some(Arc::new(decoder)),
-            Err(payload) => {
-                eprintln!(
-                    "skipping {json_prefix}/kajit/deser: compile unsupported ({})",
-                    panic_payload_to_string(&payload)
-                );
-                None
-            }
-        };
-        if let Some(decoder) = json_decoder {
-            match catch_unwind(AssertUnwindSafe(|| {
-                kajit::from_str::<T>(decoder.as_ref(), json_data.as_str())
-            })) {
-                Ok(Ok(_)) => {
-                    v.push(harness::Bench {
-                        name: format!("{json_prefix}/kajit/deser"),
-                        func: Box::new({
-                            let data = Arc::clone(&json_data);
-                            let decoder = Arc::clone(&decoder);
-                            move |runner| {
-                                let decoder = decoder.as_ref();
-                                runner.run(|| {
-                                    black_box(
-                                        kajit::from_str::<T>(decoder, black_box(data.as_str()))
-                                            .unwrap(),
-                                    );
-                                });
-                            }
-                        }),
-                    });
-                }
-                Ok(Err(err)) => {
-                    eprintln!(
-                        "skipping {json_prefix}/kajit/deser: preflight decode failed ({err:?})"
-                    );
-                }
-                Err(payload) => {
-                    eprintln!(
-                        "skipping {json_prefix}/kajit/deser: preflight panic ({})",
-                        panic_payload_to_string(&payload)
-                    );
-                }
-            }
-        }
-    }
-    v.push(harness::Bench {
-        name: format!("{json_prefix}/serde/ser"),
-        func: Box::new({
-            let value = Arc::clone(&value);
-            move |runner| {
-                runner.run(|| {
-                    black_box(serde_json::to_vec(black_box(&*value)).unwrap());
-                });
-            }
-        }),
-    });
-    // Use #[inline(never)] to prevent LLVM from inlining the entire serde
-    // decoder into the benchmark loop — otherwise serde pays zero call overhead
-    // while kajit pays full prologue/epilogue, making the comparison unfair.
-    #[inline(never)]
-    fn serde_postcard_deser_noinline<U: serde::de::DeserializeOwned>(data: &[u8]) -> U {
-        postcard::from_bytes(data).unwrap()
-    }
     v.push(harness::Bench {
         name: format!("{postcard_prefix}/serde/deser"),
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             move |runner| {
                 runner.run(|| {
-                    black_box(serde_postcard_deser_noinline::<T>(black_box(&data[..])));
+                    black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
                 });
             }
         }),
@@ -753,7 +657,6 @@ fn main() {
             age: 42,
             name: "Alice".into(),
         },
-        false,
         true,
     );
     register_bench_case(
@@ -767,7 +670,6 @@ fn main() {
                 zip: 97201,
             },
         },
-        false,
         true,
     );
     register_bench_case(
@@ -780,7 +682,6 @@ fn main() {
             },
             z: 3,
         },
-        false,
         true,
     );
     register_bench_case(
@@ -800,7 +701,6 @@ fn main() {
             a_i128: -170141183460469231731687303715884105728i128,
             a_isize: -123_456isize,
         },
-        false,
         false,
     );
     register_bench_case(
@@ -826,15 +726,8 @@ fn main() {
             a_name: "hello".into(),
         },
         false,
-        false,
     );
-    register_bench_case(
-        &mut v,
-        "bool_true_false",
-        Bools { a: true, b: false },
-        false,
-        true,
-    );
+    register_bench_case(&mut v, "bool_true_false", Bools { a: true, b: false }, true);
     register_bench_case(
         &mut v,
         "integer_boundaries",
@@ -847,16 +740,15 @@ fn main() {
             i32_min: -2147483648,
         },
         false,
-        false,
     );
-    register_bench_case(&mut v, "scalar_u16", 0u16, false, true);
-    register_bench_case(&mut v, "scalar_u32", 0u32, false, true);
-    register_bench_case(&mut v, "scalar_u64", 0u64, false, true);
-    register_bench_case(&mut v, "scalar_i16", i16::MIN, false, true);
-    register_bench_case(&mut v, "scalar_i32", i32::MIN, false, true);
-    register_bench_case(&mut v, "scalar_i64", i64::MIN, false, true);
-    register_bench_case(&mut v, "bool_field", BoolField { value: true }, false, true);
-    register_bench_case(&mut v, "enum_external", Animal::Cat, false, false);
+    register_bench_case(&mut v, "scalar_u16", 0u16, true);
+    register_bench_case(&mut v, "scalar_u32", 0u32, true);
+    register_bench_case(&mut v, "scalar_u64", 0u64, true);
+    register_bench_case(&mut v, "scalar_i16", i16::MIN, true);
+    register_bench_case(&mut v, "scalar_i32", i32::MIN, true);
+    register_bench_case(&mut v, "scalar_i64", i64::MIN, true);
+    register_bench_case(&mut v, "bool_field", BoolField { value: true }, true);
+    register_bench_case(&mut v, "enum_external", Animal::Cat, false);
     register_bench_case(
         &mut v,
         "enum_as_struct_field",
@@ -868,38 +760,28 @@ fn main() {
             },
         },
         false,
-        false,
     );
-    register_bench_case(
-        &mut v,
-        "tuple_pair",
-        (42u32, "Alice".to_string()),
-        false,
-        true,
-    );
-    register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32), false, true);
+    register_bench_case(&mut v, "tuple_pair", (42u32, "Alice".to_string()), true);
+    register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32), true);
     register_bench_case(
         &mut v,
         "array_u32_4_small",
         [10u32, 20u32, 30u32, 40u32],
-        false,
         true,
     );
     register_bench_case(
         &mut v,
         "array_u32_4_large",
         [70_000u32, 80_000u32, 90_000u32, 100_000u32],
-        false,
         true,
     );
-    register_bench_case(&mut v, "tuple_nested", ((1u32, 2u32), 3u32), false, true);
+    register_bench_case(&mut v, "tuple_nested", ((1u32, 2u32), 3u32), true);
     register_bench_case(
         &mut v,
         "vec_scalar_small",
         ScalarVec {
             values: (0..16).map(|i| i as u32).collect(),
         },
-        false,
         true,
     );
     register_bench_case(
@@ -909,7 +791,6 @@ fn main() {
             value: Box::new(42),
         },
         false,
-        false,
     );
     register_bench_case(
         &mut v,
@@ -917,7 +798,6 @@ fn main() {
         BoxedString {
             name: Box::new("hello".to_string()),
         },
-        false,
         false,
     );
     register_bench_case(
@@ -930,7 +810,6 @@ fn main() {
             }),
         },
         false,
-        false,
     );
     register_bench_case(
         &mut v,
@@ -938,7 +817,6 @@ fn main() {
         OptionBox {
             value: Some(Box::new(7)),
         },
-        false,
         false,
     );
     register_bench_case(
@@ -948,7 +826,6 @@ fn main() {
             items: vec![Box::new(1), Box::new(2), Box::new(3)],
         },
         false,
-        false,
     );
     register_bench_case(
         &mut v,
@@ -957,7 +834,6 @@ fn main() {
             geo: (),
             name: "test".into(),
         },
-        false,
         true,
     );
     register_bench_case(
@@ -966,7 +842,6 @@ fn main() {
         ScalarVec {
             values: (0..2048).map(|i| i as u32).collect(),
         },
-        false,
         true,
     );
     register_bench_case(
@@ -979,23 +854,15 @@ fn main() {
                 author: "Amos".into(),
             },
         },
-        false,
         true,
     );
-    register_bench_case(
-        &mut v,
-        "option_u32",
-        WithOptU32 { value: Some(42) },
-        false,
-        true,
-    );
+    register_bench_case(&mut v, "option_u32", WithOptU32 { value: Some(42) }, true);
     register_bench_case(
         &mut v,
         "option_string",
         WithOptStr {
             name: Some("Alice".into()),
         },
-        false,
         true,
     );
     register_bench_case(
@@ -1007,7 +874,6 @@ fn main() {
                 zip: 97201,
             }),
         },
-        false,
         true,
     );
     register_bench_case(
@@ -1018,7 +884,6 @@ fn main() {
             b: "hello".into(),
             c: None,
         },
-        false,
         true,
     );
     register_bench_case(
@@ -1027,7 +892,6 @@ fn main() {
         Nums {
             vals: vec![1, 2, 3],
         },
-        false,
         true,
     );
     register_bench_case(
@@ -1036,7 +900,6 @@ fn main() {
         Names {
             items: vec!["hello".into(), "world".into()],
         },
-        false,
         true,
     );
     register_bench_case(
@@ -1054,7 +917,6 @@ fn main() {
                 },
             ],
         },
-        false,
         true,
     );
     register_bench_case(
@@ -1064,16 +926,9 @@ fn main() {
             name: "Alice".into(),
             age: 30,
         },
-        false,
         true,
     );
-    register_bench_case(
-        &mut v,
-        "deny_unknown_fields",
-        Strict { x: 10, y: 20 },
-        false,
-        true,
-    );
+    register_bench_case(&mut v, "deny_unknown_fields", Strict { x: 10, y: 20 }, true);
     register_bench_case(
         &mut v,
         "default_field",
@@ -1082,14 +937,12 @@ fn main() {
             score: 7,
         },
         false,
-        false,
     );
-    register_bench_case(&mut v, "transparent_scalar", Wrapper(42), false, true);
+    register_bench_case(&mut v, "transparent_scalar", Wrapper(42), true);
     register_bench_case(
         &mut v,
         "transparent_string",
         StringWrapper("hello".into()),
-        false,
         true,
     );
     register_bench_case(
@@ -1099,7 +952,6 @@ fn main() {
             age: 25,
             name: "Eve".into(),
         }),
-        false,
         true,
     );
     register_bench_case(
@@ -1115,7 +967,6 @@ fn main() {
                 zip: 98101,
             },
         },
-        false,
         true,
     );
     harness::run_benchmarks(v);

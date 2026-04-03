@@ -2,17 +2,16 @@
 
 use facet::StructKind;
 
-/// Wire format kind — determines which HIR frontend and runtime behavior to use.
+/// Wire format kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DecoderKind {
-    Json,
     Postcard,
 }
 
 impl DecoderKind {
     /// Whether `from_str` can safely enable trusted UTF-8 mode for this format.
     pub fn supports_trusted_utf8_input(self) -> bool {
-        matches!(self, DecoderKind::Json)
+        false
     }
 }
 

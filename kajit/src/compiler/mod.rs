@@ -18,7 +18,6 @@ use crate::pipeline_opts::PipelineOptions;
 
 pub use hir_to_ir::lower_hir_module;
 pub(crate) use hir_to_ir::{build_postcard_decoder_ir_via_hir, build_structural_hir_ir};
-pub(crate) use kajit_json::{build_json_decoder_hir, supports_json_decoder_hir};
 pub(crate) use kajit_postcard::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
@@ -329,10 +328,8 @@ pub fn compile_pipeline(
     let registry = symbol_registry_for_shape(shape);
 
     // Phase 1: HIR
-    let module = match kind {
-        DecoderKind::Postcard => build_postcard_decoder_hir(shape),
-        DecoderKind::Json => build_json_decoder_hir(shape),
-    };
+    let _ = kind;
+    let module = build_postcard_decoder_hir(shape);
     let hir_text = module.to_string();
 
     // Phase 2: IR + passes with timeline
@@ -353,7 +350,7 @@ pub fn compile_pipeline(
     let linear_text = format!("{linear}");
 
     // Phase 4: CFG-MIR + optimize
-    let trusted_utf8_input = matches!(kind, DecoderKind::Json);
+    let trusted_utf8_input = false;
 
     // Phase 5: CFG-MIR lowering + optimization (ONCE — used for everything)
     let hints = Default::default();
@@ -449,10 +446,8 @@ pub fn compile_pre_opt_cfg(
     pipeline_opts: &PipelineOptions,
 ) -> kajit_mir::cfg_mir::Program {
     // Phase 1: HIR
-    let module = match kind {
-        DecoderKind::Postcard => build_postcard_decoder_hir(shape),
-        DecoderKind::Json => build_json_decoder_hir(shape),
-    };
+    let _ = kind;
+    let module = build_postcard_decoder_hir(shape);
 
     // Phase 2: IR + passes
     let mut func = build_structural_hir_ir(shape, &module);
@@ -490,9 +485,6 @@ fn compile_decoder_with_options_legacy(
     pipeline_opts: &PipelineOptions,
 ) -> CompiledDecoder {
     match kind {
-        DecoderKind::Json if supports_json_decoder_hir(shape) => {
-            compile_json_decoder_via_hir_with_options(shape, pipeline_opts.clone())
-        }
         DecoderKind::Postcard if supports_postcard_decoder_hir(shape) => {
             compile_postcard_decoder_via_hir_with_options(shape, pipeline_opts.clone())
         }
@@ -654,10 +646,6 @@ pub(crate) fn build_decoder_ir_via_hir(
     kind: DecoderKind,
 ) -> crate::ir::IrFunc {
     match kind {
-        DecoderKind::Json => {
-            let module = build_json_decoder_hir(shape);
-            build_structural_hir_ir(shape, &module)
-        }
         DecoderKind::Postcard => {
             let module = build_postcard_decoder_hir(shape);
             build_structural_hir_ir(shape, &module)
@@ -677,24 +665,6 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
     compile_linear_ir_decoder_with_options(
         &linear,
         false,
-        pipeline_opts,
-        Some(&registry),
-        Some(shape),
-    )
-}
-
-pub(crate) fn compile_json_decoder_via_hir_with_options(
-    shape: &'static Shape,
-    pipeline_opts: PipelineOptions,
-) -> CompiledDecoder {
-    let registry = symbol_registry_for_shape(shape);
-    let module = build_json_decoder_hir(shape);
-    let mut func = build_structural_hir_ir(shape, &module);
-    run_configured_default_passes(&mut func, &pipeline_opts);
-    let linear = crate::linearize::linearize(&mut func);
-    compile_linear_ir_decoder_with_options(
-        &linear,
-        true,
         pipeline_opts,
         Some(&registry),
         Some(shape),
