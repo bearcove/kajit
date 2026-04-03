@@ -538,7 +538,7 @@ fn postcard_hir_ir_path_decodes_option_borrowed_fields() {
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_float_fields() {
+fn postcard_hir_lowering_decodes_float_fields() {
     let decoder = compile_postcard_decoder_via_structural_hir(<FloatHeader>::SHAPE);
 
     let mut bytes = Vec::new();
@@ -546,24 +546,24 @@ fn postcard_structural_hir_ir_path_decodes_float_fields() {
     bytes.extend_from_slice(&2.718281828459045f64.to_le_bytes());
 
     let value = crate::deserialize::<FloatHeader>(&decoder, &bytes)
-        .expect("structural HIR postcard decoder should decode float fields");
+        .expect("postcard HIR lowering should decode float fields");
     assert_eq!(value.a.to_bits(), 3.14f32.to_bits());
     assert_eq!(value.b.to_bits(), 2.718281828459045f64.to_bits());
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_char_field() {
+fn postcard_hir_lowering_decodes_char_field() {
     let decoder = compile_postcard_decoder_via_structural_hir(<CharHeader>::SHAPE);
 
     let value = crate::deserialize::<CharHeader>(&decoder, &[2, 0xC3, 0x9F])
-        .expect("structural HIR postcard decoder should decode char fields");
+        .expect("postcard HIR lowering should decode char fields");
     assert_eq!(value, CharHeader { ch: 'ß' });
 }
 
 // pre-existing: HIR round-trip mismatch on max_iterations
 #[test]
 #[ignore]
-fn postcard_structural_hir_ir_path_decodes_128bit_fields() {
+fn postcard_hir_lowering_decodes_128bit_fields() {
     let unsigned = BigUnsigned {
         value: (1_u128 << 100) | 0x1234_5678_9abc_def0_u128,
     };
@@ -575,28 +575,28 @@ fn postcard_structural_hir_ir_path_decodes_128bit_fields() {
     let unsigned_bytes =
         postcard::to_allocvec(&unsigned).expect("postcard should encode unsigned 128-bit sample");
     let unsigned_value = crate::deserialize::<BigUnsigned>(&unsigned_decoder, &unsigned_bytes)
-        .expect("structural HIR postcard decoder should decode u128 fields");
+        .expect("postcard HIR lowering should decode u128 fields");
     assert_eq!(unsigned_value, unsigned);
 
     let signed_decoder = compile_postcard_decoder_via_structural_hir(<BigSigned>::SHAPE);
     let signed_bytes =
         postcard::to_allocvec(&signed).expect("postcard should encode signed 128-bit sample");
     let signed_value = crate::deserialize::<BigSigned>(&signed_decoder, &signed_bytes)
-        .expect("structural HIR postcard decoder should decode i128 fields");
+        .expect("postcard HIR lowering should decode i128 fields");
     assert_eq!(signed_value, signed);
 }
 
 // pre-existing: HIR round-trip mismatch on max_iterations
 #[test]
 #[ignore]
-fn postcard_structural_hir_ir_path_decodes_option_u128_field() {
+fn postcard_hir_lowering_decodes_option_u128_field() {
     let decoder = compile_postcard_decoder_via_structural_hir(<MaybeBigUnsigned>::SHAPE);
     let sample = MaybeBigUnsigned {
         value: Some((1_u128 << 72) | 0x55aa_33cc_77ee_u128),
     };
     let bytes = postcard::to_allocvec(&sample).expect("postcard should encode Option<u128>");
     let value = crate::deserialize::<MaybeBigUnsigned>(&decoder, &bytes)
-        .expect("structural HIR postcard decoder should decode Option<u128>");
+        .expect("postcard HIR lowering should decode Option<u128>");
     assert_eq!(value, sample);
 }
 
@@ -776,29 +776,29 @@ fn postcard_hir_ir_path_decodes_unit_enums() {
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_scalar_field() {
+fn postcard_hir_lowering_decodes_scalar_field() {
     let decoder = compile_postcard_decoder_via_structural_hir(<ScalarNumber>::SHAPE);
 
     let value = crate::deserialize::<ScalarNumber>(&decoder, &[42])
-        .expect("structural HIR postcard decoder should decode a scalar field");
+        .expect("postcard HIR lowering should decode a scalar field");
     assert_eq!(value, ScalarNumber { value: 42 });
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_borrowed_header() {
+fn postcard_hir_lowering_decodes_borrowed_header() {
     let decoder = compile_postcard_decoder_via_structural_hir(<BorrowedHeader<'static>>::SHAPE);
 
     let value = crate::deserialize::<BorrowedHeader<'_>>(&decoder, &[7, 2, b'h', b'i'])
-        .expect("structural HIR postcard decoder should decode direct borrowed fields");
+        .expect("postcard HIR lowering should decode direct borrowed fields");
     assert_eq!(value, BorrowedHeader { len: 7, name: "hi" });
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_owned_header() {
+fn postcard_hir_lowering_decodes_owned_header() {
     let decoder = compile_postcard_decoder_via_structural_hir(<OwnedHeader>::SHAPE);
 
     let value = crate::deserialize::<OwnedHeader>(&decoder, &[7, 2, b'h', b'i'])
-        .expect("structural HIR postcard decoder should decode direct owned string fields");
+        .expect("postcard HIR lowering should decode direct owned string fields");
     assert_eq!(
         value,
         OwnedHeader {
@@ -809,32 +809,32 @@ fn postcard_structural_hir_ir_path_decodes_owned_header() {
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_root_vec_u32() {
+fn postcard_hir_lowering_decodes_root_vec_u32() {
     let decoder = compile_postcard_decoder_via_structural_hir(<Vec<u32>>::SHAPE);
 
     let value = crate::deserialize::<Vec<u32>>(&decoder, &[3, 1, 2, 3])
-        .expect("structural HIR postcard decoder should decode root Vec<u32>");
+        .expect("postcard HIR lowering should decode root Vec<u32>");
     assert_eq!(value, vec![1, 2, 3]);
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_root_vec_string() {
+fn postcard_hir_lowering_decodes_root_vec_string() {
     let decoder = compile_postcard_decoder_via_structural_hir(<Vec<String>>::SHAPE);
 
     let value = crate::deserialize::<Vec<String>>(&decoder, &[2, 2, b'h', b'i', 2, b'b', b'y'])
-        .expect("structural HIR postcard decoder should decode root Vec<String>");
+        .expect("postcard HIR lowering should decode root Vec<String>");
     assert_eq!(value, vec!["hi".to_owned(), "by".to_owned()]);
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_root_vec_structs() {
+fn postcard_hir_lowering_decodes_root_vec_structs() {
     let decoder = compile_postcard_decoder_via_structural_hir(<Vec<OwnedAddress>>::SHAPE);
 
     let value = crate::deserialize::<Vec<OwnedAddress>>(
         &decoder,
         &[2, 2, b'P', b'A', 75, 2, b'L', b'Y', 13],
     )
-    .expect("structural HIR postcard decoder should decode root Vec<struct>");
+    .expect("postcard HIR lowering should decode root Vec<struct>");
     assert_eq!(
         value,
         vec![
@@ -853,56 +853,56 @@ fn postcard_structural_hir_ir_path_decodes_root_vec_structs() {
 // pre-existing: HIR round-trip mismatch on max_iterations
 #[test]
 #[ignore]
-fn postcard_structural_hir_ir_path_decodes_unit_enums() {
+fn postcard_hir_lowering_decodes_unit_enums() {
     let decoder = compile_postcard_decoder_via_structural_hir(<UnitAnimal>::SHAPE);
 
     let cat = crate::deserialize::<UnitAnimal>(&decoder, &[0])
-        .expect("structural HIR postcard decoder should decode Cat");
+        .expect("postcard HIR lowering should decode Cat");
     assert_eq!(cat, UnitAnimal::Cat);
 
     let dog = crate::deserialize::<UnitAnimal>(&decoder, &[1])
-        .expect("structural HIR postcard decoder should decode Dog");
+        .expect("postcard HIR lowering should decode Dog");
     assert_eq!(dog, UnitAnimal::Dog);
 
     let parrot = crate::deserialize::<UnitAnimal>(&decoder, &[2])
-        .expect("structural HIR postcard decoder should decode Parrot");
+        .expect("postcard HIR lowering should decode Parrot");
     assert_eq!(parrot, UnitAnimal::Parrot);
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_option_scalar_field() {
+fn postcard_hir_lowering_decodes_option_scalar_field() {
     let decoder = compile_postcard_decoder_via_structural_hir(<MaybeCount>::SHAPE);
 
     let some = crate::deserialize::<MaybeCount>(&decoder, &[1, 42])
-        .expect("structural HIR postcard decoder should decode Some(u32)");
+        .expect("postcard HIR lowering should decode Some(u32)");
     assert_eq!(some, MaybeCount { count: Some(42) });
 
     let none = crate::deserialize::<MaybeCount>(&decoder, &[0])
-        .expect("structural HIR postcard decoder should decode None");
+        .expect("postcard HIR lowering should decode None");
     assert_eq!(none, MaybeCount { count: None });
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_option_borrowed_field() {
+fn postcard_hir_lowering_decodes_option_borrowed_field() {
     let decoder = compile_postcard_decoder_via_structural_hir(<MaybeBorrowedName<'static>>::SHAPE);
 
     let some = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[1, 2, b'h', b'i'])
-        .expect("structural HIR postcard decoder should decode Some(&str)");
+        .expect("postcard HIR lowering should decode Some(&str)");
     assert_eq!(some, MaybeBorrowedName { name: Some("hi") });
 
     let none = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[0])
-        .expect("structural HIR postcard decoder should decode None");
+        .expect("postcard HIR lowering should decode None");
     assert_eq!(none, MaybeBorrowedName { name: None });
 }
 
 mod hir_to_ir;
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_scalar_arrays() {
+fn postcard_hir_lowering_decodes_scalar_arrays() {
     let decoder = compile_postcard_decoder_via_structural_hir(<ScalarArrayHolder>::SHAPE);
 
     let value = crate::deserialize::<ScalarArrayHolder>(&decoder, &[1, 2, 3, 4])
-        .expect("structural HIR postcard decoder should decode scalar arrays");
+        .expect("postcard HIR lowering should decode scalar arrays");
     assert_eq!(
         value,
         ScalarArrayHolder {
@@ -912,13 +912,13 @@ fn postcard_structural_hir_ir_path_decodes_scalar_arrays() {
 }
 
 #[test]
-fn postcard_structural_hir_ir_path_decodes_borrowed_arrays() {
+fn postcard_hir_lowering_decodes_borrowed_arrays() {
     let decoder =
         compile_postcard_decoder_via_structural_hir(<BorrowedArrayHolder<'static>>::SHAPE);
 
     let value =
         crate::deserialize::<BorrowedArrayHolder<'_>>(&decoder, &[2, b'h', b'i', 2, b'o', b'k'])
-            .expect("structural HIR postcard decoder should decode borrowed arrays");
+            .expect("postcard HIR lowering should decode borrowed arrays");
     assert_eq!(
         value,
         BorrowedArrayHolder {
@@ -930,26 +930,26 @@ fn postcard_structural_hir_ir_path_decodes_borrowed_arrays() {
 // pre-existing: HIR round-trip mismatch on max_iterations
 #[test]
 #[ignore]
-fn postcard_structural_hir_ir_path_decodes_payload_enums() {
+fn postcard_hir_lowering_decodes_payload_enums() {
     let decoder = compile_postcard_decoder_via_structural_hir(<PayloadAnimal<'static>>::SHAPE);
 
     let cat = crate::deserialize::<PayloadAnimal<'_>>(&decoder, &[0])
-        .expect("structural HIR postcard decoder should decode unit enum variant");
+        .expect("postcard HIR lowering should decode unit enum variant");
     assert_eq!(cat, PayloadAnimal::Cat);
 
     let count = crate::deserialize::<PayloadAnimal<'_>>(&decoder, &[1, 42])
-        .expect("structural HIR postcard decoder should decode scalar payload enum variant");
+        .expect("postcard HIR lowering should decode scalar payload enum variant");
     assert_eq!(count, PayloadAnimal::Count(42));
 
     let name = crate::deserialize::<PayloadAnimal<'_>>(&decoder, &[2, 2, b'h', b'i'])
-        .expect("structural HIR postcard decoder should decode borrowed payload enum variant");
+        .expect("postcard HIR lowering should decode borrowed payload enum variant");
     assert_eq!(name, PayloadAnimal::Name("hi"));
 }
 
 // pre-existing: HIR round-trip mismatch on max_iterations
 #[test]
 #[ignore]
-fn postcard_structural_hir_ir_path_decodes_enum_in_struct_field() {
+fn postcard_hir_lowering_decodes_enum_in_struct_field() {
     let decoder = compile_postcard_decoder_via_structural_hir(<OwnedZoo>::SHAPE);
 
     let value = crate::deserialize::<OwnedZoo>(
@@ -961,7 +961,7 @@ fn postcard_structural_hir_ir_path_decodes_enum_in_struct_field() {
             1,    // good_boy
         ],
     )
-    .expect("structural HIR postcard decoder should decode nested enum payloads");
+    .expect("postcard HIR lowering should decode nested enum payloads");
     assert_eq!(
         value,
         OwnedZoo {
@@ -975,7 +975,7 @@ fn postcard_structural_hir_ir_path_decodes_enum_in_struct_field() {
 }
 
 #[test]
-fn postcard_structural_hir_array_path_matches_jit_differential_harness() {
+fn postcard_hir_lowering_array_path_matches_jit_differential_harness() {
     let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
     let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
@@ -985,7 +985,7 @@ fn postcard_structural_hir_array_path_matches_jit_differential_harness() {
         &[1, 2, 3, 4],
         output_size,
     )
-    .expect("differential harness should execute structural HIR postcard array decoder");
+    .expect("differential harness should execute postcard HIR-lowered array decoder");
     assert!(
         report.is_match(),
         "unexpected differential mismatch: {:?}",
@@ -994,14 +994,14 @@ fn postcard_structural_hir_array_path_matches_jit_differential_harness() {
 }
 
 #[test]
-fn postcard_structural_hir_array_path_matches_post_regalloc_simulation() {
+fn postcard_hir_lowering_array_path_matches_post_regalloc_simulation() {
     let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
     let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default();
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate structural HIR postcard array cfg");
+        .expect("regalloc should allocate postcard HIR-lowered array cfg");
     let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &[1, 2, 3, 4]);
     assert!(
         matches!(
@@ -1012,9 +1012,9 @@ fn postcard_structural_hir_array_path_matches_post_regalloc_simulation() {
     );
 }
 
-// Removed: postcard_structural_hir_array_path_without_backend_edit_emission
+// Removed: postcard_hir_lowering_array_path_without_backend_edit_emission
 // tested the old (non-regalloc3) backend with apply_regalloc_edits=false.
-// ScalarArrayHolder is covered by postcard_structural_hir_ir_path_decodes_scalar_arrays
+// ScalarArrayHolder is covered by postcard_hir_lowering_decodes_scalar_arrays
 // which uses the active regalloc3 pipeline.
 
 #[test]
@@ -1025,7 +1025,7 @@ fn debug_scalar_array_regalloc_edits() {
     let hints = Default::default();
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate structural HIR postcard array cfg");
+        .expect("regalloc should allocate postcard HIR-lowered array cfg");
     println!("{}", format_allocated_regalloc_edits(&alloc));
 }
 
