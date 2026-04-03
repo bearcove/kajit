@@ -1404,9 +1404,11 @@ pub fn allocate_cfg_program_regalloc3_native(
         // Pre-color data_args to their ABI argument registers.
         let mut fixed_colors = std::collections::HashMap::new();
         for (i, &arg_vreg) in func.data_args.iter().enumerate() {
-            fixed_colors.insert(arg_vreg, machine_inst::PReg(i as u8 + abi_arg_offset));
+            let abi_preg = machine_inst::PReg(i as u8 + abi_arg_offset);
+            if !program.extra_excluded_regs.contains(&abi_preg) {
+                fixed_colors.insert(arg_vreg, abi_preg);
+            }
         }
-
 
         let mut alloc_result = crate::regalloc3::ssa_coloring::allocate_with_excluded(
             &func_mut,

@@ -30,10 +30,18 @@ pub struct CompiledDecoder {
     cfg_mir_line_text_by_line: Vec<String>,
     entry: usize,
     func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
+    root_data_abi: RootDecoderDataAbi,
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
     #[cfg(target_arch = "aarch64")]
     asm_program: Option<kajit_emit::aarch64_asm::Program>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum RootDecoderDataAbi {
+    #[default]
+    None,
+    CursorRef,
 }
 
 /// A compiled scalar function. Owns the executable buffer containing JIT'd machine code.
@@ -76,6 +84,10 @@ impl CompiledFunction {
 impl CompiledDecoder {
     pub(crate) fn func(&self) -> unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) {
         self.func
+    }
+
+    pub(crate) fn root_data_abi(&self) -> RootDecoderDataAbi {
+        self.root_data_abi
     }
 
     /// The raw executable code buffer.
@@ -330,6 +342,7 @@ pub fn compile_pipeline(
 
     // Phase 1: HIR
     let module = build_decoder_hir(shape, kind);
+    let root_data_abi = infer_root_decoder_data_abi(&module);
     let hir_text = module.to_string();
 
     // Phase 2: IR + passes with timeline
@@ -361,6 +374,14 @@ pub fn compile_pipeline(
     // in the prologue, so x0/x1 are free for regalloc.
     #[cfg(target_arch = "aarch64")]
     if !cfg_program.is_scalar {
+        use kajit_mir::regalloc3::machine_inst::PReg;
+
+        if let Some(func) = cfg_program.funcs.first() {
+            cfg_program.extra_excluded_regs = (0..func.data_args.len())
+                .map(|i| PReg(i as u8 + 2))
+                .collect();
+        }
+
         let is_leaf = cfg_program.funcs.iter().all(|func| {
             func.insts.iter().all(|inst| {
                 !matches!(
@@ -373,8 +394,9 @@ pub fn compile_pipeline(
             })
         });
         if is_leaf {
-            use kajit_mir::regalloc3::machine_inst::PReg;
-            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1), PReg(15)];
+            cfg_program
+                .extra_excluded_regs
+                .extend([PReg(0), PReg(1), PReg(15)]);
         }
     }
 
@@ -407,6 +429,7 @@ pub fn compile_pipeline(
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
+        root_data_abi,
         trusted_utf8_input,
         _jit_registration: None, // JIT debug registration handled by the old path if needed
         #[cfg(target_arch = "aarch64")]
@@ -653,6 +676,7 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
 ) -> CompiledDecoder {
     let registry = symbol_registry_for_shape(shape);
     let module = build_postcard_decoder_hir(shape);
+    let root_data_abi = infer_root_decoder_data_abi(&module);
     let mut func = lower_hir_module(&module);
     run_configured_default_passes(&mut func, &pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
@@ -662,6 +686,7 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
         pipeline_opts,
         Some(&registry),
         Some(shape),
+        root_data_abi,
     )
 }
 
@@ -748,6 +773,7 @@ pub fn compile_linear_ir_decoder(
         PipelineOptions::from_env(),
         None,
         None,
+        RootDecoderDataAbi::None,
     )
 }
 
@@ -781,6 +807,7 @@ fn compile_linear_ir_decoder_with_options(
     pipeline_opts: PipelineOptions,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     root_shape: Option<&'static Shape>,
+    root_data_abi: RootDecoderDataAbi,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
@@ -794,6 +821,16 @@ fn compile_linear_ir_decoder_with_options(
     // For leaf functions with regalloc3: exclude x0/x1 from allocation
     #[cfg(target_arch = "aarch64")]
     if use_regalloc3 {
+        use kajit_mir::regalloc3::machine_inst::PReg;
+
+        if !cfg_program.is_scalar {
+            if let Some(func) = cfg_program.funcs.first() {
+                cfg_program.extra_excluded_regs = (0..func.data_args.len())
+                    .map(|i| PReg(i as u8 + 2))
+                    .collect();
+            }
+        }
+
         let is_leaf = cfg_program.funcs.iter().all(|func| {
             func.insts.iter().all(|inst| {
                 !matches!(
@@ -806,11 +843,12 @@ fn compile_linear_ir_decoder_with_options(
             })
         });
         if is_leaf {
-            use kajit_mir::regalloc3::machine_inst::PReg;
             // x0/x1: keep output_ptr/ctx_ptr in place (no moves to x21/x22)
             // x15: reserved for cursor writeback (RestoreCursor writes here
             //      instead of x19, avoiding callee-save overhead)
-            cfg_program.extra_excluded_regs = vec![PReg(0), PReg(1), PReg(15)];
+            cfg_program
+                .extra_excluded_regs
+                .extend([PReg(0), PReg(1), PReg(15)]);
         }
     }
 
@@ -917,6 +955,7 @@ fn compile_linear_ir_decoder_with_options(
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
+        root_data_abi,
         trusted_utf8_input,
         _jit_registration: Some(registration),
         #[cfg(target_arch = "aarch64")]
@@ -1010,10 +1049,35 @@ fn compile_cfg_mir_decoder_with_options(
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
+        root_data_abi: RootDecoderDataAbi::None,
         trusted_utf8_input,
         _jit_registration: Some(registration),
         #[cfg(target_arch = "aarch64")]
         asm_program,
+    }
+}
+
+fn infer_root_decoder_data_abi(module: &hir::Module) -> RootDecoderDataAbi {
+    let Some((_, function)) = module.functions.iter().next() else {
+        return RootDecoderDataAbi::None;
+    };
+    let non_destination_params: Vec<_> = function
+        .params
+        .iter()
+        .filter(|param| !param.is_destination())
+        .collect();
+    match non_destination_params.as_slice() {
+        [] => RootDecoderDataAbi::None,
+        [param] => match &param.ty {
+            hir::Type::Ref { pointee, .. } => match &**pointee {
+                hir::Type::Named { def, .. } if module.type_defs[*def].name == "Cursor" => {
+                    RootDecoderDataAbi::CursorRef
+                }
+                _ => RootDecoderDataAbi::None,
+            },
+            _ => RootDecoderDataAbi::None,
+        },
+        _ => RootDecoderDataAbi::None,
     }
 }
 

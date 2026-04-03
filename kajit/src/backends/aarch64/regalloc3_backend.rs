@@ -597,7 +597,20 @@ impl<'a> EmitContext<'a> {
                     } else {
                         (self.reg_for_vreg_with_temp(*addr, Reg::X10), 0)
                     };
-                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let mut used_scratch = false;
+                let assigned = self.dst_reg_or_temp(*dst, Reg::X9);
+                let rd = if assigned == base_reg {
+                    used_scratch = true;
+                    if base_reg != Reg::X9 {
+                        Reg::X9
+                    } else if base_reg != Reg::X10 {
+                        Reg::X10
+                    } else {
+                        Reg::X11
+                    }
+                } else {
+                    assigned
+                };
                 match width {
                     kajit_ir::Width::W1 => {
                         self.ectx
@@ -624,8 +637,8 @@ impl<'a> EmitContext<'a> {
                             .expect("ldr");
                     }
                 }
-                if rd == Reg::X9 {
-                    self.store_to_vreg(*dst, Reg::X9);
+                if used_scratch || rd == Reg::X9 {
+                    self.store_to_vreg(*dst, rd);
                 }
             }
 
@@ -2087,6 +2100,36 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     } else {
         ectx.begin_func_with_config(&prologue_config)
     };
+
+    if !is_scalar_function {
+        if let Some(alloc_func) = alloc.functions.first() {
+            if let Some(func) = program.funcs.first() {
+                for (i, &arg) in func.data_args.iter().enumerate() {
+                    let abi_reg = Reg::from_raw(i as u8 + 2);
+                    if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
+                        let offset = ectx.base_frame + (slot.0 * 8);
+                        ectx.emit
+                            .emit_str_imm(Width::X64, abi_reg, Reg::SP, offset)
+                            .expect("str spilled decoder data_arg");
+                    }
+                }
+
+                let mut arg_moves = Vec::new();
+                for (i, &arg) in func.data_args.iter().enumerate() {
+                    let abi_reg = Reg::from_raw(i as u8 + 2);
+                    if let Some(preg) = alloc_func.preg_for_vreg(arg) {
+                        let assigned = Reg::from_raw(preg.0);
+                        if assigned != abi_reg {
+                            arg_moves.push((assigned, abi_reg));
+                        }
+                    }
+                }
+                if !arg_moves.is_empty() {
+                    emit_parallel_reg_moves(&mut ectx, &arg_moves, Reg::X16);
+                }
+            }
+        }
+    }
 
     // Create success exit label
     let success_exit = ectx.new_label();
