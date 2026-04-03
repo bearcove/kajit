@@ -134,6 +134,18 @@ impl RuntimeDialectLowerer {
                 rb.restore_cursor(args[0]);
                 true
             }
+            Some(hir::RuntimeIntrinsic::Memcpy) => {
+                let args = call
+                    .args
+                    .iter()
+                    .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
+                    .collect::<Vec<_>>();
+                let _ = rb.call_effect(
+                    crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize),
+                    &args,
+                );
+                true
+            }
             _ => false,
         }
     }

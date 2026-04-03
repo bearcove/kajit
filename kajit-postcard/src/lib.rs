@@ -1727,44 +1727,6 @@ impl PostcardHirLowerer {
         callable_id
     }
 
-    fn ensure_runtime_string_validate_alloc_copy(&mut self) -> hir::CallableId {
-        const NAME: &str = "runtime.string_validate_alloc_copy";
-        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
-            return existing;
-        }
-
-        let callable = hir::CallableSpec {
-            kind: hir::CallableKind::Host,
-            name: NAME.to_owned(),
-            intrinsic: Some(hir::RuntimeIntrinsic::StringValidateAllocCopy),
-            signature: hir::CallSignature {
-                params: vec![hir::Type::u(64), hir::Type::u(32)],
-                returns: vec![hir::Type::persistent_addr()],
-                effect_class: hir::EffectClass::Barrier,
-                domain_effects: vec![
-                    hir::DomainEffect {
-                        domain: "input".to_owned(),
-                        access: hir::DomainAccess::Read,
-                    },
-                    hir::DomainEffect {
-                        domain: "persistent_heap".to_owned(),
-                        access: hir::DomainAccess::Mutate,
-                    },
-                ],
-                control: hir::ControlTransfer::MayFail,
-                capabilities: vec!["runtime.alloc".to_owned(), "runtime.utf8".to_owned()],
-                safety: hir::CallSafety::OpaqueHost,
-            },
-            docs: Some(
-                "Validate a postcard string range, allocate persistent bytes, and copy them."
-                    .to_owned(),
-            ),
-        };
-        let callable_id = self.module.add_callable(callable);
-        self.callables_by_name.insert(NAME, callable_id);
-        callable_id
-    }
-
     fn ensure_runtime_alloc_persistent(&mut self) -> hir::CallableId {
         const NAME: &str = "runtime.alloc_persistent";
         if let Some(existing) = self.callables_by_name.get(NAME).copied() {
@@ -1787,6 +1749,40 @@ impl PostcardHirLowerer {
                 safety: hir::CallSafety::OpaqueHost,
             },
             docs: Some("Allocate persistent memory that may escape in the result.".to_owned()),
+        };
+        let callable_id = self.module.add_callable(callable);
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
+    fn ensure_runtime_memcpy(&mut self) -> hir::CallableId {
+        const NAME: &str = "runtime.memcpy";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+        let callable = hir::CallableSpec {
+            kind: hir::CallableKind::Host,
+            name: NAME.to_owned(),
+            intrinsic: Some(hir::RuntimeIntrinsic::Memcpy),
+            signature: hir::CallSignature {
+                params: vec![hir::Type::u(64), hir::Type::u(64), hir::Type::u(64)],
+                returns: vec![hir::Type::u(64)],
+                effect_class: hir::EffectClass::Mutates,
+                domain_effects: vec![
+                    hir::DomainEffect {
+                        domain: "persistent_heap".to_owned(),
+                        access: hir::DomainAccess::Mutate,
+                    },
+                    hir::DomainEffect {
+                        domain: "input".to_owned(),
+                        access: hir::DomainAccess::Read,
+                    },
+                ],
+                control: hir::ControlTransfer::Returns,
+                capabilities: vec!["runtime.memcpy".to_owned()],
+                safety: hir::CallSafety::OpaqueHost,
+            },
+            docs: Some("Copy bytes from one address to another.".to_owned()),
         };
         let callable_id = self.module.add_callable(callable);
         self.callables_by_name.insert(NAME, callable_id);
@@ -1916,15 +1912,66 @@ impl PostcardHirLowerer {
             rhs: Box::new(pos.clone()),
         };
         self.push_init(statements, hir::Place::Local(data_local), data_expr);
-        let validate_alloc = self.ensure_runtime_string_validate_alloc_copy();
-        self.push_init(
-            statements,
-            hir::Place::Local(ptr_local),
-            hir::Expr::Call(hir::CallExpr {
-                target: hir::CallTarget::Callable(validate_alloc),
+        let validate_utf8 = self.ensure_runtime_validate_utf8_range();
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                target: hir::CallTarget::Callable(validate_utf8),
                 args: vec![hir::Expr::Local(data_local), hir::Expr::Local(len_local)],
-            }),
-        );
+            })),
+        });
+
+        let alloc_persistent = self.ensure_runtime_alloc_persistent();
+        let memcpy = self.ensure_runtime_memcpy();
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::If {
+                condition: hir::Expr::Binary {
+                    op: hir::BinaryOp::Eq,
+                    lhs: Box::new(hir::Expr::Local(len_local)),
+                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(0))),
+                },
+                then_block: hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: vec![hir::Stmt {
+                        id: self.next_stmt_id(),
+                        kind: hir::StmtKind::Init {
+                            place: hir::Place::Local(ptr_local),
+                            value: hir::Expr::Literal(hir::Literal::Integer(1)),
+                        },
+                    }],
+                },
+                else_block: Some(hir::Block {
+                    scope: hir::ScopeId::new(0),
+                    statements: vec![
+                        hir::Stmt {
+                            id: self.next_stmt_id(),
+                            kind: hir::StmtKind::Init {
+                                place: hir::Place::Local(ptr_local),
+                                value: hir::Expr::Call(hir::CallExpr {
+                                    target: hir::CallTarget::Callable(alloc_persistent),
+                                    args: vec![
+                                        hir::Expr::Local(len_local),
+                                        hir::Expr::Literal(hir::Literal::Integer(1)),
+                                    ],
+                                }),
+                            },
+                        },
+                        hir::Stmt {
+                            id: self.next_stmt_id(),
+                            kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                                target: hir::CallTarget::Callable(memcpy),
+                                args: vec![
+                                    hir::Expr::Local(ptr_local),
+                                    hir::Expr::Local(data_local),
+                                    hir::Expr::Local(len_local),
+                                ],
+                            })),
+                        },
+                    ],
+                }),
+            },
+        });
 
         self.push_cursor_pos_update(
             statements,
