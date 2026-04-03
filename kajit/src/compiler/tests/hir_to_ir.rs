@@ -162,7 +162,7 @@ hir_module {
       regions [r0]
       stores []
       params [
-        l0 param "cursor": t0<r0> bind runtime_cursor(bytes="bytes", pos="pos")
+        l0 param "cursor": t0<r0>
         l1 destination "out": t1
       ]
       locals [

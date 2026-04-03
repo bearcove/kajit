@@ -3,9 +3,9 @@ use std::fmt;
 use crate::{
     AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallTarget, CallableKind,
     ControlTransfer, DomainAccess, EffectClass, ErrorCode, Expr, Function, GenericArg,
-    GenericParam, Literal, LocalId, LocalKind, MatchArm, Module, Parameter, ParameterBinding,
-    Pattern, PatternField, Place, RuntimeIntrinsic, Scope, Stmt, StmtKind, Type, TypeDef,
-    TypeDefKind, UnaryOp, VariantDef,
+    GenericParam, Literal, LocalId, LocalKind, MatchArm, Module, Parameter, Pattern, PatternField,
+    Place, RuntimeIntrinsic, Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp,
+    VariantDef,
 };
 
 impl fmt::Display for Module {
@@ -534,18 +534,6 @@ fn fmt_param_decl(
             ty: &param.ty
         }
     )?;
-    if let Some(binding) = &param.binding {
-        match binding {
-            ParameterBinding::RuntimeCursor(cursor) => {
-                write!(
-                    f,
-                    " bind runtime_cursor(bytes={}, pos={})",
-                    quoted(&cursor.bytes_field),
-                    quoted(&cursor.pos_field)
-                )?;
-            }
-        }
-    }
     writeln!(f)
 }
 
