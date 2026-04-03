@@ -8,7 +8,7 @@ pub(crate) use shape_utils::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use facet::{Def, OptionDef, ScalarType, Shape, Type, UserType};
+use facet::{Def, ScalarType, Shape, Type, UserType};
 use kajit_hir as hir;
 
 use crate::format::{DecoderKind, FieldEmitInfo, SkippedFieldInfo};
@@ -333,7 +333,7 @@ pub fn compile_pipeline(
     let hir_text = module.to_string();
 
     // Phase 2: IR + passes with timeline
-    let mut func = build_structural_hir_ir(shape, &module);
+    let mut func = build_structural_hir_ir(&module);
     let mut ir_opt_timeline = vec![(
         "initial".to_string(),
         format!("{}", func.display_with_registry(&registry)),
@@ -450,7 +450,7 @@ pub fn compile_pre_opt_cfg(
     let module = build_postcard_decoder_hir(shape);
 
     // Phase 2: IR + passes
-    let mut func = build_structural_hir_ir(shape, &module);
+    let mut func = build_structural_hir_ir(&module);
     run_configured_default_passes_with_observer(&mut func, pipeline_opts, |_, _| {});
 
     // Phase 3: Linearize
@@ -648,7 +648,7 @@ pub(crate) fn build_decoder_ir_via_hir(
     match kind {
         DecoderKind::Postcard => {
             let module = build_postcard_decoder_hir(shape);
-            build_structural_hir_ir(shape, &module)
+            build_structural_hir_ir(&module)
         }
     }
 }
@@ -659,7 +659,7 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
 ) -> CompiledDecoder {
     let registry = symbol_registry_for_shape(shape);
     let module = build_postcard_decoder_hir(shape);
-    let mut func = build_structural_hir_ir(shape, &module);
+    let mut func = build_structural_hir_ir(&module);
     run_configured_default_passes(&mut func, &pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
     compile_linear_ir_decoder_with_options(

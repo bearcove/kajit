@@ -532,6 +532,39 @@ impl PostcardHirLowerer {
         }
     }
 
+    fn push_cursor_pos_update(
+        &mut self,
+        statements: &mut Vec<hir::Stmt>,
+        cursor_local: hir::LocalId,
+        new_pos: hir::Expr,
+    ) {
+        let restore_cursor = self.ensure_runtime_cursor_restore();
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Assign {
+                place: hir::Place::Field {
+                    base: Box::new(hir::Place::Local(cursor_local)),
+                    field: "pos".to_owned(),
+                },
+                value: new_pos,
+            },
+        });
+        let absolute = hir::Expr::Binary {
+            op: hir::BinaryOp::Add,
+            lhs: Box::new(hir::Expr::SliceData {
+                value: Box::new(self.cursor_bytes_expr(cursor_local)),
+            }),
+            rhs: Box::new(self.cursor_pos_expr(cursor_local)),
+        };
+        statements.push(hir::Stmt {
+            id: self.next_stmt_id(),
+            kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
+                target: hir::CallTarget::Callable(restore_cursor),
+                args: vec![absolute],
+            })),
+        });
+    }
+
     fn push_cursor_bounds_check(
         &mut self,
         statements: &mut Vec<hir::Stmt>,
@@ -636,22 +669,17 @@ impl PostcardHirLowerer {
                 width,
             },
         );
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Add,
-                    lhs: Box::new(pos),
-                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(u64::from(
-                        width.bytes(),
-                    )))),
-                },
+        self.push_cursor_pos_update(
+            statements,
+            cursor_local,
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(pos),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(u64::from(
+                    width.bytes(),
+                )))),
             },
-        });
+        );
 
         match scalar_type {
             ScalarType::Bool => {
@@ -865,20 +893,15 @@ impl PostcardHirLowerer {
                 width: hir::MemoryWidth::W1,
             },
         );
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Add,
-                    lhs: Box::new(pos),
-                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
-                },
+        self.push_cursor_pos_update(
+            statements,
+            cursor_local,
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(pos),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
             },
-        });
+        );
 
         let low = hir::Expr::Binary {
             op: hir::BinaryOp::BitAnd,
@@ -1375,20 +1398,15 @@ impl PostcardHirLowerer {
         });
 
         self.push_init(statements, place, hir::Expr::Local(code_local));
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Add,
-                    lhs: Box::new(pos),
-                    rhs: Box::new(hir::Expr::Local(len_local)),
-                },
+        self.push_cursor_pos_update(
+            statements,
+            cursor_local,
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(pos),
+                rhs: Box::new(hir::Expr::Local(len_local)),
             },
-        });
+        );
     }
 
     fn lower_postcard_option_tag_into_local(
@@ -1421,20 +1439,15 @@ impl PostcardHirLowerer {
                 width: hir::MemoryWidth::W1,
             },
         );
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Add,
-                    lhs: Box::new(pos),
-                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
-                },
+        self.push_cursor_pos_update(
+            statements,
+            cursor_local,
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(pos),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
             },
-        });
+        );
         let invalid = hir::Expr::Binary {
             op: hir::BinaryOp::Gt,
             lhs: Box::new(hir::Expr::Local(raw_local)),
@@ -1493,6 +1506,36 @@ impl PostcardHirLowerer {
                 safety: hir::CallSafety::OpaqueHost,
             },
             docs: Some("Validate that a borrowed byte range is UTF-8.".to_owned()),
+        };
+        let callable_id = self.module.add_callable(callable);
+        self.callables_by_name.insert(NAME, callable_id);
+        callable_id
+    }
+
+    fn ensure_runtime_cursor_restore(&mut self) -> hir::CallableId {
+        const NAME: &str = "runtime.cursor_restore";
+        if let Some(existing) = self.callables_by_name.get(NAME).copied() {
+            return existing;
+        }
+
+        let callable = hir::CallableSpec {
+            kind: hir::CallableKind::Host,
+            name: NAME.to_owned(),
+            signature: hir::CallSignature {
+                params: vec![hir::Type::u(64)],
+                returns: vec![],
+                effect_class: hir::EffectClass::Mutates,
+                domain_effects: vec![hir::DomainEffect {
+                    domain: "input".to_owned(),
+                    access: hir::DomainAccess::Mutate,
+                }],
+                control: hir::ControlTransfer::Returns,
+                capabilities: vec!["runtime.cursor".to_owned()],
+                safety: hir::CallSafety::OpaqueHost,
+            },
+            docs: Some(
+                "Synchronize the physical decoder cursor to an absolute input address.".to_owned(),
+            ),
         };
         let callable_id = self.module.add_callable(callable);
         self.callables_by_name.insert(NAME, callable_id);
@@ -1646,20 +1689,15 @@ impl PostcardHirLowerer {
             })),
         });
 
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Add,
-                    lhs: Box::new(pos),
-                    rhs: Box::new(hir::Expr::Local(len_local)),
-                },
+        self.push_cursor_pos_update(
+            statements,
+            cursor_local,
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(pos),
+                rhs: Box::new(hir::Expr::Local(len_local)),
             },
-        });
+        );
 
         self.push_init(
             statements,
@@ -1733,20 +1771,15 @@ impl PostcardHirLowerer {
             }),
         );
 
-        statements.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Add,
-                    lhs: Box::new(pos),
-                    rhs: Box::new(hir::Expr::Local(len_local)),
-                },
+        self.push_cursor_pos_update(
+            statements,
+            cursor_local,
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(pos),
+                rhs: Box::new(hir::Expr::Local(len_local)),
             },
-        });
+        );
 
         self.push_init(
             statements,
@@ -2327,20 +2360,15 @@ impl PostcardHirLowerer {
         });
 
         // pos++
-        loop_body.push(hir::Stmt {
-            id: self.next_stmt_id(),
-            kind: hir::StmtKind::Assign {
-                place: hir::Place::Field {
-                    base: Box::new(hir::Place::Local(cursor_local)),
-                    field: "pos".to_owned(),
-                },
-                value: hir::Expr::Binary {
-                    op: hir::BinaryOp::Add,
-                    lhs: Box::new(pos),
-                    rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
-                },
+        self.push_cursor_pos_update(
+            &mut loop_body,
+            cursor_local,
+            hir::Expr::Binary {
+                op: hir::BinaryOp::Add,
+                lhs: Box::new(pos),
+                rhs: Box::new(hir::Expr::Literal(hir::Literal::Integer(1))),
             },
-        });
+        );
 
         // acc |= (byte & 0x7f) << shift
         let low = hir::Expr::Binary {
