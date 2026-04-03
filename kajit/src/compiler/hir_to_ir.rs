@@ -206,10 +206,18 @@ impl<'a> StructuralHirIrLowerer<'a> {
         }
     }
 
-    fn callable_name(&self, call: &hir::CallExpr) -> &str {
+    fn callable_spec(&self, call: &hir::CallExpr) -> &'a hir::CallableSpec {
         match call.target {
-            hir::CallTarget::Callable(callable) => &self.module.callables[callable].name,
+            hir::CallTarget::Callable(callable) => &self.module.callables[callable],
         }
+    }
+
+    fn callable_name(&self, call: &hir::CallExpr) -> &str {
+        &self.callable_spec(call).name
+    }
+
+    fn callable_intrinsic(&self, call: &hir::CallExpr) -> Option<hir::RuntimeIntrinsic> {
+        self.callable_spec(call).intrinsic
     }
 
     fn slot_at(storage: StructuralLocalStorage, slot_offset: usize) -> crate::ir::SlotId {
@@ -1035,7 +1043,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
     }
 
     fn is_vec_from_raw_parts(&self, call: &hir::CallExpr) -> bool {
-        self.callable_name(call) == "runtime.vec_from_raw_parts"
+        matches!(
+            self.callable_intrinsic(call),
+            Some(hir::RuntimeIntrinsic::VecFromRawParts)
+        )
     }
 
     fn lower_vec_from_raw_parts_at_offset(
@@ -1195,14 +1206,17 @@ impl<'a> StructuralHirIrLowerer<'a> {
             .iter()
             .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
-        let func = match self.callable_name(call) {
-            "runtime.alloc_persistent" => {
+        let func = match self.callable_intrinsic(call) {
+            Some(hir::RuntimeIntrinsic::AllocPersistent) => {
                 crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize)
             }
-            "runtime.string_validate_alloc_copy" => crate::ir::IntrinsicFn(
+            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => crate::ir::IntrinsicFn(
                 intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
             ),
-            other => panic!("unsupported structural HIR scalar call {other}"),
+            other => panic!(
+                "unsupported structural HIR scalar call {} ({other:?})",
+                self.callable_name(call)
+            ),
         };
         rb.call_intrinsic(func, &args, 0, true)
             .expect("scalar intrinsic call should return a value")
@@ -1220,11 +1234,11 @@ impl<'a> StructuralHirIrLowerer<'a> {
             .iter()
             .map(|arg| self.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
-        let func = match self.callable_name(call) {
-            "runtime.validate_utf8_range" => {
+        let func = match self.callable_intrinsic(call) {
+            Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
                 crate::ir::IntrinsicFn(intrinsics::kajit_validate_utf8_range as *const () as usize)
             }
-            "runtime.cursor_restore" => {
+            Some(hir::RuntimeIntrinsic::CursorRestore) => {
                 assert_eq!(
                     args.len(),
                     1,
@@ -1233,7 +1247,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 rb.restore_cursor(args[0]);
                 return;
             }
-            other => panic!("unsupported structural HIR effect call {other}"),
+            other => panic!(
+                "unsupported structural HIR effect call {} ({other:?})",
+                self.callable_name(call)
+            ),
         };
         rb.call_intrinsic(func, &args, 0, false);
     }
@@ -1966,8 +1983,7 @@ pub fn lower_hir_module(module: &hir::Module) -> crate::ir::IrFunc {
 /// and return a value — no cursor, no destination, no decoder-specific
 /// machinery. All params get slots, all locals get slots, expressions lower
 /// to IR operations, and `return expr` sets the region result.
-/// Check if an HIR function body uses any effect callables (runtime.alloc_transient,
-/// runtime.memcpy, runtime.free_transient) that require the MEMORY state domain.
+/// Check if an HIR function body uses effect callables that require the MEMORY state domain.
 fn hir_function_uses_effect_calls(module: &hir::Module, function: &hir::Function) -> bool {
     fn expr_uses_effects(module: &hir::Module, expr: &hir::Expr) -> bool {
         match expr {
@@ -1975,10 +1991,13 @@ fn hir_function_uses_effect_calls(module: &hir::Module, function: &hir::Function
                 let id = match call.target {
                     hir::CallTarget::Callable(id) => id,
                 };
-                let name = &module.callables[id].name;
                 if matches!(
-                    name.as_str(),
-                    "runtime.alloc_transient" | "runtime.memcpy" | "runtime.free_transient"
+                    module.callables[id].intrinsic,
+                    Some(
+                        hir::RuntimeIntrinsic::AllocTransient
+                            | hir::RuntimeIntrinsic::Memcpy
+                            | hir::RuntimeIntrinsic::FreeTransient
+                    )
                 ) {
                     return true;
                 }
@@ -2436,11 +2455,14 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 let callable = &self.module.callables[match call.target {
                     hir::CallTarget::Callable(id) => id,
                 }];
-                let func = match callable.name.as_str() {
-                    "runtime.free_transient" => crate::ir::IntrinsicFn(
+                let func = match callable.intrinsic {
+                    Some(hir::RuntimeIntrinsic::FreeTransient) => crate::ir::IntrinsicFn(
                         intrinsics::kajit_free_transient as *const () as usize,
                     ),
-                    name => panic!("unsupported scalar HIR effect call: {name}"),
+                    other => panic!(
+                        "unsupported scalar HIR effect call: {} ({other:?})",
+                        callable.name
+                    ),
                 };
                 // Void-returning effectful call: use call_effect but ignore result.
                 let _result = rb.call_effect(func, &args);
@@ -2716,14 +2738,17 @@ impl<'a> ScalarHirIrLowerer<'a> {
         let callable = &self.module.callables[match call.target {
             hir::CallTarget::Callable(id) => id,
         }];
-        let func = match callable.name.as_str() {
-            "runtime.alloc_transient" => {
+        let func = match callable.intrinsic {
+            Some(hir::RuntimeIntrinsic::AllocTransient) => {
                 crate::ir::IntrinsicFn(intrinsics::kajit_alloc_transient as *const () as usize)
             }
-            "runtime.memcpy" => {
+            Some(hir::RuntimeIntrinsic::Memcpy) => {
                 crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize)
             }
-            name => panic!("unsupported scalar HIR call target: {name}"),
+            other => panic!(
+                "unsupported scalar HIR call target: {} ({other:?})",
+                callable.name
+            ),
         };
         rb.call_effect(func, &args)
     }

@@ -453,6 +453,7 @@ fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>>
                 callable: CallableSpec {
                     kind,
                     name,
+                    intrinsic: None,
                     signature: CallSignature {
                         params,
                         returns,

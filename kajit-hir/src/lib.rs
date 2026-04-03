@@ -367,6 +367,7 @@ impl Module {
         let alloc_transient = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.alloc_transient".to_owned(),
+            intrinsic: Some(RuntimeIntrinsic::AllocTransient),
             signature: CallSignature {
                 params: vec![Type::u(64), Type::u(64)],
                 returns: vec![Type::transient_addr()],
@@ -384,6 +385,7 @@ impl Module {
         let alloc_persistent = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.alloc_persistent".to_owned(),
+            intrinsic: Some(RuntimeIntrinsic::AllocPersistent),
             signature: CallSignature {
                 params: vec![Type::u(64), Type::u(64)],
                 returns: vec![Type::persistent_addr()],
@@ -401,6 +403,7 @@ impl Module {
         let vec_from_raw_parts = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.vec_from_raw_parts".to_owned(),
+            intrinsic: Some(RuntimeIntrinsic::VecFromRawParts),
             signature: CallSignature {
                 params: vec![
                     Type::persistent_addr(),
@@ -423,6 +426,7 @@ impl Module {
         let validate_utf8_range = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.validate_utf8_range".to_owned(),
+            intrinsic: Some(RuntimeIntrinsic::ValidateUtf8Range),
             signature: CallSignature {
                 params: vec![Type::u(64), Type::u(32)],
                 returns: vec![],
@@ -440,6 +444,7 @@ impl Module {
         let string_validate_alloc_copy = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.string_validate_alloc_copy".to_owned(),
+            intrinsic: Some(RuntimeIntrinsic::StringValidateAllocCopy),
             signature: CallSignature {
                 params: vec![Type::u(64), Type::u(32)],
                 returns: vec![Type::persistent_addr()],
@@ -465,6 +470,7 @@ impl Module {
         let vec_from_chunks = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.vec_from_chunks".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![Type::transient_addr(), Type::u(64), Type::u(64)],
                 returns: vec![Type::u(64)],
@@ -491,6 +497,7 @@ impl Module {
         let memcpy = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.memcpy".to_owned(),
+            intrinsic: Some(RuntimeIntrinsic::Memcpy),
             signature: CallSignature {
                 params: vec![Type::u(64), Type::u(64), Type::u(64)],
                 returns: vec![Type::u(64)],
@@ -510,6 +517,7 @@ impl Module {
         let free_transient = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "runtime.free_transient".to_owned(),
+            intrinsic: Some(RuntimeIntrinsic::FreeTransient),
             signature: CallSignature {
                 params: vec![Type::u(64), Type::u(64), Type::u(64)],
                 returns: vec![],
@@ -522,9 +530,7 @@ impl Module {
                 capabilities: vec!["runtime.alloc".to_owned()],
                 safety: CallSafety::OpaqueHost,
             },
-            docs: Some(
-                "Free heap memory allocated by runtime.alloc_transient.".to_owned(),
-            ),
+            docs: Some("Free heap memory allocated by runtime.alloc_transient.".to_owned()),
         });
 
         RuntimeMemoryCallables {
@@ -543,6 +549,7 @@ impl Module {
         let emit_node = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "emit.node".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![types.node.clone()],
                 returns: vec![Type::unit()],
@@ -560,6 +567,7 @@ impl Module {
         let emit_edge = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "emit.edge".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![types.edge.clone()],
                 returns: vec![Type::unit()],
@@ -577,6 +585,7 @@ impl Module {
         let emit_fact = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "emit.fact".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![types.fact.clone()],
                 returns: vec![Type::unit()],
@@ -594,6 +603,7 @@ impl Module {
         let rust_crate_graph = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "rust.crate_graph".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![],
                 returns: vec![types.crate_graph.clone()],
@@ -611,6 +621,7 @@ impl Module {
         let rust_root = self.add_callable(CallableSpec {
             kind: CallableKind::Builtin,
             name: "rust.root".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![types.crate_graph.clone()],
                 returns: vec![types.crate_node.clone()],
@@ -625,6 +636,7 @@ impl Module {
         let graph_lookup_crate = self.add_callable(CallableSpec {
             kind: CallableKind::Builtin,
             name: "graph.lookup_crate".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![types.crate_graph.clone(), types.crate_id.clone()],
                 returns: vec![types.crate_node.clone()],
@@ -639,6 +651,7 @@ impl Module {
         let cargo_registry_package_exists = self.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "cargo.registry_package_exists".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![types.string.clone(), types.string.clone()],
                 returns: vec![Type::bool()],
@@ -1599,10 +1612,23 @@ pub enum CallableKind {
     Host,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeIntrinsic {
+    AllocTransient,
+    AllocPersistent,
+    VecFromRawParts,
+    ValidateUtf8Range,
+    StringValidateAllocCopy,
+    CursorRestore,
+    Memcpy,
+    FreeTransient,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallableSpec {
     pub kind: CallableKind,
     pub name: String,
+    pub intrinsic: Option<RuntimeIntrinsic>,
     pub signature: CallSignature,
     pub docs: Option<String>,
 }
@@ -1867,6 +1893,7 @@ mod tests {
         let decode_header = module.add_callable(CallableSpec {
             kind: CallableKind::Builtin,
             name: "decode.header".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![Type::u(64)],
                 returns: vec![Type::bool()],
@@ -1891,6 +1918,7 @@ mod tests {
         let emit_node = module.add_callable(CallableSpec {
             kind: CallableKind::Host,
             name: "emit.node".to_owned(),
+            intrinsic: None,
             signature: CallSignature {
                 params: vec![Type::named(node, Vec::new())],
                 returns: vec![Type::unit()],
