@@ -5,7 +5,7 @@ use kajit_hir_text::parse_hir;
 use super::lower_hir_module;
 
 #[test]
-fn structural_hir_ir_path_decodes_constant_output() {
+fn destination_hir_lowering_decodes_constant_output() {
     let module = parse_hir(
         r#"
 hir_module {
@@ -32,7 +32,7 @@ hir_module {
       ]
       return unit
       scopes [
-        scope sc0 parent none comment "constant structural HIR"
+        scope sc0 parent none comment "constant destination-writing HIR"
       ]
       body @sc0 {
         stmt0: init field(l1, "value") = 0x2a
@@ -53,7 +53,7 @@ hir_module {
 }
 
 #[test]
-fn structural_hir_ir_path_preserves_local_scalar_across_empty_else_if() {
+fn destination_hir_lowering_preserves_local_scalar_across_empty_else_if() {
     let module = parse_hir(
         r#"
 hir_module {

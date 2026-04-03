@@ -225,10 +225,7 @@ pub fn debug_hir_text(shape: &'static facet::Shape, kind: DecoderKind) -> String
     compiler::build_decoder_hir(shape, kind).to_string()
 }
 
-/// Build postcard RVSDG by first lowering through the prototype HIR path.
-///
-/// This currently supports only the narrow postcard subset covered by the
-/// prototype HIR producer and lowerer.
+/// Build postcard RVSDG by building postcard HIR and lowering it to IR.
 pub fn debug_postcard_ir_via_hir_text(shape: &'static facet::Shape) -> String {
     let module = compiler::build_postcard_decoder_hir(shape);
     let func = compiler::lower_hir_module(&module);
@@ -236,19 +233,15 @@ pub fn debug_postcard_ir_via_hir_text(shape: &'static facet::Shape) -> String {
     format!("{}", func.display_with_registry(&registry))
 }
 
-/// Compile a postcard decoder by lowering through the prototype HIR path.
-///
-/// This is currently limited to the subset supported by the postcard HIR
-/// producer and HIR->RVSDG lowerer.
+/// Compile a postcard decoder by building postcard HIR and lowering it.
 pub fn compile_postcard_decoder_via_hir(shape: &'static facet::Shape) -> CompiledDecoder {
     compiler::compile_postcard_decoder_via_hir_with_options(shape, PipelineOptions::from_env())
 }
 
-/// Compile a postcard decoder via the structural HIR lowering subset.
+/// Compile a postcard decoder through the postcard-HIR pipeline.
 ///
-/// This bypasses the older postcard-template recognizer and instead lowers the
-/// supported HIR subset structurally. The currently supported subset is small
-/// and intended for bring-up/debugging, not general postcard coverage.
+/// This is retained as a compatibility alias for callers that still use the
+/// older name.
 pub fn compile_postcard_decoder_via_structural_hir(
     shape: &'static facet::Shape,
 ) -> CompiledDecoder {
