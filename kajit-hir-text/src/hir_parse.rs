@@ -401,6 +401,8 @@ fn callable<'src>() -> impl Parser<'src, &'src str, ParsedCallable, Extra<'src>>
     let runtime_intrinsic = choice((
         token("save_cursor").to(kajit_hir::RuntimeIntrinsic::SaveCursor),
         token("save_input_end").to(kajit_hir::RuntimeIntrinsic::SaveInputEnd),
+        token("option_init_none").to(kajit_hir::RuntimeIntrinsic::OptionInitNone),
+        token("option_init_some").to(kajit_hir::RuntimeIntrinsic::OptionInitSome),
         token("alloc_transient").to(kajit_hir::RuntimeIntrinsic::AllocTransient),
         token("alloc_persistent").to(kajit_hir::RuntimeIntrinsic::AllocPersistent),
         token("vec_from_raw_parts").to(kajit_hir::RuntimeIntrinsic::VecFromRawParts),
@@ -699,6 +701,12 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
                 index: Box::new(index),
             });
 
+        let addr_of_expr = token("addr_of")
+            .ignore_then(token("("))
+            .ignore_then(place(expr.clone()))
+            .then_ignore(token(")"))
+            .map(|place| Expr::AddrOf(Box::new(place)));
+
         let struct_expr = token("struct")
             .ignore_then(type_id())
             .then(
@@ -787,6 +795,7 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
             call,
             field_expr,
             index_expr,
+            addr_of_expr,
             struct_expr,
             variant_expr,
             unary_expr,

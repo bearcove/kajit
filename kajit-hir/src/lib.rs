@@ -1559,6 +1559,7 @@ pub enum Expr {
         base: Box<Expr>,
         index: Box<Expr>,
     },
+    AddrOf(Box<Place>),
     Struct {
         def: TypeDefId,
         fields: Vec<(String, Expr)>,
@@ -1635,6 +1636,8 @@ pub enum CallableKind {
 pub enum RuntimeIntrinsic {
     SaveCursor,
     SaveInputEnd,
+    OptionInitNone,
+    OptionInitSome,
     AllocTransient,
     AllocPersistent,
     VecFromRawParts,
