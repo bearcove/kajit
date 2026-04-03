@@ -7,9 +7,8 @@ use kajit_hir_text::parse_hir;
 use serde::Serialize;
 
 use super::{
-    CompiledDecoder, build_decoder_ir_via_hir, build_jit_debug_info_from_source_map,
-    build_postcard_decoder_hir, build_postcard_decoder_ir_via_hir, build_structural_hir_ir,
-    cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
+    CompiledDecoder, build_jit_debug_info_from_source_map, build_postcard_decoder_hir,
+    build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
     cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, compile_linear_ir_decoder,
     deser_dwarf_variables, dwarf_expr_for_out_field, format_allocated_regalloc_edits,
     jit_dwarf_target_arch, lower_hir_module, materialize_backend_result,
@@ -977,7 +976,8 @@ fn postcard_structural_hir_ir_path_decodes_enum_in_struct_field() {
 
 #[test]
 fn postcard_structural_hir_array_path_matches_jit_differential_harness() {
-    let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
+    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
+    let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
     let output_size = std::mem::size_of::<ScalarArrayHolder>();
     let report = crate::differential_check_linear_ir_vs_jit_with_output_size(
@@ -995,7 +995,8 @@ fn postcard_structural_hir_array_path_matches_jit_differential_harness() {
 
 #[test]
 fn postcard_structural_hir_array_path_matches_post_regalloc_simulation() {
-    let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
+    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
+    let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default();
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
@@ -1018,7 +1019,8 @@ fn postcard_structural_hir_array_path_matches_post_regalloc_simulation() {
 
 #[test]
 fn debug_scalar_array_regalloc_edits() {
-    let mut func = build_postcard_decoder_ir_via_hir(<ScalarArrayHolder>::SHAPE);
+    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
+    let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default();
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
