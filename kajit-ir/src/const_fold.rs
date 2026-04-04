@@ -354,9 +354,11 @@ fn resolve_to_constant_inner(func: &IrFunc, source: &PortSource, depth: usize) -
 
             match &func.nodes[owner].kind {
                 NodeKind::Gamma { .. } => {
-                    // Gamma branch arg[K] corresponds to gamma input[K+1] (skip predicate).
-                    let input = func.nodes[owner].inputs.get(arg_index + 1)?;
-                    resolve_to_constant_inner(func, &input.source, depth + 1)
+                    // Do not treat gamma branch args as globally constant.
+                    // They can be constant within a branch as data while still
+                    // being unsafe to reuse for control-sensitive folding in a
+                    // downstream gamma or comparison.
+                    None
                 }
                 NodeKind::Theta { body, .. } => {
                     // Theta body arg[K] corresponds to theta input[K].

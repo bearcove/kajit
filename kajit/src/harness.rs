@@ -190,8 +190,7 @@ impl LocationMap {
                                 call_return_vregs.insert(next_line, dst.index() as u32);
                             }
                         }
-                        LinearOp::CallPure { dst, .. }
-                        | LinearOp::CallEffect { dst, .. } => {
+                        LinearOp::CallPure { dst, .. } | LinearOp::CallEffect { dst, .. } => {
                             call_lines.insert(next_line);
                             call_return_vregs.insert(next_line, dst.index() as u32);
                         }
@@ -453,22 +452,38 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
         let mut debug_line_section_id = None;
 
         if !dwarf.debug_line.is_empty() {
-            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_line"), SectionKind::Debug);
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_line"),
+                SectionKind::Debug,
+            );
             obj.append_section_data(sid, &dwarf.debug_line, 1);
             debug_line_section_id = Some(sid);
         }
         if !dwarf.debug_info.is_empty() {
-            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_info"), SectionKind::Debug);
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_info"),
+                SectionKind::Debug,
+            );
             obj.append_section_data(sid, &dwarf.debug_info, 1);
             debug_info_section_id = Some(sid);
         }
         if !dwarf.debug_abbrev.is_empty() {
-            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_abbrev"), SectionKind::Debug);
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_abbrev"),
+                SectionKind::Debug,
+            );
             obj.append_section_data(sid, &dwarf.debug_abbrev, 1);
         }
         let mut debug_aranges_section_id = None;
         if !dwarf.debug_aranges.is_empty() {
-            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_aranges"), SectionKind::Debug);
+            let sid = obj.add_section(
+                dwarf_segment_name(),
+                dwarf_debug_section_name("debug_aranges"),
+                SectionKind::Debug,
+            );
             obj.append_section_data(sid, &dwarf.debug_aranges, 1);
             debug_aranges_section_id = Some(sid);
         }
@@ -481,8 +496,11 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
                 crate::jit_dwarf::DwarfSection::DebugAranges => debug_aranges_section_id,
             };
             if let Some(sid) = target_section {
-                obj.add_relocation(sid, dwarf_text_relocation(text_symbol, reloc, input.entry_offset))
-                    .map_err(HarnessError::ObjectWrite)?;
+                obj.add_relocation(
+                    sid,
+                    dwarf_text_relocation(text_symbol, reloc, input.entry_offset),
+                )
+                .map_err(HarnessError::ObjectWrite)?;
             }
         }
     }
@@ -1202,7 +1220,10 @@ fn linux_native_static_libs() -> Result<Vec<String>, HarnessError> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let line = stderr
         .lines()
-        .find_map(|line| line.split_once("native-static-libs: ").map(|(_, libs)| libs))
+        .find_map(|line| {
+            line.split_once("native-static-libs: ")
+                .map(|(_, libs)| libs)
+        })
         .ok_or_else(|| HarnessError::Link("native-static-libs output missing".into()))?;
 
     Ok(line.split_whitespace().map(str::to_owned).collect())

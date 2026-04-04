@@ -157,6 +157,13 @@ impl SBDebugger {
         unsafe { sys::SBDebuggerInitialize() };
     }
 
+    /// Initialize LLDB and return an error if startup fails.
+    pub fn initialize_with_error_handling() -> SBError {
+        SBError {
+            raw: unsafe { sys::SBDebuggerInitializeWithErrorHandling() },
+        }
+    }
+
     /// Tear down LLDB.
     ///
     /// This should be called once the application no longer needs

@@ -1129,8 +1129,8 @@ fn print_mcp_setup_instructions(installed_binary: &Path) {
     let binary = installed_binary.display();
     println!();
     println!("MCP setup (copy/paste):");
-    println!("  codex  => codex mcp add kajit-mir -- {binary} mcp");
-    println!("  claude => claude mcp add --transport stdio kajit-mir -- {binary} mcp");
+    println!("  codex  => codex mcp add kajit -- {binary} mcp");
+    println!("  claude => claude mcp add --transport stdio kajit -- {binary} mcp");
     println!();
     println!("After adding, restart the client so it picks up the new MCP server.");
 }

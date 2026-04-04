@@ -55,6 +55,8 @@ LLDB_API const char *SBDebuggerGetProgressFromEvent(SBEventRef event,
 
 LLDB_API void SBDebuggerInitialize(void);
 
+LLDB_API SBErrorRef SBDebuggerInitializeWithErrorHandling(void);
+
 LLDB_API void SBDebuggerTerminate(void);
 
 LLDB_API SBDebuggerRef SBDebuggerCreate(void);

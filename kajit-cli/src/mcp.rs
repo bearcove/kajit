@@ -1,7 +1,13 @@
 use std::collections::HashMap;
+#[cfg(feature = "lldb")]
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
+#[cfg(feature = "lldb")]
+use kajit::harness::{LocationMap, VRegLocation};
+#[cfg(feature = "lldb")]
+use kajit::lockstep::{DebugError as JitDebugError, Divergence, JitDebugger, LockstepResult};
 use kajit_mir::cfg_mir::BlockId;
 use kajit_mir::{DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
@@ -14,6 +20,9 @@ use rust_mcp_sdk::schema::{
 use rust_mcp_sdk::{McpServer, StdioTransport, ToMcpServerHandler, TransportOptions, tool_box};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value as JsonValue, json};
+
+#[cfg(feature = "lldb")]
+use crate::lldb_debugger::LldbJitDebugger;
 
 #[mcp_tool(
     name = "session_new",
@@ -124,6 +133,78 @@ struct SessionInspectOutputTool {
     len: Option<u64>,
 }
 
+#[mcp_tool(
+    name = "debug_session_new",
+    description = "Compile a decoder, generate a standalone harness, launch LLDB, and create a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionNewTool {
+    /// Format: postcard
+    format: String,
+    /// Type to compile (e.g. u32, ScalarVec, BorrowedHeader)
+    ty: String,
+    /// Input bytes as hex string (e.g. '8101' or '[0x81, 0x01]')
+    input_hex: String,
+}
+
+#[mcp_tool(
+    name = "debug_session_close",
+    description = "Close and remove a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionCloseTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+}
+
+#[mcp_tool(
+    name = "debug_session_step",
+    description = "Step a persistent lockstep debug session forward by one or more CFG-MIR operations."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionStepTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+    /// Number of lockstep op steps.
+    #[serde(default)]
+    count: Option<u64>,
+}
+
+#[mcp_tool(
+    name = "debug_session_state",
+    description = "Get combined LLDB + interpreter state for a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionStateTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+}
+
+#[mcp_tool(
+    name = "debug_session_disassemble",
+    description = "Disassemble around the current PC for a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionDisassembleTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+    /// Number of instructions of context before/after the PC.
+    #[serde(default)]
+    context: Option<u64>,
+}
+
+#[mcp_tool(
+    name = "debug_session_lldb",
+    description = "Run a raw LLDB command against a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionLldbTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+    /// Raw LLDB command.
+    command: String,
+}
+
 tool_box!(
     MirTools,
     [
@@ -134,7 +215,13 @@ tool_box!(
         SessionRunUntilTool,
         SessionStateTool,
         SessionInspectVregTool,
-        SessionInspectOutputTool
+        SessionInspectOutputTool,
+        DebugSessionNewTool,
+        DebugSessionCloseTool,
+        DebugSessionStepTool,
+        DebugSessionStateTool,
+        DebugSessionDisassembleTool,
+        DebugSessionLldbTool
     ]
 );
 
@@ -142,6 +229,10 @@ tool_box!(
 struct ServerState {
     sessions: HashMap<u64, DebuggerSession>,
     next_session_id: u64,
+    #[cfg(feature = "lldb")]
+    debug_sessions: HashMap<u64, DebugDiffSession>,
+    #[cfg(feature = "lldb")]
+    next_debug_session_id: u64,
 }
 
 #[derive(Clone, Default)]
@@ -170,6 +261,12 @@ impl MirHandler {
             "session_state" => self.session_state(args),
             "session_inspect_vreg" => self.session_inspect_vreg(args),
             "session_inspect_output" => self.session_inspect_output(args),
+            "debug_session_new" => self.debug_session_new(args),
+            "debug_session_close" => self.debug_session_close(args),
+            "debug_session_step" => self.debug_session_step(args),
+            "debug_session_state" => self.debug_session_state(args),
+            "debug_session_disassemble" => self.debug_session_disassemble(args),
+            "debug_session_lldb" => self.debug_session_lldb(args),
             other => Err(format!("unknown tool: {other}")),
         }
     }
@@ -347,6 +444,158 @@ impl MirHandler {
             json!({ "text": format!("output[{}..{}]: `{}`", start, start + bytes.len(), encode_hex(&bytes)) }),
         )
     }
+
+    fn debug_session_new(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let format = arg_str(args, "format")?;
+            let ty = arg_str(args, "ty")?;
+            let input_hex = arg_str(args, "input_hex")?;
+            let session = DebugDiffSession::new(&format, &ty, &input_hex)?;
+
+            let mut state = self.lock_state()?;
+            if state.next_debug_session_id == 0 {
+                state.next_debug_session_id = 1;
+            }
+            let session_id = state.next_debug_session_id;
+            state.next_debug_session_id += 1;
+            state.debug_sessions.insert(session_id, session);
+
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .expect("inserted debug session should exist");
+            Ok(json!({ "text": session.snapshot_markdown(session_id) }))
+        }
+    }
+
+    fn debug_session_close(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let mut state = self.lock_state()?;
+            let removed = state.debug_sessions.remove(&session_id).is_some();
+            Ok(json!({
+                "session_id": session_id,
+                "closed": removed,
+            }))
+        }
+    }
+
+    fn debug_session_step(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let count = arg_opt_u64(args, "count").unwrap_or(1) as usize;
+
+            let mut state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get_mut(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+
+            let mut out = format!("**Debug session {}**\n\n", session_id);
+            for _ in 0..count {
+                let step = session.step_forward()?;
+                out.push_str(&step);
+                out.push('\n');
+                if !session.is_running() {
+                    break;
+                }
+            }
+            out.push('\n');
+            out.push_str(&session.snapshot_markdown(session_id));
+            Ok(json!({ "text": out }))
+        }
+    }
+
+    fn debug_session_state(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+            Ok(json!({ "text": session.snapshot_markdown(session_id) }))
+        }
+    }
+
+    fn debug_session_disassemble(
+        &self,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let context = arg_opt_u64(args, "context").unwrap_or(4) as usize;
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+            let text = session
+                .debugger
+                .disassemble_around_pc(context)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "text": text }))
+        }
+    }
+
+    fn debug_session_lldb(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let command = arg_str(args, "command")?;
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+            let text = session
+                .debugger
+                .execute_command(&command)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({ "text": text }))
+        }
+    }
 }
 
 #[async_trait]
@@ -374,6 +623,863 @@ impl ServerHandler for MirHandler {
             Err(message) => call_tool_err(&message),
         };
         Ok(result)
+    }
+}
+
+#[cfg(feature = "lldb")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DebugDiffSessionStatus {
+    Running,
+    Diverged,
+    Completed,
+}
+
+#[cfg(feature = "lldb")]
+struct DebugDiffSession {
+    format: String,
+    ty: String,
+    input: Vec<u8>,
+    exe_path: PathBuf,
+    listing_path: PathBuf,
+    cfg_program: kajit_mir::cfg_mir::Program,
+    location_map: LocationMap,
+    listing_lines: Vec<String>,
+    interpreter: DebuggerSession,
+    debugger: LldbJitDebugger,
+    op_to_line: HashMap<(u32, bool, usize), u32>,
+    prev_dwarf_line: u32,
+    jit_steps: usize,
+    verified: HashMap<u32, (u64, u32, usize)>,
+    status: DebugDiffSessionStatus,
+    divergence: Option<Divergence>,
+}
+
+#[cfg(feature = "lldb")]
+impl DebugDiffSession {
+    fn new(format: &str, ty: &str, input_hex: &str) -> Result<Self, String> {
+        let kind = match format {
+            "postcard" => kajit::DecoderKind::Postcard,
+            other => return Err(format!("unknown format '{other}', expected 'postcard'")),
+        };
+
+        let shape = super::resolve_shape(ty);
+        let pipeline_opts = kajit::PipelineOptions::from_env();
+        let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
+
+        let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
+        let output_dir = PathBuf::from("/tmp/kajit-harness");
+        let base_name = format!("harness_{format}_{ty}");
+        let listing_path = output_dir.join(format!("{base_name}.cfg-mir"));
+        let dwarf = artifacts.decoder.build_standalone_dwarf(&listing_path);
+
+        let known = kajit::intrinsics::known_intrinsics();
+        let intrinsic_calls: Vec<_> = artifacts
+            .intrinsic_call_sites
+            .iter()
+            .filter_map(|site| {
+                let name = known
+                    .iter()
+                    .find(|(_, f)| f.0 == site.func.0)
+                    .map(|(name, _)| name.to_string())?;
+                Some(kajit::harness::IntrinsicCallSite {
+                    code_offset: site.code_offset,
+                    baked_addr: site.func.0 as u64,
+                    symbol_name: name,
+                })
+            })
+            .collect();
+
+        let harness_input = kajit::harness::HarnessInput {
+            code: artifacts.decoder.code(),
+            entry_offset: artifacts.decoder.entry_offset(),
+            output_size,
+            dwarf,
+            cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
+            function_name: "kajit_decode",
+            uses_root_cursor_arg: artifacts.decoder.uses_root_cursor_arg(),
+            alloc_map: Some(&artifacts.alloc_map),
+            intrinsic_calls,
+        };
+
+        let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)
+            .map_err(|e| format!("error generating harness: {e}"))?;
+
+        let input = parse_hex_input(input_hex)?;
+        let debugger = LldbJitDebugger::launch(exe_path.to_str().unwrap(), input_hex)
+            .map_err(|e| format!("error launching LLDB: {e}"))?;
+
+        let jit_cursor = debugger.read_register(19).map_err(|e| e.to_string())?;
+        let jit_input_end = debugger.read_register(20).map_err(|e| e.to_string())?;
+        let jit_output_ptr = debugger.read_register(21).map_err(|e| e.to_string())?;
+
+        let listing_lines = artifacts.cfg_program.debug_line_listing_with_registry(None);
+
+        let mut interpreter = DebuggerSession::new(&artifacts.cfg_program, &input)
+            .map_err(|e| format!("interpreter init: {e}"))?;
+        interpreter.input_base_addr = Some(jit_cursor);
+        interpreter.input_end_addr = Some(jit_input_end);
+        interpreter.output_base_addr = Some(jit_output_ptr);
+
+        let mut op_to_line = HashMap::new();
+        let mut next_line = 1u32;
+        let func = &artifacts.cfg_program.funcs[0];
+        for block in &func.blocks {
+            for (inst_idx, _) in block.insts.iter().enumerate() {
+                op_to_line.insert((block.id.0, false, inst_idx), next_line);
+                next_line += 1;
+            }
+            op_to_line.insert((block.id.0, true, 0), next_line);
+            next_line += 1;
+        }
+
+        let prev_dwarf_line = debugger.current_source_line().unwrap_or(1);
+
+        Ok(Self {
+            format: format.to_owned(),
+            ty: ty.to_owned(),
+            input,
+            exe_path,
+            listing_path,
+            cfg_program: artifacts.cfg_program,
+            location_map: artifacts.location_map,
+            listing_lines,
+            interpreter,
+            debugger,
+            op_to_line,
+            prev_dwarf_line,
+            jit_steps: 0,
+            verified: HashMap::new(),
+            status: DebugDiffSessionStatus::Running,
+            divergence: None,
+        })
+    }
+
+    fn is_running(&self) -> bool {
+        self.status == DebugDiffSessionStatus::Running
+    }
+
+    fn current_line_text(&self, line: u32) -> String {
+        if line > 0 && (line as usize) <= self.listing_lines.len() {
+            self.listing_lines[line as usize - 1].clone()
+        } else {
+            format!("<line {line}>")
+        }
+    }
+
+    fn finish_with_result(&mut self, result: LockstepResult) -> String {
+        self.divergence = result.divergence.clone();
+        self.status = if result.completed {
+            DebugDiffSessionStatus::Completed
+        } else {
+            DebugDiffSessionStatus::Diverged
+        };
+        kajit::lockstep::format_result(&result)
+    }
+
+    fn step_forward(&mut self) -> Result<String, String> {
+        if self.status != DebugDiffSessionStatus::Running {
+            let result = LockstepResult {
+                steps: self.jit_steps,
+                divergence: self.divergence.clone(),
+                completed: self.status == DebugDiffSessionStatus::Completed,
+            };
+            return Ok(kajit::lockstep::format_result(&result));
+        }
+
+        if self.debugger.has_exited() {
+            let result = handle_jit_exit(
+                &mut self.interpreter,
+                &self.op_to_line,
+                &self.listing_lines,
+                self.jit_steps,
+                self.prev_dwarf_line,
+                "already exited",
+            )
+            .map_err(|e| e.to_string())?;
+            return Ok(self.finish_with_result(result));
+        }
+
+        let dwarf_line = match self.debugger.step_to_next_source_line() {
+            Ok(line) => line,
+            Err(JitDebugError::ProcessExited(code)) => {
+                let result = handle_jit_exit(
+                    &mut self.interpreter,
+                    &self.op_to_line,
+                    &self.listing_lines,
+                    self.jit_steps,
+                    self.prev_dwarf_line,
+                    &format!("exited with code {code}"),
+                )
+                .map_err(|e| e.to_string())?;
+                return Ok(self.finish_with_result(result));
+            }
+            Err(JitDebugError::ProcessSignaled(sig)) => {
+                let sig_name = match sig {
+                    6 => "SIGABRT",
+                    10 => "SIGBUS",
+                    11 => "SIGSEGV",
+                    _ => "signal",
+                };
+                let result = handle_jit_exit(
+                    &mut self.interpreter,
+                    &self.op_to_line,
+                    &self.listing_lines,
+                    self.jit_steps,
+                    self.prev_dwarf_line,
+                    &format!("killed by {sig_name} (signal {sig})"),
+                )
+                .map_err(|e| e.to_string())?;
+                return Ok(self.finish_with_result(result));
+            }
+            Err(e) => return Err(e.to_string()),
+        };
+
+        self.jit_steps += 1;
+        let executed_line = self.prev_dwarf_line;
+        self.prev_dwarf_line = dwarf_line;
+
+        let mut last_event = None;
+        let mut synced = false;
+        for _ in 0..500 {
+            let pre_loc = self.interpreter.state().location;
+            let pre_line = loc_to_line(&self.op_to_line, &pre_loc);
+
+            if pre_line == executed_line && last_event.is_none() {
+                let event = self
+                    .interpreter
+                    .step_forward()
+                    .map_err(|e| format!("interpreter step: {e}"))?;
+                last_event = Some(event.clone());
+                if event.returned {
+                    break;
+                }
+                continue;
+            }
+
+            if pre_line == dwarf_line {
+                synced = true;
+                break;
+            }
+
+            let event = self
+                .interpreter
+                .step_forward()
+                .map_err(|e| format!("interpreter step: {e}"))?;
+
+            let ev_line = loc_to_line(&self.op_to_line, &event.location_before);
+            if ev_line == executed_line && last_event.is_none() {
+                last_event = Some(event.clone());
+            }
+
+            if event.returned {
+                break;
+            }
+        }
+
+        if !synced && !self.interpreter.state().returned {
+            let cur_loc = self.interpreter.state().location;
+            let cur_line = loc_to_line(&self.op_to_line, &cur_loc);
+            let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
+            let source_line = format!(
+                "\
+SYNC FAILURE at JIT step {}
+
+  JIT executed line {}: {}
+  JIT now at line {}: {}
+  interpreter stuck at line {} (b{} inst[{}] term={}): {}
+
+  machine code at JIT position:
+{}",
+                self.jit_steps,
+                executed_line,
+                self.current_line_text(executed_line),
+                dwarf_line,
+                self.current_line_text(dwarf_line),
+                cur_line,
+                cur_loc.block.index(),
+                cur_loc.next_inst_index,
+                cur_loc.at_terminator,
+                self.current_line_text(cur_line),
+                disasm,
+            );
+            let result = LockstepResult {
+                steps: self.jit_steps,
+                divergence: Some(Divergence {
+                    step: self.jit_steps,
+                    dwarf_line: executed_line,
+                    source_line,
+                    vreg_diffs: Vec::new(),
+                }),
+                completed: false,
+            };
+            return Ok(self.finish_with_result(result));
+        }
+
+        let Some(event) = last_event else {
+            let cur_loc = self.interpreter.state().location;
+            let cur_line = loc_to_line(&self.op_to_line, &cur_loc);
+            let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
+            let source_line = format!(
+                "\
+LOCKSTEP DESYNC at JIT step {}
+
+  JIT executed line {}: {}
+  JIT now at line {}: {}
+  interpreter at line {} (b{} inst[{}] term={}): {}
+
+  The interpreter could not find line {}.
+
+  machine code at JIT position:
+{}",
+                self.jit_steps,
+                executed_line,
+                self.current_line_text(executed_line),
+                dwarf_line,
+                self.current_line_text(dwarf_line),
+                cur_line,
+                cur_loc.block.index(),
+                cur_loc.next_inst_index,
+                cur_loc.at_terminator,
+                self.current_line_text(cur_line),
+                executed_line,
+                disasm,
+            );
+            let result = LockstepResult {
+                steps: self.jit_steps,
+                divergence: Some(Divergence {
+                    step: self.jit_steps,
+                    dwarf_line: executed_line,
+                    source_line,
+                    vreg_diffs: Vec::new(),
+                }),
+                completed: false,
+            };
+            return Ok(self.finish_with_result(result));
+        };
+
+        let state = self.interpreter.state();
+        let func = &self.cfg_program.funcs[0];
+        let loc = &event.location_before;
+        let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, loc);
+
+        let interp_next_loc = self.interpreter.state().location;
+        let interp_next_line = self
+            .op_to_line
+            .get(&(
+                interp_next_loc.block.0,
+                interp_next_loc.at_terminator,
+                if interp_next_loc.at_terminator {
+                    0
+                } else {
+                    interp_next_loc.next_inst_index
+                },
+            ))
+            .copied()
+            .unwrap_or(0);
+
+        if interp_next_line != dwarf_line && !state.returned && dwarf_line != 0 {
+            let jit_pc = self.debugger.read_pc().map_err(|e| e.to_string())?;
+            let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
+            let term_info = {
+                let block = &func.blocks[loc.block.index()];
+                let term = &func.terms[block.term.index()];
+                let mut info = format!("  terminator: {:?}\n", term);
+                for &edge_id in &block.succs {
+                    let edge = &func.edges[edge_id.index()];
+                    let target_line = self
+                        .op_to_line
+                        .get(&(edge.to.0, false, 0))
+                        .or_else(|| self.op_to_line.get(&(edge.to.0, true, 0)))
+                        .copied()
+                        .unwrap_or(0);
+                    info.push_str(&format!(
+                        "  edge e{}: b{} → b{} (line {}) args={}\n",
+                        edge_id.index(),
+                        edge.from.index(),
+                        edge.to.index(),
+                        target_line,
+                        edge.args.len()
+                    ));
+                }
+                info
+            };
+
+            let mut vreg_diffs = Vec::new();
+            if let (Some(dst), Some(location)) = (
+                def_vreg,
+                def_vreg.and_then(|d| {
+                    self.location_map
+                        .location_at(executed_line, d.index() as u32)
+                }),
+            ) {
+                let sp = self.debugger.read_sp().map_err(|e| e.to_string())?;
+                let iv = if dst.index() < state.vregs.len() {
+                    state.vregs[dst.index()]
+                } else {
+                    0
+                };
+                let jv =
+                    read_vreg_from_jit(&self.debugger, location, sp).map_err(|e| e.to_string())?;
+                vreg_diffs.push(kajit::lockstep::VRegDiff {
+                    vreg_index: dst.index() as u32,
+                    interpreter_value: iv,
+                    jit_value: jv,
+                    jit_location: location.clone(),
+                    matches: jv == Some(iv),
+                });
+            }
+
+            let source_line = format!(
+                "\
+CONTROL FLOW DIVERGENCE at step {}
+
+  last op (line {}): {}
+{}  JIT went to:         line {} (pc=0x{:x}): {}
+  interpreter went to: line {}: {}
+
+  machine code:
+{}",
+                self.jit_steps,
+                executed_line,
+                self.current_line_text(executed_line),
+                term_info,
+                dwarf_line,
+                jit_pc,
+                self.current_line_text(dwarf_line),
+                interp_next_line,
+                self.current_line_text(interp_next_line),
+                disasm,
+            );
+            let result = LockstepResult {
+                steps: self.jit_steps,
+                divergence: Some(Divergence {
+                    step: self.jit_steps,
+                    dwarf_line: executed_line,
+                    source_line,
+                    vreg_diffs,
+                }),
+                completed: false,
+            };
+            return Ok(self.finish_with_result(result));
+        }
+
+        let compare_vregs: Vec<kajit_ir::VReg> = if let Some(dst) = def_vreg {
+            vec![dst]
+        } else if !use_vregs.is_empty() {
+            use_vregs.clone()
+        } else {
+            Vec::new()
+        };
+
+        if let Some(&dst) = compare_vregs.first() {
+            let dst_idx = dst.index() as u32;
+            let location = self.location_map.location_at(executed_line, dst_idx);
+            if let Some(location) = location {
+                let interp_value = if dst.index() < state.vregs.len() {
+                    state.vregs[dst.index()]
+                } else {
+                    0
+                };
+
+                let sp = self.debugger.read_sp().map_err(|e| e.to_string())?;
+                let jit_value =
+                    read_vreg_from_jit(&self.debugger, location, sp).map_err(|e| e.to_string())?;
+
+                if jit_value != Some(interp_value) {
+                    let mut vreg_diffs = vec![kajit::lockstep::VRegDiff {
+                        vreg_index: dst_idx,
+                        interpreter_value: interp_value,
+                        jit_value,
+                        jit_location: location.clone(),
+                        matches: false,
+                    }];
+                    for use_vreg in &use_vregs {
+                        let use_idx = use_vreg.index() as u32;
+                        if let Some(use_loc) = self.location_map.location_at(executed_line, use_idx)
+                        {
+                            let use_interp = if use_vreg.index() < state.vregs.len() {
+                                state.vregs[use_vreg.index()]
+                            } else {
+                                0
+                            };
+                            let use_jit = read_vreg_from_jit(&self.debugger, use_loc, sp)
+                                .map_err(|e| e.to_string())?;
+                            vreg_diffs.push(kajit::lockstep::VRegDiff {
+                                vreg_index: use_idx,
+                                interpreter_value: use_interp,
+                                jit_value: use_jit,
+                                jit_location: use_loc.clone(),
+                                matches: use_jit == Some(use_interp),
+                            });
+                        }
+                    }
+                    let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
+                    let mut diag = String::new();
+                    diag.push_str(&format!(
+                        "VALUE DIVERGENCE at step {}, line {}\n\n",
+                        self.jit_steps, executed_line
+                    ));
+                    diag.push_str(&format!(
+                        "  op: {}\n",
+                        self.current_line_text(executed_line)
+                    ));
+                    let reg_name = match location {
+                        VRegLocation::Register(p) => LocationMap::reg_name(*p),
+                        _ => "stk",
+                    };
+                    diag.push_str(&format!(
+                        "\n  v{} ({}): interpreter={}, jit={}\n",
+                        dst_idx,
+                        reg_name,
+                        interp_value,
+                        jit_value.map(|v| v.to_string()).unwrap_or("???".into())
+                    ));
+                    if let Some(&(last_val, last_line, last_step)) = self.verified.get(&dst_idx) {
+                        diag.push_str(&format!(
+                            "  v{} last verified: {} at line {} (step {})\n",
+                            dst_idx, last_val, last_line, last_step
+                        ));
+                    } else {
+                        diag.push_str(&format!("  v{} was NEVER verified before\n", dst_idx));
+                    }
+                    diag.push_str(&format!("\n  machine code:\n{}\n", disasm));
+
+                    let result = LockstepResult {
+                        steps: self.jit_steps,
+                        divergence: Some(Divergence {
+                            step: self.jit_steps,
+                            dwarf_line: executed_line,
+                            source_line: diag,
+                            vreg_diffs,
+                        }),
+                        completed: false,
+                    };
+                    return Ok(self.finish_with_result(result));
+                }
+
+                self.verified
+                    .insert(dst_idx, (interp_value, executed_line, self.jit_steps));
+
+                let reg_name = match location {
+                    VRegLocation::Register(p) => LocationMap::reg_name(*p),
+                    _ => "stk",
+                };
+                return Ok(format!(
+                    "step {}: line {} OK, v{}({}) = {}",
+                    self.jit_steps, executed_line, dst_idx, reg_name, interp_value
+                ));
+            } else if self.location_map.call_lines.contains(&executed_line) {
+                return Ok(format!(
+                    "step {}: line {} skipped (call-clobbered location)",
+                    self.jit_steps, executed_line
+                ));
+            }
+        }
+
+        Ok(format!(
+            "step {}: line {} executed, no comparable vreg",
+            self.jit_steps, executed_line
+        ))
+    }
+
+    fn snapshot_markdown(&self, session_id: u64) -> String {
+        let status = match self.status {
+            DebugDiffSessionStatus::Running => "running",
+            DebugDiffSessionStatus::Diverged => "diverged",
+            DebugDiffSessionStatus::Completed => "completed",
+        };
+        let pc = self.debugger.read_pc().ok();
+        let dwarf_line = self
+            .debugger
+            .current_source_line()
+            .ok()
+            .unwrap_or(self.prev_dwarf_line);
+        let mut out = format!(
+            "**Debug session {}** `{}` `{}`\n\nstatus: **{}** | steps={} | input=`{}`\nexe: `{}`\nlisting: `{}`\n",
+            session_id,
+            self.format,
+            self.ty,
+            status,
+            self.jit_steps,
+            encode_hex(&self.input),
+            self.exe_path.display(),
+            self.listing_path.display(),
+        );
+        if let Some(pc) = pc {
+            out.push_str(&format!(
+                "pc=0x{pc:x} | dwarf_line={} | source=`{}`\n",
+                dwarf_line,
+                self.current_line_text(dwarf_line)
+            ));
+        }
+        out.push('\n');
+        let state = self.interpreter.state();
+        out.push_str(&format_state_markdown(&state));
+        if let Some(provenance) = self.current_provenance_markdown(&state) {
+            out.push('\n');
+            out.push_str("**provenance**\n");
+            out.push_str(&provenance);
+        }
+        if let Some(div) = &self.divergence {
+            out.push_str("\n**last divergence**\n");
+            out.push_str(&div.source_line);
+            out.push('\n');
+        }
+        out
+    }
+
+    fn current_provenance_markdown(&self, state: &DebuggerState) -> Option<String> {
+        let loc = &state.location;
+        let func = self.cfg_program.funcs.first()?;
+        let block = func.blocks.get(loc.block.index())?;
+        let op_id = if loc.at_terminator {
+            kajit_mir::cfg_mir::OpId::Term(block.term)
+        } else {
+            kajit_mir::cfg_mir::OpId::Inst(*block.insts.get(loc.next_inst_index)?)
+        };
+        let cfg_line = loc_to_line(&self.op_to_line, loc);
+        let mut out = String::new();
+        out.push_str(&format!(
+            "cfg_line={} | op=`{}`\n",
+            cfg_line,
+            self.current_line_text(cfg_line)
+        ));
+
+        if let Some(scope_id) = self.cfg_program.op_debug_scope(func.lambda_id, op_id) {
+            out.push_str(&format!(
+                "op_scope: {}\n",
+                self.format_scope_chain(scope_id)
+            ));
+        }
+        if let Some(value_id) = self.cfg_program.op_debug_value(func.lambda_id, op_id) {
+            out.push_str(&format!(
+                "op_value: {}\n",
+                self.format_debug_value(value_id)
+            ));
+        }
+
+        let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, loc);
+        let mut vreg_lines = Vec::new();
+        if let Some(vreg) = def_vreg {
+            vreg_lines.push(self.format_vreg_provenance(state, "def", vreg));
+        }
+        for vreg in use_vregs {
+            vreg_lines.push(self.format_vreg_provenance(state, "use", vreg));
+        }
+        if !vreg_lines.is_empty() {
+            out.push_str("vregs:\n");
+            for line in vreg_lines {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+
+        Some(out)
+    }
+
+    fn format_vreg_provenance(
+        &self,
+        state: &DebuggerState,
+        role: &str,
+        vreg: kajit_ir::VReg,
+    ) -> String {
+        let mut line = format!(
+            "  {} v{}={}",
+            role,
+            vreg.index(),
+            state.vregs.get(vreg.index()).copied().unwrap_or(0)
+        );
+        if let Some(scope_id) = self.cfg_program.vreg_debug_scope(vreg) {
+            line.push_str(&format!(" | scope {}", self.format_scope_chain(scope_id)));
+        }
+        if let Some(value_id) = self.cfg_program.vreg_debug_value(vreg) {
+            line.push_str(&format!(" | value {}", self.format_debug_value(value_id)));
+        }
+        line
+    }
+
+    fn format_scope_chain(&self, scope_id: kajit_ir::DebugScopeId) -> String {
+        let mut chain = Vec::new();
+        let mut current = Some(scope_id);
+        while let Some(id) = current {
+            let scope = &self.cfg_program.debug.scopes[id];
+            chain.push(format!(
+                "@s{} {}",
+                id.index(),
+                format_scope_kind(&scope.kind)
+            ));
+            current = scope.parent;
+        }
+        chain.join(" <- ")
+    }
+
+    fn format_debug_value(&self, value_id: kajit_ir::DebugValueId) -> String {
+        let value = &self.cfg_program.debug.values[value_id];
+        match &value.kind {
+            kajit_ir::DebugValueKind::Field { offset } => {
+                format!("{} [field offset={}]", value.name, offset)
+            }
+            kajit_ir::DebugValueKind::Named => format!("{} [named]", value.name),
+        }
+    }
+}
+
+#[cfg(feature = "lldb")]
+fn loc_to_line(map: &HashMap<(u32, bool, usize), u32>, loc: &kajit_mir::ProgramLocation) -> u32 {
+    map.get(&(
+        loc.block.0,
+        loc.at_terminator,
+        if loc.at_terminator {
+            0
+        } else {
+            loc.next_inst_index
+        },
+    ))
+    .copied()
+    .unwrap_or(0)
+}
+
+#[cfg(feature = "lldb")]
+fn handle_jit_exit(
+    session: &mut DebuggerSession,
+    op_to_line: &HashMap<(u32, bool, usize), u32>,
+    listing_lines: &[String],
+    jit_steps: usize,
+    last_dwarf_line: u32,
+    exit_reason: &str,
+) -> Result<LockstepResult, JitDebugError> {
+    let mut interp_steps = 0;
+    loop {
+        let ev = session
+            .step_forward()
+            .map_err(|e| JitDebugError::LldbError(format!("interpreter step: {e}")))?;
+        interp_steps += 1;
+        if ev.returned || interp_steps > 10_000 {
+            break;
+        }
+    }
+
+    let final_state = session.state();
+    let interp_loc = final_state.location;
+    let interp_line = loc_to_line(op_to_line, &interp_loc);
+    let line_text = |n: u32| -> String {
+        if n > 0 && (n as usize) <= listing_lines.len() {
+            listing_lines[n as usize - 1].clone()
+        } else {
+            format!("<line {n}>")
+        }
+    };
+
+    if final_state.returned && interp_steps <= 2 {
+        return Ok(LockstepResult {
+            steps: jit_steps,
+            divergence: None,
+            completed: true,
+        });
+    }
+
+    let source_line = format!(
+        "\
+JIT EARLY EXIT at step {jit_steps}
+
+  JIT {exit_reason} at line {last_dwarf_line}: {last_op}
+  interpreter needed {interp_steps} more steps (returned={returned}, at line {interp_line}: {interp_op})",
+        last_op = line_text(last_dwarf_line),
+        returned = final_state.returned,
+        interp_op = line_text(interp_line),
+    );
+
+    Ok(LockstepResult {
+        steps: jit_steps,
+        divergence: Some(Divergence {
+            step: jit_steps,
+            dwarf_line: last_dwarf_line,
+            source_line,
+            vreg_diffs: Vec::new(),
+        }),
+        completed: false,
+    })
+}
+
+#[cfg(feature = "lldb")]
+fn read_vreg_from_jit(
+    debugger: &dyn JitDebugger,
+    location: &VRegLocation,
+    sp: u64,
+) -> Result<Option<u64>, JitDebugError> {
+    match location {
+        VRegLocation::Register(preg) => Ok(debugger.read_register(*preg).ok()),
+        VRegLocation::StackSlot(offset) => {
+            let addr = sp + *offset as u64;
+            Ok(debugger
+                .read_memory(addr, 8)
+                .ok()
+                .map(|b| u64::from_le_bytes(b[..8].try_into().unwrap())))
+        }
+        VRegLocation::Constant(val) => Ok(Some(*val)),
+    }
+}
+
+#[cfg(feature = "lldb")]
+fn op_def_uses_and_kind(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> (Option<kajit_ir::VReg>, Vec<kajit_ir::VReg>, bool) {
+    use kajit_lir::LinearOp;
+    use kajit_mir::cfg_mir::OperandKind;
+
+    let block = &func.blocks[loc.block.index()];
+
+    if loc.at_terminator {
+        let term = &func.terms[block.term.index()];
+        let uses = match term {
+            kajit_mir::cfg_mir::Terminator::BranchIf { cond, .. }
+            | kajit_mir::cfg_mir::Terminator::BranchIfZero { cond, .. } => vec![*cond],
+            kajit_mir::cfg_mir::Terminator::JumpTable { predicate, .. } => vec![*predicate],
+            _ => Vec::new(),
+        };
+        return (None, uses, false);
+    }
+
+    if loc.next_inst_index >= block.insts.len() {
+        return (None, Vec::new(), false);
+    }
+
+    let inst_id = block.insts[loc.next_inst_index];
+    let inst = &func.insts[inst_id.index()];
+
+    let mut def = None;
+    let mut uses = Vec::new();
+    for op in &inst.operands {
+        match op.kind {
+            OperandKind::Def => def = Some(op.vreg),
+            OperandKind::Use => uses.push(op.vreg),
+        }
+    }
+
+    let is_pointer = matches!(
+        inst.op,
+        LinearOp::SaveCursor { .. }
+            | LinearOp::SaveInputEnd { .. }
+            | LinearOp::SaveOutPtr { .. }
+            | LinearOp::SlotAddr { .. }
+            | LinearOp::LoadFromAddr { .. }
+    );
+
+    (def, uses, is_pointer)
+}
+
+#[cfg(feature = "lldb")]
+fn format_scope_kind(kind: &kajit_ir::DebugScopeKind) -> String {
+    match kind {
+        kajit_ir::DebugScopeKind::LambdaBody { lambda_id } => {
+            format!("lambda_body(@{})", lambda_id.index())
+        }
+        kajit_ir::DebugScopeKind::GammaBranch { branch_index } => {
+            format!("gamma_branch({branch_index})")
+        }
+        kajit_ir::DebugScopeKind::ThetaBody => "theta_body".to_owned(),
+        kajit_ir::DebugScopeKind::Synthetic => "synthetic".to_owned(),
     }
 }
 
@@ -572,12 +1678,13 @@ async fn run() -> Result<(), String> {
     let handler = MirHandler::default();
     let server_details = InitializeResult {
         server_info: Implementation {
-            name: "kajit-mir-mcp".into(),
+            name: "kajit".into(),
             version: env!("CARGO_PKG_VERSION").into(),
             description: Some(
-                "Session-based CFG-MIR debugger (step/run/inspect) for kajit-mir".into(),
+                "Kajit MCP server: interpreter debugging plus persistent lockstep LLDB sessions."
+                    .into(),
             ),
-            title: Some("Kajit MIR Debugger".into()),
+            title: Some("Kajit Debugger".into()),
             icons: vec![],
             website_url: None,
         },
@@ -589,7 +1696,8 @@ async fn run() -> Result<(), String> {
         },
         protocol_version: LATEST_PROTOCOL_VERSION.into(),
         instructions: Some(
-            "CFG-MIR interpreter debugger over MCP. Use tools/list then tools/call.".into(),
+            "Kajit MCP server. Use `session_*` tools for reversible CFG-MIR interpreter debugging and `debug_session_*` tools for persistent LLDB-backed lockstep sessions."
+                .into(),
         ),
         meta: None,
     };
@@ -716,7 +1824,7 @@ async fn run_proxy() -> Result<(), String> {
         if !should_reload {
             return Ok(());
         }
-        eprintln!("[kajit-mir-mcp] reloading backend...");
+        eprintln!("[kajit-mcp] reloading backend...");
     }
 }
 

@@ -2170,6 +2170,7 @@ unsafe extern "C" {
         is_debugger_specific: *mut bool,
     ) -> *const ::std::os::raw::c_char;
     pub fn SBDebuggerInitialize();
+    pub fn SBDebuggerInitializeWithErrorHandling() -> SBErrorRef;
     pub fn SBDebuggerTerminate();
     pub fn CloneSBDebugger(instance: SBDebuggerRef) -> SBDebuggerRef;
     pub fn SBDebuggerCreate() -> SBDebuggerRef;
