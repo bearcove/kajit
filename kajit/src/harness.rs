@@ -9,7 +9,7 @@
 //! Usage: `kajit compile postcard u32 -s harness`
 //! Produces: `harness_postcard_u32` executable + source listing
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 /// Where a vreg lives after register allocation.
@@ -240,6 +240,7 @@ impl LocationMap {
         }
 
         let mut edit_clobbers = HashMap::<u32, Vec<VRegLocation>>::new();
+
         for alloc_func in &alloc.functions {
             let lambda_id = alloc_func.lambda_id.index() as u32;
             for edit in &alloc_func.edits {
@@ -280,7 +281,7 @@ enum LocationKey {
 /// longer readable from that location.
 #[derive(Debug, Clone, Default)]
 pub struct LocationTracker {
-    owners: HashMap<LocationKey, u32>,
+    owners: HashMap<LocationKey, BTreeSet<u32>>,
 }
 
 impl LocationTracker {
@@ -289,14 +290,20 @@ impl LocationTracker {
 
         if let Some(func) = program.funcs.first() {
             for &vreg in &func.data_args {
-                LocationMap::assign_owner(&mut owners, &map.static_locations, vreg.index() as u32);
+                assign_aliases(
+                    &mut owners,
+                    &map.static_locations,
+                    vreg.index() as u32,
+                    BTreeSet::from([vreg.index() as u32]),
+                );
             }
             if let Some(entry) = func.blocks.get(func.entry.index()) {
                 for &vreg in &entry.params {
-                    LocationMap::assign_owner(
+                    assign_aliases(
                         &mut owners,
                         &map.static_locations,
                         vreg.index() as u32,
+                        BTreeSet::from([vreg.index() as u32]),
                     );
                 }
             }
@@ -305,22 +312,18 @@ impl LocationTracker {
         Self { owners }
     }
 
-    pub fn location_for<'a>(&self, map: &'a LocationMap, vreg_idx: u32) -> Option<&'a VRegLocation> {
-        let loc = map.static_locations.get(&vreg_idx)?;
-        let Some(key) = LocationMap::key_for(loc) else {
-            return Some(loc);
-        };
-        (self.owners.get(&key) == Some(&vreg_idx)).then_some(loc)
+    pub fn location_for(&self, map: &LocationMap, vreg_idx: u32) -> Option<VRegLocation> {
+        current_location_from_owners(&self.owners, map, vreg_idx)
     }
 
     pub fn owner_of_vreg_location(&self, map: &LocationMap, vreg_idx: u32) -> Option<u32> {
-        let loc = map.static_locations.get(&vreg_idx)?;
-        self.owner_of_location(loc)
+        let loc = self.location_for(map, vreg_idx)?;
+        self.owner_of_location(&loc)
     }
 
     pub fn owner_of_location(&self, loc: &VRegLocation) -> Option<u32> {
         let key = LocationMap::key_for(loc)?;
-        self.owners.get(&key).copied()
+        self.owners.get(&key)?.iter().next().copied()
     }
 
     pub fn observe_step(
@@ -345,22 +348,39 @@ impl LocationTracker {
         if loc_before.at_terminator {
             if let Some(edge) = chosen_edge(func, loc_before, loc_after) {
                 for arg in &edge.args {
-                    LocationMap::assign_owner(
+                    let aliases = aliases_for_vreg(&self.owners, arg.source.index() as u32)
+                        .unwrap_or_else(|| BTreeSet::from([arg.source.index() as u32]));
+                    assign_aliases(
                         &mut self.owners,
                         &map.static_locations,
                         arg.target.index() as u32,
+                        aliases,
                     );
                 }
             }
             return;
         }
 
-        if let Some(def_vreg) = op_def_vreg(func, loc_before) {
-            LocationMap::assign_owner(
-                &mut self.owners,
-                &map.static_locations,
-                def_vreg.index() as u32,
-            );
+        if let Some(block) = func.blocks.get(loc_before.block.index()) {
+            if let Some(&inst_id) = block.insts.get(loc_before.next_inst_index) {
+                let inst = &func.insts[inst_id.index()];
+                if let Some(def_vreg) = op_def_vreg(func, loc_before) {
+                    let aliases = match inst.op {
+                        kajit_lir::LinearOp::Copy { src, .. } => aliases_for_vreg(
+                            &self.owners,
+                            src.index() as u32,
+                        )
+                        .unwrap_or_else(|| BTreeSet::from([src.index() as u32])),
+                        _ => BTreeSet::from([def_vreg.index() as u32]),
+                    };
+                    assign_aliases(
+                        &mut self.owners,
+                        &map.static_locations,
+                        def_vreg.index() as u32,
+                        aliases,
+                    );
+                }
+            }
         }
     }
 
@@ -372,29 +392,49 @@ impl LocationTracker {
 }
 
 fn current_location_from_owners(
-    owners: &HashMap<LocationKey, u32>,
+    owners: &HashMap<LocationKey, BTreeSet<u32>>,
     map: &LocationMap,
     vreg_idx: u32,
 ) -> Option<VRegLocation> {
     let loc = map.static_locations.get(&vreg_idx)?;
-    match loc {
-        VRegLocation::Constant(value) => Some(VRegLocation::Constant(*value)),
-        VRegLocation::Register(preg) => owners
-            .get(&LocationKey::Register(*preg))
-            .copied()
-            .filter(|owner| *owner == vreg_idx)
-            .map(|_| VRegLocation::Register(*preg)),
-        VRegLocation::StackSlot(offset) => owners
-            .get(&LocationKey::StackSlot(*offset))
-            .copied()
-            .filter(|owner| *owner == vreg_idx)
-            .map(|_| VRegLocation::StackSlot(*offset)),
+    if let VRegLocation::Constant(value) = loc {
+        return Some(VRegLocation::Constant(*value));
     }
+
+    match loc {
+        VRegLocation::Register(preg)
+            if owners
+                .get(&LocationKey::Register(*preg))
+                .is_some_and(|aliases| aliases.contains(&vreg_idx)) =>
+        {
+            return Some(VRegLocation::Register(*preg));
+        }
+        VRegLocation::StackSlot(offset)
+            if owners
+                .get(&LocationKey::StackSlot(*offset))
+                .is_some_and(|aliases| aliases.contains(&vreg_idx)) =>
+        {
+            return Some(VRegLocation::StackSlot(*offset));
+        }
+        _ => {}
+    }
+
+    for (key, aliases) in owners {
+        if !aliases.contains(&vreg_idx) {
+            continue;
+        }
+        match key {
+            LocationKey::Register(preg) => return Some(VRegLocation::Register(*preg)),
+            LocationKey::StackSlot(offset) => return Some(VRegLocation::StackSlot(*offset)),
+        }
+    }
+
+    None
 }
 
 fn merge_owner_maps(
-    dst: &mut HashMap<LocationKey, u32>,
-    src: &HashMap<LocationKey, u32>,
+    dst: &mut HashMap<LocationKey, BTreeSet<u32>>,
+    src: &HashMap<LocationKey, BTreeSet<u32>>,
 ) -> bool {
     if dst.is_empty() {
         *dst = src.clone();
@@ -402,12 +442,58 @@ fn merge_owner_maps(
     }
 
     let before = dst.clone();
-    dst.retain(|key, owner| src.get(key) == Some(owner));
+    dst.retain(|key, aliases| {
+        let Some(src_aliases) = src.get(key) else {
+            return false;
+        };
+        aliases.retain(|vreg| src_aliases.contains(vreg));
+        !aliases.is_empty()
+    });
     *dst != before
 }
 
+fn aliases_for_vreg(
+    owners: &HashMap<LocationKey, BTreeSet<u32>>,
+    vreg_idx: u32,
+) -> Option<BTreeSet<u32>> {
+    let mut aliases = BTreeSet::new();
+    for members in owners.values() {
+        if members.contains(&vreg_idx) {
+            aliases.extend(members.iter().copied());
+        }
+    }
+    (!aliases.is_empty()).then_some(aliases)
+}
+
+fn remove_vreg_from_all_locations(
+    owners: &mut HashMap<LocationKey, BTreeSet<u32>>,
+    vreg_idx: u32,
+) {
+    owners.retain(|_, aliases| {
+        aliases.remove(&vreg_idx);
+        !aliases.is_empty()
+    });
+}
+
+fn assign_aliases(
+    owners: &mut HashMap<LocationKey, BTreeSet<u32>>,
+    static_locations: &HashMap<u32, VRegLocation>,
+    vreg_idx: u32,
+    mut aliases: BTreeSet<u32>,
+) {
+    remove_vreg_from_all_locations(owners, vreg_idx);
+    aliases.insert(vreg_idx);
+    let Some(loc) = static_locations.get(&vreg_idx) else {
+        return;
+    };
+    let Some(key) = LocationMap::key_for(loc) else {
+        return;
+    };
+    owners.insert(key, aliases);
+}
+
 fn apply_block_transfer(
-    owners: &mut HashMap<LocationKey, u32>,
+    owners: &mut HashMap<LocationKey, BTreeSet<u32>>,
     map: &LocationMap,
     func: &kajit_mir::cfg_mir::Function,
     block: &kajit_mir::cfg_mir::Block,
@@ -437,7 +523,12 @@ fn apply_block_transfer(
             .find(|operand| operand.kind == kajit_mir::cfg_mir::OperandKind::Def)
             .map(|operand| operand.vreg)
         {
-            LocationMap::assign_owner(owners, &map.static_locations, def.index() as u32);
+            let aliases = match inst.op {
+                kajit_lir::LinearOp::Copy { src, .. } => aliases_for_vreg(owners, src.index() as u32)
+                    .unwrap_or_else(|| BTreeSet::from([src.index() as u32])),
+                _ => BTreeSet::from([def.index() as u32]),
+            };
+            assign_aliases(owners, &map.static_locations, def.index() as u32, aliases);
         }
     }
 }
@@ -462,7 +553,8 @@ pub fn compute_edge_source_locations(
         next_line += 1;
     }
 
-    let mut entry_owners = HashMap::<kajit_mir::cfg_mir::BlockId, HashMap<LocationKey, u32>>::new();
+    let mut entry_owners =
+        HashMap::<kajit_mir::cfg_mir::BlockId, HashMap<LocationKey, BTreeSet<u32>>>::new();
     let mut worklist = VecDeque::new();
 
     let seed = LocationTracker::new(map, program).owners;
@@ -483,10 +575,13 @@ pub fn compute_edge_source_locations(
             let edge = &func.edges[edge_id.index()];
             let mut edge_owners = owners.clone();
             for arg in &edge.args {
-                LocationMap::assign_owner(
+                let aliases = aliases_for_vreg(&owners, arg.source.index() as u32)
+                    .unwrap_or_else(|| BTreeSet::from([arg.source.index() as u32]));
+                assign_aliases(
                     &mut edge_owners,
                     &map.static_locations,
                     arg.target.index() as u32,
+                    aliases,
                 );
             }
 
@@ -518,6 +613,117 @@ pub fn compute_edge_source_locations(
     }
 
     edge_source_locations
+}
+
+pub fn compute_inst_source_locations(
+    map: &LocationMap,
+    program: &kajit_mir::cfg_mir::Program,
+) -> HashMap<(kajit_mir::cfg_mir::InstId, u32), VRegLocation> {
+    use std::collections::VecDeque;
+
+    let Some(func) = program.funcs.first() else {
+        return HashMap::new();
+    };
+
+    let mut inst_lines = HashMap::<kajit_mir::cfg_mir::InstId, u32>::new();
+    let mut next_line = 1u32;
+    for block in &func.blocks {
+        for &inst_id in &block.insts {
+            inst_lines.insert(inst_id, next_line);
+            next_line += 1;
+        }
+        next_line += 1;
+    }
+
+    let mut entry_owners =
+        HashMap::<kajit_mir::cfg_mir::BlockId, HashMap<LocationKey, BTreeSet<u32>>>::new();
+    let mut worklist = VecDeque::new();
+
+    let seed = LocationTracker::new(map, program).owners;
+    entry_owners.insert(func.entry, seed);
+    worklist.push_back(func.entry);
+
+    while let Some(block_id) = worklist.pop_front() {
+        let Some(block) = func.blocks.get(block_id.index()) else {
+            continue;
+        };
+        let Some(mut owners) = entry_owners.get(&block_id).cloned() else {
+            continue;
+        };
+
+        apply_block_transfer(&mut owners, map, func, block, &inst_lines);
+
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            let mut edge_owners = owners.clone();
+            for arg in &edge.args {
+                let aliases = aliases_for_vreg(&owners, arg.source.index() as u32)
+                    .unwrap_or_else(|| BTreeSet::from([arg.source.index() as u32]));
+                assign_aliases(
+                    &mut edge_owners,
+                    &map.static_locations,
+                    arg.target.index() as u32,
+                    aliases,
+                );
+            }
+
+            let succ_entry = entry_owners.entry(edge.to).or_default();
+            if merge_owner_maps(succ_entry, &edge_owners) {
+                worklist.push_back(edge.to);
+            }
+        }
+    }
+
+    let mut inst_source_locations = HashMap::new();
+    for block in &func.blocks {
+        let Some(mut owners) = entry_owners.get(&block.id).cloned() else {
+            continue;
+        };
+
+        for &inst_id in &block.insts {
+            let Some(&line) = inst_lines.get(&inst_id) else {
+                continue;
+            };
+            let inst = &func.insts[inst_id.index()];
+            for operand in &inst.operands {
+                if operand.kind != kajit_mir::cfg_mir::OperandKind::Use {
+                    continue;
+                }
+                if let Some(loc) = current_location_from_owners(&owners, map, operand.vreg.index() as u32)
+                {
+                    inst_source_locations.insert((inst_id, operand.vreg.index() as u32), loc);
+                }
+            }
+
+            if let Some(clobbers) = map.edit_clobbers.get(&line) {
+                for loc in clobbers {
+                    if let Some(key) = LocationMap::key_for(loc) {
+                        owners.remove(&key);
+                    }
+                }
+            }
+
+            if map.call_lines.contains(&line) {
+                owners.retain(|key, _| !matches!(key, LocationKey::Register(preg) if *preg <= 18));
+            }
+
+            if let Some(def) = inst
+                .operands
+                .iter()
+                .find(|operand| operand.kind == kajit_mir::cfg_mir::OperandKind::Def)
+                .map(|operand| operand.vreg)
+            {
+                let aliases = match inst.op {
+                    kajit_lir::LinearOp::Copy { src, .. } => aliases_for_vreg(&owners, src.index() as u32)
+                        .unwrap_or_else(|| BTreeSet::from([src.index() as u32])),
+                    _ => BTreeSet::from([def.index() as u32]),
+                };
+                assign_aliases(&mut owners, &map.static_locations, def.index() as u32, aliases);
+            }
+        }
+    }
+
+    inst_source_locations
 }
 
 fn chosen_edge<'a>(
@@ -686,7 +892,7 @@ mod tests {
                 at_terminator: true,
             },
         );
-        assert_eq!(tracker.location_for(&map, 3), Some(&VRegLocation::StackSlot(16)));
+        assert_eq!(tracker.location_for(&map, 3), Some(VRegLocation::StackSlot(16)));
         assert_eq!(tracker.location_for(&map, 1), None);
 
         tracker.observe_step(
@@ -704,7 +910,7 @@ mod tests {
                 at_terminator: true,
             },
         );
-        assert_eq!(tracker.location_for(&map, 1), Some(&VRegLocation::StackSlot(16)));
+        assert_eq!(tracker.location_for(&map, 1), Some(VRegLocation::StackSlot(16)));
         assert_eq!(tracker.location_for(&map, 3), None);
     }
 
@@ -761,7 +967,7 @@ mod tests {
             .insert(1, vec![VRegLocation::Register(5)]);
 
         let mut tracker = LocationTracker::new(&map, &program);
-        assert_eq!(tracker.location_for(&map, 1), Some(&VRegLocation::Register(5)));
+        assert_eq!(tracker.location_for(&map, 1), Some(VRegLocation::Register(5)));
 
         tracker.observe_step(
             &map,
@@ -780,6 +986,131 @@ mod tests {
         );
 
         assert_eq!(tracker.location_for(&map, 1), None);
+    }
+
+    #[test]
+    fn copy_equivalent_live_home_survives_source_clobber() {
+        let program = cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId(0),
+                lambda_id: LambdaId::new(0),
+                entry: cfg_mir::BlockId(0),
+                data_args: vec![v(2)],
+                data_results: Vec::new(),
+                output_size: 0,
+                blocks: vec![
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId(0),
+                        params: Vec::new(),
+                        insts: vec![cfg_mir::InstId(0), cfg_mir::InstId(1)],
+                        term: cfg_mir::TermId(0),
+                        preds: Vec::new(),
+                        succs: vec![cfg_mir::EdgeId(0)],
+                        dead: false,
+                    },
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId(1),
+                        params: vec![v(1)],
+                        insts: Vec::new(),
+                        term: cfg_mir::TermId(1),
+                        preds: vec![cfg_mir::EdgeId(0)],
+                        succs: Vec::new(),
+                        dead: false,
+                    },
+                ],
+                edges: vec![cfg_mir::Edge {
+                    id: cfg_mir::EdgeId(0),
+                    from: cfg_mir::BlockId(0),
+                    to: cfg_mir::BlockId(1),
+                    args: vec![cfg_mir::EdgeArg {
+                        target: v(1),
+                        source: v(2),
+                    }],
+                }],
+                insts: vec![
+                    cfg_mir::Inst {
+                        id: cfg_mir::InstId(0),
+                        op: LinearOp::Copy { dst: v(1), src: v(2) },
+                        operands: vec![
+                            cfg_mir::Operand {
+                                vreg: v(1),
+                                kind: cfg_mir::OperandKind::Def,
+                                class: cfg_mir::RegClass::Gpr,
+                                fixed: None,
+                            },
+                            cfg_mir::Operand {
+                                vreg: v(2),
+                                kind: cfg_mir::OperandKind::Use,
+                                class: cfg_mir::RegClass::Gpr,
+                                fixed: None,
+                            },
+                        ],
+                        clobbers: cfg_mir::Clobbers::default(),
+                    },
+                    def_inst(1, v(3)),
+                ],
+                terms: vec![
+                    cfg_mir::Terminator::Branch {
+                        edge: cfg_mir::EdgeId(0),
+                    },
+                    cfg_mir::Terminator::Return,
+                ],
+            }],
+            vreg_count: 4,
+            slot_count: 0,
+            param_slot_count: 0,
+            is_scalar: false,
+            debug: Default::default(),
+            hints: Default::default(),
+            extra_excluded_regs: vec![],
+            data_blobs: vec![],
+        };
+
+        let mut map = LocationMap::default();
+        map.static_locations.insert(1, VRegLocation::Register(0));
+        map.static_locations.insert(2, VRegLocation::Register(23));
+        map.static_locations.insert(3, VRegLocation::Register(23));
+        let func = &program.funcs[0];
+        let mut tracker = LocationTracker::new(&map, &program);
+
+        tracker.observe_step(
+            &map,
+            func,
+            1,
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 0,
+                at_terminator: false,
+            },
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 1,
+                at_terminator: false,
+            },
+        );
+        tracker.observe_step(
+            &map,
+            func,
+            2,
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 1,
+                at_terminator: false,
+            },
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 2,
+                at_terminator: true,
+            },
+        );
+
+        assert_eq!(tracker.location_for(&map, 2), Some(VRegLocation::Register(0)));
+
+        let edge_sources = compute_edge_source_locations(&map, &program);
+        assert_eq!(
+            edge_sources.get(&(cfg_mir::EdgeId(0), 2)),
+            Some(&VRegLocation::Register(0))
+        );
     }
 }
 

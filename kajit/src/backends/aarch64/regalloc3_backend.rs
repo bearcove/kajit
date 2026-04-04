@@ -7,7 +7,10 @@ use kajit_mir::regalloc3_result::{AllocatedCfgFunctionRa3, AllocatedCfgProgramRa
 
 use crate::arch::EmitCtx;
 use crate::context::{CTX_INPUT_END, CTX_INPUT_PTR};
-use crate::harness::{compute_edge_source_locations, AllocationMap, LocationMap, VRegLocation};
+use crate::harness::{
+    compute_edge_source_locations, compute_inst_source_locations, AllocationMap, LocationMap,
+    VRegLocation,
+};
 use crate::ir_backend::LinearBackendResult;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use std::collections::HashMap;
@@ -76,6 +79,9 @@ struct EmitContext<'a> {
     edge_trampoline_labels: HashMap<cfg_mir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
     /// Actual source homes for edge arguments at predecessor exit.
     edge_source_locations: HashMap<(cfg_mir::EdgeId, u32), VRegLocation>,
+    /// Actual source homes for instruction use operands at instruction entry.
+    inst_source_locations: HashMap<(cfg_mir::InstId, u32), VRegLocation>,
+    current_inst: Option<cfg_mir::InstId>,
 }
 
 struct BfiInfo {
@@ -136,6 +142,16 @@ impl<'a> EmitContext<'a> {
     /// Get hardware register for a vreg, or use a temp register and load from spill slot.
     /// For spilled constants, rematerializes with movz instead of loading from stack.
     fn reg_for_vreg_with_temp(&mut self, vreg: kajit_ir::VReg, temp: Reg) -> Reg {
+        if let Some(inst_id) = self.current_inst {
+            if let Some(loc) = self
+                .inst_source_locations
+                .get(&(inst_id, vreg.index() as u32))
+                .cloned()
+            {
+                return self.reg_for_location_with_temp(&loc, temp);
+            }
+        }
+
         if let Some(preg) = self.preg_for_vreg(vreg) {
             return self.preg_to_reg(preg);
         }
@@ -360,12 +376,14 @@ impl<'a> EmitContext<'a> {
 
     /// Emit a single instruction.
     fn emit_inst(&mut self, inst: &Inst) {
+        self.current_inst = Some(inst.id);
         // Skip instructions whose outputs were fused (bfi, bit-test, etc.)
         match &inst.op {
             LinearOp::BinOp { dst, .. }
             | LinearOp::Const { dst, .. }
             | LinearOp::DataAddr { dst, .. } => {
                 if self.fused_skip.contains(dst) {
+                    self.current_inst = None;
                     return;
                 }
             }
@@ -376,6 +394,7 @@ impl<'a> EmitContext<'a> {
                 // Elide copy when src and dst are in the same register
                 if let (Some(sp), Some(dp)) = (self.preg_for_vreg(*src), self.preg_for_vreg(*dst)) {
                     if sp == dp {
+                        self.current_inst = None;
                         return; // nop
                     }
                 }
@@ -386,6 +405,7 @@ impl<'a> EmitContext<'a> {
             LinearOp::Const { dst, value } => {
                 // Skip immediate-only consts (operands cleared by elim_imm).
                 if inst.operands.is_empty() {
+                    self.current_inst = None;
                     return;
                 }
                 if let Some(preg) = self.preg_for_vreg(*dst) {
@@ -797,6 +817,7 @@ impl<'a> EmitContext<'a> {
                 );
             }
         }
+        self.current_inst = None;
     }
 
     /// Emit a binary operation.
@@ -2363,6 +2384,7 @@ pub fn compile_regalloc3_with_root_data_abi(
         let alloc_map = AllocationMap::from_regalloc3(alloc_func, ectx.base_frame);
         let location_map = LocationMap::from_alloc_map_and_cfg(&alloc_map, program, alloc);
         let edge_source_locations = compute_edge_source_locations(&location_map, program);
+        let inst_source_locations = compute_inst_source_locations(&location_map, program);
 
         // For leaf functions: keep output_ptr in x0 and ctx_ptr in x1
         // (avoids saving/restoring x21/x22 and the arg moves).
@@ -2395,6 +2417,8 @@ pub fn compile_regalloc3_with_root_data_abi(
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),
             edge_source_locations,
+            inst_source_locations,
+            current_inst: None,
         };
 
         ctx.emit_function();

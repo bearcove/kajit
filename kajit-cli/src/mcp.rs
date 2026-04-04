@@ -1472,7 +1472,7 @@ fn format_live_location(
         .location_for(&lockstep.location_map, vreg_index)
     {
         Some(kajit::harness::VRegLocation::Register(preg)) => {
-            format!("reg {}", kajit::harness::LocationMap::reg_name(*preg))
+            format!("reg {}", kajit::harness::LocationMap::reg_name(preg))
         }
         Some(kajit::harness::VRegLocation::StackSlot(offset)) => format!("[sp+{offset}]"),
         Some(kajit::harness::VRegLocation::Constant(value)) => format!("const({value})"),
