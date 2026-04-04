@@ -202,17 +202,7 @@ impl<D: JitDebugger> LockstepSession<D> {
         }
 
         let func = &program.funcs[0];
-        let mut op_to_line: std::collections::HashMap<(u32, bool, usize), u32> =
-            std::collections::HashMap::new();
-        let mut next_line = 1u32;
-        for block in &func.blocks {
-            for (inst_idx, _) in block.insts.iter().enumerate() {
-                op_to_line.insert((block.id.0, false, inst_idx), next_line);
-                next_line += 1;
-            }
-            op_to_line.insert((block.id.0, true, 0), next_line);
-            next_line += 1;
-        }
+        let op_to_line = build_op_to_line_map(program, backend_debug_info);
 
         let entry_pc = debugger.read_pc()?;
         let code_line_ranges = build_code_line_ranges(backend_debug_info, entry_offset);
@@ -332,6 +322,7 @@ impl<D: JitDebugger> LockstepSession<D> {
         self.prev_dwarf_line = dwarf_line;
 
         let mut last_event = None;
+        let mut executed_state = None;
         let mut synced = false;
         for _ in 0..500 {
             let pre_loc = self.interpreter.state().location;
@@ -342,6 +333,7 @@ impl<D: JitDebugger> LockstepSession<D> {
                     .interpreter
                     .step_forward()
                     .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+                executed_state = Some(self.interpreter.state());
                 last_event = Some(event.clone());
                 if event.returned {
                     break;
@@ -361,6 +353,7 @@ impl<D: JitDebugger> LockstepSession<D> {
 
             let ev_line = loc_to_line(&self.op_to_line, &event.location_before);
             if ev_line == executed_line && last_event.is_none() {
+                executed_state = Some(self.interpreter.state());
                 last_event = Some(event.clone());
             }
 
@@ -450,7 +443,7 @@ LOCKSTEP DESYNC at JIT step {}
             return Ok(self.finish_with_result(result));
         };
 
-        let state = self.interpreter.state();
+        let state = executed_state.unwrap_or_else(|| self.interpreter.state());
         let func = &self.cfg_program.funcs[0];
         let loc = &event.location_before;
         let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, loc);
@@ -834,6 +827,46 @@ fn build_code_line_ranges(
         .collect();
     ranges.sort_by_key(|range| (range.start, range.end, range.line));
     ranges
+}
+
+fn build_op_to_line_map(
+    program: &kajit_mir::cfg_mir::Program,
+    backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
+) -> std::collections::HashMap<(u32, bool, usize), u32> {
+    let func = &program.funcs[0];
+    let lambda_id = func.lambda_id.index() as u32;
+
+    let mut op_locations =
+        std::collections::HashMap::<kajit_mir::cfg_mir::OpId, (u32, bool, usize)>::new();
+    let mut fallback = std::collections::HashMap::<(u32, bool, usize), u32>::new();
+    let mut next_line = 1u32;
+    for block in &func.blocks {
+        for (inst_idx, inst_id) in block.insts.iter().enumerate() {
+            let key = (block.id.0, false, inst_idx);
+            op_locations.insert(kajit_mir::cfg_mir::OpId::Inst(*inst_id), key);
+            fallback.insert(key, next_line);
+            next_line += 1;
+        }
+        let term_key = (block.id.0, true, 0);
+        op_locations.insert(kajit_mir::cfg_mir::OpId::Term(block.term), term_key);
+        fallback.insert(term_key, next_line);
+        next_line += 1;
+    }
+
+    let Some(backend_debug_info) = backend_debug_info else {
+        return fallback;
+    };
+
+    let mut mapped = fallback.clone();
+    for op in &backend_debug_info.op_infos {
+        if op.lambda_id != lambda_id {
+            continue;
+        }
+        if let Some(&key) = op_locations.get(&op.op_id) {
+            mapped.insert(key, op.line);
+        }
+    }
+    mapped
 }
 
 fn current_line_from_pc(
