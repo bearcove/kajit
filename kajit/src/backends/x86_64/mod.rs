@@ -439,8 +439,7 @@ impl Lowerer {
                     self.set_const(*dst, None);
                 }
             }
-            LinearOp::CallPure { func, args, dst }
-            | LinearOp::CallEffect { func, args, dst } => {
+            LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
                 self.emit_call_pure(*func, args, *dst);
                 self.set_const(*dst, None);
             }

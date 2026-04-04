@@ -803,7 +803,9 @@ pub fn interpret(program: &Program, input: &[u8]) -> Option<Vec<u8>> {
         f.insts.iter().any(|inst| {
             matches!(
                 inst.op,
-                kajit_lir::LinearOp::CallIntrinsic { .. } | kajit_lir::LinearOp::CallPure { .. } | kajit_lir::LinearOp::CallEffect { .. }
+                kajit_lir::LinearOp::CallIntrinsic { .. }
+                    | kajit_lir::LinearOp::CallPure { .. }
+                    | kajit_lir::LinearOp::CallEffect { .. }
             )
         })
     });
