@@ -53,7 +53,7 @@ unsafe impl Sync for ExecutableBuffer {}
 impl ExecutableBuffer {
     fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
-        let mut flags = MAP_PRIVATE | MAP_ANON;
+        let flags = MAP_PRIVATE | MAP_ANON;
         #[cfg(target_os = "macos")]
         {
             flags |= MAP_JIT;
