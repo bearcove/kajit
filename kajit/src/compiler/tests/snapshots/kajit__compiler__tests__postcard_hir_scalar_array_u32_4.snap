@@ -24,13 +24,13 @@ hir_module {
       regions [r0]
       stores []
       params [
-        l2 param "cursor": t0<r0>
+        l2 param "cursor": &mut t0<r0>
         l3 destination "out": t1
       ]
       locals [
         l4 temp "array_idx_0": u64
         l5 temp "varint_acc_1": u64
-        l6 temp "varint_index_2": u64
+        l6 temp "varint_shift_2": u64
         l7 temp "varint_byte_3": u8
       ]
       return unit
@@ -48,19 +48,19 @@ hir_module {
           stmt4: init l6 = 0x0
           stmt5: init l7 = 0x0
           stmt16: loop @sc0 {
-            stmt6: if binary gt(binary add(field(l2, "pos"), 0x1), slice_len(field(l2, "bytes"))) @sc0 {
+            stmt6: if binary gt(binary add(field(deref(l2), "pos"), 0x1), slice_len(field(deref(l2), "bytes"))) @sc0 {
               stmt7: fail UnexpectedEof
             } else @sc0 {
             }
-            stmt8: assign l7 = load w1(binary add(slice_data(field(l2, "bytes")), field(l2, "pos")))
-            stmt9: assign field(l2, "pos") = binary add(field(l2, "pos"), 0x1)
-            stmt10: assign l5 = binary bitor(l5, binary shl(binary bitand(l7, 0x7f), binary mul(l6, 0x7)))
-            stmt11: assign l6 = binary add(l6, 0x1)
+            stmt8: assign l7 = load w1(binary add(slice_data(field(deref(l2), "bytes")), field(deref(l2), "pos")))
+            stmt9: assign field(deref(l2), "pos") = binary add(field(deref(l2), "pos"), 0x1)
+            stmt10: assign l5 = binary bitor(l5, binary shl(binary bitand(l7, 0x7f), l6))
+            stmt11: assign l6 = binary add(l6, 0x7)
             stmt13: if binary eq(binary bitand(l7, 0x80), 0x0) @sc0 {
               stmt12: break
             } else @sc0 {
             }
-            stmt14: if binary eq(l6, 0x5) @sc0 {
+            stmt14: if binary eq(l6, 0x23) @sc0 {
               stmt15: fail InvalidVarint
             } else @sc0 {
             }

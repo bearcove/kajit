@@ -934,7 +934,6 @@ fn postcard_hir_models_payload_enums() {
 
 // pre-existing: HIR round-trip mismatch on max_iterations
 #[test]
-#[ignore]
 fn postcard_hir_scalar_array_u32_4() {
     let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
     insta::assert_snapshot!(module.to_string());
@@ -995,22 +994,6 @@ fn postcard_hir_lowering_decodes_borrowed_header() {
     assert_eq!(value, BorrowedHeader { len: 7, name: "hi" });
 }
 
-#[test]
-#[ignore]
-fn debug_postcard_borrowed_header_codegen() {
-    let module = build_postcard_decoder_hir(<BorrowedHeader<'static>>::SHAPE);
-    std::fs::write("/tmp/borrowed-header.hir.txt", module.to_string()).unwrap();
-
-    let decoder = compile_postcard_decoder_via_structural_hir(<BorrowedHeader<'static>>::SHAPE);
-    std::fs::write("/tmp/borrowed-header.cfg.txt", decoder.cfg_mir_text()).unwrap();
-    #[cfg(target_arch = "aarch64")]
-    if let Some(asm) = decoder.assembly_text() {
-        std::fs::write("/tmp/borrowed-header.asm.txt", asm).unwrap();
-    }
-}
-
-#[test]
-#[ignore]
 #[cfg(target_os = "linux")]
 fn debug_postcard_borrowed_header_harness() {
     let shape = <BorrowedHeader<'static>>::SHAPE;
