@@ -13,7 +13,7 @@ path = "src/main.rs"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [features]
-default = []
+default = ["lldb"]
 lldb = ["dep:lldb"]
 
 [dependencies]

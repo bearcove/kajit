@@ -124,7 +124,7 @@ Lockstep sessions:
   large buffers.
 - `run_until` is bounded by `max_steps` to avoid runaway sessions.
 - State is deterministic for the same RA-MIR + input + step sequence.
-- `debug_session_*` requires Kajit to be built with the `lldb` feature and a working LLDB runtime.
+- `debug_session_*` requires a Kajit build with LLDB support and a working LLDB runtime. This is enabled by default for `kajit-cli`.
 
 ## Suggested next layering
 
