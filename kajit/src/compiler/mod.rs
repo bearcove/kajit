@@ -322,9 +322,18 @@ pub fn compile_pipeline(
     pipeline_opts: &PipelineOptions,
 ) -> PipelineArtifacts {
     let registry = symbol_registry_for_shape(shape);
-
-    // Phase 1: HIR
     let module = build_decoder_hir(shape, kind);
+    compile_pipeline_from_hir_module(&module, &registry, pipeline_opts)
+}
+
+/// Run the full compilation pipeline from an already-built HIR module.
+///
+/// This is primarily intended for handwritten HIR debugging and tooling.
+pub fn compile_pipeline_from_hir_module(
+    module: &kajit_hir::Module,
+    registry: &crate::ir::IntrinsicRegistry,
+    pipeline_opts: &PipelineOptions,
+) -> PipelineArtifacts {
     let root_data_abi = infer_root_decoder_data_abi(&module);
     let hir_text = module.to_string();
 

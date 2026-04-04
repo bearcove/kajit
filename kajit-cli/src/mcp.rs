@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 #[cfg(feature = "lldb")]
 use kajit::lockstep::{JitDebugger, LockstepSession, LockstepSessionStatus};
+#[cfg(feature = "lldb")]
+use kajit_hir_text::parse_hir;
 use kajit_mir::cfg_mir::BlockId;
 use kajit_mir::{DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
@@ -143,6 +145,9 @@ struct DebugSessionNewTool {
     ty: String,
     /// Input bytes as hex string (e.g. '8101' or '[0x81, 0x01]')
     input_hex: String,
+    /// Optional path to handwritten HIR text. When provided, this is compiled instead of a shape-based decoder.
+    #[serde(default)]
+    hir_path: Option<String>,
 }
 
 #[mcp_tool(
@@ -542,7 +547,8 @@ impl MirHandler {
             let format = arg_str(args, "format")?;
             let ty = arg_str(args, "ty")?;
             let input_hex = arg_str(args, "input_hex")?;
-            let session = DebugDiffSession::new(&format, &ty, &input_hex)?;
+            let hir_path = arg_opt_str(args, "hir_path");
+            let session = DebugDiffSession::new(&format, &ty, &input_hex, hir_path.as_deref())?;
 
             let mut state = self.lock_state()?;
             if state.next_debug_session_id == 0 {
@@ -1100,17 +1106,64 @@ struct DebugDiffSession {
 
 #[cfg(feature = "lldb")]
 impl DebugDiffSession {
-    fn new(format: &str, ty: &str, input_hex: &str) -> Result<Self, String> {
-        let kind = match format {
-            "postcard" => kajit::DecoderKind::Postcard,
-            other => return Err(format!("unknown format '{other}', expected 'postcard'")),
+    fn output_size_from_hir_module(module: &kajit_hir::Module) -> Result<usize, String> {
+        use kajit_hir::Type;
+
+        fn type_size(module: &kajit_hir::Module, ty: &Type) -> Result<usize, String> {
+            Ok(match ty {
+                Type::Unit => 0,
+                Type::Bool => 1,
+                Type::Integer(int) => usize::from(int.bits / 8),
+                Type::Ref { .. } | Type::Address { .. } | Type::Handle { .. } => 8,
+                Type::Slice { .. } | Type::Str { .. } => 16,
+                Type::Array { element, len } => type_size(module, element)? * *len,
+                Type::Named { def, .. } => module.type_defs[*def]
+                    .size
+                    .map(|size| size as usize)
+                    .ok_or_else(|| {
+                        format!(
+                            "destination type '{}' is missing size metadata",
+                            module.type_defs[*def].name
+                        )
+                    })?,
+            })
+        }
+
+        let (_, function) = module
+            .functions
+            .iter()
+            .next()
+            .ok_or_else(|| "HIR module should contain at least one function".to_owned())?;
+        let destination = function
+            .destination_param()
+            .ok_or_else(|| "debug sessions require a destination-writing HIR function".to_owned())?;
+        type_size(module, &destination.ty)
+    }
+
+    fn new(format: &str, ty: &str, input_hex: &str, hir_path: Option<&str>) -> Result<Self, String> {
+        let pipeline_opts = kajit::PipelineOptions::from_env();
+        let (artifacts, output_size) = if let Some(hir_path) = hir_path {
+            let hir_text = std::fs::read_to_string(hir_path)
+                .map_err(|e| format!("failed to read HIR file '{hir_path}': {e}"))?;
+            let module = parse_hir(&hir_text).map_err(|e| format!("HIR parse error: {e}"))?;
+            let registry = kajit::ir::IntrinsicRegistry::empty();
+            let output_size = Self::output_size_from_hir_module(&module)?;
+            (
+                kajit::compile_pipeline_from_hir_module(&module, &registry, &pipeline_opts),
+                output_size,
+            )
+        } else {
+            let kind = match format {
+                "postcard" => kajit::DecoderKind::Postcard,
+                other => return Err(format!("unknown format '{other}', expected 'postcard'")),
+            };
+
+            let shape = super::resolve_shape(ty);
+            let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
+            let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
+            (artifacts, output_size)
         };
 
-        let shape = super::resolve_shape(ty);
-        let pipeline_opts = kajit::PipelineOptions::from_env();
-        let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
-
-        let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
         let output_dir = PathBuf::from("/tmp/kajit-harness");
         let base_name = format!("harness_{format}_{ty}");
         let listing_path = output_dir.join(format!("{base_name}.cfg-mir"));
