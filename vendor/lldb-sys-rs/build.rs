@@ -1,6 +1,6 @@
 use cc::Build;
 
-use std::{fs, path::Path, process::Command};
+use std::{collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command};
 
 fn llvm_config_candidates() -> Vec<String> {
     let mut candidates = Vec::new();
@@ -41,33 +41,143 @@ fn run_llvm_config(llvm_config: &str, arg: &str) -> Result<String, String> {
     }
 }
 
-fn resolve_llvm_config() -> String {
-    let mut fallback = None;
+fn resolve_llvm_config() -> Option<String> {
     for llvm_config in llvm_config_candidates() {
-        let include_dir = match run_llvm_config(&llvm_config, "--includedir") {
-            Ok(include_dir) => include_dir,
-            Err(err) => {
-                fallback = Some(err);
-                continue;
-            }
-        };
-        if Path::new(&include_dir).join("lldb/API/LLDB.h").exists() {
-            return llvm_config;
+        if run_llvm_config(&llvm_config, "--includedir").is_ok()
+            && run_llvm_config(&llvm_config, "--libdir").is_ok()
+        {
+            return Some(llvm_config);
         }
-        fallback = Some(format!(
-            "\"{} --includedir\" resolved to {}, but LLDB.h was not found there",
-            llvm_config, include_dir
-        ));
     }
-    panic!(
-        "{}",
-        fallback.unwrap_or_else(|| "unable to locate llvm-config".to_owned())
-    );
+    None
 }
 
-fn get_llvm_output(arg: &str) -> String {
-    let llvm_config = resolve_llvm_config();
-    run_llvm_config(&llvm_config, arg).unwrap_or_else(|err| panic!("{err}"))
+fn get_llvm_output(llvm_config: &str, arg: &str) -> Option<String> {
+    run_llvm_config(llvm_config, arg).ok()
+}
+
+fn lldb_header_exists(dir: &Path) -> bool {
+    dir.join("lldb/API/LLDB.h").exists()
+}
+
+fn lldb_lib_exists(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .any(|entry| match_libname(entry.file_name().to_string_lossy().as_ref()).is_some())
+}
+
+fn push_dir(candidates: &mut Vec<PathBuf>, seen: &mut BTreeSet<PathBuf>, path: PathBuf) {
+    if seen.insert(path.clone()) {
+        candidates.push(path);
+    }
+}
+
+fn common_llvm_prefixes() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for version in [21, 20, 19, 18, 17, 16] {
+        push_dir(
+            &mut candidates,
+            &mut seen,
+            PathBuf::from(format!("/usr/lib/llvm-{version}")),
+        );
+    }
+    if let Ok(entries) = fs::read_dir("/usr/lib") {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.starts_with("llvm-"))
+                .unwrap_or(false)
+            {
+                push_dir(&mut candidates, &mut seen, path);
+            }
+        }
+    }
+    for prefix in [
+        "/usr/local/opt/llvm",
+        "/opt/homebrew/opt/llvm",
+        "/opt/local/libexec/llvm",
+    ] {
+        push_dir(&mut candidates, &mut seen, PathBuf::from(prefix));
+    }
+    candidates
+}
+
+fn candidate_include_dirs(llvm_config: Option<&str>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    if let Some(dirs) = std::env::var_os("LLDB_ADDITIONAL_INCLUDE_DIRS") {
+        for path in std::env::split_paths(&dirs) {
+            push_dir(&mut candidates, &mut seen, path);
+        }
+    }
+    if let Some(llvm_config) = llvm_config
+        && let Some(include_dir) = get_llvm_output(llvm_config, "--includedir")
+    {
+        push_dir(&mut candidates, &mut seen, PathBuf::from(include_dir));
+    }
+    for prefix in common_llvm_prefixes() {
+        push_dir(&mut candidates, &mut seen, prefix.join("include"));
+    }
+    candidates
+}
+
+fn candidate_lib_dirs(llvm_config: Option<&str>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    if let Some(path) = std::env::var_os("LLDB_LIB_PATH") {
+        push_dir(
+            &mut candidates,
+            &mut seen,
+            PathBuf::from(path.into_string().expect("LLDB_LIB_PATH contains invalid Unicode data")),
+        );
+    }
+    if let Some(llvm_config) = llvm_config
+        && let Some(lib_dir) = get_llvm_output(llvm_config, "--libdir")
+    {
+        push_dir(&mut candidates, &mut seen, PathBuf::from(lib_dir));
+    }
+    for prefix in common_llvm_prefixes() {
+        push_dir(&mut candidates, &mut seen, prefix.join("lib"));
+    }
+    for path in ["/usr/lib", "/usr/local/lib"] {
+        push_dir(&mut candidates, &mut seen, PathBuf::from(path));
+    }
+    candidates
+}
+
+fn resolve_lldb_include_dir(llvm_config: Option<&str>) -> PathBuf {
+    candidate_include_dirs(llvm_config)
+        .into_iter()
+        .find(|dir| lldb_header_exists(dir))
+        .unwrap_or_else(|| {
+            panic!(
+                "unable to locate LLDB headers (looking for lldb/API/LLDB.h); tried LLVM_CONFIG={:?}, LLDB_ADDITIONAL_INCLUDE_DIRS={:?}",
+                llvm_config,
+                std::env::var_os("LLDB_ADDITIONAL_INCLUDE_DIRS")
+            )
+        })
+}
+
+fn resolve_lldb_lib_dir(llvm_config: Option<&str>) -> PathBuf {
+    candidate_lib_dirs(llvm_config)
+        .into_iter()
+        .find(|dir| lldb_lib_exists(dir))
+        .unwrap_or_else(|| {
+            panic!(
+                "unable to locate liblldb shared library; tried LLVM_CONFIG={:?}, LLDB_LIB_PATH={:?}",
+                llvm_config,
+                std::env::var_os("LLDB_LIB_PATH")
+            )
+        })
 }
 
 fn match_libname(name: &str) -> Option<String> {
@@ -103,32 +213,24 @@ fn get_compiler_config() -> Build {
     println!("cargo:rerun-if-env-changed=LLVM_CONFIG");
     println!("cargo:rerun-if-env-changed=LLDB_LIB_PATH");
     println!("cargo:rerun-if-env-changed=LLDB_ADDITIONAL_INCLUDE_DIRS");
-    let llvm_headers_path = get_llvm_output("--includedir");
-    let llvm_lib_path = get_llvm_output("--libdir");
+    let llvm_config = resolve_llvm_config();
+    let lldb_include_dir = resolve_lldb_include_dir(llvm_config.as_deref());
+    let lldb_lib_dir = resolve_lldb_lib_dir(llvm_config.as_deref());
 
-    // Some systems (ex. NixOS) do not have liblldb.so in llvm-config's libdir.
-    // As a workaround, allow users to specifiy path to search
-    // for the aforementioned library.
-    let lldb_lib_path = match std::env::var_os("LLDB_LIB_PATH") {
-        Some(path) => &path
-            .into_string()
-            .expect("LLDB_LIB_PATH contains invalid Unicode data"),
-        None => &llvm_lib_path,
-    };
-
-    let lib_name = fs::read_dir(lldb_lib_path)
+    let lib_name = fs::read_dir(&lldb_lib_dir)
         .expect("failed to stat libdir from llvm-config")
         .filter_map(|entry| match_libname(entry.unwrap().file_name().to_str().unwrap()))
         .next()
         .expect("unable to locate shared library of liblldb");
-    println!("cargo:rustc-link-search={llvm_lib_path}");
+    println!("cargo:rustc-link-search={}", lldb_lib_dir.display());
     println!("cargo:rustc-link-lib={lib_name}");
     let mut res = cc::Build::new();
-    res.include(llvm_headers_path);
-    // if llvm is in the development tree, (in other words, just after build)
-    // we may need to add several other directories to include lldb
-    // those directories are not constant (might depend on build system) so
-    // we allow user to specify with PATH
+    res.include(lldb_include_dir);
+    if let Some(llvm_config) = llvm_config.as_deref()
+        && let Some(llvm_headers_path) = get_llvm_output(llvm_config, "--includedir")
+    {
+        res.include(llvm_headers_path);
+    }
     if let Some(dirs) = std::env::var_os("LLDB_ADDITIONAL_INCLUDE_DIRS") {
         for path in std::env::split_paths(&dirs) {
             res.include(path);

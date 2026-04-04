@@ -58,7 +58,7 @@ impl ExecutableBuffer {
         } else {
             PROT_READ | PROT_WRITE
         };
-        let mut flags = MAP_PRIVATE | MAP_ANON;
+        let flags = MAP_PRIVATE | MAP_ANON;
         #[cfg(target_os = "macos")]
         {
             flags |= MAP_JIT;
