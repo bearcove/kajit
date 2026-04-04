@@ -3,6 +3,9 @@ experimental = ["wrapper-scripts"]
 [profile.default]
 slow-timeout = { period = "5s", terminate-after = 2 }
 
+[profile.patient]
+slow-timeout = { period = "10s", terminate-after = 60 }
+
 [scripts.wrapper.valgrind]
 command = ['valgrind', '-q', '--error-exitcode=1']
 
