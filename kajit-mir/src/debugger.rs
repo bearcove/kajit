@@ -414,6 +414,25 @@ impl DebuggerSession {
         }
     }
 
+    fn translate_debug_address_to_host_ptr(&self, raw: u64) -> u64 {
+        if let (Some(base), Some(end)) = (self.input_base_addr, self.input_end_addr) {
+            if raw >= base && raw <= end {
+                let offset = (raw - base) as usize;
+                return unsafe { self.input.as_ptr().add(offset) as u64 };
+            }
+        }
+
+        if let Some(base) = self.output_base_addr {
+            let end = base.saturating_add(self.output.len() as u64);
+            if raw >= base && raw <= end {
+                let offset = (raw - base) as usize;
+                return unsafe { self.output.as_ptr().add(offset) as u64 };
+            }
+        }
+
+        raw
+    }
+
     fn store_root_cursor_arg(&mut self, raw_addr: usize, value: u64, width: usize) -> bool {
         let Some(base) = self.root_cursor_arg_addr else {
             return false;
@@ -715,7 +734,10 @@ impl DebuggerSession {
         field_offset: u32,
     ) -> Result<(), DebuggerError> {
         // Collect arg values
-        let arg_values: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
+        let arg_values: Vec<u64> = args
+            .iter()
+            .map(|v| self.translate_debug_address_to_host_ptr(self.read_vreg(v.index())))
+            .collect();
 
         // Build a temporary runtime context
         let mut ctx = RuntimeDeserContext {
@@ -820,7 +842,10 @@ impl DebuggerSession {
         args: &[kajit_ir::VReg],
         dst: kajit_ir::VReg,
     ) -> Result<(), DebuggerError> {
-        let arg_values: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
+        let arg_values: Vec<u64> = args
+            .iter()
+            .map(|v| self.translate_debug_address_to_host_ptr(self.read_vreg(v.index())))
+            .collect();
         let ret = unsafe {
             match arg_values.len() {
                 0 => {
@@ -834,6 +859,39 @@ impl DebuggerSession {
                 2 => {
                     let f: unsafe extern "C" fn(u64, u64) -> u64 = core::mem::transmute(func_addr);
                     f(arg_values[0], arg_values[1])
+                }
+                3 => {
+                    let f: unsafe extern "C" fn(u64, u64, u64) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(arg_values[0], arg_values[1], arg_values[2])
+                }
+                4 => {
+                    let f: unsafe extern "C" fn(u64, u64, u64, u64) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(arg_values[0], arg_values[1], arg_values[2], arg_values[3])
+                }
+                5 => {
+                    let f: unsafe extern "C" fn(u64, u64, u64, u64, u64) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(
+                        arg_values[0],
+                        arg_values[1],
+                        arg_values[2],
+                        arg_values[3],
+                        arg_values[4],
+                    )
+                }
+                6 => {
+                    let f: unsafe extern "C" fn(u64, u64, u64, u64, u64, u64) -> u64 =
+                        core::mem::transmute(func_addr);
+                    f(
+                        arg_values[0],
+                        arg_values[1],
+                        arg_values[2],
+                        arg_values[3],
+                        arg_values[4],
+                        arg_values[5],
+                    )
                 }
                 _ => {
                     return Err(DebuggerError::UnsupportedOp {
@@ -1161,6 +1219,72 @@ mod tests {
         }
     }
 
+    fn make_utf8_intrinsic_program() -> cfg_mir::Program {
+        cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId(0),
+                lambda_id: LambdaId::new(0),
+                entry: cfg_mir::BlockId(0),
+                data_args: Vec::new(),
+                data_results: Vec::new(),
+                output_size: 0,
+                blocks: vec![cfg_mir::Block {
+                    id: cfg_mir::BlockId(0),
+                    params: Vec::new(),
+                    insts: vec![cfg_mir::InstId(0)],
+                    term: cfg_mir::TermId(0),
+                    preds: Vec::new(),
+                    succs: Vec::new(),
+                    dead: false,
+                }],
+                edges: Vec::new(),
+                insts: vec![cfg_mir::Inst {
+                    id: cfg_mir::InstId(0),
+                    op: LinearOp::CallIntrinsic {
+                        func: kajit_ir::IntrinsicFn(test_validate_utf8_range as *const () as usize),
+                        args: vec![v(0), v(1)],
+                        dst: None,
+                        field_offset: 0,
+                    },
+                    operands: vec![
+                        cfg_mir::Operand {
+                            vreg: v(0),
+                            kind: cfg_mir::OperandKind::Use,
+                            class: cfg_mir::RegClass::Gpr,
+                            fixed: None,
+                        },
+                        cfg_mir::Operand {
+                            vreg: v(1),
+                            kind: cfg_mir::OperandKind::Use,
+                            class: cfg_mir::RegClass::Gpr,
+                            fixed: None,
+                        },
+                    ],
+                    clobbers: cfg_mir::Clobbers::default(),
+                }],
+                terms: vec![cfg_mir::Terminator::Return],
+            }],
+            vreg_count: 2,
+            slot_count: 0,
+            param_slot_count: 0,
+            is_scalar: false,
+            debug: Default::default(),
+            hints: Default::default(),
+            extra_excluded_regs: vec![],
+            data_blobs: vec![],
+        }
+    }
+
+    unsafe extern "C" fn test_validate_utf8_range(
+        _ctx: *mut super::RuntimeDeserContext,
+        data_ptr: u64,
+        data_len: u64,
+    ) -> u64 {
+        let bytes = unsafe { std::slice::from_raw_parts(data_ptr as *const u8, data_len as usize) };
+        assert_eq!(bytes, b"hi");
+        0
+    }
+
     #[test]
     fn step_forward_and_back_restores_state() {
         let program = make_simple_program();
@@ -1212,5 +1336,21 @@ mod tests {
         assert!(session.store_root_cursor_arg(0x1010, 4, 8));
         assert_eq!(session.cursor, 4);
         assert_eq!(session.load_root_cursor_arg(0x1010, 8), Some(4));
+    }
+
+    #[test]
+    fn intrinsic_calls_translate_debug_input_pointers_back_to_host() {
+        let input = [b'h', b'i'];
+        let program = make_utf8_intrinsic_program();
+        let mut session = DebuggerSession::new(&program, &input).expect("session");
+        session.input_base_addr = Some(0xffff_ffff_ec38);
+        session.input_end_addr = Some(0xffff_ffff_ec3a);
+        session.write_vreg(0, 0xffff_ffff_ec38);
+        session.write_vreg(1, 2);
+
+        session
+            .step_forward()
+            .expect("utf8 intrinsic call should succeed");
+        assert!(session.trap.is_none(), "utf8 helper should not trap");
     }
 }
