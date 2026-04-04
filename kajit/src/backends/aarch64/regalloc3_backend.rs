@@ -72,7 +72,7 @@ struct EmitContext<'a> {
     /// Allows Return terminator to fall through instead of branching.
     is_last_emitted_block: bool,
     /// Per-edge trampoline labels for edges that need value delivery before control transfer.
-    edge_trampoline_labels: HashMap<cfg_mir::EdgeId, LabelId>,
+    edge_trampoline_labels: HashMap<cfg_mir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
 }
 
 struct BfiInfo {
@@ -282,10 +282,11 @@ impl<'a> EmitContext<'a> {
         if !self.edge_has_moves(edge_id) {
             return target_label;
         }
-        *self
+        self
             .edge_trampoline_labels
             .entry(edge_id)
-            .or_insert_with(|| self.ectx.new_label())
+            .or_insert_with(|| (self.ectx.new_label(), self.ectx.current_source_location()))
+            .0
     }
 
     fn emit_edge_moves(&mut self, edge_id: cfg_mir::EdgeId) {
@@ -314,14 +315,15 @@ impl<'a> EmitContext<'a> {
     }
 
     fn emit_edge_trampolines(&mut self) {
-        let trampolines: Vec<(cfg_mir::EdgeId, LabelId)> = self
+        let trampolines: Vec<(cfg_mir::EdgeId, LabelId, kajit_emit::SourceLocation)> = self
             .edge_trampoline_labels
             .iter()
-            .map(|(&edge_id, &label)| (edge_id, label))
+            .map(|(&edge_id, &(label, source_location))| (edge_id, label, source_location))
             .collect();
-        for (edge_id, trampoline_label) in trampolines {
+        for (edge_id, trampoline_label, source_location) in trampolines {
             let edge = &self.func.edges[edge_id.index()];
             let target_label = self.block_labels[&edge.to];
+            self.ectx.set_source_location(source_location);
             self.ectx.bind_label(trampoline_label);
             self.emit_edge_moves(edge_id);
             self.ectx

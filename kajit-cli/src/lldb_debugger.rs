@@ -169,36 +169,29 @@ fn find_lldb_server_in_dir(dir: &Path) -> Option<PathBuf> {
 }
 
 impl JitDebugger for LldbJitDebugger {
-    fn step_to_next_source_line(&mut self) -> Result<u32, DebugError> {
+    fn step_instruction_over(&mut self) -> Result<(), DebugError> {
         if self.exited {
             return Err(DebugError::ProcessExited(0));
         }
-
         let thread = self.process.selected_thread();
-
-        // Source-level step over — advances one CFG-MIR operation
         thread
-            .step_over(RunMode::OnlyThisThread)
-            .map_err(|e| DebugError::LldbError(format!("step_over: {e}")))?;
+            .step_instruction(true)
+            .map_err(|e| DebugError::LldbError(format!("step_instruction: {e}")))?;
 
         if !self.process.is_stopped() {
             self.exited = true;
             return Err(DebugError::ProcessExited(self.process.exit_status()));
         }
 
-        // Check for signal (SIGSEGV, SIGBUS, SIGABRT, etc.)
+        let thread = self.process.selected_thread();
         let stop_reason = thread.stop_reason();
         if stop_reason == lldb::StopReason::Signal || stop_reason == lldb::StopReason::Exception {
             self.exited = true;
-            // On macOS, Mach exceptions map to Unix signals. The exit status
-            // encodes the signal number when the process is killed.
             let status = self.process.exit_status();
-            // If process is still alive (stopped on signal), use stop info
             let sig = if self.process.is_alive() {
-                // LLDB exposes signal via stop description; approximate from exception type
                 match stop_reason {
                     lldb::StopReason::Signal => status,
-                    lldb::StopReason::Exception => 11, // SIGSEGV is most common
+                    lldb::StopReason::Exception => 11,
                     _ => status,
                 }
             } else {
@@ -207,17 +200,30 @@ impl JitDebugger for LldbJitDebugger {
             return Err(DebugError::ProcessSignaled(sig));
         }
 
-        // Check if we stepped out of the function
-        let frame = thread.selected_frame();
-        let line = frame.line_entry().map(|le| le.line()).unwrap_or(0);
+        Ok(())
+    }
 
-        if line == 0 {
-            // No source line — we've left the JIT function
-            self.exited = true;
+    fn step_to_next_source_line(&mut self) -> Result<u32, DebugError> {
+        if self.exited {
             return Err(DebugError::ProcessExited(0));
         }
 
-        Ok(line)
+        let start_line = self.current_source_line().unwrap_or(0);
+        for _ in 0..4096 {
+            self.step_instruction_over()?;
+            let line = self.current_source_line().unwrap_or(0);
+            if line == 0 {
+                self.exited = true;
+                return Err(DebugError::ProcessExited(0));
+            }
+            if line != start_line {
+                return Ok(line);
+            }
+        }
+
+        Err(DebugError::LldbError(format!(
+            "instruction stepping did not leave source line {start_line}"
+        )))
     }
 
     fn read_register(&self, preg: u8) -> Result<u64, DebugError> {

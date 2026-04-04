@@ -179,6 +179,10 @@ pub struct DebuggerSession {
     pub input_end_addr: Option<u64>,
     /// When set, SaveOutPtr returns this value instead of an abstract offset.
     pub output_base_addr: Option<u64>,
+    /// When set, the root decoder cursor-ref argument is modeled as a real
+    /// `RuntimeCursorArg*`, so loads/stores through that pointer are reflected
+    /// in the debugger's abstract cursor state.
+    pub root_cursor_arg_addr: Option<u64>,
     /// Embedded constant data blobs (string literals, etc.).
     data_blobs: Vec<Vec<u8>>,
 }
@@ -208,6 +212,7 @@ impl DebuggerSession {
             input_base_addr: None,
             input_end_addr: None,
             output_base_addr: None,
+            root_cursor_arg_addr: None,
             data_blobs: program.data_blobs.clone(),
         })
     }
@@ -244,6 +249,13 @@ impl DebuggerSession {
         self.input_base_addr = Some(self.input.as_ptr() as u64);
         self.input_end_addr = Some(unsafe { self.input.as_ptr().add(self.input.len()) } as u64);
         self.output_base_addr = Some(self.output.as_ptr() as u64);
+    }
+
+    pub fn set_root_cursor_arg_addr(&mut self, addr: u64) {
+        self.root_cursor_arg_addr = Some(addr);
+        if let Some(&data_arg) = self.func.data_args.first() {
+            self.write_vreg(data_arg.index(), addr);
+        }
     }
 
     pub fn step_forward(&mut self) -> Result<StepEvent, DebuggerError> {
@@ -382,6 +394,44 @@ impl DebuggerSession {
                 block: self.current,
             })?;
         Ok(&self.func.blocks[idx])
+    }
+
+    fn load_root_cursor_arg(&self, raw_addr: usize, width: usize) -> Option<u64> {
+        let base = self.root_cursor_arg_addr? as usize;
+        let field_offset = raw_addr.checked_sub(base)?;
+        if width != 8 {
+            return None;
+        }
+        match field_offset {
+            0 => Some(self.input_base_addr.unwrap_or(0)),
+            8 => Some(
+                self.input_end_addr
+                    .map(|end| end.wrapping_sub(self.input_base_addr.unwrap_or(0)))
+                    .unwrap_or(self.input.len() as u64),
+            ),
+            16 => Some(self.cursor as u64),
+            _ => None,
+        }
+    }
+
+    fn store_root_cursor_arg(&mut self, raw_addr: usize, value: u64, width: usize) -> bool {
+        let Some(base) = self.root_cursor_arg_addr else {
+            return false;
+        };
+        let Some(field_offset) = raw_addr.checked_sub(base as usize) else {
+            return false;
+        };
+        if width != 8 {
+            return false;
+        }
+        match field_offset {
+            16 => {
+                self.cursor = value as usize;
+                true
+            }
+            0 | 8 => true,
+            _ => false,
+        }
     }
 
     fn snapshot(&self) -> SessionSnapshot {
@@ -534,6 +584,10 @@ impl DebuggerSession {
             }
             LinearOp::LoadFromAddr { dst, addr, width } => {
                 let raw_addr = self.read_vreg(addr.index()) as usize;
+                if let Some(value) = self.load_root_cursor_arg(raw_addr, width.bytes() as usize) {
+                    self.write_vreg(dst.index(), value);
+                    return Ok(());
+                }
                 // Convert raw pointer to input index if using pointer-mode addresses
                 let addr_val = match self.input_base_addr {
                     Some(base) => raw_addr.wrapping_sub(base as usize),
@@ -554,6 +608,9 @@ impl DebuggerSession {
                 let raw_addr = self.read_vreg(addr.index()) as usize;
                 let value = self.read_vreg(src.index());
                 let width = width.bytes() as usize;
+                if self.store_root_cursor_arg(raw_addr, value, width) {
+                    return Ok(());
+                }
                 if self.output_base_addr.is_some() {
                     // Real-address mode: write to actual memory (e.g., heap buffer
                     // from kajit_alloc_persistent). The address is a real pointer.
@@ -1070,6 +1127,40 @@ mod tests {
         }
     }
 
+    fn make_data_arg_program(arg: VReg) -> cfg_mir::Program {
+        let b0 = cfg_mir::Block {
+            id: cfg_mir::BlockId(0),
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: cfg_mir::TermId(0),
+            preds: Vec::new(),
+            succs: Vec::new(),
+            dead: false,
+        };
+        cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId(0),
+                lambda_id: LambdaId::new(0),
+                entry: cfg_mir::BlockId(0),
+                data_args: vec![arg],
+                data_results: Vec::new(),
+                output_size: 0,
+                blocks: vec![b0],
+                edges: Vec::new(),
+                insts: Vec::new(),
+                terms: vec![cfg_mir::Terminator::Return],
+            }],
+            vreg_count: arg.index() as u32 + 1,
+            slot_count: 0,
+            param_slot_count: 0,
+            is_scalar: false,
+            debug: Default::default(),
+            hints: Default::default(),
+            extra_excluded_regs: vec![],
+            data_blobs: vec![],
+        }
+    }
+
     #[test]
     fn step_forward_and_back_restores_state() {
         let program = make_simple_program();
@@ -1101,5 +1192,25 @@ mod tests {
         let trap = event.trap.expect("trap should be recorded");
         assert_eq!(trap.code, ErrorCode::UnexpectedEof);
         assert_eq!(trap.offset, 0);
+    }
+
+    #[test]
+    fn root_cursor_arg_helpers_track_runtime_cursor_layout() {
+        let arg = v(7);
+        let program = make_data_arg_program(arg);
+        let mut session =
+            DebuggerSession::new(&program, b"abcdef").expect("session should initialize");
+        session.input_base_addr = Some(0x2000);
+        session.input_end_addr = Some(0x2006);
+        session.set_root_cursor_arg_addr(0x1000);
+
+        assert_eq!(session.inspect_vreg(arg.index()), 0x1000);
+        assert_eq!(session.load_root_cursor_arg(0x1000, 8), Some(0x2000));
+        assert_eq!(session.load_root_cursor_arg(0x1008, 8), Some(6));
+        assert_eq!(session.load_root_cursor_arg(0x1010, 8), Some(0));
+
+        assert!(session.store_root_cursor_arg(0x1010, 4, 8));
+        assert_eq!(session.cursor, 4);
+        assert_eq!(session.load_root_cursor_arg(0x1010, 8), Some(4));
     }
 }
