@@ -61,6 +61,44 @@ pub trait JitDebugger {
     fn disassemble_around_pc(&self, context: usize) -> Result<String, DebugError>;
 }
 
+impl<T: JitDebugger + ?Sized> JitDebugger for &mut T {
+    fn step_to_next_source_line(&mut self) -> Result<u32, DebugError> {
+        (**self).step_to_next_source_line()
+    }
+
+    fn step_instruction_over(&mut self) -> Result<(), DebugError> {
+        (**self).step_instruction_over()
+    }
+
+    fn read_register(&self, preg: u8) -> Result<u64, DebugError> {
+        (**self).read_register(preg)
+    }
+
+    fn read_memory(&self, addr: u64, size: usize) -> Result<Vec<u8>, DebugError> {
+        (**self).read_memory(addr, size)
+    }
+
+    fn read_sp(&self) -> Result<u64, DebugError> {
+        (**self).read_sp()
+    }
+
+    fn read_pc(&self) -> Result<u64, DebugError> {
+        (**self).read_pc()
+    }
+
+    fn has_exited(&self) -> bool {
+        (**self).has_exited()
+    }
+
+    fn current_source_line(&self) -> Result<u32, DebugError> {
+        (**self).current_source_line()
+    }
+
+    fn disassemble_around_pc(&self, context: usize) -> Result<String, DebugError> {
+        (**self).disassemble_around_pc(context)
+    }
+}
+
 #[derive(Debug)]
 pub enum DebugError {
     /// Process exited normally with exit code.
@@ -91,7 +129,7 @@ impl std::fmt::Display for DebugError {
 }
 
 /// Result of a lockstep debugging session.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LockstepResult {
     /// Total steps executed before stopping.
     pub steps: usize,
@@ -101,116 +139,173 @@ pub struct LockstepResult {
     pub completed: bool,
 }
 
-/// Run the lockstep debugger.
-///
-/// Steps both the interpreter and JIT debugger, comparing vreg values at each
-/// CFG-MIR operation. Stops at the first divergence or when both complete.
-pub fn run_lockstep(
-    program: &kajit_mir::cfg_mir::Program,
-    input: &[u8],
-    location_map: &LocationMap,
-    listing_lines: &[String],
-    backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
-    entry_offset: usize,
-    debugger: &mut dyn JitDebugger,
-    max_steps: usize,
-) -> Result<LockstepResult, DebugError> {
-    // Read the JIT's runtime bases at the breakpoint. Root container decoders
-    // use the extra cursor-ref argument in x2; plain decoders still materialize
-    // cursor/end in x19/x20 after the prologue.
-    let jit_output_ptr = debugger.read_register(21)?; // x21
-    let jit_root_cursor_arg = if !program.funcs[0].data_args.is_empty() {
-        Some(debugger.read_register(2)?)
-    } else {
-        None
-    };
-    let (jit_cursor, jit_input_end) = if let Some(root_cursor_arg) = jit_root_cursor_arg {
-        let input_base = read_u64(debugger, root_cursor_arg)?;
-        let input_len = read_u64(debugger, root_cursor_arg + 8)?;
-        (input_base, input_base.wrapping_add(input_len))
-    } else {
-        (debugger.read_register(19)?, debugger.read_register(20)?)
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockstepSessionStatus {
+    Running,
+    Diverged,
+    Completed,
+}
 
-    eprintln!(
-        "[lockstep] JIT base addrs: cursor=0x{:x}, end=0x{:x}, out=0x{:x}",
-        jit_cursor, jit_input_end, jit_output_ptr
-    );
+pub struct LockstepSession<D: JitDebugger> {
+    pub cfg_program: kajit_mir::cfg_mir::Program,
+    pub location_map: LocationMap,
+    pub location_tracker: LocationTracker,
+    pub listing_lines: Vec<String>,
+    pub interpreter: kajit_mir::DebuggerSession,
+    pub debugger: D,
+    pub op_to_line: std::collections::HashMap<(u32, bool, usize), u32>,
+    pub prev_dwarf_line: u32,
+    pub jit_steps: usize,
+    pub verified: std::collections::HashMap<u32, (u64, u32, usize)>,
+    pub status: LockstepSessionStatus,
+    pub divergence: Option<Divergence>,
+    entry_pc: u64,
+    code_line_ranges: Vec<CodeLineRange>,
+}
 
-    // Set up interpreter with the JIT's base addresses so pointer values match
-    let mut session = kajit_mir::DebuggerSession::new(program, input)
-        .map_err(|e| DebugError::LldbError(format!("interpreter init: {e}")))?;
-    session.input_base_addr = Some(jit_cursor);
-    session.input_end_addr = Some(jit_input_end);
-    session.output_base_addr = Some(jit_output_ptr);
-    if let Some(root_cursor_arg) = jit_root_cursor_arg {
-        session.set_root_cursor_arg_addr(root_cursor_arg);
-    }
+impl<D: JitDebugger> LockstepSession<D> {
+    pub fn new(
+        program: &kajit_mir::cfg_mir::Program,
+        input: &[u8],
+        location_map: &LocationMap,
+        listing_lines: Vec<String>,
+        backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
+        entry_offset: usize,
+        debugger: D,
+    ) -> Result<Self, DebugError> {
+        let jit_output_ptr = debugger.read_register(21)?;
+        let jit_root_cursor_arg = if !program.funcs[0].data_args.is_empty() {
+            Some(debugger.read_register(2)?)
+        } else {
+            None
+        };
+        let (jit_cursor, jit_input_end) = if let Some(root_cursor_arg) = jit_root_cursor_arg {
+            let input_base = read_u64(&debugger, root_cursor_arg)?;
+            let input_len = read_u64(&debugger, root_cursor_arg + 8)?;
+            (input_base, input_base.wrapping_add(input_len))
+        } else {
+            (debugger.read_register(19)?, debugger.read_register(20)?)
+        };
 
-    // Build bidirectional mapping: DWARF line ↔ (block, inst_index, is_term)
-    let func = &program.funcs[0];
-    // Map (block_id, is_terminator, inst_index_if_not_term) → DWARF line
-    // For terminators, inst_index doesn't matter — we key by (block, true, 0)
-    let mut op_to_line: std::collections::HashMap<(u32, bool, usize), u32> =
-        std::collections::HashMap::new();
-    let mut next_line = 1u32;
-    for block in &func.blocks {
-        // Include ALL blocks (even dead ones) to match build_debug_line_maps
-        for (inst_idx, _) in block.insts.iter().enumerate() {
-            op_to_line.insert((block.id.0, false, inst_idx), next_line);
+        eprintln!(
+            "[lockstep] JIT base addrs: cursor=0x{:x}, end=0x{:x}, out=0x{:x}",
+            jit_cursor, jit_input_end, jit_output_ptr
+        );
+
+        let mut interpreter = kajit_mir::DebuggerSession::new(program, input)
+            .map_err(|e| DebugError::LldbError(format!("interpreter init: {e}")))?;
+        interpreter.input_base_addr = Some(jit_cursor);
+        interpreter.input_end_addr = Some(jit_input_end);
+        interpreter.output_base_addr = Some(jit_output_ptr);
+        if let Some(root_cursor_arg) = jit_root_cursor_arg {
+            interpreter.set_root_cursor_arg_addr(root_cursor_arg);
+        }
+
+        let func = &program.funcs[0];
+        let mut op_to_line: std::collections::HashMap<(u32, bool, usize), u32> =
+            std::collections::HashMap::new();
+        let mut next_line = 1u32;
+        for block in &func.blocks {
+            for (inst_idx, _) in block.insts.iter().enumerate() {
+                op_to_line.insert((block.id.0, false, inst_idx), next_line);
+                next_line += 1;
+            }
+            op_to_line.insert((block.id.0, true, 0), next_line);
             next_line += 1;
         }
-        // Terminator: key with is_term=true, inst_idx=0 (ignored)
-        op_to_line.insert((block.id.0, true, 0), next_line);
-        next_line += 1;
+
+        let entry_pc = debugger.read_pc()?;
+        let code_line_ranges = build_code_line_ranges(backend_debug_info, entry_offset);
+        let prev_dwarf_line =
+            current_line_from_pc(&debugger, entry_pc, &code_line_ranges).unwrap_or(1);
+
+        Ok(Self {
+            cfg_program: program.clone(),
+            location_map: location_map.clone(),
+            location_tracker: LocationTracker::new(location_map, program),
+            listing_lines,
+            interpreter,
+            debugger,
+            op_to_line,
+            prev_dwarf_line,
+            jit_steps: 0,
+            verified: std::collections::HashMap::new(),
+            status: LockstepSessionStatus::Running,
+            divergence: None,
+            entry_pc,
+            code_line_ranges,
+        })
     }
 
-    let mut jit_steps = 0;
-    let entry_pc = debugger.read_pc()?;
-    let code_line_ranges = build_code_line_ranges(backend_debug_info, entry_offset);
-    let mut prev_dwarf_line =
-        current_line_from_pc(debugger, entry_pc, &code_line_ranges).unwrap_or(1);
+    pub fn is_running(&self) -> bool {
+        self.status == LockstepSessionStatus::Running
+    }
 
-    // History: vreg_index → (last_verified_value, at_line, at_step)
-    let mut verified: std::collections::HashMap<u32, (u64, u32, usize)> =
-        std::collections::HashMap::new();
-    let mut location_tracker = LocationTracker::new(location_map, program);
+    pub fn current_result(&self) -> LockstepResult {
+        LockstepResult {
+            steps: self.jit_steps,
+            divergence: self.divergence.clone(),
+            completed: self.status == LockstepSessionStatus::Completed,
+        }
+    }
 
-    loop {
-        if jit_steps >= max_steps {
-            eprintln!("[lockstep] max steps ({max_steps}) reached");
-            return Ok(LockstepResult {
-                steps: jit_steps,
-                divergence: None,
-                completed: false,
-            });
+    pub fn current_line_text(&self, line: u32) -> String {
+        if line > 0 && (line as usize) <= self.listing_lines.len() {
+            self.listing_lines[line as usize - 1].clone()
+        } else {
+            format!("<line {line}>")
+        }
+    }
+
+    pub fn current_mapped_line(&self) -> u32 {
+        current_line_from_pc(&self.debugger, self.entry_pc, &self.code_line_ranges)
+            .unwrap_or(self.prev_dwarf_line)
+    }
+
+    fn finish_with_result(&mut self, result: LockstepResult) -> String {
+        self.divergence = result.divergence.clone();
+        self.status = if result.completed {
+            LockstepSessionStatus::Completed
+        } else {
+            LockstepSessionStatus::Diverged
+        };
+        format_result(&result)
+    }
+
+    pub fn step_forward(&mut self) -> Result<String, DebugError> {
+        if self.status != LockstepSessionStatus::Running {
+            return Ok(format_result(&self.current_result()));
         }
 
-        if debugger.has_exited() {
-            return Ok(LockstepResult {
-                steps: jit_steps,
-                divergence: None,
-                completed: true,
-            });
+        if self.debugger.has_exited() {
+            let result = handle_jit_exit(
+                &mut self.interpreter,
+                &self.op_to_line,
+                &self.listing_lines,
+                self.jit_steps,
+                self.prev_dwarf_line,
+                "already exited",
+            )?;
+            return Ok(self.finish_with_result(result));
         }
 
-        // Step JIT one source line
         let dwarf_line = match step_to_next_mapped_line(
-            debugger,
-            entry_pc,
-            &code_line_ranges,
-            prev_dwarf_line,
+            &mut self.debugger,
+            self.entry_pc,
+            &self.code_line_ranges,
+            self.prev_dwarf_line,
         ) {
             Ok(line) => line,
             Err(DebugError::ProcessExited(code)) => {
-                return handle_jit_exit(
-                    &mut session,
-                    &op_to_line,
-                    listing_lines,
-                    jit_steps,
-                    prev_dwarf_line,
+                let result = handle_jit_exit(
+                    &mut self.interpreter,
+                    &self.op_to_line,
+                    &self.listing_lines,
+                    self.jit_steps,
+                    self.prev_dwarf_line,
                     &format!("exited with code {code}"),
-                );
+                )?;
+                return Ok(self.finish_with_result(result));
             }
             Err(DebugError::ProcessSignaled(sig)) => {
                 let sig_name = match sig {
@@ -219,39 +314,32 @@ pub fn run_lockstep(
                     11 => "SIGSEGV",
                     _ => "signal",
                 };
-                return handle_jit_exit(
-                    &mut session,
-                    &op_to_line,
-                    listing_lines,
-                    jit_steps,
-                    prev_dwarf_line,
-                    &format!("killed by {} (signal {})", sig_name, sig),
-                );
+                let result = handle_jit_exit(
+                    &mut self.interpreter,
+                    &self.op_to_line,
+                    &self.listing_lines,
+                    self.jit_steps,
+                    self.prev_dwarf_line,
+                    &format!("killed by {sig_name} (signal {sig})"),
+                )?;
+                return Ok(self.finish_with_result(result));
             }
             Err(e) => return Err(e),
         };
-        jit_steps += 1;
 
-        // The JIT was at prev_dwarf_line, stepped to dwarf_line.
-        // That means it executed the op at prev_dwarf_line.
-        let executed_line = prev_dwarf_line;
-        prev_dwarf_line = dwarf_line;
+        self.jit_steps += 1;
+        let executed_line = self.prev_dwarf_line;
+        self.prev_dwarf_line = dwarf_line;
 
-        // Step interpreter until it reaches dwarf_line (where the JIT is now).
-        // We sync by (block, inst) position, not just line number, because
-        // DWARF lines follow emission order while the interpreter follows
-        // execution order — these differ in unrolled code.
-        //
-        // Strategy: step the interpreter, capturing the event when its line
-        // matches executed_line. Stop when its line matches dwarf_line.
         let mut last_event = None;
         let mut synced = false;
         for _ in 0..500 {
-            let pre_loc = session.state().location;
-            let pre_line = loc_to_line(&op_to_line, &pre_loc);
+            let pre_loc = self.interpreter.state().location;
+            let pre_line = loc_to_line(&self.op_to_line, &pre_loc);
 
             if pre_line == executed_line && last_event.is_none() {
-                let event = session
+                let event = self
+                    .interpreter
                     .step_forward()
                     .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
                 last_event = Some(event.clone());
@@ -266,16 +354,12 @@ pub fn run_lockstep(
                 break;
             }
 
-            // If we already captured last_event and overshot past dwarf_line,
-            // the interpreter and JIT may be visiting blocks in different order.
-            // In that case, just step until we hit dwarf_line or the interpreter
-            // catches up.
-            let event = session
+            let event = self
+                .interpreter
                 .step_forward()
                 .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
 
-            // Also capture if this step happens to hit executed_line
-            let ev_line = loc_to_line(&op_to_line, &event.location_before);
+            let ev_line = loc_to_line(&self.op_to_line, &event.location_before);
             if ev_line == executed_line && last_event.is_none() {
                 last_event = Some(event.clone());
             }
@@ -285,103 +369,95 @@ pub fn run_lockstep(
             }
         }
 
-        if !synced && !session.state().returned {
-            let cur_loc = session.state().location;
-            let cur_line = loc_to_line(&op_to_line, &cur_loc);
-            let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
-            let line_text = |n: u32| -> String {
-                if n > 0 && (n as usize) <= listing_lines.len() {
-                    listing_lines[n as usize - 1].clone()
-                } else {
-                    format!("<line {n}>")
-                }
-            };
-
+        if !synced && !self.interpreter.state().returned {
+            let cur_loc = self.interpreter.state().location;
+            let cur_line = loc_to_line(&self.op_to_line, &cur_loc);
+            let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
             let source_line = format!(
                 "\
-SYNC FAILURE at JIT step {jit_steps}
+SYNC FAILURE at JIT step {}
 
-  JIT executed line {executed_line}: {}
-  JIT now at line {dwarf_line}: {}
-  interpreter stuck at line {cur_line} (b{} inst[{}] term={}): {}
+  JIT executed line {}: {}
+  JIT now at line {}: {}
+  interpreter stuck at line {} (b{} inst[{}] term={}): {}
 
   machine code at JIT position:
-{disasm}",
-                line_text(executed_line),
-                line_text(dwarf_line),
+{}",
+                self.jit_steps,
+                executed_line,
+                self.current_line_text(executed_line),
+                dwarf_line,
+                self.current_line_text(dwarf_line),
+                cur_line,
                 cur_loc.block.index(),
                 cur_loc.next_inst_index,
                 cur_loc.at_terminator,
-                line_text(cur_line),
+                self.current_line_text(cur_line),
+                disasm,
             );
-
-            return Ok(LockstepResult {
-                steps: jit_steps,
+            let result = LockstepResult {
+                steps: self.jit_steps,
                 divergence: Some(Divergence {
-                    step: jit_steps,
+                    step: self.jit_steps,
                     dwarf_line: executed_line,
                     source_line,
                     vreg_diffs: Vec::new(),
                 }),
                 completed: false,
-            });
+            };
+            return Ok(self.finish_with_result(result));
         }
 
         let Some(event) = last_event else {
-            let cur_loc = session.state().location;
-            let cur_line = loc_to_line(&op_to_line, &cur_loc);
-            let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
-            let line_text = |n: u32| -> String {
-                if n > 0 && (n as usize) <= listing_lines.len() {
-                    listing_lines[n as usize - 1].clone()
-                } else {
-                    format!("<line {n}>")
-                }
-            };
-
+            let cur_loc = self.interpreter.state().location;
+            let cur_line = loc_to_line(&self.op_to_line, &cur_loc);
+            let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
             let source_line = format!(
                 "\
-LOCKSTEP DESYNC at JIT step {jit_steps}
+LOCKSTEP DESYNC at JIT step {}
 
-  JIT executed line {executed_line}: {}
-  JIT now at line {dwarf_line}: {}
-  interpreter at line {cur_line} (b{} inst[{}] term={}): {}
+  JIT executed line {}: {}
+  JIT now at line {}: {}
+  interpreter at line {} (b{} inst[{}] term={}): {}
 
-  The interpreter could not find line {executed_line} — the JIT and interpreter
-  are visiting different blocks. This is either a control flow bug or a
-  DWARF line numbering mismatch.
+  The interpreter could not find line {}.
 
   machine code at JIT position:
-{disasm}",
-                line_text(executed_line),
-                line_text(dwarf_line),
+{}",
+                self.jit_steps,
+                executed_line,
+                self.current_line_text(executed_line),
+                dwarf_line,
+                self.current_line_text(dwarf_line),
+                cur_line,
                 cur_loc.block.index(),
                 cur_loc.next_inst_index,
                 cur_loc.at_terminator,
-                line_text(cur_line),
+                self.current_line_text(cur_line),
+                executed_line,
+                disasm,
             );
-
-            return Ok(LockstepResult {
-                steps: jit_steps,
+            let result = LockstepResult {
+                steps: self.jit_steps,
                 divergence: Some(Divergence {
-                    step: jit_steps,
+                    step: self.jit_steps,
                     dwarf_line: executed_line,
                     source_line,
                     vreg_diffs: Vec::new(),
                 }),
                 completed: false,
-            });
+            };
+            return Ok(self.finish_with_result(result));
         };
-        let state = session.state();
-        let func = &program.funcs[0];
+
+        let state = self.interpreter.state();
+        let func = &self.cfg_program.funcs[0];
         let loc = &event.location_before;
         let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, loc);
 
-        // After stepping, check where BOTH sides ended up NEXT.
-        // The JIT is now at `dwarf_line`. The interpreter is at its next op.
-        // If these don't match, we have a CONTROL FLOW DIVERGENCE.
-        let interp_next_loc = session.state().location;
-        let interp_next_line = op_to_line
+        let interp_next_loc = self.interpreter.state().location;
+        let interp_next_line = self
+            .op_to_line
             .get(&(
                 interp_next_loc.block.0,
                 interp_next_loc.at_terminator,
@@ -394,33 +470,22 @@ LOCKSTEP DESYNC at JIT step {jit_steps}
             .copied()
             .unwrap_or(0);
 
-        location_tracker.observe_step(location_map, func, executed_line, loc, &interp_next_loc);
+        self.location_tracker
+            .observe_step(&self.location_map, func, executed_line, loc, &interp_next_loc);
 
         if interp_next_line != dwarf_line && !state.returned && dwarf_line != 0 {
-            // CONTROL FLOW DIVERGENCE — build rich diagnostic
-            let jit_pc = debugger.read_pc()?;
-            let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
-
-            let line = |n: u32| -> String {
-                if n > 0 && (n as usize) <= listing_lines.len() {
-                    listing_lines[n as usize - 1].clone()
-                } else {
-                    format!("<line {n}>")
-                }
-            };
-
-            // Look up the terminator and its edge targets from the CFG
+            let jit_pc = self.debugger.read_pc()?;
+            let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
             let term_info = {
-                let loc = &event.location_before;
                 let block = &func.blocks[loc.block.index()];
                 let term = &func.terms[block.term.index()];
                 let mut info = format!("  terminator: {:?}\n", term);
                 for &edge_id in &block.succs {
                     let edge = &func.edges[edge_id.index()];
-                    let _target = &func.blocks[edge.to.index()];
-                    let target_line = op_to_line
+                    let target_line = self
+                        .op_to_line
                         .get(&(edge.to.0, false, 0))
-                        .or_else(|| op_to_line.get(&(edge.to.0, true, 0)))
+                        .or_else(|| self.op_to_line.get(&(edge.to.0, true, 0)))
                         .copied()
                         .unwrap_or(0);
                     info.push_str(&format!(
@@ -438,15 +503,18 @@ LOCKSTEP DESYNC at JIT step {jit_steps}
             let mut vreg_diffs = Vec::new();
             if let (Some(dst), Some(location)) = (
                 def_vreg,
-                def_vreg.and_then(|d| location_tracker.location_for(location_map, d.index() as u32)),
+                def_vreg.and_then(|d| {
+                    self.location_tracker
+                        .location_for(&self.location_map, d.index() as u32)
+                }),
             ) {
-                let sp = debugger.read_sp()?;
+                let sp = self.debugger.read_sp()?;
                 let iv = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
                 } else {
                     0
                 };
-                let jv = read_vreg_from_jit(debugger, location, sp)?;
+                let jv = read_vreg_from_jit(&self.debugger, location, sp)?;
                 vreg_diffs.push(VRegDiff {
                     vreg_index: dst.index() as u32,
                     interpreter_value: iv,
@@ -458,44 +526,51 @@ LOCKSTEP DESYNC at JIT step {jit_steps}
 
             let source_line = format!(
                 "\
-CONTROL FLOW DIVERGENCE at step {jit_steps}
+CONTROL FLOW DIVERGENCE at step {}
 
-  last op (line {executed_line}): {}
-{term_info}
-  JIT went to:         line {dwarf_line} (pc=0x{jit_pc:x}): {}
-  interpreter went to: line {interp_next_line}: {}
+  last op (line {}): {}
+{}  JIT went to:         line {} (pc=0x{:x}): {}
+  interpreter went to: line {}: {}
 
   machine code:
-{disasm}",
-                line(executed_line),
-                line(dwarf_line),
-                line(interp_next_line),
+{}",
+                self.jit_steps,
+                executed_line,
+                self.current_line_text(executed_line),
+                term_info,
+                dwarf_line,
+                jit_pc,
+                self.current_line_text(dwarf_line),
+                interp_next_line,
+                self.current_line_text(interp_next_line),
+                disasm,
             );
-
-            return Ok(LockstepResult {
-                steps: jit_steps,
+            let result = LockstepResult {
+                steps: self.jit_steps,
                 divergence: Some(Divergence {
-                    step: jit_steps,
+                    step: self.jit_steps,
                     dwarf_line: executed_line,
                     source_line,
                     vreg_diffs,
                 }),
                 completed: false,
-            });
+            };
+            return Ok(self.finish_with_result(result));
         }
 
         if should_skip_fused_compare_value_check(func, loc, def_vreg)
             || should_skip_branch_predicate_value_check(func, loc)
             || should_skip_process_local_intrinsic_return_check(func, loc)
         {
-            continue;
+            return Ok(format!(
+                "step {}: line {} skipped (non-comparable backend artifact)",
+                self.jit_steps, executed_line
+            ));
         }
 
-        // Compare: either the defined vreg, or for store ops, the source vreg
         let compare_vregs: Vec<kajit_ir::VReg> = if let Some(dst) = def_vreg {
             vec![dst]
         } else if !use_vregs.is_empty() {
-            // No def — this is a store/side-effect op. Compare its use vregs.
             use_vregs.clone()
         } else {
             Vec::new()
@@ -503,18 +578,18 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
 
         if let Some(&dst) = compare_vregs.first() {
             let dst_idx = dst.index() as u32;
-            // Use per-line location lookup: at call sites, caller-saved registers
-            // are clobbered. location_at returns None for clobbered locations.
-            let location = location_tracker.location_for(location_map, dst_idx);
+            let location = self
+                .location_tracker
+                .location_for(&self.location_map, dst_idx);
             if let Some(location) = location {
                 let interp_value = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
                 } else {
-                    continue;
+                    0
                 };
 
-                let sp = debugger.read_sp()?;
-                let jit_value = read_vreg_from_jit(debugger, location, sp)?;
+                let sp = self.debugger.read_sp()?;
+                let jit_value = read_vreg_from_jit(&self.debugger, location, sp)?;
 
                 if jit_value != Some(interp_value) {
                     let mut vreg_diffs = vec![VRegDiff {
@@ -527,14 +602,14 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                     for use_vreg in &use_vregs {
                         let use_idx = use_vreg.index() as u32;
                         if let Some(use_loc) =
-                            location_tracker.location_for(location_map, use_idx)
+                            self.location_tracker.location_for(&self.location_map, use_idx)
                         {
                             let use_interp = if use_vreg.index() < state.vregs.len() {
                                 state.vregs[use_vreg.index()]
                             } else {
                                 0
                             };
-                            let use_jit = read_vreg_from_jit(debugger, use_loc, sp)?;
+                            let use_jit = read_vreg_from_jit(&self.debugger, use_loc, sp)?;
                             vreg_diffs.push(VRegDiff {
                                 vreg_index: use_idx,
                                 interpreter_value: use_interp,
@@ -544,45 +619,36 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                             });
                         }
                     }
-                    let disasm = debugger.disassemble_around_pc(4).unwrap_or_default();
-                    let line_text = |n: u32| -> String {
-                        if n > 0 && (n as usize) <= listing_lines.len() {
-                            listing_lines[n as usize - 1].clone()
-                        } else {
-                            format!("<line {n}>")
-                        }
-                    };
-
-                    // Build rich diagnostic: history, register sharing, clobber trail
+                    let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
                     let mut diag = String::new();
                     diag.push_str(&format!(
-                        "VALUE DIVERGENCE at step {jit_steps}, line {executed_line}\n\n"
+                        "VALUE DIVERGENCE at step {}, line {}\n\n",
+                        self.jit_steps, executed_line
                     ));
-                    diag.push_str(&format!("  op: {}\n", line_text(executed_line)));
-
-                    // Show the diverging vreg
+                    diag.push_str(&format!("  op: {}\n", self.current_line_text(executed_line)));
                     let reg_name = match location {
                         VRegLocation::Register(p) => LocationMap::reg_name(*p),
                         _ => "stk",
                     };
                     diag.push_str(&format!(
-                        "\n  v{dst_idx} ({reg_name}): interpreter={interp_value}, jit={}\n",
+                        "\n  v{} ({}): interpreter={}, jit={}\n",
+                        dst_idx,
+                        reg_name,
+                        interp_value,
                         jit_value.map(|v| v.to_string()).unwrap_or("???".into())
                     ));
-
-                    // Show last verified value for this vreg
-                    if let Some(&(last_val, last_line, last_step)) = verified.get(&dst_idx) {
+                    if let Some(&(last_val, last_line, last_step)) = self.verified.get(&dst_idx) {
                         diag.push_str(&format!(
-                            "  v{dst_idx} last verified: {} at line {} (step {})\n",
-                            last_val, last_line, last_step
+                            "  v{} last verified: {} at line {} (step {})\n",
+                            dst_idx, last_val, last_line, last_step
                         ));
                     } else {
-                        diag.push_str(&format!("  v{dst_idx} was NEVER verified before\n"));
+                        diag.push_str(&format!("  v{} was NEVER verified before\n", dst_idx));
                     }
 
-                    // Show what else shares this physical register
                     if let VRegLocation::Register(preg) = location {
-                        let sharing: Vec<_> = location_map
+                        let sharing: Vec<_> = self
+                            .location_map
                             .static_locations
                             .iter()
                             .filter(|(k, v)| {
@@ -600,7 +666,7 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                                 if i > 0 {
                                     diag.push_str(", ");
                                 }
-                                if let Some(&(val, line, _step)) = verified.get(v) {
+                                if let Some(&(val, line, _step)) = self.verified.get(v) {
                                     diag.push_str(&format!("v{}(={} @line{})", v, val, line));
                                 } else {
                                     diag.push_str(&format!("v{}", v));
@@ -608,10 +674,9 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                             }
                             diag.push('\n');
 
-                            // Show which sharing vreg has the JIT's current value
                             if let Some(jv) = jit_value {
                                 for &v in &sharing {
-                                    if let Some(&(val, line, _)) = verified.get(&v) {
+                                    if let Some(&(val, line, _)) = self.verified.get(&v) {
                                         if val == jv {
                                             diag.push_str(&format!(
                                                 "\n  SUSPECT: v{} had value {} at line {} — same as JIT's current {}\n",
@@ -629,7 +694,6 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                         }
                     }
 
-                    // Show use vregs
                     if !vreg_diffs.is_empty() {
                         diag.push_str("\n  inputs:\n");
                         for d in &vreg_diffs[1..] {
@@ -652,36 +716,86 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
 
                     diag.push_str(&format!("\n  machine code:\n{disasm}\n"));
 
-                    let source_line = diag;
-                    return Ok(LockstepResult {
-                        steps: jit_steps,
+                    let result = LockstepResult {
+                        steps: self.jit_steps,
                         divergence: Some(Divergence {
-                            step: jit_steps,
+                            step: self.jit_steps,
                             dwarf_line: executed_line,
-                            source_line,
+                            source_line: diag,
                             vreg_diffs,
                         }),
                         completed: false,
-                    });
+                    };
+                    return Ok(self.finish_with_result(result));
                 }
 
-                verified.insert(dst_idx, (interp_value, executed_line, jit_steps));
+                self.verified
+                    .insert(dst_idx, (interp_value, executed_line, self.jit_steps));
 
                 let reg_name = match location {
                     VRegLocation::Register(p) => LocationMap::reg_name(*p),
                     _ => "stk",
                 };
-                eprintln!(
-                    "[lockstep] line {executed_line}: v{}({}) = {} OK",
-                    dst_idx, reg_name, interp_value
-                );
-            } else if location_map.call_lines.contains(&executed_line) {
-                // Vreg is in a clobbered register at a call site — skip comparison
-                eprintln!(
-                    "[lockstep] line {executed_line}: v{dst_idx} skipped (call-clobbered register)"
-                );
+                return Ok(format!(
+                    "step {}: line {} OK, v{}({}) = {}",
+                    self.jit_steps, executed_line, dst_idx, reg_name, interp_value
+                ));
+            } else if self.location_map.call_lines.contains(&executed_line) {
+                return Ok(format!(
+                    "step {}: line {} skipped (call-clobbered location)",
+                    self.jit_steps, executed_line
+                ));
             }
         }
+
+        Ok(format!(
+            "step {}: line {} executed, no comparable vreg",
+            self.jit_steps, executed_line
+        ))
+    }
+}
+
+/// Run the lockstep debugger.
+///
+/// Steps both the interpreter and JIT debugger, comparing vreg values at each
+/// CFG-MIR operation. Stops at the first divergence or when both complete.
+pub fn run_lockstep(
+    program: &kajit_mir::cfg_mir::Program,
+    input: &[u8],
+    location_map: &LocationMap,
+    listing_lines: &[String],
+    backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
+    entry_offset: usize,
+    debugger: &mut dyn JitDebugger,
+    max_steps: usize,
+) -> Result<LockstepResult, DebugError> {
+    let mut session = LockstepSession::new(
+        program,
+        input,
+        location_map,
+        listing_lines.to_vec(),
+        backend_debug_info,
+        entry_offset,
+        debugger,
+    )?;
+
+    loop {
+        if session.jit_steps >= max_steps {
+            eprintln!("[lockstep] max steps ({max_steps}) reached");
+            return Ok(LockstepResult {
+                steps: session.jit_steps,
+                divergence: None,
+                completed: false,
+            });
+        }
+
+        let msg = session.step_forward()?;
+        if session.is_running() {
+            eprintln!("[lockstep] {msg}");
+            continue;
+        }
+
+        return Ok(session.current_result());
     }
 }
 
@@ -880,7 +994,7 @@ fn is_process_local_pointer_intrinsic(func: kajit_ir::IntrinsicFn) -> bool {
 }
 
 /// Look up the DWARF line for an interpreter ProgramLocation.
-fn loc_to_line(
+pub fn loc_to_line(
     map: &std::collections::HashMap<(u32, bool, usize), u32>,
     loc: &kajit_mir::ProgramLocation,
 ) -> u32 {
@@ -989,7 +1103,7 @@ fn read_vreg_from_jit(
 }
 
 /// Extract def vreg, use vregs, and whether this op produces a pointer value.
-fn op_def_uses_and_kind(
+pub fn op_def_uses_and_kind(
     func: &kajit_mir::cfg_mir::Function,
     loc: &kajit_mir::ProgramLocation,
 ) -> (Option<kajit_ir::VReg>, Vec<kajit_ir::VReg>, bool) {
