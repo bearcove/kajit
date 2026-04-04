@@ -1465,7 +1465,6 @@ mod tests {
 
     // regalloc conflict: call args share physical register
     #[test]
-    #[ignore]
     fn linear_backend_call_intrinsic_with_args_return_value() {
         unsafe extern "C" fn add3(
             _ctx: *mut crate::context::DeserContext,
@@ -1499,7 +1498,6 @@ mod tests {
 
     // regalloc conflict: call args share physical register
     #[test]
-    #[ignore]
     fn linear_backend_call_intrinsic_with_args_and_out_ptr() {
         unsafe extern "C" fn write_scaled_sum(
             _ctx: *mut crate::context::DeserContext,

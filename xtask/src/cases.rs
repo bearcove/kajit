@@ -1058,8 +1058,6 @@ fn unsupported_reason_for_format(case: &Case, format: WireFormat) -> Option<Stri
                 Some("map lowering is not implemented in IR path yet")
             } else if is_pointer_case_type(&ty) {
                 Some("pointer lowering is not implemented in IR path yet")
-            } else if is_default_or_skip_case_type(&ty) {
-                Some("default/skip field lowering is not implemented in IR path yet")
             } else if is_postcard_wide_scalar_case(case) {
                 Some("postcard wide scalar aggregate lowering is not implemented in IR path yet")
             } else if is_json_enum_case_type(&ty) {
@@ -1081,20 +1079,11 @@ fn ignore_attr_for_format(case: &Case, format: WireFormat) -> Option<TokenStream
 }
 
 fn ignore_attr_for_prop_case(case: &Case) -> Option<TokenStream> {
-    let mut reasons = Vec::new();
-    if let Some(reason) = unsupported_reason_for_format(case, WireFormat::Json) {
-        reasons.push(format!("json: {reason}"));
-    }
-    if let Some(reason) = unsupported_reason_for_format(case, WireFormat::Postcard) {
-        reasons.push(format!("postcard: {reason}"));
-    }
-    if reasons.is_empty() {
-        None
-    } else {
-        let msg = reasons.join(" | ");
+    unsupported_reason_for_format(case, WireFormat::Postcard).map(|reason| {
+        let msg = format!("postcard: {reason}");
         let lit = LitStr::new(&msg, Span::call_site());
-        Some(quote!(#[ignore = #lit]))
-    }
+        quote!(#[ignore = #lit])
+    })
 }
 
 macro_rules! json_case_spec {

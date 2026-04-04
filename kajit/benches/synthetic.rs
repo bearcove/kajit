@@ -2,17 +2,17 @@
 #[path = "harness.rs"]
 mod harness;
 use facet::Facet;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
 use std::hint::black_box;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::Arc;
-#[allow(unused_imports)]
-use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
 #[cfg(target_arch = "aarch64")]
 use yaxpeax_arm::armv8::a64::InstDecoder;
 #[cfg(target_arch = "x86_64")]
 use yaxpeax_x86::amd64::InstDecoder;
+#[allow(unused_imports)]
+use yaxpeax_arch::{Decoder, U8Reader, LengthedInstruction};
+use serde::{Serialize, Deserialize};
+use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
     age: u32,
@@ -227,7 +227,8 @@ struct Wrapper(u32);
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
 struct StringWrapper(
-    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")] String,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
+    String,
 );
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
@@ -318,12 +319,16 @@ struct UnitField {
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
-    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
+    )]
     values: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Nums {
-    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
+    #[proptest(
+        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
+    )]
     vals: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -399,7 +404,7 @@ fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
 }
 #[cfg(target_arch = "x86_64")]
 fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
-    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+    use yaxpeax_arch::{Decoder, U8Reader, LengthedInstruction};
     use yaxpeax_x86::amd64::InstDecoder;
     let decoder = InstDecoder::default();
     let mut reader = U8Reader::new(code);
@@ -437,13 +442,10 @@ fn register_bench_case<T>(
     group: &str,
     value: T,
     enable_postcard_kajit: bool,
-) where
-    for<'input> T: Facet<'input>
-        + serde::Serialize
-        + serde::de::DeserializeOwned
-        + 'static
-        + PartialEq
-        + std::fmt::Debug,
+)
+where
+    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
+        + 'static + PartialEq + std::fmt::Debug,
 {
     if !harness::matches_filter(group) {
         return;
@@ -481,16 +483,15 @@ fn register_bench_case<T>(
         }
         println!();
         if enable_postcard_kajit {
-            if let Ok(decoder) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
-            })) {
+            if let Ok(decoder) = std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| {
+                    kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
+                }),
+            ) {
                 let code = decoder.code();
                 let entry = decoder.entry_offset();
                 let base = code.as_ptr() as usize;
-                println!(
-                    "=== {postcard_prefix}/kajit/deser ({} bytes) ===",
-                    code.len()
-                );
+                println!("=== {postcard_prefix}/kajit/deser ({} bytes) ===", code.len());
                 for line in disassemble_code(&code[entry..], base + entry) {
                     println!("{line}");
                 }
@@ -507,29 +508,36 @@ fn register_bench_case<T>(
         func: Box::new({
             let data = Arc::clone(&postcard_data);
             move |runner| {
-                runner.run(|| {
-                    black_box(postcard::from_bytes::<T>(black_box(&data[..])).unwrap());
-                });
+                runner
+                    .run(|| {
+                        black_box(
+                            postcard::from_bytes::<T>(black_box(&data[..])).unwrap(),
+                        );
+                    });
             }
         }),
     });
     if enable_postcard_kajit {
-        let postcard_decoder = match catch_unwind(AssertUnwindSafe(|| {
-            kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
-        })) {
+        let postcard_decoder = match catch_unwind(
+            AssertUnwindSafe(|| {
+                kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
+            }),
+        ) {
             Ok(decoder) => Some(Arc::new(decoder)),
             Err(payload) => {
                 eprintln!(
                     "skipping {postcard_prefix}/kajit/deser: compile unsupported ({})",
-                    panic_payload_to_string(&payload)
+                    panic_payload_to_string(& payload)
                 );
                 None
             }
         };
         if let Some(decoder) = postcard_decoder {
-            let kajit_preflight_result = catch_unwind(AssertUnwindSafe(|| {
-                kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
-            }));
+            let kajit_preflight_result = catch_unwind(
+                AssertUnwindSafe(|| {
+                    kajit::deserialize::<T>(decoder.as_ref(), &postcard_data[..])
+                }),
+            );
             match &kajit_preflight_result {
                 Ok(Ok(_)) => {
                     v.push(harness::Bench {
@@ -539,12 +547,13 @@ fn register_bench_case<T>(
                             let decoder = Arc::clone(&decoder);
                             move |runner| {
                                 let decoder = decoder.as_ref();
-                                runner.run(|| {
-                                    black_box(
-                                        kajit::deserialize::<T>(decoder, black_box(&data[..]))
-                                            .unwrap(),
-                                    );
-                                });
+                                runner
+                                    .run(|| {
+                                        black_box(
+                                            kajit::deserialize::<T>(decoder, black_box(&data[..]))
+                                                .unwrap(),
+                                        );
+                                    });
                             }
                         }),
                     });
@@ -567,18 +576,24 @@ fn register_bench_case<T>(
                 match kajit::alt_asm::load_alt_decoder(group, "postcard", &registry) {
                     Some(alt_decoder) => {
                         let alt_decoder = Arc::new(alt_decoder);
-                        let alt_preflight_result = catch_unwind(AssertUnwindSafe(|| {
-                            let func = alt_decoder.func();
-                            let mut out = std::mem::MaybeUninit::<T>::uninit();
-                            let mut ctx = kajit::context::DeserContext::new(&postcard_data[..]);
-                            unsafe {
-                                func(out.as_mut_ptr() as *mut u8, &mut ctx);
-                            }
-                            if ctx.error.code != 0 {
-                                return Err(format!("decode error code: {}", ctx.error.code));
-                            }
-                            Ok(unsafe { out.assume_init() })
-                        }));
+                        let alt_preflight_result = catch_unwind(
+                            AssertUnwindSafe(|| {
+                                let func = alt_decoder.func();
+                                let mut out = std::mem::MaybeUninit::<T>::uninit();
+                                let mut ctx = kajit::context::DeserContext::new(
+                                    &postcard_data[..],
+                                );
+                                unsafe {
+                                    func(out.as_mut_ptr() as *mut u8, &mut ctx);
+                                }
+                                if ctx.error.code != 0 {
+                                    return Err(
+                                        format!("decode error code: {}", ctx.error.code),
+                                    );
+                                }
+                                Ok(unsafe { out.assume_init() })
+                            }),
+                        );
                         match alt_preflight_result {
                             Ok(Ok(alt_result)) => {
                                 if let Ok(Ok(jit_result)) = &kajit_preflight_result {
@@ -594,17 +609,17 @@ fn register_bench_case<T>(
                                             let alt_decoder = Arc::clone(&alt_decoder);
                                             move |runner| {
                                                 let func = alt_decoder.func();
-                                                runner.run(|| {
-                                                    let mut out =
-                                                        std::mem::MaybeUninit::<T>::uninit();
-                                                    let mut ctx = kajit::context::DeserContext::new(
-                                                        black_box(&data[..]),
-                                                    );
-                                                    unsafe {
-                                                        func(out.as_mut_ptr() as *mut u8, &mut ctx);
-                                                    }
-                                                    black_box(unsafe { out.assume_init() });
-                                                });
+                                                runner
+                                                    .run(|| {
+                                                        let mut out = std::mem::MaybeUninit::<T>::uninit();
+                                                        let mut ctx = kajit::context::DeserContext::new(
+                                                            black_box(&data[..]),
+                                                        );
+                                                        unsafe {
+                                                            func(out.as_mut_ptr() as *mut u8, &mut ctx);
+                                                        }
+                                                        black_box(unsafe { out.assume_init() });
+                                                    });
                                             }
                                         }),
                                     });
@@ -622,7 +637,7 @@ fn register_bench_case<T>(
                             Err(payload) => {
                                 eprintln!(
                                     "skipping {postcard_prefix}/kajit.alt/deser: preflight panic ({})",
-                                    panic_payload_to_string(&payload)
+                                    panic_payload_to_string(& payload)
                                 );
                             }
                         }
@@ -641,9 +656,10 @@ fn register_bench_case<T>(
         func: Box::new({
             let value = Arc::clone(&value);
             move |runner| {
-                runner.run(|| {
-                    black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
-                });
+                runner
+                    .run(|| {
+                        black_box(postcard::to_allocvec(black_box(&*value)).unwrap());
+                    });
             }
         }),
     });
@@ -763,12 +779,7 @@ fn main() {
     );
     register_bench_case(&mut v, "tuple_pair", (42u32, "Alice".to_string()), true);
     register_bench_case(&mut v, "tuple_triple", (1u32, 2u32, 3u32), true);
-    register_bench_case(
-        &mut v,
-        "array_u32_4_small",
-        [10u32, 20u32, 30u32, 40u32],
-        true,
-    );
+    register_bench_case(&mut v, "array_u32_4_small", [10u32, 20u32, 30u32, 40u32], true);
     register_bench_case(
         &mut v,
         "array_u32_4_large",
@@ -787,9 +798,7 @@ fn main() {
     register_bench_case(
         &mut v,
         "box_scalar",
-        BoxedScalar {
-            value: Box::new(42),
-        },
+        BoxedScalar { value: Box::new(42) },
         false,
     );
     register_bench_case(
@@ -886,14 +895,7 @@ fn main() {
         },
         true,
     );
-    register_bench_case(
-        &mut v,
-        "vec_u32",
-        Nums {
-            vals: vec![1, 2, 3],
-        },
-        true,
-    );
+    register_bench_case(&mut v, "vec_u32", Nums { vals: vec![1, 2, 3] }, true);
     register_bench_case(
         &mut v,
         "vec_string",
@@ -907,14 +909,8 @@ fn main() {
         "vec_nested_struct",
         AddressList {
             addrs: vec![
-                Address {
-                    city: "Portland".into(),
-                    zip: 97201,
-                },
-                Address {
-                    city: "Seattle".into(),
-                    zip: 98101,
-                },
+                Address { city : "Portland".into(), zip : 97201 }, Address { city :
+                "Seattle".into(), zip : 98101 },
             ],
         },
         true,
@@ -936,7 +932,7 @@ fn main() {
             name: "hello".into(),
             score: 7,
         },
-        false,
+        true,
     );
     register_bench_case(&mut v, "transparent_scalar", Wrapper(42), true);
     register_bench_case(
