@@ -804,8 +804,7 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
                 });
 
         // Phase 4: Run lockstep
-        let listing_lines = artifacts.cfg_program.debug_line_listing_with_registry(None);
-        let decoder_lines = artifacts.decoder.cfg_mir_lines().len();
+        let listing_lines = artifacts.decoder.cfg_mir_lines().to_vec();
         let total_ops: usize = artifacts
             .cfg_program
             .funcs
@@ -819,9 +818,8 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
             .map(|f| f.blocks.iter().filter(|b| b.dead).count())
             .sum();
         eprintln!(
-            "[debug-diff] listing: {} lines (cfg_program), {} lines (decoder), {} total ops, {} dead blocks",
+            "[debug-diff] listing: {} lines (decoder/cfg_program), {} total ops, {} dead blocks",
             listing_lines.len(),
-            decoder_lines,
             total_ops,
             dead_blocks
         );
@@ -837,6 +835,8 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
             &input,
             &artifacts.location_map,
             &listing_lines,
+            artifacts.backend_debug_info.as_ref(),
+            artifacts.decoder.entry_offset(),
             &mut debugger,
             10_000,
         )

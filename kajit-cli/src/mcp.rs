@@ -8,6 +8,8 @@ use async_trait::async_trait;
 use kajit::harness::{LocationMap, VRegLocation};
 #[cfg(feature = "lldb")]
 use kajit::lockstep::{DebugError as JitDebugError, Divergence, JitDebugger, LockstepResult};
+#[cfg(feature = "lldb")]
+use kajit_lir::{BinOpKind, LinearOp};
 use kajit_mir::cfg_mir::BlockId;
 use kajit_mir::{DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
@@ -889,17 +891,35 @@ impl DebugDiffSession {
         let debugger = LldbJitDebugger::launch(exe_path.to_str().unwrap(), input_hex)
             .map_err(|e| format!("error launching LLDB: {e}"))?;
 
-        let jit_cursor = debugger.read_register(19).map_err(|e| e.to_string())?;
-        let jit_input_end = debugger.read_register(20).map_err(|e| e.to_string())?;
         let jit_output_ptr = debugger.read_register(21).map_err(|e| e.to_string())?;
+        let jit_root_cursor_arg = if artifacts.decoder.uses_root_cursor_arg() {
+            Some(debugger.read_register(2).map_err(|e| e.to_string())?)
+        } else {
+            None
+        };
+        let (jit_cursor, jit_input_end) = if let Some(root_cursor_arg) = jit_root_cursor_arg {
+            let input_base =
+                read_debug_u64(&debugger, root_cursor_arg).map_err(|e| e.to_string())?;
+            let input_len =
+                read_debug_u64(&debugger, root_cursor_arg + 8).map_err(|e| e.to_string())?;
+            (input_base, input_base.wrapping_add(input_len))
+        } else {
+            (
+                debugger.read_register(19).map_err(|e| e.to_string())?,
+                debugger.read_register(20).map_err(|e| e.to_string())?,
+            )
+        };
 
-        let listing_lines = artifacts.cfg_program.debug_line_listing_with_registry(None);
+        let listing_lines = artifacts.decoder.cfg_mir_lines().to_vec();
 
         let mut interpreter = DebuggerSession::new(&artifacts.cfg_program, &input)
             .map_err(|e| format!("interpreter init: {e}"))?;
         interpreter.input_base_addr = Some(jit_cursor);
         interpreter.input_end_addr = Some(jit_input_end);
         interpreter.output_base_addr = Some(jit_output_ptr);
+        if let Some(root_cursor_arg) = jit_root_cursor_arg {
+            interpreter.set_root_cursor_arg_addr(root_cursor_arg);
+        }
 
         let mut op_to_line = HashMap::new();
         let mut next_line = 1u32;
@@ -1242,6 +1262,16 @@ CONTROL FLOW DIVERGENCE at step {}
                 completed: false,
             };
             return Ok(self.finish_with_result(result));
+        }
+
+        if should_skip_fused_compare_value_check(func, loc, def_vreg)
+            || should_skip_branch_predicate_value_check(func, loc)
+            || should_skip_process_local_intrinsic_return_check(func, loc)
+        {
+            return Ok(format!(
+                "step {}: line {} skipped (non-comparable backend artifact)",
+                self.jit_steps, executed_line
+            ));
         }
 
         let compare_vregs: Vec<kajit_ir::VReg> = if let Some(dst) = def_vreg {
@@ -1651,6 +1681,119 @@ fn op_def_uses_and_kind(
 }
 
 #[cfg(feature = "lldb")]
+fn should_skip_fused_compare_value_check(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+    def_vreg: Option<kajit_ir::VReg>,
+) -> bool {
+    let Some(def_vreg) = def_vreg else {
+        return false;
+    };
+    if loc.at_terminator {
+        return false;
+    }
+    let Some(block) = func.blocks.get(loc.block.index()) else {
+        return false;
+    };
+    if loc.next_inst_index + 1 != block.insts.len() {
+        return false;
+    }
+    let Some(inst_id) = block.insts.get(loc.next_inst_index) else {
+        return false;
+    };
+    let Some(inst) = func.insts.get(inst_id.index()) else {
+        return false;
+    };
+    let is_compare = matches!(
+        inst.op,
+        LinearOp::BinOp {
+            op: BinOpKind::CmpEq
+                | BinOpKind::CmpNe
+                | BinOpKind::CmpLt
+                | BinOpKind::CmpLe
+                | BinOpKind::CmpGt
+                | BinOpKind::CmpGe,
+            ..
+        }
+    );
+    if !is_compare {
+        return false;
+    }
+    matches!(
+        &func.terms[block.term.index()],
+        kajit_mir::cfg_mir::Terminator::BranchIf { cond, .. }
+            | kajit_mir::cfg_mir::Terminator::BranchIfZero { cond, .. }
+            if *cond == def_vreg
+    )
+}
+
+#[cfg(feature = "lldb")]
+fn should_skip_branch_predicate_value_check(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> bool {
+    if !loc.at_terminator {
+        return false;
+    }
+    let Some(block) = func.blocks.get(loc.block.index()) else {
+        return false;
+    };
+    matches!(
+        &func.terms[block.term.index()],
+        kajit_mir::cfg_mir::Terminator::BranchIf { .. }
+            | kajit_mir::cfg_mir::Terminator::BranchIfZero { .. }
+    )
+}
+
+#[cfg(feature = "lldb")]
+fn should_skip_process_local_intrinsic_return_check(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> bool {
+    if loc.at_terminator {
+        return false;
+    }
+    let Some(block) = func.blocks.get(loc.block.index()) else {
+        return false;
+    };
+    let Some(inst_id) = block.insts.get(loc.next_inst_index) else {
+        return false;
+    };
+    let Some(inst) = func.insts.get(inst_id.index()) else {
+        return false;
+    };
+    let intrinsic = match inst.op {
+        LinearOp::CallIntrinsic { func, dst, .. } if dst.is_some() => Some(func),
+        LinearOp::CallPure { func, .. } | LinearOp::CallEffect { func, .. } => Some(func),
+        _ => None,
+    };
+    intrinsic.is_some_and(is_process_local_pointer_intrinsic)
+}
+
+#[cfg(feature = "lldb")]
+fn is_process_local_pointer_intrinsic(func: kajit_ir::IntrinsicFn) -> bool {
+    let f = func.0;
+    let alloc_persistent = kajit::intrinsics::kajit_alloc_persistent as *const () as usize;
+    let alloc_transient = kajit::intrinsics::kajit_alloc_transient as *const () as usize;
+    let vec_alloc = kajit::intrinsics::kajit_vec_alloc as *const () as usize;
+    let vec_grow = kajit::intrinsics::kajit_vec_grow as *const () as usize;
+    let map_build = kajit::intrinsics::kajit_map_build as *const () as usize;
+    let string_alloc =
+        kajit::intrinsics::kajit_postcard_validate_and_alloc_string as *const () as usize;
+    let string_copy = kajit::intrinsics::kajit_string_validate_alloc_copy as *const () as usize;
+    matches!(
+        f,
+        x if x == alloc_persistent
+            || x == alloc_transient
+            || x == vec_alloc
+            || x == vec_grow
+            || x == map_build
+            || x == string_alloc
+            || x == string_copy
+    )
+}
+
+#[cfg(feature = "lldb")]
 fn format_scope_kind(kind: &kajit_ir::DebugScopeKind) -> String {
     match kind {
         kajit_ir::DebugScopeKind::LambdaBody { lambda_id } => {
@@ -1720,6 +1863,20 @@ fn parse_debug_register_names(spec: Option<&str>) -> Vec<String> {
         }
         None => default_debug_register_names(),
     }
+}
+
+#[cfg(feature = "lldb")]
+fn read_debug_u64(debugger: &LldbJitDebugger, addr: u64) -> Result<u64, kajit::lockstep::DebugError> {
+    let bytes = debugger.read_memory(addr, 8)?;
+    if bytes.len() != 8 {
+        return Err(kajit::lockstep::DebugError::LldbError(format!(
+            "short read at 0x{addr:x}: expected 8 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let mut raw = [0u8; 8];
+    raw.copy_from_slice(&bytes);
+    Ok(u64::from_le_bytes(raw))
 }
 
 fn trap_json(trap: &kajit_mir::InterpreterTrap) -> JsonValue {

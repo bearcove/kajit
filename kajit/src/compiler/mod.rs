@@ -268,6 +268,8 @@ pub struct PipelineArtifacts {
     /// Intrinsic call sites in the JIT code (for harness relocation)
     pub intrinsic_call_sites:
         Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
+    /// Exact machine-code ranges for emitted CFG ops.
+    pub backend_debug_info: Option<crate::ir_backend::BackendDebugInfo>,
     /// The post-optimization CFG-MIR program (same one the JIT compiled).
     /// Used by the lockstep debugger to run the interpreter on the exact same IR.
     pub cfg_program: kajit_mir::cfg_mir::Program,
@@ -400,13 +402,14 @@ pub fn compile_pipeline(
         root_data_abi,
     );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
-    let (buf, entry, _source_map, _backend_debug_info, asm_program) =
+    let (buf, entry, _source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
 
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
 
-    let listing = dwarf::build_cfg_mir_listing(&cfg_program, Some(&registry));
+    let emitted_cfg_program = &ra3_alloc.cfg_program;
+    let listing = dwarf::build_cfg_mir_listing(emitted_cfg_program, Some(&registry));
 
     let decoder = CompiledDecoder {
         buf,
@@ -438,7 +441,8 @@ pub fn compile_pipeline(
         alloc_map,
         location_map,
         intrinsic_call_sites,
-        cfg_program: ra3_alloc.cfg_program.clone(),
+        backend_debug_info,
+        cfg_program: emitted_cfg_program.clone(),
         decoder,
     }
 }

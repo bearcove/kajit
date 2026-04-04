@@ -6,6 +6,7 @@
 //! divergence.
 
 use crate::harness::{LocationMap, VRegLocation};
+use kajit_lir::{BinOpKind, LinearOp};
 
 /// A divergence found by the lockstep debugger.
 #[derive(Debug, Clone)]
@@ -34,6 +35,9 @@ pub struct VRegDiff {
 pub trait JitDebugger {
     /// Step until the DWARF source line changes. Returns the new line number.
     fn step_to_next_source_line(&mut self) -> Result<u32, DebugError>;
+
+    /// Step a single machine instruction, stepping over calls.
+    fn step_instruction_over(&mut self) -> Result<(), DebugError>;
 
     /// Read a general-purpose register by index (0=x0, 1=x1, ..., 28=x28).
     fn read_register(&self, preg: u8) -> Result<u64, DebugError>;
@@ -106,14 +110,27 @@ pub fn run_lockstep(
     input: &[u8],
     location_map: &LocationMap,
     listing_lines: &[String],
+    backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
+    entry_offset: usize,
     debugger: &mut dyn JitDebugger,
     max_steps: usize,
 ) -> Result<LockstepResult, DebugError> {
-    // Read the JIT's base addresses from its registers at the breakpoint.
-    // After the aarch64 prologue: x19=cursor, x20=input_end, x21=output_ptr, x22=ctx
-    let jit_cursor = debugger.read_register(19)?; // x19
-    let jit_input_end = debugger.read_register(20)?; // x20
+    // Read the JIT's runtime bases at the breakpoint. Root container decoders
+    // use the extra cursor-ref argument in x2; plain decoders still materialize
+    // cursor/end in x19/x20 after the prologue.
     let jit_output_ptr = debugger.read_register(21)?; // x21
+    let jit_root_cursor_arg = if !program.funcs[0].data_args.is_empty() {
+        Some(debugger.read_register(2)?)
+    } else {
+        None
+    };
+    let (jit_cursor, jit_input_end) = if let Some(root_cursor_arg) = jit_root_cursor_arg {
+        let input_base = read_u64(debugger, root_cursor_arg)?;
+        let input_len = read_u64(debugger, root_cursor_arg + 8)?;
+        (input_base, input_base.wrapping_add(input_len))
+    } else {
+        (debugger.read_register(19)?, debugger.read_register(20)?)
+    };
 
     eprintln!(
         "[lockstep] JIT base addrs: cursor=0x{:x}, end=0x{:x}, out=0x{:x}",
@@ -126,6 +143,9 @@ pub fn run_lockstep(
     session.input_base_addr = Some(jit_cursor);
     session.input_end_addr = Some(jit_input_end);
     session.output_base_addr = Some(jit_output_ptr);
+    if let Some(root_cursor_arg) = jit_root_cursor_arg {
+        session.set_root_cursor_arg_addr(root_cursor_arg);
+    }
 
     // Build bidirectional mapping: DWARF line ↔ (block, inst_index, is_term)
     let func = &program.funcs[0];
@@ -146,8 +166,10 @@ pub fn run_lockstep(
     }
 
     let mut jit_steps = 0;
-    // Track which DWARF line LLDB was at before stepping
-    let mut prev_dwarf_line = debugger.current_source_line().unwrap_or(1);
+    let entry_pc = debugger.read_pc()?;
+    let code_line_ranges = build_code_line_ranges(backend_debug_info, entry_offset);
+    let mut prev_dwarf_line =
+        current_line_from_pc(debugger, entry_pc, &code_line_ranges).unwrap_or(1);
 
     // History: vreg_index → (last_verified_value, at_line, at_step)
     let mut verified: std::collections::HashMap<u32, (u64, u32, usize)> =
@@ -172,7 +194,12 @@ pub fn run_lockstep(
         }
 
         // Step JIT one source line
-        let dwarf_line = match debugger.step_to_next_source_line() {
+        let dwarf_line = match step_to_next_mapped_line(
+            debugger,
+            entry_pc,
+            &code_line_ranges,
+            prev_dwarf_line,
+        ) {
             Ok(line) => line,
             Err(DebugError::ProcessExited(code)) => {
                 return handle_jit_exit(
@@ -454,6 +481,13 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
             });
         }
 
+        if should_skip_fused_compare_value_check(func, loc, def_vreg)
+            || should_skip_branch_predicate_value_check(func, loc)
+            || should_skip_process_local_intrinsic_return_check(func, loc)
+        {
+            continue;
+        }
+
         // Compare: either the defined vreg, or for store ops, the source vreg
         let compare_vregs: Vec<kajit_ir::VReg> = if let Some(dst) = def_vreg {
             vec![dst]
@@ -644,6 +678,200 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CodeLineRange {
+    start: u64,
+    end: u64,
+    line: u32,
+}
+
+fn build_code_line_ranges(
+    backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
+    entry_offset: usize,
+) -> Vec<CodeLineRange> {
+    let Some(backend_debug_info) = backend_debug_info else {
+        return Vec::new();
+    };
+
+    let mut ranges: Vec<_> = backend_debug_info
+        .op_infos
+        .iter()
+        .flat_map(|op| {
+            op.code_ranges.iter().filter_map(|range| {
+                let start = range.start_offset as usize;
+                let end = range.end_offset as usize;
+                if end <= start || end <= entry_offset {
+                    return None;
+                }
+                Some(CodeLineRange {
+                    start: start.saturating_sub(entry_offset) as u64,
+                    end: end.saturating_sub(entry_offset) as u64,
+                    line: op.line,
+                })
+            })
+        })
+        .collect();
+    ranges.sort_by_key(|range| (range.start, range.end, range.line));
+    ranges
+}
+
+fn current_line_from_pc(
+    debugger: &dyn JitDebugger,
+    entry_pc: u64,
+    code_line_ranges: &[CodeLineRange],
+) -> Result<u32, DebugError> {
+    let pc = debugger.read_pc()?;
+    let offset = pc.saturating_sub(entry_pc);
+    if let Some(range) = code_line_ranges
+        .iter()
+        .find(|range| offset >= range.start && offset < range.end)
+    {
+        return Ok(range.line);
+    }
+    Ok(debugger.current_source_line().unwrap_or(0))
+}
+
+fn step_to_next_mapped_line(
+    debugger: &mut dyn JitDebugger,
+    entry_pc: u64,
+    code_line_ranges: &[CodeLineRange],
+    start_line: u32,
+) -> Result<u32, DebugError> {
+    for _ in 0..4096 {
+        debugger.step_instruction_over()?;
+        let line = current_line_from_pc(debugger, entry_pc, code_line_ranges)?;
+        if line != 0 && line != start_line {
+            return Ok(line);
+        }
+    }
+
+    Err(DebugError::LldbError(format!(
+        "instruction stepping did not leave mapped line {start_line}"
+    )))
+}
+
+fn read_u64(debugger: &dyn JitDebugger, addr: u64) -> Result<u64, DebugError> {
+    let bytes = debugger.read_memory(addr, 8)?;
+    if bytes.len() != 8 {
+        return Err(DebugError::LldbError(format!(
+            "short read at 0x{addr:x}: expected 8 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let mut raw = [0u8; 8];
+    raw.copy_from_slice(&bytes);
+    Ok(u64::from_le_bytes(raw))
+}
+
+fn should_skip_fused_compare_value_check(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+    def_vreg: Option<kajit_ir::VReg>,
+) -> bool {
+    let Some(def_vreg) = def_vreg else {
+        return false;
+    };
+    if loc.at_terminator {
+        return false;
+    }
+    let Some(block) = func.blocks.get(loc.block.index()) else {
+        return false;
+    };
+    if loc.next_inst_index + 1 != block.insts.len() {
+        return false;
+    }
+    let Some(inst_id) = block.insts.get(loc.next_inst_index) else {
+        return false;
+    };
+    let Some(inst) = func.insts.get(inst_id.index()) else {
+        return false;
+    };
+    let is_compare = matches!(
+        inst.op,
+        LinearOp::BinOp {
+            op: BinOpKind::CmpEq
+                | BinOpKind::CmpNe
+                | BinOpKind::CmpLt
+                | BinOpKind::CmpLe
+                | BinOpKind::CmpGt
+                | BinOpKind::CmpGe,
+            ..
+        }
+    );
+    if !is_compare {
+        return false;
+    }
+    matches!(
+        &func.terms[block.term.index()],
+        kajit_mir::cfg_mir::Terminator::BranchIf { cond, .. }
+            | kajit_mir::cfg_mir::Terminator::BranchIfZero { cond, .. }
+            if *cond == def_vreg
+    )
+}
+
+fn should_skip_branch_predicate_value_check(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> bool {
+    if !loc.at_terminator {
+        return false;
+    }
+    let Some(block) = func.blocks.get(loc.block.index()) else {
+        return false;
+    };
+    matches!(
+        &func.terms[block.term.index()],
+        kajit_mir::cfg_mir::Terminator::BranchIf { .. }
+            | kajit_mir::cfg_mir::Terminator::BranchIfZero { .. }
+    )
+}
+
+fn should_skip_process_local_intrinsic_return_check(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> bool {
+    if loc.at_terminator {
+        return false;
+    }
+    let Some(block) = func.blocks.get(loc.block.index()) else {
+        return false;
+    };
+    let Some(inst_id) = block.insts.get(loc.next_inst_index) else {
+        return false;
+    };
+    let Some(inst) = func.insts.get(inst_id.index()) else {
+        return false;
+    };
+    let intrinsic = match inst.op {
+        LinearOp::CallIntrinsic { func, dst, .. } if dst.is_some() => Some(func),
+        LinearOp::CallPure { func, .. } | LinearOp::CallEffect { func, .. } => Some(func),
+        _ => None,
+    };
+    intrinsic.is_some_and(is_process_local_pointer_intrinsic)
+}
+
+fn is_process_local_pointer_intrinsic(func: kajit_ir::IntrinsicFn) -> bool {
+    let f = func.0;
+    let alloc_persistent = crate::intrinsics::kajit_alloc_persistent as *const () as usize;
+    let alloc_transient = crate::intrinsics::kajit_alloc_transient as *const () as usize;
+    let vec_alloc = crate::intrinsics::kajit_vec_alloc as *const () as usize;
+    let vec_grow = crate::intrinsics::kajit_vec_grow as *const () as usize;
+    let map_build = crate::intrinsics::kajit_map_build as *const () as usize;
+    let string_alloc =
+        crate::intrinsics::kajit_postcard_validate_and_alloc_string as *const () as usize;
+    let string_copy = crate::intrinsics::kajit_string_validate_alloc_copy as *const () as usize;
+    matches!(
+        f,
+        x if x == alloc_persistent
+            || x == alloc_transient
+            || x == vec_alloc
+            || x == vec_grow
+            || x == map_build
+            || x == string_alloc
+            || x == string_copy
+    )
 }
 
 /// Look up the DWARF line for an interpreter ProgramLocation.
