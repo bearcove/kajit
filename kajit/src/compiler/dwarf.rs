@@ -120,14 +120,7 @@ pub(super) fn build_jit_debug_info_from_source_map(
         .parent()
         .and_then(Path::to_str)
         .map(str::to_owned);
-    let rows = source_map
-        .iter()
-        .filter(|entry| entry.location.line != 0)
-        .map(|entry| crate::jit_dwarf::JitDebugLineRow {
-            code_offset: entry.offset,
-            line: entry.location.line,
-        })
-        .collect();
+    let rows = normalize_debug_line_rows(source_map);
 
     Some(crate::jit_dwarf::JitDebugInfo {
         target_arch: jit_dwarf_target_arch(),
@@ -140,6 +133,33 @@ pub(super) fn build_jit_debug_info_from_source_map(
         },
         subprogram,
     })
+}
+
+pub(super) fn normalize_debug_line_rows(
+    source_map: &kajit_emit::SourceMap,
+) -> Vec<crate::jit_dwarf::JitDebugLineRow> {
+    let mut rows = source_map
+        .iter()
+        .filter(|entry| entry.location.line != 0)
+        .map(|entry| crate::jit_dwarf::JitDebugLineRow {
+            code_offset: entry.offset,
+            line: entry.location.line,
+        })
+        .collect::<Vec<_>>();
+
+    if let Some(first) = rows.first().cloned()
+        && first.code_offset != 0
+    {
+        rows.insert(
+            0,
+            crate::jit_dwarf::JitDebugLineRow {
+                code_offset: 0,
+                line: first.line,
+            },
+        );
+    }
+
+    rows
 }
 
 #[derive(Debug, Clone, Copy)]

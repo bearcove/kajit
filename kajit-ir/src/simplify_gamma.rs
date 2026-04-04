@@ -55,10 +55,15 @@ fn resolve_constant_source(func: &IrFunc, source: &PortSource) -> Option<usize> 
                     // Recurse: check if the theta input is a constant
                     resolve_constant_source(func, &input.source)
                 }
-                NodeKind::Gamma { regions: _ } => {
-                    // Gamma branch: arg[K] corresponds to gamma input[K+1] (skip predicate)
-                    let input = node.inputs.get(arg_index + 1)?;
-                    resolve_constant_source(func, &input.source)
+                NodeKind::Gamma { .. } => {
+                    // Do not infer predicate const-ness through gamma branch args.
+                    // A branch-local value can be constant as data while still being
+                    // unsafe to reuse as a control predicate in a downstream gamma.
+                    //
+                    // Post-unroll canonicalization handles the safe control-vs-data
+                    // split explicitly; the generic gamma simplifier stays
+                    // conservative here to avoid folding the wrong branch.
+                    None
                 }
                 _ => None,
             }

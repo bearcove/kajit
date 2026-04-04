@@ -84,6 +84,8 @@ fn get_compiler_config() -> Build {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=DOCS_RS");
+    println!("cargo:rerun-if-changed=src/lldb/UnityBuild.cpp");
+    println!("cargo:rerun-if-changed=src/lldb/Bindings");
     if std::env::var("DOCS_RS").is_ok() {
         return;
     }

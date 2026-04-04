@@ -11,7 +11,7 @@ use super::{
     build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
     cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, deser_dwarf_variables,
     dwarf_expr_for_out_field, format_allocated_regalloc_edits, jit_dwarf_target_arch,
-    lower_hir_module, run_default_passes_from_env,
+    lower_hir_module, normalize_debug_line_rows, run_default_passes_from_env,
 };
 
 #[derive(Facet)]
@@ -889,11 +889,10 @@ fn debug_postcard_borrowed_header_harness() {
         .map(|func| crate::harness::AllocationMap::from_regalloc3(func, base_frame))
         .unwrap_or_default();
 
-    let result =
-        crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-            &ra3_alloc,
-            root_data_abi,
-        );
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &ra3_alloc,
+        root_data_abi,
+    );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
         super::materialize_backend_result(result);
@@ -1416,6 +1415,63 @@ fn builds_dwarf_sections_from_source_map_lines() {
     let dwarf = crate::jit_dwarf::build_jit_dwarf_sections_from_debug_info(&debug_info)
         .expect("expected dwarf sections");
     assert!(!dwarf.debug_line.is_empty());
+}
+
+#[test]
+fn debug_line_rows_cover_entry_prologue() {
+    let rows = normalize_debug_line_rows(&vec![
+        kajit_emit::SourceMapEntry {
+            offset: 40,
+            location: kajit_emit::SourceLocation {
+                file: 0,
+                line: 5,
+                column: 1,
+            },
+        },
+        kajit_emit::SourceMapEntry {
+            offset: 48,
+            location: kajit_emit::SourceLocation {
+                file: 0,
+                line: 6,
+                column: 1,
+            },
+        },
+    ]);
+
+    assert_eq!(rows[0].code_offset, 0);
+    assert_eq!(rows[0].line, 5);
+    assert_eq!(rows[1].code_offset, 40);
+    assert_eq!(rows[1].line, 5);
+    assert_eq!(rows[2].code_offset, 48);
+    assert_eq!(rows[2].line, 6);
+}
+
+#[test]
+fn debug_line_rows_do_not_duplicate_existing_entry_mapping() {
+    let rows = normalize_debug_line_rows(&vec![
+        kajit_emit::SourceMapEntry {
+            offset: 0,
+            location: kajit_emit::SourceLocation {
+                file: 0,
+                line: 5,
+                column: 1,
+            },
+        },
+        kajit_emit::SourceMapEntry {
+            offset: 48,
+            location: kajit_emit::SourceLocation {
+                file: 0,
+                line: 6,
+                column: 1,
+            },
+        },
+    ]);
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].code_offset, 0);
+    assert_eq!(rows[0].line, 5);
+    assert_eq!(rows[1].code_offset, 48);
+    assert_eq!(rows[1].line, 6);
 }
 
 #[test]

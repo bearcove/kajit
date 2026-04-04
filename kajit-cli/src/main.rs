@@ -15,7 +15,7 @@ struct Args {
 #[derive(Facet, Debug)]
 #[repr(u8)]
 enum Command {
-    /// Run the MCP debugger server
+    /// Run the Kajit MCP server
     Mcp {
         /// Run in real mode (direct MCP protocol, not proxy)
         #[facet(args::named, default)]

@@ -78,6 +78,11 @@ const char *SBDebuggerGetProgressFromEvent(SBEventRef event,
 
 void SBDebuggerInitialize() { lldb::SBDebugger::Initialize(); }
 
+SBErrorRef SBDebuggerInitializeWithErrorHandling() {
+  return reinterpret_cast<SBErrorRef>(
+      new SBError(lldb::SBDebugger::InitializeWithErrorHandling()));
+}
+
 void SBDebuggerTerminate() { lldb::SBDebugger::Terminate(); }
 
 SBDebuggerRef SBDebuggerCreate() {

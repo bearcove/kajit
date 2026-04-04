@@ -2,7 +2,9 @@
 
 use kajit::lockstep::{DebugError, JitDebugger};
 use lldb::*;
-use std::path::Path;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// LLDB-based JIT debugger that drives a standalone harness process.
 #[allow(dead_code)]
@@ -17,35 +19,41 @@ impl LldbJitDebugger {
     /// Launch a harness executable under LLDB, stopping at CFG-MIR line 1.
     /// The dSYM bundle must be next to the executable (auto-discovered by LLDB).
     pub fn launch(harness_path: &str, input_hex: &str) -> Result<Self, DebugError> {
-        SBDebugger::initialize();
+        configure_lldb_debugserver_path();
+        let init = SBDebugger::initialize_with_error_handling();
+        if !init.is_success() {
+            return Err(DebugError::LldbError(format!(
+                "failed to initialize LLDB: {init}"
+            )));
+        }
 
         let debugger = SBDebugger::create(false);
         debugger.set_asynchronous(false); // synchronous mode
 
-        let target = debugger.create_target_simple(harness_path).ok_or_else(|| {
-            DebugError::LldbError(format!("failed to create target for {harness_path}"))
-        })?;
+        let target = debugger
+            .create_target(harness_path, None, None, true)
+            .map_err(|e| {
+                DebugError::LldbError(format!("failed to create target for {harness_path}: {e}"))
+            })?;
+        debugger.set_selected_target(&target);
 
-        // Set breakpoint at first CFG-MIR source line (dSYM auto-discovered)
-        let listing_name = Path::new(harness_path)
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap();
-        let listing_file = format!("{listing_name}.cfg-mir");
-        let bp = target.breakpoint_create_by_location(&listing_file, 1);
-        if !bp.is_valid() {
-            // Fallback: breakpoint by function name
-            eprintln!("[lldb] warning: source breakpoint failed, using function name");
-            let bp = target.breakpoint_create_by_name("kajit_decode");
-            if !bp.is_valid() {
-                return Err(DebugError::LldbError("failed to set breakpoint".into()));
-            }
+        // Break on the decoder entrypoint itself. Source breakpoints can look
+        // valid before launch while still resolving to zero locations.
+        let bp = target.breakpoint_create_by_name("kajit_decode");
+        if !bp.is_valid() || bp.locations().next().is_none() {
+            return Err(DebugError::LldbError(format!(
+                "failed to resolve breakpoint on kajit_decode in {harness_path}"
+            )));
         }
 
-        // Launch
         let launch_info = SBLaunchInfo::new();
+        let exe_file = target.executable().ok_or_else(|| {
+            DebugError::LldbError(format!(
+                "target executable missing after create_target for {harness_path}"
+            ))
+        })?;
         launch_info.set_arguments([input_hex].into_iter(), false);
+        launch_info.set_executable_file(&exe_file, true);
 
         let process = target
             .launch(launch_info)
@@ -73,6 +81,72 @@ impl LldbJitDebugger {
             exited: false,
         })
     }
+
+    pub fn execute_command(&self, command: &str) -> Result<String, DebugError> {
+        self.debugger
+            .execute_command(command)
+            .map(|out| out.to_owned())
+            .map_err(DebugError::LldbError)
+    }
+}
+
+fn configure_lldb_debugserver_path() {
+    if env::var_os("LLDB_DEBUGSERVER_PATH").is_some() {
+        return;
+    }
+
+    if let Some(path) = find_lldb_server_path() {
+        // This runs before LLDB is initialized, so there are no concurrent
+        // environment readers in-process yet.
+        unsafe {
+            env::set_var("LLDB_DEBUGSERVER_PATH", path);
+        }
+    }
+}
+
+fn find_lldb_server_path() -> Option<PathBuf> {
+    find_lldb_server_on_path()
+        .or_else(|| find_lldb_server_in_dir(Path::new("/usr/bin")))
+        .or_else(|| find_lldb_server_under_prefix(Path::new("/usr/lib")))
+        .or_else(|| find_lldb_server_under_prefix(Path::new("/lib")))
+}
+
+fn find_lldb_server_on_path() -> Option<PathBuf> {
+    let path = env::var_os("PATH")?;
+    env::split_paths(&path).find_map(|dir| find_lldb_server_in_dir(&dir))
+}
+
+fn find_lldb_server_under_prefix(prefix: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(prefix).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("llvm-"))
+        })
+        .find_map(|llvm_dir| find_lldb_server_in_dir(&llvm_dir.join("bin")))
+}
+
+fn find_lldb_server_in_dir(dir: &Path) -> Option<PathBuf> {
+    let direct = dir.join("lldb-server");
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let entries = fs::read_dir(dir).ok()?;
+    entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.is_file()
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("lldb-server"))
+        })
 }
 
 impl JitDebugger for LldbJitDebugger {

@@ -155,33 +155,7 @@ impl CompiledDecoder {
             .parent()
             .and_then(std::path::Path::to_str)
             .map(str::to_owned);
-
-        let rows: Vec<crate::jit_dwarf::JitDebugLineRow> = source_map
-            .iter()
-            .filter(|entry| entry.location.line != 0)
-            .map(|entry| crate::jit_dwarf::JitDebugLineRow {
-                code_offset: entry.offset,
-                line: entry.location.line,
-            })
-            .collect();
-
-        eprintln!(
-            "[dwarf] source map: {} entries, {} with line!=0",
-            source_map.len(),
-            rows.len()
-        );
-        if let Some(first) = rows.first() {
-            eprintln!(
-                "[dwarf] first row: offset={}, line={}",
-                first.code_offset, first.line
-            );
-        }
-        if let Some(last) = rows.last() {
-            eprintln!(
-                "[dwarf] last row: offset={}, line={}",
-                last.code_offset, last.line
-            );
-        }
+        let rows = normalize_debug_line_rows(source_map);
 
         let debug_info = crate::jit_dwarf::JitDebugInfo {
             target_arch: crate::compiler::dwarf::jit_dwarf_target_arch(),
