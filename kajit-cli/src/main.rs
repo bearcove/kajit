@@ -787,8 +787,9 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
     #[cfg(not(feature = "lldb"))]
     {
         let _ = (exe_path, artifacts, input_hex);
-        eprintln!("error: debug-diff requires the 'lldb' feature");
-        eprintln!("  rebuild with: cargo build -p kajit-cli --features lldb");
+        eprintln!("error: debug-diff requires LLDB support");
+        eprintln!("  rebuild with: cargo build -p kajit-cli");
+        eprintln!("  or explicitly: cargo build -p kajit-cli --features lldb");
         std::process::exit(1);
     }
 

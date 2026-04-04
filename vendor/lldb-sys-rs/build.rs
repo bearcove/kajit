@@ -1,18 +1,73 @@
 use cc::Build;
 
-use std::{fs, process::Command};
+use std::{fs, path::Path, process::Command};
+
+fn llvm_config_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Ok(explicit) = std::env::var("LLVM_CONFIG") {
+        candidates.push(explicit);
+    }
+    candidates.extend(
+        [
+            "llvm-config",
+            "llvm-config-21",
+            "llvm-config-20",
+            "/usr/bin/llvm-config",
+            "/usr/bin/llvm-config-21",
+            "/usr/bin/llvm-config-20",
+        ]
+        .into_iter()
+        .map(str::to_owned),
+    );
+    candidates
+}
+
+fn run_llvm_config(llvm_config: &str, arg: &str) -> Result<String, String> {
+    match Command::new(llvm_config).arg(arg).output() {
+        Ok(res) if res.status.success() => Ok(String::from_utf8(res.stdout)
+            .unwrap()
+            .trim()
+            .to_string()),
+        Ok(res) => Err(format!(
+            "Could not run \"{} {}\": {}",
+            llvm_config,
+            arg,
+            res.status.code().unwrap_or(-1)
+        )),
+        Err(err) => Err(format!(
+            "Could not spawn \"{} {}\": {}",
+            llvm_config, arg, err
+        )),
+    }
+}
+
+fn resolve_llvm_config() -> String {
+    let mut fallback = None;
+    for llvm_config in llvm_config_candidates() {
+        let include_dir = match run_llvm_config(&llvm_config, "--includedir") {
+            Ok(include_dir) => include_dir,
+            Err(err) => {
+                fallback = Some(err);
+                continue;
+            }
+        };
+        if Path::new(&include_dir).join("lldb/API/LLDB.h").exists() {
+            return llvm_config;
+        }
+        fallback = Some(format!(
+            "\"{} --includedir\" resolved to {}, but LLDB.h was not found there",
+            llvm_config, include_dir
+        ));
+    }
+    panic!(
+        "{}",
+        fallback.unwrap_or_else(|| "unable to locate llvm-config".to_owned())
+    );
+}
 
 fn get_llvm_output(arg: &str) -> String {
-    let llvm_config = std::env::var("LLVM_CONFIG").unwrap_or_else(|_| "llvm-config".into());
-    let res = Command::new(llvm_config).arg(arg).output().unwrap();
-    if !res.status.success() {
-        panic!(
-            "Could not run \"llvm-config {}\": {}",
-            arg,
-            res.status.code().unwrap()
-        );
-    }
-    String::from_utf8(res.stdout).unwrap().trim().to_string()
+    let llvm_config = resolve_llvm_config();
+    run_llvm_config(&llvm_config, arg).unwrap_or_else(|err| panic!("{err}"))
 }
 
 fn match_libname(name: &str) -> Option<String> {
