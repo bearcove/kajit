@@ -9,10 +9,9 @@ use serde::Serialize;
 use super::{
     CompiledDecoder, build_jit_debug_info_from_source_map, build_postcard_decoder_hir,
     build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
-    cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, compile_linear_ir_decoder,
-    deser_dwarf_variables, dwarf_expr_for_out_field, format_allocated_regalloc_edits,
-    jit_dwarf_target_arch, lower_hir_module, materialize_backend_result,
-    run_default_passes_from_env,
+    cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, deser_dwarf_variables,
+    dwarf_expr_for_out_field, format_allocated_regalloc_edits, jit_dwarf_target_arch,
+    lower_hir_module, run_default_passes_from_env,
 };
 
 #[derive(Facet)]
@@ -77,6 +76,13 @@ struct MaybeBorrowedName<'a> {
 #[derive(Debug, PartialEq, Eq, Facet)]
 struct MaybeCount {
     count: Option<u32>,
+}
+
+#[derive(Debug, PartialEq, Eq, Facet, Serialize)]
+struct MultiOpt {
+    a: Option<u32>,
+    b: String,
+    c: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Facet)]
@@ -197,11 +203,19 @@ pub(crate) fn compile_structural_hir_decoder(
     shape: &'static Shape,
     module: &hir::Module,
 ) -> CompiledDecoder {
-    let _ = shape;
+    let registry = super::symbol_registry_for_shape(shape);
+    let root_data_abi = super::infer_root_decoder_data_abi(module);
     let mut func = build_structural_hir_ir(module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
-    compile_linear_ir_decoder(&linear, false)
+    super::compile_linear_ir_decoder_with_options(
+        &linear,
+        false,
+        crate::pipeline_opts::PipelineOptions::from_env(),
+        Some(&registry),
+        Some(shape),
+        root_data_abi,
+    )
 }
 
 fn compile_postcard_decoder_via_structural_hir(shape: &'static Shape) -> CompiledDecoder {
@@ -839,6 +853,20 @@ fn postcard_hir_lowering_decodes_borrowed_header() {
 }
 
 #[test]
+#[ignore]
+fn debug_postcard_borrowed_header_codegen() {
+    let module = build_postcard_decoder_hir(<BorrowedHeader<'static>>::SHAPE);
+    std::fs::write("/tmp/borrowed-header.hir.txt", module.to_string()).unwrap();
+
+    let decoder = compile_postcard_decoder_via_structural_hir(<BorrowedHeader<'static>>::SHAPE);
+    std::fs::write("/tmp/borrowed-header.cfg.txt", decoder.cfg_mir_text()).unwrap();
+    #[cfg(target_arch = "aarch64")]
+    if let Some(asm) = decoder.assembly_text() {
+        std::fs::write("/tmp/borrowed-header.asm.txt", asm).unwrap();
+    }
+}
+
+#[test]
 fn postcard_hir_lowering_decodes_owned_header() {
     let decoder = compile_postcard_decoder_via_structural_hir(<OwnedHeader>::SHAPE);
 
@@ -938,6 +966,65 @@ fn postcard_hir_lowering_decodes_option_borrowed_field() {
     let none = crate::deserialize::<MaybeBorrowedName<'_>>(&decoder, &[0])
         .expect("postcard HIR lowering should decode None");
     assert_eq!(none, MaybeBorrowedName { name: None });
+}
+
+#[test]
+fn postcard_hir_lowering_decodes_multi_options() {
+    let hir = crate::debug_postcard_hir_text(<MultiOpt>::SHAPE);
+    std::fs::write("/tmp/multiopt.hir.txt", hir).expect("write MultiOpt HIR dump");
+    let cfg = crate::debug_cfg_mir_text(<MultiOpt>::SHAPE, crate::DecoderKind::Postcard);
+    std::fs::write("/tmp/multiopt.cfg.txt", cfg).expect("write MultiOpt CFG dump");
+    let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
+    let mut ir = lower_hir_module(&module);
+    crate::compiler::run_default_passes_from_env(&mut ir);
+    let linear = crate::linearize::linearize(&mut ir);
+    let hints = Default::default();
+    let cfg = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let ra3 = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg)
+        .expect("regalloc3 should allocate postcard HIR-lowered MultiOpt cfg");
+    if let Some(func) = ra3.functions.first() {
+        let mut dump = String::new();
+        let mut allocs: Vec<_> = func.allocations.iter().collect();
+        allocs.sort_by_key(|(vreg, _)| vreg.index());
+        for (vreg, alloc) in allocs {
+            let spill = func.spill_slot_for_vreg(*vreg);
+            dump.push_str(&format!(
+                "v{} => {:?} spill={spill:?}\n",
+                vreg.index(),
+                alloc
+            ));
+        }
+        std::fs::write("/tmp/multiopt.regalloc3.txt", dump).expect("write MultiOpt regalloc3 dump");
+    }
+    let decoder = compile_postcard_decoder_via_structural_hir(<MultiOpt>::SHAPE);
+    #[cfg(target_arch = "aarch64")]
+    if let Some(asm) = decoder.assembly_text() {
+        std::fs::write("/tmp/multiopt.asm.txt", asm).expect("write MultiOpt asm dump");
+    }
+    std::fs::write(
+        "/tmp/multiopt.emit.txt",
+        decoder
+            .emission_trace_text()
+            .expect("build MultiOpt emission trace"),
+    )
+    .expect("write MultiOpt emission dump");
+    let encoded = ::postcard::to_allocvec(&MultiOpt {
+        a: Some(7),
+        b: "hello".to_owned(),
+        c: None,
+    })
+    .expect("postcard should encode MultiOpt");
+
+    let value = crate::deserialize::<MultiOpt>(&decoder, &encoded)
+        .expect("postcard HIR lowering should decode mixed option/string fields");
+    assert_eq!(
+        value,
+        MultiOpt {
+            a: Some(7),
+            b: "hello".to_owned(),
+            c: None,
+        }
+    );
 }
 
 mod hir_to_ir;
@@ -1048,6 +1135,110 @@ fn postcard_hir_lowering_array_path_matches_post_regalloc_simulation() {
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
         .expect("regalloc should allocate postcard HIR-lowered array cfg");
     let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &[1, 2, 3, 4]);
+    assert!(
+        matches!(
+            result,
+            crate::regalloc_engine::DifferentialCheckResult::Match { .. }
+        ),
+        "unexpected interpreter/post-regalloc mismatch: {result:?}"
+    );
+}
+
+#[test]
+fn postcard_hir_lowering_multi_options_matches_jit_differential_harness() {
+    let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
+    let mut func = lower_hir_module(&module);
+    let linear = crate::linearize::linearize(&mut func);
+    let encoded = ::postcard::to_allocvec(&MultiOpt {
+        a: Some(7),
+        b: "hello".to_owned(),
+        c: None,
+    })
+    .expect("postcard should encode MultiOpt");
+    let output_size = std::mem::size_of::<MultiOpt>();
+    let report =
+        crate::differential_check_linear_ir_vs_jit_with_output_size(&linear, &encoded, output_size)
+            .expect("differential harness should execute postcard HIR-lowered MultiOpt decoder");
+    assert!(
+        report.is_match(),
+        "unexpected differential mismatch: {:?}",
+        report.mismatch
+    );
+}
+
+#[test]
+fn postcard_hir_lowering_multi_options_matches_post_regalloc_simulation() {
+    let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
+    let mut func = lower_hir_module(&module);
+    let linear = crate::linearize::linearize(&mut func);
+    let hints = Default::default();
+    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
+    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
+        .expect("regalloc should allocate postcard HIR-lowered MultiOpt cfg");
+    std::fs::write(
+        "/tmp/multiopt.regalloc.txt",
+        format_allocated_regalloc_edits(&alloc),
+    )
+    .expect("write MultiOpt regalloc dump");
+    if let Some(func_alloc) = alloc.functions.first() {
+        let mut dump = String::new();
+        if let Some(cfg_func) = alloc.cfg_program.funcs.first() {
+            std::fs::write(
+                "/tmp/multiopt.alloc_cfg.txt",
+                format!("{}", alloc.cfg_program),
+            )
+            .expect("write allocated MultiOpt cfg dump");
+            for block_id in [101_u32, 102, 103, 104] {
+                let block = &cfg_func.blocks[block_id as usize];
+                dump.push_str(&format!(
+                    "block b{} params={:?} preds={:?} succs={:?}\n",
+                    block.id.0, block.params, block.preds, block.succs
+                ));
+                for inst_id in &block.insts {
+                    let op = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
+                    let inst = &cfg_func.insts[inst_id.index()];
+                    let allocs = func_alloc.op_allocs.get(&op);
+                    let operands = func_alloc.op_operands.get(&op);
+                    dump.push_str(&format!(
+                        "  {op:?}: {:?} allocs={allocs:?} operands={operands:?}\n",
+                        inst.op
+                    ));
+                }
+                let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
+                let term = cfg_func.term(block.term).expect("block term should exist");
+                let term_allocs = func_alloc.op_allocs.get(&term_op);
+                let term_operands = func_alloc.op_operands.get(&term_op);
+                dump.push_str(&format!(
+                    "  {term_op:?}: {term:?} allocs={term_allocs:?} operands={term_operands:?}\n"
+                ));
+            }
+        }
+        std::fs::write("/tmp/multiopt.op_allocs.txt", dump).expect("write MultiOpt op alloc dump");
+    }
+    let encoded = ::postcard::to_allocvec(&MultiOpt {
+        a: Some(7),
+        b: "hello".to_owned(),
+        c: None,
+    })
+    .expect("postcard should encode MultiOpt");
+    let trace = crate::regalloc_engine::simulate_execution_trace_cfg(&alloc, &encoded)
+        .expect("post-regalloc trace should execute");
+    let mut trace_dump = String::new();
+    for entry in trace
+        .iter()
+        .filter(|entry| (295..=310).contains(&entry.step_index))
+    {
+        trace_dump.push_str(&format!(
+            "step {} pos={:?} regs={:?} spills={:?} output_prefix={:?}\n",
+            entry.step_index,
+            entry.state.position,
+            entry.state.physical_registers,
+            entry.state.spillslots,
+            &entry.output[..24]
+        ));
+    }
+    std::fs::write("/tmp/multiopt.trace.txt", trace_dump).expect("write MultiOpt trace dump");
+    let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &encoded);
     assert!(
         matches!(
             result,

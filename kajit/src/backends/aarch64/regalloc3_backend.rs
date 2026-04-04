@@ -38,6 +38,8 @@ struct EmitContext<'a> {
     success_exit: LabelId,
     /// Slot offset base: base_frame + spill_slots * 8 gives the start of user slots.
     slot_base: u32,
+    /// Scratch stack area used to snapshot edge arguments before delivering them.
+    edge_tmp_base: u32,
     /// VReg → constant value (for immediate folding in BinOps)
     const_values: HashMap<kajit_ir::VReg, u64>,
     /// OpId → DWARF line number (for source-level debugging)
@@ -54,6 +56,8 @@ struct EmitContext<'a> {
     output_reg: Reg,
     /// Context pointer register (x1 for leaf, x22 for non-leaf).
     ctx_reg: Reg,
+    /// Whether intrinsic/lambda calls should sync the fixed cursor register through ctx.input_ptr.
+    sync_ctx_cursor_around_calls: bool,
     /// Intermediate vregs (And/Shl results) whose instructions should be skipped.
     fused_skip: std::collections::HashSet<kajit_ir::VReg>,
     /// Fused base+offset info for LoadFromAddr/RestoreCursor.
@@ -67,6 +71,8 @@ struct EmitContext<'a> {
     /// Set to true when emitting the last block before the success epilogue.
     /// Allows Return terminator to fall through instead of branching.
     is_last_emitted_block: bool,
+    /// Per-edge trampoline labels for edges that need value delivery before control transfer.
+    edge_trampoline_labels: HashMap<cfg_mir::EdgeId, LabelId>,
 }
 
 struct BfiInfo {
@@ -261,6 +267,68 @@ impl<'a> EmitContext<'a> {
     /// Offset of a user slot on the stack.
     fn slot_off(&self, slot: u32) -> u32 {
         self.slot_base + slot * 8
+    }
+
+    fn edge_tmp_off(&self, index: usize) -> u32 {
+        self.edge_tmp_base + (index as u32) * 8
+    }
+
+    fn edge_has_moves(&self, edge_id: cfg_mir::EdgeId) -> bool {
+        let edge = &self.func.edges[edge_id.index()];
+        edge.args.iter().any(|arg| arg.source != arg.target)
+    }
+
+    fn edge_target_label(&mut self, edge_id: cfg_mir::EdgeId, target_label: LabelId) -> LabelId {
+        if !self.edge_has_moves(edge_id) {
+            return target_label;
+        }
+        *self
+            .edge_trampoline_labels
+            .entry(edge_id)
+            .or_insert_with(|| self.ectx.new_label())
+    }
+
+    fn emit_edge_moves(&mut self, edge_id: cfg_mir::EdgeId) {
+        let edge = &self.func.edges[edge_id.index()];
+        if edge.args.is_empty() {
+            return;
+        }
+
+        for (index, arg) in edge.args.iter().enumerate() {
+            let src_reg = self.reg_for_vreg_with_temp(arg.source, Reg::X9);
+            let off = self.edge_tmp_off(index);
+            self.ectx
+                .emit
+                .emit_str_imm(Width::X64, src_reg, Reg::SP, off)
+                .expect("str edge tmp");
+        }
+
+        for (index, arg) in edge.args.iter().enumerate() {
+            let off = self.edge_tmp_off(index);
+            self.ectx
+                .emit
+                .emit_ldr_imm(Width::X64, Reg::X9, Reg::SP, off)
+                .expect("ldr edge tmp");
+            self.store_to_vreg(arg.target, Reg::X9);
+        }
+    }
+
+    fn emit_edge_trampolines(&mut self) {
+        let trampolines: Vec<(cfg_mir::EdgeId, LabelId)> = self
+            .edge_trampoline_labels
+            .iter()
+            .map(|(&edge_id, &label)| (edge_id, label))
+            .collect();
+        for (edge_id, trampoline_label) in trampolines {
+            let edge = &self.func.edges[edge_id.index()];
+            let target_label = self.block_labels[&edge.to];
+            self.ectx.bind_label(trampoline_label);
+            self.emit_edge_moves(edge_id);
+            self.ectx
+                .emit
+                .emit_b_label(target_label)
+                .expect("b edge target");
+        }
     }
 
     /// Emit a single instruction.
@@ -1029,11 +1097,13 @@ impl<'a> EmitContext<'a> {
 
         let error_exit = self.ectx.error_exit;
 
-        // Flush cursor to ctx before call
-        self.ectx
-            .emit
-            .emit_str_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
-            .expect("str cursor");
+        if self.sync_ctx_cursor_around_calls {
+            // Legacy cursor-ABI path: host calls observe the cursor through ctx.input_ptr.
+            self.ectx
+                .emit
+                .emit_str_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
+                .expect("str cursor");
+        }
 
         // Adjust out_ptr for field offset if needed
         if let Some(off) = field_offset {
@@ -1051,10 +1121,26 @@ impl<'a> EmitContext<'a> {
             }
         }
 
-        // Load args into x1+ (x0=ctx)
+        // Move register-resident args with parallel-copy semantics first, then
+        // materialize spilled/rematerialized args into their ABI homes.
+        let mut reg_moves = Vec::new();
+        let mut deferred_args = Vec::new();
         for (i, &arg) in args.iter().enumerate() {
             let target_reg = Reg::from_raw((i + 1) as u8);
-            let src_reg = self.reg_for_vreg_with_temp(arg, Reg::X9);
+            if let Some(preg) = self.preg_for_vreg(arg) {
+                let src_reg = self.preg_to_reg(preg);
+                if src_reg != target_reg {
+                    reg_moves.push((target_reg, src_reg));
+                }
+            } else {
+                deferred_args.push((arg, target_reg));
+            }
+        }
+        if !reg_moves.is_empty() {
+            self.emit_parallel_moves(&reg_moves, Reg::X16);
+        }
+        for (arg, target_reg) in deferred_args {
+            let src_reg = self.reg_for_vreg_with_temp(arg, target_reg);
             if src_reg != target_reg {
                 self.ectx
                     .emit
@@ -1105,11 +1191,12 @@ impl<'a> EmitContext<'a> {
             }
         }
 
-        // Reload cursor from ctx after call
-        self.ectx
-            .emit
-            .emit_ldr_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
-            .expect("ldr cursor");
+        if self.sync_ctx_cursor_around_calls {
+            self.ectx
+                .emit
+                .emit_ldr_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
+                .expect("ldr cursor");
+        }
 
         // Check error after call
         self.ectx
@@ -1549,6 +1636,7 @@ impl<'a> EmitContext<'a> {
     /// RestoreCursor, we can skip the Add and use `[base_reg, #offset]` directly.
     fn compute_fusable_addr_offsets(
         func: &Function,
+        alloc_func: &AllocatedCfgFunctionRa3,
         const_values: &HashMap<kajit_ir::VReg, u64>,
         skip_set: &mut std::collections::HashSet<kajit_ir::VReg>,
     ) -> HashMap<kajit_ir::VReg, (kajit_ir::VReg, u64)> {
@@ -1657,6 +1745,29 @@ impl<'a> EmitContext<'a> {
                 continue;
             }
 
+            // Only fuse when regalloc assigned the temporary address to the
+            // same physical register as the base. Otherwise the address vreg
+            // has its own live range/home, and reviving the base here can read
+            // from a register that has been legitimately reused.
+            let Some(addr_preg) = alloc_func.preg_for_vreg(addr_vreg) else {
+                continue;
+            };
+            let Some(base_preg) = alloc_func.preg_for_vreg(base) else {
+                continue;
+            };
+            if addr_preg != base_preg {
+                if std::env::var("KAJIT_DEBUG_ADDR_FUSION").is_ok() {
+                    eprintln!(
+                        "[addr-fusion] v{} != base v{} reg homes (p{} vs p{}), skip",
+                        addr_vreg.index(),
+                        base.index(),
+                        addr_preg.0,
+                        base_preg.0
+                    );
+                }
+                continue;
+            }
+
             if std::env::var("KAJIT_DEBUG_ADDR_FUSION").is_ok() {
                 eprintln!(
                     "[addr-fusion] FUSE: v{} = v{} + {} → skip Add+Const",
@@ -1711,7 +1822,11 @@ impl<'a> EmitContext<'a> {
                 let target_block = self.func.edges[edge.index()].to;
                 // Resolve through trampolines for fallthrough elision.
                 let resolved = self.resolve_trampoline(target_block);
-                if Some(resolved) != next_block {
+                if self.edge_has_moves(*edge) {
+                    let trampoline =
+                        self.edge_target_label(*edge, self.block_labels[&target_block]);
+                    self.ectx.emit.emit_b_label(trampoline).expect("branch");
+                } else if Some(resolved) != next_block {
                     let label = self.block_labels[&target_block];
                     self.ectx.emit.emit_b_label(label).expect("branch");
                 }
@@ -1732,12 +1847,23 @@ impl<'a> EmitContext<'a> {
                 let resolved_fall = self.resolve_trampoline(fallthrough_block);
                 let invert =
                     Some(resolved_taken) == next_block && Some(resolved_fall) != next_block;
+                let taken_label = self.edge_target_label(*taken, taken_label);
+                let fallthrough_label = self.edge_target_label(*fallthrough, fallthrough_label);
 
                 if invert {
                     self.emit_branch_cond(*cond, fallthrough_label, true);
+                    self.emit_edge_moves(*taken);
                 } else {
                     self.emit_branch_cond(*cond, taken_label, false);
-                    if Some(resolved_fall) != next_block {
+                    if self.edge_has_moves(*fallthrough) {
+                        self.emit_edge_moves(*fallthrough);
+                        if Some(resolved_fall) != next_block {
+                            self.ectx
+                                .emit
+                                .emit_b_label(fallthrough_label)
+                                .expect("b fallthrough");
+                        }
+                    } else if Some(resolved_fall) != next_block {
                         self.ectx
                             .emit
                             .emit_b_label(fallthrough_label)
@@ -1760,14 +1886,25 @@ impl<'a> EmitContext<'a> {
                 let resolved_fall = self.resolve_trampoline(fallthrough_block);
                 let invert =
                     Some(resolved_taken) == next_block && Some(resolved_fall) != next_block;
+                let taken_label = self.edge_target_label(*taken, taken_label);
+                let fallthrough_label = self.edge_target_label(*fallthrough, fallthrough_label);
 
                 if invert {
                     // BranchIfZero inverted = BranchIf → emit non-inverted branch to fallthrough
                     self.emit_branch_cond(*cond, fallthrough_label, false);
+                    self.emit_edge_moves(*taken);
                 } else {
                     // Normal: BranchIfZero = branch to taken when zero
                     self.emit_branch_cond(*cond, taken_label, true);
-                    if Some(resolved_fall) != next_block {
+                    if self.edge_has_moves(*fallthrough) {
+                        self.emit_edge_moves(*fallthrough);
+                        if Some(resolved_fall) != next_block {
+                            self.ectx
+                                .emit
+                                .emit_b_label(fallthrough_label)
+                                .expect("b fallthrough");
+                        }
+                    } else if Some(resolved_fall) != next_block {
                         self.ectx
                             .emit
                             .emit_b_label(fallthrough_label)
@@ -1892,6 +2029,8 @@ impl<'a> EmitContext<'a> {
             let term = &self.func.terms[block.term.0 as usize];
             self.emit_terminator(term, next_block_id);
         }
+
+        self.emit_edge_trampolines();
     }
 }
 
@@ -1920,6 +2059,13 @@ pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
 
 /// Compile CFG-MIR with regalloc3 allocations to aarch64 machine code.
 pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult {
+    compile_regalloc3_with_root_data_abi(alloc, crate::compiler::RootDecoderDataAbi::None)
+}
+
+pub fn compile_regalloc3_with_root_data_abi(
+    alloc: &AllocatedCfgProgramRa3,
+    root_data_abi: crate::compiler::RootDecoderDataAbi,
+) -> LinearBackendResult {
     let program = &alloc.cfg_program;
 
     // Calculate max spillslots and extra callee-saved pairs needed
@@ -1963,25 +2109,35 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         max_slot.map_or(0, |m| m + 1)
     };
 
+    let max_edge_args = program
+        .funcs
+        .iter()
+        .flat_map(|func| func.edges.iter().map(|edge| edge.args.len()))
+        .max()
+        .unwrap_or(0);
+
     // Create emission context with stack space for spills + actual slots
-    let extra_stack = ((max_spillslots + actual_slot_count as usize) * 8) as u32;
+    let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32;
     let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
+    let edge_tmp_base = slot_base + (actual_slot_count as u32 * 8);
 
     // Check if the program uses cursor operations (BoundsCheck, ReadBytes, etc.)
     // that require the cursor to live in a fixed register.
-    let uses_cursor_ops = program.funcs.iter().any(|func| {
-        func.insts.iter().any(|inst| {
-            matches!(
-                inst.op,
-                kajit_lir::LinearOp::BoundsCheck { .. }
-                    | kajit_lir::LinearOp::ReadBytes { .. }
-                    | kajit_lir::LinearOp::PeekByte { .. }
-                    | kajit_lir::LinearOp::AdvanceCursor { .. }
-                    | kajit_lir::LinearOp::AdvanceCursorBy { .. }
-            )
-        })
-    });
+    let ctx_cursor_abi = matches!(root_data_abi, crate::compiler::RootDecoderDataAbi::None);
+    let uses_cursor_ops = ctx_cursor_abi
+        && program.funcs.iter().any(|func| {
+            func.insts.iter().any(|inst| {
+                matches!(
+                    inst.op,
+                    kajit_lir::LinearOp::BoundsCheck { .. }
+                        | kajit_lir::LinearOp::ReadBytes { .. }
+                        | kajit_lir::LinearOp::PeekByte { .. }
+                        | kajit_lir::LinearOp::AdvanceCursor { .. }
+                        | kajit_lir::LinearOp::AdvanceCursorBy { .. }
+                )
+            })
+        });
 
     // For leaf functions with cursor ops, we still need x19/x20 for the cursor
     // and input end — just skip the callee-save overhead since we're a leaf.
@@ -2009,12 +2165,13 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     let prologue_config = crate::arch::PrologueConfig {
         save_x21_x22: !is_leaf,
         save_x19_x20: need_save_x19_x20,
-        load_cursor_x19_x20: !is_leaf || leaf_needs_cursor,
+        load_cursor_x19_x20: ctx_cursor_abi && (!is_leaf || leaf_needs_cursor),
         cursor_writeback_reg: if is_leaf && !leaf_needs_cursor {
             Some(cursor_writeback_reg)
         } else {
             None
         },
+        writeback_cursor_to_ctx: ctx_cursor_abi,
     };
 
     let is_scalar_function = program.is_scalar;
@@ -2158,8 +2315,12 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         let fused_cmps = EmitContext::compute_fusable_cmps(func);
         let (fused_bfi, mut fused_skip) = EmitContext::compute_fusable_bfis(func, &const_values);
         EmitContext::compute_fusable_bit_tests(func, &const_values, &mut fused_skip);
-        let fused_addr_offsets =
-            EmitContext::compute_fusable_addr_offsets(func, &const_values, &mut fused_skip);
+        let fused_addr_offsets = EmitContext::compute_fusable_addr_offsets(
+            func,
+            alloc_func,
+            &const_values,
+            &mut fused_skip,
+        );
 
         // For leaf functions: keep output_ptr in x0 and ctx_ptr in x1
         // (avoids saving/restoring x21/x22 and the arg moves).
@@ -2176,6 +2337,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             block_labels: HashMap::new(),
             success_exit,
             slot_base,
+            edge_tmp_base,
             const_values,
             line_map,
             intrinsic_call_sites: Vec::new(),
@@ -2186,8 +2348,10 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             fused_addr_offsets,
             output_reg,
             ctx_reg,
+            sync_ctx_cursor_around_calls: ctx_cursor_abi,
             cursor_writeback_reg,
             is_last_emitted_block: false,
+            edge_trampoline_labels: HashMap::new(),
         };
 
         ctx.emit_function();

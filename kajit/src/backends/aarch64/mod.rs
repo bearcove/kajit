@@ -89,6 +89,8 @@ pub(crate) struct Lowerer<'a> {
     pub(crate) current_inst_operands: Option<Vec<cfg_mir::Operand>>,
     pub(crate) current_op_id: Option<cfg_mir::OpId>,
     pub(crate) apply_regalloc_edits: bool,
+    pub(crate) root_data_arg_offset: u8,
+    pub(crate) sync_ctx_cursor_with_calls: bool,
     pub(crate) no_edit_edge_tmp_base: u32,
     pub(crate) edge_args_by_lambda: BTreeMap<u32, BTreeMap<cfg_mir::EdgeId, Vec<cfg_mir::EdgeArg>>>,
     pub(crate) backend_debug_info: BackendDebugInfo,
@@ -107,6 +109,7 @@ pub fn compile(
     program: &cfg_mir::Program,
     alloc: &AllocatedCfgProgram,
     apply_regalloc_edits: bool,
+    root_data_abi: crate::compiler::RootDecoderDataAbi,
     intrinsic_registry: Option<&crate::ir::IntrinsicRegistry>,
 ) -> LinearBackendResult {
     let max_spillslots = alloc
@@ -121,6 +124,7 @@ pub fn compile(
         max_spillslots,
         alloc,
         apply_regalloc_edits,
+        root_data_abi,
         intrinsic_registry,
     )
     .run(program)
@@ -297,6 +301,7 @@ impl Lowerer<'_> {
         max_spillslots: usize,
         alloc: &AllocatedCfgProgram,
         apply_regalloc_edits: bool,
+        root_data_abi: crate::compiler::RootDecoderDataAbi,
         intrinsic_registry: Option<&'a crate::ir::IntrinsicRegistry>,
     ) -> Lowerer<'a> {
         let no_edit_mode = !apply_regalloc_edits;
@@ -427,6 +432,11 @@ impl Lowerer<'_> {
             current_inst_operands: None,
             current_op_id: None,
             apply_regalloc_edits,
+            root_data_arg_offset: if program.is_scalar { 0 } else { 2 },
+            sync_ctx_cursor_with_calls: matches!(
+                root_data_abi,
+                crate::compiler::RootDecoderDataAbi::None
+            ),
             no_edit_edge_tmp_base,
             edge_args_by_lambda,
             backend_debug_info: BackendDebugInfo::default(),
@@ -818,8 +828,7 @@ impl Lowerer<'_> {
                     self.set_const(*dst, None);
                 }
             }
-            LinearOp::CallPure { func, args, dst }
-            | LinearOp::CallEffect { func, args, dst } => {
+            LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
                 self.emit_call_pure(*func, args, *dst);
                 self.set_const(*dst, None);
             }
@@ -1005,7 +1014,12 @@ impl Lowerer<'_> {
                 line: first_line_by_lambda.get(&lambda_id).copied().unwrap_or(1),
                 column: 0,
             });
-            let (entry_offset, error_exit) = self.ectx.begin_func();
+            let prologue_config = crate::arch::PrologueConfig {
+                load_cursor_x19_x20: self.sync_ctx_cursor_with_calls,
+                writeback_cursor_to_ctx: self.sync_ctx_cursor_with_calls,
+                ..Default::default()
+            };
+            let (entry_offset, error_exit) = self.ectx.begin_func_with_config(&prologue_config);
             if func.lambda_id.index() == 0 {
                 self.entry = Some(entry_offset);
             }
@@ -1014,7 +1028,12 @@ impl Lowerer<'_> {
                 data_results: func.data_results.clone(),
                 lambda_id: func.lambda_id,
             });
-            self.emit_store_incoming_lambda_args(&func.data_args);
+            let abi_arg_offset = if func.lambda_id.index() == 0 {
+                self.root_data_arg_offset
+            } else {
+                0
+            };
+            self.emit_store_incoming_lambda_args(&func.data_args, abi_arg_offset);
 
             for (block_index, block) in func.blocks.iter().enumerate() {
                 // Skip dead blocks (tombstones from block merging)
@@ -1084,7 +1103,8 @@ impl Lowerer<'_> {
                 .take()
                 .expect("FuncEnd without active function");
             self.emit_load_lambda_results_to_ret_regs(func_ctx.lambda_id, &func_ctx.data_results);
-            self.ectx.end_func(func_ctx.error_exit);
+            self.ectx
+                .end_func_with_config(func_ctx.error_exit, &prologue_config);
         }
 
         self.emit_edge_trampolines();

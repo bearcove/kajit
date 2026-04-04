@@ -210,6 +210,9 @@ pub enum InterpreterError {
     StepLimitExceeded {
         limit: usize,
     },
+    UnsupportedRootDataArgs {
+        count: usize,
+    },
 }
 
 impl std::fmt::Display for InterpreterError {
@@ -249,6 +252,10 @@ impl std::fmt::Display for InterpreterError {
             Self::StepLimitExceeded { limit } => {
                 write!(f, "CFG-MIR interpreter exceeded step limit ({limit})")
             }
+            Self::UnsupportedRootDataArgs { count } => write!(
+                f,
+                "unsupported root data arg ABI for interpreter MVP: expected 0 or 1 args, got {count}"
+            ),
         }
     }
 }
@@ -267,6 +274,7 @@ struct InterpreterState<'a> {
     trace_slots: Vec<TraceValue>,
     slot_mem: Vec<u8>,
     ctx: RuntimeDeserContext,
+    root_cursor_arg: Option<Box<RuntimeCursorArg>>,
     trap: Option<InterpreterTrap>,
     trace_out_ptr: TraceValue,
 }
@@ -289,9 +297,23 @@ impl<'a> InterpreterState<'a> {
             trace_slots: vec![TraceValue::U64(0); slot_count],
             slot_mem,
             ctx: RuntimeDeserContext::new(input),
+            root_cursor_arg: None,
             trap: None,
             trace_out_ptr: TraceValue::OutputPtr { offset: 0 },
         }
+    }
+
+    fn init_root_cursor_arg(&mut self) -> u64 {
+        let cursor = self.root_cursor_arg.get_or_insert_with(|| {
+            Box::new(RuntimeCursorArg {
+                bytes: RuntimeSliceU8 {
+                    ptr: self.input_base,
+                    len: self.input.len(),
+                },
+                pos: 0,
+            })
+        });
+        cursor.as_mut() as *mut RuntimeCursorArg as u64
     }
 
     fn read_vreg(&self, idx: usize) -> u64 {
@@ -523,6 +545,7 @@ pub fn execute_program_with_event_trace(
         program.slot_count as usize,
         infer_program_output_size(program),
     );
+    seed_root_data_args(program, &mut state)?;
     let mut trace = InterpreterExecutionTrace::default();
     let mut steps = 0usize;
     let root = &program.funcs[0];
@@ -594,6 +617,7 @@ pub fn execute_program_with_trace(
         program.slot_count as usize,
         infer_program_output_size(program),
     );
+    seed_root_data_args(program, &mut state)?;
     let mut trace = Vec::new();
     let mut steps = 0usize;
     let _ = execute_function_inner(
@@ -611,6 +635,25 @@ pub fn execute_program_with_trace(
         trap: state.trap,
     };
     Ok((outcome, trace))
+}
+
+fn seed_root_data_args(
+    program: &cfg_mir::Program,
+    state: &mut InterpreterState<'_>,
+) -> Result<(), InterpreterError> {
+    let Some(root) = program.funcs.first() else {
+        return Err(InterpreterError::NoFunctions);
+    };
+    match root.data_args.as_slice() {
+        [] => Ok(()),
+        [arg] => {
+            let cursor_ptr = state.init_root_cursor_arg();
+            state.write_vreg(arg.index(), cursor_ptr);
+            state.write_trace_vreg(arg.index(), TraceValue::U64(cursor_ptr));
+            Ok(())
+        }
+        args => Err(InterpreterError::UnsupportedRootDataArgs { count: args.len() }),
+    }
 }
 
 pub fn execute_function_with_trace(
@@ -1847,6 +1890,18 @@ struct RuntimeDeserContext {
     key_scratch_ptr: *mut u8,
     key_scratch_cap: usize,
     trusted_utf8: bool,
+}
+
+#[repr(C)]
+struct RuntimeSliceU8 {
+    ptr: *const u8,
+    len: usize,
+}
+
+#[repr(C)]
+struct RuntimeCursorArg {
+    bytes: RuntimeSliceU8,
+    pos: u64,
 }
 
 impl RuntimeDeserContext {

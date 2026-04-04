@@ -85,9 +85,11 @@ pub fn allocate_with_excluded(
         .filter(|p| callee_saved_set.contains(p))
         .count();
 
-    // Build def-site map: vreg → (block, inst_index_in_block)
-    // Block params use DEF_AT_ENTRY (before all instructions).
-    const DEF_AT_ENTRY: u32 = u32::MAX;
+    // Build def-site map: vreg → (block, local definition order).
+    // Order 0 is block entry (data args / block params). Instruction defs use
+    // 1-based indices so uses at instruction i can be considered "before" defs
+    // at order i + 1 within the same instruction.
+    const DEF_AT_ENTRY: u32 = 0;
     let mut def_block: HashMap<VReg, BlockId> = HashMap::new();
     let mut def_inst_idx: HashMap<VReg, u32> = HashMap::new();
 
@@ -112,7 +114,7 @@ pub fn allocate_with_excluded(
             let inst = &func.insts[inst_id.0 as usize];
             inst.op.for_each_def(|dst| {
                 def_block.insert(*dst, block.id);
-                def_inst_idx.insert(*dst, idx as u32);
+                def_inst_idx.insert(*dst, idx as u32 + 1);
             });
         }
     }
@@ -621,6 +623,11 @@ fn color_phase(
         .filter(|p| callee_saved_set.contains(p))
         .copied()
         .collect();
+    let caller_saved_allocatable: Vec<PReg> = allocatable
+        .iter()
+        .filter(|p| !callee_saved_set.contains(p))
+        .copied()
+        .collect();
 
     // Pre-compute: for each (block, vreg), the index of the last instruction
     // that uses it in that block (including terminator and edge args).
@@ -630,11 +637,12 @@ fn color_phase(
         if block.dead {
             continue;
         }
-        // Instruction uses
+        // Instruction uses happen before defs of the same instruction, so record
+        // them at the same 1-based order used by instruction defs.
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
             inst.op.for_each_use(|src| {
-                last_use_in_block.insert((block.id, *src), inst_idx as u32);
+                last_use_in_block.insert((block.id, *src), inst_idx as u32 + 1);
             });
         }
         // Terminator condition uses
@@ -742,11 +750,7 @@ fn color_phase(
             if spilled.contains(&param) {
                 continue;
             }
-            let pool = if live_across_call.contains(&param) {
-                &callee_saved_allocatable
-            } else {
-                allocatable
-            };
+            let needs_callee_saved = live_across_call.contains(&param);
             // Phi affinity: prefer registers of already-colored source vregs.
             // Weight by loop depth: phi edges inside loops are more valuable
             // to coalesce (they execute many times).
@@ -764,20 +768,31 @@ fn color_phase(
                         .collect()
                 })
                 .unwrap_or_default();
-            let color = preferred_color(pool, &occupied, &[], &phi_prefs);
-            if let Some(color) = color {
-                if std::env::var("KAJIT_RA_TRACE").is_ok() {
-                    eprintln!(
-                        "  b{} param v{} -> p{} (occupied: {:?})",
-                        block_id.0,
-                        param.index(),
-                        color.0,
-                        occupied.iter().map(|p| p.0).collect::<Vec<_>>()
-                    );
-                }
-                coloring.insert(param, color);
-                occupied.insert(color);
+            let color = if needs_callee_saved {
+                preferred_color(&callee_saved_allocatable, &occupied, &[], &phi_prefs)
+            } else {
+                preferred_color(&caller_saved_allocatable, &occupied, &[], &phi_prefs)
+                    .or_else(|| preferred_color(allocatable, &occupied, &[], &phi_prefs))
             }
+            .unwrap_or_else(|| {
+                panic!(
+                    "no register available for block param v{} in b{} (live_across_call={})",
+                    param.index(),
+                    block_id.0,
+                    needs_callee_saved
+                )
+            });
+            if std::env::var("KAJIT_RA_TRACE").is_ok() {
+                eprintln!(
+                    "  b{} param v{} -> p{} (occupied: {:?})",
+                    block_id.0,
+                    param.index(),
+                    color.0,
+                    occupied.iter().map(|p| p.0).collect::<Vec<_>>()
+                );
+            }
+            coloring.insert(param, color);
+            occupied.insert(color);
         }
 
         // Color data_args that weren't pre-colored (e.g., because they're
@@ -787,22 +802,29 @@ fn color_phase(
                 if spilled.contains(&arg) || coloring.contains_key(&arg) {
                     continue;
                 }
-                let pool = if live_across_call.contains(&arg) {
-                    &callee_saved_allocatable
+                let needs_callee_saved = live_across_call.contains(&arg);
+                let color = if needs_callee_saved {
+                    preferred_color(&callee_saved_allocatable, &occupied, &[], &[])
                 } else {
-                    allocatable
-                };
-                let color = preferred_color(pool, &occupied, &[], &[]);
-                if let Some(color) = color {
-                    coloring.insert(arg, color);
-                    occupied.insert(color);
+                    preferred_color(&caller_saved_allocatable, &occupied, &[], &[])
+                        .or_else(|| preferred_color(allocatable, &occupied, &[], &[]))
                 }
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no register available for data arg v{} in entry block (live_across_call={})",
+                        arg.index(),
+                        needs_callee_saved
+                    )
+                });
+                coloring.insert(arg, color);
+                occupied.insert(color);
             }
         }
 
         // Scan instructions in program order
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
+            let inst_order = inst_idx as u32 + 1;
 
             // Collect uses of this instruction.
             let mut uses_here: Vec<VReg> = Vec::new();
@@ -819,8 +841,8 @@ fn color_phase(
                     continue;
                 }
                 let last = last_use_in_block.get(&(block_id, vreg)).copied();
-                let is_dying = last == Some(inst_idx as u32)
-                    && !live_out.map_or(false, |lo| lo.contains(&vreg));
+                let is_dying =
+                    last == Some(inst_order) && !live_out.map_or(false, |lo| lo.contains(&vreg));
                 if is_dying {
                     if let Some(&preg) = coloring.get(&vreg) {
                         dying_source_colors.push(preg);
@@ -866,12 +888,7 @@ fn color_phase(
                 if spilled.contains(dst) {
                     return;
                 }
-                // If this vreg is live across a call, only use callee-saved registers
-                let pool = if live_across_call.contains(dst) {
-                    &callee_saved_allocatable
-                } else {
-                    allocatable
-                };
+                let needs_callee_saved = live_across_call.contains(dst);
 
                 // Collect weighted phi preferences specific to this def.
                 let block_loop_depth = loop_info
@@ -886,22 +903,46 @@ fn color_phase(
                     .map(|(_, tc)| (*tc, phi_weight))
                     .collect();
 
-                let color = preferred_color(pool, &occupied, &dying_source_colors, &phi_prefs);
-                if let Some(color) = color {
-                    if std::env::var("KAJIT_RA_TRACE").is_ok() {
-                        eprintln!(
-                            "  b{} def v{} -> p{} (freed: {:?}, occupied: {}, callee_only: {})",
-                            block_id.0,
-                            dst.index(),
-                            color.0,
-                            freed_debug,
-                            occupied.len(),
-                            live_across_call.contains(dst),
-                        );
-                    }
-                    coloring.insert(*dst, color);
-                    occupied.insert(color);
+                let color = if needs_callee_saved {
+                    preferred_color(
+                        &callee_saved_allocatable,
+                        &occupied,
+                        &dying_source_colors,
+                        &phi_prefs,
+                    )
+                } else {
+                    preferred_color(
+                        &caller_saved_allocatable,
+                        &occupied,
+                        &dying_source_colors,
+                        &phi_prefs,
+                    )
+                    .or_else(|| {
+                        preferred_color(allocatable, &occupied, &dying_source_colors, &phi_prefs)
+                    })
                 }
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no register available for def v{} in b{} inst {} (live_across_call={})",
+                        dst.index(),
+                        block_id.0,
+                        inst_idx,
+                        needs_callee_saved
+                    )
+                });
+                if std::env::var("KAJIT_RA_TRACE").is_ok() {
+                    eprintln!(
+                        "  b{} def v{} -> p{} (freed: {:?}, occupied: {}, callee_only: {})",
+                        block_id.0,
+                        dst.index(),
+                        color.0,
+                        freed_debug,
+                        occupied.len(),
+                        live_across_call.contains(dst),
+                    );
+                }
+                coloring.insert(*dst, color);
+                occupied.insert(color);
             });
 
             // Call clobber handling: after a clobbering instruction, caller-saved
@@ -1555,10 +1596,10 @@ fn interferes(
         // Same block: precise check using instruction ordering.
         // The earlier-defined vreg interferes with the later-defined one
         // iff the earlier is still alive at the later's def point.
-        let v_idx = def_inst_idx.get(&v).copied().unwrap_or(u32::MAX);
-        let w_idx = def_inst_idx.get(&w).copied().unwrap_or(u32::MAX);
+        let v_idx = def_inst_idx.get(&v).copied().unwrap_or(0);
+        let w_idx = def_inst_idx.get(&w).copied().unwrap_or(0);
 
-        // Determine which is defined first (block params at u32::MAX = "before all")
+        // Determine which is defined first. Block-entry defs have order 0.
         let (early, early_idx, late_idx) = if v_idx <= w_idx {
             (v, v_idx, w_idx)
         } else {
@@ -1601,7 +1642,7 @@ fn interferes(
         }
         // Refine: if v dies before w's def in w's block, they don't interfere.
         let v_last_use = last_use_map.get(&(w_block, v)).copied();
-        let w_def_idx = def_inst_idx.get(&w).copied().unwrap_or(u32::MAX);
+        let w_def_idx = def_inst_idx.get(&w).copied().unwrap_or(0);
         match v_last_use {
             Some(u32::MAX) => true,
             Some(last) => last >= w_def_idx,
@@ -1622,7 +1663,7 @@ fn interferes(
             return false;
         }
         let w_last_use = last_use_map.get(&(v_block, w)).copied();
-        let v_def_idx = def_inst_idx.get(&v).copied().unwrap_or(u32::MAX);
+        let v_def_idx = def_inst_idx.get(&v).copied().unwrap_or(0);
         match w_last_use {
             Some(u32::MAX) => true,
             Some(last) => last >= v_def_idx,

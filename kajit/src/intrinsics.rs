@@ -745,6 +745,12 @@ pub unsafe extern "C" fn kajit_validate_utf8_range(
     }
     let bytes = unsafe { core::slice::from_raw_parts(data_ptr, len) };
     if core::str::from_utf8(bytes).is_err() {
+        if std::env::var_os("KAJIT_TRACE_UTF8").is_some() {
+            eprintln!(
+                "[kajit_validate_utf8_range] invalid utf8 len={} bytes={:02x?}",
+                len, bytes
+            );
+        }
         ctx.error.code = ErrorCode::InvalidUtf8 as u32;
     }
 }
@@ -867,11 +873,7 @@ pub unsafe extern "C" fn kajit_alloc_transient(size: usize, align: usize) -> *mu
 /// - `dst` and `src` must be valid for `len` bytes
 /// - Regions must not overlap
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kajit_memcpy(
-    dst: *mut u8,
-    src: *const u8,
-    len: usize,
-) -> *mut u8 {
+pub unsafe extern "C" fn kajit_memcpy(dst: *mut u8, src: *const u8, len: usize) -> *mut u8 {
     if len > 0 {
         unsafe { core::ptr::copy_nonoverlapping(src, dst, len) };
     }

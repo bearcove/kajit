@@ -45,6 +45,7 @@ pub fn compile_linear_ir_with_alloc_and_mode(
     cfg_program: &cfg_mir::Program,
     alloc: &AllocatedCfgProgram,
     apply_regalloc_edits: bool,
+    root_data_abi: crate::compiler::RootDecoderDataAbi,
     intrinsic_registry: Option<&crate::ir::IntrinsicRegistry>,
 ) -> LinearBackendResult {
     let max_spillslots = alloc
@@ -56,7 +57,13 @@ pub fn compile_linear_ir_with_alloc_and_mode(
 
     #[cfg(target_arch = "x86_64")]
     {
-        let _ = (ir, max_spillslots, apply_regalloc_edits, intrinsic_registry);
+        let _ = (
+            ir,
+            max_spillslots,
+            apply_regalloc_edits,
+            root_data_abi,
+            intrinsic_registry,
+        );
         crate::backends::x86_64::compile(cfg_program, alloc)
     }
 
@@ -67,6 +74,7 @@ pub fn compile_linear_ir_with_alloc_and_mode(
             cfg_program,
             alloc,
             apply_regalloc_edits,
+            root_data_abi,
             intrinsic_registry,
         )
     }
@@ -95,8 +103,14 @@ mod tests {
         let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
             .unwrap_or_else(|err| panic!("regalloc2 allocation failed in test: {err}"));
 
-        let result =
-            compile_linear_ir_with_alloc_and_mode(&linear, &cfg_program, &alloc, true, None);
+        let result = compile_linear_ir_with_alloc_and_mode(
+            &linear,
+            &cfg_program,
+            &alloc,
+            true,
+            crate::compiler::RootDecoderDataAbi::None,
+            None,
+        );
         let backend_debug_info = result
             .backend_debug_info
             .expect("backend debug info should be present");

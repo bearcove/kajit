@@ -323,7 +323,10 @@ pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
     // Phase 6: Backend compilation
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &alloc,
+        RootDecoderDataAbi::None,
+    );
     let entry = result.entry as usize;
 
     CompiledFunction {
@@ -414,7 +417,10 @@ pub fn compile_pipeline(
     let location_map =
         crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &ra3_alloc.cfg_program);
 
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &ra3_alloc,
+        RootDecoderDataAbi::None,
+    );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
         materialize_backend_result(result);
@@ -814,6 +820,10 @@ fn compile_linear_ir_decoder_with_options(
 
     let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
     let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
+    let root_data_abi = match root_data_abi {
+        RootDecoderDataAbi::None => infer_root_decoder_data_abi_from_cfg(&cfg_program),
+        explicit => explicit,
+    };
 
     // Use regalloc3 by default, opt out with KAJIT_USE_REGALLOC2=1
     let use_regalloc3 = std::env::var("KAJIT_USE_REGALLOC2").is_err();
@@ -856,7 +866,11 @@ fn compile_linear_ir_decoder_with_options(
     {
         let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
             .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
-        let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
+        let result =
+            crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+                &alloc,
+                root_data_abi,
+            );
         let (buf, entry, source_map, backend_debug_info, asm_program) =
             materialize_backend_result(result);
         // Create a dummy regalloc2 alloc for DWARF/debug info (just needs cfg_program)
@@ -885,6 +899,7 @@ fn compile_linear_ir_decoder_with_options(
                 &cfg_program,
                 &regalloc_alloc,
                 apply_regalloc_edits,
+                root_data_abi,
                 registry,
             );
             materialize_backend_result(result)
@@ -972,6 +987,7 @@ fn compile_cfg_mir_decoder_with_options(
     let jit_debug = jit_debug_enabled();
     let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
 
+    let root_data_abi = infer_root_decoder_data_abi_from_cfg(cfg_program);
     let regalloc_alloc = if apply_regalloc_edits {
         let mut alloc = crate::regalloc_engine::allocate_cfg_program(cfg_program)
             .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
@@ -997,6 +1013,7 @@ fn compile_cfg_mir_decoder_with_options(
             cfg_program,
             &regalloc_alloc,
             apply_regalloc_edits,
+            root_data_abi,
             registry,
         );
         materialize_backend_result(result)
@@ -1049,7 +1066,7 @@ fn compile_cfg_mir_decoder_with_options(
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
-        root_data_abi: RootDecoderDataAbi::None,
+        root_data_abi,
         trusted_utf8_input,
         _jit_registration: Some(registration),
         #[cfg(target_arch = "aarch64")]
@@ -1068,15 +1085,22 @@ fn infer_root_decoder_data_abi(module: &hir::Module) -> RootDecoderDataAbi {
         .collect();
     match non_destination_params.as_slice() {
         [] => RootDecoderDataAbi::None,
-        [param] => match &param.ty {
-            hir::Type::Ref { pointee, .. } => match &**pointee {
-                hir::Type::Named { def, .. } if module.type_defs[*def].name == "Cursor" => {
-                    RootDecoderDataAbi::CursorRef
-                }
-                _ => RootDecoderDataAbi::None,
-            },
-            _ => RootDecoderDataAbi::None,
-        },
+        [param] if matches!(param.ty, hir::Type::Ref { mutable: true, .. }) => {
+            RootDecoderDataAbi::CursorRef
+        }
+        _ => RootDecoderDataAbi::None,
+    }
+}
+
+fn infer_root_decoder_data_abi_from_cfg(
+    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+) -> RootDecoderDataAbi {
+    let Some(root) = cfg_program.funcs.first() else {
+        return RootDecoderDataAbi::None;
+    };
+    match root.data_args.as_slice() {
+        [] => RootDecoderDataAbi::None,
+        [_] => RootDecoderDataAbi::CursorRef,
         _ => RootDecoderDataAbi::None,
     }
 }
