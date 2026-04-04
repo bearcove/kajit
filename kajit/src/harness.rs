@@ -371,6 +371,155 @@ impl LocationTracker {
     }
 }
 
+fn current_location_from_owners(
+    owners: &HashMap<LocationKey, u32>,
+    map: &LocationMap,
+    vreg_idx: u32,
+) -> Option<VRegLocation> {
+    let loc = map.static_locations.get(&vreg_idx)?;
+    match loc {
+        VRegLocation::Constant(value) => Some(VRegLocation::Constant(*value)),
+        VRegLocation::Register(preg) => owners
+            .get(&LocationKey::Register(*preg))
+            .copied()
+            .filter(|owner| *owner == vreg_idx)
+            .map(|_| VRegLocation::Register(*preg)),
+        VRegLocation::StackSlot(offset) => owners
+            .get(&LocationKey::StackSlot(*offset))
+            .copied()
+            .filter(|owner| *owner == vreg_idx)
+            .map(|_| VRegLocation::StackSlot(*offset)),
+    }
+}
+
+fn merge_owner_maps(
+    dst: &mut HashMap<LocationKey, u32>,
+    src: &HashMap<LocationKey, u32>,
+) -> bool {
+    if dst.is_empty() {
+        *dst = src.clone();
+        return !dst.is_empty();
+    }
+
+    let before = dst.clone();
+    dst.retain(|key, owner| src.get(key) == Some(owner));
+    *dst != before
+}
+
+fn apply_block_transfer(
+    owners: &mut HashMap<LocationKey, u32>,
+    map: &LocationMap,
+    func: &kajit_mir::cfg_mir::Function,
+    block: &kajit_mir::cfg_mir::Block,
+    inst_lines: &HashMap<kajit_mir::cfg_mir::InstId, u32>,
+) {
+    for &inst_id in &block.insts {
+        let Some(&line) = inst_lines.get(&inst_id) else {
+            continue;
+        };
+
+        if let Some(clobbers) = map.edit_clobbers.get(&line) {
+            for loc in clobbers {
+                if let Some(key) = LocationMap::key_for(loc) {
+                    owners.remove(&key);
+                }
+            }
+        }
+
+        if map.call_lines.contains(&line) {
+            owners.retain(|key, _| !matches!(key, LocationKey::Register(preg) if *preg <= 18));
+        }
+
+        let inst = &func.insts[inst_id.index()];
+        if let Some(def) = inst
+            .operands
+            .iter()
+            .find(|operand| operand.kind == kajit_mir::cfg_mir::OperandKind::Def)
+            .map(|operand| operand.vreg)
+        {
+            LocationMap::assign_owner(owners, &map.static_locations, def.index() as u32);
+        }
+    }
+}
+
+pub fn compute_edge_source_locations(
+    map: &LocationMap,
+    program: &kajit_mir::cfg_mir::Program,
+) -> HashMap<(kajit_mir::cfg_mir::EdgeId, u32), VRegLocation> {
+    use std::collections::{HashMap, VecDeque};
+
+    let Some(func) = program.funcs.first() else {
+        return HashMap::new();
+    };
+
+    let mut inst_lines = HashMap::<kajit_mir::cfg_mir::InstId, u32>::new();
+    let mut next_line = 1u32;
+    for block in &func.blocks {
+        for &inst_id in &block.insts {
+            inst_lines.insert(inst_id, next_line);
+            next_line += 1;
+        }
+        next_line += 1;
+    }
+
+    let mut entry_owners = HashMap::<kajit_mir::cfg_mir::BlockId, HashMap<LocationKey, u32>>::new();
+    let mut worklist = VecDeque::new();
+
+    let seed = LocationTracker::new(map, program).owners;
+    entry_owners.insert(func.entry, seed);
+    worklist.push_back(func.entry);
+
+    while let Some(block_id) = worklist.pop_front() {
+        let Some(block) = func.blocks.get(block_id.index()) else {
+            continue;
+        };
+        let Some(mut owners) = entry_owners.get(&block_id).cloned() else {
+            continue;
+        };
+
+        apply_block_transfer(&mut owners, map, func, block, &inst_lines);
+
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            let mut edge_owners = owners.clone();
+            for arg in &edge.args {
+                LocationMap::assign_owner(
+                    &mut edge_owners,
+                    &map.static_locations,
+                    arg.target.index() as u32,
+                );
+            }
+
+            let succ_entry = entry_owners.entry(edge.to).or_default();
+            if merge_owner_maps(succ_entry, &edge_owners) {
+                worklist.push_back(edge.to);
+            }
+        }
+    }
+
+    let mut edge_source_locations = HashMap::new();
+    for block in &func.blocks {
+        let Some(mut owners) = entry_owners.get(&block.id).cloned() else {
+            continue;
+        };
+
+        apply_block_transfer(&mut owners, map, func, block, &inst_lines);
+
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
+            for arg in &edge.args {
+                if let Some(loc) =
+                    current_location_from_owners(&owners, map, arg.source.index() as u32)
+                {
+                    edge_source_locations.insert((edge_id, arg.source.index() as u32), loc);
+                }
+            }
+        }
+    }
+
+    edge_source_locations
+}
+
 fn chosen_edge<'a>(
     func: &'a kajit_mir::cfg_mir::Function,
     loc_before: &kajit_mir::ProgramLocation,

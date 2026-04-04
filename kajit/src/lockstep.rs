@@ -320,9 +320,12 @@ impl<D: JitDebugger> LockstepSession<D> {
         self.jit_steps += 1;
         let executed_line = self.prev_dwarf_line;
         self.prev_dwarf_line = dwarf_line;
+        let func = &self.cfg_program.funcs[0];
 
         let mut last_event = None;
         let mut executed_state = None;
+        let mut tracker = self.location_tracker.clone();
+        let mut executed_tracker = None;
         let mut synced = false;
         for _ in 0..500 {
             let pre_loc = self.interpreter.state().location;
@@ -333,7 +336,16 @@ impl<D: JitDebugger> LockstepSession<D> {
                     .interpreter
                     .step_forward()
                     .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+                let post_loc = self.interpreter.state().location;
+                tracker.observe_step(
+                    &self.location_map,
+                    func,
+                    executed_line,
+                    &event.location_before,
+                    &post_loc,
+                );
                 executed_state = Some(self.interpreter.state());
+                executed_tracker = Some(tracker.clone());
                 last_event = Some(event.clone());
                 if event.returned {
                     break;
@@ -350,10 +362,19 @@ impl<D: JitDebugger> LockstepSession<D> {
                 .interpreter
                 .step_forward()
                 .map_err(|e| DebugError::LldbError(format!("interpreter step: {e}")))?;
+            let post_loc = self.interpreter.state().location;
 
             let ev_line = loc_to_line(&self.op_to_line, &event.location_before);
+            tracker.observe_step(
+                &self.location_map,
+                func,
+                ev_line,
+                &event.location_before,
+                &post_loc,
+            );
             if ev_line == executed_line && last_event.is_none() {
                 executed_state = Some(self.interpreter.state());
+                executed_tracker = Some(tracker.clone());
                 last_event = Some(event.clone());
             }
 
@@ -443,10 +464,12 @@ LOCKSTEP DESYNC at JIT step {}
             return Ok(self.finish_with_result(result));
         };
 
+        self.location_tracker = tracker;
+
         let state = executed_state.unwrap_or_else(|| self.interpreter.state());
-        let func = &self.cfg_program.funcs[0];
         let loc = &event.location_before;
         let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, loc);
+        let compare_tracker = executed_tracker.as_ref().unwrap_or(&self.location_tracker);
 
         let interp_next_loc = self.interpreter.state().location;
         let interp_next_line = self
@@ -462,9 +485,6 @@ LOCKSTEP DESYNC at JIT step {}
             ))
             .copied()
             .unwrap_or(0);
-
-        self.location_tracker
-            .observe_step(&self.location_map, func, executed_line, loc, &interp_next_loc);
 
         if interp_next_line != dwarf_line && !state.returned && dwarf_line != 0 {
             let jit_pc = self.debugger.read_pc()?;
@@ -497,8 +517,7 @@ LOCKSTEP DESYNC at JIT step {}
             if let (Some(dst), Some(location)) = (
                 def_vreg,
                 def_vreg.and_then(|d| {
-                    self.location_tracker
-                        .location_for(&self.location_map, d.index() as u32)
+                    compare_tracker.location_for(&self.location_map, d.index() as u32)
                 }),
             ) {
                 let sp = self.debugger.read_sp()?;
@@ -571,9 +590,7 @@ CONTROL FLOW DIVERGENCE at step {}
 
         if let Some(&dst) = compare_vregs.first() {
             let dst_idx = dst.index() as u32;
-            let location = self
-                .location_tracker
-                .location_for(&self.location_map, dst_idx);
+            let location = compare_tracker.location_for(&self.location_map, dst_idx);
             if let Some(location) = location {
                 let interp_value = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
@@ -595,7 +612,7 @@ CONTROL FLOW DIVERGENCE at step {}
                     for use_vreg in &use_vregs {
                         let use_idx = use_vreg.index() as u32;
                         if let Some(use_loc) =
-                            self.location_tracker.location_for(&self.location_map, use_idx)
+                            compare_tracker.location_for(&self.location_map, use_idx)
                         {
                             let use_interp = if use_vreg.index() < state.vregs.len() {
                                 state.vregs[use_vreg.index()]
