@@ -7,6 +7,7 @@ use kajit_mir::regalloc3_result::{AllocatedCfgFunctionRa3, AllocatedCfgProgramRa
 
 use crate::arch::EmitCtx;
 use crate::context::{CTX_INPUT_END, CTX_INPUT_PTR};
+use crate::harness::{compute_edge_source_locations, AllocationMap, LocationMap, VRegLocation};
 use crate::ir_backend::LinearBackendResult;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use std::collections::HashMap;
@@ -73,6 +74,8 @@ struct EmitContext<'a> {
     is_last_emitted_block: bool,
     /// Per-edge trampoline labels for edges that need value delivery before control transfer.
     edge_trampoline_labels: HashMap<cfg_mir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
+    /// Actual source homes for edge arguments at predecessor exit.
+    edge_source_locations: HashMap<(cfg_mir::EdgeId, u32), VRegLocation>,
 }
 
 struct BfiInfo {
@@ -289,6 +292,23 @@ impl<'a> EmitContext<'a> {
             .0
     }
 
+    fn reg_for_location_with_temp(&mut self, loc: &VRegLocation, temp: Reg) -> Reg {
+        match loc {
+            VRegLocation::Register(preg) => Reg::from_raw(*preg),
+            VRegLocation::StackSlot(offset) => {
+                self.ectx
+                    .emit
+                    .emit_ldr_imm(Width::X64, temp, Reg::SP, *offset)
+                    .expect("ldr edge source");
+                temp
+            }
+            VRegLocation::Constant(value) => {
+                self.emit_load_u64(temp, *value);
+                temp
+            }
+        }
+    }
+
     fn emit_edge_moves(&mut self, edge_id: cfg_mir::EdgeId) {
         let edge = &self.func.edges[edge_id.index()];
         if edge.args.is_empty() {
@@ -296,7 +316,12 @@ impl<'a> EmitContext<'a> {
         }
 
         for (index, arg) in edge.args.iter().enumerate() {
-            let src_reg = self.reg_for_vreg_with_temp(arg.source, Reg::X9);
+            let src_reg = self
+                .edge_source_locations
+                .get(&(edge_id, arg.source.index() as u32))
+                .cloned()
+                .map(|loc| self.reg_for_location_with_temp(&loc, Reg::X9))
+                .unwrap_or_else(|| self.reg_for_vreg_with_temp(arg.source, Reg::X9));
             let off = self.edge_tmp_off(index);
             self.ectx
                 .emit
@@ -2335,6 +2360,9 @@ pub fn compile_regalloc3_with_root_data_abi(
             &const_values,
             &mut fused_skip,
         );
+        let alloc_map = AllocationMap::from_regalloc3(alloc_func, ectx.base_frame);
+        let location_map = LocationMap::from_alloc_map_and_cfg(&alloc_map, program, alloc);
+        let edge_source_locations = compute_edge_source_locations(&location_map, program);
 
         // For leaf functions: keep output_ptr in x0 and ctx_ptr in x1
         // (avoids saving/restoring x21/x22 and the arg moves).
@@ -2366,6 +2394,7 @@ pub fn compile_regalloc3_with_root_data_abi(
             cursor_writeback_reg,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),
+            edge_source_locations,
         };
 
         ctx.emit_function();
