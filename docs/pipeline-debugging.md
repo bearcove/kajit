@@ -19,19 +19,14 @@ which field diverged first.
 ## Debugging decision tree
 
 1. Reproduce the failure with one exact test and one exact input.
-2. Run with `KAJIT_OPTS='-regalloc'`.
-   - If the failure disappears, the bug is in CFG-MIR allocation/edit handling
-     or backend use of allocated locations.
-   - If it remains, the bug is earlier in the pipeline or in canonical
-     stackslot lowering.
-3. Run the differential harness.
+2. Run the differential harness.
    - Allocator/simulation mismatch: investigate CFG-MIR, allocation, edits, and
      post-allocation execution.
    - CFG/JIT mismatch: investigate backend emission or runtime/JIT plumbing.
-4. Dump stages only after you know which phase is suspect.
-5. Freeze the reproducer as CFG-MIR text.
-6. Minimize that CFG-MIR program against the same concrete input.
-7. Use LLDB or disassembly on the minimized reproducer if needed.
+3. Dump stages only after you know which phase is suspect.
+4. Freeze the reproducer as CFG-MIR text.
+5. Minimize that CFG-MIR program against the same concrete input.
+6. Use LLDB or disassembly on the minimized reproducer if needed.
 
 ## Bisecting with `KAJIT_OPTS`
 
@@ -41,8 +36,6 @@ Syntax: comma-separated tokens. `+name` enables, `-name` disables, bare `name` i
 
 Options:
 - `all_opts` — default RVSDG optimization passes before linearization
-- `regalloc` — regalloc allocation + edit application during backend emission
-  - disabled (`-regalloc`): skip regalloc entirely and use canonical `vreg -> stackslot` lowering
 
 Per-pass options:
 - `pass.bounds_check_coalescing`
@@ -55,9 +48,6 @@ Examples:
 ```bash
 # disable all optimization passes
 KAJIT_OPTS='-all_opts' cargo nextest run -p kajit <test_filter>
-
-# disable regalloc entirely (canonical vreg->stack lowering)
-KAJIT_OPTS='-regalloc' cargo nextest run -p kajit <test_filter>
 
 # disable a single pass
 KAJIT_OPTS='-pass.inline_apply' cargo nextest run -p kajit <test_filter>
@@ -393,9 +383,9 @@ not any one reducer.
 
 ### Worked example: failing corpus test -> minimized CFG-MIR
 
-Suppose one exact corpus test is failing and `KAJIT_OPTS='-regalloc'` makes it
-pass. That means the bug is in the post-linearization path and CFG-MIR is the
-right artifact to freeze.
+Suppose one exact corpus test is failing and the differential harness points at
+the post-linearization path. That means CFG-MIR is the right artifact to
+freeze.
 
 1. Reproduce one exact test:
 
@@ -403,10 +393,10 @@ right artifact to freeze.
 cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
 ```
 
-2. Confirm the failure disappears with regalloc disabled:
+2. Run the differential harness or a focused failing test again so you have one
+exact reproducer:
 
 ```bash
-KAJIT_OPTS='-regalloc' \
 cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
 ```
 
@@ -458,7 +448,6 @@ cargo run -q --manifest-path xtask/Cargo.toml -- \
 
 In practice, the loop is:
 - red test
-- `-regalloc` check
 - dump CFG-MIR
 - minimize against the same corpus test or exact concrete input
 - debug the minimized reproducer instead of the original corpus case
@@ -479,7 +468,7 @@ absolute path if you want dumps in a specific workspace location.
 Example:
 
 ```bash
-KAJIT_OPTS='+all_opts,+regalloc,-pass.theta_loop_invariant_hoist' \
+KAJIT_OPTS='+all_opts,-pass.theta_loop_invariant_hoist' \
 KAJIT_DUMP_STAGES='ir,linear,cfg,edits,emit' \
 KAJIT_DUMP_FILTER='json::all_scalars' \
 cargo nextest run -p kajit --test corpus -E 'test(=json::all_scalars)'
@@ -496,7 +485,6 @@ cargo nextest run -p kajit --test corpus -E 'test(=rvsdg_json::all_scalars)'
 On Apple Silicon, run x86_64 tests via Rosetta:
 
 ```bash
-KAJIT_OPTS='-regalloc' \
 KAJIT_DUMP_STAGES='ir,linear,cfg,edits,emit' \
 KAJIT_DUMP_FILTER='postcard::scalar_u16_v1' \
 cargo nextest run -p kajit --target x86_64-apple-darwin \

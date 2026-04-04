@@ -294,7 +294,7 @@ pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
 
     // Phase 4: CFG-MIR lowering + optimization
     let hints = Default::default();
-    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
 
     // Phase 5: Register allocation
     let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
@@ -549,9 +549,6 @@ pub fn regalloc_edit_count_with_options(
     kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> usize {
-    if !pipeline_opts.resolve_regalloc(true) {
-        return 0;
-    }
     let module = build_decoder_hir(shape, kind);
     let mut func = lower_hir_module(&module);
     run_configured_default_passes(&mut func, pipeline_opts);
@@ -587,16 +584,10 @@ pub fn regalloc_edits_text_with_options(
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
     let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = if pipeline_opts.resolve_regalloc(true) {
-        let mut alloc =
-            crate::regalloc_engine::allocate_cfg_program(&cfg_program).unwrap_or_else(|err| {
-                panic!("regalloc2 allocation failed while formatting edits: {err}")
-            });
-        maybe_disable_regalloc_edits_cfg(&mut alloc, pipeline_opts);
-        alloc
-    } else {
-        no_regalloc_alloc_for_cfg_program(&cfg_program)
-    };
+    let alloc =
+        crate::regalloc_engine::allocate_cfg_program(&cfg_program).unwrap_or_else(|err| {
+            panic!("regalloc2 allocation failed while formatting edits: {err}")
+        });
     format_allocated_regalloc_edits(&alloc)
 }
 
@@ -707,20 +698,6 @@ pub(crate) fn run_configured_default_passes_with_observer<F>(
     }
 }
 
-fn maybe_disable_regalloc_edits_cfg(
-    alloc: &mut crate::regalloc_engine::AllocatedCfgProgram,
-    pipeline_opts: &PipelineOptions,
-) {
-    if pipeline_opts.resolve_regalloc(true) {
-        return;
-    }
-
-    for func in &mut alloc.functions {
-        func.edits.clear();
-        func.edge_edits.clear();
-    }
-}
-
 fn no_regalloc_alloc_for_cfg_program(
     cfg_program: &crate::regalloc_engine::cfg_mir::Program,
 ) -> crate::regalloc_engine::AllocatedCfgProgram {
@@ -788,13 +765,13 @@ pub(crate) fn compile_cfg_mir_decoder_with_registry(
 fn compile_linear_ir_decoder_with_options(
     ir: &crate::linearize::LinearIr,
     trusted_utf8_input: bool,
-    pipeline_opts: PipelineOptions,
+    _pipeline_opts: PipelineOptions,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     root_shape: Option<&'static Shape>,
     root_data_abi: RootDecoderDataAbi,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
-    let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
+    let apply_regalloc_edits = true;
 
     let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
     let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
@@ -862,14 +839,8 @@ fn compile_linear_ir_decoder_with_options(
             dummy_alloc,
         )
     } else {
-        let regalloc_alloc = if apply_regalloc_edits {
-            let mut alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-                .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-            maybe_disable_regalloc_edits_cfg(&mut alloc, &pipeline_opts);
-            alloc
-        } else {
-            no_regalloc_alloc_for_cfg_program(&cfg_program)
-        };
+        let regalloc_alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
+            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
 
         let (buf, entry, source_map, backend_debug_info, asm_program) = {
             let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
@@ -960,20 +931,14 @@ fn compile_cfg_mir_decoder_with_options(
     cfg_program: &crate::regalloc_engine::cfg_mir::Program,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     trusted_utf8_input: bool,
-    pipeline_opts: PipelineOptions,
+    _pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
-    let apply_regalloc_edits = pipeline_opts.resolve_regalloc(true);
+    let apply_regalloc_edits = true;
 
     let root_data_abi = infer_root_decoder_data_abi_from_cfg(cfg_program);
-    let regalloc_alloc = if apply_regalloc_edits {
-        let mut alloc = crate::regalloc_engine::allocate_cfg_program(cfg_program)
-            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-        maybe_disable_regalloc_edits_cfg(&mut alloc, &pipeline_opts);
-        alloc
-    } else {
-        no_regalloc_alloc_for_cfg_program(cfg_program)
-    };
+    let regalloc_alloc = crate::regalloc_engine::allocate_cfg_program(cfg_program)
+        .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
 
     let shim_linear = crate::linearize::LinearIr {
         ops: Vec::new(),

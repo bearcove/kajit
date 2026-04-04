@@ -137,8 +137,8 @@ pub fn compile_decoder_from_ir_text(
 
 /// Compile a deserializer from canonical CFG-MIR text.
 ///
-/// Parses the CFG-MIR text with the provided symbol registry, runs regalloc
-/// (unless `KAJIT_OPTS='-regalloc'`), and returns an executable decoder.
+/// Parses the CFG-MIR text with the provided symbol registry, runs regalloc,
+/// and returns an executable decoder.
 pub fn compile_decoder_from_cfg_mir_text(
     cfg_mir_text: &str,
     registry: &ir::IntrinsicRegistry,
