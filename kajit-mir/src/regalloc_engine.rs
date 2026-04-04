@@ -1927,6 +1927,25 @@ impl SimulatorRuntime {
         }
     }
 
+    fn write_slot_value(&mut self, slot: usize, value: u64) {
+        self.ensure_slot(slot);
+        self.slots[slot] = value;
+        let start = slot * SLOT_ADDR_STRIDE;
+        self.slot_mem[start..start + SLOT_ADDR_STRIDE].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn read_slot_value(&mut self, slot: usize) -> u64 {
+        self.ensure_slot(slot);
+        let start = slot * SLOT_ADDR_STRIDE;
+        let value = u64::from_le_bytes(
+            self.slot_mem[start..start + SLOT_ADDR_STRIDE]
+                .try_into()
+                .expect("slot backing memory should match slot stride"),
+        );
+        self.slots[slot] = value;
+        value
+    }
+
     fn slot_addr_value(&mut self, slot: usize) -> u64 {
         self.ensure_slot(slot);
         let ptr = self.slot_mem.as_mut_ptr();
@@ -2424,13 +2443,11 @@ fn execute_sim_linear_op(
             )?;
             let value = read_allocation(regs, spills, src_alloc);
             let slot = slot.index();
-            sim.ensure_slot(slot);
-            sim.slots[slot] = value;
+            sim.write_slot_value(slot, value);
         }
         LinearOp::ReadFromSlot { dst, slot } => {
             let slot = slot.index();
-            sim.ensure_slot(slot);
-            let value = sim.slots[slot];
+            let value = sim.read_slot_value(slot);
             let dst_alloc = find_operand_alloc(
                 inst_operands,
                 inst_allocs,
@@ -3312,9 +3329,10 @@ fn ideal_trace(
         .collect())
 }
 
-fn first_differing_field(
+fn first_differing_field_with_ignored_output_bytes(
     ideal: &DifferentialState,
     post: &DifferentialState,
+    ignored_output_bytes: Option<&[bool]>,
 ) -> Option<&'static str> {
     if ideal.position != post.position {
         return Some("position");
@@ -3328,8 +3346,23 @@ fn first_differing_field(
     if ideal.returned != post.returned {
         return Some("returned");
     }
-    if std::env::var_os("KAJIT_DIFF_IGNORE_OUTPUT").is_none() && ideal.output != post.output {
-        return Some("output");
+    if std::env::var_os("KAJIT_DIFF_IGNORE_OUTPUT").is_none() {
+        let shared = ideal.output.len().min(post.output.len());
+        for i in 0..shared {
+            if ignored_output_bytes
+                .and_then(|mask| mask.get(i))
+                .copied()
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            if ideal.output[i] != post.output[i] {
+                return Some("output");
+            }
+        }
+        if ideal.output.len() != post.output.len() {
+            return Some("output");
+        }
     }
     None
 }
@@ -3348,13 +3381,16 @@ fn differential_state_from_trace_entry(entry: ExecutionTraceEntry) -> Differenti
     }
 }
 
-fn compare_differential_states(
+fn compare_differential_states_with_ignored_output_bytes(
     ideal: Vec<DifferentialState>,
     post: Vec<DifferentialState>,
+    ignored_output_bytes: Option<&[bool]>,
 ) -> DifferentialCheckResult {
     let shared = ideal.len().min(post.len());
     for i in 0..shared {
-        if let Some(field) = first_differing_field(&ideal[i], &post[i]) {
+        if let Some(field) =
+            first_differing_field_with_ignored_output_bytes(&ideal[i], &post[i], ignored_output_bytes)
+        {
             return DifferentialCheckResult::Diverged(DifferentialDivergence {
                 step_index: ideal[i].step_index.min(post[i].step_index),
                 field: field.to_string(),
@@ -3434,7 +3470,11 @@ fn compare_differential_states(
         spillslots: Some(HashMap::new()),
     });
 
-    if let Some(field) = first_differing_field(&ideal_final, &post_final) {
+    if let Some(field) = first_differing_field_with_ignored_output_bytes(
+        &ideal_final,
+        &post_final,
+        ignored_output_bytes,
+    ) {
         return DifferentialCheckResult::Diverged(DifferentialDivergence {
             step_index: ideal_final.step_index.min(post_final.step_index),
             field: field.to_string(),
@@ -3455,6 +3495,15 @@ pub fn differential_check_cfg(
     allocated: &AllocatedCfgProgram,
     input: &[u8],
 ) -> DifferentialCheckResult {
+    differential_check_cfg_with_ignored_output_bytes(ideal_program, allocated, input, None)
+}
+
+pub fn differential_check_cfg_with_ignored_output_bytes(
+    ideal_program: &cfg_mir::Program,
+    allocated: &AllocatedCfgProgram,
+    input: &[u8],
+    ignored_output_bytes: Option<&[bool]>,
+) -> DifferentialCheckResult {
     let ideal = match ideal_trace(ideal_program, input) {
         Ok(v) => v,
         Err(err) => return DifferentialCheckResult::Error(err.to_string()),
@@ -3467,7 +3516,7 @@ pub fn differential_check_cfg(
         .into_iter()
         .map(differential_state_from_trace_entry)
         .collect::<Vec<_>>();
-    compare_differential_states(ideal, post)
+    compare_differential_states_with_ignored_output_bytes(ideal, post, ignored_output_bytes)
 }
 
 #[cfg(test)]

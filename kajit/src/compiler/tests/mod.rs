@@ -223,6 +223,149 @@ fn compile_postcard_decoder_via_structural_hir(shape: &'static Shape) -> Compile
     compile_structural_hir_decoder(shape, &module)
 }
 
+fn structural_hir_type_size_for_test(module: &hir::Module, ty: &hir::Type) -> usize {
+    match ty {
+        hir::Type::Unit => 0,
+        hir::Type::Bool => 1,
+        hir::Type::Integer(kind) => (kind.bits as usize) / 8,
+        hir::Type::Ref { .. } | hir::Type::Address { .. } | hir::Type::Handle { .. } => {
+            core::mem::size_of::<usize>()
+        }
+        hir::Type::Str { .. } | hir::Type::Slice { .. } => core::mem::size_of::<usize>() * 2,
+        hir::Type::Array { element, len } => structural_hir_type_size_for_test(module, element) * len,
+        hir::Type::Named { def, .. } => {
+            let type_def = &module.type_defs[*def];
+            if let Some(size) = type_def.size {
+                return size as usize;
+            }
+            match &type_def.kind {
+                hir::TypeDefKind::Struct { fields } => {
+                    let mut max_end = 0usize;
+                    let mut cursor = 0usize;
+                    for field in fields {
+                        let field_size = structural_hir_type_size_for_test(module, &field.ty);
+                        let offset = field.offset.map(|offset| offset as usize).unwrap_or(cursor);
+                        max_end = max_end.max(offset + field_size);
+                        cursor = offset + field_size;
+                    }
+                    max_end
+                }
+                hir::TypeDefKind::Enum {
+                    variants,
+                    discriminant_width,
+                } => {
+                    let disc_size = discriminant_width.unwrap_or(1) as usize;
+                    let max_payload = variants
+                        .iter()
+                        .map(|variant| {
+                            let mut max_end = 0usize;
+                            let mut cursor = 0usize;
+                            for field in &variant.fields {
+                                let field_size =
+                                    structural_hir_type_size_for_test(module, &field.ty);
+                                let offset =
+                                    field.offset.map(|offset| offset as usize).unwrap_or(cursor);
+                                max_end = max_end.max(offset + field_size);
+                                cursor = offset + field_size;
+                            }
+                            max_end
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    disc_size + max_payload
+                }
+            }
+        }
+    }
+}
+
+fn mark_non_semantic_output_bytes_for_type(
+    module: &hir::Module,
+    ty: &hir::Type,
+    base: usize,
+    mask: &mut [bool],
+) {
+    match ty {
+        hir::Type::Unit | hir::Type::Bool | hir::Type::Integer(_) => {}
+        hir::Type::Ref { .. } | hir::Type::Address { .. } | hir::Type::Handle { .. } => {
+            for offset in 0..core::mem::size_of::<usize>() {
+                if let Some(slot) = mask.get_mut(base + offset) {
+                    *slot = true;
+                }
+            }
+        }
+        hir::Type::Str { .. } | hir::Type::Slice { .. } => {
+            for offset in 0..core::mem::size_of::<usize>() {
+                if let Some(slot) = mask.get_mut(base + offset) {
+                    *slot = true;
+                }
+            }
+        }
+        hir::Type::Array { element, len } => {
+            let elem_size = structural_hir_type_size_for_test(module, element);
+            for index in 0..*len {
+                mark_non_semantic_output_bytes_for_type(
+                    module,
+                    element,
+                    base + index * elem_size,
+                    mask,
+                );
+            }
+        }
+        hir::Type::Named { def, .. } => {
+            let type_def = &module.type_defs[*def];
+            match &type_def.kind {
+                hir::TypeDefKind::Struct { fields } => {
+                    let mut cursor = 0usize;
+                    for field in fields {
+                        let offset = field.offset.map(|offset| offset as usize).unwrap_or(cursor);
+                        mark_non_semantic_output_bytes_for_type(
+                            module,
+                            &field.ty,
+                            base + offset,
+                            mask,
+                        );
+                        cursor = offset + structural_hir_type_size_for_test(module, &field.ty);
+                    }
+                }
+                hir::TypeDefKind::Enum { variants, .. } => {
+                    for variant in variants {
+                        let mut cursor = 0usize;
+                        for field in &variant.fields {
+                            let offset =
+                                field.offset.map(|offset| offset as usize).unwrap_or(cursor);
+                            mark_non_semantic_output_bytes_for_type(
+                                module,
+                                &field.ty,
+                                base + offset,
+                                mask,
+                            );
+                            cursor = offset + structural_hir_type_size_for_test(module, &field.ty);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn non_semantic_output_byte_mask(module: &hir::Module) -> Vec<bool> {
+    let function = module
+        .functions
+        .iter()
+        .next()
+        .map(|(_, function)| function)
+        .expect("decoder module should have a root function");
+    let dest_ty = function
+        .destination_param()
+        .map(|param| &param.ty)
+        .unwrap_or(&function.return_type);
+    let output_size = structural_hir_type_size_for_test(module, dest_ty);
+    let mut mask = vec![false; output_size];
+    mark_non_semantic_output_bytes_for_type(module, dest_ty, 0, &mut mask);
+    mask
+}
+
 #[test]
 fn instantiated_shape_symbol_key_distinguishes_generic_instantiations() {
     let u32_key = instantiated_shape_symbol_key(<Wrapper<u32>>::SHAPE);
@@ -1648,13 +1791,19 @@ fn postcard_hir_lowering_multi_options_matches_jit_differential_harness() {
     })
     .expect("postcard should encode MultiOpt");
     let output_size = std::mem::size_of::<MultiOpt>();
+    let ignored_output_bytes = non_semantic_output_byte_mask(&module);
     let report =
         crate::differential_check_linear_ir_vs_jit_with_output_size(&linear, &encoded, output_size)
             .expect("differential harness should execute postcard HIR-lowered MultiOpt decoder");
+    let masked_mismatch = crate::compare_differential_outcomes_with_ignored_output_bytes(
+        &report.interpreter,
+        &report.jit,
+        Some(&ignored_output_bytes),
+    );
     assert!(
-        report.is_match(),
-        "unexpected differential mismatch: {:?}",
-        report.mismatch
+        masked_mismatch.is_none(),
+        "unexpected differential mismatch: {masked_mismatch:?} (raw={:?})",
+        report.mismatch,
     );
 }
 
@@ -1663,6 +1812,7 @@ fn postcard_hir_lowering_multi_options_matches_post_regalloc_simulation() {
     let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
     let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
+    let ignored_output_bytes = non_semantic_output_byte_mask(&module);
     let hints = Default::default();
     let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
     let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
@@ -1730,7 +1880,12 @@ fn postcard_hir_lowering_multi_options_matches_post_regalloc_simulation() {
         ));
     }
     std::fs::write("/tmp/multiopt.trace.txt", trace_dump).expect("write MultiOpt trace dump");
-    let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &encoded);
+    let result = crate::regalloc_engine::differential_check_cfg_with_ignored_output_bytes(
+        &cfg,
+        &alloc,
+        &encoded,
+        Some(&ignored_output_bytes),
+    );
     assert!(
         matches!(
             result,

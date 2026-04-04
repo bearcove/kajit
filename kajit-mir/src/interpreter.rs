@@ -390,6 +390,25 @@ impl<'a> InterpreterState<'a> {
         }
     }
 
+    fn write_slot_value(&mut self, slot: usize, value: u64) {
+        self.ensure_slot(slot);
+        self.slots[slot] = value;
+        let start = slot * SLOT_ADDR_STRIDE;
+        self.slot_mem[start..start + SLOT_ADDR_STRIDE].copy_from_slice(&value.to_le_bytes());
+    }
+
+    fn read_slot_value(&mut self, slot: usize) -> u64 {
+        self.ensure_slot(slot);
+        let start = slot * SLOT_ADDR_STRIDE;
+        let value = u64::from_le_bytes(
+            self.slot_mem[start..start + SLOT_ADDR_STRIDE]
+                .try_into()
+                .expect("slot backing memory should match slot stride"),
+        );
+        self.slots[slot] = value;
+        value
+    }
+
     fn slot_addr_value(&mut self, slot: usize) -> u64 {
         self.ensure_slot(slot);
         let ptr = self.slot_mem.as_mut_ptr();
@@ -852,13 +871,12 @@ fn execute_function_inner(
                 }
                 LinearOp::WriteToSlot { slot, src } => {
                     let slot = slot.index();
-                    state.ensure_slot(slot);
-                    state.slots[slot] = state.read_vreg(src.index());
+                    state.write_slot_value(slot, state.read_vreg(src.index()));
                 }
                 LinearOp::ReadFromSlot { dst, slot } => {
                     let slot = slot.index();
-                    state.ensure_slot(slot);
-                    state.write_vreg(dst.index(), state.slots[slot]);
+                    let value = state.read_slot_value(slot);
+                    state.write_vreg(dst.index(), value);
                 }
                 LinearOp::CallIntrinsic {
                     func,
@@ -1446,10 +1464,9 @@ fn execute_function_inner_with_event_trace(
                 }
                 LinearOp::WriteToSlot { slot, src } => {
                     let slot_index = slot.index();
-                    state.ensure_slot(slot_index);
                     let value = state.read_vreg(src.index());
                     let trace_value = state.read_trace_vreg(src.index());
-                    state.slots[slot_index] = value;
+                    state.write_slot_value(slot_index, value);
                     state.trace_slots[slot_index] = trace_value.clone();
                     push_interpreter_event(
                         trace,
@@ -1463,8 +1480,7 @@ fn execute_function_inner_with_event_trace(
                 }
                 LinearOp::ReadFromSlot { dst, slot } => {
                     let slot_index = slot.index();
-                    state.ensure_slot(slot_index);
-                    let value = state.slots[slot_index];
+                    let value = state.read_slot_value(slot_index);
                     let trace_value = state.trace_slots[slot_index].clone();
                     state.write_vreg(dst.index(), value);
                     state.write_trace_vreg(dst.index(), trace_value.clone());
