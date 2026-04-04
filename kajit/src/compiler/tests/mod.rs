@@ -993,6 +993,405 @@ fn postcard_hir_lowering_decodes_root_vec_string() {
 }
 
 #[test]
+fn handwritten_hir_decodes_vec_string_with_one_empty_string() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions [
+    r0 "input"
+  ]
+  stores []
+  types [
+    type t0 "Cursor" <region "r_input"> = struct {
+      "bytes": Slice<r0, u8>
+      "pos": u64
+    }
+    type t1 "Vec" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+    type t2 "HostStringRaw" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+  ]
+  callables [
+    callable c0 host "runtime.alloc_persistent" {
+      params [u64, u64]
+      intrinsic alloc_persistent
+      returns [addr<persistent>]
+      effect mutates
+      domains ["persistent_heap":mutate]
+      control may_fail
+      capabilities ["runtime.alloc"]
+      safety opaque_host
+      docs "Allocate persistent memory that may escape in the result."
+    }
+  ]
+  functions [
+    function f0 "build_vec_with_one_empty_string" {
+      regions [r0]
+      stores []
+      params [
+        l0 param "cursor": &mut t0<r0>
+        l1 destination "out": t1
+      ]
+      locals [
+        l2 temp "list_len": u64
+        l3 temp "list_bytes": u64
+        l4 temp "list_ptr": addr<persistent>
+        l5 temp "list_index": u64
+        l6 temp "list_elem": t2
+        l7 temp "string_len": u32
+        l8 temp "string_ptr": addr<persistent>
+        l9 temp "string_raw": t2
+      ]
+      return unit
+      scopes [
+        scope sc0 parent none comment "handwritten Vec<String> builder"
+      ]
+      body @sc0 {
+        stmt0: init l2 = 0x1
+        stmt1: init l3 = binary mul(l2, 0x18)
+        stmt2: init l4 = call c0(l3, 0x8)
+        stmt3: init l5 = 0x0
+        stmt20: loop @sc0 {
+          stmt4: if binary eq(l5, l2) @sc0 {
+            stmt5: break
+          } else @sc0 {
+          }
+          stmt6: init l7 = 0x0
+          stmt7: init l8 = 0x1
+          stmt8: init field(l9, "ptr") = l8
+          stmt9: init field(l9, "len") = l7
+          stmt10: init field(l9, "cap") = l7
+          stmt11: init l6 = l9
+          stmt12: store w8 binary add(binary add(l4, binary mul(l5, 0x18)), 0x8) = field(l6, "ptr")
+          stmt13: store w8 binary add(binary add(l4, binary mul(l5, 0x18)), 0x10) = field(l6, "len")
+          stmt14: store w8 binary add(l4, binary mul(l5, 0x18)) = field(l6, "cap")
+          stmt15: assign l5 = binary add(l5, 0x1)
+        }
+        stmt21: init field(l1, "cap") = l2
+        stmt22: init field(l1, "ptr") = binary add(l4, binary mul(binary eq(l2, 0x0), 0x8))
+        stmt23: init field(l1, "len") = l2
+        stmt24: return
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("handwritten HIR should parse");
+
+    let decoder = compile_structural_hir_decoder(<Vec<String>>::SHAPE, &module);
+
+    let value = crate::deserialize::<Vec<String>>(&decoder, &[])
+        .expect("handwritten HIR should decode Vec<String> with one empty string");
+    assert_eq!(value, vec![String::new()]);
+}
+
+#[test]
+fn handwritten_hir_decodes_vec_string_with_one_inline_string() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions [
+    r0 "input"
+  ]
+  stores []
+  types [
+    type t0 "Cursor" <region "r_input"> = struct {
+      "bytes": Slice<r0, u8>
+      "pos": u64
+    }
+    type t1 "Vec" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+    type t2 "HostStringRaw" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+  ]
+  callables [
+    callable c0 host "runtime.alloc_persistent" {
+      params [u64, u64]
+      intrinsic alloc_persistent
+      returns [addr<persistent>]
+      effect mutates
+      domains ["persistent_heap":mutate]
+      control may_fail
+      capabilities ["runtime.alloc"]
+      safety opaque_host
+      docs "Allocate persistent memory that may escape in the result."
+    }
+    callable c1 host "runtime.validate_utf8_range" {
+      params [u64, u32]
+      intrinsic validate_utf8_range
+      returns []
+      effect reads
+      domains ["input":read]
+      control may_fail
+      capabilities ["runtime.utf8"]
+      safety opaque_host
+      docs "Validate that a borrowed byte range is UTF-8."
+    }
+    callable c2 host "runtime.memcpy" {
+      params [u64, u64, u64]
+      intrinsic memcpy
+      returns [u64]
+      effect mutates
+      domains ["persistent_heap":mutate, "input":read]
+      control returns
+      capabilities ["runtime.memcpy"]
+      safety opaque_host
+      docs "Copy bytes from one address to another."
+    }
+  ]
+  functions [
+    function f0 "build_vec_with_one_inline_string" {
+      regions [r0]
+      stores []
+      params [
+        l0 param "cursor": &mut t0<r0>
+        l1 destination "out": t1
+      ]
+      locals [
+        l2 temp "list_len": u64
+        l3 temp "list_bytes": u64
+        l4 temp "list_ptr": addr<persistent>
+        l5 temp "list_index": u64
+        l6 temp "list_elem": t2
+        l7 temp "string_len": u32
+        l8 temp "string_data": u64
+        l9 temp "string_ptr": addr<persistent>
+        l10 temp "string_raw": t2
+      ]
+      return unit
+      scopes [
+        scope sc0 parent none comment "handwritten Vec<String> builder with inline string copy"
+      ]
+      body @sc0 {
+        stmt0: init l2 = 0x1
+        stmt1: init l3 = binary mul(l2, 0x18)
+        stmt2: init l4 = call c0(l3, 0x8)
+        stmt3: init l5 = 0x0
+        stmt28: loop @sc0 {
+          stmt4: if binary eq(l5, l2) @sc0 {
+            stmt5: break
+          } else @sc0 {
+          }
+          stmt6: init l7 = 0x2
+          stmt7: if binary gt(binary add(field(deref(l0), "pos"), l7), slice_len(field(deref(l0), "bytes"))) @sc0 {
+            stmt8: fail UnexpectedEof
+          } else @sc0 {
+          }
+          stmt9: init l8 = binary add(slice_data(field(deref(l0), "bytes")), field(deref(l0), "pos"))
+          stmt10: expr call c1(l8, l7)
+          stmt11: init l9 = call c0(l7, 0x1)
+          stmt12: expr call c2(l9, l8, l7)
+          stmt13: assign field(deref(l0), "pos") = binary add(field(deref(l0), "pos"), l7)
+          stmt14: init field(l10, "ptr") = l9
+          stmt15: init field(l10, "len") = l7
+          stmt16: init field(l10, "cap") = l7
+          stmt17: init l6 = l10
+          stmt18: store w8 binary add(binary add(l4, binary mul(l5, 0x18)), 0x8) = field(l6, "ptr")
+          stmt19: store w8 binary add(binary add(l4, binary mul(l5, 0x18)), 0x10) = field(l6, "len")
+          stmt20: store w8 binary add(l4, binary mul(l5, 0x18)) = field(l6, "cap")
+          stmt21: assign l5 = binary add(l5, 0x1)
+        }
+        stmt29: init field(l1, "cap") = l2
+        stmt30: init field(l1, "ptr") = binary add(l4, binary mul(binary eq(l2, 0x0), 0x8))
+        stmt31: init field(l1, "len") = l2
+        stmt32: return
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("handwritten HIR should parse");
+
+    let decoder = compile_structural_hir_decoder(<Vec<String>>::SHAPE, &module);
+
+    let value = crate::deserialize::<Vec<String>>(&decoder, b"hi")
+        .expect("handwritten HIR should decode Vec<String> with one inline string");
+    assert_eq!(value, vec!["hi".to_owned()]);
+}
+
+#[test]
+#[ignore = "reduced repro for Vec<String> nested varint decode bug"]
+fn handwritten_hir_decodes_vec_string_with_varint_string_len() {
+    let module = parse_hir(
+        r#"
+hir_module {
+  regions [
+    r0 "input"
+  ]
+  stores []
+  types [
+    type t0 "Cursor" <region "r_input"> = struct {
+      "bytes": Slice<r0, u8>
+      "pos": u64
+    }
+    type t1 "Vec" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+    type t2 "HostStringRaw" size=24 = struct {
+      "cap": u64 @0
+      "ptr": addr<persistent> @8
+      "len": u64 @16
+    }
+  ]
+  callables [
+    callable c0 host "runtime.alloc_persistent" {
+      params [u64, u64]
+      intrinsic alloc_persistent
+      returns [addr<persistent>]
+      effect mutates
+      domains ["persistent_heap":mutate]
+      control may_fail
+      capabilities ["runtime.alloc"]
+      safety opaque_host
+      docs "Allocate persistent memory that may escape in the result."
+    }
+    callable c1 host "runtime.validate_utf8_range" {
+      params [u64, u32]
+      intrinsic validate_utf8_range
+      returns []
+      effect reads
+      domains ["input":read]
+      control may_fail
+      capabilities ["runtime.utf8"]
+      safety opaque_host
+      docs "Validate that a borrowed byte range is UTF-8."
+    }
+    callable c2 host "runtime.memcpy" {
+      params [u64, u64, u64]
+      intrinsic memcpy
+      returns [u64]
+      effect mutates
+      domains ["persistent_heap":mutate, "input":read]
+      control returns
+      capabilities ["runtime.memcpy"]
+      safety opaque_host
+      docs "Copy bytes from one address to another."
+    }
+  ]
+  functions [
+    function f0 "build_vec_with_varint_string_len" {
+      regions [r0]
+      stores []
+      params [
+        l0 param "cursor": &mut t0<r0>
+        l1 destination "out": t1
+      ]
+      locals [
+        l2 temp "list_len": u64
+        l3 temp "list_bytes": u64
+        l4 temp "list_ptr": addr<persistent>
+        l5 temp "list_index": u64
+        l6 temp "list_elem": t2
+        l7 temp "varint_acc": u64
+        l8 temp "varint_shift": u64
+        l9 temp "varint_byte": u8
+        l10 temp "string_len": u32
+        l11 temp "string_data": u64
+        l12 temp "string_ptr": addr<persistent>
+        l13 temp "string_raw": t2
+      ]
+      return unit
+      scopes [
+        scope sc0 parent none comment "handwritten Vec<String> builder with varint string len"
+      ]
+      body @sc0 {
+        stmt0: init l2 = 0x1
+        stmt1: init l3 = binary mul(l2, 0x18)
+        stmt2: init l4 = call c0(l3, 0x8)
+        stmt3: init l5 = 0x0
+        stmt39: loop @sc0 {
+          stmt4: if binary eq(l5, l2) @sc0 {
+            stmt5: break
+          } else @sc0 {
+          }
+          stmt6: init l7 = 0x0
+          stmt7: init l8 = 0x0
+          stmt8: init l9 = 0x0
+          stmt19: loop @sc0 {
+            stmt9: if binary gt(binary add(field(deref(l0), "pos"), 0x1), slice_len(field(deref(l0), "bytes"))) @sc0 {
+              stmt10: fail UnexpectedEof
+            } else @sc0 {
+            }
+            stmt11: assign l9 = load w1(binary add(slice_data(field(deref(l0), "bytes")), field(deref(l0), "pos")))
+            stmt12: assign field(deref(l0), "pos") = binary add(field(deref(l0), "pos"), 0x1)
+            stmt13: assign l7 = binary bitor(l7, binary shl(binary bitand(l9, 0x7f), l8))
+            stmt14: assign l8 = binary add(l8, 0x7)
+            stmt16: if binary eq(binary bitand(l9, 0x80), 0x0) @sc0 {
+              stmt15: break
+            } else @sc0 {
+            }
+            stmt17: if binary eq(l8, 0x23) @sc0 {
+              stmt18: fail InvalidVarint
+            } else @sc0 {
+            }
+          }
+          stmt20: if binary ne(binary shr(l7, 0x20), 0x0) @sc0 {
+            stmt21: fail NumberOutOfRange
+          } else @sc0 {
+          }
+          stmt22: init l10 = l7
+          stmt23: if binary gt(binary add(field(deref(l0), "pos"), l10), slice_len(field(deref(l0), "bytes"))) @sc0 {
+            stmt24: fail UnexpectedEof
+          } else @sc0 {
+          }
+          stmt25: init l11 = binary add(slice_data(field(deref(l0), "bytes")), field(deref(l0), "pos"))
+          stmt26: expr call c1(l11, l10)
+          stmt27: if binary eq(l10, 0x0) @sc0 {
+            stmt28: init l12 = 0x1
+          } else @sc0 {
+            stmt29: init l12 = call c0(l10, 0x1)
+            stmt30: expr call c2(l12, l11, l10)
+          }
+          stmt31: assign field(deref(l0), "pos") = binary add(field(deref(l0), "pos"), l10)
+          stmt32: init field(l13, "ptr") = l12
+          stmt33: init field(l13, "len") = l10
+          stmt34: init field(l13, "cap") = l10
+          stmt35: init l6 = l13
+          stmt36: store w8 binary add(binary add(l4, binary mul(l5, 0x18)), 0x8) = field(l6, "ptr")
+          stmt37: store w8 binary add(binary add(l4, binary mul(l5, 0x18)), 0x10) = field(l6, "len")
+          stmt38: store w8 binary add(l4, binary mul(l5, 0x18)) = field(l6, "cap")
+          stmt40: assign l5 = binary add(l5, 0x1)
+        }
+        stmt41: init field(l1, "cap") = l2
+        stmt42: init field(l1, "ptr") = binary add(l4, binary mul(binary eq(l2, 0x0), 0x8))
+        stmt43: init field(l1, "len") = l2
+        stmt44: return
+      }
+    }
+  ]
+}
+"#,
+    )
+    .expect("handwritten HIR should parse");
+
+    let decoder = compile_structural_hir_decoder(<Vec<String>>::SHAPE, &module);
+
+    let empty = crate::deserialize::<Vec<String>>(&decoder, &[0])
+        .expect("handwritten HIR should decode Vec<String> with empty varint string");
+    assert_eq!(empty, vec![String::new()]);
+
+    let value = crate::deserialize::<Vec<String>>(&decoder, &[2, b'h', b'i'])
+        .expect("handwritten HIR should decode Vec<String> with varint string len");
+    assert_eq!(value, vec!["hi".to_owned()]);
+}
+
+#[test]
 fn postcard_hir_lowering_decodes_root_vec_structs() {
     let decoder = compile_postcard_decoder_via_structural_hir(<Vec<OwnedAddress>>::SHAPE);
 
