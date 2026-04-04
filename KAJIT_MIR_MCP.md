@@ -89,6 +89,14 @@ Lockstep sessions:
   - args: `session_id`
 - `debug_session_disassemble`
   - args: `session_id`, `context` (optional)
+- `debug_session_registers`
+  - args: `session_id`, `names` (optional comma-separated register names)
+- `debug_session_memory`
+  - args: `session_id`, `address`, `len` (optional)
+- `debug_session_backtrace`
+  - args: `session_id`
+- `debug_session_source_info`
+  - args: `session_id`
 - `debug_session_lldb`
   - args: `session_id`, `command`
 
@@ -100,8 +108,9 @@ Lockstep sessions:
 4. Use `session_back` to re-check branches without re-creating session.
 5. Use `session_run_until` to jump to trap/return/block checkpoints.
 6. Use `session_inspect_output` for small deterministic slices.
-7. For compiled/JIT debugging, use `debug_session_step` and fall back to `debug_session_lldb` for raw LLDB commands.
-8. Close session and report:
+7. For compiled/JIT debugging, use `debug_session_step` for lockstep stepping and `debug_session_registers` / `debug_session_memory` / `debug_session_backtrace` / `debug_session_source_info` for structured machine inspection.
+8. Use `debug_session_lldb` only as an escape hatch when Kajit MCP does not yet expose a structured primitive you need.
+9. Close session and report:
    - input bytes
    - step index/location
    - trap code + offset (if any)

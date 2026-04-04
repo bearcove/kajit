@@ -88,6 +88,25 @@ impl LldbJitDebugger {
             .map(|out| out.to_owned())
             .map_err(DebugError::LldbError)
     }
+
+    pub fn read_register_by_name(&self, name: &str) -> Result<u64, DebugError> {
+        let frame = self.process.selected_thread().selected_frame();
+        let value = frame
+            .find_register(name)
+            .ok_or_else(|| DebugError::LldbError(format!("register {name} not found")))?;
+        Ok(value.value_as_unsigned(0))
+    }
+
+    pub fn backtrace(&self) -> Result<String, DebugError> {
+        self.execute_command("bt")
+    }
+
+    pub fn source_info(&self) -> Result<String, DebugError> {
+        let pc = self.read_pc()?;
+        let frame_info = self.execute_command("frame info")?;
+        let source_info = self.execute_command(&format!("source info --address 0x{pc:x}"))?;
+        Ok(format!("{frame_info}\n{source_info}"))
+    }
 }
 
 fn configure_lldb_debugserver_path() {
