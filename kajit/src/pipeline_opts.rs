@@ -7,7 +7,6 @@ const PASS_OPTION_PREFIX: &str = "pass.";
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PipelineOptions {
     pub all_opts: Option<bool>,
-    pub regalloc: Option<bool>,
     pass_overrides: BTreeMap<String, bool>,
 }
 
@@ -89,10 +88,6 @@ impl PipelineOptions {
                 self.all_opts = Some(enabled);
                 return Ok(());
             }
-            "regalloc" => {
-                self.regalloc = Some(enabled);
-                return Ok(());
-            }
             _ => {}
         }
 
@@ -119,10 +114,6 @@ impl PipelineOptions {
         self.all_opts.unwrap_or(default_enabled)
     }
 
-    pub fn resolve_regalloc(&self, default_enabled: bool) -> bool {
-        self.regalloc.unwrap_or(default_enabled)
-    }
-
     pub fn resolve_pass(&self, pass_name: &str, default_enabled: bool) -> bool {
         self.pass_overrides
             .get(pass_name)
@@ -134,10 +125,10 @@ impl PipelineOptions {
         let mut out = String::new();
         out.push_str("KAJIT_OPTS usage:\n");
         out.push_str("  comma-separated tokens, each optionally prefixed with '+' or '-'\n");
-        out.push_str("  examples: -all_opts, +regalloc, -pass.inline_apply\n\n");
+        out.push_str("  examples: -all_opts, -pass.inline_apply\n\n");
         out.push_str("Top-level options:\n");
         out.push_str("  all_opts  : enable/disable pre-linearization default passes\n");
-        out.push_str("  regalloc  : enable/disable regalloc allocation+edits (disabled = canonical vreg->stack lowering)\n\n");
+        out.push('\n');
         out.push_str("Per-pass options:\n");
         for pass in crate::ir_passes::default_pass_registry() {
             out.push_str(&format!("  pass.{}  : {}\n", pass.name, pass.description));
@@ -190,17 +181,15 @@ mod tests {
     // r[verify compiler.opts.composition]
     #[test]
     fn parse_supports_enabling_disabling_and_last_token_wins() {
-        let got = PipelineOptions::parse("-all_opts,+all_opts,-regalloc").unwrap();
+        let got = PipelineOptions::parse("-all_opts,+all_opts").unwrap();
         assert_eq!(got.all_opts, Some(true));
-        assert_eq!(got.regalloc, Some(false));
     }
 
     // r[verify compiler.opts.syntax]
     #[test]
     fn parse_bare_tokens_as_enable() {
-        let got = PipelineOptions::parse("all_opts,regalloc").unwrap();
+        let got = PipelineOptions::parse("all_opts").unwrap();
         assert_eq!(got.all_opts, Some(true));
-        assert_eq!(got.regalloc, Some(true));
     }
 
     #[test]
@@ -225,24 +214,22 @@ mod tests {
     fn resolve_falls_back_to_callsite_defaults() {
         let got = PipelineOptions::default();
         assert_eq!(got.resolve_all_opts(false), false);
-        assert_eq!(got.resolve_regalloc(true), true);
         assert_eq!(got.resolve_pass("inline_apply", true), true);
     }
 
     #[test]
     // r[verify compiler.opts.api]
     fn resolve_prefers_explicit_overrides() {
-        let got = PipelineOptions::parse("-all_opts,+regalloc").unwrap();
+        let got = PipelineOptions::parse("-all_opts").unwrap();
         assert_eq!(got.resolve_all_opts(true), false);
-        assert_eq!(got.resolve_regalloc(false), true);
     }
 
     #[test]
     // r[verify compiler.opts]
     fn from_env_reads_kajit_opts() {
-        with_kajit_opts_env(Some("-regalloc"), || {
+        with_kajit_opts_env(Some("-all_opts"), || {
             let got = PipelineOptions::from_env();
-            assert_eq!(got.resolve_regalloc(true), false);
+            assert_eq!(got.resolve_all_opts(true), false);
         });
     }
 

@@ -194,8 +194,6 @@ Disable parts of the pipeline at runtime to isolate bugs. Syntax: comma-separate
 
 **Top-level switches:**
 - `all_opts` — all RVSDG optimization passes (pre-linearization)
-- `regalloc` — regalloc allocation + edit application during emission
-  - disabled (`-regalloc`): skip regalloc and use canonical `vreg -> stackslot` lowering
 
 **Per-pass switches** (4 passes, run in this order):
 1. `pass.bounds_check_coalescing` — coalesce redundant BoundsCheck chains
@@ -211,9 +209,6 @@ KAJIT_OPTS='-all_opts' cargo nextest run -p kajit --test corpus -E 'test(=the::t
 # Disable one pass at a time to find the culprit
 KAJIT_OPTS='-pass.theta_loop_invariant_hoist' cargo nextest run ...
 KAJIT_OPTS='-pass.inline_apply' cargo nextest run ...
-
-# Does it pass with regalloc disabled? → bug is in regalloc/spill/reload
-KAJIT_OPTS='-regalloc' cargo nextest run ...
 ```
 
 Print all available options: `KAJIT_OPTS=help cargo nextest run -p kajit --test corpus -E 'test(=any::test)'`

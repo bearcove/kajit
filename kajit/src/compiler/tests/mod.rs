@@ -1341,8 +1341,8 @@ fn postcard_hir_lowering_multi_options_matches_post_regalloc_simulation() {
     );
 }
 
-// Removed: postcard_hir_lowering_array_path_without_backend_edit_emission
-// tested the old (non-regalloc3) backend with apply_regalloc_edits=false.
+// Removed: postcard_hir_lowering_array_path_without_backend_edit_emission.
+// It covered a backend mode that no longer exists now that regalloc is mandatory.
 // ScalarArrayHolder is covered by postcard_hir_lowering_decodes_scalar_arrays
 // which uses the active regalloc3 pipeline.
 

@@ -608,11 +608,6 @@ r[compiler.opts.all-opts]
 Option `all_opts` controls whether default RVSDG optimization passes run
 before linearization in compile paths that use the default pipeline.
 
-r[compiler.opts.regalloc]
-Option `regalloc` controls whether regalloc allocation + edit application is
-enabled during machine emission. When disabled, compile paths must skip
-regalloc entirely and lower with canonical `vreg -> stackslot` behavior.
-
 r[compiler.opts.composition]
 Multiple option tokens compose left-to-right; for repeated option names, the
 last token wins.
