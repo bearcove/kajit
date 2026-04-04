@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 #[cfg(feature = "lldb")]
-use kajit::harness::{LocationMap, VRegLocation};
+use kajit::harness::{LocationMap, LocationTracker, VRegLocation};
 #[cfg(feature = "lldb")]
 use kajit::lockstep::{DebugError as JitDebugError, Divergence, JitDebugger, LockstepResult};
 #[cfg(feature = "lldb")]
@@ -826,6 +826,7 @@ struct DebugDiffSession {
     listing_path: PathBuf,
     cfg_program: kajit_mir::cfg_mir::Program,
     location_map: LocationMap,
+    location_tracker: LocationTracker,
     listing_lines: Vec<String>,
     interpreter: DebuggerSession,
     debugger: LldbJitDebugger,
@@ -934,6 +935,8 @@ impl DebugDiffSession {
         }
 
         let prev_dwarf_line = debugger.current_source_line().unwrap_or(1);
+        let location_tracker =
+            LocationTracker::new(&artifacts.location_map, &artifacts.cfg_program);
 
         Ok(Self {
             format: format.to_owned(),
@@ -943,6 +946,7 @@ impl DebugDiffSession {
             listing_path,
             cfg_program: artifacts.cfg_program,
             location_map: artifacts.location_map,
+            location_tracker,
             listing_lines,
             interpreter,
             debugger,
@@ -1178,6 +1182,14 @@ LOCKSTEP DESYNC at JIT step {}
             .copied()
             .unwrap_or(0);
 
+        self.location_tracker.observe_step(
+            &self.location_map,
+            func,
+            executed_line,
+            loc,
+            &interp_next_loc,
+        );
+
         if interp_next_line != dwarf_line && !state.returned && dwarf_line != 0 {
             let jit_pc = self.debugger.read_pc().map_err(|e| e.to_string())?;
             let disasm = self.debugger.disassemble_around_pc(4).unwrap_or_default();
@@ -1209,8 +1221,8 @@ LOCKSTEP DESYNC at JIT step {}
             if let (Some(dst), Some(location)) = (
                 def_vreg,
                 def_vreg.and_then(|d| {
-                    self.location_map
-                        .location_at(executed_line, d.index() as u32)
+                    self.location_tracker
+                        .location_for(&self.location_map, d.index() as u32)
                 }),
             ) {
                 let sp = self.debugger.read_sp().map_err(|e| e.to_string())?;
@@ -1284,7 +1296,9 @@ CONTROL FLOW DIVERGENCE at step {}
 
         if let Some(&dst) = compare_vregs.first() {
             let dst_idx = dst.index() as u32;
-            let location = self.location_map.location_at(executed_line, dst_idx);
+            let location = self
+                .location_tracker
+                .location_for(&self.location_map, dst_idx);
             if let Some(location) = location {
                 let interp_value = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
@@ -1306,7 +1320,9 @@ CONTROL FLOW DIVERGENCE at step {}
                     }];
                     for use_vreg in &use_vregs {
                         let use_idx = use_vreg.index() as u32;
-                        if let Some(use_loc) = self.location_map.location_at(executed_line, use_idx)
+                        if let Some(use_loc) = self
+                            .location_tracker
+                            .location_for(&self.location_map, use_idx)
                         {
                             let use_interp = if use_vreg.index() < state.vregs.len() {
                                 state.vregs[use_vreg.index()]

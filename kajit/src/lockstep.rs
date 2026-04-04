@@ -5,7 +5,7 @@
 //! comparing vreg values after each CFG-MIR operation and stopping on the first
 //! divergence.
 
-use crate::harness::{LocationMap, VRegLocation};
+use crate::harness::{LocationMap, LocationTracker, VRegLocation};
 use kajit_lir::{BinOpKind, LinearOp};
 
 /// A divergence found by the lockstep debugger.
@@ -174,6 +174,7 @@ pub fn run_lockstep(
     // History: vreg_index → (last_verified_value, at_line, at_step)
     let mut verified: std::collections::HashMap<u32, (u64, u32, usize)> =
         std::collections::HashMap::new();
+    let mut location_tracker = LocationTracker::new(location_map, program);
 
     loop {
         if jit_steps >= max_steps {
@@ -393,6 +394,8 @@ LOCKSTEP DESYNC at JIT step {jit_steps}
             .copied()
             .unwrap_or(0);
 
+        location_tracker.observe_step(location_map, func, executed_line, loc, &interp_next_loc);
+
         if interp_next_line != dwarf_line && !state.returned && dwarf_line != 0 {
             // CONTROL FLOW DIVERGENCE — build rich diagnostic
             let jit_pc = debugger.read_pc()?;
@@ -435,7 +438,7 @@ LOCKSTEP DESYNC at JIT step {jit_steps}
             let mut vreg_diffs = Vec::new();
             if let (Some(dst), Some(location)) = (
                 def_vreg,
-                def_vreg.and_then(|d| location_map.location_at(executed_line, d.index() as u32)),
+                def_vreg.and_then(|d| location_tracker.location_for(location_map, d.index() as u32)),
             ) {
                 let sp = debugger.read_sp()?;
                 let iv = if dst.index() < state.vregs.len() {
@@ -502,7 +505,7 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
             let dst_idx = dst.index() as u32;
             // Use per-line location lookup: at call sites, caller-saved registers
             // are clobbered. location_at returns None for clobbered locations.
-            let location = location_map.location_at(executed_line, dst_idx);
+            let location = location_tracker.location_for(location_map, dst_idx);
             if let Some(location) = location {
                 let interp_value = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
@@ -523,7 +526,9 @@ CONTROL FLOW DIVERGENCE at step {jit_steps}
                     }];
                     for use_vreg in &use_vregs {
                         let use_idx = use_vreg.index() as u32;
-                        if let Some(use_loc) = location_map.location_at(executed_line, use_idx) {
+                        if let Some(use_loc) =
+                            location_tracker.location_for(location_map, use_idx)
+                        {
                             let use_interp = if use_vreg.index() < state.vregs.len() {
                                 state.vregs[use_vreg.index()]
                             } else {

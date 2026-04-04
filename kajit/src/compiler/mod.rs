@@ -394,8 +394,11 @@ pub fn compile_pipeline(
         .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
         .unwrap_or_default();
 
-    let location_map =
-        crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &ra3_alloc.cfg_program);
+    let location_map = crate::harness::LocationMap::from_alloc_map_and_cfg(
+        &alloc_map,
+        &ra3_alloc.cfg_program,
+        &ra3_alloc,
+    );
 
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
         &ra3_alloc,

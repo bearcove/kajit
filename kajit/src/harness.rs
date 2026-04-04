@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Where a vreg lives after register allocation.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VRegLocation {
     /// Physical register (aarch64 GPR index: 0=x0, 1=x1, ..., 28=x28)
     Register(u8),
@@ -135,6 +135,9 @@ pub struct LocationMap {
     /// For each call line, the return value vreg index (if any).
     /// This vreg IS valid in its allocated register after the call.
     pub call_return_vregs: HashMap<u32, u32>,
+    /// DWARF lines with pre-op regalloc edits that overwrite fixed registers.
+    /// These locations are invalidated before the op result is written back.
+    pub edit_clobbers: HashMap<u32, Vec<VRegLocation>>,
     pub num_spill_slots: usize,
 }
 
@@ -164,6 +167,28 @@ impl LocationMap {
         Some(loc)
     }
 
+    fn key_for(loc: &VRegLocation) -> Option<LocationKey> {
+        match loc {
+            VRegLocation::Register(preg) => Some(LocationKey::Register(*preg)),
+            VRegLocation::StackSlot(offset) => Some(LocationKey::StackSlot(*offset)),
+            VRegLocation::Constant(_) => None,
+        }
+    }
+
+    fn assign_owner(
+        owners: &mut HashMap<LocationKey, u32>,
+        static_locations: &HashMap<u32, VRegLocation>,
+        vreg_idx: u32,
+    ) {
+        let Some(loc) = static_locations.get(&vreg_idx) else {
+            return;
+        };
+        let Some(key) = Self::key_for(loc) else {
+            return;
+        };
+        owners.insert(key, vreg_idx);
+    }
+
     /// Build from an AllocationMap and CFG program.
     ///
     /// Walks the CFG in the same order as `build_debug_line_maps` to assign
@@ -171,18 +196,22 @@ impl LocationMap {
     pub fn from_alloc_map_and_cfg(
         alloc_map: &AllocationMap,
         program: &kajit_mir::cfg_mir::Program,
+        alloc: &kajit_mir::regalloc3_result::AllocatedCfgProgramRa3,
     ) -> Self {
         use kajit_lir::LinearOp;
         use std::collections::HashSet;
 
         let mut call_lines = HashSet::new();
         let mut call_return_vregs = HashMap::new();
+        let mut inst_lines = HashMap::new();
 
         for func in &program.funcs {
+            let lambda_id = func.lambda_id.index() as u32;
             let mut next_line = 1u32;
             for block in &func.blocks {
                 for inst_id in &block.insts {
                     let inst = &func.insts[inst_id.index()];
+                    inst_lines.insert((lambda_id, *inst_id), next_line);
                     match &inst.op {
                         LinearOp::CallIntrinsic { dst, .. } => {
                             call_lines.insert(next_line);
@@ -210,10 +239,25 @@ impl LocationMap {
             }
         }
 
+        let mut edit_clobbers = HashMap::<u32, Vec<VRegLocation>>::new();
+        for alloc_func in &alloc.functions {
+            let lambda_id = alloc_func.lambda_id.index() as u32;
+            for edit in &alloc_func.edits {
+                let Some(line) = inst_lines.get(&(lambda_id, edit.before_inst)).copied() else {
+                    continue;
+                };
+                edit_clobbers
+                    .entry(line)
+                    .or_default()
+                    .push(VRegLocation::Register(edit.to.0));
+            }
+        }
+
         Self {
             static_locations: alloc_map.locations.clone(),
             call_lines,
             call_return_vregs,
+            edit_clobbers,
             num_spill_slots: alloc_map.num_spill_slots,
         }
     }
@@ -221,6 +265,362 @@ impl LocationMap {
     /// Get the aarch64 register name for a physical register index.
     pub fn reg_name(preg: u8) -> &'static str {
         AllocationMap::reg_name(preg)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum LocationKey {
+    Register(u8),
+    StackSlot(u32),
+}
+
+/// Tracks which vreg currently owns each architectural location along the
+/// executed program path. This makes lockstep comparisons path-sensitive:
+/// once an op or edge writes a register/stack slot, previous occupants are no
+/// longer readable from that location.
+#[derive(Debug, Clone, Default)]
+pub struct LocationTracker {
+    owners: HashMap<LocationKey, u32>,
+}
+
+impl LocationTracker {
+    pub fn new(map: &LocationMap, program: &kajit_mir::cfg_mir::Program) -> Self {
+        let mut owners = HashMap::new();
+
+        if let Some(func) = program.funcs.first() {
+            for &vreg in &func.data_args {
+                LocationMap::assign_owner(&mut owners, &map.static_locations, vreg.index() as u32);
+            }
+            if let Some(entry) = func.blocks.get(func.entry.index()) {
+                for &vreg in &entry.params {
+                    LocationMap::assign_owner(
+                        &mut owners,
+                        &map.static_locations,
+                        vreg.index() as u32,
+                    );
+                }
+            }
+        }
+
+        Self { owners }
+    }
+
+    pub fn location_for<'a>(&self, map: &'a LocationMap, vreg_idx: u32) -> Option<&'a VRegLocation> {
+        let loc = map.static_locations.get(&vreg_idx)?;
+        let Some(key) = LocationMap::key_for(loc) else {
+            return Some(loc);
+        };
+        (self.owners.get(&key) == Some(&vreg_idx)).then_some(loc)
+    }
+
+    pub fn observe_step(
+        &mut self,
+        map: &LocationMap,
+        func: &kajit_mir::cfg_mir::Function,
+        executed_line: u32,
+        loc_before: &kajit_mir::ProgramLocation,
+        loc_after: &kajit_mir::ProgramLocation,
+    ) {
+        if let Some(clobbers) = map.edit_clobbers.get(&executed_line) {
+            for loc in clobbers {
+                self.invalidate_location(loc);
+            }
+        }
+
+        if map.call_lines.contains(&executed_line) {
+            self.owners
+                .retain(|key, _| !matches!(key, LocationKey::Register(preg) if *preg <= 18));
+        }
+
+        if loc_before.at_terminator {
+            if let Some(edge) = chosen_edge(func, loc_before, loc_after) {
+                for arg in &edge.args {
+                    LocationMap::assign_owner(
+                        &mut self.owners,
+                        &map.static_locations,
+                        arg.target.index() as u32,
+                    );
+                }
+            }
+            return;
+        }
+
+        if let Some(def_vreg) = op_def_vreg(func, loc_before) {
+            LocationMap::assign_owner(
+                &mut self.owners,
+                &map.static_locations,
+                def_vreg.index() as u32,
+            );
+        }
+    }
+
+    fn invalidate_location(&mut self, loc: &VRegLocation) {
+        if let Some(key) = LocationMap::key_for(loc) {
+            self.owners.remove(&key);
+        }
+    }
+}
+
+fn chosen_edge<'a>(
+    func: &'a kajit_mir::cfg_mir::Function,
+    loc_before: &kajit_mir::ProgramLocation,
+    loc_after: &kajit_mir::ProgramLocation,
+) -> Option<&'a kajit_mir::cfg_mir::Edge> {
+    let block = func.blocks.get(loc_before.block.index())?;
+    let term = func.terms.get(block.term.index())?;
+    let edge_id = match term {
+        kajit_mir::cfg_mir::Terminator::Branch { edge } => Some(*edge),
+        kajit_mir::cfg_mir::Terminator::BranchIf {
+            taken,
+            fallthrough,
+            ..
+        }
+        | kajit_mir::cfg_mir::Terminator::BranchIfZero {
+            taken,
+            fallthrough,
+            ..
+        } => {
+            let taken_edge = func.edges.get(taken.index())?;
+            if taken_edge.to == loc_after.block {
+                Some(*taken)
+            } else {
+                Some(*fallthrough)
+            }
+        }
+        kajit_mir::cfg_mir::Terminator::JumpTable {
+            targets, default, ..
+        } => targets
+            .iter()
+            .copied()
+            .find(|edge_id| func.edges[edge_id.index()].to == loc_after.block)
+            .or(Some(*default).filter(|edge_id| func.edges[edge_id.index()].to == loc_after.block)),
+        _ => None,
+    }?;
+    func.edges.get(edge_id.index())
+}
+
+fn op_def_vreg(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> Option<kajit_ir::VReg> {
+    use kajit_mir::cfg_mir::OperandKind;
+
+    if loc.at_terminator {
+        return None;
+    }
+    let block = func.blocks.get(loc.block.index())?;
+    let inst_id = *block.insts.get(loc.next_inst_index)?;
+    let inst = func.insts.get(inst_id.index())?;
+    inst.operands
+        .iter()
+        .find(|operand| operand.kind == OperandKind::Def)
+        .map(|operand| operand.vreg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kajit_ir::{LambdaId, VReg};
+    use kajit_lir::LinearOp;
+    use kajit_mir::cfg_mir;
+
+    fn v(index: u32) -> VReg {
+        VReg::new(index)
+    }
+
+    fn def_inst(id: u32, dst: VReg) -> cfg_mir::Inst {
+        cfg_mir::Inst {
+            id: cfg_mir::InstId(id),
+            op: LinearOp::Const {
+                dst,
+                value: id as u64,
+            },
+            operands: vec![cfg_mir::Operand {
+                vreg: dst,
+                kind: cfg_mir::OperandKind::Def,
+                class: cfg_mir::RegClass::Gpr,
+                fixed: None,
+            }],
+            clobbers: cfg_mir::Clobbers::default(),
+        }
+    }
+
+    fn branch_program() -> cfg_mir::Program {
+        cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId(0),
+                lambda_id: LambdaId::new(0),
+                entry: cfg_mir::BlockId(0),
+                data_args: vec![v(2)],
+                data_results: Vec::new(),
+                output_size: 0,
+                blocks: vec![
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId(0),
+                        params: Vec::new(),
+                        insts: vec![cfg_mir::InstId(0)],
+                        term: cfg_mir::TermId(0),
+                        preds: Vec::new(),
+                        succs: vec![cfg_mir::EdgeId(0)],
+                        dead: false,
+                    },
+                    cfg_mir::Block {
+                        id: cfg_mir::BlockId(1),
+                        params: vec![v(1)],
+                        insts: Vec::new(),
+                        term: cfg_mir::TermId(1),
+                        preds: vec![cfg_mir::EdgeId(0)],
+                        succs: Vec::new(),
+                        dead: false,
+                    },
+                ],
+                edges: vec![cfg_mir::Edge {
+                    id: cfg_mir::EdgeId(0),
+                    from: cfg_mir::BlockId(0),
+                    to: cfg_mir::BlockId(1),
+                    args: vec![cfg_mir::EdgeArg {
+                        target: v(1),
+                        source: v(2),
+                    }],
+                }],
+                insts: vec![def_inst(0, v(3))],
+                terms: vec![
+                    cfg_mir::Terminator::Branch {
+                        edge: cfg_mir::EdgeId(0),
+                    },
+                    cfg_mir::Terminator::Return,
+                ],
+            }],
+            vreg_count: 4,
+            slot_count: 0,
+            param_slot_count: 0,
+            is_scalar: false,
+            debug: Default::default(),
+            hints: Default::default(),
+            extra_excluded_regs: vec![],
+            data_blobs: vec![],
+        }
+    }
+
+    #[test]
+    fn location_tracker_reassigns_stack_slot_on_taken_edge() {
+        let program = branch_program();
+        let func = &program.funcs[0];
+        let mut map = LocationMap::default();
+        map.static_locations.insert(1, VRegLocation::StackSlot(16));
+        map.static_locations.insert(2, VRegLocation::Register(5));
+        map.static_locations.insert(3, VRegLocation::StackSlot(16));
+
+        let mut tracker = LocationTracker::new(&map, &program);
+        tracker.observe_step(
+            &map,
+            func,
+            1,
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 0,
+                at_terminator: false,
+            },
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 1,
+                at_terminator: true,
+            },
+        );
+        assert_eq!(tracker.location_for(&map, 3), Some(&VRegLocation::StackSlot(16)));
+        assert_eq!(tracker.location_for(&map, 1), None);
+
+        tracker.observe_step(
+            &map,
+            func,
+            2,
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 0,
+                at_terminator: true,
+            },
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(1),
+                next_inst_index: 0,
+                at_terminator: true,
+            },
+        );
+        assert_eq!(tracker.location_for(&map, 1), Some(&VRegLocation::StackSlot(16)));
+        assert_eq!(tracker.location_for(&map, 3), None);
+    }
+
+    #[test]
+    fn location_tracker_invalidates_preop_edit_clobber() {
+        let program = cfg_mir::Program {
+            funcs: vec![cfg_mir::Function {
+                id: cfg_mir::FunctionId(0),
+                lambda_id: LambdaId::new(0),
+                entry: cfg_mir::BlockId(0),
+                data_args: vec![v(1)],
+                data_results: Vec::new(),
+                output_size: 0,
+                blocks: vec![cfg_mir::Block {
+                    id: cfg_mir::BlockId(0),
+                    params: Vec::new(),
+                    insts: vec![cfg_mir::InstId(0)],
+                    term: cfg_mir::TermId(0),
+                    preds: Vec::new(),
+                    succs: Vec::new(),
+                    dead: false,
+                }],
+                edges: Vec::new(),
+                insts: vec![cfg_mir::Inst {
+                    id: cfg_mir::InstId(0),
+                    op: LinearOp::WriteToField {
+                        src: v(1),
+                        offset: 0,
+                        width: kajit_ir::Width::W8,
+                    },
+                    operands: vec![cfg_mir::Operand {
+                        vreg: v(1),
+                        kind: cfg_mir::OperandKind::Use,
+                        class: cfg_mir::RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: cfg_mir::Clobbers::default(),
+                }],
+                terms: vec![cfg_mir::Terminator::Return],
+            }],
+            vreg_count: 2,
+            slot_count: 0,
+            param_slot_count: 0,
+            is_scalar: false,
+            debug: Default::default(),
+            hints: Default::default(),
+            extra_excluded_regs: vec![],
+            data_blobs: vec![],
+        };
+
+        let mut map = LocationMap::default();
+        map.static_locations.insert(1, VRegLocation::Register(5));
+        map.edit_clobbers
+            .insert(1, vec![VRegLocation::Register(5)]);
+
+        let mut tracker = LocationTracker::new(&map, &program);
+        assert_eq!(tracker.location_for(&map, 1), Some(&VRegLocation::Register(5)));
+
+        tracker.observe_step(
+            &map,
+            &program.funcs[0],
+            1,
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 0,
+                at_terminator: false,
+            },
+            &kajit_mir::ProgramLocation {
+                block: cfg_mir::BlockId(0),
+                next_inst_index: 0,
+                at_terminator: true,
+            },
+        );
+
+        assert_eq!(tracker.location_for(&map, 1), None);
     }
 }
 
