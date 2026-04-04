@@ -313,6 +313,16 @@ impl LocationTracker {
         (self.owners.get(&key) == Some(&vreg_idx)).then_some(loc)
     }
 
+    pub fn owner_of_vreg_location(&self, map: &LocationMap, vreg_idx: u32) -> Option<u32> {
+        let loc = map.static_locations.get(&vreg_idx)?;
+        self.owner_of_location(loc)
+    }
+
+    pub fn owner_of_location(&self, loc: &VRegLocation) -> Option<u32> {
+        let key = LocationMap::key_for(loc)?;
+        self.owners.get(&key).copied()
+    }
+
     pub fn observe_step(
         &mut self,
         map: &LocationMap,

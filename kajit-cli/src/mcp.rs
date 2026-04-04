@@ -253,6 +253,20 @@ struct DebugSessionCfgContextTool {
 }
 
 #[mcp_tool(
+    name = "debug_session_vregs",
+    description = "Inspect interpreter values, static homes, live homes, and current owners for selected vregs at the current stop."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionVregsTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+    /// Optional comma-separated vreg list (e.g. '338,344' or 'v338,v344').
+    /// Defaults to the current op's def/use vregs.
+    #[serde(default)]
+    vregs: Option<String>,
+}
+
+#[mcp_tool(
     name = "debug_session_lldb",
     description = "Run a raw LLDB command against a persistent lockstep debug session."
 )]
@@ -285,6 +299,7 @@ tool_box!(
         DebugSessionBacktraceTool,
         DebugSessionSourceInfoTool,
         DebugSessionCfgContextTool,
+        DebugSessionVregsTool,
         DebugSessionLldbTool
     ]
 );
@@ -335,6 +350,7 @@ impl MirHandler {
             "debug_session_backtrace" => self.debug_session_backtrace(args),
             "debug_session_source_info" => self.debug_session_source_info(args),
             "debug_session_cfg_context" => self.debug_session_cfg_context(args),
+            "debug_session_vregs" => self.debug_session_vregs(args),
             "debug_session_lldb" => self.debug_session_lldb(args),
             other => Err(format!("unknown tool: {other}")),
         }
@@ -820,7 +836,11 @@ impl MirHandler {
             ));
             text.push_str(&format!(
                 "params: {}\n",
-                format_cfg_vregs(&block.params, &session.lockstep.interpreter.state())
+                format_cfg_vregs(
+                    &block.params,
+                    &session.lockstep.interpreter.state(),
+                    Some(&session.lockstep),
+                )
             ));
             text.push_str(&format!("dead: {}\n", block.dead));
 
@@ -888,7 +908,11 @@ impl MirHandler {
                     edge.id.index(),
                     edge.from.index(),
                     edge.to.index(),
-                    format_edge_args(edge, &session.lockstep.interpreter.state())
+                    format_edge_args(
+                        edge,
+                        &session.lockstep.interpreter.state(),
+                        Some(&session.lockstep),
+                    )
                 ));
             }
 
@@ -900,13 +924,112 @@ impl MirHandler {
                     edge.id.index(),
                     edge.from.index(),
                     edge.to.index(),
-                    format_edge_args(edge, &session.lockstep.interpreter.state())
+                    format_edge_args(
+                        edge,
+                        &session.lockstep.interpreter.state(),
+                        Some(&session.lockstep),
+                    )
                 ));
             }
 
             Ok(json!({
                 "text": text,
                 "block_id": block.id.index(),
+            }))
+        }
+    }
+
+    fn debug_session_vregs(
+        &self,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let requested = parse_vreg_list(arg_opt_str(args, "vregs").as_deref())?;
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+
+            let func = session
+                .lockstep
+                .cfg_program
+                .funcs
+                .first()
+                .ok_or_else(|| "debug session has no function".to_owned())?;
+            let current_loc = session.lockstep.interpreter.state().location;
+            let current_state = session.lockstep.interpreter.state();
+            let mut vregs = if requested.is_empty() {
+                let (def_vreg, use_vregs, _) =
+                    kajit::lockstep::op_def_uses_and_kind(func, &current_loc);
+                let mut derived = Vec::new();
+                if let Some(def_vreg) = def_vreg {
+                    derived.push(def_vreg.index() as u32);
+                }
+                for vreg in use_vregs {
+                    let idx = vreg.index() as u32;
+                    if !derived.contains(&idx) {
+                        derived.push(idx);
+                    }
+                }
+                derived
+            } else {
+                requested
+            };
+            if vregs.is_empty() {
+                return Err("no vregs specified and current op has no def/use vregs".to_owned());
+            }
+            vregs.sort_unstable();
+
+            let mut text = String::new();
+            let mut rows = Vec::new();
+            for vreg_idx in vregs {
+                let value = current_state
+                    .vregs
+                    .get(vreg_idx as usize)
+                    .copied()
+                    .unwrap_or(0);
+                let static_loc = format_static_location(&session.lockstep, vreg_idx);
+                let live_loc = format_live_location(&session.lockstep, vreg_idx);
+                let owner = session
+                    .lockstep
+                    .location_tracker
+                    .owner_of_vreg_location(&session.lockstep.location_map, vreg_idx);
+                let owner_text = match owner {
+                    Some(owner_idx) if owner_idx == vreg_idx => "self".to_owned(),
+                    Some(owner_idx) => {
+                        let owner_val = current_state
+                            .vregs
+                            .get(owner_idx as usize)
+                            .copied()
+                            .unwrap_or(0);
+                        format!("v{owner_idx}={owner_val}")
+                    }
+                    None => "none".to_owned(),
+                };
+                text.push_str(&format!(
+                    "v{vreg_idx}={value}\n  static: {static_loc}\n  live: {live_loc}\n  owner: {owner_text}\n"
+                ));
+                rows.push(json!({
+                    "vreg": vreg_idx,
+                    "value": value,
+                    "static": static_loc,
+                    "live": live_loc,
+                    "owner": owner,
+                }));
+            }
+
+            Ok(json!({
+                "text": text,
+                "vregs": rows,
             }))
         }
     }
@@ -1222,7 +1345,11 @@ fn format_scope_kind(kind: &kajit_ir::DebugScopeKind) -> String {
 }
 
 #[cfg(feature = "lldb")]
-fn format_cfg_vregs(vregs: &[kajit_ir::VReg], state: &DebuggerState) -> String {
+fn format_cfg_vregs(
+    vregs: &[kajit_ir::VReg],
+    state: &DebuggerState,
+    lockstep: Option<&LockstepSession<LldbJitDebugger>>,
+) -> String {
     if vregs.is_empty() {
         return "[]".to_owned();
     }
@@ -1230,14 +1357,26 @@ fn format_cfg_vregs(vregs: &[kajit_ir::VReg], state: &DebuggerState) -> String {
         .iter()
         .map(|vreg| {
             let value = state.vregs.get(vreg.index()).copied().unwrap_or(0);
-            format!("v{}={value}", vreg.index())
+            match lockstep {
+                Some(lockstep) => format!(
+                    "v{}={} ({})",
+                    vreg.index(),
+                    value,
+                    describe_location(lockstep, vreg.index() as u32)
+                ),
+                None => format!("v{}={value}", vreg.index()),
+            }
         })
         .collect();
     format!("[{}]", parts.join(", "))
 }
 
 #[cfg(feature = "lldb")]
-fn format_edge_args(edge: &kajit_mir::cfg_mir::Edge, state: &DebuggerState) -> String {
+fn format_edge_args(
+    edge: &kajit_mir::cfg_mir::Edge,
+    state: &DebuggerState,
+    lockstep: Option<&LockstepSession<LldbJitDebugger>>,
+) -> String {
     if edge.args.is_empty() {
         return String::new();
     }
@@ -1247,13 +1386,24 @@ fn format_edge_args(edge: &kajit_mir::cfg_mir::Edge, state: &DebuggerState) -> S
         .map(|arg| {
             let src_value = state.vregs.get(arg.source.index()).copied().unwrap_or(0);
             let dst_value = state.vregs.get(arg.target.index()).copied().unwrap_or(0);
-            format!(
-                "v{} <- v{} (src={}, dst={})",
-                arg.target.index(),
-                arg.source.index(),
-                src_value,
-                dst_value
-            )
+            match lockstep {
+                Some(lockstep) => format!(
+                    "v{} <- v{} (src={}, dst={}, src_loc={}, dst_loc={})",
+                    arg.target.index(),
+                    arg.source.index(),
+                    src_value,
+                    dst_value,
+                    describe_location(lockstep, arg.source.index() as u32),
+                    describe_location(lockstep, arg.target.index() as u32),
+                ),
+                None => format!(
+                    "v{} <- v{} (src={}, dst={})",
+                    arg.target.index(),
+                    arg.source.index(),
+                    src_value,
+                    dst_value
+                ),
+            }
         })
         .collect();
     format!(" args=[{}]", parts.join(", "))
@@ -1275,6 +1425,57 @@ fn format_live_location(
         Some(kajit::harness::VRegLocation::Constant(value)) => format!("const({value})"),
         None => "clobbered/unmapped".to_owned(),
     }
+}
+
+#[cfg(feature = "lldb")]
+fn format_static_location(
+    lockstep: &LockstepSession<LldbJitDebugger>,
+    vreg_index: u32,
+) -> String {
+    match lockstep.location_map.static_locations.get(&vreg_index) {
+        Some(kajit::harness::VRegLocation::Register(preg)) => {
+            format!("reg {}", kajit::harness::LocationMap::reg_name(*preg))
+        }
+        Some(kajit::harness::VRegLocation::StackSlot(offset)) => format!("[sp+{offset}]"),
+        Some(kajit::harness::VRegLocation::Constant(value)) => format!("const({value})"),
+        None => "unallocated".to_owned(),
+    }
+}
+
+#[cfg(feature = "lldb")]
+fn describe_location(
+    lockstep: &LockstepSession<LldbJitDebugger>,
+    vreg_index: u32,
+) -> String {
+    let live = format_live_location(lockstep, vreg_index);
+    let static_loc = format_static_location(lockstep, vreg_index);
+    if live == static_loc {
+        live
+    } else {
+        format!("live={live}, static={static_loc}")
+    }
+}
+
+#[cfg(feature = "lldb")]
+fn parse_vreg_list(spec: Option<&str>) -> Result<Vec<u32>, String> {
+    let Some(spec) = spec else {
+        return Ok(Vec::new());
+    };
+    let mut result = Vec::new();
+    for raw in spec.split(',') {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let digits = trimmed.strip_prefix('v').unwrap_or(trimmed);
+        let idx = digits
+            .parse::<u32>()
+            .map_err(|_| format!("invalid vreg index `{trimmed}`"))?;
+        if !result.contains(&idx) {
+            result.push(idx);
+        }
+    }
+    Ok(result)
 }
 
 fn arg_str(args: &JsonMap<String, JsonValue>, key: &str) -> Result<String, String> {

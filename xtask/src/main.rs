@@ -1011,13 +1011,38 @@ fn install() {
     }
 
     let dst = dst_dir.join(&binary);
-    if let Err(err) = fs::copy(&src, &dst) {
+    let tmp = dst_dir.join(format!("{binary}.tmp-{}", std::process::id()));
+    if let Err(err) = fs::copy(&src, &tmp) {
         eprintln!(
             "failed to copy {} to {}: {err}",
             src.display(),
-            dst.display()
+            tmp.display()
         );
         std::process::exit(1);
+    }
+    if let Err(err) = fs::rename(&tmp, &dst) {
+        #[cfg(windows)]
+        {
+            let _ = fs::remove_file(&dst);
+            if let Err(err) = fs::rename(&tmp, &dst) {
+                eprintln!(
+                    "failed to install {} to {}: {err}",
+                    src.display(),
+                    dst.display()
+                );
+                std::process::exit(1);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = fs::remove_file(&tmp);
+            eprintln!(
+                "failed to install {} to {}: {err}",
+                src.display(),
+                dst.display()
+            );
+            std::process::exit(1);
+        }
     }
     println!("copied {package} to {}", dst.display());
 

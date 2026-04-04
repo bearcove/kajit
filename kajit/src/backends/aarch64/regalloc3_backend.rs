@@ -1787,8 +1787,9 @@ impl<'a> EmitContext<'a> {
     }
 
     /// Resolve a block ID through trampoline aliases.
-    /// If `block_id` is a trampoline (no insts, Branch terminator), follow
-    /// the chain to the final non-trampoline target.
+    /// If `block_id` is a trampoline (no insts, Branch terminator) whose
+    /// outgoing edge carries no value moves, follow the chain to the final
+    /// non-trampoline target.
     fn resolve_trampoline(&self, mut block_id: cfg_mir::BlockId) -> cfg_mir::BlockId {
         for _ in 0..16 {
             let block = &self.func.blocks[block_id.index()];
@@ -1797,6 +1798,9 @@ impl<'a> EmitContext<'a> {
             }
             let term = &self.func.terms[block.term.0 as usize];
             if let Terminator::Branch { edge } = term {
+                if self.edge_has_moves(*edge) {
+                    break;
+                }
                 block_id = self.func.edges[edge.index()].to;
             } else {
                 break;
@@ -1935,14 +1939,18 @@ impl<'a> EmitContext<'a> {
             self.block_labels.insert(block.id, label);
         }
 
-        // Alias trampoline blocks: blocks with no instructions and an
-        // unconditional Branch terminator become label aliases for their target.
+        // Alias trampoline blocks only when they are pure control-flow aliases.
+        // If the outgoing edge carries block-param moves, the block must remain
+        // materialized so its branch can target the edge trampoline.
         for block in &self.func.blocks {
             if block.dead || !block.insts.is_empty() {
                 continue;
             }
             let term = &self.func.terms[block.term.0 as usize];
             if let Terminator::Branch { edge } = term {
+                if self.edge_has_moves(*edge) {
+                    continue;
+                }
                 let target_block = self.func.edges[edge.index()].to;
                 let from_label = self.block_labels[&block.id];
                 let to_label = self.block_labels[&target_block];
@@ -1959,11 +1967,13 @@ impl<'a> EmitContext<'a> {
             if block.dead {
                 continue;
             }
-            // Skip trampoline blocks (aliased above, no code to emit).
+            // Skip only pure alias trampoline blocks (aliased above, no code to emit).
             if block.insts.is_empty() {
                 let term = &self.func.terms[block.term.0 as usize];
-                if let Terminator::Branch { .. } = term {
-                    continue;
+                if let Terminator::Branch { edge } = term {
+                    if !self.edge_has_moves(*edge) {
+                        continue;
+                    }
                 }
             }
             let term = &self.func.terms[block.term.0 as usize];
