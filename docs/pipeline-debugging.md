@@ -592,6 +592,47 @@ For the current scope-visibility regression suite, run:
 scripts/lldb-scope-regressions.sh
 ```
 
+### LLDB MCP from Codex
+
+Codex can talk to LLDB through LLDB's native MCP server on Linux/macOS, which
+is useful when you want debugger control without leaving the agent session.
+
+Requirements:
+- LLDB 21 or newer (`protocol-server` is not present in LLDB 20.x)
+- an LLDB process with the MCP server running
+- a Codex MCP entry that forwards stdio to that listener
+
+Server side:
+
+```bash
+lldb-21
+(lldb) protocol-server start MCP listen://localhost:59999
+```
+
+Codex-side registration:
+
+```bash
+codex mcp add lldb -- /usr/bin/nc localhost 59999
+```
+
+After restarting Codex, the session should expose an LLDB MCP tool plus
+`lldb://debugger/<id>` resources. A minimal smoke test is:
+
+```text
+use lldb://debugger/1
+lldb_command debugger_id=1 arguments="help"
+```
+
+For standalone Linux harnesses, a typical sequence is:
+
+```text
+lldb_command debugger_id=1 arguments="file /tmp/kajit-harness/harness_postcard_borrowed_header"
+lldb_command debugger_id=1 arguments="settings set target.run-args 07026869"
+lldb_command debugger_id=1 arguments="breakpoint set --name kajit_decode"
+lldb_command debugger_id=1 arguments="run"
+lldb_command debugger_id=1 arguments="bt"
+```
+
 ### How it works
 
 When `KAJIT_DEBUG=1`:

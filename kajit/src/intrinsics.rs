@@ -1397,6 +1397,10 @@ pub fn known_intrinsics() -> Vec<(&'static str, crate::ir::IntrinsicFn)> {
             IntrinsicFn(kajit_postcard_validate_and_alloc_string as *const () as usize),
         ),
         (
+            "kajit_validate_utf8_range",
+            IntrinsicFn(kajit_validate_utf8_range as *const () as usize),
+        ),
+        (
             "kajit_string_validate_alloc_copy",
             IntrinsicFn(kajit_string_validate_alloc_copy as *const () as usize),
         ),

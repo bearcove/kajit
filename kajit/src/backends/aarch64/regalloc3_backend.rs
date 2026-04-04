@@ -1807,9 +1807,11 @@ impl<'a> EmitContext<'a> {
     fn emit_terminator(&mut self, term: &Terminator, next_block: Option<cfg_mir::BlockId>) {
         match term {
             Terminator::Return => {
-                // Elide the branch if the success epilogue will be emitted
-                // immediately after this block (last_emitted_block flag).
-                if !self.is_last_emitted_block {
+                // Elide the branch only when the success epilogue is the next
+                // emitted code. Edge trampolines are emitted after the block
+                // stream, so a "last" return block cannot safely fall through
+                // when any trampoline labels were materialized.
+                if !self.is_last_emitted_block || !self.edge_trampoline_labels.is_empty() {
                     let success_exit = self.success_exit;
                     self.ectx
                         .emit

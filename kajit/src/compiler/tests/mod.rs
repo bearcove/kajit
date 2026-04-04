@@ -867,6 +867,100 @@ fn debug_postcard_borrowed_header_codegen() {
 }
 
 #[test]
+#[ignore]
+#[cfg(target_os = "linux")]
+fn debug_postcard_borrowed_header_harness() {
+    let shape = <BorrowedHeader<'static>>::SHAPE;
+    let module = build_postcard_decoder_hir(shape);
+    let registry = super::symbol_registry_for_shape(shape);
+    let root_data_abi = super::infer_root_decoder_data_abi(&module);
+
+    let mut func = build_structural_hir_ir(&module);
+    run_default_passes_from_env(&mut func);
+    let linear = crate::linearize::linearize(&mut func);
+    let hints = Default::default();
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
+        .expect("regalloc3 should allocate BorrowedHeader cfg");
+    let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&ra3_alloc);
+    let alloc_map = ra3_alloc
+        .functions
+        .first()
+        .map(|func| crate::harness::AllocationMap::from_regalloc3(func, base_frame))
+        .unwrap_or_default();
+
+    let result =
+        crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+            &ra3_alloc,
+            root_data_abi,
+        );
+    let intrinsic_call_sites = result.intrinsic_call_sites.clone();
+    let (buf, entry, _source_map, _backend_debug_info, asm_program) =
+        super::materialize_backend_result(result);
+    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
+        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+    let listing = super::build_cfg_mir_listing(&cfg_program, Some(&registry));
+
+    let decoder = CompiledDecoder {
+        buf,
+        cfg_mir_line_text_by_line: listing.line_text_by_line,
+        entry,
+        func,
+        root_data_abi,
+        trusted_utf8_input: false,
+        _jit_registration: None,
+        #[cfg(target_arch = "aarch64")]
+        asm_program,
+    };
+
+    let output_dir = std::path::PathBuf::from("/tmp/kajit-harness");
+    let base_name = "harness_postcard_borrowed_header";
+    let listing_path = output_dir.join(format!("{base_name}.cfg-mir"));
+    let dwarf = decoder.build_standalone_dwarf(&listing_path);
+    let known = crate::intrinsics::known_intrinsics();
+    let intrinsic_calls = intrinsic_call_sites
+        .iter()
+        .filter_map(|site| {
+            let name = known
+                .iter()
+                .find(|(_, func)| func.0 == site.func.0)
+                .map(|(name, _)| name.to_string())?;
+            Some(crate::harness::IntrinsicCallSite {
+                code_offset: site.code_offset,
+                baked_addr: site.func.0 as u64,
+                symbol_name: name,
+            })
+        })
+        .collect();
+
+    let harness_input = crate::harness::HarnessInput {
+        code: decoder.code(),
+        entry_offset: decoder.entry_offset(),
+        output_size: std::mem::size_of::<BorrowedHeader<'static>>(),
+        dwarf,
+        cfg_mir_lines: decoder.cfg_mir_lines(),
+        function_name: "kajit_decode",
+        uses_root_cursor_arg: decoder.uses_root_cursor_arg(),
+        alloc_map: Some(&alloc_map),
+        intrinsic_calls,
+    };
+
+    let exe_path = crate::harness::generate_harness(&harness_input, &output_dir, base_name)
+        .expect("generate BorrowedHeader harness");
+    let output = std::process::Command::new(&exe_path)
+        .arg("07026869")
+        .output()
+        .expect("run BorrowedHeader harness");
+    assert!(
+        output.status.success(),
+        "BorrowedHeader harness should run successfully: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    eprintln!("[harness-test] executable: {}", exe_path.display());
+}
+
+#[test]
 fn postcard_hir_lowering_decodes_owned_header() {
     let decoder = compile_postcard_decoder_via_structural_hir(<OwnedHeader>::SHAPE);
 
