@@ -47,6 +47,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install LLVM/LLDB 21
+        if: runner.os == 'Linux'
+        run: |
+          wget -O /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 21
+          sudo apt-get update
+          sudo apt-get install -y llvm-21 llvm-21-dev lldb-21 liblldb-21-dev
+          echo "LLVM_CONFIG=/usr/bin/llvm-config-21" >> "$GITHUB_ENV"
+
       - name: Check
         run: cargo check
 
