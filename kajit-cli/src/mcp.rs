@@ -194,6 +194,54 @@ struct DebugSessionDisassembleTool {
 }
 
 #[mcp_tool(
+    name = "debug_session_registers",
+    description = "Read named machine registers for a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionRegistersTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+    /// Optional comma-separated register names (defaults to key decoder registers).
+    #[serde(default)]
+    names: Option<String>,
+}
+
+#[mcp_tool(
+    name = "debug_session_memory",
+    description = "Read a byte range from the debuggee process memory for a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionMemoryTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+    /// Start address to read from.
+    address: u64,
+    /// Number of bytes to read.
+    #[serde(default)]
+    len: Option<u64>,
+}
+
+#[mcp_tool(
+    name = "debug_session_backtrace",
+    description = "Get a backtrace for the currently stopped frame in a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionBacktraceTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+}
+
+#[mcp_tool(
+    name = "debug_session_source_info",
+    description = "Get source and frame info for the current PC in a persistent lockstep debug session."
+)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+struct DebugSessionSourceInfoTool {
+    /// Session identifier returned by debug_session_new.
+    session_id: u64,
+}
+
+#[mcp_tool(
     name = "debug_session_lldb",
     description = "Run a raw LLDB command against a persistent lockstep debug session."
 )]
@@ -221,6 +269,10 @@ tool_box!(
         DebugSessionStepTool,
         DebugSessionStateTool,
         DebugSessionDisassembleTool,
+        DebugSessionRegistersTool,
+        DebugSessionMemoryTool,
+        DebugSessionBacktraceTool,
+        DebugSessionSourceInfoTool,
         DebugSessionLldbTool
     ]
 );
@@ -266,6 +318,10 @@ impl MirHandler {
             "debug_session_step" => self.debug_session_step(args),
             "debug_session_state" => self.debug_session_state(args),
             "debug_session_disassemble" => self.debug_session_disassemble(args),
+            "debug_session_registers" => self.debug_session_registers(args),
+            "debug_session_memory" => self.debug_session_memory(args),
+            "debug_session_backtrace" => self.debug_session_backtrace(args),
+            "debug_session_source_info" => self.debug_session_source_info(args),
             "debug_session_lldb" => self.debug_session_lldb(args),
             other => Err(format!("unknown tool: {other}")),
         }
@@ -570,6 +626,131 @@ impl MirHandler {
                 .disassemble_around_pc(context)
                 .map_err(|e| e.to_string())?;
             Ok(json!({ "text": text }))
+        }
+    }
+
+    fn debug_session_registers(
+        &self,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let names = parse_debug_register_names(arg_opt_str(args, "names").as_deref());
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+
+            let mut values = serde_json::Map::new();
+            let mut text = String::new();
+            for name in names {
+                let value = session
+                    .debugger
+                    .read_register_by_name(&name)
+                    .map_err(|e| e.to_string())?;
+                values.insert(name.clone(), json!(value));
+                text.push_str(&format!("{name}=0x{value:x} ({value})\n"));
+            }
+
+            Ok(json!({
+                "text": text,
+                "registers": values,
+            }))
+        }
+    }
+
+    fn debug_session_memory(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let address = arg_u64(args, "address")?;
+            let len = arg_opt_u64(args, "len").unwrap_or(64) as usize;
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+            let bytes = session
+                .debugger
+                .read_memory(address, len)
+                .map_err(|e| e.to_string())?;
+            Ok(json!({
+                "text": format!("mem[0x{address:x}..0x{:x}] = `{}`", address + bytes.len() as u64, encode_hex(&bytes)),
+                "address": address,
+                "len": bytes.len(),
+                "hex": encode_hex(&bytes),
+            }))
+        }
+    }
+
+    fn debug_session_backtrace(
+        &self,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+            let text = session.debugger.backtrace().map_err(|e| e.to_string())?;
+            Ok(json!({ "text": text }))
+        }
+    }
+
+    fn debug_session_source_info(
+        &self,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
+        #[cfg(not(feature = "lldb"))]
+        {
+            let _ = args;
+            Err("debug sessions require kajit to be built with the `lldb` feature".to_owned())
+        }
+
+        #[cfg(feature = "lldb")]
+        {
+            let session_id = arg_u64(args, "session_id")?;
+            let state = self.lock_state()?;
+            let session = state
+                .debug_sessions
+                .get(&session_id)
+                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+            let pc = session.debugger.read_pc().map_err(|e| e.to_string())?;
+            let dwarf_line = session
+                .debugger
+                .current_source_line()
+                .map_err(|e| e.to_string())?;
+            let cfg_line = session.current_line_text(dwarf_line);
+            let lldb = session.debugger.source_info().map_err(|e| e.to_string())?;
+            Ok(json!({
+                "text": format!("pc=0x{pc:x}\ndwarf_line={dwarf_line}\ncfg=`{cfg_line}`\n\n{lldb}"),
+                "pc": pc,
+                "dwarf_line": dwarf_line,
+                "cfg_line": cfg_line,
+            }))
         }
     }
 
@@ -1508,6 +1689,37 @@ fn arg_opt_u64(args: &JsonMap<String, JsonValue>, key: &str) -> Option<u64> {
 
 fn arg_opt_bool(args: &JsonMap<String, JsonValue>, key: &str) -> Option<bool> {
     args.get(key).and_then(JsonValue::as_bool)
+}
+
+#[cfg(feature = "lldb")]
+fn default_debug_register_names() -> Vec<String> {
+    [
+        "pc", "sp", "fp", "lr", "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x19", "x20",
+        "x21", "x22", "x23", "x24", "x25", "x26", "x27", "x28",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+#[cfg(feature = "lldb")]
+fn parse_debug_register_names(spec: Option<&str>) -> Vec<String> {
+    match spec {
+        Some(spec) => {
+            let names: Vec<_> = spec
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .collect();
+            if names.is_empty() {
+                default_debug_register_names()
+            } else {
+                names
+            }
+        }
+        None => default_debug_register_names(),
+    }
 }
 
 fn trap_json(trap: &kajit_mir::InterpreterTrap) -> JsonValue {
