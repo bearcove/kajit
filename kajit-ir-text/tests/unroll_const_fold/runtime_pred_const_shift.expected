@@ -17,8 +17,8 @@ lambda @0 @s0 (shape: "u8") {
     n15 @s1 = Const(0x0) [] -> [?]
     n18 @s1 = Const(0x1) [] -> [?]
     n4 = ReadBytes(1) [%cs:n3] -> [v2, %cs]
-    n16 @s1 = Shl [v2, n15.0] -> [?]
-    n17 @s1 = Or [v1, n16.0] -> [?]
+    n16 @s1 = Identity [v2] -> [?]
+    n17 @s1 = Identity [n16.0] -> [?]
     n34 = gamma [
       pred: v2
       in0: n18.0
