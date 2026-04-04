@@ -973,9 +973,6 @@ fn should_skip_fused_compare_value_check(
     let Some(block) = func.blocks.get(loc.block.index()) else {
         return false;
     };
-    if loc.next_inst_index + 1 != block.insts.len() {
-        return false;
-    }
     let Some(inst_id) = block.insts.get(loc.next_inst_index) else {
         return false;
     };
@@ -1125,6 +1122,7 @@ fn op_produces_non_comparable_value(
     non_comparable_vregs: &std::collections::HashSet<u32>,
 ) -> bool {
     match op {
+        LinearOp::SlotAddr { .. } => true,
         LinearOp::Copy { src, .. } => non_comparable_vregs.contains(&(src.index() as u32)),
         LinearOp::BinOp {
             op: BinOpKind::Add | BinOpKind::Sub,
