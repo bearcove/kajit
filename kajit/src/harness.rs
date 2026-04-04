@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 //! Standalone test harness generator.
 //!
-//! Generates a Mach-O executable containing:
+//! Generates a native executable containing:
 //! - The JIT-compiled decoder code in `.text`
 //! - DWARF debug sections (`.debug_line`, `.debug_info`, `.debug_abbrev`)
 //! - A C harness wrapper that sets up input/output and calls the decoder
@@ -250,6 +250,8 @@ pub struct HarnessInput<'a> {
     pub cfg_mir_lines: &'a [String],
     /// Name for the generated function symbol.
     pub function_name: &'a str,
+    /// Whether the decoder takes an explicit root cursor argument.
+    pub uses_root_cursor_arg: bool,
     /// Allocation map (vreg → physical location).
     pub alloc_map: Option<&'a AllocationMap>,
     /// Intrinsic call sites that need address patching.
@@ -292,18 +294,19 @@ pub fn generate_harness(
     let exe_path = output_dir.join(base_name);
     link_harness(&c_path, &obj_path, &exe_path)?;
 
-    // Build dSYM bundle: copy DWARF sections with patched addresses
-    if let Some(dwarf) = &input.dwarf {
-        if let Err(e) = build_dsym(&exe_path, dwarf, input.function_name, input.entry_offset) {
-            eprintln!("[harness] warning: dSYM creation failed: {e}");
-        }
-    }
+    maybe_build_debug_bundle(&exe_path, input);
 
     eprintln!("[harness] generated: {}", exe_path.display());
     eprintln!("[harness] listing:   {}", listing_path.display());
     eprintln!("[harness] usage:     {} <input-hex>", exe_path.display());
+    #[cfg(target_os = "macos")]
     eprintln!(
         "[harness] debug:     lldb {} -- <input-hex>",
+        exe_path.display()
+    );
+    #[cfg(target_os = "linux")]
+    eprintln!(
+        "[harness] debug:     gdb --args {} <input-hex>",
         exe_path.display()
     );
 
@@ -318,17 +321,20 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
     };
 
     let mut obj = Object::new(
-        BinaryFormat::MachO,
+        BinaryFormat::native_object(),
         Architecture::Aarch64,
         Endianness::Little,
     );
 
-    // Set macOS platform version (prevents "no platform load command" warning)
-    let mut build_ver = object::write::MachOBuildVersion::default();
-    build_ver.platform = object::macho::PLATFORM_MACOS;
-    build_ver.minos = (14 << 16) | (0 << 8); // macOS 14.0
-    build_ver.sdk = (14 << 16) | (0 << 8);
-    obj.set_macho_build_version(build_ver);
+    #[cfg(target_os = "macos")]
+    {
+        // Set macOS platform version (prevents "no platform load command" warning)
+        let mut build_ver = object::write::MachOBuildVersion::default();
+        build_ver.platform = object::macho::PLATFORM_MACOS;
+        build_ver.minos = (14 << 16) | (0 << 8); // macOS 14.0
+        build_ver.sdk = (14 << 16) | (0 << 8);
+        obj.set_macho_build_version(build_ver);
+    }
 
     // Patch intrinsic call sites: replace movz/movk/movk with adrp/add/nop
     // so the linker can resolve intrinsic symbols.
@@ -349,9 +355,6 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
         });
 
         // Rewrite movz/movk/movk (12 bytes) to adrp/add/nop (12 bytes).
-        // adrp x16, sym@PAGE  → will be fixed by ARM64_RELOC_PAGE21
-        // add x16, x16, sym@PAGEOFF → will be fixed by ARM64_RELOC_PAGEOFF12
-        // nop → padding (was movk)
         let off = site.code_offset;
         let adrp = 0x90000010u32; // adrp x16, #0 (imm filled by linker)
         let add = 0x91000210u32; // add x16, x16, #0 (imm filled by linker)
@@ -368,37 +371,67 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
 
     // Add relocations for intrinsic call sites
     for &(off, sym_id) in &intrinsic_relocs {
-        // ADRP relocation (page-relative, 21-bit)
-        obj.add_relocation(
-            text_section,
-            Relocation {
-                offset: off as u64,
-                symbol: sym_id,
-                flags: RelocationFlags::MachO {
-                    r_type: object::macho::ARM64_RELOC_PAGE21,
-                    r_pcrel: true,
-                    r_length: 2,
+        #[cfg(target_os = "macos")]
+        {
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: off as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_PAGE21,
+                        r_pcrel: true,
+                        r_length: 2,
+                    },
+                    addend: 0,
                 },
-                addend: 0,
-            },
-        )
-        .expect("adrp relocation");
+            )
+            .expect("adrp relocation");
 
-        // ADD relocation (page offset, 12-bit)
-        obj.add_relocation(
-            text_section,
-            Relocation {
-                offset: (off + 4) as u64,
-                symbol: sym_id,
-                flags: RelocationFlags::MachO {
-                    r_type: object::macho::ARM64_RELOC_PAGEOFF12,
-                    r_pcrel: false,
-                    r_length: 2,
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: (off + 4) as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_PAGEOFF12,
+                        r_pcrel: false,
+                        r_length: 2,
+                    },
+                    addend: 0,
                 },
-                addend: 0,
-            },
-        )
-        .expect("add relocation");
+            )
+            .expect("add relocation");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: off as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::Elf {
+                        r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
+                    },
+                    addend: 0,
+                },
+            )
+            .expect("adrp relocation");
+
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: (off + 4) as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::Elf {
+                        r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
+                    },
+                    addend: 0,
+                },
+            )
+            .expect("add relocation");
+        }
     }
 
     // Add the entry point symbol (global, so the C harness can call it)
@@ -419,41 +452,23 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
         let mut debug_info_section_id = None;
         let mut debug_line_section_id = None;
 
-        // Mach-O DWARF sections must be in the __DWARF segment
-        let dwarf_segment = b"__DWARF".to_vec();
         if !dwarf.debug_line.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment.clone(),
-                b"__debug_line".to_vec(),
-                SectionKind::Debug,
-            );
+            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_line"), SectionKind::Debug);
             obj.append_section_data(sid, &dwarf.debug_line, 1);
             debug_line_section_id = Some(sid);
         }
         if !dwarf.debug_info.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment.clone(),
-                b"__debug_info".to_vec(),
-                SectionKind::Debug,
-            );
+            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_info"), SectionKind::Debug);
             obj.append_section_data(sid, &dwarf.debug_info, 1);
             debug_info_section_id = Some(sid);
         }
         if !dwarf.debug_abbrev.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment.clone(),
-                b"__debug_abbrev".to_vec(),
-                SectionKind::Debug,
-            );
+            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_abbrev"), SectionKind::Debug);
             obj.append_section_data(sid, &dwarf.debug_abbrev, 1);
         }
         let mut debug_aranges_section_id = None;
         if !dwarf.debug_aranges.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment.clone(),
-                b"__debug_aranges".to_vec(),
-                SectionKind::Debug,
-            );
+            let sid = obj.add_section(dwarf_segment_name(), dwarf_debug_section_name("debug_aranges"), SectionKind::Debug);
             obj.append_section_data(sid, &dwarf.debug_aranges, 1);
             debug_aranges_section_id = Some(sid);
         }
@@ -466,20 +481,8 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
                 crate::jit_dwarf::DwarfSection::DebugAranges => debug_aranges_section_id,
             };
             if let Some(sid) = target_section {
-                obj.add_relocation(
-                    sid,
-                    Relocation {
-                        offset: reloc.offset as u64,
-                        symbol: text_symbol,
-                        addend: reloc.addend + input.entry_offset as i64,
-                        flags: RelocationFlags::MachO {
-                            r_type: object::macho::ARM64_RELOC_UNSIGNED,
-                            r_pcrel: false,
-                            r_length: 3, // 8 bytes (2^3)
-                        },
-                    },
-                )
-                .map_err(HarnessError::ObjectWrite)?;
+                obj.add_relocation(sid, dwarf_text_relocation(text_symbol, reloc, input.entry_offset))
+                    .map_err(HarnessError::ObjectWrite)?;
             }
         }
     }
@@ -490,9 +493,97 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
     Ok(())
 }
 
+fn dwarf_segment_name() -> Vec<u8> {
+    #[cfg(target_os = "macos")]
+    {
+        return b"__DWARF".to_vec();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Vec::new()
+    }
+}
+
+fn dwarf_debug_section_name(name: &str) -> Vec<u8> {
+    #[cfg(target_os = "macos")]
+    {
+        return format!("__{name}").into_bytes();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        format!(".{name}").into_bytes()
+    }
+}
+
+fn dwarf_text_relocation(
+    text_symbol: object::write::SymbolId,
+    reloc: &crate::jit_dwarf::DwarfRelocation,
+    entry_offset: usize,
+) -> object::write::Relocation {
+    #[cfg(target_os = "macos")]
+    {
+        return object::write::Relocation {
+            offset: reloc.offset as u64,
+            symbol: text_symbol,
+            addend: reloc.addend + entry_offset as i64,
+            flags: object::RelocationFlags::MachO {
+                r_type: object::macho::ARM64_RELOC_UNSIGNED,
+                r_pcrel: false,
+                r_length: 3,
+            },
+        };
+    }
+    #[cfg(target_os = "linux")]
+    {
+        object::write::Relocation {
+            offset: reloc.offset as u64,
+            symbol: text_symbol,
+            addend: reloc.addend + entry_offset as i64,
+            flags: object::RelocationFlags::Generic {
+                kind: object::RelocationKind::Absolute,
+                encoding: object::RelocationEncoding::Generic,
+                size: 64,
+            },
+        }
+    }
+}
+
 fn write_c_harness(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {
     let output_size = input.output_size;
     let func_name = input.function_name;
+    let call_decl = if input.uses_root_cursor_arg {
+        format!(
+            r#"
+typedef struct {{
+    const uint8_t *ptr;
+    size_t len;
+}} RuntimeSliceU8;
+
+typedef struct {{
+    RuntimeSliceU8 bytes;
+    uint64_t pos;
+}} RuntimeCursorArg;
+
+extern void {func_name}(uint8_t *output, DeserContext *ctx, RuntimeCursorArg *cursor);
+"#
+        )
+    } else {
+        format!("extern void {func_name}(uint8_t *output, DeserContext *ctx);\n")
+    };
+    let call_site = if input.uses_root_cursor_arg {
+        format!(
+            r#"
+    RuntimeCursorArg cursor;
+    memset(&cursor, 0, sizeof(cursor));
+    cursor.bytes.ptr = input;
+    cursor.bytes.len = input_len;
+    {func_name}(output, &ctx, &cursor);
+    ctx.cursor = cursor.bytes.ptr + cursor.pos;
+"#
+        )
+    } else {
+        format!("\n    {func_name}(output, &ctx);\n")
+    };
 
     let c_code = format!(
         r#"// Auto-generated test harness for kajit JIT code.
@@ -518,7 +609,7 @@ typedef struct {{
 }} DeserContext;
 
 // The JIT-compiled decoder function (linked from the .o file)
-extern void {func_name}(uint8_t *output, DeserContext *ctx);
+{call_decl}
 
 static int hex_digit(char c) {{
     if (c >= '0' && c <= '9') return c - '0';
@@ -563,7 +654,7 @@ int main(int argc, char **argv) {{
     ctx.end = input + input_len;
 
     // Call the JIT decoder
-    {func_name}(output, &ctx);
+    {call_site}
 
     // Check for errors
     if (ctx.error.code != 0) {{
@@ -579,7 +670,9 @@ int main(int argc, char **argv) {{
 
     return 0;
 }}
-"#
+"#,
+        call_decl = call_decl,
+        call_site = call_site,
     );
 
     std::fs::write(path, c_code).map_err(|e| HarnessError::Io("write C harness", e))?;
@@ -1032,19 +1125,48 @@ fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), H
     // Build it if needed: `cargo rustc -p kajit --crate-type=staticlib`
     let staticlib = find_or_build_staticlib()?;
 
-    let output = std::process::Command::new("cc")
-        .arg("-g") // keep debug info
-        .arg("-O0") // no optimization (so DWARF is accurate)
-        .arg("-Wl,-no_deduplicate") // don't mess with our sections
+    let mut command = std::process::Command::new("cc");
+    command.arg("-O0");
+
+    #[cfg(target_os = "macos")]
+    {
+        command.arg("-g");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Keep the generated decoder's DWARF as the only debug contribution.
+        // Our standalone .debug_info currently hard-codes section offsets like
+        // abbrev_offset=0 and stmt_list=0, which only remain valid when the
+        // linker does not merge in an additional C TU's DWARF contribution.
+        command.arg("-g0");
+    }
+
+    command
         .arg("-o")
         .arg(exe_path)
         .arg(c_path)
         .arg(obj_path)
-        .arg(&staticlib) // link kajit staticlib for intrinsics
-        .arg("-lSystem")
-        .arg("-lc++")
-        .arg("-framework")
-        .arg("Security") // Rust std dependency
+        .arg(&staticlib);
+
+    #[cfg(target_os = "macos")]
+    {
+        command
+            .arg("-Wl,-no_deduplicate")
+            .arg("-lSystem")
+            .arg("-lc++")
+            .arg("-framework")
+            .arg("Security");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        for lib in linux_native_static_libs()? {
+            command.arg(lib);
+        }
+    }
+
+    let output = command
         .output()
         .map_err(|e| HarnessError::Io("invoke cc", e))?;
 
@@ -1055,6 +1177,48 @@ fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), H
 
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+fn linux_native_static_libs() -> Result<Vec<String>, HarnessError> {
+    let output = std::process::Command::new("cargo")
+        .args([
+            "rustc",
+            "-p",
+            "kajit",
+            "--crate-type=staticlib",
+            "--",
+            "--print=native-static-libs",
+        ])
+        .output()
+        .map_err(|e| HarnessError::Io("query native static libs", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(HarnessError::Link(format!(
+            "failed to query native static libs: {stderr}"
+        )));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find_map(|line| line.split_once("native-static-libs: ").map(|(_, libs)| libs))
+        .ok_or_else(|| HarnessError::Link("native-static-libs output missing".into()))?;
+
+    Ok(line.split_whitespace().map(str::to_owned).collect())
+}
+
+#[cfg(target_os = "macos")]
+fn maybe_build_debug_bundle(exe_path: &Path, input: &HarnessInput) {
+    if let Some(dwarf) = &input.dwarf {
+        if let Err(e) = build_dsym(exe_path, dwarf, input.function_name, input.entry_offset) {
+            eprintln!("[harness] warning: dSYM creation failed: {e}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn maybe_build_debug_bundle(_exe_path: &Path, _input: &HarnessInput) {}
 
 /// Find or build the kajit staticlib for linking intrinsics into standalone harnesses.
 fn find_or_build_staticlib() -> Result<std::path::PathBuf, HarnessError> {

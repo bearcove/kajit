@@ -278,6 +278,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             dwarf,
             cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
             function_name: "kajit_decode",
+            uses_root_cursor_arg: artifacts.decoder.uses_root_cursor_arg(),
             alloc_map: Some(&artifacts.alloc_map),
             intrinsic_calls,
         };
@@ -771,6 +772,7 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
         dwarf,
         cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
         function_name: "kajit_decode",
+        uses_root_cursor_arg: artifacts.decoder.uses_root_cursor_arg(),
         alloc_map: Some(&artifacts.alloc_map),
         intrinsic_calls,
     };

@@ -113,6 +113,10 @@ impl CompiledDecoder {
         self.trusted_utf8_input
     }
 
+    pub fn uses_root_cursor_arg(&self) -> bool {
+        matches!(self.root_data_abi, RootDecoderDataAbi::CursorRef)
+    }
+
     /// Deterministic machine-emission trace annotated with CFG-MIR provenance.
     pub fn emission_trace_text(&self) -> Result<String, kajit_emit::TraceError> {
         #[cfg(target_arch = "x86_64")]
@@ -419,7 +423,7 @@ pub fn compile_pipeline(
 
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
         &ra3_alloc,
-        RootDecoderDataAbi::None,
+        root_data_abi,
     );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
