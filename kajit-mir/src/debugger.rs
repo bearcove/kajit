@@ -632,8 +632,7 @@ impl DebuggerSession {
             } => {
                 self.execute_call_intrinsic(func.0, args, *dst, *field_offset)?;
             }
-            LinearOp::CallPure { func, args, dst }
-            | LinearOp::CallEffect { func, args, dst } => {
+            LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
                 self.execute_call_pure(func.0, args, *dst)?;
             }
             op => {
