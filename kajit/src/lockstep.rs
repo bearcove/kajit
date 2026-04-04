@@ -157,6 +157,7 @@ pub struct LockstepSession<D: JitDebugger> {
     pub prev_dwarf_line: u32,
     pub jit_steps: usize,
     pub verified: std::collections::HashMap<u32, (u64, u32, usize)>,
+    pub non_comparable_vregs: std::collections::HashSet<u32>,
     pub status: LockstepSessionStatus,
     pub divergence: Option<Divergence>,
     entry_pc: u64,
@@ -201,7 +202,6 @@ impl<D: JitDebugger> LockstepSession<D> {
             interpreter.set_root_cursor_arg_addr(root_cursor_arg);
         }
 
-        let func = &program.funcs[0];
         let op_to_line = build_op_to_line_map(program, backend_debug_info);
 
         let entry_pc = debugger.read_pc()?;
@@ -220,6 +220,7 @@ impl<D: JitDebugger> LockstepSession<D> {
             prev_dwarf_line,
             jit_steps: 0,
             verified: std::collections::HashMap::new(),
+            non_comparable_vregs: std::collections::HashSet::new(),
             status: LockstepSessionStatus::Running,
             divergence: None,
             entry_pc,
@@ -325,7 +326,9 @@ impl<D: JitDebugger> LockstepSession<D> {
         let mut last_event = None;
         let mut executed_state = None;
         let mut tracker = self.location_tracker.clone();
+        let mut non_comparable = self.non_comparable_vregs.clone();
         let mut executed_tracker = None;
+        let mut executed_non_comparable = None;
         let mut synced = false;
         for _ in 0..500 {
             let pre_loc = self.interpreter.state().location;
@@ -344,8 +347,15 @@ impl<D: JitDebugger> LockstepSession<D> {
                     &event.location_before,
                     &post_loc,
                 );
+                observe_non_comparable_step(
+                    &mut non_comparable,
+                    func,
+                    &event.location_before,
+                    &post_loc,
+                );
                 executed_state = Some(self.interpreter.state());
                 executed_tracker = Some(tracker.clone());
+                executed_non_comparable = Some(non_comparable.clone());
                 last_event = Some(event.clone());
                 if event.returned {
                     break;
@@ -372,9 +382,16 @@ impl<D: JitDebugger> LockstepSession<D> {
                 &event.location_before,
                 &post_loc,
             );
+            observe_non_comparable_step(
+                &mut non_comparable,
+                func,
+                &event.location_before,
+                &post_loc,
+            );
             if ev_line == executed_line && last_event.is_none() {
                 executed_state = Some(self.interpreter.state());
                 executed_tracker = Some(tracker.clone());
+                executed_non_comparable = Some(non_comparable.clone());
                 last_event = Some(event.clone());
             }
 
@@ -465,11 +482,15 @@ LOCKSTEP DESYNC at JIT step {}
         };
 
         self.location_tracker = tracker;
+        self.non_comparable_vregs = non_comparable;
 
         let state = executed_state.unwrap_or_else(|| self.interpreter.state());
         let loc = &event.location_before;
         let (def_vreg, use_vregs, _) = op_def_uses_and_kind(func, loc);
         let compare_tracker = executed_tracker.as_ref().unwrap_or(&self.location_tracker);
+        let compare_non_comparable = executed_non_comparable
+            .as_ref()
+            .unwrap_or(&self.non_comparable_vregs);
 
         let interp_next_loc = self.interpreter.state().location;
         let interp_next_line = self
@@ -526,12 +547,12 @@ LOCKSTEP DESYNC at JIT step {}
                 } else {
                     0
                 };
-                let jv = read_vreg_from_jit(&self.debugger, location, sp)?;
+                let jv = read_vreg_from_jit(&self.debugger, &location, sp)?;
                 vreg_diffs.push(VRegDiff {
                     vreg_index: dst.index() as u32,
                     interpreter_value: iv,
                     jit_value: jv,
-                    jit_location: location.clone(),
+                    jit_location: location,
                     matches: jv == Some(iv),
                 });
             }
@@ -573,6 +594,7 @@ CONTROL FLOW DIVERGENCE at step {}
         if should_skip_fused_compare_value_check(func, loc, def_vreg)
             || should_skip_branch_predicate_value_check(func, loc)
             || should_skip_process_local_intrinsic_return_check(func, loc)
+            || should_skip_non_comparable_value_check(def_vreg, &use_vregs, compare_non_comparable)
         {
             return Ok(format!(
                 "step {}: line {} skipped (non-comparable backend artifact)",
@@ -599,7 +621,7 @@ CONTROL FLOW DIVERGENCE at step {}
                 };
 
                 let sp = self.debugger.read_sp()?;
-                let jit_value = read_vreg_from_jit(&self.debugger, location, sp)?;
+                let jit_value = read_vreg_from_jit(&self.debugger, &location, sp)?;
 
                 if jit_value != Some(interp_value) {
                     let mut vreg_diffs = vec![VRegDiff {
@@ -619,12 +641,12 @@ CONTROL FLOW DIVERGENCE at step {}
                             } else {
                                 0
                             };
-                            let use_jit = read_vreg_from_jit(&self.debugger, use_loc, sp)?;
+                            let use_jit = read_vreg_from_jit(&self.debugger, &use_loc, sp)?;
                             vreg_diffs.push(VRegDiff {
                                 vreg_index: use_idx,
                                 interpreter_value: use_interp,
                                 jit_value: use_jit,
-                                jit_location: use_loc.clone(),
+                                jit_location: use_loc,
                                 matches: use_jit == Some(use_interp),
                             });
                         }
@@ -637,7 +659,7 @@ CONTROL FLOW DIVERGENCE at step {}
                     ));
                     diag.push_str(&format!("  op: {}\n", self.current_line_text(executed_line)));
                     let reg_name = match location {
-                        VRegLocation::Register(p) => LocationMap::reg_name(*p),
+                        VRegLocation::Register(p) => LocationMap::reg_name(p),
                         _ => "stk",
                     };
                     diag.push_str(&format!(
@@ -663,14 +685,14 @@ CONTROL FLOW DIVERGENCE at step {}
                             .iter()
                             .filter(|(k, v)| {
                                 **k != dst_idx
-                                    && matches!(v, VRegLocation::Register(p) if p == preg)
+                                    && matches!(v, VRegLocation::Register(p) if *p == preg)
                             })
                             .map(|(k, _)| *k)
                             .collect();
                         if !sharing.is_empty() {
                             diag.push_str(&format!(
                                 "\n  other vregs sharing {}: ",
-                                LocationMap::reg_name(*preg)
+                                LocationMap::reg_name(preg)
                             ));
                             for (i, v) in sharing.iter().enumerate() {
                                 if i > 0 {
@@ -743,7 +765,7 @@ CONTROL FLOW DIVERGENCE at step {}
                     .insert(dst_idx, (interp_value, executed_line, self.jit_steps));
 
                 let reg_name = match location {
-                    VRegLocation::Register(p) => LocationMap::reg_name(*p),
+                    VRegLocation::Register(p) => LocationMap::reg_name(p),
                     _ => "stk",
                 };
                 return Ok(format!(
@@ -899,6 +921,9 @@ fn current_line_from_pc(
     {
         return Ok(range.line);
     }
+    if !code_line_ranges.is_empty() {
+        return Ok(0);
+    }
     Ok(debugger.current_source_line().unwrap_or(0))
 }
 
@@ -1021,6 +1046,17 @@ fn should_skip_process_local_intrinsic_return_check(
     intrinsic.is_some_and(is_process_local_pointer_intrinsic)
 }
 
+fn should_skip_non_comparable_value_check(
+    def_vreg: Option<kajit_ir::VReg>,
+    use_vregs: &[kajit_ir::VReg],
+    non_comparable_vregs: &std::collections::HashSet<u32>,
+) -> bool {
+    def_vreg.is_some_and(|dst| non_comparable_vregs.contains(&(dst.index() as u32)))
+        || use_vregs
+            .iter()
+            .any(|vreg| non_comparable_vregs.contains(&(vreg.index() as u32)))
+}
+
 fn is_process_local_pointer_intrinsic(func: kajit_ir::IntrinsicFn) -> bool {
     let f = func.0;
     let alloc_persistent = crate::intrinsics::kajit_alloc_persistent as *const () as usize;
@@ -1041,6 +1077,128 @@ fn is_process_local_pointer_intrinsic(func: kajit_ir::IntrinsicFn) -> bool {
             || x == string_alloc
             || x == string_copy
     )
+}
+
+fn observe_non_comparable_step(
+    non_comparable_vregs: &mut std::collections::HashSet<u32>,
+    func: &kajit_mir::cfg_mir::Function,
+    loc_before: &kajit_mir::ProgramLocation,
+    loc_after: &kajit_mir::ProgramLocation,
+) {
+    if loc_before.at_terminator {
+        if let Some(edge) = chosen_edge_for_non_comparable(func, loc_before, loc_after) {
+            for arg in &edge.args {
+                let src_idx = arg.source.index() as u32;
+                let dst_idx = arg.target.index() as u32;
+                if non_comparable_vregs.contains(&src_idx) {
+                    non_comparable_vregs.insert(dst_idx);
+                } else {
+                    non_comparable_vregs.remove(&dst_idx);
+                }
+            }
+        }
+        return;
+    }
+
+    let Some(block) = func.blocks.get(loc_before.block.index()) else {
+        return;
+    };
+    let Some(&inst_id) = block.insts.get(loc_before.next_inst_index) else {
+        return;
+    };
+    let Some(inst) = func.insts.get(inst_id.index()) else {
+        return;
+    };
+    let Some(def_vreg) = op_def_vreg_at(func, loc_before) else {
+        return;
+    };
+    let def_idx = def_vreg.index() as u32;
+    if op_produces_non_comparable_value(&inst.op, non_comparable_vregs) {
+        non_comparable_vregs.insert(def_idx);
+    } else {
+        non_comparable_vregs.remove(&def_idx);
+    }
+}
+
+fn op_produces_non_comparable_value(
+    op: &LinearOp,
+    non_comparable_vregs: &std::collections::HashSet<u32>,
+) -> bool {
+    match op {
+        LinearOp::Copy { src, .. } => non_comparable_vregs.contains(&(src.index() as u32)),
+        LinearOp::BinOp {
+            op: BinOpKind::Add | BinOpKind::Sub,
+            lhs,
+            rhs,
+            ..
+        } => {
+            non_comparable_vregs.contains(&(lhs.index() as u32))
+                || non_comparable_vregs.contains(&(rhs.index() as u32))
+        }
+        LinearOp::CallIntrinsic { func, dst, .. } if dst.is_some() => {
+            is_process_local_pointer_intrinsic(*func)
+        }
+        LinearOp::CallPure { func, .. } | LinearOp::CallEffect { func, .. } => {
+            is_process_local_pointer_intrinsic(*func)
+        }
+        _ => false,
+    }
+}
+
+fn chosen_edge_for_non_comparable<'a>(
+    func: &'a kajit_mir::cfg_mir::Function,
+    loc_before: &kajit_mir::ProgramLocation,
+    loc_after: &kajit_mir::ProgramLocation,
+) -> Option<&'a kajit_mir::cfg_mir::Edge> {
+    let block = func.blocks.get(loc_before.block.index())?;
+    let term = func.terms.get(block.term.index())?;
+    let edge_id = match term {
+        kajit_mir::cfg_mir::Terminator::Branch { edge } => Some(*edge),
+        kajit_mir::cfg_mir::Terminator::BranchIf {
+            taken,
+            fallthrough,
+            ..
+        }
+        | kajit_mir::cfg_mir::Terminator::BranchIfZero {
+            taken,
+            fallthrough,
+            ..
+        } => {
+            let taken_edge = func.edges.get(taken.index())?;
+            if taken_edge.to == loc_after.block {
+                Some(*taken)
+            } else {
+                Some(*fallthrough)
+            }
+        }
+        kajit_mir::cfg_mir::Terminator::JumpTable {
+            targets, default, ..
+        } => targets
+            .iter()
+            .copied()
+            .find(|edge_id| func.edges[edge_id.index()].to == loc_after.block)
+            .or(Some(*default).filter(|edge_id| func.edges[edge_id.index()].to == loc_after.block)),
+        _ => None,
+    }?;
+    func.edges.get(edge_id.index())
+}
+
+fn op_def_vreg_at(
+    func: &kajit_mir::cfg_mir::Function,
+    loc: &kajit_mir::ProgramLocation,
+) -> Option<kajit_ir::VReg> {
+    use kajit_mir::cfg_mir::OperandKind;
+
+    if loc.at_terminator {
+        return None;
+    }
+    let block = func.blocks.get(loc.block.index())?;
+    let inst_id = *block.insts.get(loc.next_inst_index)?;
+    let inst = func.insts.get(inst_id.index())?;
+    inst.operands
+        .iter()
+        .find(|operand| operand.kind == OperandKind::Def)
+        .map(|operand| operand.vreg)
 }
 
 /// Look up the DWARF line for an interpreter ProgramLocation.
