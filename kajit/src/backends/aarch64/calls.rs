@@ -90,10 +90,12 @@ impl Lowerer<'_> {
 
         self.flush_all_vregs();
 
-        self.ectx
-            .emit
-            .emit_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
-            .expect("str");
+        if self.sync_ctx_cursor_with_calls {
+            self.ectx
+                .emit
+                .emit_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("str");
+        }
         self.emit_set_abi_intrinsic_args_parallel(1, args);
         self.ectx
             .emit
@@ -138,10 +140,12 @@ impl Lowerer<'_> {
         }
         self.ectx.emit.emit_blr(Reg::X16).expect("blr");
 
-        self.ectx
-            .emit
-            .emit_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
-            .expect("ldr");
+        if self.sync_ctx_cursor_with_calls {
+            self.ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("ldr");
+        }
         self.ectx
             .emit
             .emit_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)
@@ -254,7 +258,11 @@ impl Lowerer<'_> {
         let _ = dst;
     }
 
-    pub(super) fn emit_store_incoming_lambda_args(&mut self, data_args: &[crate::ir::VReg]) {
+    pub(super) fn emit_store_incoming_lambda_args(
+        &mut self,
+        data_args: &[crate::ir::VReg],
+        abi_arg_offset: u8,
+    ) {
         const MAX_LAMBDA_DATA_ARGS: usize = 6;
         if data_args.len() > MAX_LAMBDA_DATA_ARGS {
             panic!(
@@ -266,7 +274,7 @@ impl Lowerer<'_> {
             return;
         }
         for (index, vreg) in data_args.iter().copied().enumerate() {
-            let source_reg = Reg::from_raw(index as u8);
+            let source_reg = Reg::from_raw(index as u8 + abi_arg_offset);
             if index != 9 {
                 self.ectx
                     .emit
@@ -364,10 +372,12 @@ impl Lowerer<'_> {
             .expect("CallLambda outside function")
             .error_exit;
         self.flush_all_vregs();
-        self.ectx
-            .emit
-            .emit_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
-            .expect("str");
+        if self.sync_ctx_cursor_with_calls {
+            self.ectx
+                .emit
+                .emit_str_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("str");
+        }
         let lambda_moves: Vec<(Allocation, Allocation)> = args
             .iter()
             .enumerate()
@@ -389,10 +399,12 @@ impl Lowerer<'_> {
             .expect("mov");
 
         self.ectx.emit.emit_bl_label(label).expect("bl");
-        self.ectx
-            .emit
-            .emit_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
-            .expect("ldr");
+        if self.sync_ctx_cursor_with_calls {
+            self.ectx
+                .emit
+                .emit_ldr_imm(aarch64::Width::X64, Reg::X19, Reg::X22, CTX_INPUT_PTR)
+                .expect("ldr");
+        }
         self.ectx
             .emit
             .emit_ldr_imm(aarch64::Width::W32, Reg::X9, Reg::X22, CTX_ERROR_CODE)

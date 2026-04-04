@@ -55,6 +55,8 @@ pub struct PrologueConfig {
     /// Register to read the cursor from for the success-path writeback.
     /// Only used when `load_cursor_x19_x20` is false.
     pub cursor_writeback_reg: Option<Reg>,
+    /// Whether the success epilogue should write the cursor back to ctx.input_ptr.
+    pub writeback_cursor_to_ctx: bool,
 }
 
 impl Default for PrologueConfig {
@@ -64,6 +66,7 @@ impl Default for PrologueConfig {
             save_x19_x20: true,
             load_cursor_x19_x20: true,
             cursor_writeback_reg: None,
+            writeback_cursor_to_ctx: true,
         }
     }
 }
@@ -183,23 +186,14 @@ impl EmitCtx {
             BASE_FRAME
         };
 
-        // Reduce frame size when skipping callee-saved register saves.
-        let mut effective_frame_size = frame_size;
-        if !config.save_x21_x22 {
-            effective_frame_size = effective_frame_size.saturating_sub(16);
-        }
-        if !config.save_x19_x20 {
-            effective_frame_size = effective_frame_size.saturating_sub(16);
-        }
-
         let extra_pairs = ((self.base_frame - base) / 16) as usize;
         assert!(
             extra_pairs <= 3,
             "unsupported extra callee-saved pair count"
         );
 
-        if effective_frame_size > 0 {
-            self.emit_sub_imm_any(Reg::SP, Reg::SP, effective_frame_size);
+        if frame_size > 0 {
+            self.emit_sub_imm_any(Reg::SP, Reg::SP, frame_size);
         }
 
         let mut offset: i16 = 0;
@@ -286,13 +280,6 @@ impl EmitCtx {
         } else {
             BASE_FRAME
         };
-        let mut effective_frame_size = frame_size;
-        if !config.save_x21_x22 {
-            effective_frame_size = effective_frame_size.saturating_sub(16);
-        }
-        if !config.save_x19_x20 {
-            effective_frame_size = effective_frame_size.saturating_sub(16);
-        }
         let extra_pairs = ((self.base_frame - base) / 16) as usize;
         assert!(
             extra_pairs <= 3,
@@ -310,7 +297,7 @@ impl EmitCtx {
         for is_error in [false, true] {
             if is_error {
                 self.emit.bind_label(error_exit).expect("bind");
-            } else {
+            } else if config.writeback_cursor_to_ctx {
                 // Write back cursor before returning on success
                 let cursor_reg = config.cursor_writeback_reg.unwrap_or(Reg::X19);
                 self.emit
@@ -361,8 +348,8 @@ impl EmitCtx {
                     .emit_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
                     .expect("ldp");
             }
-            if effective_frame_size > 0 {
-                self.emit_add_imm_any(Reg::SP, Reg::SP, effective_frame_size);
+            if frame_size > 0 {
+                self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
             }
             self.emit.emit_ret().expect("ret");
         }

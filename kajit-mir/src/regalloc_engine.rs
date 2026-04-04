@@ -1405,7 +1405,14 @@ pub fn allocate_cfg_program_regalloc3_native(
         let mut fixed_colors = std::collections::HashMap::new();
         for (i, &arg_vreg) in func.data_args.iter().enumerate() {
             let abi_preg = machine_inst::PReg(i as u8 + abi_arg_offset);
-            if !program.extra_excluded_regs.contains(&abi_preg) {
+            let preferred_preg = if abi_arg_offset == 2 {
+                machine_inst::PReg(23 + i as u8)
+            } else {
+                abi_preg
+            };
+            if !program.extra_excluded_regs.contains(&preferred_preg) {
+                fixed_colors.insert(arg_vreg, preferred_preg);
+            } else if !program.extra_excluded_regs.contains(&abi_preg) {
                 fixed_colors.insert(arg_vreg, abi_preg);
             }
         }
@@ -1696,8 +1703,11 @@ fn apply_moves(
     spills: &mut HashMap<usize, u64>,
     edits: &[(Allocation, Allocation)],
 ) {
-    for (from, to) in edits {
-        let value = read_allocation(regs, spills, *from);
+    let values: Vec<u64> = edits
+        .iter()
+        .map(|(from, _)| read_allocation(regs, spills, *from))
+        .collect();
+    for ((_, to), value) in edits.iter().zip(values) {
         write_allocation(regs, spills, *to, value);
     }
 }
@@ -1777,6 +1787,18 @@ struct RuntimeDeserContext {
     trusted_utf8: bool,
 }
 
+#[repr(C)]
+struct RuntimeSliceU8 {
+    ptr: *const u8,
+    len: usize,
+}
+
+#[repr(C)]
+struct RuntimeCursorArg {
+    bytes: RuntimeSliceU8,
+    pos: u64,
+}
+
 impl RuntimeDeserContext {
     fn new(input: &[u8]) -> Self {
         let ptr = input.as_ptr();
@@ -1835,6 +1857,7 @@ struct SimulatorRuntime {
     slots: Vec<u64>,
     slot_mem: Vec<u8>,
     ctx: RuntimeDeserContext,
+    root_cursor_arg: Option<Box<RuntimeCursorArg>>,
 }
 
 impl SimulatorRuntime {
@@ -1846,7 +1869,21 @@ impl SimulatorRuntime {
             slots: vec![0; slot_count],
             slot_mem: vec![0; slot_count.saturating_mul(SLOT_ADDR_STRIDE)],
             ctx: RuntimeDeserContext::new(input),
+            root_cursor_arg: None,
         }
+    }
+
+    fn init_root_cursor_arg(&mut self) -> u64 {
+        let cursor = self.root_cursor_arg.get_or_insert_with(|| {
+            Box::new(RuntimeCursorArg {
+                bytes: RuntimeSliceU8 {
+                    ptr: self.input_base,
+                    len: self.input_len,
+                },
+                pos: 0,
+            })
+        });
+        cursor.as_mut() as *mut RuntimeCursorArg as u64
     }
 
     fn init_out_ptr(&mut self, output: &mut Vec<u8>) {
@@ -2595,6 +2632,7 @@ pub fn simulate_execution_cfg(
     let mut output = vec![0u8; infer_output_size_for_cfg_program(&allocated.cfg_program)];
     let mut sim = SimulatorRuntime::new(input, allocated.cfg_program.slot_count as usize);
     sim.init_out_ptr(&mut output);
+    seed_root_data_args_in_regs(func, &mut sim, &mut regs)?;
     let mut cursor = 0usize;
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut returned = false;
@@ -2809,6 +2847,40 @@ pub fn simulate_execution_cfg(
         trap,
         returned,
     })
+}
+
+fn root_data_args_for_function(
+    func: &cfg_mir::Function,
+    sim: &mut SimulatorRuntime,
+) -> Result<Vec<u64>, RegallocEngineError> {
+    match func.data_args.as_slice() {
+        [] => Ok(Vec::new()),
+        [_] => Ok(vec![sim.init_root_cursor_arg()]),
+        args => Err(RegallocEngineError::Simulation(format!(
+            "unsupported root data arg ABI: expected 0 or 1 args, got {}",
+            args.len()
+        ))),
+    }
+}
+
+fn seed_root_data_args_in_regs(
+    func: &cfg_mir::Function,
+    sim: &mut SimulatorRuntime,
+    regs: &mut HashMap<PReg, u64>,
+) -> Result<(), RegallocEngineError> {
+    for (arg_index, arg_value) in root_data_args_for_function(func, sim)?
+        .into_iter()
+        .enumerate()
+    {
+        let preg = abi_arg_int(arg_index + 2).ok_or_else(|| {
+            RegallocEngineError::Simulation(format!(
+                "root data arg {} exceeds ABI register capacity",
+                arg_index
+            ))
+        })?;
+        regs.insert(preg, arg_value);
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3195,11 +3267,12 @@ pub fn simulate_execution_trace_cfg(
     let mut trap: Option<crate::InterpreterTrap> = None;
     let mut trace = Vec::<ExecutionTraceEntry>::new();
     let mut steps = 0usize;
+    let root_args = root_data_args_for_function(root, &mut sim)?;
 
     let _ = simulate_execution_trace_cfg_function(
         allocated,
         root.lambda_id,
-        &[],
+        &root_args,
         &mut sim,
         &mut cursor,
         &mut output,
