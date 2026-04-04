@@ -593,6 +593,14 @@ fn compare_differential_outcomes(
     interpreter: &DifferentialOutcome,
     jit: &DifferentialOutcome,
 ) -> Option<DifferentialMismatch> {
+    compare_differential_outcomes_with_ignored_output_bytes(interpreter, jit, None)
+}
+
+pub(crate) fn compare_differential_outcomes_with_ignored_output_bytes(
+    interpreter: &DifferentialOutcome,
+    jit: &DifferentialOutcome,
+    ignored_output_bytes: Option<&[bool]>,
+) -> Option<DifferentialMismatch> {
     match (interpreter, jit) {
         (
             DifferentialOutcome::Success {
@@ -602,6 +610,13 @@ fn compare_differential_outcomes(
         ) => {
             let shared = interpreter.len().min(jit.len());
             for i in 0..shared {
+                if ignored_output_bytes
+                    .and_then(|mask| mask.get(i))
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
                 if interpreter[i] != jit[i] {
                     return Some(DifferentialMismatch::FirstDivergentByte {
                         index: i,
