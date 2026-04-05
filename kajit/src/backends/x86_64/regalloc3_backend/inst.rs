@@ -640,21 +640,23 @@ impl<'a> EmitContext<'a> {
         }
 
         // Arithmetic/logic: 2-operand destructive form.
-        // Load lhs into result register, apply op with rhs.
+        // x86_64 encodes `op rd, rhs` which computes rd = op(rd, rhs).
+        // We need: rd = op(lhs, rhs). So: mov rd, lhs; op rd, rhs.
+        //
+        // Hazard: if rd == rhs_enc, the mov clobbers rhs before the op reads it.
+        // In that case: save rhs to R11 first.
         let lhs_enc = self.reg_for_vreg_with_temp(lhs, R10);
         let rd = self.dst_enc_or_temp(dst, R10);
 
-        // Move lhs into rd if needed (destructive 2-operand).
-        if rd != lhs_enc {
-            self.ectx
-                .emit
-                .emit_mov_r64_r64(rd, lhs_enc)
-                .expect("mov lhs→rd");
-        }
-
-        // Try immediate form for add/sub with 32-bit const.
+        // Try immediate form for add/sub with 32-bit const (no rhs clobber risk).
         if matches!(kind, BinOpKind::Add | BinOpKind::Sub) {
             if let Some(imm) = self.imm32_const(rhs) {
+                if rd != lhs_enc {
+                    self.ectx
+                        .emit
+                        .emit_mov_r64_r64(rd, lhs_enc)
+                        .expect("mov lhs→rd");
+                }
                 match kind {
                     BinOpKind::Add => self
                         .ectx
@@ -677,14 +679,44 @@ impl<'a> EmitContext<'a> {
 
         let rhs_enc = self.reg_for_vreg_with_temp(rhs, R11);
 
-        match kind {
-            BinOpKind::Add => self.ectx.emit.emit_add_r64_r64(rd, rhs_enc).expect("add"),
-            BinOpKind::Sub => self.ectx.emit.emit_sub_r64_r64(rd, rhs_enc).expect("sub"),
-            BinOpKind::Mul => self.ectx.emit.emit_imul_r64_r64(rd, rhs_enc).expect("imul"),
-            BinOpKind::And => self.ectx.emit.emit_and_r64_r64(rd, rhs_enc).expect("and"),
-            BinOpKind::Or => self.ectx.emit.emit_or_r64_r64(rd, rhs_enc).expect("or"),
-            BinOpKind::Xor => self.ectx.emit.emit_xor_r64_r64(rd, rhs_enc).expect("xor"),
-            _ => unreachable!("comparison/shift ops handled above"),
+        // Handle the clobber hazard: if rd == rhs_enc and rd != lhs_enc,
+        // the mov lhs→rd would destroy rhs before the op can read it.
+        if rd == rhs_enc && rd != lhs_enc {
+            // Save rhs to R11, mov lhs into rd, operate with R11.
+            self.ectx
+                .emit
+                .emit_mov_r64_r64(R11, rhs_enc)
+                .expect("save rhs to temp");
+            self.ectx
+                .emit
+                .emit_mov_r64_r64(rd, lhs_enc)
+                .expect("mov lhs→rd");
+            match kind {
+                BinOpKind::Add => self.ectx.emit.emit_add_r64_r64(rd, R11).expect("add"),
+                BinOpKind::Sub => self.ectx.emit.emit_sub_r64_r64(rd, R11).expect("sub"),
+                BinOpKind::Mul => self.ectx.emit.emit_imul_r64_r64(rd, R11).expect("imul"),
+                BinOpKind::And => self.ectx.emit.emit_and_r64_r64(rd, R11).expect("and"),
+                BinOpKind::Or => self.ectx.emit.emit_or_r64_r64(rd, R11).expect("or"),
+                BinOpKind::Xor => self.ectx.emit.emit_xor_r64_r64(rd, R11).expect("xor"),
+                _ => unreachable!("comparison/shift ops handled above"),
+            }
+        } else {
+            // Normal case: mov lhs into rd (if needed), then operate with rhs.
+            if rd != lhs_enc {
+                self.ectx
+                    .emit
+                    .emit_mov_r64_r64(rd, lhs_enc)
+                    .expect("mov lhs→rd");
+            }
+            match kind {
+                BinOpKind::Add => self.ectx.emit.emit_add_r64_r64(rd, rhs_enc).expect("add"),
+                BinOpKind::Sub => self.ectx.emit.emit_sub_r64_r64(rd, rhs_enc).expect("sub"),
+                BinOpKind::Mul => self.ectx.emit.emit_imul_r64_r64(rd, rhs_enc).expect("imul"),
+                BinOpKind::And => self.ectx.emit.emit_and_r64_r64(rd, rhs_enc).expect("and"),
+                BinOpKind::Or => self.ectx.emit.emit_or_r64_r64(rd, rhs_enc).expect("or"),
+                BinOpKind::Xor => self.ectx.emit.emit_xor_r64_r64(rd, rhs_enc).expect("xor"),
+                _ => unreachable!("comparison/shift ops handled above"),
+            }
         }
 
         if rd == R10 {

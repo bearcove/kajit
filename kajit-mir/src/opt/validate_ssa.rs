@@ -607,7 +607,7 @@ fn check_entry_liveness(func: &Function, errors: &mut Vec<SsaError>) {
 
         // Add this instruction's defs
         for operand in &inst.operands {
-            if operand.kind == OperandKind::Def {
+            if operand.kind.is_def() {
                 defined.insert(operand.vreg);
             }
         }

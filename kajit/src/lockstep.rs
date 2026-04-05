@@ -1340,7 +1340,7 @@ pub fn op_def_uses_and_kind(
     let mut uses = Vec::new();
     for op in &inst.operands {
         match op.kind {
-            OperandKind::Def => def = Some(op.vreg),
+            OperandKind::Def | OperandKind::DefTied(_) => def = Some(op.vreg),
             OperandKind::Use => uses.push(op.vreg),
         }
     }

@@ -449,8 +449,8 @@ fn lower_operand(op: cfg_mir::Operand) -> Operand {
         None => OperandConstraint::Reg,
     };
     let kind = match op.kind {
-        RaOperandKind::Use => OperandKind::Use,
-        RaOperandKind::Def => OperandKind::Def,
+        cfg_mir::OperandKind::Use => OperandKind::Use,
+        cfg_mir::OperandKind::Def | cfg_mir::OperandKind::DefTied(_) => OperandKind::Def,
     };
     let pos = match kind {
         OperandKind::Use => OperandPos::Early,

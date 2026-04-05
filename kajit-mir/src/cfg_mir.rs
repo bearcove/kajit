@@ -48,6 +48,17 @@ pub enum OpId {
 pub enum OperandKind {
     Use,
     Def,
+    /// Def tied to a use operand at the given index in the same instruction's operand list.
+    /// The allocator must assign this def the same physical register as the tied use.
+    /// On x86_64, destructive 2-operand instructions (add, and, etc.) tie dst to lhs.
+    DefTied(usize),
+}
+
+impl OperandKind {
+    /// Returns true if this is a definition (either plain or tied).
+    pub fn is_def(self) -> bool {
+        matches!(self, OperandKind::Def | OperandKind::DefTied(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -596,7 +607,7 @@ impl Function {
                 for &inst_id in &other_block.insts {
                     let inst = &self.insts[inst_id.index()];
                     for op in &inst.operands {
-                        if op.kind == OperandKind::Def {
+                        if op.kind.is_def() {
                             defs_available.insert(op.vreg);
                         }
                     }
@@ -623,7 +634,7 @@ impl Function {
 
                 // Add this instruction's defs
                 for op in &inst.operands {
-                    if op.kind == OperandKind::Def {
+                    if op.kind.is_def() {
                         defs_available.insert(op.vreg);
                     }
                 }
@@ -997,7 +1008,7 @@ fn fmt_cfg_inst(
     let _defs: Vec<_> = inst
         .operands
         .iter()
-        .filter(|op| op.kind == OperandKind::Def)
+        .filter(|op| op.kind.is_def())
         .collect();
     let _uses: Vec<_> = inst
         .operands
@@ -1307,6 +1318,16 @@ fn push_def(out: &mut Vec<Operand>, v: VReg, fixed: Option<FixedReg>) {
     });
 }
 
+/// Push a def operand tied to the use operand at `tied_to_index` in the same operand list.
+fn push_def_tied(out: &mut Vec<Operand>, v: VReg, tied_to_index: usize) {
+    out.push(Operand {
+        vreg: v,
+        kind: OperandKind::DefTied(tied_to_index),
+        class: RegClass::Gpr,
+        fixed: None,
+    });
+}
+
 fn lower_inst(id: InstId, op: LinearOp) -> Inst {
     let mut operands = Vec::new();
     let mut clobbers = Clobbers::default();
@@ -1349,6 +1370,28 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
                 }
             };
             push_use(&mut operands, *rhs, rhs_fixed);
+            // On x86_64, arithmetic/logic BinOps are destructive 2-operand (dst = op(dst, rhs)),
+            // so dst must be tied to lhs (operand index 0). Comparisons use cmp+setcc, not
+            // destructive form, so they use a plain Def.
+            #[cfg(target_arch = "x86_64")]
+            {
+                use kajit_lir::BinOpKind;
+                let is_comparison = matches!(
+                    op,
+                    BinOpKind::CmpEq
+                        | BinOpKind::CmpNe
+                        | BinOpKind::CmpLt
+                        | BinOpKind::CmpLe
+                        | BinOpKind::CmpGt
+                        | BinOpKind::CmpGe
+                );
+                if is_comparison {
+                    push_def(&mut operands, *dst, None);
+                } else {
+                    push_def_tied(&mut operands, *dst, 0); // tied to lhs
+                }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
             push_def(&mut operands, *dst, None);
         }
         LinearOp::UnaryOp { dst, src, .. } | LinearOp::Copy { dst, src } => {
@@ -1515,7 +1558,7 @@ fn _collect_use_def(
                         use_set[operand.vreg.index()] = true;
                     }
                 }
-                OperandKind::Def => {
+                OperandKind::Def | OperandKind::DefTied(_) => {
                     def_set[operand.vreg.index()] = true;
                 }
             }
@@ -2647,7 +2690,7 @@ fn rematerialize_constants_in_function(
 
                 // Then add this instruction's defs
                 for op in &inst.operands {
-                    if op.kind == OperandKind::Def {
+                    if op.kind.is_def() {
                         defs_so_far.insert(op.vreg);
                     }
                 }
@@ -2754,7 +2797,7 @@ fn global_copy_propagation(func: &mut Function) {
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
             for operand in &inst.operands {
-                if operand.kind == OperandKind::Def {
+                if operand.kind.is_def() {
                     vreg_def_block.insert(operand.vreg, block.id);
                 }
             }
@@ -2791,7 +2834,7 @@ fn global_copy_propagation(func: &mut Function) {
         for (idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.index()];
             for operand in &inst.operands {
-                if operand.kind == OperandKind::Def {
+                if operand.kind.is_def() {
                     block_vreg_def_idx.insert((block_id, operand.vreg), idx + 1);
                 }
             }
@@ -3369,7 +3412,7 @@ fn dead_code_elimination_in_function(func: &mut Function) {
 
                 // Check if all defs are unused
                 let all_defs_unused = inst.operands.iter().all(|op| {
-                    if op.kind != OperandKind::Def {
+                    if !op.kind.is_def() {
                         return true;
                     }
                     is_def_unused(func, &analysis, op.vreg, block.id, is_entry)
@@ -3444,7 +3487,7 @@ fn build_use_def_analysis(func: &Function) -> UseDefAnalysis {
 
             // Then record defs
             for op in &inst.operands {
-                if op.kind == OperandKind::Def {
+                if op.kind.is_def() {
                     defs_in_block.insert(op.vreg);
                     local_defs.entry(op.vreg).or_default().insert(block.id);
                 }
@@ -3564,7 +3607,7 @@ fn has_local_use_after_def(func: &Function, vreg: VReg, block_id: BlockId) -> bo
 
         // Check if this instruction defines vreg
         for op in &inst.operands {
-            if op.kind == OperandKind::Def && op.vreg == vreg {
+            if op.kind.is_def() && op.vreg == vreg {
                 found_def = true;
                 break;
             }

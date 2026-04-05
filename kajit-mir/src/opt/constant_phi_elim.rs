@@ -293,7 +293,7 @@ fn is_vreg_defined(func: &Function, vreg: VReg) -> bool {
     // Check instruction definitions
     for inst in &func.insts {
         for operand in &inst.operands {
-            if operand.vreg == vreg && operand.kind == crate::cfg_mir::OperandKind::Def {
+            if operand.vreg == vreg && operand.kind.is_def() {
                 return true;
             }
         }
@@ -328,7 +328,7 @@ fn find_def_block_for_vreg(func: &Function, vreg: VReg) -> Option<BlockId> {
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
             for operand in &inst.operands {
-                if operand.vreg == vreg && operand.kind == crate::cfg_mir::OperandKind::Def {
+                if operand.vreg == vreg && operand.kind.is_def() {
                     return Some(block.id);
                 }
             }
