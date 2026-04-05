@@ -219,7 +219,7 @@ fn compute_rpo(func: &Function) -> Vec<BlockId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cfg_mir::{Block, Edge, Function, Inst, Terminator};
+    use crate::cfg_mir::{Block, Function, Inst, Terminator};
 
     #[test]
     fn test_progpoint_ordering() {

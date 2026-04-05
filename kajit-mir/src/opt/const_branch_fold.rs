@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::cfg_mir::{Edge, EdgeArg, EdgeId, Function, Terminator};
+use crate::cfg_mir::{EdgeArg, EdgeId, Function, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
@@ -177,6 +177,7 @@ fn fold_direct_const_branches(func: &mut Function, const_vals: &HashMap<VReg, u6
 /// - A predecessor edge E where the source for v_cond is a known constant
 ///
 /// Retarget E to bypass B, going directly to the correct successor of B.
+#[allow(dead_code)]
 fn thread_const_phi_branches(func: &mut Function, const_vals: &HashMap<VReg, u64>) -> usize {
     let mut threaded = 0;
 
@@ -273,7 +274,7 @@ fn thread_const_phi_branches(func: &mut Function, const_vals: &HashMap<VReg, u64
         let succ_args = succ_edge.args.clone();
 
         let branch_block = &func.blocks[action.branch_block_idx];
-        let branch_params = branch_block.params.clone();
+        let _branch_params = branch_block.params.clone();
 
         let pred_edge = &func.edges[action.pred_edge_id.index()];
         let pred_args = pred_edge.args.clone();
@@ -327,6 +328,7 @@ fn thread_const_phi_branches(func: &mut Function, const_vals: &HashMap<VReg, u64
     threaded
 }
 
+#[allow(dead_code)]
 struct ThreadAction {
     pred_edge_id: EdgeId,
     branch_block_idx: usize,

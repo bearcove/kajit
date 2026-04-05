@@ -1012,6 +1012,7 @@ fn postcard_hir_lowering_decodes_borrowed_header() {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)]
 fn debug_postcard_borrowed_header_harness() {
     let shape = <BorrowedHeader<'static>>::SHAPE;
     let module = build_postcard_decoder_hir(shape);
@@ -1025,19 +1026,28 @@ fn debug_postcard_borrowed_header_harness() {
     let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
     let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .expect("regalloc3 should allocate BorrowedHeader cfg");
+    #[cfg(target_arch = "aarch64")]
     let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&ra3_alloc);
+    #[cfg(target_arch = "x86_64")]
+    let base_frame = crate::backends::x86_64::regalloc3_backend::compute_base_frame(&ra3_alloc);
     let alloc_map = ra3_alloc
         .functions
         .first()
         .map(|func| crate::harness::AllocationMap::from_regalloc3(func, base_frame))
         .unwrap_or_default();
 
+    #[cfg(target_arch = "aarch64")]
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
         &ra3_alloc,
         root_data_abi,
     );
+    #[cfg(target_arch = "x86_64")]
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &ra3_alloc,
+        root_data_abi,
+    );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
-    let (buf, entry, _source_map, _backend_debug_info, asm_program) =
+    let (buf, entry, _source_map, _backend_debug_info, _asm_program) =
         super::materialize_backend_result(result);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
@@ -1051,8 +1061,7 @@ fn debug_postcard_borrowed_header_harness() {
         root_data_abi,
         trusted_utf8_input: false,
         _jit_registration: None,
-        #[cfg(target_arch = "aarch64")]
-        asm_program,
+        asm_program: _asm_program,
     };
 
     let output_dir = std::path::PathBuf::from("/tmp/kajit-harness");

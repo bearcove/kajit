@@ -710,7 +710,8 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                             }
                             used_now.push(operand.vreg);
                         }
-                        crate::regalloc_engine::cfg_mir::OperandKind::Def => {
+                        crate::regalloc_engine::cfg_mir::OperandKind::Def
+                        | crate::regalloc_engine::cfg_mir::OperandKind::DefTied(_) => {
                             let dest = lexical_intro_ranges_by_vreg.entry(operand.vreg).or_default();
                             dest.extend(op_ranges.iter().map(|(start, end)| {
                                 crate::jit_dwarf::JitDebugRange {

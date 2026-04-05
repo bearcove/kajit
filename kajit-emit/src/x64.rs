@@ -53,7 +53,7 @@ unsafe impl Sync for ExecutableBuffer {}
 impl ExecutableBuffer {
     fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
-        let mut flags = MAP_PRIVATE | MAP_ANON;
+        let flags = MAP_PRIVATE | MAP_ANON;
         #[cfg(target_os = "macos")]
         {
             flags |= MAP_JIT;
@@ -114,31 +114,25 @@ impl ExecutableBuffer {
             "patch_u64_load: offset {offset} + 10 > len {}",
             self.len
         );
-        let ptr = self.ptr.add(offset);
+        let ptr = unsafe { self.ptr.add(offset) };
 
         #[cfg(target_os = "macos")]
-        unsafe {
-            pthread_jit_write_protect_np(0);
-        }
+        unsafe { pthread_jit_write_protect_np(0) };
 
         #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
-        }
+        unsafe { mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE) };
 
         // The imm64 is at bytes [2..10] for a REX.W + B8+rd instruction.
-        let imm_ptr = ptr.add(2) as *mut u64;
-        unsafe { imm_ptr.write_unaligned(value) };
+        unsafe {
+            let imm_ptr = ptr.add(2) as *mut u64;
+            imm_ptr.write_unaligned(value);
+        }
 
         #[cfg(target_os = "macos")]
-        unsafe {
-            pthread_jit_write_protect_np(1);
-        }
+        unsafe { pthread_jit_write_protect_np(1) };
 
         #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
-        }
+        unsafe { mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC) };
     }
 }
 
@@ -285,6 +279,7 @@ pub struct Emitter {
     last_recorded_location: Option<SourceLocation>,
     labels: Vec<Option<u32>>,
     fixups: Vec<Fixup>,
+    captured_instructions: Option<Vec<crate::x64_asm::Item>>,
 }
 
 impl Emitter {
@@ -308,6 +303,32 @@ impl Emitter {
     /// Append raw bytes to the code buffer (for data sections appended after code).
     pub fn emit_raw_bytes(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
+    }
+
+    /// Enable instruction capture for assembly dump workflow.
+    pub fn enable_capture(&mut self) {
+        self.captured_instructions = Some(Vec::new());
+    }
+
+    /// Get captured instructions and labels as a program.
+    pub fn take_captured_program(&mut self) -> Option<crate::x64_asm::Program> {
+        self.captured_instructions
+            .take()
+            .map(|items| crate::x64_asm::Program { items })
+    }
+
+    /// Capture an instruction (if capture is enabled).
+    fn capture(&mut self, inst: crate::x64_asm::Instruction) {
+        if let Some(ref mut captured) = self.captured_instructions {
+            captured.push(crate::x64_asm::Item::Instruction(inst));
+        }
+    }
+
+    /// Capture a label (if capture is enabled).
+    fn capture_label(&mut self, label: LabelId) {
+        if let Some(ref mut captured) = self.captured_instructions {
+            captured.push(crate::x64_asm::Item::Label(crate::x64_asm::Label(label.0)));
+        }
     }
 
     pub fn source_map(&self) -> &[SourceMapEntry] {
@@ -350,6 +371,7 @@ impl Emitter {
             });
         }
         *slot = Some(current_offset);
+        self.capture_label(label);
         Ok(())
     }
 
@@ -419,6 +441,7 @@ impl Emitter {
         condition: Condition,
     ) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
+        self.capture(crate::x64_asm::Instruction::JccLabel { cond: condition, label });
         let start = self.current_offset();
         self.emit_with(|buf| encode_jcc_rel32(buf, condition, 0))?;
         self.fixups.push(Fixup {
@@ -431,6 +454,7 @@ impl Emitter {
 
     pub fn emit_jmp_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
+        self.capture(crate::x64_asm::Instruction::JmpLabel { label });
         let start = self.current_offset();
         self.emit_with(|buf| encode_jmp_rel32(buf, 0))?;
         self.fixups.push(Fixup {
@@ -443,6 +467,7 @@ impl Emitter {
 
     pub fn emit_call_label(&mut self, label: LabelId) -> Result<(), EmitError> {
         self.ensure_label_exists(label)?;
+        self.capture(crate::x64_asm::Instruction::CallLabel { label });
         let start = self.current_offset();
         self.emit_with(|buf| encode_call_rel32(buf, 0))?;
         self.fixups.push(Fixup {
@@ -451,6 +476,228 @@ impl Emitter {
             label,
         });
         Ok(())
+    }
+
+    // ── Instruction wrapper methods (encode + capture) ──────────────────
+
+    // Moves: reg-reg
+    pub fn emit_mov_r64_r64(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovR64R64 { dst, src });
+        self.emit_with(|buf| encode_mov_r64_r64(dst, src, buf))
+    }
+    pub fn emit_mov_r32_r32(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovR32R32 { dst, src });
+        self.emit_with(|buf| encode_mov_r32_r32(dst, src, buf))
+    }
+
+    // Moves: reg-imm
+    pub fn emit_mov_r64_imm64(&mut self, dst: u8, imm: u64) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovR64Imm64 { dst, imm });
+        self.emit_with(|buf| encode_mov_r64_imm64(dst, imm, buf))
+    }
+    pub fn emit_mov_r64_imm32_sext(&mut self, dst: u8, imm: u32) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovR64Imm32Sext { dst, imm });
+        self.emit_with(|buf| encode_mov_r64_imm32_sext(dst, imm, buf))
+    }
+    pub fn emit_mov_r32_imm32(&mut self, dst: u8, imm: u32) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovR32Imm32 { dst, imm });
+        self.emit_with(|buf| encode_mov_r32_imm32(dst, imm, buf))
+    }
+
+    // Moves: reg-mem, mem-reg
+    pub fn emit_mov_r64_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovR64M { dst, src });
+        self.emit_with(|buf| encode_mov_r64_m(dst, src, buf))
+    }
+    pub fn emit_mov_m_r64(&mut self, dst: Mem, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovMR64 { dst, src });
+        self.emit_with(|buf| encode_mov_m_r64(dst, src, buf))
+    }
+    pub fn emit_mov_r32_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovR32M { dst, src });
+        self.emit_with(|buf| encode_mov_r32_m(dst, src, buf))
+    }
+    pub fn emit_mov_m_r32(&mut self, dst: Mem, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovMR32 { dst, src });
+        self.emit_with(|buf| encode_mov_m_r32(dst, src, buf))
+    }
+    pub fn emit_mov_m_r16(&mut self, dst: Mem, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovMR16 { dst, src });
+        self.emit_with(|buf| encode_mov_m_r16(dst.base, dst.disp, src, buf))
+    }
+    pub fn emit_mov_m_r8(&mut self, dst: Mem, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovMR8 { dst, src });
+        self.emit_with(|buf| encode_mov_m_r8(dst.base, dst.disp, src, buf))
+    }
+
+    // Zero/sign extension
+    pub fn emit_movzx_r32_rm8(&mut self, dst: u8, src: Operand) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovzxR32Rm8 { dst, src });
+        self.emit_with(|buf| encode_movzx_r32_rm8(dst, src, buf))
+    }
+    pub fn emit_movzx_r32_rm16(&mut self, dst: u8, src: Operand) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovzxR32Rm16 { dst, src });
+        self.emit_with(|buf| encode_movzx_r32_rm16(dst, src, buf))
+    }
+    pub fn emit_movzx_r64_rm8(&mut self, dst: u8, src: Operand) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovzxR64Rm8 { dst, src });
+        self.emit_with(|buf| encode_movzx_r64_rm8(dst, src, buf))
+    }
+    pub fn emit_movsx_r64_rm8(&mut self, dst: u8, src: Operand) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovsxR64Rm8 { dst, src });
+        self.emit_with(|buf| encode_movsx_r64_rm8(dst, src, buf))
+    }
+    pub fn emit_movsx_r64_rm16(&mut self, dst: u8, src: Operand) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovsxR64Rm16 { dst, src });
+        self.emit_with(|buf| encode_movsx_r64_rm16(dst, src, buf))
+    }
+    pub fn emit_movsxd_r64_rm32(&mut self, dst: u8, src: Operand) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::MovsxdR64Rm32 { dst, src });
+        self.emit_with(|buf| encode_movsxd_r64_rm32(dst, src, buf))
+    }
+
+    // Arithmetic
+    pub fn emit_add_r64_r64(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::AddR64R64 { dst, src });
+        self.emit_with(|buf| encode_add_r64_r64(dst, src, buf))
+    }
+    pub fn emit_add_r64_imm32(&mut self, dst: u8, imm: u32) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::AddR64Imm32 { dst, imm });
+        self.emit_with(|buf| encode_add_r64_imm32(dst, imm, buf))
+    }
+    pub fn emit_add_r64_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::AddR64M { dst, src });
+        self.emit_with(|buf| encode_add_r64_m(dst, src, buf))
+    }
+    pub fn emit_sub_r64_r64(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::SubR64R64 { dst, src });
+        self.emit_with(|buf| encode_sub_r64_r64(dst, src, buf))
+    }
+    pub fn emit_sub_r64_imm32(&mut self, dst: u8, imm: u32) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::SubR64Imm32 { dst, imm });
+        self.emit_with(|buf| encode_sub_r64_imm32(dst, imm, buf))
+    }
+    pub fn emit_sub_r64_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::SubR64M { dst, src });
+        self.emit_with(|buf| encode_sub_r64_m(dst, src, buf))
+    }
+    pub fn emit_imul_r64_r64(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::ImulR64R64 { dst, src });
+        self.emit_with(|buf| encode_imul_r64_r64(dst, src, buf))
+    }
+    pub fn emit_neg_r64(&mut self, dst: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::NegR64 { dst });
+        self.emit_with(|buf| encode_neg_r64(dst, buf))
+    }
+    pub fn emit_lea_r64_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::LeaR64M { dst, src });
+        self.emit_with(|buf| encode_lea_r64_m(dst, src, buf))
+    }
+
+    // Logical
+    pub fn emit_and_r64_r64(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::AndR64R64 { dst, src });
+        self.emit_with(|buf| encode_and_r64_r64(dst, src, buf))
+    }
+    pub fn emit_and_r64_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::AndR64M { dst, src });
+        self.emit_with(|buf| encode_and_r64_m(dst, src, buf))
+    }
+    pub fn emit_or_r64_r64(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::OrR64R64 { dst, src });
+        self.emit_with(|buf| encode_or_r64_r64(dst, src, buf))
+    }
+    pub fn emit_or_r64_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::OrR64M { dst, src });
+        self.emit_with(|buf| encode_or_r64_m(dst, src, buf))
+    }
+    pub fn emit_xor_r64_r64(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::XorR64R64 { dst, src });
+        self.emit_with(|buf| encode_xor_r64_r64(dst, src, buf))
+    }
+    pub fn emit_xor_r64_m(&mut self, dst: u8, src: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::XorR64M { dst, src });
+        self.emit_with(|buf| encode_xor_r64_m(dst, src, buf))
+    }
+    pub fn emit_xor_r32_r32(&mut self, dst: u8, src: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::XorR32R32 { dst, src });
+        self.emit_with(|buf| encode_xor_r32_r32(dst, src, buf))
+    }
+
+    // Shifts
+    pub fn emit_shl_r64_imm8(&mut self, dst: u8, imm: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::ShlR64Imm8 { dst, imm });
+        self.emit_with(|buf| encode_shl_r64_imm8(dst, imm, buf))
+    }
+    pub fn emit_shl_r64_cl(&mut self, dst: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::ShlR64Cl { dst });
+        self.emit_with(|buf| encode_shl_r64_cl(dst, buf))
+    }
+    pub fn emit_shr_r64_imm8(&mut self, dst: u8, imm: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::ShrR64Imm8 { dst, imm });
+        self.emit_with(|buf| encode_shr_r64_imm8(dst, imm, buf))
+    }
+    pub fn emit_shr_r64_cl(&mut self, dst: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::ShrR64Cl { dst });
+        self.emit_with(|buf| encode_shr_r64_cl(dst, buf))
+    }
+    pub fn emit_sar_r64_imm8(&mut self, dst: u8, imm: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::SarR64Imm8 { dst, imm });
+        self.emit_with(|buf| encode_sar_r64_imm8(dst, imm, buf))
+    }
+    pub fn emit_sar_r64_cl(&mut self, dst: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::SarR64Cl { dst });
+        self.emit_with(|buf| encode_sar_r64_cl(dst, buf))
+    }
+
+    // Compare/Test
+    pub fn emit_cmp_r64_r64(&mut self, lhs: u8, rhs: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::CmpR64R64 { lhs, rhs });
+        self.emit_with(|buf| encode_cmp_r64_r64(lhs, rhs, buf))
+    }
+    pub fn emit_cmp_r64_imm32(&mut self, dst: u8, imm: u32) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::CmpR64Imm32 { dst, imm });
+        self.emit_with(|buf| encode_cmp_r64_imm32(dst, imm, buf))
+    }
+    pub fn emit_cmp_r64_m(&mut self, lhs: u8, rhs: Mem) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::CmpR64M { lhs, rhs });
+        self.emit_with(|buf| encode_cmp_r64_m(lhs, rhs, buf))
+    }
+    pub fn emit_test_r64_r64(&mut self, lhs: u8, rhs: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::TestR64R64 { lhs, rhs });
+        self.emit_with(|buf| encode_test_r64_r64(lhs, rhs, buf))
+    }
+    pub fn emit_test_r32_r32(&mut self, lhs: u8, rhs: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::TestR32R32 { lhs, rhs });
+        self.emit_with(|buf| encode_test_r32_r32(lhs, rhs, buf))
+    }
+    pub fn emit_setcc_r8(&mut self, cond: Condition, dst: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::SetccR8 { cond, dst });
+        self.emit_with(|buf| encode_setcc_r8(cond, dst, buf))
+    }
+
+    // Call/Stack
+    pub fn emit_call_r64(&mut self, reg: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::CallR64 { reg });
+        self.emit_with(|buf| encode_call_r64(reg, buf))
+    }
+    pub fn emit_push_r64(&mut self, reg: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::PushR64 { reg });
+        self.emit_with(|buf| encode_push_r64(reg, buf))
+    }
+    pub fn emit_pop_r64(&mut self, reg: u8) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::PopR64 { reg });
+        self.emit_with(|buf| encode_pop_r64(reg, buf))
+    }
+
+    // Misc
+    pub fn emit_ret(&mut self) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::Ret);
+        self.emit_with(|buf| encode_ret(buf))
+    }
+    pub fn emit_nop(&mut self) -> Result<(), EmitError> {
+        self.capture(crate::x64_asm::Instruction::Nop);
+        self.emit_with(|buf| encode_nop(buf))
     }
 
     pub fn finalize(mut self) -> Result<FinalizedEmission, EmitError> {

@@ -91,7 +91,7 @@ fn collect_block_defs(func: &Function, block_id: BlockId) -> HashSet<VReg> {
     for &inst_id in &block.insts {
         let inst = &func.insts[inst_id.index()];
         for op in &inst.operands {
-            if op.kind == OperandKind::Def {
+            if op.kind.is_def() {
                 defs.insert(op.vreg);
             }
         }
@@ -112,7 +112,7 @@ fn build_def_map(func: &Function) -> HashMap<VReg, BlockId> {
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
             for op in &inst.operands {
-                if op.kind == OperandKind::Def {
+                if op.kind.is_def() {
                     def_map.insert(op.vreg, block.id);
                 }
             }

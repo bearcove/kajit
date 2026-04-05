@@ -18,6 +18,7 @@ pub type SourceMap = Vec<SourceMapEntry>;
 pub mod aarch64;
 pub mod aarch64_asm;
 pub mod x64;
+pub mod x64_asm;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceMapError {

@@ -836,6 +836,7 @@ fn is_port_source_referenced_non_gamma(func: &IrFunc, source: PortSource) -> boo
 }
 
 /// Check if a PortSource has ANY references in the entire IR (all nodes, all regions).
+#[allow(dead_code)]
 fn is_port_source_referenced_anywhere(func: &IrFunc, source: PortSource) -> bool {
     for (_nid, node) in func.nodes.iter() {
         for input in &node.inputs {

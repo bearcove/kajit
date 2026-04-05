@@ -48,6 +48,17 @@ pub enum OpId {
 pub enum OperandKind {
     Use,
     Def,
+    /// Def tied to a use operand at the given index in the same instruction's operand list.
+    /// The allocator must assign this def the same physical register as the tied use.
+    /// On x86_64, destructive 2-operand instructions (add, and, etc.) tie dst to lhs.
+    DefTied(usize),
+}
+
+impl OperandKind {
+    /// Returns true if this is a definition (either plain or tied).
+    pub fn is_def(self) -> bool {
+        matches!(self, OperandKind::Def | OperandKind::DefTied(_))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -596,7 +607,7 @@ impl Function {
                 for &inst_id in &other_block.insts {
                     let inst = &self.insts[inst_id.index()];
                     for op in &inst.operands {
-                        if op.kind == OperandKind::Def {
+                        if op.kind.is_def() {
                             defs_available.insert(op.vreg);
                         }
                     }
@@ -623,7 +634,7 @@ impl Function {
 
                 // Add this instruction's defs
                 for op in &inst.operands {
-                    if op.kind == OperandKind::Def {
+                    if op.kind.is_def() {
                         defs_available.insert(op.vreg);
                     }
                 }
@@ -997,7 +1008,7 @@ fn fmt_cfg_inst(
     let _defs: Vec<_> = inst
         .operands
         .iter()
-        .filter(|op| op.kind == OperandKind::Def)
+        .filter(|op| op.kind.is_def())
         .collect();
     let _uses: Vec<_> = inst
         .operands
@@ -1307,6 +1318,16 @@ fn push_def(out: &mut Vec<Operand>, v: VReg, fixed: Option<FixedReg>) {
     });
 }
 
+/// Push a def operand tied to the use operand at `tied_to_index` in the same operand list.
+fn push_def_tied(out: &mut Vec<Operand>, v: VReg, tied_to_index: usize) {
+    out.push(Operand {
+        vreg: v,
+        kind: OperandKind::DefTied(tied_to_index),
+        class: RegClass::Gpr,
+        fixed: None,
+    });
+}
+
 fn lower_inst(id: InstId, op: LinearOp) -> Inst {
     let mut operands = Vec::new();
     let mut clobbers = Clobbers::default();
@@ -1349,6 +1370,28 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
                 }
             };
             push_use(&mut operands, *rhs, rhs_fixed);
+            // On x86_64, arithmetic/logic BinOps are destructive 2-operand (dst = op(dst, rhs)),
+            // so dst must be tied to lhs (operand index 0). Comparisons use cmp+setcc, not
+            // destructive form, so they use a plain Def.
+            #[cfg(target_arch = "x86_64")]
+            {
+                use kajit_lir::BinOpKind;
+                let is_comparison = matches!(
+                    op,
+                    BinOpKind::CmpEq
+                        | BinOpKind::CmpNe
+                        | BinOpKind::CmpLt
+                        | BinOpKind::CmpLe
+                        | BinOpKind::CmpGt
+                        | BinOpKind::CmpGe
+                );
+                if is_comparison {
+                    push_def(&mut operands, *dst, None);
+                } else {
+                    push_def_tied(&mut operands, *dst, 0); // tied to lhs
+                }
+            }
+            #[cfg(not(target_arch = "x86_64"))]
             push_def(&mut operands, *dst, None);
         }
         LinearOp::UnaryOp { dst, src, .. } | LinearOp::Copy { dst, src } => {
@@ -1515,7 +1558,7 @@ fn _collect_use_def(
                         use_set[operand.vreg.index()] = true;
                     }
                 }
-                OperandKind::Def => {
+                OperandKind::Def | OperandKind::DefTied(_) => {
                     def_set[operand.vreg.index()] = true;
                 }
             }
@@ -2647,7 +2690,7 @@ fn rematerialize_constants_in_function(
 
                 // Then add this instruction's defs
                 for op in &inst.operands {
-                    if op.kind == OperandKind::Def {
+                    if op.kind.is_def() {
                         defs_so_far.insert(op.vreg);
                     }
                 }
@@ -2754,7 +2797,7 @@ fn global_copy_propagation(func: &mut Function) {
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
             for operand in &inst.operands {
-                if operand.kind == OperandKind::Def {
+                if operand.kind.is_def() {
                     vreg_def_block.insert(operand.vreg, block.id);
                 }
             }
@@ -2791,7 +2834,7 @@ fn global_copy_propagation(func: &mut Function) {
         for (idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.index()];
             for operand in &inst.operands {
-                if operand.kind == OperandKind::Def {
+                if operand.kind.is_def() {
                     block_vreg_def_idx.insert((block_id, operand.vreg), idx + 1);
                 }
             }
@@ -3071,6 +3114,8 @@ fn dominates(idom: &HashMap<BlockId, Option<BlockId>>, a: BlockId, b: BlockId) -
 /// can be encoded as immediates on all supported targets.
 fn can_encode_as_immediate(op: kajit_lir::BinOpKind, value: u64) -> bool {
     use kajit_lir::BinOpKind;
+
+    #[cfg(target_arch = "aarch64")]
     match op {
         // ARM64 add/sub immediate: 12-bit unsigned (0-4095)
         BinOpKind::Add | BinOpKind::Sub => value <= 4095,
@@ -3079,6 +3124,19 @@ fn can_encode_as_immediate(op: kajit_lir::BinOpKind, value: u64) -> bool {
         // ARM64 logical immediate uses bitmask encoding. Only allow values we know encode.
         // Common varint masks: 0x7f (7 consecutive 1s), 0x80 (single bit), 0xff, etc.
         BinOpKind::And | BinOpKind::Or | BinOpKind::Xor => is_encodable_logical_imm(value),
+        _ => false,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    match op {
+        // x86_64 add/sub r64, imm32
+        BinOpKind::Add | BinOpKind::Sub => value <= u32::MAX as u64,
+        // x86_64 shl/shr/sar r64, imm8 (shift amount 0-63)
+        BinOpKind::Shl | BinOpKind::Shr | BinOpKind::Sar => value < 64,
+        // x86_64 cmp r64, imm32
+        BinOpKind::CmpEq | BinOpKind::CmpNe | BinOpKind::CmpLt | BinOpKind::CmpLe
+        | BinOpKind::CmpGt | BinOpKind::CmpGe => value <= u32::MAX as u64,
+        // x86_64 backend does not yet support and/or/xor with immediates
         _ => false,
     }
 }
@@ -3186,14 +3244,13 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                 if is_compare {
                     // For compares, EITHER operand can be the immediate —
                     // the backend swaps operands to put the const on the RHS.
-                    // ARM64 cmp immediate: 12-bit unsigned (0-4095).
                     if let Some(value) = get_const_value(lhs) {
-                        if value > 4095 {
+                        if !can_encode_as_immediate(*op, value) {
                             use_kinds.insert(*lhs, UseKind::RequiresRegister);
                         }
                     }
                     if let Some(value) = get_const_value(rhs) {
-                        if value > 4095 {
+                        if !can_encode_as_immediate(*op, value) {
                             use_kinds.insert(*rhs, UseKind::RequiresRegister);
                         }
                     }
@@ -3305,12 +3362,40 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                 // Also handle if src is immediate-only (shouldn't happen given our logic, but be safe)
                 let _ = src;
             }
-            LinearOp::BinOp { lhs, rhs, .. } => {
+            LinearOp::BinOp { op, lhs, rhs, .. } => {
                 // Remove Use operands for immediate-only consts (LHS for compares, RHS for all)
                 if immediate_only.contains(rhs) || immediate_only.contains(lhs) {
                     inst.operands.retain(|op| {
                         !immediate_only.contains(&op.vreg) || op.kind != OperandKind::Use
                     });
+                }
+                // Per-use removal: even if a const is NOT globally immediate-only
+                // (it has register uses elsewhere), remove its Use operand from THIS
+                // instruction if it's encodable as an immediate here. This prevents
+                // the regalloc from inserting moves for fixed constraints (e.g., Shl
+                // requires rhs in CL) that the backend will ignore because it uses
+                // the immediate form.
+                if let Some(value) = get_const_value(rhs) {
+                    if !immediate_only.contains(rhs) && can_encode_as_immediate(*op, value) {
+                        inst.operands
+                            .retain(|operand| operand.vreg != *rhs || operand.kind != OperandKind::Use);
+                    }
+                }
+                if matches!(
+                    op,
+                    BinOpKind::CmpEq
+                        | BinOpKind::CmpNe
+                        | BinOpKind::CmpLt
+                        | BinOpKind::CmpLe
+                        | BinOpKind::CmpGt
+                        | BinOpKind::CmpGe
+                ) {
+                    if let Some(value) = get_const_value(lhs) {
+                        if !immediate_only.contains(lhs) && can_encode_as_immediate(*op, value) {
+                            inst.operands
+                                .retain(|operand| operand.vreg != *lhs || operand.kind != OperandKind::Use);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -3369,7 +3454,7 @@ fn dead_code_elimination_in_function(func: &mut Function) {
 
                 // Check if all defs are unused
                 let all_defs_unused = inst.operands.iter().all(|op| {
-                    if op.kind != OperandKind::Def {
+                    if !op.kind.is_def() {
                         return true;
                     }
                     is_def_unused(func, &analysis, op.vreg, block.id, is_entry)
@@ -3444,7 +3529,7 @@ fn build_use_def_analysis(func: &Function) -> UseDefAnalysis {
 
             // Then record defs
             for op in &inst.operands {
-                if op.kind == OperandKind::Def {
+                if op.kind.is_def() {
                     defs_in_block.insert(op.vreg);
                     local_defs.entry(op.vreg).or_default().insert(block.id);
                 }
@@ -3564,7 +3649,7 @@ fn has_local_use_after_def(func: &Function, vreg: VReg, block_id: BlockId) -> bo
 
         // Check if this instruction defines vreg
         for op in &inst.operands {
-            if op.kind == OperandKind::Def && op.vreg == vreg {
+            if op.kind.is_def() && op.vreg == vreg {
                 found_def = true;
                 break;
             }
@@ -5398,9 +5483,9 @@ mod tests {
     #[test]
     fn eliminate_immediate_handles_copy_chains() {
         // Test that copy-chain tracking works:
-        // v0 = const 127  (immediate-encodable for AND)
+        // v0 = const 42  (immediate-encodable for Add on all targets)
         // v1 = copy v0
-        // v2 = and v3, v1  (uses copy of const as RHS)
+        // v2 = add v3, v1  (uses copy of const as RHS)
         //
         // After eliminate_immediate_only_const_defs:
         // - v0 and v1 should both be marked immediate-only
@@ -5417,7 +5502,7 @@ mod tests {
                     id: InstId(0),
                     op: LinearOp::Const {
                         dst: v(0),
-                        value: 127,
+                        value: 42,
                     },
                     operands: vec![Operand {
                         vreg: v(0),
@@ -5451,9 +5536,9 @@ mod tests {
                 },
                 Inst {
                     id: InstId(2),
-                    // v2 = and v3, v1 where v1 is a copy of const 127
+                    // v2 = add v3, v1 where v1 is a copy of const 42
                     op: LinearOp::BinOp {
-                        op: BinOpKind::And,
+                        op: BinOpKind::Add,
                         dst: v(2),
                         lhs: v(3),
                         rhs: v(1),

@@ -163,7 +163,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             })
             .unwrap_or(false);
         // Check 2: scalar temp + not multi-slot (structural safety).
-        let structurally_eligible = func
+        let _structurally_eligible = func
             .theta_port_slots
             .get(&theta_id)
             .and_then(|port_slots| port_slots.get(p))
@@ -186,7 +186,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         // The output is unused. Verify the body arg is only used as a gamma
         // input (for break-path pass-through). If it's used in non-gamma
         // computation, the value matters and we can't safely remove the port.
-        let body_arg_id = func.regions[body].args[p];
+        let _body_arg_id = func.regions[body].args[p];
 
         if debug {
             eprintln!(
@@ -288,7 +288,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     }
 
     // Phase 2: For each dead port, replace uses and prepare for removal.
-    let parent_region = func.nodes[theta_id].region;
+    let _parent_region = func.nodes[theta_id].region;
     // Create a SINGLE shared Const(0) node for all dead port replacements.
     // Using one node prevents theta_loop_invariant_hoist from hoisting
     // multiple orphaned Const(0) copies as separate theta ports.
@@ -370,6 +370,7 @@ fn resolve_to_const(func: &IrFunc, source: &PortSource) -> Option<u64> {
 /// `theta_arg` is always `expected` (by induction).
 ///
 /// Traces through gamma outputs: all branches must produce `expected`.
+#[allow(dead_code)]
 fn is_always_const(
     func: &IrFunc,
     source: &PortSource,
@@ -505,6 +506,7 @@ fn is_always_const(
 
 /// Find the gamma node that contains a given region as one of its branches.
 /// Returns (gamma_node_id, branch_index).
+#[allow(dead_code)]
 fn find_gamma_for_branch(func: &IrFunc, region_id: RegionId) -> Option<(NodeId, usize)> {
     for (nid, node) in func.nodes.iter() {
         if let NodeKind::Gamma { regions, .. } = &node.kind {

@@ -866,10 +866,27 @@ fn color_phase(
             };
 
             // Color defs
-            inst.op.for_each_def(|dst| {
+            for op in &inst.operands {
+                let dst = match op.kind {
+                    cfg_mir::OperandKind::Def => &op.vreg,
+                    cfg_mir::OperandKind::DefTied(_) => &op.vreg,
+                    _ => continue,
+                };
                 if spilled.contains(dst) {
-                    return;
+                    continue;
                 }
+
+                // Tied def: strongly prefer the tied use's color. If the tied use
+                // is dying at this instruction, its color was freed above and we can
+                // reuse it. If it's still live, its color is in `occupied` and we fall
+                // through to normal allocation (the backend emits a mov either way).
+                let tied_pref: Option<PReg> = if let cfg_mir::OperandKind::DefTied(tied_idx) = op.kind {
+                    let tied_use_vreg = inst.operands[tied_idx].vreg;
+                    coloring.get(&tied_use_vreg).copied()
+                } else {
+                    None
+                };
+
                 let needs_callee_saved = live_across_call.contains(dst);
 
                 // Collect weighted phi preferences specific to this def.
@@ -879,28 +896,33 @@ fn color_phase(
                     .unwrap_or(0);
                 let phi_weight =
                     WEIGHT_PHI_EDGE + (block_loop_depth as u32) * WEIGHT_PHI_LOOP_BONUS;
-                let phi_prefs: Vec<(PReg, u32)> = edge_arg_prefs
+                let mut all_prefs: Vec<(PReg, u32)> = edge_arg_prefs
                     .iter()
                     .filter(|(src, _)| *src == *dst)
                     .map(|(_, tc)| (*tc, phi_weight))
                     .collect();
+
+                // Tied def: strongly prefer the tied use's color to avoid a mov.
+                if let Some(tied_color) = tied_pref {
+                    all_prefs.push((tied_color, WEIGHT_TIED));
+                }
 
                 let color = if needs_callee_saved {
                     preferred_color(
                         &callee_saved_allocatable,
                         &occupied,
                         &dying_source_colors,
-                        &phi_prefs,
+                        &all_prefs,
                     )
                 } else {
                     preferred_color(
                         &caller_saved_allocatable,
                         &occupied,
                         &dying_source_colors,
-                        &phi_prefs,
+                        &all_prefs,
                     )
                     .or_else(|| {
-                        preferred_color(allocatable, &occupied, &dying_source_colors, &phi_prefs)
+                        preferred_color(allocatable, &occupied, &dying_source_colors, &all_prefs)
                     })
                 }
                 .unwrap_or_else(|| {
@@ -925,7 +947,7 @@ fn color_phase(
                 }
                 coloring.insert(*dst, color);
                 occupied.insert(color);
-            });
+            }
 
             // Call clobber handling: after a clobbering instruction, caller-saved
             // registers are destroyed. Free caller-saved colors from occupied,
@@ -1121,6 +1143,7 @@ fn lowest_available_color(allocatable: &[PReg], occupied: &HashSet<PReg>) -> Opt
 const WEIGHT_DYING_SOURCE: u32 = 100;
 const WEIGHT_PHI_EDGE: u32 = 40;
 const WEIGHT_PHI_LOOP_BONUS: u32 = 60; // added to PHI_EDGE for edges inside loops
+const WEIGHT_TIED: u32 = 200; // strongly prefer tied use's color to avoid mov on 2-operand ISAs
 
 /// Choose the best available register for a vreg using accumulated weighted scoring.
 ///
@@ -1579,7 +1602,7 @@ fn interferes(
         let w_idx = def_inst_idx.get(&w).copied().unwrap_or(0);
 
         // Determine which is defined first. Block-entry defs have order 0.
-        let (early, early_idx, late_idx) = if v_idx <= w_idx {
+        let (early, _early_idx, late_idx) = if v_idx <= w_idx {
             (v, v_idx, w_idx)
         } else {
             (w, w_idx, v_idx)

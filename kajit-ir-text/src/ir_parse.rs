@@ -1631,6 +1631,7 @@ mod tests {
     use super::*;
     use kajit_ir::{DebugScope, DebugScopeId, DebugScopeKind, IrBuilder, Width};
 
+    #[allow(dead_code)]
     fn test_shape() -> &'static facet::Shape {
         <u8 as facet::Facet>::SHAPE
     }

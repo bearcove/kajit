@@ -386,7 +386,7 @@ fn find_def_block(func: &Function, vreg: VReg) -> Option<BlockId> {
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
             for operand in &inst.operands {
-                if operand.vreg == vreg && operand.kind == crate::cfg_mir::OperandKind::Def {
+                if operand.vreg == vreg && operand.kind.is_def() {
                     return Some(block.id);
                 }
             }

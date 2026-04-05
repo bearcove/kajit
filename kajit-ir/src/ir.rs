@@ -1151,7 +1151,7 @@ impl IrFunc {
         }
 
         // For each branch, check what the result source is
-        for (branch_idx, &region_id) in regions.iter().enumerate() {
+        for (_, &region_id) in regions.iter().enumerate() {
             let region = &self.regions[region_id];
             let Some(&result_id) = region.results.get(output_index) else {
                 return false;

@@ -58,7 +58,7 @@ impl ExecutableBuffer {
         } else {
             PROT_READ | PROT_WRITE
         };
-        let mut flags = MAP_PRIVATE | MAP_ANON;
+        let flags = MAP_PRIVATE | MAP_ANON;
         #[cfg(target_os = "macos")]
         {
             flags |= MAP_JIT;
@@ -111,26 +111,24 @@ impl ExecutableBuffer {
         let p2 = ((value >> 32) & 0xFFFF) as u16;
         let p3 = ((value >> 48) & 0xFFFF) as u16;
 
-        let ptr = self.ptr.add(offset);
+        let ptr = unsafe { self.ptr.add(offset) };
 
         #[cfg(target_os = "macos")]
-        unsafe {
-            pthread_jit_write_protect_np(0);
-        }
+        unsafe { pthread_jit_write_protect_np(0) };
 
         #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
-        }
+        unsafe { mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE) };
 
         // Patch the imm16 fields of the 4 instructions.
         // movz: bits [20:5] = imm16
         // movk: bits [20:5] = imm16
         for (i, imm) in [p0, p1, p2, p3].iter().enumerate() {
-            let inst_ptr = ptr.add(i * 4) as *mut u32;
-            let word = inst_ptr.read_unaligned();
-            let patched = (word & !(0xFFFF << 5)) | ((*imm as u32) << 5);
-            inst_ptr.write_unaligned(patched);
+            unsafe {
+                let inst_ptr = ptr.add(i * 4) as *mut u32;
+                let word = inst_ptr.read_unaligned();
+                let patched = (word & !(0xFFFF << 5)) | ((*imm as u32) << 5);
+                inst_ptr.write_unaligned(patched);
+            }
         }
 
         #[cfg(target_os = "macos")]
@@ -140,9 +138,7 @@ impl ExecutableBuffer {
         }
 
         #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
-        }
+        unsafe { mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC) };
     }
 
     pub fn len(&self) -> usize {

@@ -204,7 +204,7 @@ fn compute_nesting_depth(func: &IrFunc, node_id: NodeId) -> u32 {
     // Walk up from the node's region to the root, counting thetas
     loop {
         // Find the node that owns this region
-        let owner = func.regions.iter().find_map(|(_, r)| {
+        let _owner = func.regions.iter().find_map(|(_, _r)| {
             // Skip: we're looking for a node whose body/branch IS this region
             None::<NodeId>
         });
