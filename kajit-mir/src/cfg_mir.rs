@@ -3114,6 +3114,8 @@ fn dominates(idom: &HashMap<BlockId, Option<BlockId>>, a: BlockId, b: BlockId) -
 /// can be encoded as immediates on all supported targets.
 fn can_encode_as_immediate(op: kajit_lir::BinOpKind, value: u64) -> bool {
     use kajit_lir::BinOpKind;
+
+    #[cfg(target_arch = "aarch64")]
     match op {
         // ARM64 add/sub immediate: 12-bit unsigned (0-4095)
         BinOpKind::Add | BinOpKind::Sub => value <= 4095,
@@ -3122,6 +3124,19 @@ fn can_encode_as_immediate(op: kajit_lir::BinOpKind, value: u64) -> bool {
         // ARM64 logical immediate uses bitmask encoding. Only allow values we know encode.
         // Common varint masks: 0x7f (7 consecutive 1s), 0x80 (single bit), 0xff, etc.
         BinOpKind::And | BinOpKind::Or | BinOpKind::Xor => is_encodable_logical_imm(value),
+        _ => false,
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    match op {
+        // x86_64 add/sub r64, imm32
+        BinOpKind::Add | BinOpKind::Sub => value <= u32::MAX as u64,
+        // x86_64 shl/shr/sar r64, imm8 (shift amount 0-63)
+        BinOpKind::Shl | BinOpKind::Shr | BinOpKind::Sar => value < 64,
+        // x86_64 cmp r64, imm32
+        BinOpKind::CmpEq | BinOpKind::CmpNe | BinOpKind::CmpLt | BinOpKind::CmpLe
+        | BinOpKind::CmpGt | BinOpKind::CmpGe => value <= u32::MAX as u64,
+        // x86_64 backend does not yet support and/or/xor with immediates
         _ => false,
     }
 }
@@ -3229,14 +3244,13 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                 if is_compare {
                     // For compares, EITHER operand can be the immediate —
                     // the backend swaps operands to put the const on the RHS.
-                    // ARM64 cmp immediate: 12-bit unsigned (0-4095).
                     if let Some(value) = get_const_value(lhs) {
-                        if value > 4095 {
+                        if !can_encode_as_immediate(*op, value) {
                             use_kinds.insert(*lhs, UseKind::RequiresRegister);
                         }
                     }
                     if let Some(value) = get_const_value(rhs) {
-                        if value > 4095 {
+                        if !can_encode_as_immediate(*op, value) {
                             use_kinds.insert(*rhs, UseKind::RequiresRegister);
                         }
                     }
@@ -3348,12 +3362,40 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                 // Also handle if src is immediate-only (shouldn't happen given our logic, but be safe)
                 let _ = src;
             }
-            LinearOp::BinOp { lhs, rhs, .. } => {
+            LinearOp::BinOp { op, lhs, rhs, .. } => {
                 // Remove Use operands for immediate-only consts (LHS for compares, RHS for all)
                 if immediate_only.contains(rhs) || immediate_only.contains(lhs) {
                     inst.operands.retain(|op| {
                         !immediate_only.contains(&op.vreg) || op.kind != OperandKind::Use
                     });
+                }
+                // Per-use removal: even if a const is NOT globally immediate-only
+                // (it has register uses elsewhere), remove its Use operand from THIS
+                // instruction if it's encodable as an immediate here. This prevents
+                // the regalloc from inserting moves for fixed constraints (e.g., Shl
+                // requires rhs in CL) that the backend will ignore because it uses
+                // the immediate form.
+                if let Some(value) = get_const_value(rhs) {
+                    if !immediate_only.contains(rhs) && can_encode_as_immediate(*op, value) {
+                        inst.operands
+                            .retain(|operand| operand.vreg != *rhs || operand.kind != OperandKind::Use);
+                    }
+                }
+                if matches!(
+                    op,
+                    BinOpKind::CmpEq
+                        | BinOpKind::CmpNe
+                        | BinOpKind::CmpLt
+                        | BinOpKind::CmpLe
+                        | BinOpKind::CmpGt
+                        | BinOpKind::CmpGe
+                ) {
+                    if let Some(value) = get_const_value(lhs) {
+                        if !immediate_only.contains(lhs) && can_encode_as_immediate(*op, value) {
+                            inst.operands
+                                .retain(|operand| operand.vreg != *lhs || operand.kind != OperandKind::Use);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -5441,9 +5483,9 @@ mod tests {
     #[test]
     fn eliminate_immediate_handles_copy_chains() {
         // Test that copy-chain tracking works:
-        // v0 = const 127  (immediate-encodable for AND)
+        // v0 = const 42  (immediate-encodable for Add on all targets)
         // v1 = copy v0
-        // v2 = and v3, v1  (uses copy of const as RHS)
+        // v2 = add v3, v1  (uses copy of const as RHS)
         //
         // After eliminate_immediate_only_const_defs:
         // - v0 and v1 should both be marked immediate-only
@@ -5460,7 +5502,7 @@ mod tests {
                     id: InstId(0),
                     op: LinearOp::Const {
                         dst: v(0),
-                        value: 127,
+                        value: 42,
                     },
                     operands: vec![Operand {
                         vreg: v(0),
@@ -5494,9 +5536,9 @@ mod tests {
                 },
                 Inst {
                     id: InstId(2),
-                    // v2 = and v3, v1 where v1 is a copy of const 127
+                    // v2 = add v3, v1 where v1 is a copy of const 42
                     op: LinearOp::BinOp {
-                        op: BinOpKind::And,
+                        op: BinOpKind::Add,
                         dst: v(2),
                         lhs: v(3),
                         rhs: v(1),
