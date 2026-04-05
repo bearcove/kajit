@@ -1579,7 +1579,7 @@ fn interferes(
         let w_idx = def_inst_idx.get(&w).copied().unwrap_or(0);
 
         // Determine which is defined first. Block-entry defs have order 0.
-        let (early, early_idx, late_idx) = if v_idx <= w_idx {
+        let (early, _early_idx, late_idx) = if v_idx <= w_idx {
             (v, v_idx, w_idx)
         } else {
             (w, w_idx, v_idx)

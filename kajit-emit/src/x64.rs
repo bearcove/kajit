@@ -53,7 +53,7 @@ unsafe impl Sync for ExecutableBuffer {}
 impl ExecutableBuffer {
     fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
-        let mut flags = MAP_PRIVATE | MAP_ANON;
+        let flags = MAP_PRIVATE | MAP_ANON;
         #[cfg(target_os = "macos")]
         {
             flags |= MAP_JIT;
@@ -114,31 +114,25 @@ impl ExecutableBuffer {
             "patch_u64_load: offset {offset} + 10 > len {}",
             self.len
         );
-        let ptr = self.ptr.add(offset);
+        let ptr = unsafe { self.ptr.add(offset) };
 
         #[cfg(target_os = "macos")]
-        unsafe {
-            pthread_jit_write_protect_np(0);
-        }
+        unsafe { pthread_jit_write_protect_np(0) };
 
         #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
-        }
+        unsafe { mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE) };
 
         // The imm64 is at bytes [2..10] for a REX.W + B8+rd instruction.
-        let imm_ptr = ptr.add(2) as *mut u64;
-        unsafe { imm_ptr.write_unaligned(value) };
+        unsafe {
+            let imm_ptr = ptr.add(2) as *mut u64;
+            imm_ptr.write_unaligned(value);
+        }
 
         #[cfg(target_os = "macos")]
-        unsafe {
-            pthread_jit_write_protect_np(1);
-        }
+        unsafe { pthread_jit_write_protect_np(1) };
 
         #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
-        }
+        unsafe { mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC) };
     }
 }
 

@@ -43,6 +43,7 @@ enum KnownValue {
 /// Local value-role classification. NOT an IR concept — only used inside this
 /// pass to decide which resolver strength is safe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 enum Role {
     /// Feeds a gamma predicate or control-only chain. Conservative resolver only.
     Control,

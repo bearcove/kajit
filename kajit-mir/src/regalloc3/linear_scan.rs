@@ -358,7 +358,7 @@ pub fn allocate(
 mod tests {
     use super::*;
     use crate::{
-        cfg_mir::{Block, Clobbers, Function, Inst, OperandKind, RegClass, Terminator},
+        cfg_mir::{Block, Clobbers, Function, Inst, Terminator},
         regalloc3::{
             hints::{SpillCost, VRegMetadata},
             liveness::compute_liveness,
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn test_simple_allocation() {
         // One vreg, plenty of registers
-        use crate::cfg_mir::{BlockId, InstId, Operand};
+        use crate::cfg_mir::{BlockId, InstId};
 
         let func = Function {
             id: crate::cfg_mir::FunctionId(0),
@@ -432,7 +432,7 @@ mod tests {
     #[test]
     fn test_register_pressure() {
         // More vregs than registers -> must spill
-        use crate::cfg_mir::{BlockId, InstId, Operand};
+        use crate::cfg_mir::{BlockId, InstId};
 
         let func = Function {
             id: crate::cfg_mir::FunctionId(0),
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn test_interval_expiry() {
         // Non-overlapping intervals should reuse registers
-        use crate::cfg_mir::{BlockId, InstId, Operand};
+        use crate::cfg_mir::{BlockId, InstId};
 
         let func = Function {
             id: crate::cfg_mir::FunctionId(0),
@@ -599,7 +599,7 @@ mod tests {
     fn test_spill_cost_hints() {
         // Test that spill cost hints affect victim selection
         // Create two vregs with same next-use, different spill costs
-        use crate::cfg_mir::{BlockId, InstId, Operand};
+        use crate::cfg_mir::{BlockId, InstId};
 
         // Function with 6 vregs (more than 5 available registers)
         // v1 has High spill cost (loop-carried)

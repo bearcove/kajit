@@ -627,7 +627,7 @@ fn check_entry_liveness(func: &Function, errors: &mut Vec<SsaError>) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     // TODO: Add tests once we have a CFG builder API
     // Test cases:

@@ -61,7 +61,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     compile_regalloc3_with_root_data_abi(alloc, crate::compiler::RootDecoderDataAbi::None)
 }
 
-pub fn compile_regalloc3_with_root_data_abi(
+pub(crate) fn compile_regalloc3_with_root_data_abi(
     alloc: &AllocatedCfgProgramRa3,
     root_data_abi: crate::compiler::RootDecoderDataAbi,
 ) -> LinearBackendResult {

@@ -717,6 +717,7 @@ struct Linearizer<'a> {
     fusion_applied: bool,
 }
 
+#[allow(dead_code)]
 impl<'a> Linearizer<'a> {
     fn new(func: &'a IrFunc) -> Self {
         Self {
@@ -5061,6 +5062,7 @@ fn assign_vregs(func: &mut IrFunc) {
 }
 
 /// A level in a gamma cascade: one iteration body + its exit predicate.
+#[allow(dead_code)]
 struct CascadeLevel {
     /// The gamma node at this level
     gamma_node: NodeId,

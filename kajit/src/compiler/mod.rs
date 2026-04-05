@@ -459,7 +459,7 @@ pub fn compile_pipeline_from_hir_module(
         root_data_abi,
     );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
-    let (buf, entry, _source_map, backend_debug_info, asm_program) =
+    let (buf, entry, _source_map, backend_debug_info, _asm_program) =
         materialize_backend_result(result);
 
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
@@ -757,6 +757,7 @@ pub(crate) fn run_configured_default_passes_with_observer<F>(
     }
 }
 
+#[allow(dead_code)]
 fn no_regalloc_alloc_for_cfg_program(
     cfg_program: &crate::regalloc_engine::cfg_mir::Program,
 ) -> crate::regalloc_engine::AllocatedCfgProgram {
@@ -916,7 +917,7 @@ fn compile_linear_ir_decoder_with_options(
         }
     }
 
-    let (buf, entry, source_map, backend_debug_info, asm_program, dwarf_location_map) =
+    let (buf, entry, source_map, backend_debug_info, _asm_program, dwarf_location_map) =
         if use_regalloc3 {
             let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
                 .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
@@ -1069,7 +1070,7 @@ fn compile_cfg_mir_decoder_with_options(
         debug: Default::default(),
         data_blobs: cfg_program.data_blobs.clone(),
     };
-    let (buf, entry, source_map, backend_debug_info, asm_program) = {
+    let (buf, entry, source_map, backend_debug_info, _asm_program) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
             &shim_linear,
             cfg_program,

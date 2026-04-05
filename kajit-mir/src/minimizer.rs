@@ -603,7 +603,7 @@ fn remap_terminator(
 
 #[cfg(test)]
 mod tests {
-    use facet::Facet;
+    
     use kajit_ir::{ErrorCode, IntrinsicRegistry, LambdaId, VReg};
     use kajit_ir_text::parse_ir;
     use kajit_lir::LinearOp;

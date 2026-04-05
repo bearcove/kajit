@@ -3544,7 +3544,7 @@ pub fn differential_check_cfg_with_ignored_output_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use facet::Facet;
+    
     use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, IrOp, Width, run_default_passes};
     use kajit_ir_text::parse_ir;
     use kajit_lir::linearize;
