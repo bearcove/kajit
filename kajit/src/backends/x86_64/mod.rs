@@ -17,6 +17,8 @@ mod calls;
 mod edits;
 mod emit;
 
+pub mod regalloc3_backend;
+
 pub(crate) struct FunctionCtx {
     pub(crate) error_exit: LabelId,
     pub(crate) data_results: Vec<crate::ir::VReg>,
@@ -468,7 +470,7 @@ impl Lowerer {
             LinearOp::FuncStart { .. }
             | LinearOp::FuncEnd
             | LinearOp::Label(_)
-            | LinearOp::Branch(_)
+            | LinearOp::Branch { .. }
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. } => {
@@ -681,6 +683,8 @@ impl Lowerer {
             entry,
             source_map,
             backend_debug_info: Some(self.backend_debug_info),
+            intrinsic_call_sites: Vec::new(),
+            data_relocs: Vec::new(),
         }
     }
 }

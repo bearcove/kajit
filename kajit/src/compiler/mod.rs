@@ -234,14 +234,17 @@ pub(crate) fn materialize_backend_result(
     usize,
     Option<kajit_emit::SourceMap>,
     Option<crate::ir_backend::BackendDebugInfo>,
+    (), // placeholder for asm_program (aarch64-only)
 ) {
     let crate::ir_backend::LinearBackendResult {
         buf,
         entry,
         source_map,
         backend_debug_info,
+        intrinsic_call_sites: _,
+        data_relocs: _,
     } = result;
-    (buf, entry as usize, source_map, backend_debug_info)
+    (buf, entry as usize, source_map, backend_debug_info, ())
 }
 
 /// All intermediate artifacts from a compilation pipeline run.
@@ -266,8 +269,12 @@ pub struct PipelineArtifacts {
     /// Per-program-point vreg location map (call-clobber aware, replaces alloc_map for lockstep)
     pub location_map: crate::harness::LocationMap,
     /// Intrinsic call sites in the JIT code (for harness relocation)
+    #[cfg(target_arch = "aarch64")]
     pub intrinsic_call_sites:
         Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
+    #[cfg(target_arch = "x86_64")]
+    pub intrinsic_call_sites:
+        Vec<crate::backends::x86_64::regalloc3_backend::IntrinsicCallSiteInfo>,
     /// Exact machine-code ranges for emitted CFG ops.
     pub backend_debug_info: Option<crate::ir_backend::BackendDebugInfo>,
     /// The post-optimization CFG-MIR program (same one the JIT compiled).
@@ -303,7 +310,13 @@ pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
     // Phase 6: Backend compilation
+    #[cfg(target_arch = "aarch64")]
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &alloc,
+        RootDecoderDataAbi::None,
+    );
+    #[cfg(target_arch = "x86_64")]
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
         &alloc,
         RootDecoderDataAbi::None,
     );
@@ -361,17 +374,32 @@ pub fn compile_pipeline_from_hir_module(
     let hints = Default::default();
     let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
 
-    // For leaf decoder functions: exclude x0/x1 from allocation (kept for output_ptr/ctx_ptr).
-    // Scalar functions don't need this — args are stored to slots
-    // in the prologue, so x0/x1 are free for regalloc.
-    #[cfg(target_arch = "aarch64")]
+    // For leaf decoder functions: exclude ABI arg registers from allocation
+    // (kept for output_ptr/ctx_ptr). Scalar functions don't need this.
     if !cfg_program.is_scalar {
         use kajit_mir::regalloc3::machine_inst::PReg;
 
         if let Some(func) = cfg_program.funcs.first() {
-            cfg_program.extra_excluded_regs = (0..func.data_args.len())
-                .map(|i| PReg(i as u8 + 2))
-                .collect();
+            #[cfg(target_arch = "aarch64")]
+            {
+                cfg_program.extra_excluded_regs = (0..func.data_args.len())
+                    .map(|i| PReg(i as u8 + 2))
+                    .collect();
+            }
+            #[cfg(target_arch = "x86_64")]
+            {
+                // SysV: data_args arrive at rdx(2), rcx(1), r8(8), r9(9)
+                #[cfg(not(windows))]
+                const DATA_ARG_ENCS: &[u8] = &[2, 1, 8, 9];
+                #[cfg(windows)]
+                const DATA_ARG_ENCS: &[u8] = &[8, 9];
+                cfg_program.extra_excluded_regs = func
+                    .data_args
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, _)| DATA_ARG_ENCS.get(i).map(|&enc| PReg(enc)))
+                    .collect();
+            }
         }
 
         let is_leaf = cfg_program.funcs.iter().all(|func| {
@@ -386,9 +414,17 @@ pub fn compile_pipeline_from_hir_module(
             })
         });
         if is_leaf {
+            #[cfg(target_arch = "aarch64")]
             cfg_program
                 .extra_excluded_regs
                 .extend([PReg(0), PReg(1), PReg(15)]);
+            #[cfg(target_arch = "x86_64")]
+            {
+                #[cfg(not(windows))]
+                cfg_program.extra_excluded_regs.extend([PReg(7), PReg(6)]); // rdi, rsi
+                #[cfg(windows)]
+                cfg_program.extra_excluded_regs.extend([PReg(1), PReg(2)]); // rcx, rdx
+            }
         }
     }
 
@@ -396,7 +432,10 @@ pub fn compile_pipeline_from_hir_module(
     let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
+    #[cfg(target_arch = "aarch64")]
     let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&ra3_alloc);
+    #[cfg(target_arch = "x86_64")]
+    let base_frame = crate::backends::x86_64::regalloc3_backend::compute_base_frame(&ra3_alloc);
     let alloc_map = ra3_alloc
         .functions
         .first()
@@ -409,7 +448,13 @@ pub fn compile_pipeline_from_hir_module(
         &ra3_alloc,
     );
 
+    #[cfg(target_arch = "aarch64")]
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &ra3_alloc,
+        root_data_abi,
+    );
+    #[cfg(target_arch = "x86_64")]
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
         &ra3_alloc,
         root_data_abi,
     );
@@ -600,10 +645,8 @@ pub fn regalloc_edits_text_with_options(
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
     let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc =
-        crate::regalloc_engine::allocate_cfg_program(&cfg_program).unwrap_or_else(|err| {
-            panic!("regalloc2 allocation failed while formatting edits: {err}")
-        });
+    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
+        .unwrap_or_else(|err| panic!("regalloc2 allocation failed while formatting edits: {err}"));
     format_allocated_regalloc_edits(&alloc)
 }
 
@@ -833,57 +876,111 @@ fn compile_linear_ir_decoder_with_options(
         }
     }
 
-    let (buf, entry, source_map, backend_debug_info, asm_program, dwarf_location_map) = if use_regalloc3
-    {
-        let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
-            .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
-        let result =
-            crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-                &alloc,
-                root_data_abi,
-            );
-        let (buf, entry, source_map, backend_debug_info, asm_program) =
-            materialize_backend_result(result);
-        let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&alloc);
-        let alloc_map = alloc
-            .functions
-            .first()
-            .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
-            .unwrap_or_default();
-        let location_map =
-            crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &alloc.cfg_program, &alloc);
-        (
-            buf,
-            entry,
-            source_map,
-            backend_debug_info,
-            asm_program,
-            location_map,
-        )
-    } else {
-        let regalloc_alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-            .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+    #[cfg(target_arch = "x86_64")]
+    if use_regalloc3 {
+        use kajit_mir::regalloc3::machine_inst::PReg;
 
-        let (buf, entry, source_map, backend_debug_info, asm_program) = {
-            let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
-                ir,
-                &cfg_program,
-                &regalloc_alloc,
-                apply_regalloc_edits,
-                root_data_abi,
-                registry,
+        if !cfg_program.is_scalar {
+            if let Some(func) = cfg_program.funcs.first() {
+                // Exclude data_arg ABI positions: SysV rdx(2), rcx(1), r8(8), r9(9)
+                #[cfg(not(windows))]
+                const DATA_ARG_ENCS: &[u8] = &[2, 1, 8, 9];
+                #[cfg(windows)]
+                const DATA_ARG_ENCS: &[u8] = &[8, 9];
+                cfg_program.extra_excluded_regs = func
+                    .data_args
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, _)| DATA_ARG_ENCS.get(i).map(|&enc| PReg(enc)))
+                    .collect();
+            }
+        }
+
+        let is_leaf = cfg_program.funcs.iter().all(|func| {
+            func.insts.iter().all(|inst| {
+                !matches!(
+                    inst.op,
+                    kajit_lir::LinearOp::CallIntrinsic { .. }
+                        | kajit_lir::LinearOp::CallPure { .. }
+                        | kajit_lir::LinearOp::CallEffect { .. }
+                        | kajit_lir::LinearOp::CallLambda { .. }
+                )
+            })
+        });
+        if is_leaf {
+            // rdi(7)/rsi(6): keep output_ptr/ctx_ptr in ABI arg registers
+            #[cfg(not(windows))]
+            cfg_program.extra_excluded_regs.extend([PReg(7), PReg(6)]);
+            #[cfg(windows)]
+            cfg_program.extra_excluded_regs.extend([PReg(1), PReg(2)]);
+        }
+    }
+
+    let (buf, entry, source_map, backend_debug_info, asm_program, dwarf_location_map) =
+        if use_regalloc3 {
+            let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
+                .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
+            #[cfg(target_arch = "aarch64")]
+            let result =
+                crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+                    &alloc,
+                    root_data_abi,
+                );
+            #[cfg(target_arch = "x86_64")]
+            let result =
+                crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+                    &alloc,
+                    root_data_abi,
+                );
+            let (buf, entry, source_map, backend_debug_info, asm_program) =
+                materialize_backend_result(result);
+            #[cfg(target_arch = "aarch64")]
+            let base_frame =
+                crate::backends::aarch64::regalloc3_backend::compute_base_frame(&alloc);
+            #[cfg(target_arch = "x86_64")]
+            let base_frame = crate::backends::x86_64::regalloc3_backend::compute_base_frame(&alloc);
+            let alloc_map = alloc
+                .functions
+                .first()
+                .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
+                .unwrap_or_default();
+            let location_map = crate::harness::LocationMap::from_alloc_map_and_cfg(
+                &alloc_map,
+                &alloc.cfg_program,
+                &alloc,
             );
-            materialize_backend_result(result)
+            (
+                buf,
+                entry,
+                source_map,
+                backend_debug_info,
+                asm_program,
+                location_map,
+            )
+        } else {
+            let regalloc_alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
+                .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+
+            let (buf, entry, source_map, backend_debug_info, asm_program) = {
+                let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
+                    ir,
+                    &cfg_program,
+                    &regalloc_alloc,
+                    apply_regalloc_edits,
+                    root_data_abi,
+                    registry,
+                );
+                materialize_backend_result(result)
+            };
+            (
+                buf,
+                entry,
+                source_map,
+                backend_debug_info,
+                asm_program,
+                crate::harness::LocationMap::default(),
+            )
         };
-        (
-            buf,
-            entry,
-            source_map,
-            backend_debug_info,
-            asm_program,
-            crate::harness::LocationMap::default(),
-        )
-    };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
     let listing = build_cfg_mir_listing(&cfg_program, registry);
