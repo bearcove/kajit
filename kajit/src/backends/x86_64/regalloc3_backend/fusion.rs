@@ -134,20 +134,11 @@ pub(super) fn compute_fusable_addr_offsets(
         }
     }
     for block in &func.blocks {
-        let term = &func.terms[block.term.index()];
-        let edge_ids: Vec<cfg_mir::EdgeId> = match term {
-            cfg_mir::Terminator::Branch { edge } => vec![*edge],
-            cfg_mir::Terminator::BranchIf {
-                taken, fallthrough, ..
-            }
-            | cfg_mir::Terminator::BranchIfZero {
-                taken, fallthrough, ..
-            } => vec![*taken, *fallthrough],
-            cfg_mir::Terminator::JumpTable { targets, .. } => targets.clone(),
-            _ => vec![],
-        };
-        for eid in edge_ids {
-            let edge = &func.edges[eid.index()];
+        if block.dead {
+            continue;
+        }
+        for &edge_id in &block.succs {
+            let edge = &func.edges[edge_id.index()];
             for arg in &edge.args {
                 *use_counts.entry(arg.source).or_insert(0) += 1;
             }
