@@ -1369,7 +1369,10 @@ pub fn allocate_cfg_program_regalloc3_native(
     };
 
     let scratch = &machine_inst::ScratchPolicy {
+        #[cfg(target_arch = "aarch64")]
         reserved: &[machine_inst::PReg(31)],
+        #[cfg(target_arch = "x86_64")]
+        reserved: &[machine_inst::PReg(10), machine_inst::PReg(11)], // r10, r11 scratch
         max_simultaneous_spills: 2,
     };
 
@@ -1406,7 +1409,22 @@ pub fn allocate_cfg_program_regalloc3_native(
         for (i, &arg_vreg) in func.data_args.iter().enumerate() {
             let abi_preg = machine_inst::PReg(i as u8 + abi_arg_offset);
             let preferred_preg = if abi_arg_offset == 2 {
-                machine_inst::PReg(23 + i as u8)
+                // Non-scalar: prefer callee-saved registers for data_args
+                #[cfg(target_arch = "aarch64")]
+                {
+                    machine_inst::PReg(23 + i as u8)
+                }
+                #[cfg(target_arch = "x86_64")]
+                {
+                    // Prefer callee-saved: r12(12), r13(13), r14(14), r15(15), rbx(3), rbp(5)
+                    const CALLEE_SAVED: [u8; 6] = [12, 13, 14, 15, 3, 5];
+                    machine_inst::PReg(
+                        CALLEE_SAVED
+                            .get(i)
+                            .copied()
+                            .unwrap_or(i as u8 + abi_arg_offset),
+                    )
+                }
             } else {
                 abi_preg
             };
@@ -1429,13 +1447,15 @@ pub fn allocate_cfg_program_regalloc3_native(
         );
 
         // SSA destruction: split critical edges then insert copies for phi edges.
-        // temp_vreg is assigned to x16 (IP0, reserved scratch) for cycle breaking.
-        // x16/x17 are never allocated by the coloring pass (they're in the reserved set).
+        // temp_vreg is assigned to a reserved scratch register for cycle breaking.
         let temp_vreg = kajit_ir::VReg::new(program.vreg_count);
-        alloc_result.allocations.insert(
-            temp_vreg,
-            linear_scan::Allocation::Reg(crate::regalloc3::machine_inst::PReg(16)),
-        ); // x16 = IP0 scratch
+        #[cfg(target_arch = "aarch64")]
+        let temp_scratch = crate::regalloc3::machine_inst::PReg(16); // x16 = IP0 scratch
+        #[cfg(target_arch = "x86_64")]
+        let temp_scratch = crate::regalloc3::machine_inst::PReg(10); // r10 scratch
+        alloc_result
+            .allocations
+            .insert(temp_vreg, linear_scan::Allocation::Reg(temp_scratch));
 
         let force_all_copies = std::env::var("KAJIT_NO_COALESCE").is_ok()
             || std::env::var("KAJIT_FORCE_ALL_COPIES").is_ok();
@@ -3388,9 +3408,11 @@ fn compare_differential_states_with_ignored_output_bytes(
 ) -> DifferentialCheckResult {
     let shared = ideal.len().min(post.len());
     for i in 0..shared {
-        if let Some(field) =
-            first_differing_field_with_ignored_output_bytes(&ideal[i], &post[i], ignored_output_bytes)
-        {
+        if let Some(field) = first_differing_field_with_ignored_output_bytes(
+            &ideal[i],
+            &post[i],
+            ignored_output_bytes,
+        ) {
             return DifferentialCheckResult::Diverged(DifferentialDivergence {
                 step_index: ideal[i].step_index.min(post[i].step_index),
                 field: field.to_string(),

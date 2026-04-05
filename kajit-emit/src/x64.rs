@@ -53,7 +53,7 @@ unsafe impl Sync for ExecutableBuffer {}
 impl ExecutableBuffer {
     fn allocate(bytes: &[u8]) -> Self {
         let len = bytes.len().max(1);
-        let flags = MAP_PRIVATE | MAP_ANON;
+        let mut flags = MAP_PRIVATE | MAP_ANON;
         #[cfg(target_os = "macos")]
         {
             flags |= MAP_JIT;
@@ -100,6 +100,45 @@ impl ExecutableBuffer {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Patch a `mov r64, imm64` instruction's immediate value at the given offset.
+    /// The instruction must be a REX.W + B8+rd encoding (10 bytes total).
+    /// `offset` points to the start of the instruction (REX byte).
+    ///
+    /// # Safety
+    /// The caller must ensure `offset` points to a valid `mov r64, imm64` instruction.
+    pub unsafe fn patch_u64_load(&self, offset: usize, value: u64) {
+        assert!(
+            offset + 10 <= self.len,
+            "patch_u64_load: offset {offset} + 10 > len {}",
+            self.len
+        );
+        let ptr = self.ptr.add(offset);
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            pthread_jit_write_protect_np(0);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
+        }
+
+        // The imm64 is at bytes [2..10] for a REX.W + B8+rd instruction.
+        let imm_ptr = ptr.add(2) as *mut u64;
+        unsafe { imm_ptr.write_unaligned(value) };
+
+        #[cfg(target_os = "macos")]
+        unsafe {
+            pthread_jit_write_protect_np(1);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        unsafe {
+            mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
+        }
     }
 }
 
@@ -257,8 +296,18 @@ impl Emitter {
         self.buf.len() as u32
     }
 
+    /// Current code buffer length in bytes.
+    pub fn code_len(&self) -> usize {
+        self.buf.len()
+    }
+
     pub fn bytes(&self) -> &[u8] {
         &self.buf
+    }
+
+    /// Append raw bytes to the code buffer (for data sections appended after code).
+    pub fn emit_raw_bytes(&mut self, bytes: &[u8]) {
+        self.buf.extend_from_slice(bytes);
     }
 
     pub fn source_map(&self) -> &[SourceMapEntry] {
