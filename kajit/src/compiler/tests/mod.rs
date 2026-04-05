@@ -1061,8 +1061,7 @@ fn debug_postcard_borrowed_header_harness() {
         root_data_abi,
         trusted_utf8_input: false,
         _jit_registration: None,
-        #[cfg(target_arch = "aarch64")]
-        asm_program,
+        asm_program: _asm_program,
     };
 
     let output_dir = std::path::PathBuf::from("/tmp/kajit-harness");

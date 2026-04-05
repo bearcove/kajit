@@ -1,6 +1,6 @@
 use kajit_emit::x64::{self, Emitter, FinalizedEmission, LabelId, Mem};
 
-use crate::context::{CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR, ErrorCode};
+use crate::context::{CTX_ERROR_CODE, ErrorCode};
 
 /// Base frame size (non-leaf).
 ///
@@ -32,55 +32,16 @@ pub struct EmitCtx {
     /// Whether this is a leaf function (no call instructions).
     pub is_leaf: bool,
     /// Register encoding for the cached cursor (input_ptr).
-    /// 12 (r12) for legacy, configurable for regalloc3.
     pub cursor_enc: u8,
     /// Register encoding for the cached input_end.
-    /// 13 (r13) for legacy, configurable for regalloc3.
     pub end_enc: u8,
     /// Register encoding for the output pointer.
-    /// 14 (r14) for legacy, configurable for regalloc3.
     pub output_enc: u8,
     /// Register encoding for the context pointer.
-    /// 15 (r15) for legacy, configurable for regalloc3.
     pub ctx_enc: u8,
 }
 
-// Legacy register assignments (callee-saved across all platforms):
-//   r12 = cached input_ptr
-//   r13 = cached input_end
-//   r14 = out pointer
-//   r15 = ctx pointer
-//
-// Scratch (caller-saved):
-//   rax = fn ptr loads, return values
-//   r10, r11 = temporaries
-//
-// Argument registers for calls to intrinsics:
-//   System V AMD64:  arg0=rdi, arg1=rsi, arg2=rdx, arg3=rcx, arg4=r8, arg5=r9
-//   Windows x64:     arg0=rcx, arg1=rdx, arg2=r8,  arg3=r9   (4 register args only)
-
 impl EmitCtx {
-    /// Create a legacy EmitCtx with fixed register assignments.
-    /// Used by the regalloc2 backend.
-    pub fn new(extra_stack: u32) -> Self {
-        let frame_size = (BASE_FRAME + extra_stack + 15) & !15;
-        let mut emit = Emitter::new();
-        emit.enable_capture();
-        let error_exit = emit.new_label();
-
-        EmitCtx {
-            emit,
-            error_exit,
-            base_frame: BASE_FRAME,
-            frame_size,
-            is_leaf: false,
-            cursor_enc: 12,
-            end_enc: 13,
-            output_enc: 14,
-            ctx_enc: 15,
-        }
-    }
-
     /// Create an EmitCtx for regalloc3-driven lowering.
     ///
     /// `extra_stack` is the number of bytes needed for spill slots + user slots + edge temps.
@@ -106,188 +67,6 @@ impl EmitCtx {
         }
     }
 
-    /// Emit a function prologue. Returns the entry offset and a fresh error_exit label.
-    ///
-    /// The returned error_exit label must be passed to `end_func` when done emitting
-    /// this function's body.
-    ///
-    /// # Register assignments after prologue (legacy)
-    /// - r12 = cached input_ptr
-    /// - r13 = cached input_end
-    /// - r14 = out pointer
-    /// - r15 = ctx pointer
-    pub fn begin_func(&mut self) -> (u32, LabelId) {
-        let error_exit = self.emit.new_label();
-        let entry = self.emit.current_offset();
-        let frame_size = self.frame_size;
-
-        // On entry: rsp is 8-mod-16 (return address was pushed by `call`).
-        // push rbp → rsp is now 16-byte aligned.
-        // sub rsp, frame_size → stays 16-byte aligned (frame_size is multiple of 16).
-        //
-        // System V AMD64 frame layout (BASE_FRAME = 48):
-        //   [rsp+0]:  saved rbp      [rsp+8]:  saved rbx
-        //   [rsp+16]: saved r12      [rsp+24]: saved r13
-        //   [rsp+32]: saved r14      [rsp+40]: saved r15
-        //   [rsp+48..]: extra stack  (args arrive in rdi=out, rsi=ctx)
-        //
-        // Windows x64 frame layout (BASE_FRAME = 80):
-        //   [rsp+0..31]: shadow/home space (32 bytes, callee may write here)
-        //   [rsp+32]: saved rbp      [rsp+40]: saved rbx
-        //   [rsp+48]: saved r12      [rsp+56]: saved r13
-        //   [rsp+64]: saved r14      [rsp+72]: saved r15
-        //   [rsp+80..]: extra stack  (args arrive in rcx=out, rdx=ctx)
-        #[cfg(not(windows))]
-        self.emit
-            .emit_with(|buf| {
-                x64::encode_push_r64(5, buf)?;
-                x64::encode_sub_r64_imm32(4, frame_size, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 0 }, 5, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 8 }, 3, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 16 }, 12, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 24 }, 13, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 14, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 15, buf)?;
-                x64::encode_mov_r64_r64(14, 7, buf)?;
-                x64::encode_mov_r64_r64(15, 6, buf)?;
-                x64::encode_mov_r64_m(
-                    12,
-                    Mem {
-                        base: 15,
-                        disp: CTX_INPUT_PTR as i32,
-                    },
-                    buf,
-                )?;
-                x64::encode_mov_r64_m(
-                    13,
-                    Mem {
-                        base: 15,
-                        disp: CTX_INPUT_END as i32,
-                    },
-                    buf,
-                )
-            })
-            .expect("begin prologue");
-        #[cfg(windows)]
-        self.emit
-            .emit_with(|buf| {
-                x64::encode_push_r64(5, buf)?;
-                x64::encode_sub_r64_imm32(4, frame_size, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 32 }, 5, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 40 }, 3, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 48 }, 12, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 56 }, 13, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 64 }, 14, buf)?;
-                x64::encode_mov_m_r64(Mem { base: 4, disp: 72 }, 15, buf)?;
-                x64::encode_mov_r64_r64(14, 1, buf)?;
-                x64::encode_mov_r64_r64(15, 2, buf)?;
-                x64::encode_mov_r64_m(
-                    12,
-                    Mem {
-                        base: 15,
-                        disp: CTX_INPUT_PTR as i32,
-                    },
-                    buf,
-                )?;
-                x64::encode_mov_r64_m(
-                    13,
-                    Mem {
-                        base: 15,
-                        disp: CTX_INPUT_END as i32,
-                    },
-                    buf,
-                )
-            })
-            .expect("begin prologue windows");
-
-        self.error_exit = error_exit;
-        (entry, error_exit)
-    }
-
-    /// Emit the success epilogue and error exit for the current function.
-    ///
-    /// `error_exit` must be the label returned by the corresponding `begin_func` call.
-    pub fn end_func(&mut self, error_exit: LabelId) {
-        let frame_size = self.frame_size as i32;
-        let ctx_enc = self.ctx_enc;
-        let cursor_enc = self.cursor_enc;
-
-        #[cfg(not(windows))]
-        self.emit
-            .emit_with(|buf| {
-                x64::encode_mov_m_r64(
-                    Mem {
-                        base: ctx_enc,
-                        disp: CTX_INPUT_PTR as i32,
-                    },
-                    cursor_enc,
-                    buf,
-                )?;
-                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
-                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 16 }, buf)?;
-                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 8 }, buf)?;
-                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 0 }, buf)?;
-                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
-                x64::encode_pop_r64(5, buf)?;
-                x64::encode_ret(buf)
-            })
-            .expect("end success");
-        #[cfg(windows)]
-        self.emit
-            .emit_with(|buf| {
-                x64::encode_mov_m_r64(
-                    Mem {
-                        base: ctx_enc,
-                        disp: CTX_INPUT_PTR as i32,
-                    },
-                    cursor_enc,
-                    buf,
-                )?;
-                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
-                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 48 }, buf)?;
-                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 40 }, buf)?;
-                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 32 }, buf)?;
-                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
-                x64::encode_pop_r64(5, buf)?;
-                x64::encode_ret(buf)
-            })
-            .expect("end success windows");
-
-        self.emit.bind_label(error_exit).expect("bind error_exit");
-        #[cfg(not(windows))]
-        self.emit
-            .emit_with(|buf| {
-                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 40 }, buf)?;
-                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 32 }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 24 }, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 16 }, buf)?;
-                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 8 }, buf)?;
-                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 0 }, buf)?;
-                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
-                x64::encode_pop_r64(5, buf)?;
-                x64::encode_ret(buf)
-            })
-            .expect("end error");
-        #[cfg(windows)]
-        self.emit
-            .emit_with(|buf| {
-                x64::encode_mov_r64_m(15, Mem { base: 4, disp: 72 }, buf)?;
-                x64::encode_mov_r64_m(14, Mem { base: 4, disp: 64 }, buf)?;
-                x64::encode_mov_r64_m(13, Mem { base: 4, disp: 56 }, buf)?;
-                x64::encode_mov_r64_m(12, Mem { base: 4, disp: 48 }, buf)?;
-                x64::encode_mov_r64_m(3, Mem { base: 4, disp: 40 }, buf)?;
-                x64::encode_mov_r64_m(5, Mem { base: 4, disp: 32 }, buf)?;
-                x64::encode_add_r64_imm32(4, frame_size as u32, buf)?;
-                x64::encode_pop_r64(5, buf)?;
-                x64::encode_ret(buf)
-            })
-            .expect("end error windows");
-    }
-
     /// Allocate a new dynamic label.
     pub fn new_label(&mut self) -> LabelId {
         self.emit.new_label()
@@ -308,6 +87,7 @@ impl EmitCtx {
     }
 
     /// Emit an unconditional branch to the given label.
+    #[allow(dead_code)]
     pub fn emit_branch(&mut self, label: LabelId) {
         self.emit.emit_jmp_label(label).expect("jmp");
     }
@@ -363,6 +143,7 @@ impl EmitCtx {
     }
 
     /// Emit an error (write error code to ctx, jump to error_exit).
+    #[allow(dead_code)]
     pub fn emit_error(&mut self, code: crate::context::ErrorCode) {
         let error_exit = self.error_exit;
         let error_code = code as i32;
