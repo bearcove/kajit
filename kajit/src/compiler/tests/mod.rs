@@ -14,6 +14,23 @@ use super::{
     lower_hir_module, normalize_debug_line_rows, run_default_passes_from_env,
 };
 
+fn test_location_map(
+    regs: &[(u32, u8)],
+    call_lines: &[u32],
+    call_return_vregs: &[(u32, u32)],
+) -> crate::harness::LocationMap {
+    crate::harness::LocationMap {
+        static_locations: regs
+            .iter()
+            .map(|(vreg, preg)| (*vreg, crate::harness::VRegLocation::Register(*preg)))
+            .collect(),
+        call_lines: call_lines.iter().copied().collect(),
+        call_return_vregs: call_return_vregs.iter().copied().collect(),
+        edit_clobbers: std::collections::HashMap::new(),
+        num_spill_slots: 0,
+    }
+}
+
 #[derive(Facet)]
 struct Wrapper<T> {
     inner: T,
@@ -2219,13 +2236,13 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         ],
     };
 
+    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)], &[], &[]);
     let vars = cfg_value_dwarf_variables(
         &program,
-        &alloc,
+        &location_map,
         Some(&backend_debug_info),
         0x1000 as *const u8,
         jit_dwarf_target_arch(),
-        true,
         false,
     );
 
@@ -2445,13 +2462,13 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         ],
     };
 
+    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)], &[], &[]);
     let vars = cfg_value_dwarf_variables(
         &program,
-        &alloc,
+        &location_map,
         Some(&backend_debug_info),
         0x1000 as *const u8,
         jit_dwarf_target_arch(),
-        true,
         false,
     );
 
@@ -2666,14 +2683,14 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         ],
     };
 
+    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)], &[], &[]);
     let subprogram = cfg_mir_dwarf_variables(
         None,
         &program,
-        &alloc,
+        &location_map,
         Some(&backend_debug_info),
         0x1000 as *const u8,
         jit_dwarf_target_arch(),
-        true,
     );
 
     assert!(
@@ -3022,13 +3039,13 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         ],
     };
 
+    let location_map = test_location_map(&[(0, reg.hw_enc() as u8)], &[], &[]);
     let vars = cfg_value_dwarf_variables(
         &program,
-        &alloc,
+        &location_map,
         Some(&backend_debug_info),
         0x1000 as *const u8,
         jit_dwarf_target_arch(),
-        true,
         true,
     );
 
@@ -3238,13 +3255,13 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         ],
     };
 
+    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg.hw_enc() as u8)], &[], &[]);
     let vars = cfg_semantic_named_dwarf_variables(
         &program,
-        &alloc,
+        &location_map,
         Some(&backend_debug_info),
         0x1000 as *const u8,
         jit_dwarf_target_arch(),
-        true,
     );
 
     assert_eq!(vars.len(), 1);
