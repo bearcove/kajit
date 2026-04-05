@@ -33,6 +33,13 @@ pub struct DataRelocInfo {
     pub blob_id: u32,
 }
 
+/// Physical location for edge move resolution.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum EdgeLoc {
+    Reg(Reg),
+    Stack(u32),
+}
+
 /// Context for emitting a single function.
 struct EmitContext<'a> {
     ectx: &'a mut EmitCtx,
@@ -331,27 +338,144 @@ impl<'a> EmitContext<'a> {
             return;
         }
 
-        for (index, arg) in edge.args.iter().enumerate() {
-            let src_reg = self
+        // Resolve each edge arg to physical source and destination locations.
+        // X16 and X17 are reserved scratch (never allocated to vregs).
+
+        // Build dependency map: dst → src (keyed by destination location).
+        // Constants are emitted immediately since they have no source to conflict.
+        let mut deps: HashMap<EdgeLoc, EdgeLoc> = HashMap::new();
+        let mut tmp_count = 0usize;
+
+        for arg in &edge.args {
+            // Resolve source location
+            let src = if let Some(loc) = self
                 .edge_source_locations
                 .get(&(edge_id, arg.source.index() as u32))
-                .cloned()
-                .map(|loc| self.reg_for_location_with_temp(&loc, Reg::X9))
-                .unwrap_or_else(|| self.reg_for_vreg_with_temp(arg.source, Reg::X9));
-            let off = self.edge_tmp_off(index);
-            self.ectx
-                .emit
-                .emit_str_imm(Width::X64, src_reg, Reg::SP, off)
-                .expect("str edge tmp");
+            {
+                match loc {
+                    VRegLocation::Register(preg) => Some(EdgeLoc::Reg(Reg::from_raw(*preg))),
+                    VRegLocation::StackSlot(offset) => Some(EdgeLoc::Stack(*offset)),
+                    VRegLocation::Constant(value) => {
+                        // Constants: emit immediately, they read no location.
+                        let dst = self.resolve_vreg_to_loc(arg.target);
+                        if let Some(dst) = dst {
+                            self.emit_constant_to_loc(*value, dst);
+                        }
+                        continue;
+                    }
+                }
+            } else if let Some(preg) = self.preg_for_vreg(arg.source) {
+                Some(EdgeLoc::Reg(self.preg_to_reg(preg)))
+            } else if let Some(&value) = self.alloc_func.rematerializable.get(&arg.source) {
+                let dst = self.resolve_vreg_to_loc(arg.target);
+                if let Some(dst) = dst {
+                    self.emit_constant_to_loc(value, dst);
+                }
+                continue;
+            } else if let Some(slot) = self.alloc_func.spill_slot_for_vreg(arg.source) {
+                Some(EdgeLoc::Stack(self.ectx.base_frame + slot.0 * 8))
+            } else {
+                None // dead source
+            };
+
+            let dst = self.resolve_vreg_to_loc(arg.target);
+
+            match (src, dst) {
+                (Some(s), Some(d)) if s != d => { deps.insert(d, s); }
+                _ => {} // identity or dead
+            }
         }
 
-        for (index, arg) in edge.args.iter().enumerate() {
-            let off = self.edge_tmp_off(index);
-            self.ectx
-                .emit
-                .emit_ldr_imm(Width::X64, Reg::X9, Reg::SP, off)
-                .expect("ldr edge tmp");
-            self.store_to_vreg(arg.target, Reg::X9);
+        // Briggs-style parallel copy resolution over physical locations.
+        // Same algorithm as emit_parallel_reg_moves but generalized to Loc.
+        while !deps.is_empty() {
+            // Find a move whose destination is not used as any other move's source.
+            let ready = deps
+                .iter()
+                .find(|(dst, _)| !deps.values().any(|src| src == *dst))
+                .map(|(&dst, &src)| (dst, src));
+
+            if let Some((dst, src)) = ready {
+                Self::emit_loc_move(&mut self.ectx, src, dst);
+                deps.remove(&dst);
+                continue;
+            }
+
+            // Cycle detected. Break it by saving one destination to a temp.
+            let (&cycle_dst, &cycle_src) = deps.iter().next().unwrap();
+
+            // Save cycle_dst's current value (it will be overwritten).
+            let saved = match cycle_dst {
+                EdgeLoc::Reg(rd) => {
+                    // Save register to X17 (reserved scratch)
+                    self.ectx.emit.emit_mov_reg(Width::X64, Reg::X17, rd).expect("mov save");
+                    EdgeLoc::Reg(Reg::X17)
+                }
+                EdgeLoc::Stack(off) => {
+                    // Save stack slot to an edge temp slot via X16
+                    let tmp_off = self.edge_tmp_off(tmp_count);
+                    tmp_count += 1;
+                    self.ectx.emit.emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, off).expect("ldr");
+                    self.ectx.emit.emit_str_imm(Width::X64, Reg::X16, Reg::SP, tmp_off).expect("str");
+                    EdgeLoc::Stack(tmp_off)
+                }
+            };
+
+            // Remove this edge and emit it.
+            deps.remove(&cycle_dst);
+
+            // Redirect any other move that reads from cycle_dst to read from saved.
+            for (_, src) in deps.iter_mut() {
+                if *src == cycle_dst {
+                    *src = saved;
+                }
+            }
+
+            Self::emit_loc_move(&mut self.ectx, cycle_src, cycle_dst);
+        }
+    }
+
+    /// Resolve a vreg to its physical location (register or stack offset).
+    fn resolve_vreg_to_loc(&self, vreg: kajit_ir::VReg) -> Option<EdgeLoc> {
+        if let Some(preg) = self.preg_for_vreg(vreg) {
+            Some(EdgeLoc::Reg(self.preg_to_reg(preg)))
+        } else if let Some(slot) = self.alloc_func.spill_slot_for_vreg(vreg) {
+            Some(EdgeLoc::Stack(self.ectx.base_frame + slot.0 * 8))
+        } else {
+            None // dead
+        }
+    }
+
+    /// Emit a constant value to a location. X16 is used as scratch for stack destinations.
+    fn emit_constant_to_loc(&mut self, value: u64, dst: EdgeLoc) {
+        match dst {
+            EdgeLoc::Reg(rd) => {
+                self.emit_load_u64(rd, value);
+            }
+            EdgeLoc::Stack(off) => {
+                self.emit_load_u64(Reg::X16, value);
+                self.ectx.emit.emit_str_imm(Width::X64, Reg::X16, Reg::SP, off).expect("str");
+            }
+        }
+    }
+
+    /// Emit a single move between physical locations. X16 is used as scratch
+    /// for stack↔stack transfers. Both X16 and X17 are reserved (never allocated).
+    fn emit_loc_move(ectx: &mut EmitCtx, src: EdgeLoc, dst: EdgeLoc) {
+        match (src, dst) {
+            (EdgeLoc::Reg(rs), EdgeLoc::Reg(rd)) => {
+                ectx.emit.emit_mov_reg(Width::X64, rd, rs).expect("mov");
+            }
+            (EdgeLoc::Reg(rs), EdgeLoc::Stack(off)) => {
+                ectx.emit.emit_str_imm(Width::X64, rs, Reg::SP, off).expect("str");
+            }
+            (EdgeLoc::Stack(off), EdgeLoc::Reg(rd)) => {
+                ectx.emit.emit_ldr_imm(Width::X64, rd, Reg::SP, off).expect("ldr");
+            }
+            (EdgeLoc::Stack(src_off), EdgeLoc::Stack(dst_off)) => {
+                ectx.emit.emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, src_off).expect("ldr");
+                ectx.emit.emit_str_imm(Width::X64, Reg::X16, Reg::SP, dst_off).expect("str");
+            }
         }
     }
 
