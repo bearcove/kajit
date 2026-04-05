@@ -81,9 +81,7 @@ pub(super) fn emit_parallel_reg_moves(ectx: &mut EmitCtx, moves: &[(u8, u8)], te
             .map(|(&dst, &src)| (dst, src));
 
         if let Some((dst, src)) = ready {
-            ectx.emit
-                .emit_with(|buf| x64::encode_mov_r64_r64(dst, src, buf))
-                .expect("mov");
+            ectx.emit.emit_mov_r64_r64(dst, src).expect("mov");
             deps.remove(&dst);
             continue;
         }
@@ -91,7 +89,7 @@ pub(super) fn emit_parallel_reg_moves(ectx: &mut EmitCtx, moves: &[(u8, u8)], te
         // Cycle: break it with the temp register.
         let (&cycle_dst, &cycle_src) = deps.iter().next().unwrap();
         ectx.emit
-            .emit_with(|buf| x64::encode_mov_r64_r64(temp_enc, cycle_dst, buf))
+            .emit_mov_r64_r64(temp_enc, cycle_dst)
             .expect("mov to temp");
         deps.remove(&cycle_dst);
         for (_, src) in deps.iter_mut() {
@@ -100,7 +98,7 @@ pub(super) fn emit_parallel_reg_moves(ectx: &mut EmitCtx, moves: &[(u8, u8)], te
             }
         }
         ectx.emit
-            .emit_with(|buf| x64::encode_mov_r64_r64(cycle_dst, cycle_src, buf))
+            .emit_mov_r64_r64(cycle_dst, cycle_src)
             .expect("mov cycle edge");
     }
 }
@@ -145,16 +143,13 @@ impl<'a> EmitContext<'a> {
             let offset = self.ectx.base_frame + (slot.0 * 8);
             self.ectx
                 .emit
-                .emit_with(|buf| {
-                    x64::encode_mov_r64_m(
-                        temp_enc,
-                        Mem {
-                            base: 4,
-                            disp: offset as i32,
-                        },
-                        buf,
-                    )
-                })
+                .emit_mov_r64_m(
+                    temp_enc,
+                    Mem {
+                        base: 4,
+                        disp: offset as i32,
+                    },
+                )
                 .expect("mov spill load");
             return temp_enc;
         }
@@ -162,7 +157,7 @@ impl<'a> EmitContext<'a> {
         // Dead vreg — use temp with dummy value
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_xor_r32_r32(temp_enc, temp_enc, buf))
+            .emit_xor_r32_r32(temp_enc, temp_enc)
             .expect("xor dead");
         temp_enc
     }
@@ -174,23 +169,20 @@ impl<'a> EmitContext<'a> {
             if dst_enc != from_enc {
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_mov_r64_r64(dst_enc, from_enc, buf))
+                    .emit_mov_r64_r64(dst_enc, from_enc)
                     .expect("mov");
             }
         } else if let Some(slot) = self.alloc_func.spill_slot_for_vreg(vreg) {
             let offset = self.ectx.base_frame + (slot.0 * 8);
             self.ectx
                 .emit
-                .emit_with(|buf| {
-                    x64::encode_mov_m_r64(
-                        Mem {
-                            base: 4,
-                            disp: offset as i32,
-                        },
-                        from_enc,
-                        buf,
-                    )
-                })
+                .emit_mov_m_r64(
+                    Mem {
+                        base: 4,
+                        disp: offset as i32,
+                    },
+                    from_enc,
+                )
                 .expect("mov spill store");
         }
         // If dead, do nothing
@@ -216,17 +208,17 @@ impl<'a> EmitContext<'a> {
         if value == 0 {
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_xor_r32_r32(enc, enc, buf))
+                .emit_xor_r32_r32(enc, enc)
                 .expect("xor zero");
         } else if value <= 0xFFFF_FFFF {
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_r32_imm32(enc, value as u32, buf))
+                .emit_mov_r32_imm32(enc, value as u32)
                 .expect("mov imm32");
         } else {
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_r64_imm64(enc, value, buf))
+                .emit_mov_r64_imm64(enc, value)
                 .expect("mov imm64");
         }
     }
@@ -236,7 +228,7 @@ impl<'a> EmitContext<'a> {
     pub fn emit_load_u64_fixed(&mut self, enc: u8, value: u64) {
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_mov_r64_imm64(enc, value, buf))
+            .emit_mov_r64_imm64(enc, value)
             .expect("mov imm64 fixed");
     }
 
@@ -284,16 +276,13 @@ impl<'a> EmitContext<'a> {
             VRegLocation::StackSlot(offset) => {
                 self.ectx
                     .emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_r64_m(
-                            temp_enc,
-                            Mem {
-                                base: 4,
-                                disp: *offset as i32,
-                            },
-                            buf,
-                        )
-                    })
+                    .emit_mov_r64_m(
+                        temp_enc,
+                        Mem {
+                            base: 4,
+                            disp: *offset as i32,
+                        },
+                    )
                     .expect("mov edge source");
                 temp_enc
             }
@@ -339,7 +328,7 @@ impl<'a> EmitContext<'a> {
             let off = self.edge_tmp_off(index) as i32;
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_m_r64(Mem { base: 4, disp: off }, src_enc, buf))
+                .emit_mov_m_r64(Mem { base: 4, disp: off }, src_enc)
                 .expect("mov edge tmp store");
         }
 
@@ -348,7 +337,7 @@ impl<'a> EmitContext<'a> {
             let off = self.edge_tmp_off(index) as i32;
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_r64_m(10, Mem { base: 4, disp: off }, buf))
+                .emit_mov_r64_m(10, Mem { base: 4, disp: off })
                 .expect("mov edge tmp load");
             self.store_to_vreg(arg.target, 10);
         }

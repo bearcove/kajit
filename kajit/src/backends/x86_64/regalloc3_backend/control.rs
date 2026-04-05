@@ -1,6 +1,5 @@
 //! Control flow emission for x86_64 regalloc3 backend.
 
-use kajit_emit::x64;
 use kajit_mir::cfg_mir::{self, Terminator};
 
 use super::context::EmitContext;
@@ -29,7 +28,7 @@ impl<'a> EmitContext<'a> {
         let cond_enc = self.reg_for_vreg_with_temp(cond, R10);
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_test_r64_r64(cond_enc, cond_enc, buf))
+            .emit_test_r64_r64(cond_enc, cond_enc)
             .expect("test");
         if invert {
             self.ectx.emit.emit_jz_label(target).expect("jz");
@@ -155,13 +154,13 @@ impl<'a> EmitContext<'a> {
                 if pred_enc != R10 {
                     self.ectx
                         .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(R10, pred_enc, buf))
+                        .emit_mov_r64_r64(R10, pred_enc)
                         .expect("mov");
                 }
                 // Zero-extend to 32-bit.
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_mov_r32_r32(R10, R10, buf))
+                    .emit_mov_r32_r32(R10, R10)
                     .expect("mov32");
 
                 // Emit cmp + je chain. Last target is default (fallthrough jmp).
@@ -175,7 +174,7 @@ impl<'a> EmitContext<'a> {
                     if index < last {
                         self.ectx
                             .emit
-                            .emit_with(|buf| x64::encode_cmp_r64_imm32(R10, index as u32, buf))
+                            .emit_cmp_r64_imm32(R10, index as u32)
                             .expect("cmp");
                         self.ectx.emit.emit_je_label(label).expect("je");
                     } else {

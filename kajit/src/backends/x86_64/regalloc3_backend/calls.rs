@@ -1,6 +1,6 @@
 //! Call emission for x86_64 regalloc3 backend.
 
-use kajit_emit::x64::{self, Mem};
+use kajit_emit::x64::Mem;
 
 use crate::context::{CTX_ERROR_CODE, CTX_INPUT_PTR};
 
@@ -28,16 +28,13 @@ impl<'a> EmitContext<'a> {
             let cursor_enc = self.cursor_writeback_enc;
             self.ectx
                 .emit
-                .emit_with(|buf| {
-                    x64::encode_mov_m_r64(
-                        Mem {
-                            base: ctx_enc,
-                            disp: CTX_INPUT_PTR as i32,
-                        },
-                        cursor_enc,
-                        buf,
-                    )
-                })
+                .emit_mov_m_r64(
+                    Mem {
+                        base: ctx_enc,
+                        disp: CTX_INPUT_PTR as i32,
+                    },
+                    cursor_enc,
+                )
                 .expect("sync cursor to ctx");
         }
 
@@ -46,7 +43,7 @@ impl<'a> EmitContext<'a> {
             if off > 0 {
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_add_r64_imm32(output_enc, off, buf))
+                    .emit_add_r64_imm32(output_enc, off)
                     .expect("add out_ptr offset");
             }
         }
@@ -68,7 +65,7 @@ impl<'a> EmitContext<'a> {
             let enc = self.reg_for_vreg_with_temp(arg, R10);
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_push_r64(enc, buf))
+                .emit_push_r64(enc)
                 .expect("push arg");
         }
 
@@ -76,12 +73,12 @@ impl<'a> EmitContext<'a> {
         #[cfg(not(windows))]
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_mov_r64_r64(7, ctx_enc, buf)) // rdi = ctx
+            .emit_mov_r64_r64(7, ctx_enc) // rdi = ctx
             .expect("mov ctx→rdi");
         #[cfg(windows)]
         self.ectx
             .emit
-            .emit_with(|buf| x64::encode_mov_r64_r64(1, ctx_enc, buf)) // rcx = ctx
+            .emit_mov_r64_r64(1, ctx_enc) // rcx = ctx
             .expect("mov ctx→rcx");
 
         // If no dst but field_offset, pass output_reg as out_field arg (after data args).
@@ -90,7 +87,7 @@ impl<'a> EmitContext<'a> {
                 let out_arg_enc = abi_data_regs[args.len()];
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_mov_r64_r64(out_arg_enc, output_enc, buf))
+                    .emit_mov_r64_r64(out_arg_enc, output_enc)
                     .expect("mov out_field arg");
             }
         }
@@ -100,7 +97,7 @@ impl<'a> EmitContext<'a> {
             let enc = abi_data_regs[i];
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_pop_r64(enc, buf))
+                .emit_pop_r64(enc)
                 .expect("pop arg");
         }
 
@@ -109,10 +106,11 @@ impl<'a> EmitContext<'a> {
         let fn_ptr = func.0 as u64;
         self.ectx
             .emit
-            .emit_with(|buf| {
-                x64::encode_mov_r64_imm64(RAX, fn_ptr, buf)?;
-                x64::encode_call_r64(RAX, buf)
-            })
+            .emit_mov_r64_imm64(RAX, fn_ptr)
+            .expect("mov fn_ptr");
+        self.ectx
+            .emit
+            .emit_call_r64(RAX)
             .expect("call intrinsic");
         self.intrinsic_call_sites.push(IntrinsicCallSiteInfo {
             code_offset: call_site_offset,
@@ -124,7 +122,7 @@ impl<'a> EmitContext<'a> {
             if off > 0 {
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_sub_r64_imm32(output_enc, off, buf))
+                    .emit_sub_r64_imm32(output_enc, off)
                     .expect("sub out_ptr offset");
             }
         }
@@ -133,34 +131,31 @@ impl<'a> EmitContext<'a> {
             let cursor_enc = self.cursor_writeback_enc;
             self.ectx
                 .emit
-                .emit_with(|buf| {
-                    x64::encode_mov_r64_m(
-                        cursor_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: CTX_INPUT_PTR as i32,
-                        },
-                        buf,
-                    )
-                })
+                .emit_mov_r64_m(
+                    cursor_enc,
+                    Mem {
+                        base: ctx_enc,
+                        disp: CTX_INPUT_PTR as i32,
+                    },
+                )
                 .expect("reload cursor from ctx");
         }
 
         // Check error after call.
         self.ectx
             .emit
-            .emit_with(|buf| {
-                x64::encode_mov_r32_m(
-                    R10,
-                    Mem {
-                        base: ctx_enc,
-                        disp: CTX_ERROR_CODE as i32,
-                    },
-                    buf,
-                )?;
-                x64::encode_test_r32_r32(R10, R10, buf)
-            })
-            .expect("check error");
+            .emit_mov_r32_m(
+                R10,
+                Mem {
+                    base: ctx_enc,
+                    disp: CTX_ERROR_CODE as i32,
+                },
+            )
+            .expect("load error code");
+        self.ectx
+            .emit
+            .emit_test_r32_r32(R10, R10)
+            .expect("test error");
         self.ectx
             .emit
             .emit_jnz_label(error_exit)
@@ -195,28 +190,20 @@ impl<'a> EmitContext<'a> {
         // Push all args, then pop into ABI registers.
         for &arg in args.iter() {
             let enc = self.reg_for_vreg_with_temp(arg, R10);
-            self.ectx
-                .emit
-                .emit_with(|buf| x64::encode_push_r64(enc, buf))
-                .expect("push");
+            self.ectx.emit.emit_push_r64(enc).expect("push");
         }
         for i in (0..args.len()).rev() {
             let enc = abi_regs[i];
-            self.ectx
-                .emit
-                .emit_with(|buf| x64::encode_pop_r64(enc, buf))
-                .expect("pop");
+            self.ectx.emit.emit_pop_r64(enc).expect("pop");
         }
 
         let call_site_offset = self.ectx.emit.code_len();
         let fn_ptr = func.0 as u64;
         self.ectx
             .emit
-            .emit_with(|buf| {
-                x64::encode_mov_r64_imm64(RAX, fn_ptr, buf)?;
-                x64::encode_call_r64(RAX, buf)
-            })
-            .expect("call pure");
+            .emit_mov_r64_imm64(RAX, fn_ptr)
+            .expect("mov fn_ptr");
+        self.ectx.emit.emit_call_r64(RAX).expect("call pure");
         self.intrinsic_call_sites.push(IntrinsicCallSiteInfo {
             code_offset: call_site_offset,
             func,

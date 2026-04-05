@@ -84,16 +84,13 @@ impl<'a> EmitContext<'a> {
                     let dst_enc = self.dst_enc_or_temp(*dst, R10);
                     self.ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r64_m(
-                                dst_enc,
-                                Mem {
-                                    base: self.ctx_enc,
-                                    disp: CTX_INPUT_PTR as i32,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r64_m(
+                            dst_enc,
+                            Mem {
+                                base: self.ctx_enc,
+                                disp: CTX_INPUT_PTR as i32,
+                            },
+                        )
                         .expect("mov cursor");
                     if dst_enc == R10 {
                         self.store_to_vreg(*dst, R10);
@@ -103,7 +100,7 @@ impl<'a> EmitContext<'a> {
                     let dst_enc = self.dst_enc_or_temp(*dst, R10);
                     self.ectx
                         .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(dst_enc, cursor_enc, buf))
+                        .emit_mov_r64_r64(dst_enc, cursor_enc)
                         .expect("mov cursor");
                     if dst_enc == R10 {
                         self.store_to_vreg(*dst, R10);
@@ -116,16 +113,13 @@ impl<'a> EmitContext<'a> {
                     let dst_enc = self.dst_enc_or_temp(*dst, R10);
                     self.ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r64_m(
-                                dst_enc,
-                                Mem {
-                                    base: self.ctx_enc,
-                                    disp: CTX_INPUT_END as i32,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r64_m(
+                            dst_enc,
+                            Mem {
+                                base: self.ctx_enc,
+                                disp: CTX_INPUT_END as i32,
+                            },
+                        )
                         .expect("mov input_end");
                     if dst_enc == R10 {
                         self.store_to_vreg(*dst, R10);
@@ -135,7 +129,7 @@ impl<'a> EmitContext<'a> {
                     let dst_enc = self.dst_enc_or_temp(*dst, R10);
                     self.ectx
                         .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(dst_enc, end_enc, buf))
+                        .emit_mov_r64_r64(dst_enc, end_enc)
                         .expect("mov input_end");
                     if dst_enc == R10 {
                         self.store_to_vreg(*dst, R10);
@@ -149,23 +143,20 @@ impl<'a> EmitContext<'a> {
                     let base_enc = self.reg_for_vreg_with_temp(base_vreg, R10);
                     self.ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_lea_r64_m(
-                                cursor_enc,
-                                Mem {
-                                    base: base_enc,
-                                    disp: offset as i32,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_lea_r64_m(
+                            cursor_enc,
+                            Mem {
+                                base: base_enc,
+                                disp: offset as i32,
+                            },
+                        )
                         .expect("lea restore_cursor");
                 } else {
                     let src_enc = self.reg_for_vreg_with_temp(*src, R10);
                     if cursor_enc != src_enc {
                         self.ectx
                             .emit
-                            .emit_with(|buf| x64::encode_mov_r64_r64(cursor_enc, src_enc, buf))
+                            .emit_mov_r64_r64(cursor_enc, src_enc)
                             .expect("mov restore_cursor");
                     }
                 }
@@ -182,58 +173,46 @@ impl<'a> EmitContext<'a> {
                     1 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm8(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                }),
-                                buf,
-                            )
-                        })
+                        .emit_movzx_r32_rm8(
+                            rd,
+                            Operand::Mem(Mem {
+                                base: cursor_enc,
+                                disp: 0,
+                            }),
+                        )
                         .expect("movzx"),
                     2 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm16(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                }),
-                                buf,
-                            )
-                        })
+                        .emit_movzx_r32_rm16(
+                            rd,
+                            Operand::Mem(Mem {
+                                base: cursor_enc,
+                                disp: 0,
+                            }),
+                        )
                         .expect("movzx"),
                     4 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r32_m(
-                                rd,
-                                Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r32_m(
+                            rd,
+                            Mem {
+                                base: cursor_enc,
+                                disp: 0,
+                            },
+                        )
                         .expect("mov"),
                     8 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r64_m(
-                                rd,
-                                Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r64_m(
+                            rd,
+                            Mem {
+                                base: cursor_enc,
+                                disp: 0,
+                            },
+                        )
                         .expect("mov"),
                     _ => panic!("unsupported ReadBytes count: {count}"),
                 }
@@ -247,16 +226,13 @@ impl<'a> EmitContext<'a> {
                 let rd = self.dst_enc_or_temp(*dst, R10);
                 self.ectx
                     .emit
-                    .emit_with(|buf| {
-                        x64::encode_movzx_r32_rm8(
-                            rd,
-                            Operand::Mem(Mem {
-                                base: cursor_enc,
-                                disp: 0,
-                            }),
-                            buf,
-                        )
-                    })
+                    .emit_movzx_r32_rm8(
+                        rd,
+                        Operand::Mem(Mem {
+                            base: cursor_enc,
+                            disp: 0,
+                        }),
+                    )
                     .expect("movzx");
                 if rd == R10 {
                     self.store_to_vreg(*dst, R10);
@@ -272,7 +248,7 @@ impl<'a> EmitContext<'a> {
                 let src_enc = self.reg_for_vreg_with_temp(*src, R10);
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_add_r64_r64(cursor_enc, src_enc, buf))
+                    .emit_add_r64_r64(cursor_enc, src_enc)
                     .expect("add cursor");
             }
 
@@ -280,44 +256,27 @@ impl<'a> EmitContext<'a> {
                 let src_enc = self.reg_for_vreg_with_temp(*src, R10);
                 let out = self.output_enc;
                 let off = *offset as i32;
+                let mem = Mem { base: out, disp: off };
                 match width {
                     kajit_ir::Width::W1 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_mov_m_r8(out, off, src_enc, buf))
+                        .emit_mov_m_r8(mem, src_enc)
                         .expect("mov"),
                     kajit_ir::Width::W2 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_mov_m_r16(out, off, src_enc, buf))
+                        .emit_mov_m_r16(mem, src_enc)
                         .expect("mov"),
                     kajit_ir::Width::W4 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_m_r32(
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                src_enc,
-                                buf,
-                            )
-                        })
+                        .emit_mov_m_r32(mem, src_enc)
                         .expect("mov"),
                     kajit_ir::Width::W8 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_m_r64(
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                src_enc,
-                                buf,
-                            )
-                        })
+                        .emit_mov_m_r64(mem, src_enc)
                         .expect("mov"),
                 }
             }
@@ -326,62 +285,27 @@ impl<'a> EmitContext<'a> {
                 let out = self.output_enc;
                 let off = *offset as i32;
                 let rd = self.dst_enc_or_temp(*dst, R10);
+                let mem = Mem { base: out, disp: off };
                 match width {
                     kajit_ir::Width::W1 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm8(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: out,
-                                    disp: off,
-                                }),
-                                buf,
-                            )
-                        })
+                        .emit_movzx_r32_rm8(rd, Operand::Mem(mem))
                         .expect("movzx"),
                     kajit_ir::Width::W2 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm16(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: out,
-                                    disp: off,
-                                }),
-                                buf,
-                            )
-                        })
+                        .emit_movzx_r32_rm16(rd, Operand::Mem(mem))
                         .expect("movzx"),
                     kajit_ir::Width::W4 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r32_m(
-                                rd,
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r32_m(rd, mem)
                         .expect("mov"),
                     kajit_ir::Width::W8 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r64_m(
-                                rd,
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r64_m(rd, mem)
                         .expect("mov"),
                 }
                 if rd == R10 {
@@ -393,7 +317,7 @@ impl<'a> EmitContext<'a> {
                 let rd = self.dst_enc_or_temp(*dst, R10);
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_mov_r64_r64(rd, self.output_enc, buf))
+                    .emit_mov_r64_r64(rd, self.output_enc)
                     .expect("mov");
                 if rd == R10 {
                     self.store_to_vreg(*dst, R10);
@@ -404,7 +328,7 @@ impl<'a> EmitContext<'a> {
                 let src_enc = self.reg_for_vreg_with_temp(*src, R10);
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_mov_r64_r64(self.output_enc, src_enc, buf))
+                    .emit_mov_r64_r64(self.output_enc, src_enc)
                     .expect("mov");
             }
 
@@ -413,16 +337,13 @@ impl<'a> EmitContext<'a> {
                 let off = self.slot_off(slot.index() as u32) as i32;
                 self.ectx
                     .emit
-                    .emit_with(|buf| {
-                        x64::encode_lea_r64_m(
-                            rd,
-                            Mem {
-                                base: RSP,
-                                disp: off,
-                            },
-                            buf,
-                        )
-                    })
+                    .emit_lea_r64_m(
+                        rd,
+                        Mem {
+                            base: RSP,
+                            disp: off,
+                        },
+                    )
                     .expect("lea");
                 if rd == R10 {
                     self.store_to_vreg(*dst, R10);
@@ -432,44 +353,27 @@ impl<'a> EmitContext<'a> {
             LinearOp::StoreToAddr { addr, src, width } => {
                 let addr_enc = self.reg_for_vreg_with_temp(*addr, R11);
                 let src_enc = self.reg_for_vreg_with_temp(*src, R10);
+                let mem = Mem { base: addr_enc, disp: 0 };
                 match width {
                     kajit_ir::Width::W1 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_mov_m_r8(addr_enc, 0, src_enc, buf))
+                        .emit_mov_m_r8(mem, src_enc)
                         .expect("mov"),
                     kajit_ir::Width::W2 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_mov_m_r16(addr_enc, 0, src_enc, buf))
+                        .emit_mov_m_r16(mem, src_enc)
                         .expect("mov"),
                     kajit_ir::Width::W4 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_m_r32(
-                                Mem {
-                                    base: addr_enc,
-                                    disp: 0,
-                                },
-                                src_enc,
-                                buf,
-                            )
-                        })
+                        .emit_mov_m_r32(mem, src_enc)
                         .expect("mov"),
                     kajit_ir::Width::W8 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_m_r64(
-                                Mem {
-                                    base: addr_enc,
-                                    disp: 0,
-                                },
-                                src_enc,
-                                buf,
-                            )
-                        })
+                        .emit_mov_m_r64(mem, src_enc)
                         .expect("mov"),
                 }
             }
@@ -489,62 +393,27 @@ impl<'a> EmitContext<'a> {
                 } else {
                     assigned
                 };
+                let mem = Mem { base: base_enc, disp: offset };
                 match width {
                     kajit_ir::Width::W1 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm8(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: base_enc,
-                                    disp: offset,
-                                }),
-                                buf,
-                            )
-                        })
+                        .emit_movzx_r32_rm8(rd, Operand::Mem(mem))
                         .expect("movzx"),
                     kajit_ir::Width::W2 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm16(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: base_enc,
-                                    disp: offset,
-                                }),
-                                buf,
-                            )
-                        })
+                        .emit_movzx_r32_rm16(rd, Operand::Mem(mem))
                         .expect("movzx"),
                     kajit_ir::Width::W4 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r32_m(
-                                rd,
-                                Mem {
-                                    base: base_enc,
-                                    disp: offset,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r32_m(rd, mem)
                         .expect("mov"),
                     kajit_ir::Width::W8 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r64_m(
-                                rd,
-                                Mem {
-                                    base: base_enc,
-                                    disp: offset,
-                                },
-                                buf,
-                            )
-                        })
+                        .emit_mov_r64_m(rd, mem)
                         .expect("mov"),
                 }
                 if used_scratch || rd == R10 {
@@ -557,16 +426,7 @@ impl<'a> EmitContext<'a> {
                 let off = self.slot_off(slot.index() as u32) as i32;
                 self.ectx
                     .emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_m_r64(
-                            Mem {
-                                base: RSP,
-                                disp: off,
-                            },
-                            src_enc,
-                            buf,
-                        )
-                    })
+                    .emit_mov_m_r64(Mem { base: RSP, disp: off }, src_enc)
                     .expect("mov slot store");
             }
 
@@ -575,16 +435,7 @@ impl<'a> EmitContext<'a> {
                 let off = self.slot_off(slot.index() as u32) as i32;
                 self.ectx
                     .emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_r64_m(
-                            rd,
-                            Mem {
-                                base: RSP,
-                                disp: off,
-                            },
-                            buf,
-                        )
-                    })
+                    .emit_mov_r64_m(rd, Mem { base: RSP, disp: off })
                     .expect("mov slot load");
                 if rd == R10 {
                     self.store_to_vreg(*dst, R10);
@@ -609,10 +460,7 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::CallLambda { .. } => {
-                self.ectx
-                    .emit
-                    .emit_with(|buf| x64::encode_nop(buf))
-                    .expect("nop");
+                self.ectx.emit.emit_nop().expect("nop");
             }
 
             LinearOp::SimdStringScan { .. } | LinearOp::SimdWhitespaceSkip => {
@@ -668,13 +516,13 @@ impl<'a> EmitContext<'a> {
             if let Some(imm) = self.imm32_const(cmp_rhs) {
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_cmp_r64_imm32(cmp_lhs_enc, imm, buf))
+                    .emit_cmp_r64_imm32(cmp_lhs_enc, imm)
                     .expect("cmp imm");
             } else {
                 let cmp_rhs_enc = self.reg_for_vreg_with_temp(cmp_rhs, R11);
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_cmp_r64_r64(cmp_lhs_enc, cmp_rhs_enc, buf))
+                    .emit_cmp_r64_r64(cmp_lhs_enc, cmp_rhs_enc)
                     .expect("cmp");
             }
 
@@ -705,11 +553,12 @@ impl<'a> EmitContext<'a> {
             let rd = self.dst_enc_or_temp(dst, R10);
             self.ectx
                 .emit
-                .emit_with(|buf| {
-                    x64::encode_setcc_r8(condition, rd, buf)?;
-                    x64::encode_movzx_r64_rm8(rd, Operand::Reg(rd), buf)
-                })
-                .expect("setcc+movzx");
+                .emit_setcc_r8(condition, rd)
+                .expect("setcc");
+            self.ectx
+                .emit
+                .emit_movzx_r64_rm8(rd, Operand::Reg(rd))
+                .expect("movzx");
             if rd == R10 {
                 self.store_to_vreg(dst, R10);
             }
@@ -727,24 +576,24 @@ impl<'a> EmitContext<'a> {
                     if rd != lhs_enc {
                         self.ectx
                             .emit
-                            .emit_with(|buf| x64::encode_mov_r64_r64(rd, lhs_enc, buf))
+                            .emit_mov_r64_r64(rd, lhs_enc)
                             .expect("mov");
                     }
                     match kind {
                         BinOpKind::Shl => self
                             .ectx
                             .emit
-                            .emit_with(|buf| x64::encode_shl_r64_imm8(rd, shift_val as u8, buf))
+                            .emit_shl_r64_imm8(rd, shift_val as u8)
                             .expect("shl imm"),
                         BinOpKind::Shr => self
                             .ectx
                             .emit
-                            .emit_with(|buf| x64::encode_shr_r64_imm8(rd, shift_val as u8, buf))
+                            .emit_shr_r64_imm8(rd, shift_val as u8)
                             .expect("shr imm"),
                         BinOpKind::Sar => self
                             .ectx
                             .emit
-                            .emit_with(|buf| x64::encode_sar_r64_imm8(rd, shift_val as u8, buf))
+                            .emit_sar_r64_imm8(rd, shift_val as u8)
                             .expect("sar imm"),
                         _ => unreachable!(),
                     }
@@ -759,30 +608,30 @@ impl<'a> EmitContext<'a> {
             let rhs_enc = self.reg_for_vreg_with_temp(rhs, R11);
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_r64_r64(RCX, rhs_enc, buf))
+                .emit_mov_r64_r64(RCX, rhs_enc)
                 .expect("mov rcx");
             let lhs_enc = self.reg_for_vreg_with_temp(lhs, R10);
             if lhs_enc != R10 {
                 self.ectx
                     .emit
-                    .emit_with(|buf| x64::encode_mov_r64_r64(R10, lhs_enc, buf))
+                    .emit_mov_r64_r64(R10, lhs_enc)
                     .expect("mov r10");
             }
             match kind {
                 BinOpKind::Shl => self
                     .ectx
                     .emit
-                    .emit_with(|buf| x64::encode_shl_r64_cl(R10, buf))
+                    .emit_shl_r64_cl(R10)
                     .expect("shl cl"),
                 BinOpKind::Shr => self
                     .ectx
                     .emit
-                    .emit_with(|buf| x64::encode_shr_r64_cl(R10, buf))
+                    .emit_shr_r64_cl(R10)
                     .expect("shr cl"),
                 BinOpKind::Sar => self
                     .ectx
                     .emit
-                    .emit_with(|buf| x64::encode_sar_r64_cl(R10, buf))
+                    .emit_sar_r64_cl(R10)
                     .expect("sar cl"),
                 _ => unreachable!(),
             }
@@ -799,7 +648,7 @@ impl<'a> EmitContext<'a> {
         if rd != lhs_enc {
             self.ectx
                 .emit
-                .emit_with(|buf| x64::encode_mov_r64_r64(rd, lhs_enc, buf))
+                .emit_mov_r64_r64(rd, lhs_enc)
                 .expect("mov lhs→rd");
         }
 
@@ -810,12 +659,12 @@ impl<'a> EmitContext<'a> {
                     BinOpKind::Add => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_add_r64_imm32(rd, imm, buf))
+                        .emit_add_r64_imm32(rd, imm)
                         .expect("add imm"),
                     BinOpKind::Sub => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_sub_r64_imm32(rd, imm, buf))
+                        .emit_sub_r64_imm32(rd, imm)
                         .expect("sub imm"),
                     _ => unreachable!(),
                 }
@@ -829,36 +678,12 @@ impl<'a> EmitContext<'a> {
         let rhs_enc = self.reg_for_vreg_with_temp(rhs, R11);
 
         match kind {
-            BinOpKind::Add => self
-                .ectx
-                .emit
-                .emit_with(|buf| x64::encode_add_r64_r64(rd, rhs_enc, buf))
-                .expect("add"),
-            BinOpKind::Sub => self
-                .ectx
-                .emit
-                .emit_with(|buf| x64::encode_sub_r64_r64(rd, rhs_enc, buf))
-                .expect("sub"),
-            BinOpKind::Mul => self
-                .ectx
-                .emit
-                .emit_with(|buf| x64::encode_imul_r64_r64(rd, rhs_enc, buf))
-                .expect("imul"),
-            BinOpKind::And => self
-                .ectx
-                .emit
-                .emit_with(|buf| x64::encode_and_r64_r64(rd, rhs_enc, buf))
-                .expect("and"),
-            BinOpKind::Or => self
-                .ectx
-                .emit
-                .emit_with(|buf| x64::encode_or_r64_r64(rd, rhs_enc, buf))
-                .expect("or"),
-            BinOpKind::Xor => self
-                .ectx
-                .emit
-                .emit_with(|buf| x64::encode_xor_r64_r64(rd, rhs_enc, buf))
-                .expect("xor"),
+            BinOpKind::Add => self.ectx.emit.emit_add_r64_r64(rd, rhs_enc).expect("add"),
+            BinOpKind::Sub => self.ectx.emit.emit_sub_r64_r64(rd, rhs_enc).expect("sub"),
+            BinOpKind::Mul => self.ectx.emit.emit_imul_r64_r64(rd, rhs_enc).expect("imul"),
+            BinOpKind::And => self.ectx.emit.emit_and_r64_r64(rd, rhs_enc).expect("and"),
+            BinOpKind::Or => self.ectx.emit.emit_or_r64_r64(rd, rhs_enc).expect("or"),
+            BinOpKind::Xor => self.ectx.emit.emit_xor_r64_r64(rd, rhs_enc).expect("xor"),
             _ => unreachable!("comparison/shift ops handled above"),
         }
 
@@ -874,76 +699,53 @@ impl<'a> EmitContext<'a> {
             UnaryOpKind::ZigzagDecode { wide: true } => {
                 // zigzag_decode(n) = (n >> 1) ^ -(n & 1)
                 if src_enc != R10 {
-                    self.ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(R10, src_enc, buf))
-                        .expect("mov");
+                    self.ectx.emit.emit_mov_r64_r64(R10, src_enc).expect("mov");
                 }
-                self.ectx
-                    .emit
-                    .emit_with(|buf| {
-                        // r11 = n >> 1
-                        x64::encode_mov_r64_r64(R11, R10, buf)?;
-                        x64::encode_shr_r64_imm8(R11, 1, buf)?;
-                        // r10 = n & 1 (use mov_r64_imm32_sext into r10 won't work since r10 has n)
-                        // Instead: and r10 with immediate 1 via test+set? No.
-                        // Simplest: mov scratch2 to hold 1, but we only have r10/r11.
-                        // Use: and r10, r10 keeping only bit 0 by shifting.
-                        // Actually simplest: shl r10, 63; sar r10, 63 gives sign-extend of bit 0
-                        // which is exactly -(n & 1)!
-                        x64::encode_shl_r64_imm8(R10, 63, buf)?;
-                        x64::encode_sar_r64_imm8(R10, 63, buf)?;
-                        // r10 = -(n & 1), r11 = n >> 1
-                        x64::encode_xor_r64_r64(R10, R11, buf)
-                    })
-                    .expect("zigzag wide");
+                // r11 = n >> 1
+                self.ectx.emit.emit_mov_r64_r64(R11, R10).expect("mov");
+                self.ectx.emit.emit_shr_r64_imm8(R11, 1).expect("shr");
+                // shl r10, 63; sar r10, 63 gives sign-extend of bit 0
+                // which is exactly -(n & 1)!
+                self.ectx.emit.emit_shl_r64_imm8(R10, 63).expect("shl");
+                self.ectx.emit.emit_sar_r64_imm8(R10, 63).expect("sar");
+                // r10 = -(n & 1), r11 = n >> 1
+                self.ectx.emit.emit_xor_r64_r64(R10, R11).expect("xor");
                 self.store_to_vreg(dst, R10);
             }
             UnaryOpKind::ZigzagDecode { wide: false } => {
                 if src_enc != R10 {
-                    self.ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(R10, src_enc, buf))
-                        .expect("mov");
+                    self.ectx.emit.emit_mov_r64_r64(R10, src_enc).expect("mov");
                 }
-                self.ectx
-                    .emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_r32_r32(R10, R10, buf)?; // zero-extend to 32
-                        // r11 = n >> 1
-                        x64::encode_mov_r64_r64(R11, R10, buf)?;
-                        x64::encode_shr_r64_imm8(R11, 1, buf)?;
-                        // r10 = -(n & 1) via shl 63; sar 63
-                        x64::encode_shl_r64_imm8(R10, 63, buf)?;
-                        x64::encode_sar_r64_imm8(R10, 63, buf)?;
-                        x64::encode_xor_r64_r64(R10, R11, buf)?;
-                        x64::encode_mov_r32_r32(R10, R10, buf) // truncate to 32
-                    })
-                    .expect("zigzag narrow");
+                self.ectx.emit.emit_mov_r32_r32(R10, R10).expect("mov32"); // zero-extend to 32
+                // r11 = n >> 1
+                self.ectx.emit.emit_mov_r64_r64(R11, R10).expect("mov");
+                self.ectx.emit.emit_shr_r64_imm8(R11, 1).expect("shr");
+                // r10 = -(n & 1) via shl 63; sar 63
+                self.ectx.emit.emit_shl_r64_imm8(R10, 63).expect("shl");
+                self.ectx.emit.emit_sar_r64_imm8(R10, 63).expect("sar");
+                self.ectx.emit.emit_xor_r64_r64(R10, R11).expect("xor");
+                self.ectx.emit.emit_mov_r32_r32(R10, R10).expect("mov32"); // truncate to 32
                 self.store_to_vreg(dst, R10);
             }
             UnaryOpKind::SignExtend { from_width } => {
                 if src_enc != R10 {
-                    self.ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(R10, src_enc, buf))
-                        .expect("mov");
+                    self.ectx.emit.emit_mov_r64_r64(R10, src_enc).expect("mov");
                 }
                 match from_width {
                     kajit_ir::Width::W1 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_movsx_r64_rm8(R10, Operand::Reg(R10), buf))
+                        .emit_movsx_r64_rm8(R10, Operand::Reg(R10))
                         .expect("movsx"),
                     kajit_ir::Width::W2 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_movsx_r64_rm16(R10, Operand::Reg(R10), buf))
+                        .emit_movsx_r64_rm16(R10, Operand::Reg(R10))
                         .expect("movsx"),
                     kajit_ir::Width::W4 => self
                         .ectx
                         .emit
-                        .emit_with(|buf| x64::encode_movsxd_r64_rm32(R10, Operand::Reg(R10), buf))
+                        .emit_movsxd_r64_rm32(R10, Operand::Reg(R10))
                         .expect("movsxd"),
                     kajit_ir::Width::W8 => {} // no-op
                 }

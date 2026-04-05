@@ -65,6 +65,7 @@ impl EmitCtx {
     pub fn new(extra_stack: u32) -> Self {
         let frame_size = (BASE_FRAME + extra_stack + 15) & !15;
         let mut emit = Emitter::new();
+        emit.enable_capture();
         let error_exit = emit.new_label();
 
         EmitCtx {
@@ -88,6 +89,7 @@ impl EmitCtx {
     pub fn new_regalloc(extra_stack: u32, base_frame: u32, is_leaf: bool) -> Self {
         let frame_size = (base_frame + extra_stack + 15) & !15;
         let mut emit = Emitter::new();
+        emit.enable_capture();
         let error_exit = emit.new_label();
 
         EmitCtx {
@@ -405,11 +407,13 @@ impl EmitCtx {
     pub fn emit_advance_cursor_by(&mut self, n: u32) {
         let cursor = self.cursor_enc;
         self.emit
-            .emit_with(|buf| x64::encode_add_r64_imm32(cursor, n, buf))
+            .emit_add_r64_imm32(cursor, n)
             .expect("advance cursor");
     }
 
-    pub fn finalize(self) -> FinalizedEmission {
-        self.emit.finalize().expect("failed to finalize assembly")
+    pub fn finalize(mut self) -> (FinalizedEmission, Option<kajit_emit::x64_asm::Program>) {
+        let asm_program = self.emit.take_captured_program();
+        let buf = self.emit.finalize().expect("failed to finalize assembly");
+        (buf, asm_program)
     }
 }

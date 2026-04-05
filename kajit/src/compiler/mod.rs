@@ -35,6 +35,8 @@ pub struct CompiledDecoder {
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
     #[cfg(target_arch = "aarch64")]
     asm_program: Option<kajit_emit::aarch64_asm::Program>,
+    #[cfg(target_arch = "x86_64")]
+    asm_program: Option<kajit_emit::x64_asm::Program>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -189,8 +191,7 @@ impl CompiledDecoder {
         }
     }
 
-    /// ARM64 assembly text (captured instructions before encoding).
-    #[cfg(target_arch = "aarch64")]
+    /// Assembly text (captured instructions during encoding).
     pub fn assembly_text(&self) -> Option<String> {
         self.asm_program.as_ref().map(|p| format!("{}", p))
     }
@@ -234,17 +235,18 @@ pub(crate) fn materialize_backend_result(
     usize,
     Option<kajit_emit::SourceMap>,
     Option<crate::ir_backend::BackendDebugInfo>,
-    (), // placeholder for asm_program (aarch64-only)
+    Option<kajit_emit::x64_asm::Program>,
 ) {
     let crate::ir_backend::LinearBackendResult {
         buf,
         entry,
         source_map,
         backend_debug_info,
+        asm_program,
         intrinsic_call_sites: _,
         data_relocs: _,
     } = result;
-    (buf, entry as usize, source_map, backend_debug_info, ())
+    (buf, entry as usize, source_map, backend_debug_info, asm_program)
 }
 
 /// All intermediate artifacts from a compilation pipeline run.
@@ -459,7 +461,7 @@ pub fn compile_pipeline_from_hir_module(
         root_data_abi,
     );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
-    let (buf, entry, _source_map, backend_debug_info, _asm_program) =
+    let (buf, entry, _source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
 
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
@@ -475,18 +477,13 @@ pub fn compile_pipeline_from_hir_module(
         func,
         root_data_abi,
         trusted_utf8_input,
-        _jit_registration: None, // JIT debug registration handled by the old path if needed
-        #[cfg(target_arch = "aarch64")]
+        _jit_registration: None,
         asm_program,
     };
 
     let cfg_text = decoder.cfg_mir_text();
 
-    // Capture ASM
-    #[cfg(target_arch = "aarch64")]
     let asm_text = decoder.assembly_text().unwrap_or_default();
-    #[cfg(not(target_arch = "aarch64"))]
-    let asm_text = String::new();
 
     PipelineArtifacts {
         hir_text,
@@ -917,7 +914,7 @@ fn compile_linear_ir_decoder_with_options(
         }
     }
 
-    let (buf, entry, source_map, backend_debug_info, _asm_program, dwarf_location_map) =
+    let (buf, entry, source_map, backend_debug_info, asm_program, dwarf_location_map) =
         if use_regalloc3 {
             let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
                 .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
@@ -1041,7 +1038,6 @@ fn compile_linear_ir_decoder_with_options(
         root_data_abi,
         trusted_utf8_input,
         _jit_registration: Some(registration),
-        #[cfg(target_arch = "aarch64")]
         asm_program,
     }
 }
@@ -1070,7 +1066,7 @@ fn compile_cfg_mir_decoder_with_options(
         debug: Default::default(),
         data_blobs: cfg_program.data_blobs.clone(),
     };
-    let (buf, entry, source_map, backend_debug_info, _asm_program) = {
+    let (buf, entry, source_map, backend_debug_info, asm_program) = {
         let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
             &shim_linear,
             cfg_program,
@@ -1131,7 +1127,6 @@ fn compile_cfg_mir_decoder_with_options(
         root_data_abi,
         trusted_utf8_input,
         _jit_registration: Some(registration),
-        #[cfg(target_arch = "aarch64")]
         asm_program,
     }
 }

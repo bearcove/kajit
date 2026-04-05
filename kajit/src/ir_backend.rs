@@ -26,6 +26,7 @@ pub struct LinearBackendResult {
     pub entry: u32,
     pub source_map: Option<kajit_emit::SourceMap>,
     pub backend_debug_info: Option<BackendDebugInfo>,
+    pub asm_program: Option<kajit_emit::x64_asm::Program>,
     pub intrinsic_call_sites:
         Vec<crate::backends::x86_64::regalloc3_backend::IntrinsicCallSiteInfo>,
     pub data_relocs: Vec<crate::backends::x86_64::regalloc3_backend::DataRelocInfo>,

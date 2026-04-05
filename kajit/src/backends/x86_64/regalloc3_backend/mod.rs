@@ -270,7 +270,7 @@ pub(crate) fn compile_regalloc3_with_root_data_abi(
         ectx.emit.bind_label(error_exit).expect("bind error_exit");
         // Error: return 0.
         ectx.emit
-            .emit_with(|buf| x64::encode_xor_r32_r32(0, 0, buf))
+            .emit_xor_r32_r32(0, 0)
             .expect("xor rax,rax");
         emit_scalar_epilogue_restore(&mut ectx, extra_saved_pairs);
     } else {
@@ -302,7 +302,7 @@ pub(crate) fn compile_regalloc3_with_root_data_abi(
         }
     }
 
-    let buf = ectx.finalize();
+    let (buf, asm_program) = ectx.finalize();
 
     // Patch data address relocations.
     if !data_relocs.is_empty() {
@@ -326,6 +326,7 @@ pub(crate) fn compile_regalloc3_with_root_data_abi(
             Some(source_map)
         },
         backend_debug_info: None,
+        asm_program,
         intrinsic_call_sites,
         data_relocs,
     }
@@ -346,12 +347,10 @@ fn emit_scalar_prologue(
     let frame_size = ectx.frame_size;
 
     // push rbp; sub rsp, frame_size
+    ectx.emit.emit_push_r64(5).expect("push rbp");
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_push_r64(5, buf)?;
-            x64::encode_sub_r64_imm32(4, frame_size, buf)
-        })
-        .expect("scalar prologue frame");
+        .emit_sub_r64_imm32(4, frame_size)
+        .expect("sub rsp, frame_size");
 
     // Save callee-saved registers used by regalloc.
     emit_save_callee_saved(ectx, extra_saved_pairs);
@@ -364,16 +363,13 @@ fn emit_scalar_prologue(
             if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
                 let offset = (ectx.base_frame + (slot.0 * 8)) as i32;
                 ectx.emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_m_r64(
-                            Mem {
-                                base: 4,
-                                disp: offset,
-                            },
-                            abi_enc,
-                            buf,
-                        )
-                    })
+                    .emit_mov_m_r64(
+                        Mem {
+                            base: 4,
+                            disp: offset,
+                        },
+                        abi_enc,
+                    )
                     .expect("store spilled data_arg");
             }
         }
@@ -419,12 +415,10 @@ fn emit_decoder_prologue(
     let frame_size = ectx.frame_size;
 
     // push rbp; sub rsp, frame_size
+    ectx.emit.emit_push_r64(5).expect("push rbp");
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_push_r64(5, buf)?;
-            x64::encode_sub_r64_imm32(4, frame_size, buf)
-        })
-        .expect("decoder prologue frame");
+        .emit_sub_r64_imm32(4, frame_size)
+        .expect("sub rsp, frame_size");
 
     // Save callee-saved registers used by regalloc.
     emit_save_callee_saved(ectx, extra_saved_pairs);
@@ -440,12 +434,12 @@ fn emit_decoder_prologue(
         // Non-leaf: move out/ctx to their target registers (e.g. r14, r15).
         if output_enc != abi_out {
             ectx.emit
-                .emit_with(|buf| x64::encode_mov_r64_r64(output_enc, abi_out, buf))
+                .emit_mov_r64_r64(output_enc, abi_out)
                 .expect("mov out");
         }
         if ctx_enc != abi_ctx {
             ectx.emit
-                .emit_with(|buf| x64::encode_mov_r64_r64(ctx_enc, abi_ctx, buf))
+                .emit_mov_r64_r64(ctx_enc, abi_ctx)
                 .expect("mov ctx");
         }
 
@@ -454,25 +448,23 @@ fn emit_decoder_prologue(
             let cursor_enc = ectx.cursor_enc;
             let end_enc = ectx.end_enc;
             ectx.emit
-                .emit_with(|buf| {
-                    x64::encode_mov_r64_m(
-                        cursor_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_PTR as i32,
-                        },
-                        buf,
-                    )?;
-                    x64::encode_mov_r64_m(
-                        end_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_END as i32,
-                        },
-                        buf,
-                    )
-                })
-                .expect("load cursor/end");
+                .emit_mov_r64_m(
+                    cursor_enc,
+                    Mem {
+                        base: ctx_enc,
+                        disp: crate::context::CTX_INPUT_PTR as i32,
+                    },
+                )
+                .expect("load cursor");
+            ectx.emit
+                .emit_mov_r64_m(
+                    end_enc,
+                    Mem {
+                        base: ctx_enc,
+                        disp: crate::context::CTX_INPUT_END as i32,
+                    },
+                )
+                .expect("load end");
         }
     } else {
         // Leaf: out/ctx stay in ABI arg registers.
@@ -480,25 +472,23 @@ fn emit_decoder_prologue(
             let cursor_enc = ectx.cursor_enc;
             let end_enc = ectx.end_enc;
             ectx.emit
-                .emit_with(|buf| {
-                    x64::encode_mov_r64_m(
-                        cursor_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_PTR as i32,
-                        },
-                        buf,
-                    )?;
-                    x64::encode_mov_r64_m(
-                        end_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_END as i32,
-                        },
-                        buf,
-                    )
-                })
-                .expect("load cursor/end for leaf");
+                .emit_mov_r64_m(
+                    cursor_enc,
+                    Mem {
+                        base: ctx_enc,
+                        disp: crate::context::CTX_INPUT_PTR as i32,
+                    },
+                )
+                .expect("load cursor for leaf");
+            ectx.emit
+                .emit_mov_r64_m(
+                    end_enc,
+                    Mem {
+                        base: ctx_enc,
+                        disp: crate::context::CTX_INPUT_END as i32,
+                    },
+                )
+                .expect("load end for leaf");
         }
     }
 
@@ -509,16 +499,13 @@ fn emit_decoder_prologue(
             if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
                 let offset = (ectx.base_frame + (slot.0 * 8)) as i32;
                 ectx.emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_m_r64(
-                            Mem {
-                                base: 4,
-                                disp: offset,
-                            },
-                            abi_enc,
-                            buf,
-                        )
-                    })
+                    .emit_mov_m_r64(
+                        Mem {
+                            base: 4,
+                            disp: offset,
+                        },
+                        abi_enc,
+                    )
                     .expect("store spilled decoder data_arg");
             }
         }
@@ -561,22 +548,19 @@ fn emit_scalar_epilogue(
                 let src = preg.0;
                 if src != target {
                     ectx.emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(target, src, buf))
+                        .emit_mov_r64_r64(target, src)
                         .expect("mov result");
                 }
             } else if let Some(slot) = alloc_func.spill_slot_for_vreg(vreg) {
                 let offset = (ectx.base_frame + (slot.0 * 8)) as i32;
                 ectx.emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_r64_m(
-                            target,
-                            Mem {
-                                base: 4,
-                                disp: offset,
-                            },
-                            buf,
-                        )
-                    })
+                    .emit_mov_r64_m(
+                        target,
+                        Mem {
+                            base: 4,
+                            disp: offset,
+                        },
+                    )
                     .expect("mov result from spill");
             }
         }
@@ -589,12 +573,10 @@ fn emit_scalar_epilogue_restore(ectx: &mut EmitCtx, extra_saved_pairs: u32) {
     emit_restore_callee_saved(ectx, extra_saved_pairs);
     let frame_size = ectx.frame_size;
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_add_r64_imm32(4, frame_size, buf)?;
-            x64::encode_pop_r64(5, buf)?;
-            x64::encode_ret(buf)
-        })
-        .expect("scalar epilogue");
+        .emit_add_r64_imm32(4, frame_size)
+        .expect("add rsp, frame_size");
+    ectx.emit.emit_pop_r64(5).expect("pop rbp");
+    ectx.emit.emit_ret().expect("ret");
 }
 
 /// Emit decoder success epilogue: write cursor back to ctx, restore callee-saved, ret.
@@ -603,27 +585,22 @@ fn emit_decoder_epilogue(ectx: &mut EmitCtx, extra_saved_pairs: u32, writeback_c
         let ctx_enc = ectx.ctx_enc;
         let cursor_enc = ectx.cursor_enc;
         ectx.emit
-            .emit_with(|buf| {
-                x64::encode_mov_m_r64(
-                    Mem {
-                        base: ctx_enc,
-                        disp: crate::context::CTX_INPUT_PTR as i32,
-                    },
-                    cursor_enc,
-                    buf,
-                )
-            })
+            .emit_mov_m_r64(
+                Mem {
+                    base: ctx_enc,
+                    disp: crate::context::CTX_INPUT_PTR as i32,
+                },
+                cursor_enc,
+            )
             .expect("writeback cursor");
     }
     emit_restore_callee_saved(ectx, extra_saved_pairs);
     let frame_size = ectx.frame_size;
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_add_r64_imm32(4, frame_size, buf)?;
-            x64::encode_pop_r64(5, buf)?;
-            x64::encode_ret(buf)
-        })
-        .expect("decoder epilogue");
+        .emit_add_r64_imm32(4, frame_size)
+        .expect("add rsp, frame_size");
+    ectx.emit.emit_pop_r64(5).expect("pop rbp");
+    ectx.emit.emit_ret().expect("ret");
 }
 
 /// Emit decoder error epilogue: just restore callee-saved and ret (error code already in ctx).
@@ -631,12 +608,10 @@ fn emit_decoder_error_epilogue(ectx: &mut EmitCtx, extra_saved_pairs: u32) {
     emit_restore_callee_saved(ectx, extra_saved_pairs);
     let frame_size = ectx.frame_size;
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_add_r64_imm32(4, frame_size, buf)?;
-            x64::encode_pop_r64(5, buf)?;
-            x64::encode_ret(buf)
-        })
-        .expect("decoder error epilogue");
+        .emit_add_r64_imm32(4, frame_size)
+        .expect("add rsp, frame_size");
+    ectx.emit.emit_pop_r64(5).expect("pop rbp");
+    ectx.emit.emit_ret().expect("ret");
 }
 
 // ── Callee-saved register save/restore ──────────────────────────────────
@@ -660,58 +635,22 @@ fn emit_save_callee_saved(ectx: &mut EmitCtx, pairs: u32) {
     let mut offset: i32 = 0;
     // Save rbp first (always, for frame pointer).
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_mov_m_r64(
-                Mem {
-                    base: 4,
-                    disp: offset,
-                },
-                5,
-                buf,
-            )
-        })
+        .emit_mov_m_r64(Mem { base: 4, disp: offset }, 5)
         .expect("save rbp");
     offset += 8;
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_mov_m_r64(
-                Mem {
-                    base: 4,
-                    disp: offset,
-                },
-                3,
-                buf,
-            )
-        })
+        .emit_mov_m_r64(Mem { base: 4, disp: offset }, 3)
         .expect("save rbx");
     offset += 8;
 
     for i in 0..pairs {
         let (a, b) = callee_saved_pair(i);
         ectx.emit
-            .emit_with(|buf| {
-                x64::encode_mov_m_r64(
-                    Mem {
-                        base: 4,
-                        disp: offset,
-                    },
-                    a,
-                    buf,
-                )
-            })
+            .emit_mov_m_r64(Mem { base: 4, disp: offset }, a)
             .expect("save callee-saved a");
         offset += 8;
         ectx.emit
-            .emit_with(|buf| {
-                x64::encode_mov_m_r64(
-                    Mem {
-                        base: 4,
-                        disp: offset,
-                    },
-                    b,
-                    buf,
-                )
-            })
+            .emit_mov_m_r64(Mem { base: 4, disp: offset }, b)
             .expect("save callee-saved b");
         offset += 8;
     }
@@ -720,58 +659,22 @@ fn emit_save_callee_saved(ectx: &mut EmitCtx, pairs: u32) {
 fn emit_restore_callee_saved(ectx: &mut EmitCtx, pairs: u32) {
     let mut offset: i32 = 0;
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_mov_r64_m(
-                5,
-                Mem {
-                    base: 4,
-                    disp: offset,
-                },
-                buf,
-            )
-        })
+        .emit_mov_r64_m(5, Mem { base: 4, disp: offset })
         .expect("restore rbp");
     offset += 8;
     ectx.emit
-        .emit_with(|buf| {
-            x64::encode_mov_r64_m(
-                3,
-                Mem {
-                    base: 4,
-                    disp: offset,
-                },
-                buf,
-            )
-        })
+        .emit_mov_r64_m(3, Mem { base: 4, disp: offset })
         .expect("restore rbx");
     offset += 8;
 
     for i in 0..pairs {
         let (a, b) = callee_saved_pair(i);
         ectx.emit
-            .emit_with(|buf| {
-                x64::encode_mov_r64_m(
-                    a,
-                    Mem {
-                        base: 4,
-                        disp: offset,
-                    },
-                    buf,
-                )
-            })
+            .emit_mov_r64_m(a, Mem { base: 4, disp: offset })
             .expect("restore callee-saved a");
         offset += 8;
         ectx.emit
-            .emit_with(|buf| {
-                x64::encode_mov_r64_m(
-                    b,
-                    Mem {
-                        base: 4,
-                        disp: offset,
-                    },
-                    buf,
-                )
-            })
+            .emit_mov_r64_m(b, Mem { base: 4, disp: offset })
             .expect("restore callee-saved b");
         offset += 8;
     }
