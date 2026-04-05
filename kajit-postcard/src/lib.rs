@@ -2755,7 +2755,7 @@ impl PostcardHirLowerer {
                         scope,
                         statements: body_stmts,
                     },
-                    max_iterations: None,
+                    max_iterations: Some(array_def.n as u32),
                 },
             });
             return;
