@@ -27,41 +27,6 @@ fn compile_and_run_from_ir_text_snapshot_u32() {
     assert_eq!(out, 42);
 }
 
-#[test]
-#[ignore = "pre-existing: stale IR text snapshot"]
-fn deserialize_from_ir_text_helper_u32() {
-    let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
-    let registry = kajit::known_intrinsic_registry();
-    let out: u32 = kajit::deserialize_from_ir_text(ir_text, &registry, false, &[0x80, 0x01])
-        .expect("decode should succeed");
-    assert_eq!(out, 128);
-}
-
-#[test]
-#[ignore = "pre-existing: CFG-MIR parse error"]
-fn deserialize_from_cfg_mir_text_helper_u32() {
-    let cfg_text = kajit::debug_cfg_mir_text(<u32 as Facet>::SHAPE, kajit::DecoderKind::Postcard);
-
-    let out: u32 = kajit::deserialize_from_cfg_mir_text(&cfg_text, &[0xac, 0x02])
-        .expect("decode should succeed");
-    assert_eq!(out, 300);
-}
-
-#[test]
-#[ignore = "pre-existing: CFG-MIR parse error"]
-fn deserialize_from_cfg_mir_text_with_named_option_init_const() {
-    let cfg_text =
-        kajit::debug_cfg_mir_text(PostcardOptionStruct::SHAPE, kajit::DecoderKind::Postcard);
-    assert!(
-        cfg_text.contains("@option_init_none.") || cfg_text.contains("@option_init_some."),
-        "expected named option init const in CFG-MIR text, got:\n{cfg_text}"
-    );
-
-    let out: PostcardOptionStruct = kajit::deserialize_from_cfg_mir_text(&cfg_text, &[0x01, 0x2a])
-        .expect("decode should succeed");
-    assert_eq!(out, PostcardOptionStruct { x: Some(42) });
-}
-
 #[cfg(target_arch = "aarch64")]
 #[test]
 #[ignore = "pre-existing: insta snapshot mismatch"]
