@@ -286,7 +286,7 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
             if func.lambda_id != root_lambda {
                 continue;
             }
-            for block in &func.blocks {
+            for block in func.live_blocks() {
                 for inst_id in &block.insts {
                     let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
                     let Some(debug_value_id) = program.op_debug_value(func.lambda_id, op_id) else {
@@ -642,7 +642,7 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
 
     for func in &program.funcs {
         let lambda_key = func.lambda_id.index() as u32;
-        for block in &func.blocks {
+        for block in func.live_blocks() {
             let mut remaining_uses = BTreeMap::<crate::ir::VReg, usize>::new();
             for inst_id in &block.insts {
                 for operand in &func.insts[inst_id.index()].operands {

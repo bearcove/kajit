@@ -208,7 +208,7 @@ impl LocationMap {
         for func in &program.funcs {
             let lambda_id = func.lambda_id.index() as u32;
             let mut next_line = 1u32;
-            for block in &func.blocks {
+            for block in func.live_blocks() {
                 for inst_id in &block.insts {
                     let inst = &func.insts[inst_id.index()];
                     inst_lines.insert((lambda_id, *inst_id), next_line);
@@ -545,7 +545,7 @@ pub fn compute_edge_source_locations(
 
     let mut inst_lines = HashMap::<kajit_mir::cfg_mir::InstId, u32>::new();
     let mut next_line = 1u32;
-    for block in &func.blocks {
+    for block in func.live_blocks() {
         for &inst_id in &block.insts {
             inst_lines.insert(inst_id, next_line);
             next_line += 1;
@@ -593,7 +593,7 @@ pub fn compute_edge_source_locations(
     }
 
     let mut edge_source_locations = HashMap::new();
-    for block in &func.blocks {
+    for block in func.live_blocks() {
         let Some(mut owners) = entry_owners.get(&block.id).cloned() else {
             continue;
         };
@@ -627,7 +627,7 @@ pub fn compute_inst_source_locations(
 
     let mut inst_lines = HashMap::<kajit_mir::cfg_mir::InstId, u32>::new();
     let mut next_line = 1u32;
-    for block in &func.blocks {
+    for block in func.live_blocks() {
         for &inst_id in &block.insts {
             inst_lines.insert(inst_id, next_line);
             next_line += 1;
@@ -675,7 +675,7 @@ pub fn compute_inst_source_locations(
     }
 
     let mut inst_source_locations = HashMap::new();
-    for block in &func.blocks {
+    for block in func.live_blocks() {
         let Some(mut owners) = entry_owners.get(&block.id).cloned() else {
             continue;
         };

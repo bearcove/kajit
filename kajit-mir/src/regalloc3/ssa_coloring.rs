@@ -100,10 +100,7 @@ pub fn allocate_with_excluded(
         def_inst_idx.insert(arg, DEF_AT_ENTRY);
     }
 
-    for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+    for block in func.live_blocks() {
         // Block params are defined at block entry
         for &param in &block.params {
             def_block.insert(param, block.id);
@@ -258,10 +255,7 @@ fn spill_phase(
 
     // Process each block: check pressure at block entry (live-in + block params)
     // and after each instruction
-    for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+    for block in func.live_blocks() {
 
         // Live values at block entry = live_in ∪ block_params
         let mut live: BTreeSet<VReg> = liveness.live_in.get(&block.id).cloned().unwrap_or_default();
@@ -401,10 +395,7 @@ fn pick_spill_victim(
 /// Compute next-use info: for each vreg, list of (block, inst_index) where it's used.
 fn compute_next_uses(func: &Function) -> HashMap<VReg, Vec<(BlockId, usize)>> {
     let mut uses: HashMap<VReg, Vec<(BlockId, usize)>> = HashMap::new();
-    for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+    for block in func.live_blocks() {
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
             inst.op.for_each_use(|src| {
@@ -466,10 +457,7 @@ fn is_last_use_in_block(
 /// u32::MAX means used at/after the terminator (branch condition or edge arg).
 fn compute_last_use_map(func: &Function) -> HashMap<(BlockId, VReg), u32> {
     let mut map: HashMap<(BlockId, VReg), u32> = HashMap::new();
-    for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+    for block in func.live_blocks() {
         // Instruction uses
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
@@ -510,10 +498,7 @@ fn compute_live_across_call(
     spilled: &BTreeSet<VReg>,
 ) -> HashSet<VReg> {
     let mut live_across_call: HashSet<VReg> = HashSet::new();
-    for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+    for block in func.live_blocks() {
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.0 as usize];
             if !inst.clobbers.caller_saved_gpr {
@@ -633,10 +618,7 @@ fn color_phase(
     // that uses it in that block (including terminator and edge args).
     // u32::MAX means "used at/after terminator" (edge arg or branch cond).
     let mut last_use_in_block: HashMap<(BlockId, VReg), u32> = HashMap::new();
-    for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+    for block in func.live_blocks() {
         // Instruction uses happen before defs of the same instruction, so record
         // them at the same 1-based order used by instruction defs.
         for (inst_idx, &inst_id) in block.insts.iter().enumerate() {
@@ -1028,10 +1010,7 @@ fn resolve_fixed_use_constraints(
     spilled: &BTreeSet<VReg>,
 ) -> Vec<OperandEdit> {
     let mut edits = Vec::new();
-    for block in &func.blocks {
-        if block.dead {
-            continue;
-        }
+    for block in func.live_blocks() {
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.0 as usize];
             for operand in &inst.operands {

@@ -1488,7 +1488,7 @@ impl<'a> EmitContext<'a> {
         // Count uses of each vreg across the entire function
         let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
 
-        for block in &func.blocks {
+        for block in func.live_blocks() {
             if block.dead {
                 continue;
             }
@@ -1521,7 +1521,7 @@ impl<'a> EmitContext<'a> {
 
         let mut fusable = HashMap::new();
 
-        for block in &func.blocks {
+        for block in func.live_blocks() {
             if block.dead {
                 continue;
             }
@@ -1575,7 +1575,7 @@ impl<'a> EmitContext<'a> {
 
         // Count uses of each vreg
         let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
-        for block in &func.blocks {
+        for block in func.live_blocks() {
             if block.dead {
                 continue;
             }
@@ -1726,7 +1726,7 @@ impl<'a> EmitContext<'a> {
     ) {
         // Count uses of each vreg across the entire function
         let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
-        for block in &func.blocks {
+        for block in func.live_blocks() {
             if block.dead {
                 continue;
             }
@@ -1823,7 +1823,7 @@ impl<'a> EmitContext<'a> {
                 }
             }
         }
-        for block in &func.blocks {
+        for block in func.live_blocks() {
             let term = &func.terms[block.term.index()];
             let edge_ids: Vec<cfg_mir::EdgeId> = match term {
                 cfg_mir::Terminator::Branch { edge } => vec![*edge],
@@ -2104,7 +2104,7 @@ impl<'a> EmitContext<'a> {
     /// Emit all blocks for this function.
     fn emit_function(&mut self) {
         // Create labels for all blocks
-        for block in &self.func.blocks {
+        for block in self.func.live_blocks() {
             let label = self.ectx.new_label();
             self.block_labels.insert(block.id, label);
         }
@@ -2112,7 +2112,7 @@ impl<'a> EmitContext<'a> {
         // Alias trampoline blocks only when they are pure control-flow aliases.
         // If the outgoing edge carries block-param moves, the block must remain
         // materialized so its branch can target the edge trampoline.
-        for block in &self.func.blocks {
+        for block in self.func.live_blocks() {
             if block.dead || !block.insts.is_empty() {
                 continue;
             }

@@ -18,11 +18,12 @@ use kajit_lir::LinearOp;
 /// Run CFG simplification: trampoline forwarding + jump-threading.
 /// Returns true if any changes were made.
 pub fn simplify_cfg(func: &mut Function, _vreg_count: &mut u32) -> bool {
-    // Disabled: the trampoline forwarding's global vreg replacement is unsound
-    // and interacts badly with thread_phi_branches. The control-only gamma output
-    // elimination in the linearizer (KAJIT_CHAIN_EXIT=1) replaces the need for
-    // CFG-level is_more threading. This pass needs a rewrite with structural edge
-    // forwarding before re-enabling.
+    // Disabled: trampoline forwarding breaks SSA dominance — vregs defined
+    // in blocks that dominated the trampoline become out-of-scope when the
+    // trampoline is removed and edges are redirected. The transformation needs
+    // to thread non-param vregs through the redirected edges or verify that
+    // dominance is preserved. See the forward_trampolines/thread_phi_branches
+    // implementations below for the planned rewrite.
     let _ = func;
     false
 }
@@ -37,6 +38,8 @@ fn forward_trampolines(func: &mut Function) -> bool {
         .find_map(|b| {
             let term = &func.terms[b.term.index()];
             if let Terminator::Branch { edge } = term {
+                // For multi-pred blocks with params: only safe if all params are
+                // either forwarded through the outgoing edge or unused outside.
                 if b.preds.len() > 1 && !b.params.is_empty() {
                     let out_args = &func.edges[edge.index()].args;
                     let out_arg_sources: std::collections::HashSet<VReg> =
@@ -64,15 +67,8 @@ fn forward_trampolines(func: &mut Function) -> bool {
     let final_target = func.edges[out_edge_id.index()].to;
     let out_args = func.edges[out_edge_id.index()].args.clone();
 
-    if pred_edges.len() == 1 && !trampoline_params.is_empty() {
-        let pred_incoming_args = func.edges[pred_edges[0].index()].args.clone();
-        let mut global_subst: HashMap<VReg, VReg> = HashMap::new();
-        for (param, arg) in trampoline_params.iter().zip(pred_incoming_args.iter()) {
-            global_subst.insert(*param, arg.source);
-        }
-        crate::opt::constant_phi_elim::replace_vregs_in_function(func, &global_subst);
-    }
-
+    // Redirect every predecessor edge to the final target, composing
+    // edge args through the trampoline's params.
     for pred_edge_id in &pred_edges {
         let pred_incoming_args = func.edges[pred_edge_id.index()].args.clone();
         let mut subst: HashMap<VReg, VReg> = HashMap::new();
@@ -88,15 +84,10 @@ fn forward_trampolines(func: &mut Function) -> bool {
 
         func.edges[pred_edge_id.index()].to = final_target;
         func.edges[pred_edge_id.index()].args = composed_args;
-        func.blocks[final_target.index()].preds.push(*pred_edge_id);
     }
 
-    func.blocks[trampoline_id.index()].preds.clear();
-    func.blocks[final_target.index()]
-        .preds
-        .retain(|e| *e != out_edge_id);
+    // Mark trampoline dead. gc_edges() will rebuild preds/succs.
     func.blocks[trampoline_id.index()].dead = true;
-    func.blocks[trampoline_id.index()].succs.clear();
 
     true
 }
@@ -213,10 +204,6 @@ fn thread_phi_branches(func: &mut Function) -> bool {
         }
         let source_vreg = pred_edge.args[param_idx].source;
 
-        // Only use compile-time constants for now. Branch-condition inference
-        // (infer_nonzero_from_predecessor) enables threading of blocks whose
-        // live-out params create SSA violations. Disabled until the trampoline
-        // forwarding's global replacement is made dominance-safe.
         let known_nonzero = const_vals.get(&source_vreg).map(|&val| val != 0);
 
         let Some(is_nonzero) = known_nonzero else {
@@ -229,12 +216,10 @@ fn thread_phi_branches(func: &mut Function) -> bool {
             } else {
                 fallthrough_edge
             }
+        } else if is_nonzero {
+            taken_edge
         } else {
-            if is_nonzero {
-                taken_edge
-            } else {
-                fallthrough_edge
-            }
+            fallthrough_edge
         };
         pred_targets.push((pred_edge_id, chosen_edge));
     }
@@ -288,68 +273,10 @@ fn thread_phi_branches(func: &mut Function) -> bool {
 
         func.edges[pred_edge_id.index()].to = final_target;
         func.edges[pred_edge_id.index()].args = composed_args;
-        func.blocks[final_target.index()].preds.push(*pred_edge_id);
     }
 
-    func.blocks[block_id.index()].preds.clear();
-    func.blocks[taken_target.index()]
-        .preds
-        .retain(|e| *e != taken_edge);
-    func.blocks[fallthrough_target.index()]
-        .preds
-        .retain(|e| *e != fallthrough_edge);
+    // Mark block dead. gc_edges() will rebuild preds/succs.
     func.blocks[block_id.index()].dead = true;
-    func.blocks[block_id.index()].succs.clear();
 
     true
-}
-
-/// Infer whether `source_vreg` is provably nonzero or zero based on the
-/// predecessor block's terminator.
-fn infer_nonzero_from_predecessor(
-    func: &Function,
-    pred_edge_id: EdgeId,
-    source_vreg: VReg,
-) -> Option<bool> {
-    let pred_block_id = func.edges[pred_edge_id.index()].from;
-    let pred_block = &func.blocks[pred_block_id.index()];
-    let pred_term = &func.terms[pred_block.term.index()];
-
-    match pred_term {
-        Terminator::BranchIf {
-            cond,
-            taken,
-            fallthrough,
-        } => {
-            if *cond == source_vreg {
-                if pred_edge_id == *taken {
-                    Some(true)
-                } else if pred_edge_id == *fallthrough {
-                    Some(false)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-        Terminator::BranchIfZero {
-            cond,
-            taken,
-            fallthrough,
-        } => {
-            if *cond == source_vreg {
-                if pred_edge_id == *taken {
-                    Some(false)
-                } else if pred_edge_id == *fallthrough {
-                    Some(true)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }

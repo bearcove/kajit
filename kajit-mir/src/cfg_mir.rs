@@ -238,6 +238,16 @@ impl fmt::Display for CfgMirError {
 impl std::error::Error for CfgMirError {}
 
 impl Function {
+    /// Iterate over live (non-tombstoned) blocks.
+    pub fn live_blocks(&self) -> impl DoubleEndedIterator<Item = &Block> {
+        self.blocks.iter().filter(|b| !b.dead)
+    }
+
+    /// Iterate mutably over live (non-tombstoned) blocks.
+    pub fn live_blocks_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut Block> {
+        self.blocks.iter_mut().filter(|b| !b.dead)
+    }
+
     /// Rebuild all blocks' preds and succs lists from the edge list.
     /// Edges are the source of truth — call this after any structural CFG rewrite.
     pub fn rebuild_preds_succs(&mut self) {
@@ -422,7 +432,7 @@ impl Function {
         let mut used_terms = BTreeSet::<TermId>::new();
         let mut used_insts = BTreeSet::<InstId>::new();
 
-        for block in &self.blocks {
+        for block in self.live_blocks() {
             if self.term(block.term).is_none() {
                 return Err(CfgMirError::new(format!(
                     "func @{} block b{} references missing term t{}",
@@ -508,11 +518,12 @@ impl Function {
             )));
         }
 
-        if used_terms.len() != self.blocks.len() {
+        let live_block_count = self.live_blocks().count();
+        if used_terms.len() != live_block_count {
             return Err(CfgMirError::new(format!(
-                "func @{} term ownership mismatch: {} blocks reference {} unique terms",
+                "func @{} term ownership mismatch: {} live blocks reference {} unique terms",
                 self.lambda_id.index(),
-                self.blocks.len(),
+                live_block_count,
                 used_terms.len()
             )));
         }
