@@ -139,7 +139,7 @@ pub(crate) fn build_debug_line_maps(
     for func in &program.funcs {
         let lambda_id = func.lambda_id.index() as u32;
         let mut first_line = None::<u32>;
-        for block in &func.blocks {
+        for block in func.live_blocks() {
             for inst_id in &block.insts {
                 let op_id = cfg_mir::OpId::Inst(*inst_id);
                 line_by_lambda_op.insert((lambda_id, op_id), next_line);
@@ -334,7 +334,7 @@ impl Lowerer<'_> {
                     lambda_max = lambda_max.max(target.index());
                 }
             }
-            for block in &func.blocks {
+            for block in func.live_blocks() {
                 let key = (func.lambda_id.index() as u32, block.id.0);
                 block_labels.insert(key, ectx.new_label());
             }
@@ -352,7 +352,7 @@ impl Lowerer<'_> {
             }
             edge_args_by_lambda.insert(lid, by_edge);
 
-            for block in &func.blocks {
+            for block in func.live_blocks() {
                 if block.insts.is_empty()
                     && block.params.is_empty()
                     && let Some(cfg_mir::Terminator::Branch { edge }) = func.term(block.term)

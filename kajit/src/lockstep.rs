@@ -879,7 +879,7 @@ fn build_op_to_line_map(
         std::collections::HashMap::<kajit_mir::cfg_mir::OpId, (u32, bool, usize)>::new();
     let mut fallback = std::collections::HashMap::<(u32, bool, usize), u32>::new();
     let mut next_line = 1u32;
-    for block in &func.blocks {
+    for block in func.live_blocks() {
         for (inst_idx, inst_id) in block.insts.iter().enumerate() {
             let key = (block.id.0, false, inst_idx);
             op_locations.insert(kajit_mir::cfg_mir::OpId::Inst(*inst_id), key);

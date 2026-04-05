@@ -159,11 +159,9 @@ impl<'a> LivenessAnalyzer<'a> {
     /// Run backward dataflow to fixpoint
     fn analyze(&mut self) {
         // Initialize all sets to empty
-        for block in &self.func.blocks {
-            if !block.dead {
-                self.live_in.insert(block.id, BTreeSet::new());
-                self.live_out.insert(block.id, BTreeSet::new());
-            }
+        for block in self.func.live_blocks() {
+            self.live_in.insert(block.id, BTreeSet::new());
+            self.live_out.insert(block.id, BTreeSet::new());
         }
 
         // Iterate to fixpoint
@@ -172,10 +170,7 @@ impl<'a> LivenessAnalyzer<'a> {
             changed = false;
 
             // Process blocks in reverse order (better convergence)
-            for block in self.func.blocks.iter().rev() {
-                if block.dead {
-                    continue;
-                }
+            for block in self.func.live_blocks().rev() {
 
                 let old_live_in = self.live_in[&block.id].clone();
 
@@ -259,11 +254,7 @@ impl<'a> LivenessAnalyzer<'a> {
         let mut use_points: IndexMap<VReg, Vec<ProgPoint>> = IndexMap::new();
 
         // For each block, track live ranges
-        for block in &self.func.blocks {
-            if block.dead {
-                continue;
-            }
-
+        for block in self.func.live_blocks() {
             let block_entry = self.progpoints.block_entry[&block.id];
             let block_exit = self.progpoints.block_exit[&block.id];
 
