@@ -522,7 +522,7 @@ impl<'a> EmitContext<'a> {
                         return; // nop
                     }
                 }
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
+                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                 self.store_to_vreg(*dst, src_reg);
             }
 
@@ -539,8 +539,8 @@ impl<'a> EmitContext<'a> {
                     // All reads of this vreg will re-emit movz instead.
                 } else {
                     // Spilled - load into x9, store to spill slot
-                    self.emit_load_u64(Reg::X9, *value);
-                    self.store_to_vreg(*dst, Reg::X9);
+                    self.emit_load_u64(Reg::X16, *value);
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
@@ -551,7 +551,7 @@ impl<'a> EmitContext<'a> {
                 let dest_reg = if let Some(preg) = self.preg_for_vreg(*dst) {
                     self.preg_to_reg(preg)
                 } else {
-                    Reg::X9
+                    Reg::X16
                 };
                 self.emit_load_u64_fixed(dest_reg, 0);
                 self.data_relocs.push(DataRelocInfo {
@@ -559,7 +559,7 @@ impl<'a> EmitContext<'a> {
                     blob_id: *blob_id,
                 });
                 if self.preg_for_vreg(*dst).is_none() {
-                    self.store_to_vreg(*dst, Reg::X9);
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
@@ -575,13 +575,13 @@ impl<'a> EmitContext<'a> {
                 // For leaf functions, load cursor directly from context struct
                 // into the regalloc'd register (avoids prologue → x19 → copy).
                 if self.ectx.is_leaf {
-                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X9);
+                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X16);
                     self.ectx
                         .emit
                         .emit_ldr_imm(Width::X64, dst_reg, self.ctx_reg, CTX_INPUT_PTR)
                         .expect("ldr cursor");
-                    if dst_reg == Reg::X9 {
-                        self.store_to_vreg(*dst, Reg::X9);
+                    if dst_reg == Reg::X16 {
+                        self.store_to_vreg(*dst, Reg::X16);
                     }
                 } else if let Some(preg) = self.preg_for_vreg(*dst) {
                     let dst_reg = self.preg_to_reg(preg);
@@ -592,22 +592,22 @@ impl<'a> EmitContext<'a> {
                 } else {
                     self.ectx
                         .emit
-                        .emit_mov_reg(Width::X64, Reg::X9, Reg::X19)
+                        .emit_mov_reg(Width::X64, Reg::X16, Reg::X19)
                         .expect("mov");
-                    self.store_to_vreg(*dst, Reg::X9);
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
             LinearOp::SaveInputEnd { dst } => {
                 // For leaf functions, load input_end directly from context struct.
                 if self.ectx.is_leaf {
-                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X9);
+                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X16);
                     self.ectx
                         .emit
                         .emit_ldr_imm(Width::X64, dst_reg, self.ctx_reg, CTX_INPUT_END)
                         .expect("ldr input_end");
-                    if dst_reg == Reg::X9 {
-                        self.store_to_vreg(*dst, Reg::X9);
+                    if dst_reg == Reg::X16 {
+                        self.store_to_vreg(*dst, Reg::X16);
                     }
                 } else if let Some(preg) = self.preg_for_vreg(*dst) {
                     let dst_reg = self.preg_to_reg(preg);
@@ -618,9 +618,9 @@ impl<'a> EmitContext<'a> {
                 } else {
                     self.ectx
                         .emit
-                        .emit_mov_reg(Width::X64, Reg::X9, Reg::X20)
+                        .emit_mov_reg(Width::X64, Reg::X16, Reg::X20)
                         .expect("mov");
-                    self.store_to_vreg(*dst, Reg::X9);
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
@@ -628,13 +628,13 @@ impl<'a> EmitContext<'a> {
                 let cursor_reg = self.cursor_writeback_reg;
                 // Check for fused base+offset: emit `add cursor, base, #offset`
                 if let Some(&(base_vreg, offset)) = self.fused_addr_offsets.get(src) {
-                    let base_reg = self.reg_for_vreg_with_temp(base_vreg, Reg::X9);
+                    let base_reg = self.reg_for_vreg_with_temp(base_vreg, Reg::X16);
                     self.ectx
                         .emit
                         .emit_add_imm(Width::X64, cursor_reg, base_reg, offset as u16, false)
                         .expect("add imm for restore_cursor");
                 } else {
-                    let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
+                    let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                     if cursor_reg != src_reg {
                         self.ectx
                             .emit
@@ -649,7 +649,7 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ReadBytes { dst, count } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
                 let cursor = self.ectx.cursor_reg;
                 match count {
                     1 => {
@@ -675,17 +675,17 @@ impl<'a> EmitContext<'a> {
                         return;
                     }
                 }
-                if rd == Reg::X9 {
-                    self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X16 {
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
             LinearOp::PeekByte { dst } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
                 let cursor = self.ectx.cursor_reg;
                 self.ectx.emit.emit_ldrb_imm(rd, cursor, 0).expect("ldrb");
-                if rd == Reg::X9 {
-                    self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X16 {
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
@@ -695,7 +695,7 @@ impl<'a> EmitContext<'a> {
 
             LinearOp::AdvanceCursorBy { src } => {
                 let cursor = self.ectx.cursor_reg;
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
+                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                 self.ectx
                     .emit
                     .emit_add_reg(Width::X64, cursor, cursor, src_reg)
@@ -703,7 +703,7 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::WriteToField { src, offset, width } => {
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
+                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                 // Out pointer is in x21
                 match width {
                     kajit_ir::Width::W1 => {
@@ -734,7 +734,7 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ReadFromField { dst, offset, width } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
                 match width {
                     kajit_ir::Width::W1 => {
                         self.ectx
@@ -761,24 +761,24 @@ impl<'a> EmitContext<'a> {
                             .expect("ldr");
                     }
                 }
-                if rd == Reg::X9 {
-                    self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X16 {
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
             LinearOp::SaveOutPtr { dst } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
                 self.ectx
                     .emit
                     .emit_mov_reg(Width::X64, rd, self.output_reg)
                     .expect("mov");
-                if rd == Reg::X9 {
-                    self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X16 {
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
             LinearOp::SetOutPtr { src } => {
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
+                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                 self.ectx
                     .emit
                     .emit_mov_reg(Width::X64, self.output_reg, src_reg)
@@ -786,19 +786,19 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::SlotAddr { dst, slot } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
                 let off = self.slot_off(slot.index() as u32);
                 self.ectx
                     .emit
                     .emit_add_imm(Width::X64, rd, Reg::SP, off as u16, false)
                     .expect("add");
-                if rd == Reg::X9 {
-                    self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X16 {
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
             LinearOp::StoreToAddr { addr, src, width } => {
-                let addr_reg = self.reg_for_vreg_with_temp(*addr, Reg::X9);
+                let addr_reg = self.reg_for_vreg_with_temp(*addr, Reg::X16);
                 let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X10);
                 match width {
                     kajit_ir::Width::W1 => {
@@ -837,11 +837,11 @@ impl<'a> EmitContext<'a> {
                         (self.reg_for_vreg_with_temp(*addr, Reg::X10), 0)
                     };
                 let mut used_scratch = false;
-                let assigned = self.dst_reg_or_temp(*dst, Reg::X9);
+                let assigned = self.dst_reg_or_temp(*dst, Reg::X16);
                 let rd = if assigned == base_reg {
                     used_scratch = true;
-                    if base_reg != Reg::X9 {
-                        Reg::X9
+                    if base_reg != Reg::X16 {
+                        Reg::X16
                     } else if base_reg != Reg::X10 {
                         Reg::X10
                     } else {
@@ -876,13 +876,13 @@ impl<'a> EmitContext<'a> {
                             .expect("ldr");
                     }
                 }
-                if used_scratch || rd == Reg::X9 {
+                if used_scratch || rd == Reg::X16 {
                     self.store_to_vreg(*dst, rd);
                 }
             }
 
             LinearOp::WriteToSlot { slot, src } => {
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X9);
+                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                 let off = self.slot_off(slot.index() as u32);
                 self.ectx
                     .emit
@@ -891,14 +891,14 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ReadFromSlot { dst, slot } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X9);
+                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
                 let off = self.slot_off(slot.index() as u32);
                 self.ectx
                     .emit
                     .emit_ldr_imm(Width::X64, rd, Reg::SP, off)
                     .expect("ldr slot");
-                if rd == Reg::X9 {
-                    self.store_to_vreg(*dst, Reg::X9);
+                if rd == Reg::X16 {
+                    self.store_to_vreg(*dst, Reg::X16);
                 }
             }
 
@@ -973,7 +973,7 @@ impl<'a> EmitContext<'a> {
                 (lhs, rhs, false)
             };
 
-            let cmp_lhs_reg = self.reg_for_vreg_with_temp(cmp_lhs, Reg::X9);
+            let cmp_lhs_reg = self.reg_for_vreg_with_temp(cmp_lhs, Reg::X16);
             if let Some(imm) = self.small_const(cmp_rhs) {
                 self.ectx
                     .emit
@@ -1014,14 +1014,14 @@ impl<'a> EmitContext<'a> {
             let cset_dst = if let Some(preg) = self.preg_for_vreg(dst) {
                 self.preg_to_reg(preg)
             } else {
-                Reg::X9
+                Reg::X16
             };
             self.ectx
                 .emit
                 .emit_cset(Width::X64, cset_dst, condition)
                 .expect("cset");
-            if cset_dst == Reg::X9 {
-                self.store_to_vreg(dst, Reg::X9);
+            if cset_dst == Reg::X16 {
+                self.store_to_vreg(dst, Reg::X16);
             }
             return;
         }
@@ -1029,7 +1029,7 @@ impl<'a> EmitContext<'a> {
         // Try to fold a small constant rhs into an immediate-form instruction
         if let Some(imm) = self.small_const(rhs) {
             if matches!(kind, BinOpKind::Add | BinOpKind::Sub) {
-                let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X9);
+                let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X16);
                 let result_reg = if let Some(preg) = self.preg_for_vreg(dst) {
                     self.preg_to_reg(preg)
                 } else {
@@ -1058,7 +1058,7 @@ impl<'a> EmitContext<'a> {
         }
 
         // Arithmetic/logic: load operands, compute, store
-        let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X9);
+        let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X16);
         let rhs_reg = self.reg_for_vreg_with_temp(rhs, Reg::X10);
         // Compute directly into dst register when possible.
         // On aarch64, ALU instructions read inputs before writing the result,
@@ -1115,7 +1115,7 @@ impl<'a> EmitContext<'a> {
                     .get(&dst)
                     .map(|b| (b.byte_src, b.accum, b.lsb, b.width));
                 if let Some((byte_src, accum, bfi_lsb, bfi_width)) = bfi_info {
-                    let byte_reg = self.reg_for_vreg_with_temp(byte_src, Reg::X9);
+                    let byte_reg = self.reg_for_vreg_with_temp(byte_src, Reg::X16);
                     let accum_reg = self.reg_for_vreg_with_temp(accum, Reg::X10);
                     // bfi modifies Rd in place, so ensure result_reg == accum_reg
                     if result_reg != accum_reg {
@@ -1196,7 +1196,7 @@ impl<'a> EmitContext<'a> {
 
     /// Emit a unary operation.
     fn emit_unary(&mut self, kind: UnaryOpKind, dst: kajit_ir::VReg, src: kajit_ir::VReg) {
-        let src_reg = self.reg_for_vreg_with_temp(src, Reg::X9);
+        let src_reg = self.reg_for_vreg_with_temp(src, Reg::X16);
         match kind {
             UnaryOpKind::ZigzagDecode { wide } => {
                 // zigzag_decode(n) = (n >> 1) ^ -(n & 1)
@@ -1222,36 +1222,36 @@ impl<'a> EmitContext<'a> {
                 // xor
                 self.ectx
                     .emit
-                    .emit_eor_reg(w, Reg::X9, Reg::X10, Reg::X11)
+                    .emit_eor_reg(w, Reg::X16, Reg::X10, Reg::X11)
                     .expect("eor");
-                self.store_to_vreg(dst, Reg::X9);
+                self.store_to_vreg(dst, Reg::X16);
             }
             UnaryOpKind::SignExtend { from_width } => {
                 match from_width {
                     kajit_ir::Width::W1 => {
                         self.ectx
                             .emit
-                            .emit_sxtb(Width::X64, Reg::X9, src_reg)
+                            .emit_sxtb(Width::X64, Reg::X16, src_reg)
                             .expect("sxtb");
                     }
                     kajit_ir::Width::W2 => {
                         self.ectx
                             .emit
-                            .emit_sxth(Width::X64, Reg::X9, src_reg)
+                            .emit_sxth(Width::X64, Reg::X16, src_reg)
                             .expect("sxth");
                     }
                     kajit_ir::Width::W4 => {
-                        self.ectx.emit.emit_sxtw(Reg::X9, src_reg).expect("sxtw");
+                        self.ectx.emit.emit_sxtw(Reg::X16, src_reg).expect("sxtw");
                     }
                     kajit_ir::Width::W8 => {
                         // 64-bit to 64-bit sign extend is a no-op
                         self.ectx
                             .emit
-                            .emit_mov_reg(Width::X64, Reg::X9, src_reg)
+                            .emit_mov_reg(Width::X64, Reg::X16, src_reg)
                             .expect("mov");
                     }
                 }
-                self.store_to_vreg(dst, Reg::X9);
+                self.store_to_vreg(dst, Reg::X16);
             }
         }
     }
@@ -1373,11 +1373,11 @@ impl<'a> EmitContext<'a> {
         // Check error after call
         self.ectx
             .emit
-            .emit_ldr_imm(Width::W32, Reg::X9, self.ctx_reg, CTX_ERROR_CODE)
+            .emit_ldr_imm(Width::W32, Reg::X16, self.ctx_reg, CTX_ERROR_CODE)
             .expect("ldr error");
         self.ectx
             .emit
-            .emit_cbnz_label(Width::W32, Reg::X9, error_exit)
+            .emit_cbnz_label(Width::W32, Reg::X16, error_exit)
             .expect("cbnz error");
 
         // Store result if needed (return value is in x0)
@@ -1454,7 +1454,7 @@ impl<'a> EmitContext<'a> {
             let cc = if invert { cc.invert() } else { cc };
             self.ectx.emit.emit_b_cond_label(cc, target).expect("b.cc");
         } else if let Some((src, bit)) = self.is_and_bit_test(cond) {
-            let src_reg = self.reg_for_vreg_with_temp(src, Reg::X9);
+            let src_reg = self.reg_for_vreg_with_temp(src, Reg::X16);
             if invert {
                 self.ectx
                     .emit
@@ -1467,7 +1467,7 @@ impl<'a> EmitContext<'a> {
                     .expect("tbnz");
             }
         } else {
-            let cond_reg = self.reg_for_vreg_with_temp(cond, Reg::X9);
+            let cond_reg = self.reg_for_vreg_with_temp(cond, Reg::X16);
             if invert {
                 self.ectx
                     .emit
@@ -2567,9 +2567,9 @@ pub fn compile_regalloc3_with_root_data_abi(
                             // Load spilled values into scratch first.
                             let offset = ectx.base_frame + (slot.0 * 8);
                             ectx.emit
-                                .emit_ldr_imm(Width::X64, Reg::X9, Reg::SP, offset)
+                                .emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, offset)
                                 .expect("ldr result from spill");
-                            Some(Reg::X9)
+                            Some(Reg::X16)
                         } else {
                             None
                         }
@@ -2607,13 +2607,13 @@ pub fn compile_regalloc3_with_root_data_abi(
                                     .find(|&j| !done[j] && j != i && result_regs[j] == Some(target))
                                     .unwrap();
                                 ectx.emit
-                                    .emit_mov_reg(Width::X64, Reg::X9, target)
+                                    .emit_mov_reg(Width::X64, Reg::X16, target)
                                     .expect("mov scratch");
                                 ectx.emit
                                     .emit_mov_reg(Width::X64, target, src)
                                     .expect("mov result");
                                 ectx.emit
-                                    .emit_mov_reg(Width::X64, Reg::from_raw(blocker as u8), Reg::X9)
+                                    .emit_mov_reg(Width::X64, Reg::from_raw(blocker as u8), Reg::X16)
                                     .expect("mov from scratch");
                                 done[i] = true;
                                 done[blocker] = true;
