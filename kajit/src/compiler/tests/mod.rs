@@ -2168,42 +2168,6 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
     let reg_2 = regalloc2::PReg::new(20, regalloc2::RegClass::Int);
     #[cfg(target_arch = "x86_64")]
     let reg_2 = regalloc2::PReg::new(13, regalloc2::RegClass::Int);
-    let alloc = crate::regalloc_engine::AllocatedCfgProgram {
-        cfg_program: program.clone(),
-        functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
-            lambda_id: crate::ir::LambdaId::new(0),
-            num_spillslots: 0,
-            edits: Vec::new(),
-            op_allocs: std::collections::HashMap::from([
-                (op_id, vec![regalloc2::Allocation::reg(reg)]),
-                (
-                    op_id_2,
-                    vec![
-                        regalloc2::Allocation::reg(reg),
-                        regalloc2::Allocation::reg(reg_2),
-                    ],
-                ),
-            ]),
-            op_operands: std::collections::HashMap::from([
-                (
-                    op_id,
-                    vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
-                ),
-                (
-                    op_id_2,
-                    vec![
-                        (v0, crate::regalloc_engine::cfg_mir::OperandKind::Use),
-                        (
-                            crate::ir::VReg::new(1),
-                            crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                        ),
-                    ],
-                ),
-            ]),
-            edge_edits: Vec::new(),
-            return_result_allocs: Vec::new(),
-        }],
-    };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -2405,31 +2369,6 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
     let reg_2 = regalloc2::PReg::new(20, regalloc2::RegClass::Int);
     #[cfg(target_arch = "x86_64")]
     let reg_2 = regalloc2::PReg::new(13, regalloc2::RegClass::Int);
-    let alloc = crate::regalloc_engine::AllocatedCfgProgram {
-        cfg_program: program.clone(),
-        functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
-            lambda_id: crate::ir::LambdaId::new(0),
-            num_spillslots: 0,
-            edits: Vec::new(),
-            op_allocs: std::collections::HashMap::from([
-                (op_id, vec![regalloc2::Allocation::reg(reg)]),
-                (op_id_2, vec![regalloc2::Allocation::reg(reg_2)]),
-            ]),
-            op_operands: std::collections::HashMap::from([
-                (
-                    op_id,
-                    vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
-                ),
-                (
-                    op_id_2,
-                    vec![(v1, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
-                ),
-                (term_op, Vec::new()),
-            ]),
-            edge_edits: Vec::new(),
-            return_result_allocs: Vec::new(),
-        }],
-    };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -2615,42 +2554,6 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
     let reg_2 = regalloc2::PReg::new(20, regalloc2::RegClass::Int);
     #[cfg(target_arch = "x86_64")]
     let reg_2 = regalloc2::PReg::new(13, regalloc2::RegClass::Int);
-    let alloc = crate::regalloc_engine::AllocatedCfgProgram {
-        cfg_program: program.clone(),
-        functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
-            lambda_id: crate::ir::LambdaId::new(0),
-            num_spillslots: 0,
-            edits: Vec::new(),
-            op_allocs: std::collections::HashMap::from([
-                (op_id, vec![regalloc2::Allocation::reg(reg)]),
-                (
-                    op_id_2,
-                    vec![
-                        regalloc2::Allocation::reg(reg),
-                        regalloc2::Allocation::reg(reg_2),
-                    ],
-                ),
-            ]),
-            op_operands: std::collections::HashMap::from([
-                (
-                    op_id,
-                    vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
-                ),
-                (
-                    op_id_2,
-                    vec![
-                        (v0, crate::regalloc_engine::cfg_mir::OperandKind::Use),
-                        (
-                            crate::ir::VReg::new(1),
-                            crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                        ),
-                    ],
-                ),
-            ]),
-            edge_edits: Vec::new(),
-            return_result_allocs: Vec::new(),
-        }],
-    };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -2995,27 +2898,6 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
     #[cfg(target_arch = "x86_64")]
     let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
-    let alloc = crate::regalloc_engine::AllocatedCfgProgram {
-        cfg_program: program.clone(),
-        functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
-            lambda_id: crate::ir::LambdaId::new(0),
-            num_spillslots: 0,
-            edits: Vec::new(),
-            op_allocs: std::collections::HashMap::from([(
-                op_id,
-                vec![regalloc2::Allocation::reg(reg)],
-            )]),
-            op_operands: std::collections::HashMap::from([
-                (
-                    op_id,
-                    vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
-                ),
-                (term_op, Vec::new()),
-            ]),
-            edge_edits: Vec::new(),
-            return_result_allocs: Vec::new(),
-        }],
-    };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -3175,45 +3057,6 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
     let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
     #[cfg(target_arch = "x86_64")]
     let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
-    let alloc = crate::regalloc_engine::AllocatedCfgProgram {
-        cfg_program: program.clone(),
-        functions: vec![crate::regalloc_engine::AllocatedCfgFunction {
-            lambda_id: crate::ir::LambdaId::new(0),
-            num_spillslots: 0,
-            edits: Vec::new(),
-            op_allocs: std::collections::HashMap::from([
-                (op0, vec![regalloc2::Allocation::reg(reg)]),
-                (
-                    op1,
-                    vec![
-                        regalloc2::Allocation::reg(reg),
-                        regalloc2::Allocation::reg(reg),
-                    ],
-                ),
-                (op2, vec![regalloc2::Allocation::reg(reg)]),
-            ]),
-            op_operands: std::collections::HashMap::from([
-                (
-                    op0,
-                    vec![(v0, crate::regalloc_engine::cfg_mir::OperandKind::Def)],
-                ),
-                (
-                    op1,
-                    vec![
-                        (v0, crate::regalloc_engine::cfg_mir::OperandKind::Use),
-                        (v1, crate::regalloc_engine::cfg_mir::OperandKind::Def),
-                    ],
-                ),
-                (
-                    op2,
-                    vec![(v1, crate::regalloc_engine::cfg_mir::OperandKind::Use)],
-                ),
-                (term_op, Vec::new()),
-            ]),
-            edge_edits: Vec::new(),
-            return_result_allocs: Vec::new(),
-        }],
-    };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
