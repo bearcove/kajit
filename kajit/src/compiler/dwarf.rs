@@ -359,142 +359,21 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
     out
 }
 
-#[cfg(target_arch = "aarch64")]
-pub(super) fn aarch64_regalloc_extra_saved_pairs(
-    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
-) -> u32 {
-    let mut max_pair = None::<u32>;
-    let mut observe = |allocation: regalloc2::Allocation| {
-        let Some(reg) = allocation.as_reg() else {
-            return;
-        };
-        if reg.class() != regalloc2::RegClass::Int {
-            return;
-        }
-        let pair = match reg.hw_enc() as u8 {
-            23 | 24 => Some(0),
-            25 | 26 => Some(1),
-            27 | 28 => Some(2),
-            _ => None,
-        };
-        if let Some(pair) = pair {
-            max_pair = Some(max_pair.map_or(pair, |cur| cur.max(pair)));
-        }
-    };
-
-    for func in &alloc.functions {
-        for inst_allocs in func.op_allocs.values() {
-            for &allocation in inst_allocs {
-                observe(allocation);
-            }
-        }
-        for (_, edit) in &func.edits {
-            let regalloc2::Edit::Move { from, to } = edit;
-            observe(*from);
-            observe(*to);
-        }
-        for edge in &func.edge_edits {
-            observe(edge.from);
-            observe(edge.to);
-        }
-        for &allocation in &func.return_result_allocs {
-            observe(allocation);
-        }
-    }
-
-    max_pair.map_or(0, |pair| pair + 1)
-}
-
-pub(super) fn find_cfg_alloc_for_vreg_in_op(
-    alloc_func: &crate::regalloc_engine::AllocatedCfgFunction,
-    op_id: crate::regalloc_engine::cfg_mir::OpId,
-    vreg: crate::ir::VReg,
-    preferred_kind: Option<crate::regalloc_engine::cfg_mir::OperandKind>,
-) -> Option<regalloc2::Allocation> {
-    let operands = alloc_func.op_operands.get(&op_id)?;
-    let allocs = alloc_func.op_allocs.get(&op_id)?;
-    for ((operand_vreg, operand_kind), alloc) in operands.iter().zip(allocs.iter().copied()) {
-        if *operand_vreg != vreg {
-            continue;
-        }
-        if preferred_kind.is_none_or(|kind| *operand_kind == kind) {
-            return Some(alloc);
-        }
-    }
-    None
-}
-
-pub(super) fn infer_cfg_block_param_entry_alloc(
-    _func: &crate::regalloc_engine::cfg_mir::Function,
-    alloc_func: &crate::regalloc_engine::AllocatedCfgFunction,
-    block: &crate::regalloc_engine::cfg_mir::Block,
-    param: crate::ir::VReg,
-) -> Option<regalloc2::Allocation> {
-    for inst_id in &block.insts {
-        let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
-        if let Some(alloc) = find_cfg_alloc_for_vreg_in_op(
-            alloc_func,
-            op_id,
-            param,
-            Some(crate::regalloc_engine::cfg_mir::OperandKind::Use),
-        ) {
-            return Some(alloc);
-        }
-        if let Some(alloc) = find_cfg_alloc_for_vreg_in_op(
-            alloc_func,
-            op_id,
-            param,
-            Some(crate::regalloc_engine::cfg_mir::OperandKind::Def),
-        ) {
-            return Some(alloc);
-        }
-    }
-    let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
-    find_cfg_alloc_for_vreg_in_op(
-        alloc_func,
-        term_op,
-        param,
-        Some(crate::regalloc_engine::cfg_mir::OperandKind::Use),
-    )
-}
-
-pub(super) fn dwarf_expr_for_cfg_allocation(
-    program: &crate::regalloc_engine::cfg_mir::Program,
-    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
-    allocation: regalloc2::Allocation,
+pub(super) fn dwarf_expr_for_vreg_location(
+    location: &crate::harness::VRegLocation,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
-    apply_regalloc_edits: bool,
 ) -> Option<Vec<u8>> {
-    if let Some(reg) = allocation.as_reg() {
-        if reg.class() != regalloc2::RegClass::Int {
-            return None;
+    match location {
+        crate::harness::VRegLocation::Register(preg) => {
+            let dwarf_reg =
+                crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, *preg)?;
+            Some(crate::jit_dwarf::expr_reg(dwarf_reg))
         }
-        let dwarf_reg =
-            crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, reg.hw_enc() as u8)?;
-        return Some(crate::jit_dwarf::expr_reg(dwarf_reg));
+        crate::harness::VRegLocation::StackSlot(offset) => {
+            Some(crate::jit_dwarf::expr_fbreg(*offset as i64))
+        }
+        crate::harness::VRegLocation::Constant(_) => None,
     }
-
-    let slot = allocation.as_stack()?;
-    #[cfg(target_arch = "x86_64")]
-    {
-        let slot_base = crate::arch::BASE_FRAME;
-        let spill_base = slot_base + program.slot_count * 8;
-        let offset = spill_base + (slot.index() as u32) * 8;
-        return Some(crate::jit_dwarf::expr_fbreg(offset as i64));
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        let extra_saved_pairs = aarch64_regalloc_extra_saved_pairs(alloc);
-        let slot_base = crate::arch::BASE_FRAME + extra_saved_pairs * 16;
-        let spill_base = slot_base + program.slot_count * 8;
-        let _ = apply_regalloc_edits;
-        let offset = spill_base + (slot.index() as u32) * 8;
-        return Some(crate::jit_dwarf::expr_fbreg(offset as i64));
-    }
-
-    #[allow(unreachable_code)]
-    None
 }
 
 pub(super) fn backend_op_ranges_by_op(
@@ -519,6 +398,16 @@ pub(super) fn backend_op_ranges_by_op(
                     .collect::<Vec<_>>(),
             )
         })
+        .collect()
+}
+
+pub(super) fn backend_line_by_op(
+    backend_debug_info: &crate::ir_backend::BackendDebugInfo,
+) -> BTreeMap<(u32, crate::regalloc_engine::cfg_mir::OpId), u32> {
+    backend_debug_info
+        .op_infos
+        .iter()
+        .map(|op_info| ((op_info.lambda_id, op_info.op_id), op_info.line))
         .collect()
 }
 
@@ -736,49 +625,45 @@ pub(super) fn scope_ranges_from_backend(
 
 pub(super) fn cfg_vreg_dwarf_variable_infos(
     program: &crate::regalloc_engine::cfg_mir::Program,
-    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
-    apply_regalloc_edits: bool,
 ) -> BTreeMap<crate::ir::VReg, VRegDwarfVariableInfo> {
     let Some(backend_debug_info) = backend_debug_info else {
         return BTreeMap::new();
     };
     let op_ranges = backend_op_ranges_by_op(backend_debug_info, code_ptr);
-    let alloc_func_by_lambda = alloc
-        .functions
-        .iter()
-        .map(|func| (func.lambda_id, func))
-        .collect::<HashMap<_, _>>();
+    let op_lines = backend_line_by_op(backend_debug_info);
     let mut ranges_by_vreg =
         BTreeMap::<crate::ir::VReg, Vec<crate::jit_dwarf::DwarfLocationRange>>::new();
     let mut lexical_intro_ranges_by_vreg =
         BTreeMap::<crate::ir::VReg, Vec<crate::jit_dwarf::JitDebugRange>>::new();
 
     for func in &program.funcs {
-        let Some(alloc_func) = alloc_func_by_lambda.get(&func.lambda_id) else {
-            continue;
-        };
         let lambda_key = func.lambda_id.index() as u32;
         for block in &func.blocks {
             let mut remaining_uses = BTreeMap::<crate::ir::VReg, usize>::new();
             for inst_id in &block.insts {
-                let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
-                if let Some(operand_pairs) = alloc_func.op_operands.get(&op_id) {
-                    for (vreg, operand_kind) in operand_pairs {
-                        if *operand_kind == crate::regalloc_engine::cfg_mir::OperandKind::Use {
-                            *remaining_uses.entry(*vreg).or_default() += 1;
-                        }
+                for operand in &func.insts[inst_id.index()].operands {
+                    if operand.kind == crate::regalloc_engine::cfg_mir::OperandKind::Use {
+                        *remaining_uses.entry(operand.vreg).or_default() += 1;
                     }
                 }
             }
             let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
-            if let Some(operand_pairs) = alloc_func.op_operands.get(&term_op) {
-                for (vreg, operand_kind) in operand_pairs {
-                    if *operand_kind == crate::regalloc_engine::cfg_mir::OperandKind::Use {
-                        *remaining_uses.entry(*vreg).or_default() += 1;
+            if let Some(term_inst) = func.term(block.term) {
+                match term_inst {
+                    crate::regalloc_engine::cfg_mir::Terminator::BranchIf { cond, .. }
+                    | crate::regalloc_engine::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                        *remaining_uses.entry(*cond).or_default() += 1;
                     }
+                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable { predicate, .. } => {
+                        *remaining_uses.entry(*predicate).or_default() += 1;
+                    }
+                    crate::regalloc_engine::cfg_mir::Terminator::Return
+                    | crate::regalloc_engine::cfg_mir::Terminator::ErrorExit { .. }
+                    | crate::regalloc_engine::cfg_mir::Terminator::Branch { .. } => {}
                 }
             }
             for &edge_id in &block.succs {
@@ -790,17 +675,18 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                 }
             }
 
-            let mut live_locations = BTreeMap::<crate::ir::VReg, regalloc2::Allocation>::new();
+            let mut live_vregs = BTreeMap::<crate::ir::VReg, ()>::new();
             for &param in &block.params {
                 if remaining_uses.get(&param).copied().unwrap_or(0) == 0 {
                     continue;
                 }
-                let Some(allocation) =
-                    infer_cfg_block_param_entry_alloc(func, alloc_func, block, param)
-                else {
+                if !location_map
+                    .static_locations
+                    .contains_key(&(param.index() as u32))
+                {
                     continue;
-                };
-                live_locations.insert(param, allocation);
+                }
+                live_vregs.insert(param, ());
             }
 
             for inst_id in &block.insts {
@@ -808,45 +694,44 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                 let Some(op_ranges) = op_ranges.get(&(lambda_key, op_id)) else {
                     continue;
                 };
+                let Some(op_line) = op_lines.get(&(lambda_key, op_id)).copied() else {
+                    continue;
+                };
                 let mut used_now = Vec::<crate::ir::VReg>::new();
-                let mut defs_after = Vec::<(crate::ir::VReg, regalloc2::Allocation)>::new();
-                if let (Some(operand_pairs), Some(operand_allocs)) = (
-                    alloc_func.op_operands.get(&op_id),
-                    alloc_func.op_allocs.get(&op_id),
-                ) {
-                    for ((vreg, operand_kind), allocation) in
-                        operand_pairs.iter().zip(operand_allocs.iter().copied())
-                    {
-                        match operand_kind {
-                            crate::regalloc_engine::cfg_mir::OperandKind::Use => {
-                                live_locations.insert(*vreg, allocation);
-                                used_now.push(*vreg);
+                let mut defs_after = Vec::<crate::ir::VReg>::new();
+                for operand in &func.insts[inst_id.index()].operands {
+                    match operand.kind {
+                        crate::regalloc_engine::cfg_mir::OperandKind::Use => {
+                            if location_map
+                                .static_locations
+                                .contains_key(&(operand.vreg.index() as u32))
+                            {
+                                live_vregs.insert(operand.vreg, ());
                             }
-                            crate::regalloc_engine::cfg_mir::OperandKind::Def => {
-                                let dest = lexical_intro_ranges_by_vreg.entry(*vreg).or_default();
-                                dest.extend(op_ranges.iter().map(|(start, end)| {
-                                    crate::jit_dwarf::JitDebugRange {
-                                        low_pc: *start,
-                                        high_pc: *end,
-                                    }
-                                }));
-                                defs_after.push((*vreg, allocation));
-                            }
+                            used_now.push(operand.vreg);
+                        }
+                        crate::regalloc_engine::cfg_mir::OperandKind::Def => {
+                            let dest = lexical_intro_ranges_by_vreg.entry(operand.vreg).or_default();
+                            dest.extend(op_ranges.iter().map(|(start, end)| {
+                                crate::jit_dwarf::JitDebugRange {
+                                    low_pc: *start,
+                                    high_pc: *end,
+                                }
+                            }));
+                            defs_after.push(operand.vreg);
                         }
                     }
                 }
 
-                for (vreg, allocation) in &live_locations {
+                for vreg in live_vregs.keys() {
                     if remaining_uses.get(vreg).copied().unwrap_or(0) == 0 {
                         continue;
                     }
-                    let Some(expr) = dwarf_expr_for_cfg_allocation(
-                        program,
-                        alloc,
-                        *allocation,
-                        target_arch,
-                        apply_regalloc_edits,
-                    ) else {
+                    let Some(location) = location_map.location_at(op_line, vreg.index() as u32)
+                    else {
+                        continue;
+                    };
+                    let Some(expr) = dwarf_expr_for_vreg_location(location, target_arch) else {
                         continue;
                     };
                     let dest = ranges_by_vreg.entry(*vreg).or_default();
@@ -864,10 +749,10 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                         *count = count.saturating_sub(1);
                     }
                 }
-                live_locations.retain(|vreg, _| remaining_uses.get(vreg).copied().unwrap_or(0) > 0);
-                for (vreg, allocation) in defs_after {
+                live_vregs.retain(|vreg, _| remaining_uses.get(vreg).copied().unwrap_or(0) > 0);
+                for vreg in defs_after {
                     if remaining_uses.get(&vreg).copied().unwrap_or(0) > 0 {
-                        live_locations.insert(vreg, allocation);
+                        live_vregs.insert(vreg, ());
                     }
                 }
             }
@@ -875,32 +760,45 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
             let Some(op_ranges) = op_ranges.get(&(lambda_key, term_op)) else {
                 continue;
             };
+            let Some(op_line) = op_lines.get(&(lambda_key, term_op)).copied() else {
+                continue;
+            };
             let mut used_now = Vec::<crate::ir::VReg>::new();
-            if let (Some(operand_pairs), Some(operand_allocs)) = (
-                alloc_func.op_operands.get(&term_op),
-                alloc_func.op_allocs.get(&term_op),
-            ) {
-                for ((vreg, operand_kind), allocation) in
-                    operand_pairs.iter().zip(operand_allocs.iter().copied())
-                {
-                    if *operand_kind != crate::regalloc_engine::cfg_mir::OperandKind::Use {
-                        continue;
+            if let Some(term_inst) = func.term(block.term) {
+                match term_inst {
+                    crate::regalloc_engine::cfg_mir::Terminator::BranchIf { cond, .. }
+                    | crate::regalloc_engine::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                        if location_map
+                            .static_locations
+                            .contains_key(&(cond.index() as u32))
+                        {
+                            live_vregs.insert(*cond, ());
+                            used_now.push(*cond);
+                        }
                     }
-                    live_locations.insert(*vreg, allocation);
-                    used_now.push(*vreg);
+                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable { predicate, .. } => {
+                        if location_map
+                            .static_locations
+                            .contains_key(&(predicate.index() as u32))
+                        {
+                            live_vregs.insert(*predicate, ());
+                            used_now.push(*predicate);
+                        }
+                    }
+                    crate::regalloc_engine::cfg_mir::Terminator::Return
+                    | crate::regalloc_engine::cfg_mir::Terminator::ErrorExit { .. }
+                    | crate::regalloc_engine::cfg_mir::Terminator::Branch { .. } => {}
                 }
             }
-            for (vreg, allocation) in &live_locations {
+            for vreg in live_vregs.keys() {
                 if remaining_uses.get(vreg).copied().unwrap_or(0) == 0 {
                     continue;
                 }
-                let Some(expr) = dwarf_expr_for_cfg_allocation(
-                    program,
-                    alloc,
-                    *allocation,
-                    target_arch,
-                    apply_regalloc_edits,
-                ) else {
+                let Some(location) = location_map.location_at(op_line, vreg.index() as u32)
+                else {
+                    continue;
+                };
+                let Some(expr) = dwarf_expr_for_vreg_location(location, target_arch) else {
                     continue;
                 };
                 let dest = ranges_by_vreg.entry(*vreg).or_default();
@@ -939,21 +837,13 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
 
 pub(super) fn cfg_value_dwarf_variables(
     program: &crate::regalloc_engine::cfg_mir::Program,
-    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
-    apply_regalloc_edits: bool,
     suppress_semantic_vregs: bool,
 ) -> Vec<ScopedDwarfVariable> {
-    cfg_vreg_dwarf_variable_infos(
-        program,
-        alloc,
-        backend_debug_info,
-        code_ptr,
-        target_arch,
-        apply_regalloc_edits,
-    )
+    cfg_vreg_dwarf_variable_infos(program, location_map, backend_debug_info, code_ptr, target_arch)
     .into_iter()
     .filter_map(|(vreg, info): (crate::ir::VReg, VRegDwarfVariableInfo)| {
         if suppress_semantic_vregs && program.vreg_debug_value(vreg).is_some() {
@@ -985,11 +875,10 @@ pub(super) fn cfg_value_dwarf_variables(
 
 pub(super) fn cfg_semantic_named_dwarf_variables(
     program: &crate::regalloc_engine::cfg_mir::Program,
-    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
-    apply_regalloc_edits: bool,
 ) -> Vec<ScopedDwarfVariable> {
     let mut vregs_by_value = BTreeMap::<crate::ir::DebugValueId, Vec<crate::ir::VReg>>::new();
     for vreg_index in 0..program.vreg_count {
@@ -1006,11 +895,10 @@ pub(super) fn cfg_semantic_named_dwarf_variables(
 
     let vreg_infos = cfg_vreg_dwarf_variable_infos(
         program,
-        alloc,
+        location_map,
         backend_debug_info,
         code_ptr,
         target_arch,
-        apply_regalloc_edits,
     );
 
     vregs_by_value
@@ -1057,11 +945,10 @@ pub(super) fn cfg_semantic_named_dwarf_variables(
 pub(super) fn cfg_mir_dwarf_variables(
     root_shape: Option<&'static Shape>,
     program: &crate::regalloc_engine::cfg_mir::Program,
-    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
+    location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
-    apply_regalloc_edits: bool,
 ) -> crate::jit_dwarf::JitDebugSubprogram {
     let mut variables = deser_dwarf_variables(target_arch);
     let suppress_semantic_vregs = root_shape.is_some()
@@ -1072,20 +959,18 @@ pub(super) fn cfg_mir_dwarf_variables(
             .any(|(_, value)| matches!(value.kind, crate::ir::DebugValueKind::Named));
     let mut cfg_variables = cfg_value_dwarf_variables(
         program,
-        alloc,
+        location_map,
         backend_debug_info,
         code_ptr,
         target_arch,
-        apply_regalloc_edits,
         suppress_semantic_vregs,
     );
     cfg_variables.extend(cfg_semantic_named_dwarf_variables(
         program,
-        alloc,
+        location_map,
         backend_debug_info,
         code_ptr,
         target_arch,
-        apply_regalloc_edits,
     ));
     if let Some(root_shape) = root_shape {
         cfg_variables.extend(cfg_semantic_field_dwarf_variables(

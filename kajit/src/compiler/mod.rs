@@ -5,7 +5,7 @@ mod shape_utils;
 use dwarf::*;
 pub(crate) use shape_utils::*;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use facet::{Def, ScalarType, Shape, Type, UserType};
@@ -833,7 +833,7 @@ fn compile_linear_ir_decoder_with_options(
         }
     }
 
-    let (buf, entry, source_map, backend_debug_info, asm_program, regalloc_alloc) = if use_regalloc3
+    let (buf, entry, source_map, backend_debug_info, asm_program, dwarf_location_map) = if use_regalloc3
     {
         let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
             .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
@@ -844,15 +844,21 @@ fn compile_linear_ir_decoder_with_options(
             );
         let (buf, entry, source_map, backend_debug_info, asm_program) =
             materialize_backend_result(result);
-        // Create a dummy regalloc2 alloc for DWARF/debug info (just needs cfg_program)
-        let dummy_alloc = no_regalloc_alloc_for_cfg_program(&cfg_program);
+        let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&alloc);
+        let alloc_map = alloc
+            .functions
+            .first()
+            .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
+            .unwrap_or_default();
+        let location_map =
+            crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &alloc.cfg_program, &alloc);
         (
             buf,
             entry,
             source_map,
             backend_debug_info,
             asm_program,
-            dummy_alloc,
+            location_map,
         )
     } else {
         let regalloc_alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
@@ -875,7 +881,7 @@ fn compile_linear_ir_decoder_with_options(
             source_map,
             backend_debug_info,
             asm_program,
-            regalloc_alloc,
+            crate::harness::LocationMap::default(),
         )
     };
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
@@ -903,11 +909,10 @@ fn compile_linear_ir_decoder_with_options(
         let mut debug_subprogram = cfg_mir_dwarf_variables(
             root_shape,
             &cfg_program,
-            &regalloc_alloc,
+            &dwarf_location_map,
             backend_debug_info.as_ref(),
             buf.code_ptr(),
             jit_dwarf_target_arch(),
-            apply_regalloc_edits,
         );
         debug_subprogram.name = root_display_name.clone();
         let dwarf = listing_path.as_deref().and_then(|path| {
@@ -955,6 +960,7 @@ fn compile_cfg_mir_decoder_with_options(
     let root_data_abi = infer_root_decoder_data_abi_from_cfg(cfg_program);
     let regalloc_alloc = crate::regalloc_engine::allocate_cfg_program(cfg_program)
         .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
+    let dwarf_location_map = crate::harness::LocationMap::default();
 
     let shim_linear = crate::linearize::LinearIr {
         ops: Vec::new(),
@@ -993,11 +999,10 @@ fn compile_cfg_mir_decoder_with_options(
         let mut debug_subprogram = cfg_mir_dwarf_variables(
             None,
             cfg_program,
-            &regalloc_alloc,
+            &dwarf_location_map,
             backend_debug_info.as_ref(),
             buf.code_ptr(),
             jit_dwarf_target_arch(),
-            apply_regalloc_edits,
         );
         debug_subprogram.name = root_display_name.clone();
         let dwarf = listing_path.as_deref().and_then(|path| {
