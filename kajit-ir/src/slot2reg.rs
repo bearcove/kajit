@@ -711,7 +711,7 @@ fn promote_theta(
         let mut final_value = final_body_values.get(&slot).copied().unwrap_or(body_arg);
         let _ = &reinit_slots; // legacy, superseded by dead_body_args
         if debug_s2r() {
-            let from_map = final_body_values.get(&slot).is_some();
+            let from_map = final_body_values.contains_key(&slot);
             eprintln!(
                 "[s2r]   theta {:?} slot {} feedback: {} (from_map={}, eq_body_arg={})",
                 node_id,
@@ -824,23 +824,6 @@ fn is_port_source_referenced_non_gamma(func: &IrFunc, source: PortSource) -> boo
         if matches!(node.kind, NodeKind::Gamma { .. }) {
             continue;
         }
-        for input in &node.inputs {
-            if input.source == source {
-                return true;
-            }
-        }
-    }
-    for (_rid, result) in func.region_results.iter() {
-        if result.source == source {
-            return true;
-        }
-    }
-    false
-}
-
-/// Check if a PortSource has ANY references in the entire IR (all nodes, all regions).
-fn is_port_source_referenced_anywhere(func: &IrFunc, source: PortSource) -> bool {
-    for (_nid, node) in func.nodes.iter() {
         for input in &node.inputs {
             if input.source == source {
                 return true;

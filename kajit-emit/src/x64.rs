@@ -118,28 +118,20 @@ impl ExecutableBuffer {
             let ptr = self.ptr.add(offset);
 
             #[cfg(target_os = "macos")]
-            unsafe {
-                pthread_jit_write_protect_np(0);
-            }
+            pthread_jit_write_protect_np(0);
 
             #[cfg(not(target_os = "macos"))]
-            unsafe {
-                mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
-            }
+            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
 
             // The imm64 is at bytes [2..10] for a REX.W + B8+rd instruction.
             let imm_ptr = ptr.add(2) as *mut u64;
-            unsafe { imm_ptr.write_unaligned(value) };
+            imm_ptr.write_unaligned(value);
 
             #[cfg(target_os = "macos")]
-            unsafe {
-                pthread_jit_write_protect_np(1);
-            }
+            pthread_jit_write_protect_np(1);
 
             #[cfg(not(target_os = "macos"))]
-            unsafe {
-                mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
-            }
+            mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
         }
     }
 }

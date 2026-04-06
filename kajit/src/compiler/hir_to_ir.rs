@@ -526,7 +526,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             active_slot,
             continue_slot,
             max_iterations,
-            0,
         );
     }
 
@@ -540,7 +539,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
         active_slot: kajit_ir::SlotId,
         continue_slot: kajit_ir::SlotId,
         remaining: usize,
-        iteration: usize,
     ) {
         if remaining == 0 {
             return;
@@ -586,7 +584,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     active_slot,
                     continue_slot,
                     remaining - 1,
-                    iteration + 1,
                 );
                 branch_rb.set_results(&[]);
             }

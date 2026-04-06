@@ -2408,6 +2408,7 @@ pub fn compile_regalloc3_with_root_data_abi(
         offset += 16;
 
         // Save callee-saved pairs
+        #[allow(clippy::needless_range_loop)]
         for i in 0..pairs_to_save {
             ectx.emit
                 .emit_stp(
@@ -2662,6 +2663,7 @@ pub fn compile_regalloc3_with_root_data_abi(
                 .emit_ldp(Width::X64, Reg::X29, Reg::X30, Reg::SP, offset)
                 .expect("ldp fp,lr");
             offset += 16;
+            #[allow(clippy::needless_range_loop)]
             for i in 0..pairs_to_save {
                 ectx.emit
                     .emit_ldp(

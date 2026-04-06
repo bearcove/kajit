@@ -38,7 +38,7 @@ pub struct CompiledDecoder {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum RootDecoderDataAbi {
+pub enum RootDecoderDataAbi {
     #[default]
     None,
     CursorRef,
@@ -754,29 +754,6 @@ pub(crate) fn run_configured_default_passes_with_observer<F>(
         }
         pass.run(func);
         observe_after_pass(pass.name, func);
-    }
-}
-
-fn no_regalloc_alloc_for_cfg_program(
-    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
-) -> crate::regalloc_engine::AllocatedCfgProgram {
-    let functions = cfg_program
-        .funcs
-        .iter()
-        .map(|func| crate::regalloc_engine::AllocatedCfgFunction {
-            lambda_id: func.lambda_id,
-            num_spillslots: 0,
-            edits: Vec::new(),
-            op_allocs: std::collections::HashMap::new(),
-            op_operands: std::collections::HashMap::new(),
-            edge_edits: Vec::new(),
-            return_result_allocs: Vec::new(),
-        })
-        .collect();
-
-    crate::regalloc_engine::AllocatedCfgProgram {
-        cfg_program: cfg_program.clone(),
-        functions,
     }
 }
 

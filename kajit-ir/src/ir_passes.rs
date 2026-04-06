@@ -1250,7 +1250,6 @@ pub(crate) fn clone_region_into(
                 max_iterations,
                 ..
             } => {
-                let max_iterations = max_iterations;
                 let old_reg = &func.regions[body];
                 // Clone args, creating new ArgIds
                 let mut new_args = Vec::with_capacity(old_reg.args.len());

@@ -40,16 +40,6 @@ enum KnownValue {
     Const(u64),
 }
 
-/// Local value-role classification. NOT an IR concept — only used inside this
-/// pass to decide which resolver strength is safe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Role {
-    /// Feeds a gamma predicate or control-only chain. Conservative resolver only.
-    Control,
-    /// Feeds pure data computation. Strong resolver allowed.
-    Data,
-}
-
 /// Hashable key for PortSource.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum PortSourceKey {

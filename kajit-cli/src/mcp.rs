@@ -1,3 +1,5 @@
+#![allow(clippy::enum_variant_names)]
+
 use std::collections::HashMap;
 #[cfg(feature = "lldb")]
 use std::path::PathBuf;

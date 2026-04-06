@@ -43,7 +43,7 @@ pub struct LinearBackendResult {
     pub data_relocs: Vec<crate::backends::aarch64::regalloc3_backend::DataRelocInfo>,
 }
 
-pub fn compile_linear_ir_with_alloc_and_mode(
+pub(crate) fn compile_linear_ir_with_alloc_and_mode(
     ir: &LinearIr,
     cfg_program: &cfg_mir::Program,
     alloc: &AllocatedCfgProgram,

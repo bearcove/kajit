@@ -3,8 +3,6 @@ use facet::Facet;
 use proptest::arbitrary::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-use yaxpeax_arch::{Decoder, LengthedInstruction};
 #[cfg(target_arch = "x86_64")]
 use yaxpeax_x86::amd64::InstDecoder;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -561,7 +559,7 @@ fn maybe_wait_for_debugger() {
 }
 #[cfg(target_arch = "aarch64")]
 fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
-    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+    use yaxpeax_arch::{Decoder, U8Reader};
     use yaxpeax_arm::armv8::a64::InstDecoder;
     let decoder = InstDecoder::default();
     let mut reader = U8Reader::new(code);
