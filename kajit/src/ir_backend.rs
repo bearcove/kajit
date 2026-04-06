@@ -1,5 +1,4 @@
-use crate::linearize::LinearIr;
-use crate::regalloc_engine::{AllocatedCfgProgram, cfg_mir};
+use crate::regalloc_engine::cfg_mir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendCodeRange {
@@ -41,86 +40,4 @@ pub struct LinearBackendResult {
     pub intrinsic_call_sites:
         Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
     pub data_relocs: Vec<crate::backends::aarch64::regalloc3_backend::DataRelocInfo>,
-}
-
-pub(crate) fn compile_linear_ir_with_alloc_and_mode(
-    ir: &LinearIr,
-    cfg_program: &cfg_mir::Program,
-    alloc: &AllocatedCfgProgram,
-    apply_regalloc_edits: bool,
-    root_data_abi: crate::compiler::RootDecoderDataAbi,
-    intrinsic_registry: Option<&crate::ir::IntrinsicRegistry>,
-) -> LinearBackendResult {
-    let max_spillslots = alloc
-        .functions
-        .iter()
-        .map(|f| f.num_spillslots)
-        .max()
-        .unwrap_or(0);
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        let _ = (
-            ir,
-            max_spillslots,
-            apply_regalloc_edits,
-            root_data_abi,
-            intrinsic_registry,
-        );
-        crate::backends::x86_64::compile(cfg_program, alloc)
-    }
-
-    #[cfg(target_arch = "aarch64")]
-    {
-        let _ = (ir, max_spillslots); // aarch64 backend reads from ra_mir directly
-        crate::backends::aarch64::compile(
-            cfg_program,
-            alloc,
-            apply_regalloc_edits,
-            root_data_abi,
-            intrinsic_registry,
-        )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ir::{IrBuilder, Width};
-
-    #[test]
-    fn compile_linear_ir_records_backend_op_ranges() {
-        let mut builder = IrBuilder::new("u32", 0);
-        {
-            let mut rb = builder.root_region();
-            let value = rb.const_val(42);
-            rb.write_to_field(value, 0, Width::W4);
-            rb.set_results(&[]);
-        }
-        let mut func = builder.finish();
-        crate::ir_passes::run_default_passes(&mut func);
-        let linear = crate::linearize::linearize(&mut func);
-        let hints = Default::default();
-        let cfg_program = cfg_mir::lower_linear_ir(&linear, hints);
-        let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-            .unwrap_or_else(|err| panic!("regalloc2 allocation failed in test: {err}"));
-
-        let result = compile_linear_ir_with_alloc_and_mode(
-            &linear,
-            &cfg_program,
-            &alloc,
-            true,
-            crate::compiler::RootDecoderDataAbi::None,
-            None,
-        );
-        let backend_debug_info = result
-            .backend_debug_info
-            .expect("backend debug info should be present");
-        assert!(!backend_debug_info.op_infos.is_empty());
-        assert!(backend_debug_info.op_infos.iter().all(|op| {
-            op.code_ranges
-                .iter()
-                .all(|range| range.start_offset < range.end_offset)
-        }));
-    }
 }
