@@ -353,12 +353,6 @@ enum ConstRef {
 
 /// Parse an IrOp (the operation name with parameters).
 fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
-    let cursor_ops = choice((
-        just("SaveInputEnd").to(AstOp::Resolved(IrOp::SaveInputEnd)),
-        just("SaveCursor").to(AstOp::Resolved(IrOp::SaveCursor)),
-        just("RestoreCursor").to(AstOp::Resolved(IrOp::RestoreCursor)),
-    ));
-
     let output_ops = choice((
         just("WriteToField(offset=")
             .ignore_then(uint32())
@@ -482,7 +476,7 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .map(|c| AstOp::Resolved(IrOp::ErrorExit { code: c })),
     ));
 
-    choice((cursor_ops, output_ops, stack_ops, arith_ops, call_ops))
+    choice((output_ops, stack_ops, arith_ops, call_ops))
 }
 
 /// AST op — some ops are fully resolved, some need intrinsic lookup.
@@ -1893,10 +1887,6 @@ lambda @0 (shape: "u8") {
         let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
-
-            // Cursor ops
-            let saved = rb.save_cursor();
-            rb.restore_cursor(saved);
 
             // Output ops
             let val = rb.const_val(42);

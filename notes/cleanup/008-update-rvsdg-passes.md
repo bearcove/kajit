@@ -1,30 +1,26 @@
-# Update RVSDG passes for cursor-as-data
+# Delete CURSOR_STATE_DOMAIN
 
-After cursor ops become ordinary memory ops, several RVSDG passes need updating.
+After 007, no ops use CURSOR_STATE_DOMAIN. Remove it.
 
-## Passes that break
+## What to delete
 
-### slot2reg (CRITICAL)
-- Lines 358, 429, 441, 456, 480: `state_count = func.state_domains.len()` assumes contiguous trailing state block
-- If cursor domain is gone, state_count changes, port offsets shift
-- Needs explicit state port layout instead of assuming trailing block
+- `CURSOR_STATE_DOMAIN` constant (`kajit-ir/src/ir.rs:179`)
+- `CURSOR_STATE_DOMAIN_NAME` constant
+- `CURSOR_STATE_PORT` constant  
+- `CURSOR_EFFECT` constant
+- Remove cursor domain from `builtin_state_domains()` — it no longer creates domain 0
+- Renumber: OUTPUT becomes domain 0, MEMORY becomes domain 1 (or just let the frontend add them)
+- Update `verify.rs` to not require cursor domain
+- Update all IR text tests that reference `%cs` (cursor state) args
 
-### bounds_check_coalescing (COMPLETE REWRITE)
-- `state_cursor_input_source()` and `state_cursor_output_ref()` match on `CURSOR_STATE_PORT`
-- `cursor_chain_step()` traces BoundsCheck → ReadBytes → AdvanceCursor chains via state ports
-- Must be rewritten to track cursor values as data, not state
+## Risk
 
-### const_fold
-- `resolve_slot_value()` walks backwards through cursor state chain (lines 388-402)
-- Pattern matching on state input would fail if cursors become data values
-- Needs rewrite of chain-walking logic
-
-## Passes that work unchanged
-
-- `dead_theta_ports` — correctly separates state from data generically
-- `unroll_theta` — body cloning preserves all threading
-- `simplify_gamma` — operates on predicates, cursor-agnostic
+Low — mechanical deletion. The domain has no users after 007.
 
 ## Depends on
 
-006-002 (cursor ops are replaced)
+007 (cursor ops replaced with memory ops).
+
+## Enables
+
+009 (merge output into memory).

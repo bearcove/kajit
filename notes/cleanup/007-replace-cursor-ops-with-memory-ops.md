@@ -1,28 +1,41 @@
-# Replace cursor IR ops with ordinary memory operations
+# Replace cursor IR ops with ordinary memory operations — PARTIAL
 
-The 8 cursor-specific IrOp variants become ordinary loads, stores, and arithmetic on a `&mut Cursor` pointer.
+7 test-only cursor ops removed (BoundsCheck, ReadBytes, PeekByte, AdvanceCursor, AdvanceCursorBy, SimdStringScan, SimdWhitespaceSkip). Committed.
 
-## Ops to replace
+## Remaining: 3 production ops
 
 | Cursor Op | Replacement |
 |-----------|-------------|
-| `ReadBytes { count }` | Load from cursor.pos ptr, then cursor.pos += count |
-| `PeekByte` | Load from cursor.pos ptr (no advance) |
-| `AdvanceCursor { count }` | cursor.pos += count |
-| `AdvanceCursorBy` | cursor.pos += dynamic_value |
-| `BoundsCheck { count }` | Compare cursor.pos + count <= cursor.len, branch to error |
-| `SaveCursor` | Load cursor.pos (just a value read) |
-| `SaveInputEnd` | Load cursor.len or compute end pointer |
-| `RestoreCursor` | Store cursor.pos = saved_value |
+| `SaveCursor` | `LoadFromAddr(ctx_ptr + CTX_INPUT_PTR, W8)` |
+| `SaveInputEnd` | `LoadFromAddr(ctx_ptr + CTX_INPUT_END, W8)` |
+| `RestoreCursor` | `StoreToAddr(ctx_ptr + CTX_INPUT_PTR, saved_value, W8)` |
 
-## Also replace in LinearOp
+## What needs to happen
 
-The same 8 variants exist in `kajit-lir/src/linearize.rs` LinearOp enum. They become load/store/add LinearOps.
+1. Make the context pointer an explicit data argument in the IR (it's currently implicit in the cursor state domain). The HIR already has it as a parameter — the lowerer just needs to thread it through as a PortSource.
 
-## Key decision
+2. In `hir_to_ir.rs`, emit `Add(ctx_ptr, offset) + LoadFromAddr/StoreToAddr` instead of `save_cursor()` / `save_input_end()` / `restore_cursor()`.
 
-The cursor is passed as a data argument (a pointer) to the function, not threaded as state. Cursor state domain disappears — ordering is enforced by data dependencies on the cursor pointer, or by a generic "memory" effect.
+3. These ops use MEMORY_STATE_DOMAIN (like all other LoadFromAddr/StoreToAddr), not CURSOR_STATE_DOMAIN.
+
+4. Delete the 3 ops + builders from `kajit-ir/src/ir.rs`, and remove from the entire pipeline: linearization, CFG-MIR, interpreter, backends (both aarch64 and x86_64), parsers, analysis passes.
+
+5. Delete backend cursor-caching logic: x19/x20 reservation (aarch64), r14/r15 reservation (x86_64), cursor writeback in epilogue, cursor flush/reload around calls.
+
+## Key files
+
+- `kajit/src/compiler/hir_to_ir.rs` — change lowering from cursor ops to memory ops
+- `kajit-ir/src/ir.rs` — delete SaveCursor/SaveInputEnd/RestoreCursor + builders
+- `kajit-lir/src/linearize.rs` — delete LinearOp cursor variants
+- `kajit-mir/src/cfg_mir.rs`, `interpreter.rs`, `debugger.rs` — delete cursor op handling
+- `kajit/src/backends/aarch64/regalloc3_backend.rs` — delete cursor emission + caching
+- `kajit/src/backends/x86_64/regalloc3_backend/{inst,mod,fusion,context}.rs` — same
+- `kajit/src/arch/aarch64.rs` — delete cursor writeback in prologue/epilogue
 
 ## Depends on
 
-006-001 (state domains are frontend-declared, so removing cursor domain doesn't break the API)
+Nothing (007 test-only removal is done).
+
+## Enables
+
+008 (delete CURSOR_STATE_DOMAIN — no ops use it after this).

@@ -1,6 +1,6 @@
 use kajit_emit::aarch64::{self, Emitter, LabelId, Reg};
 
-use crate::context::{CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR, ErrorCode};
+use crate::context::{CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR};
 
 /// Base frame size: 3 pairs of callee-saved registers = 48 bytes.
 pub const BASE_FRAME: u32 = 48;
@@ -18,13 +18,6 @@ pub struct EmitCtx {
     /// Whether this is a leaf function (no bl instructions).
     /// Leaf functions skip saving x29/x30 and frame pointer setup.
     pub is_leaf: bool,
-    /// The register holding the current cursor position (input_ptr).
-    /// x19 for non-leaf, x19 for leaf when prologue loads it, or
-    /// whatever register the leaf SaveCursor loaded into.
-    pub cursor_reg: Reg,
-    /// The register holding the input end pointer.
-    /// x20 for non-leaf, x20 for leaf when prologue loads it.
-    pub end_reg: Reg,
     /// Shared error trampoline labels: error code → label.
     /// Each error site emits `b .Lerr_<code>` instead of the full 3-instruction
     /// sequence. The shared blocks are emitted near the epilogue.
@@ -49,8 +42,8 @@ pub struct PrologueConfig {
     /// the stp/ldp for these registers (leaf functions that don't modify them).
     pub save_x19_x20: bool,
     /// Whether the prologue loads cursor/end into x19/x20 and the epilogue
-    /// writes x19 back. When false (leaf + regalloc3), SaveCursor/SaveInputEnd
-    /// load from the context struct directly, and the epilogue uses `cursor_writeback_reg`.
+    /// writes x19 back. When false (leaf + regalloc3), cursor/input_end are loaded
+    /// from the context struct directly, and the epilogue uses `cursor_writeback_reg`.
     pub load_cursor_x19_x20: bool,
     /// Register to read the cursor from for the success-path writeback.
     /// Only used when `load_cursor_x19_x20` is false.
@@ -95,8 +88,6 @@ impl EmitCtx {
             base_frame,
             frame_size,
             is_leaf,
-            cursor_reg: Reg::X19,
-            end_reg: Reg::X20,
             error_trampolines: std::collections::HashMap::new(),
             error_ctx_reg: None,
         }
@@ -366,63 +357,6 @@ impl EmitCtx {
         self.emit.current_source_location()
     }
 
-    /// Emit an unconditional branch to the given label.
-    pub fn emit_branch(&mut self, label: LabelId) {
-        self.emit.emit_b_label(label).expect("emit_branch failed");
-    }
-
-    /// Emit a bounds check: verify that at least `count` bytes remain in the
-    /// input buffer. Branches to the error exit with UnexpectedEof on failure.
-    pub fn emit_bounds_check(&mut self, count: u32) {
-        let eof_label = self.emit.new_label();
-        let cursor = self.cursor_reg;
-        let end = self.end_reg;
-        if count == 1 {
-            self.emit
-                .emit_cmp_reg(aarch64::Width::X64, cursor, end)
-                .expect("cmp");
-            self.emit
-                .emit_b_cond_label(aarch64::Condition::Hs, eof_label)
-                .expect("b.hs");
-        } else {
-            self.emit
-                .emit_sub_reg(aarch64::Width::X64, Reg::X9, end, cursor)
-                .expect("sub");
-            self.emit
-                .emit_cmp_imm(aarch64::Width::X64, Reg::X9, count as u16)
-                .expect("cmp");
-            self.emit
-                .emit_b_cond_label(aarch64::Condition::Lo, eof_label)
-                .expect("b.lo");
-        }
-        // EOF error path
-        let past_eof = self.emit.new_label();
-        self.emit.emit_b_label(past_eof).expect("b");
-        self.emit.bind_label(eof_label).expect("bind eof");
-        self.emit
-            .emit_movz_imm(
-                aarch64::Width::X64,
-                Reg::X9,
-                ErrorCode::UnexpectedEof as u16,
-                0,
-            )
-            .expect("movz");
-        let ctx_reg = if self.is_leaf { Reg::X1 } else { Reg::X22 };
-        self.emit
-            .emit_str_imm(aarch64::Width::W32, Reg::X9, ctx_reg, CTX_ERROR_CODE)
-            .expect("str");
-        let error_exit = self.error_exit;
-        self.emit.emit_b_label(error_exit).expect("b");
-        self.emit.bind_label(past_eof).expect("bind past_eof");
-    }
-
-    /// Emit an error (write error code to ctx, branch to error_exit).
-    /// Uses X22 as ctx_reg for non-leaf, X1 for leaf.
-    pub fn emit_error(&mut self, code: crate::context::ErrorCode) {
-        let ctx_reg = if self.is_leaf { Reg::X1 } else { Reg::X22 };
-        self.emit_error_with_ctx_reg(code, ctx_reg);
-    }
-
     /// Emit an error with an explicit ctx register.
     /// Uses shared trampolines: each error site emits just `b .Lerr_<code>`,
     /// and the shared trampoline block is emitted near the epilogue.
@@ -462,14 +396,6 @@ impl EmitCtx {
                 .expect("str");
             self.emit.emit_b_label(error_exit).expect("b");
         }
-    }
-
-    /// Advance the cached cursor by n bytes (inline, no function call).
-    pub fn emit_advance_cursor_by(&mut self, n: u32) {
-        let cursor = self.cursor_reg;
-        self.emit
-            .emit_add_imm(aarch64::Width::X64, cursor, cursor, n as u16, false)
-            .expect("add");
     }
 
     /// Commit and finalize the assembler, returning the executable buffer.

@@ -32,7 +32,7 @@ pub(super) struct EmitContext<'a> {
     pub data_relocs: Vec<DataRelocInfo>,
     /// VRegs whose CmpXx can be fused with the terminator branch (skip setcc, emit jcc directly).
     pub fused_cmps: HashMap<kajit_ir::VReg, x64::Condition>,
-    /// Pre-computed base+offset info for LoadFromAddr/RestoreCursor fusion.
+    /// Pre-computed base+offset info for LoadFromAddr fusion.
     pub fused_addr_offsets: HashMap<kajit_ir::VReg, (kajit_ir::VReg, u64)>,
     /// Intermediate vregs whose instructions should be skipped (fused away).
     pub fused_skip: std::collections::HashSet<kajit_ir::VReg>,
@@ -42,7 +42,7 @@ pub(super) struct EmitContext<'a> {
     pub ctx_enc: u8,
     /// Whether intrinsic/lambda calls should sync the cursor through ctx.input_ptr.
     pub sync_ctx_cursor_around_calls: bool,
-    /// Register encoding used by RestoreCursor and the epilogue for cursor writeback.
+    /// Register encoding used by the epilogue for cursor writeback.
     pub cursor_writeback_enc: u8,
     /// Set to true when emitting the last block before the success epilogue.
     pub is_last_emitted_block: bool,

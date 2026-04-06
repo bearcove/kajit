@@ -171,11 +171,11 @@ pub struct DebuggerSession {
     next_inst: usize,
     steps: usize,
     history: Vec<SessionSnapshot>,
-    /// When set, SaveCursor returns input_base_addr + cursor (raw pointer)
-    /// instead of just cursor (abstract offset). Used by the lockstep debugger
-    /// to match the JIT's pointer-based values.
+    /// When set, pointer-valued operations produce dereferenceable pointers
+    /// instead of abstract offsets. Used by the lockstep debugger to match
+    /// the JIT's pointer-based values.
     pub input_base_addr: Option<u64>,
-    /// When set, SaveInputEnd returns this value instead of input.len().
+    /// When set, input-end operations return this value instead of input.len().
     pub input_end_addr: Option<u64>,
     /// When set, SaveOutPtr returns this value instead of an abstract offset.
     pub output_base_addr: Option<u64>,
@@ -242,8 +242,8 @@ impl DebuggerSession {
         self.output[start..end].to_vec()
     }
 
-    /// Set real memory addresses so that pointer-valued operations (SaveCursor,
-    /// SaveInputEnd, LoadFromAddr) produce dereferenceable pointers. Required
+    /// Set real memory addresses so that pointer-valued operations (LoadFromAddr)
+    /// produce dereferenceable pointers. Required
     /// when the program contains CallIntrinsic ops that read through those pointers.
     pub fn set_real_addresses(&mut self) {
         self.input_base_addr = Some(self.input.as_ptr() as u64);
@@ -546,30 +546,6 @@ impl DebuggerSession {
                     value |= (self.output[base + i] as u64) << (i * 8);
                 }
                 self.write_vreg(dst.index(), value);
-            }
-            LinearOp::SaveCursor { dst } => {
-                let value = match self.input_base_addr {
-                    Some(base) => base + self.cursor as u64,
-                    None => self.cursor as u64,
-                };
-                self.write_vreg(dst.index(), value);
-            }
-            LinearOp::SaveInputEnd { dst } => {
-                let value = match self.input_end_addr {
-                    Some(end) => end,
-                    None => match self.input_base_addr {
-                        Some(base) => base + self.input.len() as u64,
-                        None => self.input.len() as u64,
-                    },
-                };
-                self.write_vreg(dst.index(), value);
-            }
-            LinearOp::RestoreCursor { src } => {
-                let raw = self.read_vreg(src.index());
-                self.cursor = match self.input_base_addr {
-                    Some(base) => (raw - base) as usize,
-                    None => raw as usize,
-                };
             }
             LinearOp::LoadFromAddr { dst, addr, width } => {
                 let raw_addr = self.read_vreg(addr.index()) as usize;

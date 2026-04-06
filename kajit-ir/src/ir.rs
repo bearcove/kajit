@@ -625,20 +625,6 @@ pub enum NodeKind {
 /// `Inputs: [port_kind, ...] Outputs: [port_kind, ...]`
 #[derive(Debug, Clone)]
 pub enum IrOp {
-    // ── Cursor ops ──────────────────────────────────────────────────
-    // r[impl ir.ops.cursor]
-    /// Snapshot cursor position into a data value.
-    /// Inputs: [StateCursor]. Outputs: [Data, StateCursor].
-    SaveCursor,
-
-    /// Snapshot the one-past-end input pointer into a data value.
-    /// Inputs: [StateCursor]. Outputs: [Data, StateCursor].
-    SaveInputEnd,
-
-    /// Restore cursor from a saved snapshot.
-    /// Inputs: [Data, StateCursor]. Outputs: [StateCursor].
-    RestoreCursor,
-
     // ── Output ops ──────────────────────────────────────────────────
     // r[impl ir.ops.output]
     /// Write src to out+offset.
@@ -868,12 +854,9 @@ impl IrOp {
 
             IrOp::CallEffect { .. } => (Effect::Domain(MEMORY_STATE_DOMAIN), None),
 
-            // Cursor ops
-            IrOp::SaveCursor | IrOp::SaveInputEnd => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(0)),
-            IrOp::RestoreCursor
-            | IrOp::WriteToSlot { .. }
-            | IrOp::ReadFromSlot { .. }
-            | IrOp::ErrorExit { .. } => (Effect::Domain(CURSOR_STATE_DOMAIN), None),
+            IrOp::WriteToSlot { .. } | IrOp::ReadFromSlot { .. } | IrOp::ErrorExit { .. } => {
+                (Effect::Domain(CURSOR_STATE_DOMAIN), None)
+            }
 
             // Output ops
             IrOp::WriteToField { .. }
@@ -1326,6 +1309,11 @@ impl IrBuilder {
         self.lambda_region(LambdaId::new(0))
     }
 
+    /// Allocate a fresh abstract stack slot.
+    pub fn alloc_slot(&mut self) -> SlotId {
+        self.func.fresh_slot()
+    }
+
     /// Add a new named state domain before any lambda bodies are populated.
     pub fn add_state_domain(&mut self, name: impl Into<String>) -> StateDomainId {
         let domain_id = self.func.add_state_domain(name);
@@ -1638,82 +1626,6 @@ impl<'a> RegionBuilder<'a> {
             kind: NodeKind::Simple(op),
         });
         PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    // ── Cursor operations (auto-threaded) ───────────────────────────
-
-    /// Save cursor position. Returns data output (the saved position).
-    // r[impl ir.cursor.snapshot]
-    pub fn save_cursor(&mut self) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
-            }],
-            outputs: vec![
-                data_out,
-                Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope),
-            ],
-            kind: NodeKind::Simple(IrOp::SaveCursor),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Save the current input_end pointer. Returns data output.
-    pub fn save_input_end(&mut self) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
-            }],
-            outputs: vec![
-                data_out,
-                Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope),
-            ],
-            kind: NodeKind::Simple(IrOp::SaveInputEnd),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Restore cursor from a saved position.
-    pub fn restore_cursor(&mut self, saved: PortSource) {
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![
-                InputPort {
-                    kind: PortKind::Data,
-                    source: saved,
-                },
-                InputPort {
-                    kind: CURSOR_STATE_PORT,
-                    source: self.state_source(CURSOR_STATE_DOMAIN),
-                },
-            ],
-            outputs: vec![Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::RestoreCursor),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
     }
 
     // ── Output operations (auto-threaded) ───────────────────────────
@@ -2760,9 +2672,6 @@ impl IrFunc {
         registry: Option<&IntrinsicRegistry>,
     ) -> fmt::Result {
         match op {
-            IrOp::SaveCursor => write!(f, "SaveCursor"),
-            IrOp::SaveInputEnd => write!(f, "SaveInputEnd"),
-            IrOp::RestoreCursor => write!(f, "RestoreCursor"),
             IrOp::WriteToField { offset, width } => {
                 write!(f, "WriteToField(offset={offset}, {width})")
             }
@@ -3025,9 +2934,10 @@ mod tests {
 
     #[test]
     fn linear_chain_state_threading() {
-        // Build: save_cursor -> write_to_field
-        // Verify that each cursor op's input is the previous one's output.
+        // Build: read_from_slot -> write_to_field
+        // Verify that each stateful op's input is the previous one's output.
         let mut builder = IrBuilder::new(test_label(), 0);
+        let slot = builder.alloc_slot();
 
         let body = builder.func.root_body();
         let initial_cs = PortSource::RegionArg(RegionArgRef {
@@ -3046,15 +2956,15 @@ mod tests {
             assert_eq!(rb.cursor_state(), initial_cs);
             assert_eq!(rb.output_state(), initial_os);
 
-            // save_cursor
-            let data = rb.save_cursor();
-            let after_save_cs = rb.cursor_state();
-            assert_ne!(after_save_cs, initial_cs);
+            // read_from_slot (cursor-domain op)
+            let data = rb.read_from_slot(slot);
+            let after_read_cs = rb.cursor_state();
+            assert_ne!(after_read_cs, initial_cs);
             assert_eq!(rb.output_state(), initial_os); // output unchanged
 
             // write_to_field
             rb.write_to_field(data, 0, Width::W4);
-            assert_eq!(rb.cursor_state(), after_save_cs); // cursor unchanged by output op
+            assert_eq!(rb.cursor_state(), after_read_cs); // cursor unchanged by output op
             assert_ne!(rb.output_state(), initial_os); // output updated
 
             rb.set_results(&[]);
@@ -3079,8 +2989,6 @@ mod tests {
             .effect(),
             Effect::Pure
         );
-
-        assert_eq!(IrOp::SaveCursor.effect(), CURSOR_EFFECT);
 
         assert_eq!(
             IrOp::WriteToField {
@@ -3129,7 +3037,6 @@ mod tests {
 
     #[test]
     fn op_metadata_cursor_advance_and_side_effects() {
-        assert_eq!(IrOp::SaveCursor.cursor_advance(), Some(0));
         assert_eq!(IrOp::Const { value: 1 }.cursor_advance(), None);
 
         assert!(!IrOp::Const { value: 1 }.has_side_effects());
@@ -3140,7 +3047,6 @@ mod tests {
             }
             .has_side_effects()
         );
-        assert!(IrOp::SaveCursor.has_side_effects());
         assert!(
             IrOp::WriteToField {
                 offset: 0,

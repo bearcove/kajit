@@ -691,19 +691,20 @@ mod tests {
     #[test]
     fn verify_rejects_state_forks() {
         let mut builder = IrBuilder::new("u8", 0);
+        let slot = builder.alloc_slot();
         {
             let mut rb = builder.root_region();
-            let _ = rb.save_cursor();
-            let _ = rb.save_cursor();
+            let _ = rb.read_from_slot(slot);
+            let _ = rb.read_from_slot(slot);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
         let root = func.root_body();
         let first = func.regions[root].nodes[0];
         let result_id = func.regions[root].results[0];
-        // Point result at first save_cursor's cursor state output (index 1).
-        // This creates a fork: both the second save_cursor and this result
-        // use the first save_cursor's cursor state output.
+        // Point result at first read_from_slot's cursor state output (index 1).
+        // This creates a fork: both the second read_from_slot and this result
+        // use the first read_from_slot's cursor state output.
         func.region_results[result_id].source = PortSource::Node(OutputRef {
             node: first,
             index: 1,

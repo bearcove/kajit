@@ -27,9 +27,8 @@ pub struct Trap {
 /// Interpreter state.
 struct State<'a> {
     /// Input bytes.
+    #[allow(dead_code)]
     input: &'a [u8],
-    /// Current read position.
-    cursor: usize,
     /// Output buffer.
     output: Vec<u8>,
     /// Current output write pointer offset.
@@ -52,7 +51,6 @@ impl<'a> State<'a> {
     fn new(input: &'a [u8], output_size: usize) -> Self {
         Self {
             input,
-            cursor: 0,
             output: vec![0u8; output_size],
             out_ptr: 0,
             slots: Vec::new(),
@@ -162,7 +160,7 @@ pub fn interpret(func: &IrFunc, input: &[u8], output_size: usize) -> Outcome {
 
     Outcome {
         output: state.output,
-        cursor: state.cursor,
+        cursor: 0, // cursor ops removed; position not tracked by IR interpreter
         trap: state.trap,
     }
 }
@@ -284,30 +282,6 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
             env.set_output(node_id, 0, data_inputs[0]);
         }
         IrOp::Nop => {}
-
-        // ─── Cursor ops ───
-        IrOp::SaveCursor => {
-            // Save cursor as raw pointer (matches JIT/CFG-MIR semantics).
-            let ptr = unsafe { state.input.as_ptr().add(state.cursor) } as u64;
-            env.set_output(node_id, 0, ptr);
-        }
-        IrOp::SaveInputEnd => {
-            let end = unsafe { state.input.as_ptr().add(state.input.len()) } as u64;
-            env.set_output(node_id, 0, end);
-        }
-        IrOp::RestoreCursor => {
-            // Restore cursor from raw pointer.
-            let ptr = data_inputs[0] as usize;
-            let base = state.input.as_ptr() as usize;
-            let offset = ptr.wrapping_sub(base);
-            if offset > state.input.len() {
-                state.trap = Some(Trap {
-                    code: crate::ErrorCode::UnexpectedEof,
-                });
-                return;
-            }
-            state.cursor = offset;
-        }
 
         // ─── Output ops ───
         IrOp::WriteToField { offset, width } => {

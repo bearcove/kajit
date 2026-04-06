@@ -158,8 +158,6 @@ impl LinearOpDst for LinearOp {
             | Self::BinOp { dst, .. }
             | Self::UnaryOp { dst, .. }
             | Self::LoadFromAddr { dst, .. }
-            | Self::SaveCursor { dst, .. }
-            | Self::SaveInputEnd { dst, .. }
             | Self::ReadFromField { dst, .. }
             | Self::SlotAddr { dst, .. }
             | Self::SaveOutPtr { dst, .. }
@@ -182,7 +180,6 @@ impl LinearOpDst for LinearOp {
             Self::StoreToAddr { .. }
             | Self::WriteToSlot { .. }
             | Self::WriteToField { .. }
-            | Self::RestoreCursor { .. }
             | Self::SetOutPtr { .. } => None,
         }
     }

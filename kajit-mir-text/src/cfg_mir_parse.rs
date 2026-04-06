@@ -171,9 +171,6 @@ enum AstOp {
     BinOp(BinOpKind),
     UnaryOp(UnaryOpKind),
     Copy,
-    SaveCursor,
-    SaveInputEnd,
-    RestoreCursor,
     Store(u32, Width),
     Load(u32, Width),
     StoreAddr(Width),
@@ -296,9 +293,6 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
 
     let simple = choice((
         just("copy").to(AstOp::Copy),
-        just("save_cursor").to(AstOp::SaveCursor),
-        just("save_input_end").to(AstOp::SaveInputEnd),
-        just("restore_cursor").to(AstOp::RestoreCursor),
         just("save_out_ptr").to(AstOp::SaveOutPtr),
         just("set_out_ptr").to(AstOp::SetOutPtr),
     ));
@@ -874,21 +868,6 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
                 },
             }
         }
-        AstOp::SaveCursor => LinearOp::SaveCursor {
-            dst: dst.ok_or_else(|| ParseError {
-                message: format!("inst i{} save_cursor missing dst", ast.id.0),
-            })?,
-        },
-        AstOp::SaveInputEnd => LinearOp::SaveInputEnd {
-            dst: dst.ok_or_else(|| ParseError {
-                message: format!("inst i{} save_input_end missing dst", ast.id.0),
-            })?,
-        },
-        AstOp::RestoreCursor => LinearOp::RestoreCursor {
-            src: src.ok_or_else(|| ParseError {
-                message: format!("inst i{} restore_cursor missing src", ast.id.0),
-            })?,
-        },
         AstOp::StoreAddr(width) => {
             let addr = ast
                 .body

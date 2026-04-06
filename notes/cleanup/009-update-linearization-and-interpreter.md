@@ -1,25 +1,23 @@
-# Update linearization and interpreter
+# Merge OUTPUT_STATE_DOMAIN into MEMORY_STATE_DOMAIN
 
-After cursor IR ops are replaced (006-002), the LIR and interpreter layers need matching updates.
+After 008 deletes the cursor domain, two domains remain: output and memory. Both protect memory operations (output writes are just stores to a pointer). Merge them.
 
-## Linearization (kajit-lir/src/linearize.rs)
+## What changes
 
-- Remove cursor-specific LinearOp variants (ReadBytes, PeekByte, AdvanceCursor, etc.)
-- IR cursor memory ops lower to generic load/store/add LinearOps
-- VReg dependency tracking updates automatically (cursor pointer is just a VReg)
+- All ops currently tagged `Effect::Domain(OUTPUT_STATE_DOMAIN)` become `Effect::Domain(MEMORY_STATE_DOMAIN)`
+- Affected ops: `WriteToField`, `WriteToFieldRange`, `SetOutPtr`, `WriteToOutput`
+- Delete `OUTPUT_STATE_DOMAIN`, `OUTPUT_STATE_DOMAIN_NAME`, `OUTPUT_EFFECT` constants
+- `builtin_state_domains()` creates only one domain: "memory"
+- Update all IR text tests that reference `%os` (output state) args
 
-## Interpreter (kajit-mir/src/interpreter.rs)
+## Semantic consequence
 
-- Remove cursor state machine simulation (lines 752-811 fast path, lines 1230-1325 trace path)
-- Cursor ops become ordinary load/store/add — the interpreter already handles those
-- Remove `input_ptr`/`input_end` from interpreter state — cursor is just a pointer value
-
-## CFG-MIR (kajit-mir/src/cfg_mir.rs)
-
-- Remove cursor op Display formatting (lines 905-912)
-- Remove cursor op operand lowering (lines 1300-1411 subset)
-- Remove SSA rewriting for cursor-specific ops
+Output writes and memory loads/stores are now fully serialized (single state chain). This is conservative but correct. Future alias analysis (from HIR value semantics) can reintroduce fine-grained ordering.
 
 ## Depends on
 
-006-002 (cursor ops are replaced at IR level)
+008 (cursor domain gone, only output + memory remain).
+
+## Enables
+
+010 (remove domain concept entirely — only one domain left, so the concept is trivial).

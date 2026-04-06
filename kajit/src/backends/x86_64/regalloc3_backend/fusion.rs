@@ -2,7 +2,7 @@
 //!
 //! x86_64 fusions:
 //! - CmpXx + BranchIf/BranchIfZero → cmp + jcc (skip setcc)
-//! - Add(base, const) + LoadFromAddr/RestoreCursor → [base + offset] addressing
+//! - Add(base, const) + LoadFromAddr → [base + offset] addressing
 
 use kajit_emit::x64;
 use kajit_lir::{BinOpKind, LinearOp};
@@ -115,9 +115,9 @@ pub(super) fn compute_fusable_cmps(func: &Function) -> HashMap<kajit_ir::VReg, x
     fusable
 }
 
-/// Pre-compute base+offset fusions for LoadFromAddr and RestoreCursor.
-/// When an Add(base, const) result is consumed ONLY by LoadFromAddr or
-/// RestoreCursor, we can skip the Add and use `[base + offset]` directly.
+/// Pre-compute base+offset fusions for LoadFromAddr.
+/// When an Add(base, const) result is consumed ONLY by LoadFromAddr,
+/// we can skip the Add and use `[base + offset]` directly.
 pub(super) fn compute_fusable_addr_offsets(
     func: &Function,
     alloc_func: &AllocatedCfgFunctionRa3,
@@ -173,7 +173,6 @@ pub(super) fn compute_fusable_addr_offsets(
     for inst in &func.insts {
         let addr_vreg = match &inst.op {
             LinearOp::LoadFromAddr { addr, .. } => *addr,
-            LinearOp::RestoreCursor { src } => *src,
             _ => continue,
         };
 

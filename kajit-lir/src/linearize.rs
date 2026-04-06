@@ -90,17 +90,6 @@ pub enum LinearOp {
         src: VReg,
     },
 
-    // ── Cursor ──
-    SaveCursor {
-        dst: VReg,
-    },
-    SaveInputEnd {
-        dst: VReg,
-    },
-    RestoreCursor {
-        src: VReg,
-    },
-
     // ── Output ──
     WriteToField {
         src: VReg,
@@ -229,10 +218,6 @@ impl LinearOp {
             }
             UnaryOp { src, .. } | Copy { src, .. } => f(src),
 
-            // Cursor
-            SaveCursor { .. } | SaveInputEnd { .. } => {}
-            RestoreCursor { src } => f(src),
-
             // Output
             WriteToField { src, .. } => f(src),
             ReadFromField { .. } => {}
@@ -335,8 +320,6 @@ impl LinearOp {
             | BinOp { dst, .. }
             | UnaryOp { dst, .. }
             | Copy { dst, .. }
-            | SaveCursor { dst }
-            | SaveInputEnd { dst }
             | ReadFromField { dst, .. }
             | SaveOutPtr { dst }
             | SlotAddr { dst, .. }
@@ -388,8 +371,7 @@ impl LinearOp {
             }
 
             // No defs
-            RestoreCursor { .. }
-            | WriteToField { .. }
+            WriteToField { .. }
             | SetOutPtr { .. }
             | StoreToAddr { .. }
             | WriteToSlot { .. }
@@ -414,10 +396,6 @@ impl LinearOp {
                 f(dst);
                 f(src);
             }
-
-            SaveCursor { dst } => f(dst),
-            SaveInputEnd { dst } => f(dst),
-            RestoreCursor { src } => f(src),
 
             WriteToField { src, .. } => f(src),
             ReadFromField { dst, .. } => f(dst),
@@ -1170,17 +1148,6 @@ impl<'a> Linearizer<'a> {
                         src: data_in(0),
                     },
                 );
-            }
-
-            // ── Cursor ops ──
-            IrOp::SaveCursor => {
-                self.emit_node(node, LinearOp::SaveCursor { dst: data_dst(0) });
-            }
-            IrOp::SaveInputEnd => {
-                self.emit_node(node, LinearOp::SaveInputEnd { dst: data_dst(0) });
-            }
-            IrOp::RestoreCursor => {
-                self.emit_node(node, LinearOp::RestoreCursor { src: data_in(0) });
             }
 
             // ── Output ops ──
@@ -4007,7 +3974,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         LinearOp::UnaryOp { src, .. } => vec![*src],
         LinearOp::Copy { src, .. } => vec![*src],
-        LinearOp::RestoreCursor { src } => vec![*src],
         LinearOp::WriteToField { src, .. } => vec![*src],
         LinearOp::SetOutPtr { src } => vec![*src],
         LinearOp::StoreToAddr { addr, src, .. } => vec![*addr, *src],
@@ -4043,8 +4009,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::FuncEnd => func_end_uses.unwrap_or_default().to_vec(),
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
-        | LinearOp::SaveCursor { .. }
-        | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
         | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
@@ -4061,8 +4025,6 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::BinOp { dst, .. } => vec![*dst],
         LinearOp::UnaryOp { dst, .. } => vec![*dst],
         LinearOp::Copy { dst, .. } => vec![*dst],
-        LinearOp::SaveCursor { dst } => vec![*dst],
-        LinearOp::SaveInputEnd { dst } => vec![*dst],
         LinearOp::ReadFromField { dst, .. } => vec![*dst],
         LinearOp::SaveOutPtr { dst } => vec![*dst],
         LinearOp::SlotAddr { dst, .. } => vec![*dst],
@@ -4072,8 +4034,7 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::CallPure { dst, .. } | LinearOp::CallEffect { dst, .. } => vec![*dst],
         LinearOp::FuncStart { data_args, .. } => data_args.clone(),
         LinearOp::CallLambda { results, .. } => results.clone(),
-        LinearOp::RestoreCursor { .. }
-        | LinearOp::WriteToField { .. }
+        LinearOp::WriteToField { .. }
         | LinearOp::SetOutPtr { .. }
         | LinearOp::StoreToAddr { .. }
         | LinearOp::WriteToSlot { .. }
@@ -4116,7 +4077,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         }
         LinearOp::UnaryOp { src, .. } => rewrite(src, &mut resolve),
         LinearOp::Copy { src, .. } => rewrite(src, &mut resolve),
-        LinearOp::RestoreCursor { src } => rewrite(src, &mut resolve),
         LinearOp::WriteToField { src, .. } => rewrite(src, &mut resolve),
         LinearOp::SetOutPtr { src } => rewrite(src, &mut resolve),
         LinearOp::StoreToAddr { addr, src, .. } => {
@@ -4161,8 +4121,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         LinearOp::JumpTable { predicate, .. } => rewrite(predicate, &mut resolve),
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
-        | LinearOp::SaveCursor { .. }
-        | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
         | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
@@ -4715,18 +4673,6 @@ fn fmt_op(
         LinearOp::Copy { dst, src } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = copy ")?;
-            fmt_vreg(f, *src)
-        }
-        LinearOp::SaveCursor { dst } => {
-            fmt_vreg(f, *dst)?;
-            write!(f, " = save_cursor")
-        }
-        LinearOp::SaveInputEnd { dst } => {
-            fmt_vreg(f, *dst)?;
-            write!(f, " = save_input_end")
-        }
-        LinearOp::RestoreCursor { src } => {
-            write!(f, "restore_cursor ")?;
             fmt_vreg(f, *src)
         }
         LinearOp::WriteToField { src, offset, width } => {
@@ -5359,43 +5305,6 @@ lambda @0 (shape: "test") {
         let mut func = kajit_ir_text::parse_ir(input, &registry).unwrap();
         kajit_ir::slot2reg::slot_to_reg(&mut func);
         let _ir = linearize(&mut func);
-    }
-
-    #[test]
-    fn linearize_real_array_u32_4_after_slot2reg() {
-        let result = std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(linearize_real_array_u32_4_impl)
-            .unwrap()
-            .join()
-            .unwrap();
-        if let Err(msg) = result {
-            panic!("{msg}");
-        }
-    }
-
-    fn linearize_real_array_u32_4_impl() -> Result<(), String> {
-        let input = include_str!("../tests/array_u32_4_after_slot2reg.vixen-ir");
-        let registry = kajit_ir::IntrinsicRegistry::empty();
-        let mut func =
-            kajit_ir_text::parse_ir(input, &registry).map_err(|e| format!("parse failed: {e}"))?;
-        let ir = linearize(&mut func);
-        let mut self_copies = vec![];
-        for (i, op) in ir.ops.iter().enumerate() {
-            if let LinearOp::Copy { dst, src } = op
-                && dst == src
-            {
-                self_copies.push(format!(
-                    "  op[{i}]: Copy v{} -> v{}",
-                    src.index(),
-                    dst.index()
-                ));
-            }
-        }
-        if !self_copies.is_empty() {
-            return Err(format!("self-copies found:\n{}", self_copies.join("\n")));
-        }
-        Ok(())
     }
 
     #[test]

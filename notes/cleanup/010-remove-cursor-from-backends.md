@@ -1,36 +1,28 @@
-# Remove cursor knowledge from backends
+# Remove state domain concept from IR
 
-After cursor ops are gone from LIR/CFG-MIR, backends no longer need special cursor handling.
+With only one domain remaining after 009, the domain concept is vestigial. Remove it.
 
-## aarch64 (kajit/src/backends/aarch64/regalloc3_backend.rs)
+## What changes
 
-Remove:
-- `cursor_writeback_reg` field (line 81)
-- `sync_ctx_cursor_around_calls` flag (line 71)
-- `cursor_reg` / `end_reg` in EmitContext (arch/aarch64.rs lines 24, 27)
-- x19/x20 reserved as cursor/end registers
-- `PrologueConfig::load_cursor_x19_x20`, `writeback_cursor_to_ctx`
-- Cursor flush before intrinsic calls, reload after (lines 1291-1297, 1383-1393)
-- SaveCursor/SaveInputEnd/RestoreCursor emission (lines 594-664)
-- Fused address offset tracking for RestoreCursor (lines 1822-1927)
+- `PortKind::State(StateDomainId)` → `PortKind::State` (no ID parameter)
+- `Effect::Domain(StateDomainId)` → `Effect::SideEffect` (single effectful category)
+- Delete `StateDomain` struct, `StateDomainId` type, `state_domains: Arena<StateDomain>` from `IrFunc`
+- Delete `builtin_state_domains()`, `add_state_domain()`, `has_state_domain()`, `state_domain_name()`
+- Simplify all RVSDG node builders: no more iterating `state_domains.iter()` to create state ports per domain. Each region threads exactly one state token (or zero for pure functions).
+- `RegionBuilder::state_source()` / `set_state_source()` lose the domain parameter
+- Update `slot2reg.rs`: `state_count` is always 0 or 1, no more N-domain port arithmetic
+- Update `linearize.rs`: state port layout simplifies
+- Update `ir_parse.rs`: remove `state_domains { }` block from text format
+- Update all golden test snapshots (~40 files)
 
-## x86_64 (kajit/src/backends/x86_64/regalloc3_backend/)
+## Scale
 
-Remove:
-- `sync_ctx_cursor_around_calls` in context.rs (line 44)
-- `cursor_writeback_enc` (line 46)
-- r12/r13 reserved as cursor/end registers
-- SaveCursor/SaveInputEnd/RestoreCursor emission (inst.rs lines 82-172)
-- Cursor sync in calls.rs (lines 27-140)
-- Fused cursor offsets in fusion.rs (lines 118-180)
-
-## What remains
-
-Backends still need:
-- Generic calling convention (pass struct pointers as args)
-- Callee-saved register management (driven by regalloc, not decoder knowledge)
-- Intrinsic call emission (generic: marshal args, call, handle return)
+~411 occurrences across ~62 files. But it's mechanical simplification — removing a dimension, not changing semantics.
 
 ## Depends on
 
-006-004 (cursor ops gone from CFG-MIR, so backends never see them)
+009 (merged to single domain, so removing the concept is trivially correct).
+
+## Enables
+
+011 (generalize DeserContext — compiler no longer has domain-specific knowledge).

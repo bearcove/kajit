@@ -902,9 +902,6 @@ fn fmt_cfg_op_name(
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::Copy { .. } => write!(f, "copy"),
-        LinearOp::SaveCursor { .. } => write!(f, "save_cursor"),
-        LinearOp::SaveInputEnd { .. } => write!(f, "save_input_end"),
-        LinearOp::RestoreCursor { .. } => write!(f, "restore_cursor"),
         LinearOp::WriteToField { offset, width, .. } => write!(f, "store([{offset}:{width}])"),
         LinearOp::ReadFromField { offset, width, .. } => write!(f, "load([{offset}:{width}])"),
         LinearOp::SaveOutPtr { .. } => write!(f, "save_out_ptr"),
@@ -945,8 +942,6 @@ fn linearop_dst(op: &LinearOp) -> Option<VReg> {
         | LinearOp::BinOp { dst, .. }
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
-        | LinearOp::SaveCursor { dst }
-        | LinearOp::SaveInputEnd { dst }
         | LinearOp::ReadFromField { dst, .. }
         | LinearOp::SaveOutPtr { dst }
         | LinearOp::SlotAddr { dst, .. }
@@ -965,7 +960,6 @@ fn linearop_uses(op: &LinearOp) -> Vec<VReg> {
         LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         LinearOp::UnaryOp { src, .. }
         | LinearOp::Copy { src, .. }
-        | LinearOp::RestoreCursor { src }
         | LinearOp::WriteToField { src, .. }
         | LinearOp::SetOutPtr { src }
         | LinearOp::WriteToSlot { src, .. } => vec![*src],
@@ -1304,8 +1298,6 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
     match &op {
         LinearOp::Const { dst, .. }
         | LinearOp::DataAddr { dst, .. }
-        | LinearOp::SaveCursor { dst }
-        | LinearOp::SaveInputEnd { dst }
         | LinearOp::ReadFromField { dst, .. }
         | LinearOp::SaveOutPtr { dst }
         | LinearOp::SlotAddr { dst, .. }
@@ -1343,8 +1335,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
             push_use(&mut operands, *src, None);
             push_def(&mut operands, *dst, None);
         }
-        LinearOp::RestoreCursor { src }
-        | LinearOp::WriteToField { src, .. }
+        LinearOp::WriteToField { src, .. }
         | LinearOp::SetOutPtr { src }
         | LinearOp::WriteToSlot { src, .. } => {
             push_use(&mut operands, *src, None);
@@ -2746,9 +2737,6 @@ fn global_copy_propagation(func: &mut Function) {
                 }
                 LinearOp::LoadFromAddr { addr, .. } => {
                     changed |= rewrite_use(addr);
-                }
-                LinearOp::RestoreCursor { src } => {
-                    changed |= rewrite_use(src);
                 }
                 LinearOp::SetOutPtr { src } => {
                     changed |= rewrite_use(src);

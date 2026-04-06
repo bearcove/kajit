@@ -6,7 +6,6 @@ use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::{AllocatedCfgFunctionRa3, AllocatedCfgProgramRa3};
 
 use crate::arch::EmitCtx;
-use crate::context::{CTX_INPUT_END, CTX_INPUT_PTR};
 use crate::harness::{
     AllocationMap, LocationMap, VRegLocation, compute_edge_source_locations,
     compute_inst_source_locations,
@@ -71,14 +70,11 @@ struct EmitContext<'a> {
     sync_ctx_cursor_around_calls: bool,
     /// Intermediate vregs (And/Shl results) whose instructions should be skipped.
     fused_skip: std::collections::HashSet<kajit_ir::VReg>,
-    /// Fused base+offset info for LoadFromAddr/RestoreCursor.
-    /// Maps addr vreg → (base_vreg, offset). When a LoadFromAddr/RestoreCursor
+    /// Fused base+offset info for LoadFromAddr.
+    /// Maps addr vreg → (base_vreg, offset). When a LoadFromAddr
     /// consumes an addr that was defined by `Add(base, const_offset)`, the Add
-    /// is skipped and the load/restore uses `[base_reg, #offset]` directly.
+    /// is skipped and the load uses `[base_reg, #offset]` directly.
     fused_addr_offsets: HashMap<kajit_ir::VReg, (kajit_ir::VReg, u64)>,
-    /// Register used by RestoreCursor and the epilogue for cursor writeback.
-    /// x19 for non-leaf, a caller-saved register for leaf.
-    cursor_writeback_reg: Reg,
     /// Set to true when emitting the last block before the success epilogue.
     /// Allows Return terminator to fall through instead of branching.
     is_last_emitted_block: bool,
@@ -589,79 +585,6 @@ impl<'a> EmitContext<'a> {
 
             LinearOp::UnaryOp { op, dst, src } => {
                 self.emit_unary(*op, *dst, *src);
-            }
-
-            LinearOp::SaveCursor { dst } => {
-                // For leaf functions, load cursor directly from context struct
-                // into the regalloc'd register (avoids prologue → x19 → copy).
-                if self.ectx.is_leaf {
-                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X16);
-                    self.ectx
-                        .emit
-                        .emit_ldr_imm(Width::X64, dst_reg, self.ctx_reg, CTX_INPUT_PTR)
-                        .expect("ldr cursor");
-                    if dst_reg == Reg::X16 {
-                        self.store_to_vreg(*dst, Reg::X16);
-                    }
-                } else if let Some(preg) = self.preg_for_vreg(*dst) {
-                    let dst_reg = self.preg_to_reg(preg);
-                    self.ectx
-                        .emit
-                        .emit_mov_reg(Width::X64, dst_reg, Reg::X19)
-                        .expect("mov");
-                } else {
-                    self.ectx
-                        .emit
-                        .emit_mov_reg(Width::X64, Reg::X16, Reg::X19)
-                        .expect("mov");
-                    self.store_to_vreg(*dst, Reg::X16);
-                }
-            }
-
-            LinearOp::SaveInputEnd { dst } => {
-                // For leaf functions, load input_end directly from context struct.
-                if self.ectx.is_leaf {
-                    let dst_reg = self.dst_reg_or_temp(*dst, Reg::X16);
-                    self.ectx
-                        .emit
-                        .emit_ldr_imm(Width::X64, dst_reg, self.ctx_reg, CTX_INPUT_END)
-                        .expect("ldr input_end");
-                    if dst_reg == Reg::X16 {
-                        self.store_to_vreg(*dst, Reg::X16);
-                    }
-                } else if let Some(preg) = self.preg_for_vreg(*dst) {
-                    let dst_reg = self.preg_to_reg(preg);
-                    self.ectx
-                        .emit
-                        .emit_mov_reg(Width::X64, dst_reg, Reg::X20)
-                        .expect("mov");
-                } else {
-                    self.ectx
-                        .emit
-                        .emit_mov_reg(Width::X64, Reg::X16, Reg::X20)
-                        .expect("mov");
-                    self.store_to_vreg(*dst, Reg::X16);
-                }
-            }
-
-            LinearOp::RestoreCursor { src } => {
-                let cursor_reg = self.cursor_writeback_reg;
-                // Check for fused base+offset: emit `add cursor, base, #offset`
-                if let Some(&(base_vreg, offset)) = self.fused_addr_offsets.get(src) {
-                    let base_reg = self.reg_for_vreg_with_temp(base_vreg, Reg::X16);
-                    self.ectx
-                        .emit
-                        .emit_add_imm(Width::X64, cursor_reg, base_reg, offset as u16, false)
-                        .expect("add imm for restore_cursor");
-                } else {
-                    let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
-                    if cursor_reg != src_reg {
-                        self.ectx
-                            .emit
-                            .emit_mov_reg(Width::X64, cursor_reg, src_reg)
-                            .expect("mov");
-                    }
-                }
             }
 
             LinearOp::WriteToField { src, offset, width } => {
@@ -1757,9 +1680,9 @@ impl<'a> EmitContext<'a> {
         }
     }
 
-    /// Pre-compute base+offset fusions for LoadFromAddr and RestoreCursor.
-    /// When an Add(base, const) result is consumed ONLY by LoadFromAddr or
-    /// RestoreCursor, we can skip the Add and use `[base_reg, #offset]` directly.
+    /// Pre-compute base+offset fusions for LoadFromAddr.
+    /// When an Add(base, const) result is consumed ONLY by LoadFromAddr,
+    /// we can skip the Add and use `[base_reg, #offset]` directly.
     fn compute_fusable_addr_offsets(
         func: &Function,
         alloc_func: &AllocatedCfgFunctionRa3,
@@ -1815,11 +1738,10 @@ impl<'a> EmitContext<'a> {
 
         let mut result = HashMap::new();
 
-        // Find LoadFromAddr/RestoreCursor whose addr is defined by Add(base, const)
+        // Find LoadFromAddr whose addr is defined by Add(base, const)
         for inst in &func.insts {
             let addr_vreg = match &inst.op {
                 LinearOp::LoadFromAddr { addr, .. } => *addr,
-                LinearOp::RestoreCursor { src } => *src,
                 _ => continue,
             };
 
@@ -2479,7 +2401,6 @@ pub fn compile_regalloc3_with_root_data_abi(
             output_reg,
             ctx_reg,
             sync_ctx_cursor_around_calls: ctx_cursor_abi,
-            cursor_writeback_reg,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),
             edge_source_locations,

@@ -749,23 +749,6 @@ fn execute_function_inner(
                     let value = exec_unaryop(*op, src);
                     state.write_vreg(dst.index(), value);
                 }
-                LinearOp::SaveCursor { dst } => {
-                    let ptr = unsafe { state.input_base.add(state.cursor) } as usize as u64;
-                    state.write_vreg(dst.index(), ptr);
-                }
-                LinearOp::SaveInputEnd { dst } => {
-                    let end = unsafe { state.input_base.add(state.input.len()) } as usize as u64;
-                    state.write_vreg(dst.index(), end);
-                }
-                LinearOp::RestoreCursor { src } => {
-                    let next_ptr = state.read_vreg(src.index()) as usize as *const u8;
-                    let delta = unsafe { next_ptr.offset_from(state.input_base) };
-                    if delta < 0 || delta as usize > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                        break;
-                    }
-                    state.cursor = delta as usize;
-                }
                 LinearOp::WriteToField { src, offset, width } => {
                     let value = state.read_vreg(src.index());
                     let width_bytes = width.bytes() as usize;
@@ -1183,45 +1166,6 @@ fn execute_function_inner_with_event_trace(
                             value: trace_value,
                         },
                     );
-                }
-                LinearOp::SaveCursor { dst } => {
-                    let value = unsafe { state.input_base.add(state.cursor) } as usize as u64;
-                    let trace_value = TraceValue::U64(value);
-                    state.write_vreg(dst.index(), value);
-                    state.write_trace_vreg(dst.index(), trace_value.clone());
-                    push_interpreter_event(
-                        trace,
-                        step_index,
-                        location,
-                        InterpreterEventKind::VregWrite {
-                            vreg: *dst,
-                            value: trace_value,
-                        },
-                    );
-                }
-                LinearOp::SaveInputEnd { dst } => {
-                    let value = unsafe { state.input_base.add(state.input.len()) } as usize as u64;
-                    let trace_value = TraceValue::U64(value);
-                    state.write_vreg(dst.index(), value);
-                    state.write_trace_vreg(dst.index(), trace_value.clone());
-                    push_interpreter_event(
-                        trace,
-                        step_index,
-                        location,
-                        InterpreterEventKind::VregWrite {
-                            vreg: *dst,
-                            value: trace_value,
-                        },
-                    );
-                }
-                LinearOp::RestoreCursor { src } => {
-                    let next_ptr = state.read_vreg(src.index()) as usize as *const u8;
-                    let delta = unsafe { next_ptr.offset_from(state.input_base) };
-                    if delta < 0 || delta as usize > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                    } else {
-                        state.cursor = delta as usize;
-                    }
                 }
                 LinearOp::WriteToField { src, offset, width } => {
                     let value = state.read_vreg(src.index());

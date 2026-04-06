@@ -29,4 +29,4 @@ Backends use these offsets for direct memory access. All intrinsics take `&mut D
 
 ## Depends on
 
-006-005 (backends don't use CTX_INPUT_PTR/CTX_INPUT_END anymore)
+010 (state domain concept removed — compiler has no domain-specific knowledge).
