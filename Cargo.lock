@@ -296,9 +296,6 @@ name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d20789868f4b01b2f2caec9f5c4e0213b41e3e5702a50157d699ae31ced2fcb"
-dependencies = [
- "allocator-api2",
-]
 
 [[package]]
 name = "byteorder"
@@ -1356,7 +1353,6 @@ dependencies = [
  "postcard",
  "proptest",
  "proptest-derive",
- "regalloc2",
  "serde",
  "serde_json",
  "yaxpeax-arch",
@@ -1469,7 +1465,6 @@ dependencies = [
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
- "regalloc2",
 ]
 
 [[package]]
@@ -1960,20 +1955,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags",
-]
-
-[[package]]
-name = "regalloc2"
-version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "952ddbfc6f9f64d006c3efd8c9851a6ba2f2b944ba94730db255d55006e0ffda"
-dependencies = [
- "allocator-api2",
- "bumpalo",
- "hashbrown 0.15.5",
- "log",
- "rustc-hash",
- "smallvec 1.15.1",
 ]
 
 [[package]]

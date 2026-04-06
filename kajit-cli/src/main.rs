@@ -350,10 +350,18 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         // Run CFG-MIR interpreter (post-linearization)
         let interp_result = kajit_mir::opt::reduce::interpret(&artifacts.cfg_program, &input);
         match &interp_result {
-            Some(bytes) => {
+            kajit_mir::opt::reduce::InterpOutcome::Returned(bytes) => {
                 println!("  interp out:  {} ({})", encode_hex(bytes), bytes.len())
             }
-            None => println!("  interp:      TRAP/TIMEOUT"),
+            kajit_mir::opt::reduce::InterpOutcome::Trapped(trap) => {
+                println!(
+                    "  interp:      TRAP ({:?} at offset {})",
+                    trap.code, trap.offset
+                )
+            }
+            kajit_mir::opt::reduce::InterpOutcome::TimedOut => {
+                println!("  interp:      TIMEOUT")
+            }
         }
 
         // Run JIT (may hang on buggy programs — run after interpreter)
@@ -364,11 +372,12 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         }
 
         // Compare
+        use kajit_mir::opt::reduce::InterpOutcome;
         match (&jit_result, &interp_result) {
-            (Ok(jit), Some(interp)) if jit == interp => {
+            (Ok(jit), InterpOutcome::Returned(interp)) if jit == interp => {
                 println!("  match:       YES");
             }
-            (Ok(jit), Some(interp)) => {
+            (Ok(jit), InterpOutcome::Returned(interp)) => {
                 println!("  match:       NO — DIVERGENCE");
                 // Show byte-by-byte diff
                 let max_len = jit.len().max(interp.len());

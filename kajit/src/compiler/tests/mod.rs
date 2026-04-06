@@ -1763,25 +1763,6 @@ fn postcard_hir_lowering_array_path_matches_jit_differential_harness() {
 }
 
 #[test]
-fn postcard_hir_lowering_array_path_matches_post_regalloc_simulation() {
-    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
-    let mut func = lower_hir_module(&module);
-    let linear = crate::linearize::linearize(&mut func);
-    let hints = Default::default();
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate postcard HIR-lowered array cfg");
-    let result = crate::regalloc_engine::differential_check_cfg(&cfg, &alloc, &[1, 2, 3, 4]);
-    assert!(
-        matches!(
-            result,
-            crate::regalloc_engine::DifferentialCheckResult::Match { .. }
-        ),
-        "unexpected interpreter/post-regalloc mismatch: {result:?}"
-    );
-}
-
-#[test]
 fn postcard_hir_lowering_multi_options_matches_jit_differential_harness() {
     let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
     let mut func = lower_hir_module(&module);

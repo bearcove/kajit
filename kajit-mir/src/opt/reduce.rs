@@ -792,10 +792,33 @@ pub fn get_sequence_ssa_errors(
     None
 }
 
-/// Run a program through the ideal interpreter and return output bytes.
-/// Returns None if execution fails (trap, timeout, etc.)
-pub fn interpret(program: &Program, input: &[u8]) -> Option<Vec<u8>> {
-    let mut session = crate::DebuggerSession::new(program, input).ok()?;
+/// Outcome of running the ideal interpreter.
+#[derive(Debug, Clone)]
+pub enum InterpOutcome {
+    /// Program returned normally.
+    Returned(Vec<u8>),
+    /// Program hit a trap (bounds check, unexpected EOF, etc.)
+    Trapped(crate::InterpreterTrap),
+    /// Interpreter did not finish within the step budget.
+    TimedOut,
+}
+
+impl InterpOutcome {
+    /// Returns the output bytes if the program returned normally.
+    pub fn returned(&self) -> Option<&Vec<u8>> {
+        match self {
+            Self::Returned(out) => Some(out),
+            _ => None,
+        }
+    }
+}
+
+/// Run a program through the ideal interpreter.
+pub fn interpret(program: &Program, input: &[u8]) -> InterpOutcome {
+    let mut session = match crate::DebuggerSession::new(program, input) {
+        Ok(s) => s,
+        Err(_) => return InterpOutcome::TimedOut,
+    };
 
     // If the program has intrinsic calls, set real base addresses so pointer
     // values passed to intrinsics are dereferenceable.
@@ -816,11 +839,13 @@ pub fn interpret(program: &Program, input: &[u8]) -> Option<Vec<u8>> {
     let max_steps = std::env::var("KAJIT_INTERP_STEPS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(100_000);
+        .unwrap_or(1_000_000);
     let trace = std::env::var("KAJIT_INTERP_TRACE").is_ok();
 
     for step in 0..max_steps {
-        let event = session.step_forward().ok()?;
+        let Ok(event) = session.step_forward() else {
+            return InterpOutcome::TimedOut;
+        };
         if trace {
             let st = session.state();
             eprintln!(
@@ -834,19 +859,20 @@ pub fn interpret(program: &Program, input: &[u8]) -> Option<Vec<u8>> {
     }
 
     let state = session.state();
-    if trace && !state.returned {
-        // Print block visit frequency
+    if trace && !state.returned && state.trap.is_none() {
         eprintln!("[interp] did NOT return after {max_steps} steps");
     }
     if state.returned {
-        Some(state.output.clone())
+        InterpOutcome::Returned(state.output.clone())
+    } else if let Some(trap) = &state.trap {
+        InterpOutcome::Trapped(trap.clone())
     } else {
-        None // didn't return — trap or timeout
+        InterpOutcome::TimedOut
     }
 }
 
 /// Run a program through the ideal interpreter after applying a pass sequence.
-pub fn interpret_after_passes(program: &Program, passes: &[&str], input: &[u8]) -> Option<Vec<u8>> {
+pub fn interpret_after_passes(program: &Program, passes: &[&str], input: &[u8]) -> InterpOutcome {
     let mut prog = program.clone();
     for &pass in passes {
         run_named_pass(&mut prog, pass);
@@ -867,14 +893,14 @@ pub fn predicate_wrong_output(
         // First: the unoptimized program must produce the expected output
         // (otherwise the reduction made the base program wrong, not interesting)
         let base_output = interpret(program, &input);
-        if base_output.as_ref() != Some(&expected_output) {
+        if base_output.returned() != Some(&expected_output) {
             return false; // base program is itself broken, skip
         }
 
         // Then: apply passes and check if output changes
         let pass_refs: Vec<&str> = passes.iter().map(|s| s.as_str()).collect();
         let opt_output = interpret_after_passes(program, &pass_refs, &input);
-        opt_output.as_ref() != Some(&expected_output)
+        opt_output.returned() != Some(&expected_output)
     })
 }
 
@@ -887,7 +913,7 @@ pub fn bisect_wrong_output(
 ) -> Vec<String> {
     // Verify the full sequence produces wrong output
     let opt_output = interpret_after_passes(program, all_passes, input);
-    if opt_output.as_ref() == Some(&expected_output.to_vec()) {
+    if opt_output.returned() == Some(&expected_output.to_vec()) {
         return Vec::new(); // all passes produce correct output
     }
 
@@ -895,14 +921,23 @@ pub fn bisect_wrong_output(
         "[bisect] full sequence ({} passes) produces wrong output, bisecting...",
         all_passes.len()
     );
-    if let Some(ref out) = opt_output {
-        eprintln!(
-            "[bisect] expected {} bytes, got {} bytes",
-            expected_output.len(),
-            out.len()
-        );
-    } else {
-        eprintln!("[bisect] optimized program didn't return (trap/timeout)");
+    match &opt_output {
+        InterpOutcome::Returned(out) => {
+            eprintln!(
+                "[bisect] expected {} bytes, got {} bytes",
+                expected_output.len(),
+                out.len()
+            );
+        }
+        InterpOutcome::Trapped(trap) => {
+            eprintln!(
+                "[bisect] optimized program trapped: {:?} at offset {}",
+                trap.code, trap.offset
+            );
+        }
+        InterpOutcome::TimedOut => {
+            eprintln!("[bisect] optimized program timed out");
+        }
     }
 
     // Delta debugging on the pass list
@@ -921,7 +956,7 @@ pub fn bisect_wrong_output(
 
             if !candidate.is_empty() {
                 let out = interpret_after_passes(program, &candidate, input);
-                if out.as_ref() != Some(&expected_output.to_vec()) {
+                if out.returned() != Some(&expected_output.to_vec()) {
                     eprintln!(
                         "[bisect] removed passes [{}..{}]: {:?}",
                         i,

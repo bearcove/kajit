@@ -477,22 +477,38 @@ impl DifferentialReport {
 
 #[derive(Debug)]
 pub enum DifferentialHarnessError {
-    Simulation(kajit_mir::RegallocEngineError),
+    InterpreterTimeout,
 }
 
 impl core::fmt::Display for DifferentialHarnessError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Simulation(err) => write!(f, "cfg simulation failed: {err}"),
+            Self::InterpreterTimeout => write!(f, "ideal interpreter timed out"),
         }
     }
 }
 
 impl std::error::Error for DifferentialHarnessError {}
 
-impl From<kajit_mir::RegallocEngineError> for DifferentialHarnessError {
-    fn from(value: kajit_mir::RegallocEngineError) -> Self {
-        Self::Simulation(value)
+fn normalize_interp_outcome(
+    outcome: kajit_mir::opt::reduce::InterpOutcome,
+    output_size: usize,
+) -> Result<DifferentialOutcome, DifferentialHarnessError> {
+    use kajit_mir::opt::reduce::InterpOutcome;
+    match outcome {
+        InterpOutcome::Returned(mut output) => {
+            if output.len() < output_size {
+                output.resize(output_size, 0);
+            } else if output.len() > output_size {
+                output.truncate(output_size);
+            }
+            Ok(DifferentialOutcome::Success { output })
+        }
+        InterpOutcome::Trapped(trap) => Ok(DifferentialOutcome::Failure(DifferentialFailure {
+            code: trap.code,
+            offset: trap.offset,
+        })),
+        InterpOutcome::TimedOut => Err(DifferentialHarnessError::InterpreterTimeout),
     }
 }
 
@@ -518,27 +534,6 @@ pub fn infer_linear_ir_output_size(ir: &linearize::LinearIr) -> usize {
         })
         .unwrap_or(0);
     from_fields.max(from_func_start)
-}
-
-fn normalize_simulation_outcome(
-    outcome: kajit_mir::ExecutionResult,
-    output_size: usize,
-) -> DifferentialOutcome {
-    match outcome.trap {
-        Some(trap) => DifferentialOutcome::Failure(DifferentialFailure {
-            code: trap.code,
-            offset: trap.offset,
-        }),
-        None => {
-            let mut output = outcome.output;
-            if output.len() < output_size {
-                output.resize(output_size, 0);
-            } else if output.len() > output_size {
-                output.truncate(output_size);
-            }
-            DifferentialOutcome::Success { output }
-        }
-    }
 }
 
 fn normalize_jit_outcome(
@@ -636,11 +631,10 @@ pub fn differential_check_linear_ir_vs_jit_with_output_size(
     input: &[u8],
     output_size: usize,
 ) -> Result<DifferentialReport, DifferentialHarnessError> {
-    let hints = Default::default(); // TODO: Pass hints from caller
-    let cfg_program = regalloc_engine::cfg_mir::lower_linear_ir(ir, hints);
-    let alloc = regalloc_engine::allocate_cfg_program(&cfg_program)?;
-    let simulation = regalloc_engine::simulate_execution_cfg(&alloc, input)?;
-    let interpreter = normalize_simulation_outcome(simulation, output_size);
+    let hints = Default::default();
+    let cfg_program = regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
+    let interp_outcome = kajit_mir::opt::reduce::interpret(&cfg_program, input);
+    let interpreter = normalize_interp_outcome(interp_outcome, output_size)?;
     let decoder = compile_decoder_linear_ir(ir, false);
     let jit = normalize_jit_outcome(deserialize_raw(&decoder, input, output_size), output_size);
     let mismatch = compare_differential_outcomes(&interpreter, &jit);
