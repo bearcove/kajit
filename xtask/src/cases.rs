@@ -2757,7 +2757,6 @@ pub(crate) fn render_test_file() -> String {
             ir_text: String,
             linear_text: String,
             cfg_text: String,
-            edits_text: String,
             asm_text: String,
             opt_timeline: Vec<(String, String)>,
         }
@@ -2770,7 +2769,6 @@ pub(crate) fn render_test_file() -> String {
             let hir_text = kajit::debug_hir_text(shape, kind);
             let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
             let linear_text = kajit::debug_linear_ir_text(shape, kind);
-            let edits_text = kajit::regalloc_edits_text(shape, kind);
             #[cfg(target_arch = "aarch64")]
             let asm_text = kajit::assembly_text(shape, kind);
             #[cfg(not(target_arch = "aarch64"))]
@@ -2781,7 +2779,6 @@ pub(crate) fn render_test_file() -> String {
                 ir_text,
                 linear_text,
                 cfg_text,
-                edits_text,
                 asm_text,
                 opt_timeline,
             }
@@ -2883,9 +2880,6 @@ pub(crate) fn render_test_file() -> String {
             }
             if should_dump_stage("cfg") {
                 dump_stage(format_label, case, "cfg", &artifacts.cfg_text);
-            }
-            if should_dump_stage("edits") {
-                dump_stage(format_label, case, "edits", &artifacts.edits_text);
             }
             if should_dump_stage("emit") || should_dump_stage("asm") {
                 dump_stage(format_label, case, "asm", &artifacts.asm_text);

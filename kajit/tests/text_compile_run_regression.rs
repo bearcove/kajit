@@ -33,16 +33,9 @@ fn compile_and_run_from_ir_text_snapshot_u32() {
 fn emission_trace_snapshot_captures_backend_lowering_path() {
     let trace =
         kajit::emission_trace_text(PostcardOptionStruct::SHAPE, kajit::DecoderKind::Postcard);
-    let edits =
-        kajit::regalloc_edits_text(PostcardOptionStruct::SHAPE, kajit::DecoderKind::Postcard);
-
     assert!(
         trace.contains("branch_if") || trace.contains("branch_if_zero"),
         "expected branch provenance in emission trace, got:\n{trace}"
-    );
-    assert!(
-        !edits.contains("branch_if") && !edits.contains("branch_if_zero"),
-        "regalloc edits dump should not already encode backend lowering details:\n{edits}"
     );
 
     insta::assert_snapshot!(trace);

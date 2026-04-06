@@ -59,34 +59,6 @@ pub fn compile_decoder_with_options(
     compiler::compile_decoder_with_options(shape, kind, pipeline_opts)
 }
 
-/// Return the number of regalloc edit instructions produced by IR lowering.
-pub fn regalloc_edit_count(shape: &'static facet::Shape, kind: DecoderKind) -> usize {
-    compiler::regalloc_edit_count(shape, kind)
-}
-
-/// Return the number of regalloc edit instructions produced by IR lowering with explicit options.
-pub fn regalloc_edit_count_with_options(
-    shape: &'static facet::Shape,
-    kind: DecoderKind,
-    pipeline_opts: &PipelineOptions,
-) -> usize {
-    compiler::regalloc_edit_count_with_options(shape, kind, pipeline_opts)
-}
-
-/// Return a detailed regalloc edits dump for the compiled decoder pipeline.
-pub fn regalloc_edits_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
-    compiler::regalloc_edits_text(shape, kind)
-}
-
-/// Return a detailed regalloc edits dump with explicit pipeline options.
-pub fn regalloc_edits_text_with_options(
-    shape: &'static facet::Shape,
-    kind: DecoderKind,
-    pipeline_opts: &PipelineOptions,
-) -> String {
-    compiler::regalloc_edits_text_with_options(shape, kind, pipeline_opts)
-}
-
 /// Return a deterministic machine-emission trace annotated with CFG-MIR provenance.
 pub fn emission_trace_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
     compiler::emission_trace_text(shape, kind)

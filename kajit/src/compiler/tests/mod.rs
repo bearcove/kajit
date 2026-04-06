@@ -10,8 +10,8 @@ use super::{
     CompiledDecoder, build_jit_debug_info_from_source_map, build_postcard_decoder_hir,
     build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
     cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, deser_dwarf_variables,
-    dwarf_expr_for_out_field, format_allocated_regalloc_edits, jit_dwarf_target_arch,
-    lower_hir_module, normalize_debug_line_rows, run_default_passes_from_env,
+    dwarf_expr_for_out_field, jit_dwarf_target_arch, lower_hir_module, normalize_debug_line_rows,
+    run_default_passes_from_env,
 };
 
 fn test_location_map(
@@ -249,7 +249,9 @@ fn structural_hir_type_size_for_test(module: &hir::Module, ty: &hir::Type) -> us
             core::mem::size_of::<usize>()
         }
         hir::Type::Str { .. } | hir::Type::Slice { .. } => core::mem::size_of::<usize>() * 2,
-        hir::Type::Array { element, len } => structural_hir_type_size_for_test(module, element) * len,
+        hir::Type::Array { element, len } => {
+            structural_hir_type_size_for_test(module, element) * len
+        }
         hir::Type::Named { def, .. } => {
             let type_def = &module.type_defs[*def];
             if let Some(size) = type_def.size {
@@ -1808,111 +1810,6 @@ fn postcard_hir_lowering_multi_options_matches_jit_differential_harness() {
 }
 
 #[test]
-fn postcard_hir_lowering_multi_options_matches_post_regalloc_simulation() {
-    let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
-    let mut func = lower_hir_module(&module);
-    let linear = crate::linearize::linearize(&mut func);
-    let ignored_output_bytes = non_semantic_output_byte_mask(&module);
-    let hints = Default::default();
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate postcard HIR-lowered MultiOpt cfg");
-    std::fs::write(
-        "/tmp/multiopt.regalloc.txt",
-        format_allocated_regalloc_edits(&alloc),
-    )
-    .expect("write MultiOpt regalloc dump");
-    if let Some(func_alloc) = alloc.functions.first() {
-        let mut dump = String::new();
-        if let Some(cfg_func) = alloc.cfg_program.funcs.first() {
-            std::fs::write(
-                "/tmp/multiopt.alloc_cfg.txt",
-                format!("{}", alloc.cfg_program),
-            )
-            .expect("write allocated MultiOpt cfg dump");
-            for block_id in [101_u32, 102, 103, 104] {
-                let block = &cfg_func.blocks[block_id as usize];
-                dump.push_str(&format!(
-                    "block b{} params={:?} preds={:?} succs={:?}\n",
-                    block.id.0, block.params, block.preds, block.succs
-                ));
-                for inst_id in &block.insts {
-                    let op = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
-                    let inst = &cfg_func.insts[inst_id.index()];
-                    let allocs = func_alloc.op_allocs.get(&op);
-                    let operands = func_alloc.op_operands.get(&op);
-                    dump.push_str(&format!(
-                        "  {op:?}: {:?} allocs={allocs:?} operands={operands:?}\n",
-                        inst.op
-                    ));
-                }
-                let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
-                let term = cfg_func.term(block.term).expect("block term should exist");
-                let term_allocs = func_alloc.op_allocs.get(&term_op);
-                let term_operands = func_alloc.op_operands.get(&term_op);
-                dump.push_str(&format!(
-                    "  {term_op:?}: {term:?} allocs={term_allocs:?} operands={term_operands:?}\n"
-                ));
-            }
-        }
-        std::fs::write("/tmp/multiopt.op_allocs.txt", dump).expect("write MultiOpt op alloc dump");
-    }
-    let encoded = ::postcard::to_allocvec(&MultiOpt {
-        a: Some(7),
-        b: "hello".to_owned(),
-        c: None,
-    })
-    .expect("postcard should encode MultiOpt");
-    let trace = crate::regalloc_engine::simulate_execution_trace_cfg(&alloc, &encoded)
-        .expect("post-regalloc trace should execute");
-    let mut trace_dump = String::new();
-    for entry in trace
-        .iter()
-        .filter(|entry| (295..=310).contains(&entry.step_index))
-    {
-        trace_dump.push_str(&format!(
-            "step {} pos={:?} regs={:?} spills={:?} output_prefix={:?}\n",
-            entry.step_index,
-            entry.state.position,
-            entry.state.physical_registers,
-            entry.state.spillslots,
-            &entry.output[..24]
-        ));
-    }
-    std::fs::write("/tmp/multiopt.trace.txt", trace_dump).expect("write MultiOpt trace dump");
-    let result = crate::regalloc_engine::differential_check_cfg_with_ignored_output_bytes(
-        &cfg,
-        &alloc,
-        &encoded,
-        Some(&ignored_output_bytes),
-    );
-    assert!(
-        matches!(
-            result,
-            crate::regalloc_engine::DifferentialCheckResult::Match { .. }
-        ),
-        "unexpected interpreter/post-regalloc mismatch: {result:?}"
-    );
-}
-
-// Removed: postcard_hir_lowering_array_path_without_backend_edit_emission.
-// It covered a backend mode that no longer exists now that regalloc is mandatory.
-// ScalarArrayHolder is covered by postcard_hir_lowering_decodes_scalar_arrays
-// which uses the active regalloc3 pipeline.
-
-#[test]
-fn debug_scalar_array_regalloc_edits() {
-    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
-    let mut func = lower_hir_module(&module);
-    let linear = crate::linearize::linearize(&mut func);
-    let hints = Default::default();
-    let cfg = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg)
-        .expect("regalloc should allocate postcard HIR-lowered array cfg");
-    println!("{}", format_allocated_regalloc_edits(&alloc));
-}
-
-#[test]
 fn debug_scalar_array_emission_trace() {
     let decoder = compile_postcard_decoder_via_structural_hir(<ScalarArrayHolder>::SHAPE);
     println!(
@@ -2200,7 +2097,11 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         ],
     };
 
-    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)], &[], &[]);
+    let location_map = test_location_map(
+        &[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)],
+        &[],
+        &[],
+    );
     let vars = cfg_value_dwarf_variables(
         &program,
         &location_map,
@@ -2401,7 +2302,11 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         ],
     };
 
-    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)], &[], &[]);
+    let location_map = test_location_map(
+        &[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)],
+        &[],
+        &[],
+    );
     let vars = cfg_value_dwarf_variables(
         &program,
         &location_map,
@@ -2586,7 +2491,11 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         ],
     };
 
-    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)], &[], &[]);
+    let location_map = test_location_map(
+        &[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)],
+        &[],
+        &[],
+    );
     let subprogram = cfg_mir_dwarf_variables(
         None,
         &program,
@@ -3098,7 +3007,11 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         ],
     };
 
-    let location_map = test_location_map(&[(0, reg.hw_enc() as u8), (1, reg.hw_enc() as u8)], &[], &[]);
+    let location_map = test_location_map(
+        &[(0, reg.hw_enc() as u8), (1, reg.hw_enc() as u8)],
+        &[],
+        &[],
+    );
     let vars = cfg_semantic_named_dwarf_variables(
         &program,
         &location_map,

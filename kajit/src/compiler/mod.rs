@@ -564,21 +564,6 @@ fn compile_decoder_with_options_legacy(
     }
 }
 
-// r[impl ir.regalloc.regressions]
-/// Build IR + linear form and run regalloc over it, returning total edit count.
-///
-/// This is a full-pipeline diagnostic helper, not a lightweight metric.
-pub fn regalloc_edit_count(shape: &'static Shape, kind: DecoderKind) -> usize {
-    let pipeline_opts = PipelineOptions::from_env();
-    regalloc_edit_count_with_options(shape, kind, &pipeline_opts)
-}
-
-/// Build IR + linear form and run regalloc, returning a detailed edits dump.
-pub fn regalloc_edits_text(shape: &'static Shape, kind: DecoderKind) -> String {
-    let pipeline_opts = PipelineOptions::from_env();
-    regalloc_edits_text_with_options(shape, kind, &pipeline_opts)
-}
-
 /// Build IR + linear form, compile through the backend, and return a deterministic emission trace.
 pub fn emission_trace_text(shape: &'static Shape, kind: DecoderKind) -> String {
     let pipeline_opts = PipelineOptions::from_env();
@@ -605,23 +590,6 @@ pub fn assembly_text_with_options(
 }
 
 // r[impl compiler.opts.api]
-pub fn regalloc_edit_count_with_options(
-    shape: &'static Shape,
-    kind: DecoderKind,
-    pipeline_opts: &PipelineOptions,
-) -> usize {
-    let module = build_decoder_hir(shape, kind);
-    let mut func = lower_hir_module(&module);
-    run_configured_default_passes(&mut func, pipeline_opts);
-    let linear = crate::linearize::linearize(&mut func);
-    let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-        .unwrap_or_else(|err| panic!("regalloc2 allocation failed while counting edits: {err}"));
-    alloc.functions.iter().map(|f| f.edits.len()).sum()
-}
-
-// r[impl compiler.opts.api]
 pub fn emission_trace_text_with_options(
     shape: &'static Shape,
     kind: DecoderKind,
@@ -631,71 +599,6 @@ pub fn emission_trace_text_with_options(
     decoder
         .emission_trace_text()
         .unwrap_or_else(|err| panic!("failed to format emission trace: {err:?}"))
-}
-
-/// Same as [`regalloc_edits_text`], but with explicit pipeline options.
-pub fn regalloc_edits_text_with_options(
-    shape: &'static Shape,
-    kind: DecoderKind,
-    pipeline_opts: &PipelineOptions,
-) -> String {
-    let module = build_decoder_hir(shape, kind);
-    let mut func = lower_hir_module(&module);
-    run_configured_default_passes(&mut func, pipeline_opts);
-    let linear = crate::linearize::linearize(&mut func);
-    let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints);
-    let alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-        .unwrap_or_else(|err| panic!("regalloc2 allocation failed while formatting edits: {err}"));
-    format_allocated_regalloc_edits(&alloc)
-}
-
-pub(crate) fn format_allocated_regalloc_edits(
-    alloc: &crate::regalloc_engine::AllocatedCfgProgram,
-) -> String {
-    let mut out = String::new();
-    let total_pp_edits: usize = alloc.functions.iter().map(|f| f.edits.len()).sum();
-    let total_edge_edits: usize = alloc.functions.iter().map(|f| f.edge_edits.len()).sum();
-    let _ = std::fmt::Write::write_fmt(
-        &mut out,
-        format_args!(
-            "total_progpoint_edits: {total_pp_edits}\ntotal_edge_edits: {total_edge_edits}\n"
-        ),
-    );
-
-    for func in &alloc.functions {
-        let _ = std::fmt::Write::write_fmt(
-            &mut out,
-            format_args!(
-                "\nlambda @{}:\n  num_spillslots: {}\n  progpoint_edits ({}):\n",
-                func.lambda_id.index(),
-                func.num_spillslots,
-                func.edits.len()
-            ),
-        );
-        for (prog_point, edit) in &func.edits {
-            let _ = std::fmt::Write::write_fmt(
-                &mut out,
-                format_args!("    - {:?}: {:?}\n", prog_point, edit),
-            );
-        }
-
-        let _ = std::fmt::Write::write_fmt(
-            &mut out,
-            format_args!("  edge_edits ({}):\n", func.edge_edits.len()),
-        );
-        for edge in &func.edge_edits {
-            let _ = std::fmt::Write::write_fmt(
-                &mut out,
-                format_args!(
-                    "    - edge e{} pos={:?} move {:?} -> {:?}\n",
-                    edge.edge.0, edge.pos, edge.from, edge.to
-                ),
-            );
-        }
-    }
-
-    out
 }
 
 pub(crate) fn build_decoder_hir(shape: &'static Shape, kind: DecoderKind) -> hir::Module {
