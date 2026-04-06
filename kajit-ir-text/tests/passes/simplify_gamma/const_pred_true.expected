@@ -1,0 +1,17 @@
+state_domains {
+  d0 = cursor
+  d1 = output
+}
+scopes {
+  s0 = lambda_body(@0)
+  s1 = gamma_branch(0) parent s0
+  s2 = gamma_branch(1) parent s0
+}
+lambda @0 @s0 (shape: "test") {
+  region @s0 {
+    args: [%cs, %os]
+    n1 = Const(0x1) [] -> [v0]
+    n3 @s2 = Const(0x2a) [] -> [v2]
+    results: [%cs:arg, %os:arg]
+  }
+}

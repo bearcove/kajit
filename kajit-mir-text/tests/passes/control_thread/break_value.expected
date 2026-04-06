@@ -1,0 +1,16 @@
+cfg_program vregs=4 slots=0 {
+  cfg_func @0 f0 entry=b0 {
+    data_args: []
+    data_results: []
+    block b0 params=[] insts=[i0, i1] term=t0 preds=[] succs=[e0]
+    block b1 params=[] insts=[i3] term=t3 preds=[e0] succs=[]
+    inst i0: v0:gpr = const(0x0)
+    inst i1: v1:gpr = const(0x2a)
+    inst i3: v3:gpr = const(0xff)
+    term t0: branch e0
+    term t1: branch_if v2 -> e1, fallthrough e2
+    term t2: return
+    term t3: return
+    edge e0: b0 -> b1 []
+  }
+}

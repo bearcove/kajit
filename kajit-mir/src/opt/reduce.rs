@@ -664,6 +664,20 @@ pub fn run_named_pass(prog: &mut Program, pass_name: &str) -> bool {
             crate::cfg_mir::dead_code_elimination(prog);
             true
         }
+        "simplify_cfg" => {
+            let mut changed = false;
+            for func in &mut prog.funcs {
+                changed |= crate::opt::simplify_cfg::simplify_cfg(func, &mut prog.vreg_count);
+            }
+            changed
+        }
+        "control_thread" => {
+            let mut changed = false;
+            for func in &mut prog.funcs {
+                changed |= crate::opt::control_thread::control_thread(func, &mut prog.vreg_count);
+            }
+            changed
+        }
         other => {
             eprintln!("[reduce] unknown pass: {}", other);
             false
