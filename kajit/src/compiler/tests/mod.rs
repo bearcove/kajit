@@ -2060,11 +2060,11 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
-    let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(12);
     #[cfg(target_arch = "aarch64")]
-    let reg_2 = regalloc2::PReg::new(20, regalloc2::RegClass::Int);
+    let reg_2 = kajit_mir::regalloc3::machine_inst::PReg(20);
     #[cfg(target_arch = "x86_64")]
-    let reg_2 = regalloc2::PReg::new(13, regalloc2::RegClass::Int);
+    let reg_2 = kajit_mir::regalloc3::machine_inst::PReg(13);
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -2097,11 +2097,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         ],
     };
 
-    let location_map = test_location_map(
-        &[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)],
-        &[],
-        &[],
-    );
+    let location_map = test_location_map(&[(0, reg.0), (1, reg_2.0)], &[], &[]);
     let vars = cfg_value_dwarf_variables(
         &program,
         &location_map,
@@ -2125,11 +2121,9 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
             assert_eq!(locations.len(), 1);
             assert_eq!(locations[0].start, 0x1004);
             assert_eq!(locations[0].end, 0x1008);
-            let dwarf_reg = crate::jit_dwarf::dwarf_register_from_hw_encoding(
-                jit_dwarf_target_arch(),
-                reg.hw_enc() as u8,
-            )
-            .unwrap();
+            let dwarf_reg =
+                crate::jit_dwarf::dwarf_register_from_hw_encoding(jit_dwarf_target_arch(), reg.0)
+                    .unwrap();
             assert_eq!(
                 locations[0].expression,
                 crate::jit_dwarf::expr_reg(dwarf_reg)
@@ -2265,11 +2259,11 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
-    let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(12);
     #[cfg(target_arch = "aarch64")]
-    let reg_2 = regalloc2::PReg::new(20, regalloc2::RegClass::Int);
+    let reg_2 = kajit_mir::regalloc3::machine_inst::PReg(20);
     #[cfg(target_arch = "x86_64")]
-    let reg_2 = regalloc2::PReg::new(13, regalloc2::RegClass::Int);
+    let reg_2 = kajit_mir::regalloc3::machine_inst::PReg(13);
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -2302,11 +2296,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         ],
     };
 
-    let location_map = test_location_map(
-        &[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)],
-        &[],
-        &[],
-    );
+    let location_map = test_location_map(&[(0, reg.0), (1, reg_2.0)], &[], &[]);
     let vars = cfg_value_dwarf_variables(
         &program,
         &location_map,
@@ -2330,11 +2320,9 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
             assert_eq!(locations.len(), 1);
             assert_eq!(locations[0].start, 0x1004);
             assert_eq!(locations[0].end, 0x100c);
-            let dwarf_reg = crate::jit_dwarf::dwarf_register_from_hw_encoding(
-                jit_dwarf_target_arch(),
-                reg.hw_enc() as u8,
-            )
-            .unwrap();
+            let dwarf_reg =
+                crate::jit_dwarf::dwarf_register_from_hw_encoding(jit_dwarf_target_arch(), reg.0)
+                    .unwrap();
             assert_eq!(
                 locations[0].expression,
                 crate::jit_dwarf::expr_reg(dwarf_reg)
@@ -2454,11 +2442,11 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
-    let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(12);
     #[cfg(target_arch = "aarch64")]
-    let reg_2 = regalloc2::PReg::new(20, regalloc2::RegClass::Int);
+    let reg_2 = kajit_mir::regalloc3::machine_inst::PReg(20);
     #[cfg(target_arch = "x86_64")]
-    let reg_2 = regalloc2::PReg::new(13, regalloc2::RegClass::Int);
+    let reg_2 = kajit_mir::regalloc3::machine_inst::PReg(13);
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -2491,11 +2479,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         ],
     };
 
-    let location_map = test_location_map(
-        &[(0, reg.hw_enc() as u8), (1, reg_2.hw_enc() as u8)],
-        &[],
-        &[],
-    );
+    let location_map = test_location_map(&[(0, reg.0), (1, reg_2.0)], &[], &[]);
     let subprogram = cfg_mir_dwarf_variables(
         None,
         &program,
@@ -2806,7 +2790,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
-    let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(12);
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -2830,7 +2814,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         ],
     };
 
-    let location_map = test_location_map(&[(0, reg.hw_enc() as u8)], &[], &[]);
+    let location_map = test_location_map(&[(0, reg.0)], &[], &[]);
     let vars = cfg_value_dwarf_variables(
         &program,
         &location_map,
@@ -2965,7 +2949,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
-    let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(12);
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
             crate::ir_backend::BackendOpDebugInfo {
@@ -3007,11 +2991,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         ],
     };
 
-    let location_map = test_location_map(
-        &[(0, reg.hw_enc() as u8), (1, reg.hw_enc() as u8)],
-        &[],
-        &[],
-    );
+    let location_map = test_location_map(&[(0, reg.0), (1, reg.0)], &[], &[]);
     let vars = cfg_semantic_named_dwarf_variables(
         &program,
         &location_map,
