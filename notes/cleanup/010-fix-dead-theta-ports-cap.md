@@ -1,6 +1,6 @@
 # Fix dead_theta_ports 3-port cap
 
-Limits codegen quality now.
+Limits codegen quality now. **Wait until after 006 (remove cursor ops from IR)** — cursor state threading through thetas changes shape, and this bug may vanish or change.
 
 ## Current state
 

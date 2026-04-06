@@ -93,16 +93,21 @@ Once the cursor is ordinary borrowed data:
 
 ## Execution order
 
-| Step | What | 
-|------|------|
-| 1 | **000 — delete dead code** (clean workspace) |
-| 2 | **001+002 — test harness + golden tests** (safety net) |
-| 3 | **Cherry-pick cursor branch Part 1** onto main (HIR refactoring: 14 commits) |
-| 4 | **Rebase cursor branch Part 2** (backend ABI + regalloc fixes, resolve conflicts from regalloc2 excision) |
-| 5 | **Fix remaining cursor ABI failures** (borrowed_header SIGSEGV, multi_options EOF) |
-| 6 | **Remove cursor ops from IR** — replace with loads/stores/arithmetic through the borrowed cursor struct |
-| 7 | **Remove cursor knowledge from backends** — delete special register handling, sync logic, CTX_* offsets |
-| 8 | **Generalize DeserContext** — make it a user-defined struct, not a compiler-known layout |
-| 9 | **005 — const_fold cleanup** |
-| 10 | **003, 004, 006 — uncap pass bugs** (now against the final IR shape) |
-| 11 | **007, 008, 009 — remaining cleanups** |
+See `notes/cleanup/` for detailed work items:
+
+- `000` delete dead code
+- `001` pass test harness
+- `002` golden tests
+- `003` cherry-pick cursor branch Part 1 (HIR refactoring)
+- `004` rebase cursor branch Part 2 (backend ABI + regalloc fixes)
+- `005` fix cursor ABI failures
+- `006` remove cursor ops from IR
+- `007` remove cursor knowledge from backends
+- `008` generalize DeserContext
+- `009` clean up const_fold
+- `010` fix dead_theta_ports cap (after 006)
+- `011` fix gamma_output_partition compaction (after 005)
+- `012` fix post_unroll_canonicalize cap (after 006)
+- `013` rewrite DCE
+- `014` consolidate shared infrastructure
+- `015` rewrite simplify_gamma

@@ -1,6 +1,6 @@
 # Fix gamma_output_partition compaction
 
-Limits codegen quality now.
+Limits codegen quality now. **Wait until after 005 (fix cursor ABI failures)** — the regalloc hint bug may be the same class of regalloc bug the cursor branch already found and fixed.
 
 ## Current state
 

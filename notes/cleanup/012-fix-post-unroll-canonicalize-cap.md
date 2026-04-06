@@ -1,6 +1,6 @@
 # Fix post_unroll_canonicalize 800-node cap
 
-Limits codegen for large types.
+Limits codegen for large types. **Wait until after 006 (remove cursor ops from IR)** — unrolling cursor-carrying thetas changes once cursor is ordinary data.
 
 ## Current state
 
