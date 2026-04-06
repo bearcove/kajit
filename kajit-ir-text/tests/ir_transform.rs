@@ -5,6 +5,15 @@ use std::path::Path;
 fn run_pass(name: &str, func: &mut kajit_ir::IrFunc) {
     match name {
         "slot2reg" => kajit_ir::slot2reg::slot_to_reg(func),
+        "const_fold" => {
+            kajit_ir::const_fold::const_fold(func);
+        }
+        "simplify_gamma" => {
+            kajit_ir::simplify_gamma::simplify_trivial_gammas(func);
+        }
+        "dead_theta_ports" => {
+            kajit_ir::dead_theta_ports::eliminate_dead_theta_ports(func);
+        }
         "unroll_const_fold" => {
             kajit_ir::unroll_theta::unroll_bounded_thetas(func);
             kajit_ir::const_fold::const_fold(func);
@@ -68,6 +77,5 @@ fn ir_transform_test(path: &Path) -> datatest_stable::Result<()> {
 }
 
 datatest_stable::harness! {
-    { test = ir_transform_test, root = "tests/slot2reg", pattern = r"\.vixen-ir$" },
-    { test = ir_transform_test, root = "tests/unroll_const_fold", pattern = r"\.vixen-ir$" },
+    { test = ir_transform_test, root = "tests/passes", pattern = r"\.vixen-ir$" },
 }

@@ -1472,6 +1472,7 @@ name = "kajit-mir-text"
 version = "0.1.0"
 dependencies = [
  "chumsky",
+ "datatest-stable",
  "kajit-ir",
  "kajit-lir",
  "kajit-mir",
