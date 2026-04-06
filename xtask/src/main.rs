@@ -401,51 +401,10 @@ fn minimize_cfg_mir(args: &[String]) {
         return;
     }
 
-    let text = fs::read_to_string(path).unwrap_or_else(|err| {
-        eprintln!("failed to read {}: {err}", path);
-        std::process::exit(1);
-    });
-    let registry = kajit::known_intrinsic_registry();
-    let program =
-        kajit_mir_text::parse_cfg_mir_with_registry(&text, &registry).unwrap_or_else(|err| {
-            eprintln!("failed to parse CFG-MIR from {}: {err}", path);
-            std::process::exit(1);
-        });
-    let (reduced, stats, interestingness) =
-        kajit_mir::minimize_cfg_program_for_differential(&program, &input).unwrap_or_else(|err| {
-            match err {
-                kajit_mir::MinimizeError::NotInteresting => {
-                    eprintln!(
-                        "seed program is not differentially interesting for input {input_label}"
-                    );
-                }
-                kajit_mir::MinimizeError::Predicate(message) => {
-                    eprintln!("differential minimization failed: {message}");
-                }
-            }
-            std::process::exit(1);
-        });
-
-    eprintln!(
-        "reduced CFG-MIR for input {input_label}: blocks {} -> {}, insts {} -> {}, edges {} -> {}, accepted {} / {}",
-        stats.initial_size.blocks,
-        stats.final_size.blocks,
-        stats.initial_size.insts,
-        stats.final_size.insts,
-        stats.initial_size.edges,
-        stats.final_size.edges,
-        stats.accepted,
-        stats.attempts
-    );
-    eprintln!(
-        "preserved differential signature: field={}, ideal_trap={:?}, post_trap={:?}, ideal_returned={}, post_returned={}",
-        interestingness.field,
-        interestingness.ideal_trap,
-        interestingness.post_trap,
-        interestingness.ideal_returned,
-        interestingness.post_returned
-    );
-    println!("{reduced}");
+    let _ = (path, input, input_label);
+    eprintln!("error: differential minimization was removed (regalloc2 simulator is gone)");
+    eprintln!("use --corpus-test mode or pass-based reduction instead");
+    std::process::exit(1);
 }
 
 fn print_corpus_input(args: &[String]) {

@@ -2359,75 +2359,15 @@ pub(crate) fn render_test_file() -> String {
             println!("KAJIT_CASE_CFG_MIR_END");
         }
 
-        fn maybe_minimize_case_cfg_mir<T>(input: &[u8]) -> bool
+        fn maybe_minimize_case_cfg_mir<T>(_input: &[u8]) -> bool
         where
             for<'input> T: Facet<'input>,
         {
-            let Some(path) = std::env::var_os(MINIMIZE_CFG_MIR_ENV) else {
-                return false;
-            };
-
-            let path = std::path::PathBuf::from(path);
-            let cfg_mir_text = std::fs::read_to_string(&path).unwrap_or_else(|err| {
-                eprintln!("failed to read {}: {err}", path.display());
+            if std::env::var_os(MINIMIZE_CFG_MIR_ENV).is_some() {
+                eprintln!("differential minimization was removed (regalloc2 simulator is gone)");
                 std::process::exit(1);
-            });
-            let registry = kajit::symbol_registry_for_shape(T::SHAPE);
-            let program =
-                kajit_mir_text::parse_cfg_mir_with_registry(&cfg_mir_text, &registry).unwrap_or_else(
-                    |err| {
-                        eprintln!("failed to parse CFG-MIR from {}: {err}", path.display());
-                        std::process::exit(1);
-                    },
-                );
-            let input_label = {
-                let mut hex = String::with_capacity(input.len() * 2);
-                for byte in input {
-                    use core::fmt::Write as _;
-                    write!(&mut hex, "{byte:02x}").expect("writing to String should not fail");
-                }
-                hex
-            };
-            let (reduced, stats, interestingness) =
-                kajit_mir::minimize_cfg_program_for_differential(&program, input).unwrap_or_else(
-                    |err| {
-                        match err {
-                            kajit_mir::MinimizeError::NotInteresting => {
-                                eprintln!(
-                                    "seed program is not differentially interesting for input {input_label}"
-                                );
-                            }
-                            kajit_mir::MinimizeError::Predicate(message) => {
-                                eprintln!("differential minimization failed: {message}");
-                            }
-                        }
-                        std::process::exit(1);
-                    },
-                );
-
-            eprintln!(
-                "reduced CFG-MIR for input {input_label}: blocks {} -> {}, insts {} -> {}, edges {} -> {}, accepted {} / {}",
-                stats.initial_size.blocks,
-                stats.final_size.blocks,
-                stats.initial_size.insts,
-                stats.final_size.insts,
-                stats.initial_size.edges,
-                stats.final_size.edges,
-                stats.accepted,
-                stats.attempts
-            );
-            eprintln!(
-                "preserved differential signature: field={}, ideal_trap={:?}, post_trap={:?}, ideal_returned={}, post_returned={}",
-                interestingness.field,
-                interestingness.ideal_trap,
-                interestingness.post_trap,
-                interestingness.ideal_returned,
-                interestingness.post_returned
-            );
-            println!("KAJIT_CASE_MINIMIZED_CFG_MIR_BEGIN");
-            println!("{reduced}");
-            println!("KAJIT_CASE_MINIMIZED_CFG_MIR_END");
-            true
+            }
+            false
         }
 
         fn debug_cfg_mir_command_from_env() -> Result<kajit_mir::DebugCfgMirCommand, String> {

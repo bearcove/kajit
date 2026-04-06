@@ -609,52 +609,10 @@ fn cmd_compile_reduce(format: &str, ty: &str, mode: &str) {
     eprintln!("test input: {} bytes ({})", input.len(), encode_hex(&input));
 
     match mode {
-        "differential" | "diff" | "all" => {
-            // Use the existing differential minimizer: interpreter vs post-regalloc
-            eprintln!("mode: differential (interpreter vs regalloc simulator)");
-
-            match kajit_mir::minimize_cfg_program_for_differential(&program, &input) {
-                Ok((reduced, stats, witness)) => {
-                    eprintln!(
-                        "\nreduction: {} → {} blocks, {} → {} insts ({} attempts, {} accepted)",
-                        stats.initial_size.blocks,
-                        stats.final_size.blocks,
-                        stats.initial_size.insts,
-                        stats.final_size.insts,
-                        stats.attempts,
-                        stats.accepted,
-                    );
-                    for step in &stats.steps {
-                        eprintln!(
-                            "  {} : {} → {} blocks",
-                            step.strategy, step.before.blocks, step.after.blocks
-                        );
-                    }
-                    eprintln!("witness: divergence on field '{}'", witness.field);
-                    if let Some(trap) = &witness.ideal_trap {
-                        eprintln!("  ideal trap: {:?}", trap);
-                    }
-                    if let Some(trap) = &witness.post_trap {
-                        eprintln!("  post-regalloc trap: {:?}", trap);
-                    }
-
-                    let reduced_text = format!("{reduced}");
-                    let output_path = format!("reduced_{format}_{ty}_differential.cfgmir");
-                    std::fs::write(&output_path, &reduced_text).unwrap_or_else(|e| {
-                        eprintln!("warning: failed to write {output_path}: {e}");
-                    });
-                    eprintln!("wrote: {output_path}");
-                    print!("{reduced_text}");
-                }
-                Err(kajit_mir::MinimizeError::NotInteresting) => {
-                    eprintln!("no differential divergence found — interpreter and regalloc agree");
-                    std::process::exit(0);
-                }
-                Err(kajit_mir::MinimizeError::Predicate(e)) => {
-                    eprintln!("error during reduction: {e}");
-                    std::process::exit(1);
-                }
-            }
+        "differential" | "diff" => {
+            eprintln!("error: differential reduction was removed (regalloc2 simulator is gone)");
+            eprintln!("use pass-based reduction instead: --reduce <pass_name>");
+            std::process::exit(1);
         }
         other => {
             // Interpret as pass name(s) — SSA breakage mode
