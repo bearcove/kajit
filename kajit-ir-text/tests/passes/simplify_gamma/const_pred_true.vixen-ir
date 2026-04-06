@@ -1,25 +1,25 @@
 lambda @0 (shape: "test") {
   region {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x1) [] -> [v0]
     n1 = gamma [
       pred: v0
-      in0: %cs:arg
+      in0: %ms:arg
       in1: %os:arg
     ] {
       branch 0:
         region {
-          args: [%cs, %os]
+          args: [%ms, %os]
           n2 = Const(0xff) [] -> [v1]
-          results: [v1, %cs:arg, %os:arg]
+          results: [v1, %ms:arg, %os:arg]
         }
       branch 1:
         region {
-          args: [%cs, %os]
+          args: [%ms, %os]
           n3 = Const(0x2a) [] -> [v2]
-          results: [v2, %cs:arg, %os:arg]
+          results: [v2, %ms:arg, %os:arg]
         }
-    } -> [v3, %cs, %os]
-    results: [%cs:n1, %os:n1]
+    } -> [v3, %ms, %os]
+    results: [%ms:n1, %os:n1]
   }
 }

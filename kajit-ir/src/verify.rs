@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    CURSOR_STATE_DOMAIN, DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind,
+    DebugScopeId, IrFunc, IrOp, LambdaId, MEMORY_STATE_DOMAIN, NodeId, NodeKind,
     OUTPUT_STATE_DOMAIN, OutputRef, PortKind, PortSource, RegionArgRef, RegionId, StateDomainId,
 };
 
@@ -318,14 +318,14 @@ fn state_source(source: PortSource, func: &IrFunc) -> StateProducer {
 }
 
 pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
-    if !state_domain_exists(func, CURSOR_STATE_DOMAIN) {
-        return Err(VerifyError::InvalidStateDomain {
-            domain: CURSOR_STATE_DOMAIN,
-        });
-    }
     if !state_domain_exists(func, OUTPUT_STATE_DOMAIN) {
         return Err(VerifyError::InvalidStateDomain {
             domain: OUTPUT_STATE_DOMAIN,
+        });
+    }
+    if !state_domain_exists(func, MEMORY_STATE_DOMAIN) {
+        return Err(VerifyError::InvalidStateDomain {
+            domain: MEMORY_STATE_DOMAIN,
         });
     }
 
@@ -551,7 +551,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         .or_default()
                         .entry(producer)
                         .or_default();
-                    if domain == CURSOR_STATE_DOMAIN
+                    if domain == MEMORY_STATE_DOMAIN
                         && matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. }))
                     {
                         usage.error_exit_sinks += 1;
@@ -599,7 +599,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     uses: usage.chain_uses,
                 });
             }
-            if domain == CURSOR_STATE_DOMAIN && usage.error_exit_sinks > 1 {
+            if domain == MEMORY_STATE_DOMAIN && usage.error_exit_sinks > 1 {
                 return Err(VerifyError::StateErrorExitSinkViolation {
                     producer,
                     sinks: usage.error_exit_sinks,
@@ -630,7 +630,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         uses: usage.chain_uses,
                     });
                 }
-                if domain == CURSOR_STATE_DOMAIN && usage.error_exit_sinks > 1 {
+                if domain == MEMORY_STATE_DOMAIN && usage.error_exit_sinks > 1 {
                     return Err(VerifyError::StateErrorExitSinkViolation {
                         producer,
                         sinks: usage.error_exit_sinks,
@@ -701,20 +701,20 @@ mod tests {
         let mut func = builder.finish();
         let root = func.root_body();
         let first = func.regions[root].nodes[0];
-        let result_id = func.regions[root].results[0];
-        // Point result at first read_from_slot's cursor state output (index 1).
+        let result_id = func.regions[root].results[1];
+        // Point result at first read_from_slot's memory state output (index 1).
         // This creates a fork: both the second read_from_slot and this result
-        // use the first read_from_slot's cursor state output.
+        // use the first read_from_slot's memory state output.
         func.region_results[result_id].source = PortSource::Node(OutputRef {
             node: first,
             index: 1,
         });
 
         let err = verify(&func).expect_err("verifier should reject state forks");
-        assert!(matches!(
-            err,
-            VerifyError::StateChainViolation { uses: 2, .. }
-        ));
+        assert!(
+            matches!(err, VerifyError::StateChainViolation { uses: 2, .. }),
+            "expected StateChainViolation with uses: 2, got: {err:?}"
+        );
     }
 
     #[test]

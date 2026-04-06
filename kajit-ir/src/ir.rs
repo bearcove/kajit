@@ -175,14 +175,10 @@ pub struct StateDomain {
 /// A state-domain identifier used for generic state tokens.
 pub type StateDomainId = Id<StateDomain>;
 
-/// The built-in cursor state domain.
-pub const CURSOR_STATE_DOMAIN: StateDomainId = StateDomainId::new(0);
 /// The built-in output state domain.
-pub const OUTPUT_STATE_DOMAIN: StateDomainId = StateDomainId::new(1);
+pub const OUTPUT_STATE_DOMAIN: StateDomainId = StateDomainId::new(0);
 /// The built-in computed-address memory state domain.
-pub const MEMORY_STATE_DOMAIN: StateDomainId = StateDomainId::new(2);
-/// The built-in cursor state domain name.
-pub const CURSOR_STATE_DOMAIN_NAME: &str = "cursor";
+pub const MEMORY_STATE_DOMAIN: StateDomainId = StateDomainId::new(1);
 /// The built-in output state domain name.
 pub const OUTPUT_STATE_DOMAIN_NAME: &str = "output";
 /// The built-in computed-address memory state domain name.
@@ -412,8 +408,6 @@ impl PortKind {
     }
 }
 
-/// The built-in cursor state token kind.
-pub const CURSOR_STATE_PORT: PortKind = PortKind::State(CURSOR_STATE_DOMAIN);
 /// The built-in output state token kind.
 pub const OUTPUT_STATE_PORT: PortKind = PortKind::State(OUTPUT_STATE_DOMAIN);
 /// The built-in computed-address memory state token kind.
@@ -801,8 +795,6 @@ pub enum Effect {
     Barrier,
 }
 
-/// The built-in cursor effect kind.
-pub const CURSOR_EFFECT: Effect = Effect::Domain(CURSOR_STATE_DOMAIN);
 /// The built-in output effect kind.
 pub const OUTPUT_EFFECT: Effect = Effect::Domain(OUTPUT_STATE_DOMAIN);
 /// The built-in computed-address memory effect kind.
@@ -813,12 +805,6 @@ pub const MEMORY_EFFECT: Effect = Effect::Domain(MEMORY_STATE_DOMAIN);
 pub struct IrOpMetadata {
     /// Coarse effect class for scheduling/analysis.
     pub effect: Effect,
-    /// Static cursor advancement in bytes, if known.
-    ///
-    /// `Some(0)` means the op preserves the cursor position.
-    /// `None` means the op either does not participate in the cursor chain, or
-    /// the advancement is dynamic/unknown.
-    pub cursor_advance: Option<u32>,
     /// Whether the op has any observable side effects and must not be removed
     /// solely based on dead outputs.
     pub has_side_effects: bool,
@@ -828,7 +814,7 @@ pub struct IrOpMetadata {
 impl IrOp {
     /// Returns pass metadata for this op.
     pub fn metadata(&self) -> IrOpMetadata {
-        let (effect, cursor_advance) = match self {
+        let effect = match self {
             // Pure ops
             IrOp::Const { .. }
             | IrOp::DataAddr { .. }
@@ -850,36 +836,30 @@ impl IrOp {
             | IrOp::ZigzagDecode { .. }
             | IrOp::SignExtend { .. }
             | IrOp::SlotAddr { .. }
-            | IrOp::CallPure { .. } => (Effect::Pure, None),
+            | IrOp::CallPure { .. }
+            | IrOp::Nop
+            | IrOp::Identity => Effect::Pure,
 
-            IrOp::CallEffect { .. } => (Effect::Domain(MEMORY_STATE_DOMAIN), None),
-
-            IrOp::WriteToSlot { .. } | IrOp::ReadFromSlot { .. } | IrOp::ErrorExit { .. } => {
-                (Effect::Domain(CURSOR_STATE_DOMAIN), None)
-            }
+            // Memory ops (slots, computed addresses, calls with effects)
+            IrOp::CallEffect { .. }
+            | IrOp::WriteToSlot { .. }
+            | IrOp::ReadFromSlot { .. }
+            | IrOp::ErrorExit { .. }
+            | IrOp::StoreToAddr { .. }
+            | IrOp::LoadFromAddr { .. } => Effect::Domain(MEMORY_STATE_DOMAIN),
 
             // Output ops
             IrOp::WriteToField { .. }
             | IrOp::ReadFromField { .. }
             | IrOp::SaveOutPtr
-            | IrOp::SetOutPtr => (Effect::Domain(OUTPUT_STATE_DOMAIN), None),
-
-            // Computed-address memory ops
-            IrOp::StoreToAddr { .. } | IrOp::LoadFromAddr { .. } => {
-                (Effect::Domain(MEMORY_STATE_DOMAIN), None)
-            }
+            | IrOp::SetOutPtr => Effect::Domain(OUTPUT_STATE_DOMAIN),
 
             // Barrier ops
-            IrOp::CallIntrinsic { .. } => (Effect::Barrier, None),
-
-            // No-op (removed by optimization)
-            IrOp::Nop => (Effect::Pure, Some(0)),
-            IrOp::Identity => (Effect::Pure, Some(0)),
+            IrOp::CallIntrinsic { .. } => Effect::Barrier,
         };
 
         IrOpMetadata {
             effect,
-            cursor_advance,
             has_side_effects: !matches!(effect, Effect::Pure),
         }
     }
@@ -887,11 +867,6 @@ impl IrOp {
     /// Returns the effect classification of this op.
     pub fn effect(&self) -> Effect {
         self.metadata().effect
-    }
-
-    /// Returns the static cursor advancement in bytes when known.
-    pub fn cursor_advance(&self) -> Option<u32> {
-        self.metadata().cursor_advance
     }
 
     /// Returns whether this op has side effects.
@@ -962,14 +937,14 @@ pub struct IrFunc {
 impl IrFunc {
     pub fn builtin_state_domains() -> Arena<StateDomain> {
         let mut domains = Arena::new();
-        let cursor = domains.push(StateDomain {
-            name: CURSOR_STATE_DOMAIN_NAME.to_owned(),
-        });
         let output = domains.push(StateDomain {
             name: OUTPUT_STATE_DOMAIN_NAME.to_owned(),
         });
-        debug_assert_eq!(cursor, CURSOR_STATE_DOMAIN);
         debug_assert_eq!(output, OUTPUT_STATE_DOMAIN);
+        let memory = domains.push(StateDomain {
+            name: MEMORY_STATE_DOMAIN_NAME.to_owned(),
+        });
+        debug_assert_eq!(memory, MEMORY_STATE_DOMAIN);
         domains
     }
 
@@ -1453,14 +1428,14 @@ impl<'a> RegionBuilder<'a> {
         self.region
     }
 
-    /// Current cursor state token source.
-    pub fn cursor_state(&self) -> PortSource {
-        self.state_source(CURSOR_STATE_DOMAIN)
-    }
-
     /// Current output state token source.
     pub fn output_state(&self) -> PortSource {
         self.state_source(OUTPUT_STATE_DOMAIN)
+    }
+
+    /// Current memory state token source.
+    pub fn memory_state(&self) -> PortSource {
+        self.state_source(MEMORY_STATE_DOMAIN)
     }
 
     /// Access the underlying IrFunc (for fresh_vreg, fresh_slot, etc.).
@@ -1756,15 +1731,15 @@ impl<'a> RegionBuilder<'a> {
                     source: src,
                 },
                 InputPort {
-                    kind: CURSOR_STATE_PORT,
-                    source: self.state_source(CURSOR_STATE_DOMAIN),
+                    kind: MEMORY_STATE_PORT,
+                    source: self.state_source(MEMORY_STATE_DOMAIN),
                 },
             ],
-            outputs: vec![Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope)],
+            outputs: vec![Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope)],
             kind: NodeKind::Simple(IrOp::WriteToSlot { slot }),
         });
         self.set_state_source(
-            CURSOR_STATE_DOMAIN,
+            MEMORY_STATE_DOMAIN,
             PortSource::Node(OutputRef { node, index: 0 }),
         );
     }
@@ -1777,17 +1752,17 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
+                kind: MEMORY_STATE_PORT,
+                source: self.state_source(MEMORY_STATE_DOMAIN),
             }],
             outputs: vec![
                 data_out,
-                Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope),
+                Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope),
             ],
             kind: NodeKind::Simple(IrOp::ReadFromSlot { slot }),
         });
         self.set_state_source(
-            CURSOR_STATE_DOMAIN,
+            MEMORY_STATE_DOMAIN,
             PortSource::Node(OutputRef { node, index: 1 }),
         );
         PortSource::Node(OutputRef { node, index: 0 })
@@ -1990,8 +1965,8 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
+                kind: MEMORY_STATE_PORT,
+                source: self.state_source(MEMORY_STATE_DOMAIN),
             }],
             outputs: vec![],
             kind: NodeKind::Simple(IrOp::ErrorExit { code }),
@@ -2159,7 +2134,7 @@ impl<'a> RegionBuilder<'a> {
     ///
     /// `loop_vars`: initial values for loop-carried variables.
     /// `build_body`: called with a [`RegionBuilder`] for the body.
-    ///   The body region receives `[loop_vars..., cursor_state, output_state]`
+    ///   The body region receives `[loop_vars..., output_state, memory_state]`
     ///   as arguments.
     ///   Must call `set_results` with `[predicate, loop_vars..., ...]`.
     ///   Predicate 0 = exit, nonzero = continue.
@@ -2774,11 +2749,11 @@ impl IrFunc {
                             write!(f, "n{}.{}", oref.node.index(), oref.index)
                         }
                     }
-                    PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => {
-                        write!(f, "%cs:n{}", oref.node.index())
-                    }
                     PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => {
                         write!(f, "%os:n{}", oref.node.index())
+                    }
+                    PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => {
+                        write!(f, "%ms:n{}", oref.node.index())
                     }
                     PortKind::State(domain) => {
                         write!(f, "%s{}:n{}", domain.index(), oref.node.index())
@@ -2795,11 +2770,11 @@ impl IrFunc {
                     .unwrap_or(0);
                 match arg.kind {
                     PortKind::Data => write!(f, "arg{}", display_index),
-                    PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => {
-                        write!(f, "%cs:arg")
-                    }
                     PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => {
                         write!(f, "%os:arg")
+                    }
+                    PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => {
+                        write!(f, "%ms:arg")
                     }
                     PortKind::State(domain) => write!(f, "%s{}:arg", domain.index()),
                 }
@@ -2821,8 +2796,8 @@ impl IrFunc {
                     write!(f, "?")?;
                 }
             }
-            PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => write!(f, "%cs")?,
             PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => write!(f, "%os")?,
+            PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => write!(f, "%ms")?,
             PortKind::State(domain) => write!(f, "%s{}", domain.index())?,
         }
 
@@ -2841,8 +2816,8 @@ impl IrFunc {
     ) -> fmt::Result {
         match arg.kind {
             PortKind::Data => write!(f, "arg{index}"),
-            PortKind::State(domain) if domain == CURSOR_STATE_DOMAIN => write!(f, "%cs"),
             PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => write!(f, "%os"),
+            PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => write!(f, "%ms"),
             PortKind::State(domain) => write!(f, "%s{}", domain.index()),
         }
     }
@@ -2940,11 +2915,11 @@ mod tests {
         let slot = builder.alloc_slot();
 
         let body = builder.func.root_body();
-        let initial_cs = PortSource::RegionArg(RegionArgRef {
+        let initial_os = PortSource::RegionArg(RegionArgRef {
             region: body,
             arg: builder.func.regions[body].args[0],
         });
-        let initial_os = PortSource::RegionArg(RegionArgRef {
+        let initial_ms = PortSource::RegionArg(RegionArgRef {
             region: body,
             arg: builder.func.regions[body].args[1],
         });
@@ -2953,18 +2928,18 @@ mod tests {
             let mut rb = builder.root_region();
 
             // Check initial state.
-            assert_eq!(rb.cursor_state(), initial_cs);
             assert_eq!(rb.output_state(), initial_os);
+            assert_eq!(rb.memory_state(), initial_ms);
 
-            // read_from_slot (cursor-domain op)
+            // read_from_slot (memory-domain op)
             let data = rb.read_from_slot(slot);
-            let after_read_cs = rb.cursor_state();
-            assert_ne!(after_read_cs, initial_cs);
+            let after_read_ms = rb.memory_state();
+            assert_ne!(after_read_ms, initial_ms);
             assert_eq!(rb.output_state(), initial_os); // output unchanged
 
-            // write_to_field
+            // write_to_field (output-domain op)
             rb.write_to_field(data, 0, Width::W4);
-            assert_eq!(rb.cursor_state(), after_read_cs); // cursor unchanged by output op
+            assert_eq!(rb.memory_state(), after_read_ms); // memory unchanged by output op
             assert_ne!(rb.output_state(), initial_os); // output updated
 
             rb.set_results(&[]);
@@ -3036,9 +3011,7 @@ mod tests {
     }
 
     #[test]
-    fn op_metadata_cursor_advance_and_side_effects() {
-        assert_eq!(IrOp::Const { value: 1 }.cursor_advance(), None);
-
+    fn op_metadata_side_effects() {
         assert!(!IrOp::Const { value: 1 }.has_side_effects());
         assert!(
             !IrOp::CallPure {

@@ -1,16 +1,16 @@
 state_domains {
-  d0 = cursor
-  d1 = output
+  d0 = output
+  d1 = memory
 }
 scopes {
   s0 = lambda_body(@0)
 }
 lambda @0 @s0 (shape: "test") {
   region @s0 {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x5) [] -> [v0]
     n1 = Const(0x6) [] -> [v1]
     n2 = Mul [v0, v1] -> [v2]
-    results: [%cs:arg, %os:arg]
+    results: [%ms:arg, %os:arg]
   }
 }

@@ -1,6 +1,6 @@
 state_domains {
-  d0 = cursor
-  d1 = output
+  d0 = output
+  d1 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -8,20 +8,20 @@ scopes {
 }
 lambda @0 @s0 (shape: "test") {
   region @s0 {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x0) [] -> [v0]
     n1 = Const(0xa) [] -> [v1]
-    n2 = theta(max=10) [v0, v1, %cs:arg, %os:arg] {
+    n2 = theta(max=10) [v0, v1, %ms:arg, %os:arg] {
       region @s1 {
-        args: [arg0, arg1, %cs, %os]
+        args: [arg0, arg1, %ms, %os]
         n3 = Const(0x1) [] -> [v2]
         n4 = Add [arg0, v2] -> [v3]
         n5 = Const(0xa) [] -> [v4]
         n6 = CmpEq [v3, v4] -> [v5]
         n7 = Add [arg1, v2] -> [v6]
-        results: [v5, v3, v6, %cs:arg, %os:arg]
+        results: [v5, v3, v6, %ms:arg, %os:arg]
       }
-    } -> [v7, v8, %cs, %os]
-    results: [%cs:n2, %os:n2]
+    } -> [v7, v8, %ms, %os]
+    results: [%ms:n2, %os:n2]
   }
 }

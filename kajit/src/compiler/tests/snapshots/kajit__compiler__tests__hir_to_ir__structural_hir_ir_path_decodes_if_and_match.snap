@@ -3,9 +3,8 @@ source: kajit/src/compiler/tests/hir_to_ir.rs
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
-  d0 = cursor
-  d1 = output
-  d2 = memory
+  d0 = output
+  d1 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -16,56 +15,54 @@ scopes {
 }
 lambda @0 @s0 (shape: "branchy_animal", output_size: 8) {
   region @s0 {
-    args: [arg0, %cs, %os, %s2]
-    n1 = WriteToSlot(0) [arg0, %cs:arg] -> [%cs]
+    args: [arg0, %os, %ms]
+    n1 = WriteToSlot(0) [arg0, %ms:arg] -> [%ms]
     n2 = Const(0x1) [] -> [v0]
-    n3 = WriteToSlot(1) [v0, %cs:n1] -> [%cs]
-    n4 = ReadFromSlot(1) [%cs:n3] -> [v1, %cs]
+    n3 = WriteToSlot(1) [v0, %ms:n1] -> [%ms]
+    n4 = ReadFromSlot(1) [%ms:n3] -> [v1, %ms]
     n9 = gamma [
       pred: v1
-      in0: %cs:n4
-      in1: %os:arg
-      in2: %s2:arg
+      in0: %os:arg
+      in1: %ms:n4
     ] {
       branch 0:
         region @s1 {
-          args: [%cs, %os, %s2]
+          args: [%os, %ms]
           n5 = Const(0x0) [] -> [v2]
           n6 = WriteToField(offset=0, W1) [v2, %os:arg] -> [%os]
-          results: [%cs:arg, %os:n6, %s2:arg]
+          results: [%os:n6, %ms:arg]
         }
       branch 1:
         region @s2 {
-          args: [%cs, %os, %s2]
+          args: [%os, %ms]
           n7 = Const(0x1) [] -> [v3]
           n8 = WriteToField(offset=0, W1) [v3, %os:arg] -> [%os]
-          results: [%cs:arg, %os:n8, %s2:arg]
+          results: [%os:n8, %ms:arg]
         }
-    } -> [%cs, %os, %s2]
+    } -> [%os, %ms]
     n10 = Const(0x1) [] -> [v4]
-    n11 = WriteToSlot(2) [v4, %cs:n9] -> [%cs]
-    n12 = ReadFromSlot(2) [%cs:n11] -> [v5, %cs]
+    n11 = WriteToSlot(2) [v4, %ms:n9] -> [%ms]
+    n12 = ReadFromSlot(2) [%ms:n11] -> [v5, %ms]
     n17 = gamma [
       pred: v5
-      in0: %cs:n12
-      in1: %os:n9
-      in2: %s2:n9
+      in0: %os:n9
+      in1: %ms:n12
     ] {
       branch 0:
         region @s3 {
-          args: [%cs, %os, %s2]
+          args: [%os, %ms]
           n13 = Const(0x7) [] -> [v6]
           n14 = WriteToField(offset=4, W4) [v6, %os:arg] -> [%os]
-          results: [%cs:arg, %os:n14, %s2:arg]
+          results: [%os:n14, %ms:arg]
         }
       branch 1:
         region @s4 {
-          args: [%cs, %os, %s2]
+          args: [%os, %ms]
           n15 = Const(0x2a) [] -> [v7]
           n16 = WriteToField(offset=4, W4) [v7, %os:arg] -> [%os]
-          results: [%cs:arg, %os:n16, %s2:arg]
+          results: [%os:n16, %ms:arg]
         }
-    } -> [%cs, %os, %s2]
-    results: [%cs:n17, %os:n17, %s2:n17]
+    } -> [%os, %ms]
+    results: [%os:n17, %ms:n17]
   }
 }

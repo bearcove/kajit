@@ -1,38 +1,38 @@
 lambda @0 (shape: "test") {
   region {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x0) [] -> [v0]
-    n1 = WriteToSlot(0) [v0, %cs:arg] -> [%cs]
-    n10 = theta [%cs:n1, %os:arg] {
+    n1 = WriteToSlot(0) [v0, %ms:arg] -> [%ms]
+    n10 = theta [%ms:n1, %os:arg] {
       region {
-        args: [%cs, %os]
+        args: [%ms, %os]
         n2 = Const(0x1) [] -> [v1]
         n9 = gamma [
           pred: v1
-          in0: %cs:arg
+          in0: %ms:arg
           in1: %os:arg
         ] {
           branch 0:
             region {
-              args: [%cs, %os]
-              results: [%cs:arg, %os:arg]
+              args: [%ms, %os]
+              results: [%ms:arg, %os:arg]
             }
           branch 1:
             region {
-              args: [%cs, %os]
+              args: [%ms, %os]
               n3 = Const(0x1) [] -> [v2]
-              n4 = ReadFromSlot(0) [%cs:arg] -> [v3, %cs]
+              n4 = ReadFromSlot(0) [%ms:arg] -> [v3, %ms]
               n5 = Add [v3, v2] -> [v4]
-              n6 = WriteToSlot(0) [v4, %cs:n4] -> [%cs]
-              results: [%cs:n6, %os:arg]
+              n6 = WriteToSlot(0) [v4, %ms:n4] -> [%ms]
+              results: [%ms:n6, %os:arg]
             }
-        } -> [%cs, %os]
+        } -> [%ms, %os]
         n7 = Const(0x0) [] -> [v5]
-        results: [v5, %cs:n9, %os:n9]
+        results: [v5, %ms:n9, %os:n9]
       }
-    } -> [%cs, %os]
-    n8 = ReadFromSlot(0) [%cs:n10] -> [v6, %cs]
+    } -> [%ms, %os]
+    n8 = ReadFromSlot(0) [%ms:n10] -> [v6, %ms]
     n11 = WriteToField(offset=0, W4) [v6, %os:n10] -> [%os]
-    results: [%cs:n8, %os:n11]
+    results: [%ms:n8, %os:n11]
   }
 }

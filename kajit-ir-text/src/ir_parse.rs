@@ -9,8 +9,8 @@ use chumsky::prelude::*;
 
 use kajit_ir::ErrorCode;
 use kajit_ir::{
-    Arena, CURSOR_STATE_DOMAIN, CURSOR_STATE_DOMAIN_NAME, DebugScope, DebugScopeId, DebugScopeKind,
-    InputPort, IntrinsicFn, IntrinsicRegistry, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind,
+    Arena, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry,
+    IrFunc, IrOp, LambdaId, MEMORY_STATE_DOMAIN, MEMORY_STATE_DOMAIN_NAME, Node, NodeId, NodeKind,
     OUTPUT_STATE_DOMAIN, OUTPUT_STATE_DOMAIN_NAME, OutputPort, OutputRef, PortKind, PortSource,
     Region, RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, StateDomain, StateDomainId,
     VReg, Width,
@@ -23,9 +23,9 @@ use kajit_ir::{
 enum AstSource {
     /// `v0`, `v42` — data value from a node output
     VReg(u32),
-    /// `%cs:n5`, `%os:n3`, `%s2:n8` — state from node output
+    /// `%ms:n5`, `%os:n3`, `%s2:n8` — state from node output
     StateNode { domain: u32, node: u32 },
-    /// `%cs:arg`, `%os:arg`, `%s2:arg` — state from region argument
+    /// `%ms:arg`, `%os:arg`, `%s2:arg` — state from region argument
     StateArg(u32),
     /// `arg0`, `arg1` — data value from region argument
     RegionArg(u16),
@@ -38,7 +38,7 @@ enum AstSource {
 enum AstOutput {
     /// `v0` — data output with vreg
     VReg(u32),
-    /// `%cs`, `%os`, `%s2` — state output
+    /// `%ms`, `%os`, `%s2` — state output
     State(u32),
     /// `?` — data output without vreg assignment
     Unknown,
@@ -97,7 +97,7 @@ struct AstRegion {
 #[derive(Debug, Clone)]
 enum AstRegionArg {
     Data(u16),  // arg0, arg1, ...
-    State(u32), // %cs, %os, %s2
+    State(u32), // %ms, %os, %s2
 }
 
 #[derive(Debug, Clone)]
@@ -169,8 +169,8 @@ fn uint16<'src>() -> impl Parser<'src, &'src str, u16, Extra<'src>> + Clone {
 
 fn state_domain_ref<'src>() -> impl Parser<'src, &'src str, u32, Extra<'src>> + Clone {
     choice((
-        just("%cs").to(CURSOR_STATE_DOMAIN.index() as u32),
         just("%os").to(OUTPUT_STATE_DOMAIN.index() as u32),
+        just("%ms").to(MEMORY_STATE_DOMAIN.index() as u32),
         just("%s").ignore_then(uint32()),
     ))
 }
@@ -496,7 +496,7 @@ enum AstOp {
     },
 }
 
-/// Parse a region arg: `%cs`, `%os`, `arg0`, `arg1`, etc.
+/// Parse a region arg: `%ms`, `%os`, `arg0`, `arg1`, etc.
 fn region_arg<'src>() -> impl Parser<'src, &'src str, AstRegionArg, Extra<'src>> + Clone {
     let state = state_domain_ref().map(AstRegionArg::State);
     let data = just("arg").ignore_then(uint16()).map(AstRegionArg::Data);
@@ -902,18 +902,18 @@ fn build_explicit_state_domains(
         });
     }
 
-    if func.state_domains.len() <= OUTPUT_STATE_DOMAIN.index() {
+    if func.state_domains.len() <= MEMORY_STATE_DOMAIN.index() {
         return Err(ParseError {
-            message: "explicit state domains must define d0 = cursor and d1 = output".to_string(),
+            message: "explicit state domains must define d0 = output and d1 = memory".to_string(),
         });
     }
 
-    if func.state_domains[CURSOR_STATE_DOMAIN].name != CURSOR_STATE_DOMAIN_NAME
-        || func.state_domains[OUTPUT_STATE_DOMAIN].name != OUTPUT_STATE_DOMAIN_NAME
+    if func.state_domains[OUTPUT_STATE_DOMAIN].name != OUTPUT_STATE_DOMAIN_NAME
+        || func.state_domains[MEMORY_STATE_DOMAIN].name != MEMORY_STATE_DOMAIN_NAME
     {
         return Err(ParseError {
             message: format!(
-                "explicit state domains must define d0 = {CURSOR_STATE_DOMAIN_NAME} and d1 = {OUTPUT_STATE_DOMAIN_NAME}"
+                "explicit state domains must define d0 = {OUTPUT_STATE_DOMAIN_NAME} and d1 = {MEMORY_STATE_DOMAIN_NAME}"
             ),
         });
     }
@@ -1614,10 +1614,10 @@ mod tests {
         let input = r#"
 lambda @0 (shape: "u8") {
   region {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x2a) [] -> [v0]
     n1 = WriteToField(offset=0, W4) [v0, %os:arg] -> [%os]
-    results: [%cs:arg, %os:n1]
+    results: [%ms:arg, %os:n1]
   }
 }
 "#;
@@ -1630,7 +1630,7 @@ lambda @0 (shape: "u8") {
 
         let root_body = func.root_body();
         let region = &func.regions[root_body];
-        assert_eq!(region.args.len(), 2); // %cs, %os
+        assert_eq!(region.args.len(), 2); // %ms, %os
         assert_eq!(region.nodes.len(), 2); // Const, WriteToField
         assert_eq!(region.results.len(), 2);
     }
@@ -1640,12 +1640,12 @@ lambda @0 (shape: "u8") {
         let input = r#"
 lambda @0 (shape: "u8") {
   region {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x2a) [] -> [v0]
     n1 = Const(0x10) [] -> [v1]
     n2 = Add [v0, v1] -> [v2]
     n3 = WriteToField(offset=0, W8) [v2, %os:arg] -> [%os]
-    results: [%cs:arg, %os:n3]
+    results: [%ms:arg, %os:n3]
   }
 }
 "#;
@@ -1670,28 +1670,28 @@ lambda @0 (shape: "u8") {
         let input = r#"
 lambda @0 (shape: "u8") {
   region {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x0) [] -> [v0]
     n1 = gamma [
       pred: v0
-      in0: %cs:arg
+      in0: %ms:arg
       in1: %os:arg
     ] {
       branch 0:
         region {
-          args: [%cs, %os]
+          args: [%ms, %os]
           n2 = Const(0x2a) [] -> [v1]
-          results: [v1, %cs:arg, %os:arg]
+          results: [v1, %ms:arg, %os:arg]
         }
       branch 1:
         region {
-          args: [%cs, %os]
+          args: [%ms, %os]
           n3 = Const(0x63) [] -> [v2]
-          results: [v2, %cs:arg, %os:arg]
+          results: [v2, %ms:arg, %os:arg]
         }
-    } -> [v3, %cs, %os]
+    } -> [v3, %ms, %os]
     n4 = WriteToField(offset=0, W4) [v3, %os:n1] -> [%os]
-    results: [%cs:n1, %os:n4]
+    results: [%ms:n1, %os:n4]
   }
 }
 "#;
@@ -1799,15 +1799,15 @@ lambda @0 (shape: "u8") {
     fn round_trip_generic_state_domain() {
         let input = r#"
 state_domains {
-  d0 = cursor
-  d1 = output
+  d0 = output
+  d1 = memory
   d2 = planner
 }
 lambda @0 (shape: "u8") {
   region {
-    args: [%cs, %os, %s2]
+    args: [%ms, %os, %s2]
     n0 = Const(0x2a) [] -> [v0]
-    results: [%cs:arg, %os:arg, %s2:arg]
+    results: [%ms:arg, %os:arg, %s2:arg]
   }
 }
 "#;
@@ -1832,8 +1832,8 @@ lambda @0 (shape: "u8") {
         let input = r#"
 lambda @0 (shape: "u8") {
   region {
-    args: [%cs, %os, %s2]
-    results: [%cs:arg, %os:arg, %s2:arg]
+    args: [%ms, %os, %s2]
+    results: [%ms:arg, %os:arg, %s2:arg]
   }
 }
 "#;
@@ -1852,9 +1852,9 @@ lambda @0 (shape: "u8") {
         let input = r#"
 lambda @0 (shape: "u8") {
   region {
-    args: [%cs, %os]
-    n0 = CallIntrinsic(@nonexistent, field_offset=0) [%cs:arg, %os:arg] -> [%cs, %os]
-    results: [%cs:n0, %os:n0]
+    args: [%ms, %os]
+    n0 = CallIntrinsic(@nonexistent, field_offset=0) [%ms:arg, %os:arg] -> [%ms, %os]
+    results: [%ms:n0, %os:n0]
   }
 }
 "#;
@@ -1973,8 +1973,8 @@ lambda @0 (shape: "u8") {
     fn parse_and_round_trip_explicit_debug_scopes() {
         let input = r#"
 state_domains {
-  d0 = cursor
-  d1 = output
+  d0 = output
+  d1 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -1982,7 +1982,7 @@ scopes {
 }
 lambda @0 @s0 (shape: "u8") {
   region @s0 {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n1 @s1 = Const(0x2a) [] -> [v0@s0]
     results: [v0]
   }
@@ -2049,7 +2049,7 @@ scopes {
 }
 lambda @0 @s0 (shape: "u8") {
   region @s0 {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n1 @s7 = Const(0x2a) [] -> [v0]
     results: [v0]
   }
@@ -2073,8 +2073,8 @@ scopes {
 }
 lambda @0 @s0 (shape: "u8") {
   region @s0 {
-    args: [%cs, %os]
-    results: [%cs:arg, %os:arg]
+    args: [%ms, %os]
+    results: [%ms:arg, %os:arg]
   }
 }
 "#;

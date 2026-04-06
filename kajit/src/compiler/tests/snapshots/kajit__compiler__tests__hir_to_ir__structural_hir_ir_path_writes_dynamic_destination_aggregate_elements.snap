@@ -3,49 +3,48 @@ source: kajit/src/compiler/tests/hir_to_ir.rs
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
-  d0 = cursor
-  d1 = output
-  d2 = memory
+  d0 = output
+  d1 = memory
 }
 scopes {
   s0 = lambda_body(@0)
 }
 lambda @0 @s0 (shape: "dynamic_aggregate_destination_summary", output_size: 48) {
   region @s0 {
-    args: [arg0, %cs, %os, %s2]
-    n1 = WriteToSlot(0) [arg0, %cs:arg] -> [%cs]
+    args: [arg0, %os, %ms]
+    n1 = WriteToSlot(0) [arg0, %ms:arg] -> [%ms]
     n2 = Const(0x15) [] -> [v0]
-    n3 = WriteToSlot(1) [v0, %cs:n1] -> [%cs]
+    n3 = WriteToSlot(1) [v0, %ms:n1] -> [%ms]
     n4 = Const(0x16) [] -> [v1]
-    n5 = WriteToSlot(2) [v1, %cs:n3] -> [%cs]
+    n5 = WriteToSlot(2) [v1, %ms:n3] -> [%ms]
     n6 = Const(0x1) [] -> [v2]
-    n7 = WriteToSlot(3) [v2, %cs:n5] -> [%cs]
-    n8 = ReadFromSlot(3) [%cs:n7] -> [v3, %cs]
+    n7 = WriteToSlot(3) [v2, %ms:n5] -> [%ms]
+    n8 = ReadFromSlot(3) [%ms:n7] -> [v3, %ms]
     n9 = SaveOutPtr [%os:arg] -> [v4, %os]
     n10 = Const(0x10) [] -> [v5]
     n11 = Mul [v3, v5] -> [v6]
     n12 = Add [v4, v6] -> [v7]
-    n13 = ReadFromSlot(1) [%cs:n8] -> [v8, %cs]
-    n14 = StoreToAddr(W8) [v7, v8, %s2:arg] -> [%s2]
-    n15 = ReadFromSlot(2) [%cs:n13] -> [v9, %cs]
+    n13 = ReadFromSlot(1) [%ms:n8] -> [v8, %ms]
+    n14 = StoreToAddr(W8) [v7, v8, %ms:n13] -> [%ms]
+    n15 = ReadFromSlot(2) [%ms:n14] -> [v9, %ms]
     n16 = Const(0x8) [] -> [v10]
     n17 = Add [v7, v10] -> [v11]
-    n18 = StoreToAddr(W8) [v11, v9, %s2:n14] -> [%s2]
+    n18 = StoreToAddr(W8) [v11, v9, %ms:n15] -> [%ms]
     n19 = Const(0x1) [] -> [v12]
     n20 = WriteToField(offset=0, W8) [v12, %os:n9] -> [%os]
     n21 = Const(0x2) [] -> [v13]
     n22 = WriteToField(offset=8, W8) [v13, %os:n20] -> [%os]
-    n23 = ReadFromSlot(3) [%cs:n15] -> [v14, %cs]
+    n23 = ReadFromSlot(3) [%ms:n18] -> [v14, %ms]
     n24 = SaveOutPtr [%os:n22] -> [v15, %os]
     n25 = Const(0x10) [] -> [v16]
     n26 = Mul [v14, v16] -> [v17]
     n27 = Add [v15, v17] -> [v18]
-    n28 = LoadFromAddr(W8) [v18, %s2:n18] -> [v19, %s2]
+    n28 = LoadFromAddr(W8) [v18, %ms:n23] -> [v19, %ms]
     n29 = WriteToField(offset=32, W8) [v19, %os:n24] -> [%os]
     n30 = Const(0x8) [] -> [v20]
     n31 = Add [v18, v20] -> [v21]
-    n32 = LoadFromAddr(W8) [v21, %s2:n28] -> [v22, %s2]
+    n32 = LoadFromAddr(W8) [v21, %ms:n28] -> [v22, %ms]
     n33 = WriteToField(offset=40, W8) [v22, %os:n29] -> [%os]
-    results: [%cs:n23, %os:n33, %s2:n32]
+    results: [%os:n33, %ms:n32]
   }
 }

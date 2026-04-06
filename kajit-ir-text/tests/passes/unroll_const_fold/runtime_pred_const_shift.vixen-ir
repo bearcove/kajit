@@ -1,6 +1,6 @@
 state_domains {
-  d0 = cursor
-  d1 = output
+  d0 = output
+  d1 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -8,23 +8,23 @@ scopes {
 }
 lambda @0 @s0 (shape: "u8") {
   region @s0 {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x0) [] -> [v0]
     n1 = Const(0x0) [] -> [v1]
     n3 = Const(0x1) [] -> [v2]
-    n4 = theta(max=3) [v0, v1, v2, %cs:arg, %os:arg] {
+    n4 = theta(max=3) [v0, v1, v2, %ms:arg, %os:arg] {
       region @s1 {
-        args: [arg0, arg1, arg2, %cs, %os]
+        args: [arg0, arg1, arg2, %ms, %os]
         n5 = Const(0x7) [] -> [v3]
         n6 = Const(0x1) [] -> [v4]
         n7 = Mul [arg0, v3] -> [v5]
         n8 = Shl [arg2, v5] -> [v6]
         n9 = Or [arg1, v6] -> [v7]
         n10 = Add [arg0, v4] -> [v8]
-        results: [arg2, v8, v7, arg2, %cs:arg, %os:arg]
+        results: [arg2, v8, v7, arg2, %ms:arg, %os:arg]
       }
-    } -> [v9, v10, v11, %cs, %os]
+    } -> [v9, v10, v11, %ms, %os]
     n11 = WriteToField(offset=0, W4) [v10, %os:n4] -> [%os]
-    results: [%cs:n4, %os:n11]
+    results: [%ms:n4, %os:n11]
   }
 }

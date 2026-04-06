@@ -1,27 +1,27 @@
 lambda @0 (shape: "test") {
   region {
-    args: [%cs, %os]
+    args: [%ms, %os]
     n0 = Const(0x0) [] -> [v0]
     n1 = Const(0x64) [] -> [v1]
-    n2 = WriteToSlot(0) [v0, %cs:arg] -> [%cs]
-    n3 = WriteToSlot(1) [v1, %cs:n2] -> [%cs]
-    n12 = theta [%cs:n3, %os:arg] {
+    n2 = WriteToSlot(0) [v0, %ms:arg] -> [%ms]
+    n3 = WriteToSlot(1) [v1, %ms:n2] -> [%ms]
+    n12 = theta [%ms:n3, %os:arg] {
       region {
-        args: [%cs, %os]
-        n4 = ReadFromSlot(0) [%cs:arg] -> [v2, %cs]
-        n5 = ReadFromSlot(1) [%cs:n4] -> [v3, %cs]
+        args: [%ms, %os]
+        n4 = ReadFromSlot(0) [%ms:arg] -> [v2, %ms]
+        n5 = ReadFromSlot(1) [%ms:n4] -> [v3, %ms]
         n6 = Const(0x1) [] -> [v4]
         n7 = Add [v2, v4] -> [v5]
         n8 = Sub [v3, v4] -> [v6]
-        n9 = WriteToSlot(0) [v5, %cs:n5] -> [%cs]
-        n10 = WriteToSlot(1) [v6, %cs:n9] -> [%cs]
-        results: [v6, %cs:n10, %os:arg]
+        n9 = WriteToSlot(0) [v5, %ms:n5] -> [%ms]
+        n10 = WriteToSlot(1) [v6, %ms:n9] -> [%ms]
+        results: [v6, %ms:n10, %os:arg]
       }
-    } -> [%cs, %os]
-    n13 = ReadFromSlot(0) [%cs:n12] -> [v7, %cs]
-    n14 = ReadFromSlot(1) [%cs:n13] -> [v8, %cs]
+    } -> [%ms, %os]
+    n13 = ReadFromSlot(0) [%ms:n12] -> [v7, %ms]
+    n14 = ReadFromSlot(1) [%ms:n13] -> [v8, %ms]
     n15 = WriteToField(offset=0, W4) [v7, %os:n12] -> [%os]
     n16 = WriteToField(offset=4, W4) [v8, %os:n15] -> [%os]
-    results: [%cs:n14, %os:n16]
+    results: [%ms:n14, %os:n16]
   }
 }
