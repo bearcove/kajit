@@ -24,7 +24,7 @@ impl fmt::Display for RegallocEngineError {
 impl std::error::Error for RegallocEngineError {}
 
 /// Run regalloc3 (native allocator) over canonical CFG MIR.
-/// Returns native regalloc3 types (no conversion to regalloc2).
+/// Returns native regalloc3 allocation types.
 pub fn allocate_cfg_program_regalloc3_native(
     program: &cfg_mir::Program,
 ) -> Result<AllocatedCfgProgramRa3, RegallocEngineError> {

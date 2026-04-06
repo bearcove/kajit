@@ -5541,7 +5541,7 @@ lambda @0 (shape: "test") {
     fn linearize_theta_shared_predicate_and_loopvar() {
         // Theta where a gamma output is used both as predicate AND as a
         // loop-carried variable result — the pattern from the real array
-        // decoder that triggers v_N from v_N in regalloc2.
+        // decoder that triggers v_N from v_N in register allocation.
         let input = r#"
 lambda @0 (shape: "test") {
   region {

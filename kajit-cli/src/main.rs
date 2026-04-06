@@ -619,7 +619,7 @@ fn cmd_compile_reduce(format: &str, ty: &str, mode: &str) {
 
     match mode {
         "differential" | "diff" => {
-            eprintln!("error: differential reduction was removed (regalloc2 simulator is gone)");
+            eprintln!("error: differential reduction is not currently supported");
             eprintln!("use pass-based reduction instead: --reduce <pass_name>");
             std::process::exit(1);
         }

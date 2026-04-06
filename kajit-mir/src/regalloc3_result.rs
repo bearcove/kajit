@@ -1,4 +1,4 @@
-//! Regalloc3 allocation results (native types, no regalloc2 conversion).
+//! Regalloc3 allocation results.
 
 use crate::cfg_mir::{self};
 use crate::regalloc3::{linear_scan, machine_inst::PReg};

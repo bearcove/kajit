@@ -1,4 +1,4 @@
-//! x86_64 backend for regalloc3 (native types, no regalloc2 conversion).
+//! x86_64 backend (regalloc3 native types).
 
 mod calls;
 mod context;

@@ -402,7 +402,7 @@ fn minimize_cfg_mir(args: &[String]) {
     }
 
     let _ = (path, input, input_label);
-    eprintln!("error: differential minimization was removed (regalloc2 simulator is gone)");
+    eprintln!("error: differential minimization is not currently supported");
     eprintln!("use --corpus-test mode or pass-based reduction instead");
     std::process::exit(1);
 }

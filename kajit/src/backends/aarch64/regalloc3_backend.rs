@@ -1,4 +1,4 @@
-//! aarch64 backend for regalloc3 (native types, no regalloc2 conversion).
+//! aarch64 backend (regalloc3 native types).
 
 use kajit_emit::aarch64::{Condition, LabelId, Reg, Width};
 use kajit_mir::cfg_mir::{self, Function, Inst, Terminator};

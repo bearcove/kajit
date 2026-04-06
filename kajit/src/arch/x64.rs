@@ -61,7 +61,6 @@ pub struct EmitCtx {
 
 impl EmitCtx {
     /// Create a legacy EmitCtx with fixed register assignments.
-    /// Used by the regalloc2 backend.
     pub fn new(extra_stack: u32) -> Self {
         let frame_size = (BASE_FRAME + extra_stack + 15) & !15;
         let mut emit = Emitter::new();

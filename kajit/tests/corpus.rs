@@ -401,7 +401,7 @@ where
     for<'input> T: Facet<'input>,
 {
     if std::env::var_os(MINIMIZE_CFG_MIR_ENV).is_some() {
-        eprintln!("differential minimization was removed (regalloc2 simulator is gone)");
+        eprintln!("differential minimization is not currently supported");
         eprintln!("use pass-based reduction instead");
         std::process::exit(1);
     }
