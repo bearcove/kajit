@@ -137,6 +137,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     // We can rematerialize Const(C) inside the body and remove the port.
     let mut dead_ports: Vec<(usize, u64)> = Vec::new();
 
+    #[allow(clippy::needless_range_loop)]
     for p in 0..loop_var_count {
         let input_source = func.nodes[theta_id].inputs[p].source;
         let Some(const_val) = resolve_to_const(func, &input_source) else {

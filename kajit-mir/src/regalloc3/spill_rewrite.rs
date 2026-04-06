@@ -104,32 +104,31 @@ fn rewrite_instructions(
                 .iter()
                 .any(|op| matches!(alloc.allocations.get(&op.vreg), Some(Allocation::Spill)));
 
-            let defs_spilled = match &inst.op {
-                op => {
-                    // Extract def vreg (if any)
-                    use kajit_lir::LinearOp;
-                    let def_vreg = match op {
-                        LinearOp::Const { dst, .. }
-                        | LinearOp::BinOp { dst, .. }
-                        | LinearOp::UnaryOp { dst, .. }
-                        | LinearOp::Copy { dst, .. }
-                        | LinearOp::ReadBytes { dst, .. }
-                        | LinearOp::PeekByte { dst }
-                        | LinearOp::SaveCursor { dst }
-                        | LinearOp::SaveInputEnd { dst }
-                        | LinearOp::ReadFromField { dst, .. }
-                        | LinearOp::SaveOutPtr { dst }
-                        | LinearOp::SlotAddr { dst, .. }
-                        | LinearOp::LoadFromAddr { dst, .. } => Some(*dst),
-                        LinearOp::CallIntrinsic { dst, .. } => *dst,
-                        _ => None,
-                    };
+            let op = &inst.op;
+            let defs_spilled = {
+                // Extract def vreg (if any)
+                use kajit_lir::LinearOp;
+                let def_vreg = match op {
+                    LinearOp::Const { dst, .. }
+                    | LinearOp::BinOp { dst, .. }
+                    | LinearOp::UnaryOp { dst, .. }
+                    | LinearOp::Copy { dst, .. }
+                    | LinearOp::ReadBytes { dst, .. }
+                    | LinearOp::PeekByte { dst }
+                    | LinearOp::SaveCursor { dst }
+                    | LinearOp::SaveInputEnd { dst }
+                    | LinearOp::ReadFromField { dst, .. }
+                    | LinearOp::SaveOutPtr { dst }
+                    | LinearOp::SlotAddr { dst, .. }
+                    | LinearOp::LoadFromAddr { dst, .. } => Some(*dst),
+                    LinearOp::CallIntrinsic { dst, .. } => *dst,
+                    _ => None,
+                };
 
-                    if let Some(vreg) = def_vreg {
-                        matches!(alloc.allocations.get(&vreg), Some(Allocation::Spill))
-                    } else {
-                        false
-                    }
+                if let Some(vreg) = def_vreg {
+                    matches!(alloc.allocations.get(&vreg), Some(Allocation::Spill))
+                } else {
+                    false
                 }
             };
 

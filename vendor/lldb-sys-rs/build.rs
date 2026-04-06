@@ -46,14 +46,10 @@ fn run_llvm_config(llvm_config: &str, arg: &str) -> Result<String, String> {
 }
 
 fn resolve_llvm_config() -> Option<String> {
-    for llvm_config in llvm_config_candidates() {
-        if run_llvm_config(&llvm_config, "--includedir").is_ok()
-            && run_llvm_config(&llvm_config, "--libdir").is_ok()
-        {
-            return Some(llvm_config);
-        }
-    }
-    None
+    llvm_config_candidates().into_iter().find(|llvm_config| {
+        run_llvm_config(llvm_config, "--includedir").is_ok()
+            && run_llvm_config(llvm_config, "--libdir").is_ok()
+    })
 }
 
 fn get_llvm_output(llvm_config: &str, arg: &str) -> Option<String> {
@@ -208,10 +204,13 @@ fn match_libname(name: &str) -> Option<String> {
 #[cfg(test)]
 #[test]
 fn test_match_libname() {
-    assert_eq!(match_libname("liblldb.so"), Some("lldb"));
-    assert_eq!(match_libname("liblldb-3.8.so"), Some("lldb-3.8"));
+    assert_eq!(match_libname("liblldb.so"), Some("lldb".to_string()));
+    assert_eq!(
+        match_libname("liblldb-3.8.so"),
+        Some("lldb-3.8".to_string())
+    );
     assert_eq!(match_libname("liblldbIntelFeatures.so"), None);
-    assert_eq!(match_libname("liblldb.lib"), Some("liblldb"));
+    assert_eq!(match_libname("liblldb.lib"), Some("liblldb".to_string()));
 }
 
 fn get_compiler_config() -> Build {

@@ -2757,9 +2757,7 @@ pub(crate) fn render_test_file() -> String {
             ir_text: String,
             linear_text: String,
             cfg_text: String,
-            edits: usize,
             edits_text: String,
-            emission_text: String,
             asm_text: String,
             opt_timeline: Vec<(String, String)>,
         }
@@ -2772,9 +2770,7 @@ pub(crate) fn render_test_file() -> String {
             let hir_text = kajit::debug_hir_text(shape, kind);
             let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
             let linear_text = kajit::debug_linear_ir_text(shape, kind);
-            let edits = kajit::regalloc_edit_count(shape, kind);
             let edits_text = kajit::regalloc_edits_text(shape, kind);
-            let emission_text = kajit::emission_trace_text(shape, kind);
             #[cfg(target_arch = "aarch64")]
             let asm_text = kajit::assembly_text(shape, kind);
             #[cfg(not(target_arch = "aarch64"))]
@@ -2785,9 +2781,7 @@ pub(crate) fn render_test_file() -> String {
                 ir_text,
                 linear_text,
                 cfg_text,
-                edits,
                 edits_text,
-                emission_text,
                 asm_text,
                 opt_timeline,
             }

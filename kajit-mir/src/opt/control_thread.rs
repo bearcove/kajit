@@ -241,10 +241,7 @@ fn thread_one_const_edge(
     debug: bool,
 ) -> Option<BlockId> {
     // Phase 1: Find a threadable action (read-only scan)
-    let action = find_thread_action(func, const_vals, skip_blocks);
-    let Some(action) = action else {
-        return None;
-    };
+    let action = find_thread_action(func, const_vals, skip_blocks)?;
 
     if debug {
         let succ_to = func.edges[action.target_edge.index()].to;

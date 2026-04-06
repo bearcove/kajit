@@ -1184,6 +1184,7 @@ const MAX_BLOCKERS_WIDTH: usize = 2;
 /// colors, try to recolor one to match the other. If direct recoloring is
 /// blocked by an interfering neighbor, recursively try to displace the blocker
 /// to a different color (bounded by depth and width limits).
+#[allow(clippy::too_many_arguments)]
 fn coalesce_phase(
     func: &Function,
     liveness: &LivenessInfo,
@@ -1351,6 +1352,7 @@ fn coalesce_phase(
 ///
 /// On success, `coloring` is updated and true is returned.
 /// On failure, all speculative changes are rolled back and false is returned.
+#[allow(clippy::too_many_arguments)]
 fn try_recolor_recursive(
     vreg: VReg,
     desired_color: PReg,
@@ -1362,7 +1364,7 @@ fn try_recolor_recursive(
     def_inst_idx: &HashMap<VReg, u32>,
     dom: &DominanceInfo,
     def_block: &HashMap<VReg, BlockId>,
-    spilled: &BTreeSet<VReg>,
+    _spilled: &BTreeSet<VReg>,
     must_be_callee_saved: &HashSet<VReg>,
     callee_saved_set: &HashSet<PReg>,
     allocatable: &[PReg],
@@ -1472,7 +1474,7 @@ fn try_recolor_recursive(
                 def_inst_idx,
                 dom,
                 def_block,
-                spilled,
+                _spilled,
                 must_be_callee_saved,
                 callee_saved_set,
                 allocatable,

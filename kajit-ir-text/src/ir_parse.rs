@@ -1631,10 +1631,6 @@ mod tests {
     use super::*;
     use kajit_ir::{DebugScope, DebugScopeId, DebugScopeKind, IrBuilder, Width};
 
-    fn test_shape() -> &'static facet::Shape {
-        <u8 as facet::Facet>::SHAPE
-    }
-
     #[test]
     fn parse_simple_read_write() {
         let input = r#"

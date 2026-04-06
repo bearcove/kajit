@@ -358,6 +358,7 @@ mod tests {
         assert!(matches!(moves[0], MoveOp::MoveToTemp { .. }));
 
         // Rest should be regular moves
+        #[allow(clippy::needless_range_loop)]
         for i in 1..4 {
             assert!(matches!(moves[i], MoveOp::Move { .. }));
         }

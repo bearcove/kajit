@@ -3,6 +3,10 @@ use facet::Facet;
 use proptest::arbitrary::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+#[cfg(target_arch = "aarch64")]
+use yaxpeax_arm::armv8::a64::InstDecoder;
 #[cfg(target_arch = "x86_64")]
 use yaxpeax_x86::amd64::InstDecoder;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -559,7 +563,7 @@ fn maybe_wait_for_debugger() {
 }
 #[cfg(target_arch = "aarch64")]
 fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
-    use yaxpeax_arch::{Decoder, U8Reader};
+    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
     use yaxpeax_arm::armv8::a64::InstDecoder;
     let decoder = InstDecoder::default();
     let mut reader = U8Reader::new(code);
@@ -605,7 +609,7 @@ fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
 fn disassemble_code(_code: &[u8], _base_addr: usize) -> Vec<String> {
     vec!["(disassembly not supported on this architecture)".to_string()]
 }
-fn maybe_show_postcard_asm<T>(_encoded: &[u8]) -> bool
+fn maybe_show_postcard_asm<T>(encoded: &[u8]) -> bool
 where
     for<'input> T: Facet<'input> + serde::de::DeserializeOwned,
 {
@@ -771,9 +775,7 @@ struct CodegenArtifacts {
     ir_text: String,
     linear_text: String,
     cfg_text: String,
-    edits: usize,
     edits_text: String,
-    emission_text: String,
     asm_text: String,
     opt_timeline: Vec<(String, String)>,
 }
@@ -785,9 +787,7 @@ where
     let hir_text = kajit::debug_hir_text(shape, kind);
     let (ir_text, cfg_text) = kajit::debug_ir_and_cfg_mir_text(shape, kind);
     let linear_text = kajit::debug_linear_ir_text(shape, kind);
-    let edits = kajit::regalloc_edit_count(shape, kind);
     let edits_text = kajit::regalloc_edits_text(shape, kind);
-    let emission_text = kajit::emission_trace_text(shape, kind);
     #[cfg(target_arch = "aarch64")]
     let asm_text = kajit::assembly_text(shape, kind);
     #[cfg(not(target_arch = "aarch64"))]
@@ -798,9 +798,7 @@ where
         ir_text,
         linear_text,
         cfg_text,
-        edits,
         edits_text,
-        emission_text,
         asm_text,
         opt_timeline,
     }
@@ -980,9 +978,7 @@ mod postcard {
             a_i64: -1_000_000_000_000,
             a_i128: -18_446_744_073_709_551_621i128,
             a_isize: -12345,
-            #[expect(clippy::approx_constant)]
             a_f32: 3.14,
-            #[expect(clippy::approx_constant)]
             a_f64: 2.718281828459045,
             a_char: 'ß',
             a_name: "hello".into(),
@@ -1686,9 +1682,7 @@ mod prop {
             a_i64: -1_000_000_000_000,
             a_i128: -18_446_744_073_709_551_621i128,
             a_isize: -12345,
-            #[expect(clippy::approx_constant)]
             a_f32: 3.14,
-            #[expect(clippy::approx_constant)]
             a_f64: 2.718281828459045,
             a_char: 'ß',
             a_name: "hello".into(),
@@ -2000,4 +1994,6 @@ mod postcard_input {
         assert_postcard_input_err_code::<Animal>(b"c", kajit::context::ErrorCode::UnknownVariant);
     }
 }
-mod panics {}
+mod panics {
+    use super::*;
+}

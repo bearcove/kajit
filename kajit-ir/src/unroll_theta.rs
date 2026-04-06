@@ -740,6 +740,7 @@ fn build_unrolled_cascade(
     // Gamma outputs: one per result from each branch (they must match)
     let gamma_output_count = updated_values.len();
     let mut gamma_outputs = Vec::new();
+    #[allow(clippy::needless_range_loop)]
     for i in 0..gamma_output_count {
         let kind = match &updated_values[i] {
             PortSource::Node(out) => func.nodes[out.node].outputs[out.index as usize].kind,

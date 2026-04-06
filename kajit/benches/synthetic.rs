@@ -9,6 +9,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 #[allow(unused_imports)]
 use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
+#[cfg(target_arch = "aarch64")]
+use yaxpeax_arm::armv8::a64::InstDecoder;
 #[cfg(target_arch = "x86_64")]
 use yaxpeax_x86::amd64::InstDecoder;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -478,22 +480,22 @@ fn register_bench_case<T>(
             println!("{line}");
         }
         println!();
-        if enable_postcard_kajit
-            && let Ok(decoder) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        if enable_postcard_kajit {
+            if let Ok(decoder) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard)
-            }))
-        {
-            let code = decoder.code();
-            let entry = decoder.entry_offset();
-            let base = code.as_ptr() as usize;
-            println!(
-                "=== {postcard_prefix}/kajit/deser ({} bytes) ===",
-                code.len()
-            );
-            for line in disassemble_code(&code[entry..], base + entry) {
-                println!("{line}");
+            })) {
+                let code = decoder.code();
+                let entry = decoder.entry_offset();
+                let base = code.as_ptr() as usize;
+                println!(
+                    "=== {postcard_prefix}/kajit/deser ({} bytes) ===",
+                    code.len()
+                );
+                for line in disassemble_code(&code[entry..], base + entry) {
+                    println!("{line}");
+                }
+                println!();
             }
-            println!();
         }
         return;
     }
@@ -718,9 +720,7 @@ fn main() {
             a_i64: -1_000_000_000_000,
             a_i128: -18_446_744_073_709_551_621i128,
             a_isize: -12345,
-            #[expect(clippy::approx_constant)]
             a_f32: 3.14,
-            #[expect(clippy::approx_constant)]
             a_f64: 2.718281828459045,
             a_char: 'ß',
             a_name: "hello".into(),

@@ -427,6 +427,7 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
             unsafe {
                 let mut buf = [0u8; 8];
                 core::ptr::copy_nonoverlapping(addr, buf.as_mut_ptr(), w);
+                #[allow(clippy::needless_range_loop)]
                 for i in 0..w {
                     value |= (buf[i] as u64) << (i * 8);
                 }

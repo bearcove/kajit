@@ -3180,6 +3180,7 @@ impl<'a> Linearizer<'a> {
                     }
                 } else {
                     // Top level: direct 1:1 mapping
+                    #[allow(clippy::needless_range_loop)]
                     for i in 0..ds_data_output_count {
                         let src = &ds_node.inputs[i + 1];
                         if src.kind != PortKind::Data {
@@ -3778,16 +3779,6 @@ impl<'a> Linearizer<'a> {
             return None;
         }
         Some(*gamma_node)
-    }
-
-    /// Linearize all nodes in a region EXCEPT the specified node.
-    fn linearize_region_except(&mut self, region_id: RegionId, except_node: NodeId) {
-        let region = &self.func.regions[region_id];
-        for &nid in &region.nodes {
-            if nid != except_node {
-                self.linearize_node(nid);
-            }
-        }
     }
 
     /// Check if a region's ONLY code path is an error exit (no normal return).
@@ -4687,17 +4678,6 @@ fn assign_vregs(func: &mut IrFunc) {
             }
         }
     }
-}
-
-/// A level in a gamma cascade: one iteration body + its exit predicate.
-struct CascadeLevel {
-    /// The gamma node at this level
-    gamma_node: NodeId,
-    /// The "exit" branch region (branch 0, passthrough)
-    #[allow(dead_code)]
-    exit_region: RegionId,
-    /// The "continue" branch region (branch 1, contains body + maybe next gamma)
-    continue_region: RegionId,
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
