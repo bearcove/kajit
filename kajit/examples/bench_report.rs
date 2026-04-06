@@ -145,10 +145,10 @@ fn sh(prog: &str, args: &[&str]) -> String {
 fn cpu_name() -> String {
     if let Ok(info) = std::fs::read_to_string("/proc/cpuinfo") {
         for line in info.lines() {
-            if line.starts_with("model name") {
-                if let Some(val) = line.split(':').nth(1) {
-                    return val.trim().to_string();
-                }
+            if line.starts_with("model name")
+                && let Some(val) = line.split(':').nth(1)
+            {
+                return val.trim().to_string();
             }
         }
     }
@@ -356,10 +356,10 @@ fn detect_frame_size_bytes(insts: &[String]) -> Option<u32> {
     #[cfg(target_arch = "aarch64")]
     {
         for inst in insts {
-            if let Some(rest) = inst.strip_prefix("sub sp, sp, #") {
-                if let Some(bytes) = parse_imm_u32(rest) {
-                    return Some(bytes);
-                }
+            if let Some(rest) = inst.strip_prefix("sub sp, sp, #")
+                && let Some(bytes) = parse_imm_u32(rest)
+            {
+                return Some(bytes);
             }
         }
     }

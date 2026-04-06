@@ -172,10 +172,6 @@ impl EmitCtx {
     /// - x20 = cached input_end
     /// - x21 = out pointer
     /// - x22 = ctx pointer
-    pub fn begin_func(&mut self) -> (u32, LabelId) {
-        self.begin_func_with_config(&PrologueConfig::default())
-    }
-
     pub fn begin_func_with_config(&mut self, config: &PrologueConfig) -> (u32, LabelId) {
         let error_exit = self.emit.new_label();
         let entry = self.emit.current_offset();
@@ -269,10 +265,6 @@ impl EmitCtx {
     /// Emit the success epilogue and error exit for the current function.
     ///
     /// `error_exit` must be the label returned by the corresponding `begin_func` call.
-    pub fn end_func(&mut self, error_exit: LabelId) {
-        self.end_func_with_config(error_exit, &PrologueConfig::default());
-    }
-
     pub fn end_func_with_config(&mut self, error_exit: LabelId, config: &PrologueConfig) {
         let frame_size = self.frame_size;
         let base = if self.is_leaf {

@@ -8,8 +8,8 @@ use kajit_mir::regalloc3_result::{AllocatedCfgFunctionRa3, AllocatedCfgProgramRa
 use crate::arch::EmitCtx;
 use crate::context::{CTX_INPUT_END, CTX_INPUT_PTR};
 use crate::harness::{
-    compute_edge_source_locations, compute_inst_source_locations, AllocationMap, LocationMap,
-    VRegLocation,
+    AllocationMap, LocationMap, VRegLocation, compute_edge_source_locations,
+    compute_inst_source_locations,
 };
 use crate::ir_backend::LinearBackendResult;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
@@ -308,8 +308,7 @@ impl<'a> EmitContext<'a> {
         if !self.edge_has_moves(edge_id) {
             return target_label;
         }
-        self
-            .edge_trampoline_labels
+        self.edge_trampoline_labels
             .entry(edge_id)
             .or_insert_with(|| (self.ectx.new_label(), self.ectx.current_source_location()))
             .0
@@ -381,7 +380,9 @@ impl<'a> EmitContext<'a> {
             let dst = self.resolve_vreg_to_loc(arg.target);
 
             match (src, dst) {
-                (Some(s), Some(d)) if s != d => { deps.insert(d, s); }
+                (Some(s), Some(d)) if s != d => {
+                    deps.insert(d, s);
+                }
                 _ => {} // identity or dead
             }
         }
@@ -408,15 +409,24 @@ impl<'a> EmitContext<'a> {
             let saved = match cycle_dst {
                 EdgeLoc::Reg(rd) => {
                     // Save register to X17 (reserved scratch)
-                    self.ectx.emit.emit_mov_reg(Width::X64, Reg::X17, rd).expect("mov save");
+                    self.ectx
+                        .emit
+                        .emit_mov_reg(Width::X64, Reg::X17, rd)
+                        .expect("mov save");
                     EdgeLoc::Reg(Reg::X17)
                 }
                 EdgeLoc::Stack(off) => {
                     // Save stack slot to an edge temp slot via X16
                     let tmp_off = self.edge_tmp_off(tmp_count);
                     tmp_count += 1;
-                    self.ectx.emit.emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, off).expect("ldr");
-                    self.ectx.emit.emit_str_imm(Width::X64, Reg::X16, Reg::SP, tmp_off).expect("str");
+                    self.ectx
+                        .emit
+                        .emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, off)
+                        .expect("ldr");
+                    self.ectx
+                        .emit
+                        .emit_str_imm(Width::X64, Reg::X16, Reg::SP, tmp_off)
+                        .expect("str");
                     EdgeLoc::Stack(tmp_off)
                 }
             };
@@ -454,7 +464,10 @@ impl<'a> EmitContext<'a> {
             }
             EdgeLoc::Stack(off) => {
                 self.emit_load_u64(Reg::X16, value);
-                self.ectx.emit.emit_str_imm(Width::X64, Reg::X16, Reg::SP, off).expect("str");
+                self.ectx
+                    .emit
+                    .emit_str_imm(Width::X64, Reg::X16, Reg::SP, off)
+                    .expect("str");
             }
         }
     }
@@ -467,14 +480,22 @@ impl<'a> EmitContext<'a> {
                 ectx.emit.emit_mov_reg(Width::X64, rd, rs).expect("mov");
             }
             (EdgeLoc::Reg(rs), EdgeLoc::Stack(off)) => {
-                ectx.emit.emit_str_imm(Width::X64, rs, Reg::SP, off).expect("str");
+                ectx.emit
+                    .emit_str_imm(Width::X64, rs, Reg::SP, off)
+                    .expect("str");
             }
             (EdgeLoc::Stack(off), EdgeLoc::Reg(rd)) => {
-                ectx.emit.emit_ldr_imm(Width::X64, rd, Reg::SP, off).expect("ldr");
+                ectx.emit
+                    .emit_ldr_imm(Width::X64, rd, Reg::SP, off)
+                    .expect("ldr");
             }
             (EdgeLoc::Stack(src_off), EdgeLoc::Stack(dst_off)) => {
-                ectx.emit.emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, src_off).expect("ldr");
-                ectx.emit.emit_str_imm(Width::X64, Reg::X16, Reg::SP, dst_off).expect("str");
+                ectx.emit
+                    .emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, src_off)
+                    .expect("ldr");
+                ectx.emit
+                    .emit_str_imm(Width::X64, Reg::X16, Reg::SP, dst_off)
+                    .expect("str");
             }
         }
     }
@@ -516,11 +537,11 @@ impl<'a> EmitContext<'a> {
         match &inst.op {
             LinearOp::Copy { dst, src } => {
                 // Elide copy when src and dst are in the same register
-                if let (Some(sp), Some(dp)) = (self.preg_for_vreg(*src), self.preg_for_vreg(*dst)) {
-                    if sp == dp {
-                        self.current_inst = None;
-                        return; // nop
-                    }
+                if let (Some(sp), Some(dp)) = (self.preg_for_vreg(*src), self.preg_for_vreg(*dst))
+                    && sp == dp
+                {
+                    self.current_inst = None;
+                    return; // nop
                 }
                 let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                 self.store_to_vreg(*dst, src_reg);
@@ -1027,34 +1048,34 @@ impl<'a> EmitContext<'a> {
         }
 
         // Try to fold a small constant rhs into an immediate-form instruction
-        if let Some(imm) = self.small_const(rhs) {
-            if matches!(kind, BinOpKind::Add | BinOpKind::Sub) {
-                let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X16);
-                let result_reg = if let Some(preg) = self.preg_for_vreg(dst) {
-                    self.preg_to_reg(preg)
-                } else {
-                    Reg::X11
-                };
-                match kind {
-                    BinOpKind::Add => {
-                        self.ectx
-                            .emit
-                            .emit_add_imm(Width::X64, result_reg, lhs_reg, imm, false)
-                            .expect("add imm");
-                    }
-                    BinOpKind::Sub => {
-                        self.ectx
-                            .emit
-                            .emit_sub_imm(Width::X64, result_reg, lhs_reg, imm, false)
-                            .expect("sub imm");
-                    }
-                    _ => unreachable!(),
+        if let Some(imm) = self.small_const(rhs)
+            && matches!(kind, BinOpKind::Add | BinOpKind::Sub)
+        {
+            let lhs_reg = self.reg_for_vreg_with_temp(lhs, Reg::X16);
+            let result_reg = if let Some(preg) = self.preg_for_vreg(dst) {
+                self.preg_to_reg(preg)
+            } else {
+                Reg::X11
+            };
+            match kind {
+                BinOpKind::Add => {
+                    self.ectx
+                        .emit
+                        .emit_add_imm(Width::X64, result_reg, lhs_reg, imm, false)
+                        .expect("add imm");
                 }
-                if result_reg == Reg::X11 {
-                    self.store_to_vreg(dst, result_reg);
+                BinOpKind::Sub => {
+                    self.ectx
+                        .emit
+                        .emit_sub_imm(Width::X64, result_reg, lhs_reg, imm, false)
+                        .expect("sub imm");
                 }
-                return;
+                _ => unreachable!(),
             }
+            if result_reg == Reg::X11 {
+                self.store_to_vreg(dst, result_reg);
+            }
+            return;
         }
 
         // Arithmetic/logic: load operands, compute, store
@@ -1090,18 +1111,17 @@ impl<'a> EmitContext<'a> {
             }
             BinOpKind::And => {
                 // Try logical immediate encoding
-                if let Some(&val) = self.const_values.get(&rhs) {
-                    if self
+                if let Some(&val) = self.const_values.get(&rhs)
+                    && self
                         .ectx
                         .emit
                         .emit_and_imm(Width::X64, result_reg, lhs_reg, val)
                         .is_ok()
-                    {
-                        if result_reg == Reg::X11 {
-                            self.store_to_vreg(dst, result_reg);
-                        }
-                        return;
+                {
+                    if result_reg == Reg::X11 {
+                        self.store_to_vreg(dst, result_reg);
                     }
+                    return;
                 }
                 self.ectx
                     .emit
@@ -1143,17 +1163,17 @@ impl<'a> EmitContext<'a> {
             }
             BinOpKind::Shl => {
                 // Try immediate encoding for constant shift amounts
-                if let Some(&val) = self.const_values.get(&rhs) {
-                    if val < 64 {
-                        self.ectx
-                            .emit
-                            .emit_lsl_imm(Width::X64, result_reg, lhs_reg, val as u8)
-                            .expect("lsl imm");
-                        if result_reg == Reg::X11 {
-                            self.store_to_vreg(dst, result_reg);
-                        }
-                        return;
+                if let Some(&val) = self.const_values.get(&rhs)
+                    && val < 64
+                {
+                    self.ectx
+                        .emit
+                        .emit_lsl_imm(Width::X64, result_reg, lhs_reg, val as u8)
+                        .expect("lsl imm");
+                    if result_reg == Reg::X11 {
+                        self.store_to_vreg(dst, result_reg);
                     }
+                    return;
                 }
                 self.ectx
                     .emit
@@ -1162,17 +1182,17 @@ impl<'a> EmitContext<'a> {
             }
             BinOpKind::Shr => {
                 // Try immediate encoding for constant shift amounts
-                if let Some(&val) = self.const_values.get(&rhs) {
-                    if val < 64 {
-                        self.ectx
-                            .emit
-                            .emit_lsr_imm(Width::X64, result_reg, lhs_reg, val as u8)
-                            .expect("lsr imm");
-                        if result_reg == Reg::X11 {
-                            self.store_to_vreg(dst, result_reg);
-                        }
-                        return;
+                if let Some(&val) = self.const_values.get(&rhs)
+                    && val < 64
+                {
+                    self.ectx
+                        .emit
+                        .emit_lsr_imm(Width::X64, result_reg, lhs_reg, val as u8)
+                        .expect("lsr imm");
+                    if result_reg == Reg::X11 {
+                        self.store_to_vreg(dst, result_reg);
                     }
+                    return;
                 }
                 self.ectx
                     .emit
@@ -1278,19 +1298,19 @@ impl<'a> EmitContext<'a> {
         }
 
         // Adjust out_ptr for field offset if needed
-        if let Some(off) = field_offset {
-            if off > 0 {
-                self.ectx
-                    .emit
-                    .emit_add_imm(
-                        Width::X64,
-                        self.output_reg,
-                        self.output_reg,
-                        off as u16,
-                        false,
-                    )
-                    .expect("add out_ptr");
-            }
+        if let Some(off) = field_offset
+            && off > 0
+        {
+            self.ectx
+                .emit
+                .emit_add_imm(
+                    Width::X64,
+                    self.output_reg,
+                    self.output_reg,
+                    off as u16,
+                    false,
+                )
+                .expect("add out_ptr");
         }
 
         // Move register-resident args with parallel-copy semantics first, then
@@ -1322,14 +1342,12 @@ impl<'a> EmitContext<'a> {
         }
 
         // If no dst but field_offset, pass output_reg (already adjusted) as out_field arg
-        if dst.is_none() {
-            if field_offset.is_some() {
-                let arg_idx = args.len() + 1;
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, Reg::from_raw(arg_idx as u8), self.output_reg)
-                    .expect("mov out_field");
-            }
+        if dst.is_none() && field_offset.is_some() {
+            let arg_idx = args.len() + 1;
+            self.ectx
+                .emit
+                .emit_mov_reg(Width::X64, Reg::from_raw(arg_idx as u8), self.output_reg)
+                .expect("mov out_field");
         }
 
         // x0 = ctx
@@ -1348,19 +1366,19 @@ impl<'a> EmitContext<'a> {
         });
 
         // Restore out_ptr
-        if let Some(off) = field_offset {
-            if off > 0 {
-                self.ectx
-                    .emit
-                    .emit_sub_imm(
-                        Width::X64,
-                        self.output_reg,
-                        self.output_reg,
-                        off as u16,
-                        false,
-                    )
-                    .expect("sub out_ptr");
-            }
+        if let Some(off) = field_offset
+            && off > 0
+        {
+            self.ectx
+                .emit
+                .emit_sub_imm(
+                    Width::X64,
+                    self.output_reg,
+                    self.output_reg,
+                    off as u16,
+                    false,
+                )
+                .expect("sub out_ptr");
         }
 
         if self.sync_ctx_cursor_around_calls {
@@ -1427,20 +1445,19 @@ impl<'a> EmitContext<'a> {
                 lhs,
                 rhs,
             } = &inst.op
+                && *dst == vreg
             {
-                if *dst == vreg {
-                    // Check if rhs is a power of 2 constant
-                    if let Some(&val) = self.const_values.get(rhs) {
-                        if val.is_power_of_two() {
-                            return Some((*lhs, val.trailing_zeros() as u8));
-                        }
-                    }
-                    // Check if lhs is a power of 2 constant
-                    if let Some(&val) = self.const_values.get(lhs) {
-                        if val.is_power_of_two() {
-                            return Some((*rhs, val.trailing_zeros() as u8));
-                        }
-                    }
+                // Check if rhs is a power of 2 constant
+                if let Some(&val) = self.const_values.get(rhs)
+                    && val.is_power_of_two()
+                {
+                    return Some((*lhs, val.trailing_zeros() as u8));
+                }
+                // Check if lhs is a power of 2 constant
+                if let Some(&val) = self.const_values.get(lhs)
+                    && val.is_power_of_two()
+                {
+                    return Some((*rhs, val.trailing_zeros() as u8));
                 }
             }
         }
@@ -2613,7 +2630,11 @@ pub fn compile_regalloc3_with_root_data_abi(
                                     .emit_mov_reg(Width::X64, target, src)
                                     .expect("mov result");
                                 ectx.emit
-                                    .emit_mov_reg(Width::X64, Reg::from_raw(blocker as u8), Reg::X16)
+                                    .emit_mov_reg(
+                                        Width::X64,
+                                        Reg::from_raw(blocker as u8),
+                                        Reg::X16,
+                                    )
                                     .expect("mov from scratch");
                                 done[i] = true;
                                 done[blocker] = true;

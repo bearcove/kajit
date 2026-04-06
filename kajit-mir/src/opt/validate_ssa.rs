@@ -624,16 +624,3 @@ fn check_entry_liveness(func: &Function, errors: &mut Vec<SsaError>) {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // TODO: Add tests once we have a CFG builder API
-    // Test cases:
-    // 1. Valid SSA program (should pass)
-    // 2. Use without def (should fail)
-    // 3. Use not dominated by def (should fail)
-    // 4. Edge arg count mismatch (should fail)
-    // 5. Edge arg doesn't match block param (should fail)
-}

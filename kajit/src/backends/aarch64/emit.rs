@@ -1057,22 +1057,22 @@ impl Lowerer<'_> {
             }
             // In edit mode with regalloc, check if source vreg has a current allocation
             // This would happen if src is also an operand of the branch (unusual but possible)
-            if let Some(src_alloc) = self.alloc_for_vreg(masked.src) {
-                if let Some(reg) = src_alloc.as_reg() {
-                    let r = reg.hw_enc() as u8;
-                    if invert {
-                        self.ectx
-                            .emit
-                            .emit_tbz_label(Reg::from_raw(r), masked.bit, target)
-                            .expect("tbz");
-                    } else {
-                        self.ectx
-                            .emit
-                            .emit_tbnz_label(Reg::from_raw(r), masked.bit, target)
-                            .expect("tbnz");
-                    }
-                    return;
+            if let Some(src_alloc) = self.alloc_for_vreg(masked.src)
+                && let Some(reg) = src_alloc.as_reg()
+            {
+                let r = reg.hw_enc() as u8;
+                if invert {
+                    self.ectx
+                        .emit
+                        .emit_tbz_label(Reg::from_raw(r), masked.bit, target)
+                        .expect("tbz");
+                } else {
+                    self.ectx
+                        .emit
+                        .emit_tbnz_label(Reg::from_raw(r), masked.bit, target)
+                        .expect("tbnz");
                 }
+                return;
             }
         }
 

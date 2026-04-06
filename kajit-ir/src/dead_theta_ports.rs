@@ -93,10 +93,11 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             continue;
         }
         for input in &func.nodes[nid].inputs {
-            if let PortSource::Node(oref) = &input.source {
-                if oref.node == theta_id && (oref.index as usize) < loop_var_count {
-                    output_has_consumer[oref.index as usize] = true;
-                }
+            if let PortSource::Node(oref) = &input.source
+                && oref.node == theta_id
+                && (oref.index as usize) < loop_var_count
+            {
+                output_has_consumer[oref.index as usize] = true;
             }
         }
     }
