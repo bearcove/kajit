@@ -644,8 +644,8 @@ pub fn run_named_pass(prog: &mut Program, pass_name: &str) -> bool {
             crate::cfg_mir::local_cse(prog);
             true
         }
-        "gvn" => {
-            crate::cfg_mir::global_value_numbering(prog);
+        "local_cse" => {
+            crate::cfg_mir::local_common_subexpr_elim(prog);
             true
         }
         "copyprop" => {
@@ -678,7 +678,7 @@ pub const ALL_PASS_NAMES: &[&str] = &[
     "merge_blocks",
     "remat",
     "cse",
-    "gvn",
+    "local_cse",
     "copyprop",
     "fuse_cmpz",
     "elim_imm",

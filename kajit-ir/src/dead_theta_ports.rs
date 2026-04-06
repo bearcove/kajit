@@ -359,7 +359,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
 }
 
 /// Resolve a PortSource to a constant value, if it directly references a Const node.
-fn resolve_to_const(func: &IrFunc, source: &PortSource) -> Option<u64> {
+pub fn resolve_to_const(func: &IrFunc, source: &PortSource) -> Option<u64> {
     match source {
         PortSource::Node(oref) => match &func.nodes[oref.node].kind {
             NodeKind::Simple(IrOp::Const { value: val }) => Some(*val),

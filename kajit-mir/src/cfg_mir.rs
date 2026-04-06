@@ -2020,7 +2020,9 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
                     pass_name
                 );
                 eprintln!("  2. Add KAJIT_DUMP_STAGES=cfg to see CFG before/after");
-                eprintln!("  3. Check if other passes compensate (try adding +cse, +gvn, etc.)");
+                eprintln!(
+                    "  3. Check if other passes compensate (try adding +cse, +local_cse, etc.)"
+                );
                 panic!("SSA validation failed after {}", pass_name);
             } else {
                 eprintln!("[SSA] ✓ Passed validation after {}", pass_name);
@@ -2029,7 +2031,7 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
     };
 
     // Run constant phi elimination (general redundant block-param elimination)
-    // This replaces loop_phi_elim with a proper iterative dataflow approach
+    // General redundant block-param elimination
     if opts.enabled("const_phi_elim") {
         if std::env::var("KAJIT_DUMP_BEFORE_PHI_ELIM").is_ok() {
             eprintln!("=== BEFORE const_phi_elim ===\n{cfg}\n=== END ===");
@@ -2040,16 +2042,6 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
         validate_after("const_phi_elim", &cfg);
     }
 
-    // DEPRECATED: old loop-specific phi elimination (disabled by default)
-    if opts.enabled("loop_phi_elim") {
-        for func in &mut cfg.funcs {
-            let dom = crate::analysis::dominance::DominanceInfo::compute(func);
-            let loops = crate::analysis::loops::LoopInfo::compute(func, &dom);
-            crate::opt::loop_phi_elim::eliminate_loop_invariant_phis(func, &dom, &loops);
-        }
-        validate_after("loop_phi_elim", &cfg);
-    }
-
     if opts.enabled("remat") {
         rematerialize_constants(&mut cfg);
         validate_after("remat", &cfg);
@@ -2058,9 +2050,9 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
         local_cse(&mut cfg);
         validate_after("cse", &cfg);
     }
-    if opts.enabled("gvn") {
-        global_value_numbering(&mut cfg);
-        validate_after("gvn", &cfg);
+    if opts.enabled("local_cse") {
+        local_common_subexpr_elim(&mut cfg);
+        validate_after("local_cse", &cfg);
     }
     if opts.enabled("copyprop") {
         copy_propagation(&mut cfg);
@@ -2157,7 +2149,7 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
 /// Set `KAJIT_CFG_OPTS` to a comma-separated list of `+name` or `-name` tokens.
 /// Use `-all` to disable everything, then selectively re-enable with `+name`.
 ///
-/// Pass names: `loop_phi_elim`, `remat`, `cse`, `gvn`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`, `simplify_phis`, `merge_blocks`.
+/// Pass names: `remat`, `cse`, `local_cse`, `copyprop`, `fuse_cmpz`, `elim_imm`, `dce`, `simplify_phis`, `merge_blocks`.
 ///
 /// Examples:
 ///   `KAJIT_CFG_OPTS=-all`           — disable all CFG opts
@@ -2200,10 +2192,8 @@ impl CfgOptOptions {
             return enabled;
         }
 
-        // Special cases for deprecated/new opts
         match name {
-            "loop_phi_elim" => false, // DEPRECATED: disabled by default
-            "const_phi_elim" => true, // NEW: enabled by default
+            "const_phi_elim" => true, // enabled by default
             _ => self.default_enabled,
         }
     }
@@ -2611,92 +2601,6 @@ fn rematerialize_constants_in_function(
             }
         }
     }
-
-    // Phase 2: DISABLED - this phase created multiple defs which violate SSA.
-    // TODO: Reimplement by allocating fresh vregs and updating uses.
-    // The idea was: Rematerialize constants used directly across blocks (not via params).
-    // For each non-entry block, find uses of vregs that are:
-    // - Known constants (in const_values)
-    // - NOT defined BEFORE this use in the block (respecting program order)
-    // Insert a local Const instruction at block start for each such vreg.
-    // But the old implementation reused the same vreg, creating multiple defs.
-    if false {
-        for block_idx in 0..func.blocks.len() {
-            let block = &func.blocks[block_idx];
-            if block.id == func.entry {
-                continue;
-            }
-
-            // Process instructions in order, tracking defs as we go
-            // Block params are defined at entry
-            let mut defs_so_far: HashSet<VReg> = block.params.iter().copied().collect();
-            let mut consts_to_insert: HashSet<VReg> = HashSet::new();
-
-            for &inst_id in &block.insts {
-                let inst = &func.insts[inst_id.index()];
-
-                // First check uses (before adding this inst's defs)
-                for op in &inst.operands {
-                    if op.kind == OperandKind::Use
-                        && !defs_so_far.contains(&op.vreg)
-                        && const_values.contains_key(&op.vreg)
-                    {
-                        consts_to_insert.insert(op.vreg);
-                    }
-                }
-
-                // Then add this instruction's defs
-                for op in &inst.operands {
-                    if op.kind == OperandKind::Def {
-                        defs_so_far.insert(op.vreg);
-                    }
-                }
-            }
-
-            if consts_to_insert.is_empty() {
-                continue;
-            }
-
-            if debug {
-                eprintln!(
-                    "[remat] b{}: inserting {} local consts for cross-block uses",
-                    block.id.0,
-                    consts_to_insert.len()
-                );
-            }
-
-            // Insert Const instructions at block start (in stable order)
-            let mut sorted_consts: Vec<_> = consts_to_insert.into_iter().collect();
-            sorted_consts.sort_by_key(|v| v.index());
-
-            let mut new_insts = Vec::new();
-            for vreg in sorted_consts {
-                let const_val = const_values[&vreg];
-                let inst_id = InstId(func.insts.len() as u32);
-                func.insts.push(Inst {
-                    id: inst_id,
-                    op: LinearOp::Const {
-                        dst: vreg,
-                        value: const_val,
-                    },
-                    operands: vec![Operand {
-                        vreg,
-                        kind: OperandKind::Def,
-                        class: RegClass::Gpr,
-                        fixed: None,
-                    }],
-                    clobbers: Clobbers::default(),
-                });
-                new_insts.push(inst_id);
-            }
-
-            // Insert at block start
-            let block = &mut func.blocks[block_idx];
-            for inst_id in new_insts.into_iter().rev() {
-                block.insts.insert(0, inst_id);
-            }
-        }
-    } // end if false
 }
 
 /// Copy propagation for CFG-MIR.
@@ -3776,7 +3680,7 @@ fn local_cse_in_function(func: &mut Function) {
 }
 
 // ============================================================================
-// Global Value Numbering (GVN)
+// Local Common Subexpression Elimination
 // ============================================================================
 
 /// Dominator tree for a function's CFG.
@@ -3980,22 +3884,22 @@ impl ScopedValueTable {
     }
 }
 
-/// Global Value Numbering: eliminates redundant computations across blocks.
+/// Local common subexpression elimination: eliminates redundant computations within blocks.
 ///
 /// Uses dominator tree to ensure that when we reference a canonical value,
 /// it is guaranteed to dominate (be available at) the current block.
-pub fn global_value_numbering(program: &mut Program) {
+pub fn local_common_subexpr_elim(program: &mut Program) {
     for func in &mut program.funcs {
-        global_value_numbering_in_function(func);
+        local_common_subexpr_elim_in_function(func);
     }
 }
 
-fn global_value_numbering_in_function(func: &mut Function) {
+fn local_common_subexpr_elim_in_function(func: &mut Function) {
     if func.blocks.is_empty() {
         return;
     }
 
-    // For now, we do per-block value numbering. True cross-block GVN would require
+    // For now, we do per-block value numbering. True cross-block CSE would require
     // ensuring the canonical vreg is live at the use site (via block params/edges).
     // Local CSE already handles constants, so focus on BinOp/UnaryOp/SlotAddr/CallPure.
     //
@@ -4967,7 +4871,7 @@ mod tests {
     }
 
     // ========================================================================
-    // GVN Tests
+    // Local CSE Tests
     // ========================================================================
 
     #[test]
@@ -5152,13 +5056,13 @@ mod tests {
     }
 
     #[test]
-    fn gvn_converts_duplicate_const_to_copy() {
+    fn local_cse_converts_duplicate_const_to_copy() {
         // v0 = const 42
         // v1 = const 42  <- redundant
-        // After GVN: v1 = copy v0
+        // After local CSE: v1 = copy v0
         let mut func = single_block_func(vec![make_const(0, 0, 42), make_const(1, 1, 42)]);
 
-        global_value_numbering_in_function(&mut func);
+        local_common_subexpr_elim_in_function(&mut func);
 
         // Both instructions should still exist
         assert_eq!(
@@ -5178,12 +5082,12 @@ mod tests {
     }
 
     #[test]
-    fn gvn_converts_redundant_binop_to_copy() {
+    fn local_cse_converts_redundant_binop_to_copy() {
         // v0 = const 1
         // v1 = const 2
         // v2 = add v0, v1
         // v3 = add v0, v1  <- redundant
-        // After GVN: v3 = copy v2
+        // After local CSE: v3 = copy v2
         let mut func = single_block_func(vec![
             make_const(0, 0, 1),
             make_const(1, 1, 2),
@@ -5191,7 +5095,7 @@ mod tests {
             make_binop(3, 3, 0, 1, kajit_lir::BinOpKind::Add),
         ]);
 
-        global_value_numbering_in_function(&mut func);
+        local_common_subexpr_elim_in_function(&mut func);
 
         // All 4 instructions should remain
         assert_eq!(
@@ -5211,7 +5115,7 @@ mod tests {
     }
 
     #[test]
-    fn gvn_preserves_uses_after_copy_conversion() {
+    fn local_cse_preserves_uses_after_copy_conversion() {
         // v0 = const 42
         // v1 = const 42  <- converted to copy
         // v2 = add v1, v1  <- uses remain as v1 (copy prop will handle later)
@@ -5221,7 +5125,7 @@ mod tests {
             make_binop(2, 2, 1, 1, kajit_lir::BinOpKind::Add),
         ]);
 
-        global_value_numbering_in_function(&mut func);
+        local_common_subexpr_elim_in_function(&mut func);
 
         // Check that add still uses v1 (copy propagation handles rewriting)
         match &func.insts[2].op {
@@ -5234,9 +5138,9 @@ mod tests {
     }
 
     #[test]
-    fn gvn_per_block_no_cross_block() {
+    fn local_cse_per_block_no_cross_block() {
         // b0: v0 = const 42; branch to b1
-        // b1: v1 = const 42  <- NOT eliminated (cross-block GVN disabled)
+        // b1: v1 = const 42  <- NOT eliminated (cross-block CSE disabled)
         // Per-block GVN only affects instructions within the same block.
         let mut func = Function {
             id: FunctionId(0),
@@ -5275,14 +5179,14 @@ mod tests {
             terms: vec![Terminator::Branch { edge: EdgeId(0) }, Terminator::Return],
         };
 
-        global_value_numbering_in_function(&mut func);
+        local_common_subexpr_elim_in_function(&mut func);
 
         // Both blocks keep their const (no cross-block optimization)
         assert_eq!(func.blocks[0].insts.len(), 1, "b0 keeps its const");
         assert_eq!(
             func.blocks[1].insts.len(),
             1,
-            "b1 keeps its const (per-block GVN only)"
+            "b1 keeps its const (per-block local CSE only)"
         );
         // b1's instruction should still be a Const, not a Copy
         match &func.insts[1].op {
@@ -5294,7 +5198,7 @@ mod tests {
     }
 
     #[test]
-    fn gvn_does_not_eliminate_across_non_dominating_blocks() {
+    fn local_cse_does_not_eliminate_across_non_dominating_blocks() {
         // Diamond: b0 branches to b1 or b2, both merge at b3
         // b1: v1 = const 42
         // b2: v2 = const 42
@@ -5387,7 +5291,7 @@ mod tests {
             ],
         };
 
-        global_value_numbering_in_function(&mut func);
+        local_common_subexpr_elim_in_function(&mut func);
 
         // Both b1 and b2 should keep their const 42 since neither dominates the other
         assert_eq!(func.blocks[1].insts.len(), 1, "b1 keeps its const");
