@@ -1,6 +1,6 @@
 # Write golden tests for each pass
 
-**Phase:** 0 (do first, after harness)
+Spec before implementation. Include simplify_cfg (A- pass, zero text tests, high-impact if it regresses).
 
 ## Strategy
 
@@ -62,6 +62,12 @@ Three transforms exist:
 - `const_true_branch.cfg-mir` — branch on Const(1) → unconditional jump
 - `const_false_branch.cfg-mir` — branch on Const(0) → unconditional jump
 
-### simplify_cfg (`kajit-mir/src/opt/simplify_cfg.rs`)
+### simplify_cfg (`kajit-mir/src/opt/simplify_cfg.rs`) — HIGH PRIORITY
+The only A- MIR pass with zero text tests. Runs in the cleanup loop after DCE and const_branch_fold (invoked 3x per compilation), so regressions are high-impact.
 - `empty_block.cfg-mir` — empty block with single successor merged
 - `redundant_jump.cfg-mir` — jump-to-jump collapsed
+- `diamond_const_branch.cfg-mir` — diamond with constant branch simplified
+- `unreachable_successor.cfg-mir` — dead successor removed
+
+### Pipeline ordering validation
+Also verify whether the 2nd and 3rd DCE runs in `lower_and_optimize()` actually find anything to eliminate. If they don't, remove them — free compile time.

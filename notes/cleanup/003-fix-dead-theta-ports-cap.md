@@ -1,6 +1,6 @@
 # Fix dead_theta_ports 3-port cap
 
-**Phase:** 2
+Limits codegen quality now.
 
 ## Current state
 

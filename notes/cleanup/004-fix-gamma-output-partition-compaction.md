@@ -1,6 +1,6 @@
 # Fix gamma_output_partition compaction
 
-**Phase:** 2
+Limits codegen quality now.
 
 ## Current state
 

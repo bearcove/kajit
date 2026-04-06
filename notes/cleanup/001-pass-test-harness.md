@@ -1,6 +1,6 @@
 # Create a pass test harness
 
-**Phase:** 0 (do first)
+IR harness already exists. The gap is MIR-level pass tests.
 
 ## What already exists
 

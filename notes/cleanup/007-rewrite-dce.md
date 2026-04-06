@@ -1,6 +1,6 @@
 # Rewrite DCE pass
 
-**Phase:** 1
+Correct but slow. Fix when compile time actually hurts.
 
 ## Current state
 

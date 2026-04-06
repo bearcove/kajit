@@ -1,6 +1,6 @@
 # Delete dead code outright
 
-**Phase:** 1
+Zero risk, pure deletion. Do first to clean the workspace.
 
 ## Items to delete
 
@@ -42,4 +42,4 @@
 - **File:** `kajit-mir/src/cfg_mir.rs` lines 3779-4050
 - **Status:** Per-block value numbering (local CSE), not true GVN. Enabled via pass options.
 - **Comment:** "For now, we do per-block value numbering."
-- **DO NOT DELETE** (but consider renaming from "gvn" to "local_cse" for accuracy)
+- **DO NOT DELETE** but **rename from "gvn" to "local_cse"** — the name is actively misleading. One-line rename of function + pass option string, do it in this batch.

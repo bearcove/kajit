@@ -1,6 +1,6 @@
 # Clean up const_fold
 
-**Phase:** 1
+Small, well-scoped cleanup.
 
 ## Current state
 

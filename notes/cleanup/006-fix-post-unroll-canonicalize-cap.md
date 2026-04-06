@@ -1,6 +1,6 @@
 # Fix post_unroll_canonicalize 800-node cap
 
-**Phase:** 2
+Limits codegen for large types.
 
 ## Current state
 

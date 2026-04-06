@@ -1,6 +1,6 @@
 # Consolidate shared infrastructure
 
-**Phase:** 3 (after passes work individually)
+Only the easy parts: domtree consolidation + replace_uses scoping. Skip incremental use-lists unless profiling justifies it.
 
 ## 1. UseLists / use-def structure
 

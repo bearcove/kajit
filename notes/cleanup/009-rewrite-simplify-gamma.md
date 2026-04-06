@@ -1,6 +1,6 @@
 # Rewrite simplify_gamma pass
 
-**Phase:** 1
+Nice to have. Only implement empty branch coalescing if real programs hit it, otherwise just delete the stub.
 
 ## Current state
 
