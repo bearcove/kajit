@@ -807,8 +807,6 @@ fn compile_linear_ir_decoder_with_options(
     root_data_abi: RootDecoderDataAbi,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
-    let apply_regalloc_edits = true;
-
     let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
     let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
     let root_data_abi = match root_data_abi {
@@ -816,12 +814,9 @@ fn compile_linear_ir_decoder_with_options(
         explicit => explicit,
     };
 
-    // Use regalloc3 by default, opt out with KAJIT_USE_REGALLOC2=1
-    let use_regalloc3 = std::env::var("KAJIT_USE_REGALLOC2").is_err();
-
-    // For leaf functions with regalloc3: exclude x0/x1 from allocation
+    // Exclude ABI registers from allocation
     #[cfg(target_arch = "aarch64")]
-    if use_regalloc3 {
+    {
         use kajit_mir::regalloc3::machine_inst::PReg;
 
         if !cfg_program.is_scalar
@@ -854,7 +849,7 @@ fn compile_linear_ir_decoder_with_options(
     }
 
     #[cfg(target_arch = "x86_64")]
-    if use_regalloc3 {
+    {
         use kajit_mir::regalloc3::machine_inst::PReg;
 
         if !cfg_program.is_scalar {
@@ -893,71 +888,31 @@ fn compile_linear_ir_decoder_with_options(
         }
     }
 
-    let (buf, entry, source_map, backend_debug_info, asm_program, dwarf_location_map) =
-        if use_regalloc3 {
-            let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
-                .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
-            #[cfg(target_arch = "aarch64")]
-            let result =
-                crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-                    &alloc,
-                    root_data_abi,
-                );
-            #[cfg(target_arch = "x86_64")]
-            let result =
-                crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-                    &alloc,
-                    root_data_abi,
-                );
-            let (buf, entry, source_map, backend_debug_info, asm_program) =
-                materialize_backend_result(result);
-            #[cfg(target_arch = "aarch64")]
-            let base_frame =
-                crate::backends::aarch64::regalloc3_backend::compute_base_frame(&alloc);
-            #[cfg(target_arch = "x86_64")]
-            let base_frame = crate::backends::x86_64::regalloc3_backend::compute_base_frame(&alloc);
-            let alloc_map = alloc
-                .functions
-                .first()
-                .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
-                .unwrap_or_default();
-            let location_map = crate::harness::LocationMap::from_alloc_map_and_cfg(
-                &alloc_map,
-                &alloc.cfg_program,
-                &alloc,
-            );
-            (
-                buf,
-                entry,
-                source_map,
-                backend_debug_info,
-                asm_program,
-                location_map,
-            )
-        } else {
-            let regalloc_alloc = crate::regalloc_engine::allocate_cfg_program(&cfg_program)
-                .unwrap_or_else(|err| panic!("regalloc2 allocation failed: {err}"));
-
-            let (buf, entry, source_map, backend_debug_info, asm_program) = {
-                let result = crate::ir_backend::compile_linear_ir_with_alloc_and_mode(
-                    ir,
-                    &cfg_program,
-                    &regalloc_alloc,
-                    apply_regalloc_edits,
-                    root_data_abi,
-                    registry,
-                );
-                materialize_backend_result(result)
-            };
-            (
-                buf,
-                entry,
-                source_map,
-                backend_debug_info,
-                asm_program,
-                crate::harness::LocationMap::default(),
-            )
-        };
+    let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
+        .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
+    #[cfg(target_arch = "aarch64")]
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &alloc,
+        root_data_abi,
+    );
+    #[cfg(target_arch = "x86_64")]
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
+        &alloc,
+        root_data_abi,
+    );
+    let (buf, entry, source_map, backend_debug_info, asm_program) =
+        materialize_backend_result(result);
+    #[cfg(target_arch = "aarch64")]
+    let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&alloc);
+    #[cfg(target_arch = "x86_64")]
+    let base_frame = crate::backends::x86_64::regalloc3_backend::compute_base_frame(&alloc);
+    let alloc_map = alloc
+        .functions
+        .first()
+        .map(|f| crate::harness::AllocationMap::from_regalloc3(f, base_frame))
+        .unwrap_or_default();
+    let dwarf_location_map =
+        crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &alloc.cfg_program, &alloc);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
     let listing = build_cfg_mir_listing(&cfg_program, registry);
