@@ -144,7 +144,10 @@ fn main() {
     let command_args: Vec<String> = args.collect();
 
     match command.as_deref() {
-        Some("install") => install(),
+        Some("install") => {
+            let dev = command_args.iter().any(|a| a == "--dev");
+            install(dev);
+        }
         Some("gen") => {
             generate_synthetic();
         }
@@ -843,14 +846,24 @@ fn extract_minimizer_status_line(output: &str) -> Option<String> {
     })
 }
 
-fn install() {
+fn install(dev: bool) {
     let root = workspace_root();
     let package = "kajit-cli";
     let binary = platform_binary_name("kajit");
 
-    println!("building {package} in release mode...");
-    let status = Command::new("cargo")
-        .args(["build", "--release", "-p", package])
+    let (mode, profile_dir) = if dev {
+        ("debug", "debug")
+    } else {
+        ("release", "release")
+    };
+
+    println!("building {package} in {mode} mode...");
+    let mut cmd = Command::new("cargo");
+    cmd.args(["build", "-p", package]);
+    if !dev {
+        cmd.arg("--release");
+    }
+    let status = cmd
         .current_dir(&root)
         .status()
         .expect("failed to run cargo build");
@@ -858,7 +871,7 @@ fn install() {
         std::process::exit(status.code().unwrap_or(1));
     }
 
-    let src = root.join("target").join("release").join(&binary);
+    let src = root.join("target").join(profile_dir).join(&binary);
     if !src.exists() {
         eprintln!("build finished but binary not found at {}", src.display());
         std::process::exit(1);
