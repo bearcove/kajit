@@ -125,19 +125,7 @@ pub fn compile_regalloc3_with_root_data_abi(
 
     // Determine cursor ABI.
     let ctx_cursor_abi = matches!(root_data_abi, crate::compiler::RootDecoderDataAbi::None);
-    let uses_cursor_ops = ctx_cursor_abi
-        && program.funcs.iter().any(|func| {
-            func.insts.iter().any(|inst| {
-                matches!(
-                    inst.op,
-                    LinearOp::BoundsCheck { .. }
-                        | LinearOp::ReadBytes { .. }
-                        | LinearOp::PeekByte { .. }
-                        | LinearOp::AdvanceCursor { .. }
-                        | LinearOp::AdvanceCursorBy { .. }
-                )
-            })
-        });
+    let uses_cursor_ops = false;
 
     let is_scalar_function = program.is_scalar;
 

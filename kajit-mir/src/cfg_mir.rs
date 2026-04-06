@@ -902,11 +902,6 @@ fn fmt_cfg_op_name(
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::Copy { .. } => write!(f, "copy"),
-        LinearOp::BoundsCheck { count } => write!(f, "bounds_check({count})"),
-        LinearOp::ReadBytes { count, .. } => write!(f, "read_bytes({count})"),
-        LinearOp::PeekByte { .. } => write!(f, "peek_byte"),
-        LinearOp::AdvanceCursor { count } => write!(f, "advance({count})"),
-        LinearOp::AdvanceCursorBy { .. } => write!(f, "advance_by"),
         LinearOp::SaveCursor { .. } => write!(f, "save_cursor"),
         LinearOp::SaveInputEnd { .. } => write!(f, "save_input_end"),
         LinearOp::RestoreCursor { .. } => write!(f, "restore_cursor"),
@@ -937,8 +932,6 @@ fn fmt_cfg_op_name(
             write!(f, ")")
         }
         LinearOp::CallLambda { target, .. } => write!(f, "call_lambda(@{})", target.index()),
-        LinearOp::SimdStringScan { .. } => write!(f, "simd_string_scan"),
-        LinearOp::SimdWhitespaceSkip => write!(f, "simd_ws_skip"),
         LinearOp::ErrorExit { code } => write!(f, "error_exit({code:?})"),
         other => write!(f, "<?op:{other:?}>"),
     }
@@ -952,8 +945,6 @@ fn linearop_dst(op: &LinearOp) -> Option<VReg> {
         | LinearOp::BinOp { dst, .. }
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
-        | LinearOp::ReadBytes { dst, .. }
-        | LinearOp::PeekByte { dst }
         | LinearOp::SaveCursor { dst }
         | LinearOp::SaveInputEnd { dst }
         | LinearOp::ReadFromField { dst, .. }
@@ -974,7 +965,6 @@ fn linearop_uses(op: &LinearOp) -> Vec<VReg> {
         LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         LinearOp::UnaryOp { src, .. }
         | LinearOp::Copy { src, .. }
-        | LinearOp::AdvanceCursorBy { src }
         | LinearOp::RestoreCursor { src }
         | LinearOp::WriteToField { src, .. }
         | LinearOp::SetOutPtr { src }
@@ -1314,8 +1304,6 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
     match &op {
         LinearOp::Const { dst, .. }
         | LinearOp::DataAddr { dst, .. }
-        | LinearOp::ReadBytes { dst, .. }
-        | LinearOp::PeekByte { dst }
         | LinearOp::SaveCursor { dst }
         | LinearOp::SaveInputEnd { dst }
         | LinearOp::ReadFromField { dst, .. }
@@ -1355,8 +1343,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
             push_use(&mut operands, *src, None);
             push_def(&mut operands, *dst, None);
         }
-        LinearOp::AdvanceCursorBy { src }
-        | LinearOp::RestoreCursor { src }
+        LinearOp::RestoreCursor { src }
         | LinearOp::WriteToField { src, .. }
         | LinearOp::SetOutPtr { src }
         | LinearOp::WriteToSlot { src, .. } => {
@@ -1402,13 +1389,6 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
                 caller_saved_simd: true,
             };
         }
-        LinearOp::SimdStringScan { pos, kind } => {
-            push_def(&mut operands, *pos, None);
-            push_def(&mut operands, *kind, None);
-        }
-        LinearOp::BoundsCheck { .. }
-        | LinearOp::AdvanceCursor { .. }
-        | LinearOp::SimdWhitespaceSkip => {}
         LinearOp::Label(_)
         | LinearOp::Branch { .. }
         | LinearOp::BranchIf { .. }
@@ -2767,9 +2747,6 @@ fn global_copy_propagation(func: &mut Function) {
                 LinearOp::LoadFromAddr { addr, .. } => {
                     changed |= rewrite_use(addr);
                 }
-                LinearOp::AdvanceCursorBy { src } => {
-                    changed |= rewrite_use(src);
-                }
                 LinearOp::RestoreCursor { src } => {
                     changed |= rewrite_use(src);
                 }
@@ -2789,10 +2766,6 @@ fn global_copy_propagation(func: &mut Function) {
                     for arg in args.iter_mut() {
                         changed |= rewrite_use(arg);
                     }
-                }
-                LinearOp::SimdStringScan { pos, kind } => {
-                    changed |= rewrite_use(pos);
-                    changed |= rewrite_use(kind);
                 }
                 _ => {}
             }
@@ -4337,8 +4310,7 @@ mod tests {
         let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let value = rb.read_bytes(4);
+            let value = rb.const_val(42);
             rb.write_to_field(value, 0, Width::W4);
             rb.set_results(&[]);
         }

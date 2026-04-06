@@ -528,24 +528,6 @@ impl DebuggerSession {
                 let rhs = self.read_vreg(rhs.index());
                 self.write_vreg(dst.index(), exec_binop(*op, lhs, rhs));
             }
-            LinearOp::BoundsCheck { count } => {
-                if self.cursor + (*count as usize) > self.input.len() {
-                    self.trap(ErrorCode::UnexpectedEof);
-                }
-            }
-            LinearOp::ReadBytes { dst, count } => {
-                let count = *count as usize;
-                if self.cursor + count > self.input.len() {
-                    self.trap(ErrorCode::UnexpectedEof);
-                } else {
-                    let mut value = 0u64;
-                    for i in 0..count {
-                        value |= (self.input[self.cursor + i] as u64) << (i * 8);
-                    }
-                    self.cursor += count;
-                    self.write_vreg(dst.index(), value);
-                }
-            }
             LinearOp::WriteToField { src, offset, width } => {
                 let value = self.read_vreg(src.index());
                 let base = *offset as usize;
@@ -588,19 +570,6 @@ impl DebuggerSession {
                     Some(base) => (raw - base) as usize,
                     None => raw as usize,
                 };
-            }
-            LinearOp::AdvanceCursor { count } => {
-                self.cursor += *count as usize;
-            }
-            LinearOp::AdvanceCursorBy { src } => {
-                self.cursor += self.read_vreg(src.index()) as usize;
-            }
-            LinearOp::PeekByte { dst } => {
-                if self.cursor < self.input.len() {
-                    self.write_vreg(dst.index(), self.input[self.cursor] as u64);
-                } else {
-                    self.write_vreg(dst.index(), 0);
-                }
             }
             LinearOp::LoadFromAddr { dst, addr, width } => {
                 let raw_addr = self.read_vreg(addr.index()) as usize;
@@ -1172,7 +1141,13 @@ mod tests {
                 output_size: 0,
                 blocks: vec![b0],
                 edges: Vec::new(),
-                insts: vec![test_inst(0, LinearOp::BoundsCheck { count: 1 })],
+                insts: vec![test_inst(
+                    0,
+                    LinearOp::Const {
+                        dst: VReg::new(0),
+                        value: 0,
+                    },
+                )],
                 terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 0,
@@ -1309,14 +1284,16 @@ mod tests {
     }
 
     #[test]
-    fn bounds_check_trap_has_expected_offset() {
+    fn simple_program_executes_and_returns() {
         let program = make_trap_program();
         let mut session = DebuggerSession::new(&program, &[]).expect("debugger should init");
+        // Step through const op
         let event = session.step_forward().expect("step should work");
-        assert!(event.halted_after);
-        let trap = event.trap.expect("trap should be recorded");
-        assert_eq!(trap.code, ErrorCode::UnexpectedEof);
-        assert_eq!(trap.offset, 0);
+        assert!(!event.halted_after, "const op should not halt");
+        // Step through return terminator
+        let event = session.step_forward().expect("step should work");
+        assert!(event.halted_after, "return should halt");
+        assert!(event.trap.is_none(), "should not trap");
     }
 
     #[test]

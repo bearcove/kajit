@@ -91,22 +91,6 @@ pub enum LinearOp {
     },
 
     // ── Cursor ──
-    BoundsCheck {
-        count: u32,
-    },
-    ReadBytes {
-        dst: VReg,
-        count: u32,
-    },
-    PeekByte {
-        dst: VReg,
-    },
-    AdvanceCursor {
-        count: u32,
-    },
-    AdvanceCursorBy {
-        src: VReg,
-    },
     SaveCursor {
         dst: VReg,
     },
@@ -214,13 +198,6 @@ pub enum LinearOp {
         code: ErrorCode,
     },
 
-    // ── SIMD ──
-    SimdStringScan {
-        pos: VReg,
-        kind: VReg,
-    },
-    SimdWhitespaceSkip,
-
     // ── Function structure ──
     FuncStart {
         lambda_id: LambdaId,
@@ -253,9 +230,8 @@ impl LinearOp {
             UnaryOp { src, .. } | Copy { src, .. } => f(src),
 
             // Cursor
-            BoundsCheck { .. } | AdvanceCursor { .. } => {}
-            ReadBytes { .. } | PeekByte { .. } | SaveCursor { .. } | SaveInputEnd { .. } => {}
-            AdvanceCursorBy { src } | RestoreCursor { src } => f(src),
+            SaveCursor { .. } | SaveInputEnd { .. } => {}
+            RestoreCursor { src } => f(src),
 
             // Output
             WriteToField { src, .. } => f(src),
@@ -322,13 +298,6 @@ impl LinearOp {
             }
             JumpTable { predicate, .. } => f(predicate),
 
-            // SIMD
-            SimdStringScan { pos, kind } => {
-                f(pos);
-                f(kind);
-            }
-            SimdWhitespaceSkip => {}
-
             // Function structure
             FuncStart { data_args, .. } => {
                 for arg in data_args {
@@ -366,8 +335,6 @@ impl LinearOp {
             | BinOp { dst, .. }
             | UnaryOp { dst, .. }
             | Copy { dst, .. }
-            | ReadBytes { dst, .. }
-            | PeekByte { dst }
             | SaveCursor { dst }
             | SaveInputEnd { dst }
             | ReadFromField { dst, .. }
@@ -421,10 +388,7 @@ impl LinearOp {
             }
 
             // No defs
-            BoundsCheck { .. }
-            | AdvanceCursor { .. }
-            | AdvanceCursorBy { .. }
-            | RestoreCursor { .. }
+            RestoreCursor { .. }
             | WriteToField { .. }
             | SetOutPtr { .. }
             | StoreToAddr { .. }
@@ -432,8 +396,6 @@ impl LinearOp {
             | Label(_)
             | ErrorExit { .. }
             | JumpTable { .. }
-            | SimdStringScan { .. }
-            | SimdWhitespaceSkip
             | FuncEnd => {}
         }
     }
@@ -453,10 +415,6 @@ impl LinearOp {
                 f(src);
             }
 
-            BoundsCheck { .. } | AdvanceCursor { .. } => {}
-            ReadBytes { dst, .. } => f(dst),
-            PeekByte { dst } => f(dst),
-            AdvanceCursorBy { src } => f(src),
             SaveCursor { dst } => f(dst),
             SaveInputEnd { dst } => f(dst),
             RestoreCursor { src } => f(src),
@@ -533,12 +491,6 @@ impl LinearOp {
                 }
             }
             JumpTable { predicate, .. } => f(predicate),
-
-            SimdStringScan { pos, kind } => {
-                f(pos);
-                f(kind);
-            }
-            SimdWhitespaceSkip => {}
 
             FuncStart {
                 data_args,
@@ -1221,27 +1173,6 @@ impl<'a> Linearizer<'a> {
             }
 
             // ── Cursor ops ──
-            IrOp::BoundsCheck { count } => {
-                self.emit_node(node, LinearOp::BoundsCheck { count: *count });
-            }
-            IrOp::ReadBytes { count } => {
-                self.emit_node(
-                    node,
-                    LinearOp::ReadBytes {
-                        dst: data_dst(0),
-                        count: *count,
-                    },
-                );
-            }
-            IrOp::PeekByte => {
-                self.emit_node(node, LinearOp::PeekByte { dst: data_dst(0) });
-            }
-            IrOp::AdvanceCursor { count } => {
-                self.emit_node(node, LinearOp::AdvanceCursor { count: *count });
-            }
-            IrOp::AdvanceCursorBy => {
-                self.emit_node(node, LinearOp::AdvanceCursorBy { src: data_in(0) });
-            }
             IrOp::SaveCursor => {
                 self.emit_node(node, LinearOp::SaveCursor { dst: data_dst(0) });
             }
@@ -1376,19 +1307,6 @@ impl<'a> Linearizer<'a> {
                 self.emit_node(node, LinearOp::ErrorExit { code: *code });
             }
 
-            // ── SIMD ──
-            IrOp::SimdStringScan => {
-                self.emit_node(
-                    node,
-                    LinearOp::SimdStringScan {
-                        pos: data_dst(0),
-                        kind: data_dst(1),
-                    },
-                );
-            }
-            IrOp::SimdWhitespaceSkip => {
-                self.emit_node(node, LinearOp::SimdWhitespaceSkip);
-            }
             IrOp::Nop => {
                 // No-op; skip.
             }
@@ -4089,7 +4007,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         LinearOp::UnaryOp { src, .. } => vec![*src],
         LinearOp::Copy { src, .. } => vec![*src],
-        LinearOp::AdvanceCursorBy { src } => vec![*src],
         LinearOp::RestoreCursor { src } => vec![*src],
         LinearOp::WriteToField { src, .. } => vec![*src],
         LinearOp::SetOutPtr { src } => vec![*src],
@@ -4122,15 +4039,10 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         }
         LinearOp::Branch { phi_args, .. } => phi_args.iter().map(|(src, _dst)| *src).collect(),
         LinearOp::JumpTable { predicate, .. } => vec![*predicate],
-        LinearOp::SimdStringScan { pos, kind } => vec![*pos, *kind],
         LinearOp::CallLambda { args, .. } => args.clone(),
         LinearOp::FuncEnd => func_end_uses.unwrap_or_default().to_vec(),
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
-        | LinearOp::BoundsCheck { .. }
-        | LinearOp::ReadBytes { .. }
-        | LinearOp::PeekByte { .. }
-        | LinearOp::AdvanceCursor { .. }
         | LinearOp::SaveCursor { .. }
         | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
@@ -4139,7 +4051,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
         | LinearOp::ErrorExit { .. }
-        | LinearOp::SimdWhitespaceSkip
         | LinearOp::FuncStart { .. } => Vec::new(),
     }
 }
@@ -4150,8 +4061,6 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::BinOp { dst, .. } => vec![*dst],
         LinearOp::UnaryOp { dst, .. } => vec![*dst],
         LinearOp::Copy { dst, .. } => vec![*dst],
-        LinearOp::ReadBytes { dst, .. } => vec![*dst],
-        LinearOp::PeekByte { dst } => vec![*dst],
         LinearOp::SaveCursor { dst } => vec![*dst],
         LinearOp::SaveInputEnd { dst } => vec![*dst],
         LinearOp::ReadFromField { dst, .. } => vec![*dst],
@@ -4161,13 +4070,9 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::ReadFromSlot { dst, .. } => vec![*dst],
         LinearOp::CallIntrinsic { dst, .. } => dst.iter().copied().collect(),
         LinearOp::CallPure { dst, .. } | LinearOp::CallEffect { dst, .. } => vec![*dst],
-        LinearOp::SimdStringScan { pos, kind } => vec![*pos, *kind],
         LinearOp::FuncStart { data_args, .. } => data_args.clone(),
         LinearOp::CallLambda { results, .. } => results.clone(),
-        LinearOp::BoundsCheck { .. }
-        | LinearOp::AdvanceCursor { .. }
-        | LinearOp::AdvanceCursorBy { .. }
-        | LinearOp::RestoreCursor { .. }
+        LinearOp::RestoreCursor { .. }
         | LinearOp::WriteToField { .. }
         | LinearOp::SetOutPtr { .. }
         | LinearOp::StoreToAddr { .. }
@@ -4178,7 +4083,6 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         | LinearOp::BranchIfZero { .. }
         | LinearOp::JumpTable { .. }
         | LinearOp::ErrorExit { .. }
-        | LinearOp::SimdWhitespaceSkip
         | LinearOp::FuncEnd => Vec::new(),
     }
 }
@@ -4212,7 +4116,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         }
         LinearOp::UnaryOp { src, .. } => rewrite(src, &mut resolve),
         LinearOp::Copy { src, .. } => rewrite(src, &mut resolve),
-        LinearOp::AdvanceCursorBy { src } => rewrite(src, &mut resolve),
         LinearOp::RestoreCursor { src } => rewrite(src, &mut resolve),
         LinearOp::WriteToField { src, .. } => rewrite(src, &mut resolve),
         LinearOp::SetOutPtr { src } => rewrite(src, &mut resolve),
@@ -4256,16 +4159,8 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
             }
         }
         LinearOp::JumpTable { predicate, .. } => rewrite(predicate, &mut resolve),
-        LinearOp::SimdStringScan { pos, kind } => {
-            rewrite(pos, &mut resolve);
-            rewrite(kind, &mut resolve);
-        }
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
-        | LinearOp::BoundsCheck { .. }
-        | LinearOp::ReadBytes { .. }
-        | LinearOp::PeekByte { .. }
-        | LinearOp::AdvanceCursor { .. }
         | LinearOp::SaveCursor { .. }
         | LinearOp::SaveInputEnd { .. }
         | LinearOp::ReadFromField { .. }
@@ -4274,7 +4169,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
         | LinearOp::ErrorExit { .. }
-        | LinearOp::SimdWhitespaceSkip
         | LinearOp::FuncStart { .. }
         | LinearOp::FuncEnd => {}
     }
@@ -4823,20 +4717,6 @@ fn fmt_op(
             write!(f, " = copy ")?;
             fmt_vreg(f, *src)
         }
-        LinearOp::BoundsCheck { count } => write!(f, "bounds_check {count}"),
-        LinearOp::ReadBytes { dst, count } => {
-            fmt_vreg(f, *dst)?;
-            write!(f, " = read_bytes {count}")
-        }
-        LinearOp::PeekByte { dst } => {
-            fmt_vreg(f, *dst)?;
-            write!(f, " = peek_byte")
-        }
-        LinearOp::AdvanceCursor { count } => write!(f, "advance {count}"),
-        LinearOp::AdvanceCursorBy { src } => {
-            write!(f, "advance_by ")?;
-            fmt_vreg(f, *src)
-        }
         LinearOp::SaveCursor { dst } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = save_cursor")
@@ -5038,13 +4918,6 @@ fn fmt_op(
             write!(f, "] default L{}", default.index())
         }
         LinearOp::ErrorExit { code } => write!(f, "error_exit {code:?}"),
-        LinearOp::SimdStringScan { pos, kind } => {
-            fmt_vreg(f, *pos)?;
-            write!(f, ", ")?;
-            fmt_vreg(f, *kind)?;
-            write!(f, " = simd_string_scan")
-        }
-        LinearOp::SimdWhitespaceSkip => write!(f, "simd_whitespace_skip"),
         LinearOp::CallLambda {
             target,
             args,
@@ -5127,32 +5000,30 @@ mod tests {
 
     #[test]
     fn linearize_simple_chain() {
-        // BoundsCheck(4) → ReadBytes(4) → WriteToField(offset=0, W4)
+        // Const(42) → WriteToField(offset=0, W4)
         let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let data = rb.read_bytes(4);
+            let data = rb.const_val(42);
             rb.write_to_field(data, 0, Width::W4);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
         let ir = linearize(&mut func);
 
-        // Expected: FuncStart, BoundsCheck(4), ReadBytes(4), WriteToField, FuncEnd
+        // Expected: FuncStart, Const(42), WriteToField, FuncEnd
         assert!(matches!(ir.ops[0], LinearOp::FuncStart { .. }));
-        assert!(matches!(ir.ops[1], LinearOp::BoundsCheck { count: 4 }));
-        assert!(matches!(ir.ops[2], LinearOp::ReadBytes { count: 4, .. }));
+        assert!(matches!(ir.ops[1], LinearOp::Const { .. }));
         assert!(matches!(
-            ir.ops[3],
+            ir.ops[2],
             LinearOp::WriteToField {
                 offset: 0,
                 width: Width::W4,
                 ..
             }
         ));
-        assert!(matches!(ir.ops[4], LinearOp::FuncEnd));
-        assert_eq!(ir.ops.len(), 5);
+        assert!(matches!(ir.ops[3], LinearOp::FuncEnd));
+        assert_eq!(ir.ops.len(), 4);
     }
 
     #[test]
@@ -5283,7 +5154,6 @@ mod tests {
         let mut builder = IrBuilder::new("bool", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(1);
             rb.call_intrinsic(
                 IntrinsicFn(dummy_intrinsic as *const () as usize),
                 &[],
@@ -5307,8 +5177,7 @@ mod tests {
         let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let data = rb.read_bytes(4);
+            let data = rb.const_val(42);
             rb.write_to_field(data, 0, Width::W4);
             rb.set_results(&[]);
         }
@@ -5319,14 +5188,6 @@ mod tests {
         assert!(
             display.contains("func"),
             "display should start with func:\n{display}"
-        );
-        assert!(
-            display.contains("bounds_check 4"),
-            "display should contain bounds_check:\n{display}"
-        );
-        assert!(
-            display.contains("read_bytes 4"),
-            "display should contain read_bytes:\n{display}"
         );
         assert!(
             display.contains("store [0:W4]"),

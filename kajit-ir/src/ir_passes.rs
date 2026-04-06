@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    CURSOR_STATE_PORT, InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort,
-    OutputRef, PortKind, PortSource, Region, RegionArg, RegionArgRef, RegionId, RegionResult,
-    ResultId, verify,
+    InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind,
+    PortSource, Region, RegionArg, RegionArgRef, RegionId, RegionResult, ResultId, verify,
 };
 
 const MAX_INLINE_NODES_SINGLE_USE: usize = 256;
@@ -148,11 +147,6 @@ impl DefaultPassSpec {
     }
 }
 
-fn run_bounds_check_coalescing_pass(func: &mut IrFunc) {
-    bounds_check_coalescing_pass(func);
-    debug_verify(func, "bounds_check_coalescing_pass");
-}
-
 fn run_hoist_theta_loop_invariant_setup_pass(func: &mut IrFunc) {
     hoist_theta_loop_invariant_setup_pass(func);
     debug_verify(func, "hoist_theta_loop_invariant_setup_pass");
@@ -225,7 +219,7 @@ fn run_slot_to_reg_pass(func: &mut IrFunc) {
     debug_verify(func, "slot_to_reg");
 }
 
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 12] = [
+const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 11] = [
     DefaultPassSpec {
         name: "slot_to_reg",
         description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
@@ -240,11 +234,6 @@ const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 12] = [
         name: "simplify_trivial_gammas",
         description: "Remove gamma nodes where all branches produce identical passthrough results.",
         run: run_simplify_trivial_gammas_pass,
-    },
-    DefaultPassSpec {
-        name: "bounds_check_coalescing",
-        description: "Coalesce redundant BoundsCheck chains in cursor pipelines.",
-        run: run_bounds_check_coalescing_pass,
     },
     DefaultPassSpec {
         name: "theta_loop_invariant_hoist",
@@ -290,125 +279,6 @@ const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 12] = [
 
 pub fn default_pass_registry() -> &'static [DefaultPassSpec] {
     &DEFAULT_PASS_REGISTRY
-}
-
-// r[impl ir.passes.planned]
-fn bounds_check_coalescing_pass(func: &mut IrFunc) {
-    loop {
-        let mut use_lists = UseLists::build(func);
-        let region_ids: Vec<RegionId> = func.regions.iter().map(|(rid, _)| rid).collect();
-        let mut changed = false;
-        for rid in region_ids {
-            if coalesce_bounds_checks_in_region(func, rid, &mut use_lists) {
-                changed = true;
-                break;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-}
-
-fn coalesce_bounds_checks_in_region(
-    func: &mut IrFunc,
-    region_id: RegionId,
-    use_lists: &mut UseLists,
-) -> bool {
-    let nodes = func.regions[region_id].nodes.clone();
-    for (i, first) in nodes.iter().copied().enumerate() {
-        let Some(first_count) = bounds_check_count(func, first) else {
-            continue;
-        };
-        let Some(first_cursor_out) = state_cursor_output_ref(func, first) else {
-            continue;
-        };
-        let mut chain_source = PortSource::Node(first_cursor_out);
-        let mut consumed_bytes = 0u32;
-
-        for second in nodes.iter().copied().skip(i + 1) {
-            let Some(second_cursor_in) = state_cursor_input_source(func, second) else {
-                break;
-            };
-            if second_cursor_in != chain_source {
-                break;
-            }
-
-            if let Some(second_count) = bounds_check_count(func, second) {
-                let combined = first_count.max(consumed_bytes.saturating_add(second_count));
-                if let NodeKind::Simple(IrOp::BoundsCheck { count }) = &mut func.nodes[first].kind {
-                    *count = combined;
-                }
-
-                let Some(second_cursor_out) = state_cursor_output_ref(func, second) else {
-                    break;
-                };
-                replace_output_use(func, use_lists, second_cursor_out, second_cursor_in);
-                if let Some(pos) = func.regions[region_id]
-                    .nodes
-                    .iter()
-                    .position(|&nid| nid == second)
-                {
-                    func.regions[region_id].nodes.remove(pos);
-                    return true;
-                }
-                break;
-            }
-
-            let Some((advance, next_source)) = cursor_chain_step(func, second, second_cursor_in)
-            else {
-                break;
-            };
-            consumed_bytes = consumed_bytes.saturating_add(advance);
-            chain_source = next_source;
-        }
-    }
-    false
-}
-
-fn bounds_check_count(func: &IrFunc, node_id: NodeId) -> Option<u32> {
-    match &func.nodes[node_id].kind {
-        NodeKind::Simple(IrOp::BoundsCheck { count }) => Some(*count),
-        _ => None,
-    }
-}
-
-fn state_cursor_input_source(func: &IrFunc, node_id: NodeId) -> Option<PortSource> {
-    func.nodes[node_id]
-        .inputs
-        .iter()
-        .find(|inp| inp.kind == CURSOR_STATE_PORT)
-        .map(|inp| inp.source)
-}
-
-fn state_cursor_output_ref(func: &IrFunc, node_id: NodeId) -> Option<OutputRef> {
-    func.nodes[node_id]
-        .outputs
-        .iter()
-        .position(|out| out.kind == CURSOR_STATE_PORT)
-        .map(|idx| OutputRef {
-            node: node_id,
-            index: idx as u16,
-        })
-}
-
-fn cursor_chain_step(
-    func: &IrFunc,
-    node_id: NodeId,
-    state_in: PortSource,
-) -> Option<(u32, PortSource)> {
-    let node = &func.nodes[node_id];
-    let input = state_cursor_input_source(func, node_id)?;
-    if input != state_in {
-        return None;
-    }
-    let out = PortSource::Node(state_cursor_output_ref(func, node_id)?);
-    let NodeKind::Simple(op) = &node.kind else {
-        return None;
-    };
-
-    let advance = op.cursor_advance()?;
-    Some((advance, out))
 }
 
 // r[impl ir.passes.pre-regalloc.loop-invariants]
@@ -1425,8 +1295,7 @@ mod tests {
         let child = builder.create_lambda("u8", 0);
         {
             let mut rb = builder.lambda_region(child);
-            rb.bounds_check(1);
-            let b = rb.read_bytes(1);
+            let b = rb.const_val(0);
             rb.write_to_field(b, 0, Width::W1);
             rb.set_results(&[]);
         }

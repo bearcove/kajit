@@ -30,8 +30,6 @@ impl LinearOpDst for LinearOp {
             | Self::LoadFromAddr { dst, .. }
             | Self::SaveCursor { dst, .. }
             | Self::SaveInputEnd { dst, .. }
-            | Self::PeekByte { dst, .. }
-            | Self::ReadBytes { dst, .. }
             | Self::ReadFromField { dst, .. }
             | Self::SlotAddr { dst, .. }
             | Self::SaveOutPtr { dst, .. }
@@ -40,7 +38,6 @@ impl LinearOpDst for LinearOp {
             | Self::CallEffect { dst, .. } => Some(*dst),
             Self::CallIntrinsic { dst, .. } => *dst,
             Self::CallLambda { .. } => None,
-            Self::SimdStringScan { .. } => None,
             Self::Label(_)
             | Self::Branch { .. }
             | Self::BranchIf { .. }
@@ -52,11 +49,7 @@ impl LinearOpDst for LinearOp {
             | Self::WriteToSlot { .. }
             | Self::WriteToField { .. }
             | Self::RestoreCursor { .. }
-            | Self::AdvanceCursorBy { .. }
-            | Self::SetOutPtr { .. }
-            | Self::BoundsCheck { .. }
-            | Self::AdvanceCursor { .. }
-            | Self::SimdWhitespaceSkip => None,
+            | Self::SetOutPtr { .. } => None,
         }
     }
 }

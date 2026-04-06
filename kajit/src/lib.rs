@@ -649,41 +649,6 @@ pub fn differential_check_linear_ir_vs_jit_with_output_size(
 mod differential_tests {
     use super::*;
 
-    const POSTCARD_U32_V0_RVSDG_SNAPSHOT: &str = include_str!(
-        "../tests/snapshots/corpus__generated_rvsdg_postcard_scalar_u32__v0_x86_64.snap"
-    );
-
-    fn snapshot_body(snapshot: &'static str) -> &'static str {
-        let snapshot = snapshot
-            .strip_prefix("---\n")
-            .expect("insta snapshot should start with frontmatter");
-        let (_, body) = snapshot
-            .split_once("\n---\n")
-            .expect("insta snapshot frontmatter should end with separator");
-        body.trim()
-    }
-
-    #[test]
-    fn differential_harness_matches_postcard_u32_linear_ir_snapshot() {
-        let ir_text = snapshot_body(POSTCARD_U32_V0_RVSDG_SNAPSHOT);
-        let registry = ir::IntrinsicRegistry::new();
-        let mut ir_func = ir_parse::parse_ir(ir_text, &registry).expect("valid RVSDG");
-        let linear = linearize::linearize(&mut ir_func);
-        let report =
-            differential_check_linear_ir_vs_jit(&linear, &[0x2a]).expect("harness should execute");
-        assert!(
-            report.is_match(),
-            "unexpected mismatch: {:?}",
-            report.mismatch
-        );
-        assert_eq!(
-            report.interpreter,
-            DifferentialOutcome::Success {
-                output: vec![0x2a, 0x00, 0x00, 0x00]
-            }
-        );
-    }
-
     #[test]
     fn differential_harness_reports_first_divergent_byte() {
         let interpreter = DifferentialOutcome::Success {

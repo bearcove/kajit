@@ -11,67 +11,32 @@ lambda @0 @s0 (shape: "u8") {
     args: [%cs, %os]
     n1 = Const(0x0) [] -> [v0]
     n2 = Const(0x0) [] -> [v1]
-    n3 = BoundsCheck(1) [%cs:arg] -> [%cs]
-    n13 @s1 = Const(0x7) [] -> [?]
-    n14 @s1 = Const(0x1) [] -> [?]
-    n15 @s1 = Const(0x0) [] -> [?]
-    n18 @s1 = Const(0x1) [] -> [?]
-    n4 = ReadBytes(1) [%cs:n3] -> [v2, %cs]
-    n16 @s1 = Identity [v2] -> [?]
-    n17 @s1 = Identity [n16.0] -> [?]
-    n34 = gamma [
-      pred: v2
-      in0: n18.0
-      in1: n17.0
-      in2: v2
-      in3: %cs:n4
-      in4: %os:arg
-    ] {
-      branch 0:
-        region @s0 {
-          args: [arg0, arg1, arg2, %cs, %os]
-          results: [arg0, arg1, arg2, %cs:arg, %os:arg]
-        }
-      branch 1:
-        region @s0 {
-          args: [arg0, arg1, arg2, %cs, %os]
-          n19 = Const(0x1) [] -> [?]
-          n20 @s1 = Const(0x7) [] -> [?]
-          n21 @s1 = Const(0x1) [] -> [?]
-          n22 @s1 = Const(0x7) [] -> [?]
-          n23 @s1 = Shl [arg2, n22.0] -> [?]
-          n24 @s1 = Or [arg1, n23.0] -> [?]
-          n25 @s1 = Const(0x2) [] -> [?]
-          n33 = gamma [
-            pred: arg2
-            in0: n25.0
-            in1: n24.0
-            in2: arg2
-            in3: %cs:arg
-            in4: %os:arg
-          ] {
-            branch 0:
-              region @s0 {
-                args: [arg0, arg1, arg2, %cs, %os]
-                results: [arg0, arg1, arg2, %cs:arg, %os:arg]
-              }
-            branch 1:
-              region @s0 {
-                args: [arg0, arg1, arg2, %cs, %os]
-                n26 = Const(0x2) [] -> [?]
-                n27 @s1 = Const(0x7) [] -> [?]
-                n28 @s1 = Const(0x1) [] -> [?]
-                n29 @s1 = Const(0xe) [] -> [?]
-                n30 @s1 = Shl [arg2, n29.0] -> [?]
-                n31 @s1 = Or [arg1, n30.0] -> [?]
-                n32 @s1 = Const(0x3) [] -> [?]
-                results: [n32.0, n31.0, arg2, %cs:arg, %os:arg]
-              }
-          } -> [?, ?, ?, %cs, %os]
-          results: [n33.0, n33.1, n33.2, %cs:n33, %os:n33]
-        }
-    } -> [?, ?, ?, %cs, %os]
-    n12 = WriteToField(offset=0, W4) [n34.1, %os:n34] -> [%os]
-    results: [%cs:n34, %os:n12]
+    n3 = Const(0x1) [] -> [v2]
+    n12 @s1 = Const(0x7) [] -> [?]
+    n13 @s1 = Const(0x1) [] -> [?]
+    n14 @s1 = Const(0x0) [] -> [?]
+    n15 @s1 = Const(0x1) [] -> [?]
+    n16 @s1 = Const(0x1) [] -> [?]
+    n17 @s1 = Const(0x1) [] -> [?]
+    n18 = Const(0x1) [] -> [?]
+    n19 = Const(0x1) [] -> [?]
+    n20 = Const(0x1) [] -> [?]
+    n21 @s1 = Const(0x7) [] -> [?]
+    n22 @s1 = Const(0x1) [] -> [?]
+    n23 @s1 = Const(0x7) [] -> [?]
+    n24 @s1 = Const(0x80) [] -> [?]
+    n25 @s1 = Const(0x81) [] -> [?]
+    n26 @s1 = Const(0x2) [] -> [?]
+    n27 = Const(0x2) [] -> [?]
+    n28 = Const(0x81) [] -> [?]
+    n29 = Const(0x1) [] -> [?]
+    n30 @s1 = Const(0x7) [] -> [?]
+    n31 @s1 = Const(0x1) [] -> [?]
+    n32 @s1 = Const(0xe) [] -> [?]
+    n33 @s1 = Const(0x4000) [] -> [?]
+    n34 @s1 = Const(0x4081) [] -> [?]
+    n35 @s1 = Const(0x3) [] -> [?]
+    n11 = WriteToField(offset=0, W4) [n34.0, %os:arg] -> [%os]
+    results: [%cs:arg, %os:n11]
   }
 }

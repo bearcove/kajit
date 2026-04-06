@@ -304,16 +304,15 @@ mod tests {
                 blocks: vec![block],
                 edges: Vec::new(),
                 insts: vec![
-                    test_inst(0, LinearOp::BoundsCheck { count: 1 }),
                     test_inst(
-                        1,
-                        LinearOp::ReadBytes {
+                        0,
+                        LinearOp::Const {
                             dst: v(0),
-                            count: 1,
+                            value: 42,
                         },
                     ),
                     test_inst(
-                        2,
+                        1,
                         LinearOp::WriteToField {
                             src: v(0),
                             offset: 0,

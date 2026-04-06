@@ -171,11 +171,6 @@ enum AstOp {
     BinOp(BinOpKind),
     UnaryOp(UnaryOpKind),
     Copy,
-    BoundsCheck(u32),
-    ReadBytes(u32),
-    PeekByte,
-    Advance(u32),
-    AdvanceBy,
     SaveCursor,
     SaveInputEnd,
     RestoreCursor,
@@ -192,8 +187,6 @@ enum AstOp {
     CallPure(IntrinsicRef),
     CallEffect(IntrinsicRef),
     CallLambda(u32),
-    SimdStringScan,
-    SimdWsSkip,
     ErrorExit(ErrorCode),
     DataAddr(u32),
 }
@@ -209,18 +202,6 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             )
             .then_ignore(just(")"))
             .map(AstOp::Const),
-        just("bounds_check(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(AstOp::BoundsCheck),
-        just("read_bytes(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(AstOp::ReadBytes),
-        just("advance(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(AstOp::Advance),
         just("store([")
             .ignore_then(uint32())
             .then_ignore(just(":"))
@@ -315,15 +296,11 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
 
     let simple = choice((
         just("copy").to(AstOp::Copy),
-        just("peek_byte").to(AstOp::PeekByte),
-        just("advance_by").to(AstOp::AdvanceBy),
         just("save_cursor").to(AstOp::SaveCursor),
         just("save_input_end").to(AstOp::SaveInputEnd),
         just("restore_cursor").to(AstOp::RestoreCursor),
         just("save_out_ptr").to(AstOp::SaveOutPtr),
         just("set_out_ptr").to(AstOp::SetOutPtr),
-        just("simd_string_scan").to(AstOp::SimdStringScan),
-        just("simd_ws_skip").to(AstOp::SimdWsSkip),
     ));
 
     choice((parameterized, parameterized2, binops, unaryops, simple))
@@ -897,24 +874,6 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
                 },
             }
         }
-        AstOp::BoundsCheck(count) => LinearOp::BoundsCheck { count: *count },
-        AstOp::ReadBytes(count) => LinearOp::ReadBytes {
-            dst: dst.ok_or_else(|| ParseError {
-                message: format!("inst i{} read_bytes missing dst", ast.id.0),
-            })?,
-            count: *count,
-        },
-        AstOp::PeekByte => LinearOp::PeekByte {
-            dst: dst.ok_or_else(|| ParseError {
-                message: format!("inst i{} peek_byte missing dst", ast.id.0),
-            })?,
-        },
-        AstOp::Advance(count) => LinearOp::AdvanceCursor { count: *count },
-        AstOp::AdvanceBy => LinearOp::AdvanceCursorBy {
-            src: src.ok_or_else(|| ParseError {
-                message: format!("inst i{} advance_by missing src", ast.id.0),
-            })?,
-        },
         AstOp::SaveCursor => LinearOp::SaveCursor {
             dst: dst.ok_or_else(|| ParseError {
                 message: format!("inst i{} save_cursor missing dst", ast.id.0),
@@ -1029,18 +988,6 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
             args: ast.body.uses.iter().map(|(v, _, _)| *v).collect(),
             results: ast.body.defs.iter().map(|(v, _, _)| *v).collect(),
         },
-        AstOp::SimdStringScan => {
-            if ast.body.defs.len() < 2 {
-                return Err(ParseError {
-                    message: format!("inst i{} simd_string_scan needs two defs", ast.id.0),
-                });
-            }
-            LinearOp::SimdStringScan {
-                pos: ast.body.defs[0].0,
-                kind: ast.body.defs[1].0,
-            }
-        }
-        AstOp::SimdWsSkip => LinearOp::SimdWhitespaceSkip,
         AstOp::ErrorExit(code) => LinearOp::ErrorExit { code: *code },
         AstOp::DataAddr(blob_id) => LinearOp::DataAddr {
             dst: dst.ok_or_else(|| ParseError {
@@ -1134,8 +1081,7 @@ cfg_program vregs=1 slots=0 {
         let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let val = rb.read_bytes(4);
+            let val = rb.const_val(42);
             rb.write_to_field(val, 0, Width::W4);
             rb.set_results(&[]);
         }

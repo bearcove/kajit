@@ -627,26 +627,6 @@ pub enum NodeKind {
 pub enum IrOp {
     // ── Cursor ops ──────────────────────────────────────────────────
     // r[impl ir.ops.cursor]
-    /// Read N bytes from cursor. Advances cursor.
-    /// Inputs: [StateCursor]. Outputs: [Data, StateCursor].
-    ReadBytes { count: u32 },
-
-    /// Read one byte without advancing.
-    /// Inputs: [StateCursor]. Outputs: [Data, StateCursor].
-    PeekByte,
-
-    /// Skip N bytes (static count).
-    /// Inputs: [StateCursor]. Outputs: [StateCursor].
-    AdvanceCursor { count: u32 },
-
-    /// Skip N bytes (dynamic count from data input).
-    /// Inputs: [Data, StateCursor]. Outputs: [StateCursor].
-    AdvanceCursorBy,
-
-    /// Assert N bytes remain. Error exit on failure.
-    /// Inputs: [StateCursor]. Outputs: [StateCursor].
-    BoundsCheck { count: u32 },
-
     /// Snapshot cursor position into a data value.
     /// Inputs: [StateCursor]. Outputs: [Data, StateCursor].
     SaveCursor,
@@ -810,17 +790,6 @@ pub enum IrOp {
     /// Inputs: [StateCursor]. Outputs: [].
     ErrorExit { code: ErrorCode },
 
-    // ── SIMD ops ────────────────────────────────────────────────────
-    // r[impl ir.ops.simd]
-    /// Vectorized scan for `"` or `\` in a string.
-    /// Inputs: [StateCursor].
-    /// Outputs: [Data (position), Data (kind: quote vs escape), StateCursor].
-    SimdStringScan,
-
-    /// Skip whitespace bytes using SIMD.
-    /// Inputs: [StateCursor]. Outputs: [StateCursor].
-    SimdWhitespaceSkip,
-
     /// No-op placeholder for removed nodes (used during optimization passes).
     /// Inputs: []. Outputs: [].
     Nop,
@@ -900,17 +869,10 @@ impl IrOp {
             IrOp::CallEffect { .. } => (Effect::Domain(MEMORY_STATE_DOMAIN), None),
 
             // Cursor ops
-            IrOp::ReadBytes { count } => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(*count)),
-            IrOp::AdvanceCursor { count } => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(*count)),
-            IrOp::PeekByte | IrOp::SaveCursor | IrOp::SaveInputEnd | IrOp::BoundsCheck { .. } => {
-                (Effect::Domain(CURSOR_STATE_DOMAIN), Some(0))
-            }
-            IrOp::AdvanceCursorBy
-            | IrOp::RestoreCursor
+            IrOp::SaveCursor | IrOp::SaveInputEnd => (Effect::Domain(CURSOR_STATE_DOMAIN), Some(0)),
+            IrOp::RestoreCursor
             | IrOp::WriteToSlot { .. }
             | IrOp::ReadFromSlot { .. }
-            | IrOp::SimdStringScan
-            | IrOp::SimdWhitespaceSkip
             | IrOp::ErrorExit { .. } => (Effect::Domain(CURSOR_STATE_DOMAIN), None),
 
             // Output ops
@@ -1679,117 +1641,6 @@ impl<'a> RegionBuilder<'a> {
     }
 
     // ── Cursor operations (auto-threaded) ───────────────────────────
-
-    /// Read N bytes from cursor. Returns data output.
-    pub fn read_bytes(&mut self, count: u32) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
-            }],
-            outputs: vec![
-                data_out,
-                Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope),
-            ],
-            kind: NodeKind::Simple(IrOp::ReadBytes { count }),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Peek one byte without advancing. Returns data output.
-    pub fn peek_byte(&mut self) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
-            }],
-            outputs: vec![
-                data_out,
-                Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope),
-            ],
-            kind: NodeKind::Simple(IrOp::PeekByte),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Advance cursor by N bytes (static count).
-    pub fn advance_cursor(&mut self, count: u32) {
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
-            }],
-            outputs: vec![Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::AdvanceCursor { count }),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
-    }
-
-    /// Advance cursor by a dynamic amount.
-    pub fn advance_cursor_by(&mut self, count: PortSource) {
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![
-                InputPort {
-                    kind: PortKind::Data,
-                    source: count,
-                },
-                InputPort {
-                    kind: CURSOR_STATE_PORT,
-                    source: self.state_source(CURSOR_STATE_DOMAIN),
-                },
-            ],
-            outputs: vec![Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::AdvanceCursorBy),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
-    }
-
-    /// Assert N bytes remain. Error exits on failure.
-    pub fn bounds_check(&mut self, count: u32) {
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: CURSOR_STATE_PORT,
-                source: self.state_source(CURSOR_STATE_DOMAIN),
-            }],
-            outputs: vec![Self::state_output(CURSOR_STATE_DOMAIN, self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::BoundsCheck { count }),
-        });
-        self.set_state_source(
-            CURSOR_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
-    }
 
     /// Save cursor position. Returns data output (the saved position).
     // r[impl ir.cursor.snapshot]
@@ -2909,11 +2760,6 @@ impl IrFunc {
         registry: Option<&IntrinsicRegistry>,
     ) -> fmt::Result {
         match op {
-            IrOp::ReadBytes { count } => write!(f, "ReadBytes({count})"),
-            IrOp::PeekByte => write!(f, "PeekByte"),
-            IrOp::AdvanceCursor { count } => write!(f, "AdvanceCursor({count})"),
-            IrOp::AdvanceCursorBy => write!(f, "AdvanceCursorBy"),
-            IrOp::BoundsCheck { count } => write!(f, "BoundsCheck({count})"),
             IrOp::SaveCursor => write!(f, "SaveCursor"),
             IrOp::SaveInputEnd => write!(f, "SaveInputEnd"),
             IrOp::RestoreCursor => write!(f, "RestoreCursor"),
@@ -2976,8 +2822,6 @@ impl IrFunc {
                 write!(f, ")")
             }
             IrOp::ErrorExit { code } => write!(f, "ErrorExit({code:?})"),
-            IrOp::SimdStringScan => write!(f, "SimdStringScan"),
-            IrOp::SimdWhitespaceSkip => write!(f, "SimdWhitespaceSkip"),
             IrOp::Nop => write!(f, "Nop"),
             IrOp::Identity => write!(f, "Identity"),
         }
@@ -3181,7 +3025,7 @@ mod tests {
 
     #[test]
     fn linear_chain_state_threading() {
-        // Build: bounds_check(4) -> read_bytes(4) -> write_to_field(0, W4)
+        // Build: save_cursor -> write_to_field
         // Verify that each cursor op's input is the previous one's output.
         let mut builder = IrBuilder::new(test_label(), 0);
 
@@ -3195,48 +3039,31 @@ mod tests {
             arg: builder.func.regions[body].args[1],
         });
 
-        let (read_node, after_check_cs) = {
+        {
             let mut rb = builder.root_region();
 
             // Check initial state.
             assert_eq!(rb.cursor_state(), initial_cs);
             assert_eq!(rb.output_state(), initial_os);
 
-            // bounds_check(4)
-            rb.bounds_check(4);
-            let after_check_cs = rb.cursor_state();
-            assert_ne!(after_check_cs, initial_cs);
+            // save_cursor
+            let data = rb.save_cursor();
+            let after_save_cs = rb.cursor_state();
+            assert_ne!(after_save_cs, initial_cs);
             assert_eq!(rb.output_state(), initial_os); // output unchanged
-
-            // read_bytes(4)
-            let data = rb.read_bytes(4);
-            let after_read_cs = rb.cursor_state();
-            assert_ne!(after_read_cs, after_check_cs);
-
-            // Save the read node ID for inspection after the builder is dropped.
-            let read_node = match data {
-                PortSource::Node(OutputRef { node, .. }) => node,
-                _ => panic!("expected Node source"),
-            };
 
             // write_to_field
             rb.write_to_field(data, 0, Width::W4);
-            assert_eq!(rb.cursor_state(), after_read_cs); // cursor unchanged by output op
+            assert_eq!(rb.cursor_state(), after_save_cs); // cursor unchanged by output op
             assert_ne!(rb.output_state(), initial_os); // output updated
 
             rb.set_results(&[]);
-            (read_node, after_check_cs)
         };
 
         let func = builder.finish();
 
-        // Verify the read_bytes node's cursor input is the bounds_check output.
-        let read_input = &func.nodes[read_node].inputs[0];
-        assert_eq!(read_input.kind, CURSOR_STATE_PORT);
-        assert_eq!(read_input.source, after_check_cs);
-
-        // 3 nodes in the root region.
-        assert_eq!(func.regions[func.root_body()].nodes.len(), 3);
+        // 2 nodes in the root region.
+        assert_eq!(func.regions[func.root_body()].nodes.len(), 2);
     }
 
     #[test]
@@ -3253,10 +3080,7 @@ mod tests {
             Effect::Pure
         );
 
-        assert_eq!(IrOp::ReadBytes { count: 1 }.effect(), CURSOR_EFFECT);
-        assert_eq!(IrOp::BoundsCheck { count: 1 }.effect(), CURSOR_EFFECT);
         assert_eq!(IrOp::SaveCursor.effect(), CURSOR_EFFECT);
-        assert_eq!(IrOp::PeekByte.effect(), CURSOR_EFFECT);
 
         assert_eq!(
             IrOp::WriteToField {
@@ -3305,13 +3129,7 @@ mod tests {
 
     #[test]
     fn op_metadata_cursor_advance_and_side_effects() {
-        assert_eq!(IrOp::ReadBytes { count: 4 }.cursor_advance(), Some(4));
-        assert_eq!(IrOp::AdvanceCursor { count: 7 }.cursor_advance(), Some(7));
-        assert_eq!(IrOp::PeekByte.cursor_advance(), Some(0));
         assert_eq!(IrOp::SaveCursor.cursor_advance(), Some(0));
-        assert_eq!(IrOp::BoundsCheck { count: 32 }.cursor_advance(), Some(0));
-        assert_eq!(IrOp::AdvanceCursorBy.cursor_advance(), None);
-        assert_eq!(IrOp::SimdWhitespaceSkip.cursor_advance(), None);
         assert_eq!(IrOp::Const { value: 1 }.cursor_advance(), None);
 
         assert!(!IrOp::Const { value: 1 }.has_side_effects());
@@ -3322,7 +3140,7 @@ mod tests {
             }
             .has_side_effects()
         );
-        assert!(IrOp::ReadBytes { count: 1 }.has_side_effects());
+        assert!(IrOp::SaveCursor.has_side_effects());
         assert!(
             IrOp::WriteToField {
                 offset: 0,
@@ -3348,23 +3166,20 @@ mod tests {
         {
             let mut rb = builder.root_region();
 
-            // Read a byte, use it as predicate.
-            rb.bounds_check(1);
-            let tag = rb.read_bytes(1);
+            // Use a const as predicate.
+            let tag = rb.const_val(1);
 
             // Gamma: branch on tag.
-            // Branch 0: read 4 bytes, write to field 0.
-            // Branch 1: read 8 bytes, write to field 0.
+            // Branch 0: write const to field 0.
+            // Branch 1: write const to field 0.
             let _results = rb.gamma(tag, &[], 2, |branch_idx, branch| match branch_idx {
                 0 => {
-                    branch.bounds_check(4);
-                    let val = branch.read_bytes(4);
+                    let val = branch.const_val(4);
                     branch.write_to_field(val, 0, Width::W4);
                     branch.set_results(&[]);
                 }
                 1 => {
-                    branch.bounds_check(8);
-                    let val = branch.read_bytes(8);
+                    let val = branch.const_val(8);
                     branch.write_to_field(val, 0, Width::W8);
                     branch.set_results(&[]);
                 }
@@ -3376,18 +3191,18 @@ mod tests {
 
         let func = builder.finish();
 
-        // Root region: bounds_check + read_bytes + gamma = 3 nodes.
-        assert_eq!(func.regions[func.root_body()].nodes.len(), 3);
+        // Root region: const + gamma = 2 nodes.
+        assert_eq!(func.regions[func.root_body()].nodes.len(), 2);
 
         // Find the gamma node.
-        let gamma_id = func.regions[func.root_body()].nodes[2];
+        let gamma_id = func.regions[func.root_body()].nodes[1];
         let gamma = &func.nodes[gamma_id];
         match &gamma.kind {
             NodeKind::Gamma { regions } => {
                 assert_eq!(regions.len(), 2);
-                // Each branch has 3 nodes: bounds_check, read_bytes, write_to_field.
-                assert_eq!(func.regions[regions[0]].nodes.len(), 3);
-                assert_eq!(func.regions[regions[1]].nodes.len(), 3);
+                // Each branch has 2 nodes: const, write_to_field.
+                assert_eq!(func.regions[regions[0]].nodes.len(), 2);
+                assert_eq!(func.regions[regions[1]].nodes.len(), 2);
                 // Each branch has 2 results (cursor state + output state).
                 assert_eq!(func.regions[regions[0]].results.len(), 2);
                 assert_eq!(func.regions[regions[1]].results.len(), 2);
@@ -3403,18 +3218,16 @@ mod tests {
         {
             let mut rb = builder.root_region();
 
-            // Read a count.
-            rb.bounds_check(1);
-            let count = rb.read_bytes(1);
+            // Use a const as count.
+            let count = rb.const_val(3);
 
-            // Loop `count` times, reading 4 bytes each iteration.
+            // Loop `count` times, writing a const each iteration.
             let _results = rb.theta(&[count], |body| {
                 let args = body.region_args(1);
                 let counter = args[0];
 
-                // Read 4 bytes and write to field.
-                body.bounds_check(4);
-                let val = body.read_bytes(4);
+                // Write a const to field.
+                let val = body.const_val(42);
                 body.write_to_field(val, 0, Width::W4);
 
                 // Decrement counter.
@@ -3430,16 +3243,16 @@ mod tests {
 
         let func = builder.finish();
 
-        // Root region: bounds_check + read_bytes + theta = 3 nodes.
-        assert_eq!(func.regions[func.root_body()].nodes.len(), 3);
+        // Root region: const + theta = 2 nodes.
+        assert_eq!(func.regions[func.root_body()].nodes.len(), 2);
 
         // Find the theta node.
-        let theta_id = func.regions[func.root_body()].nodes[2];
+        let theta_id = func.regions[func.root_body()].nodes[1];
         let theta = &func.nodes[theta_id];
         match &theta.kind {
             NodeKind::Theta { body, .. } => {
-                // Body: bounds_check, read_bytes, write_to_field, const, sub = 5 nodes.
-                assert_eq!(func.regions[*body].nodes.len(), 5);
+                // Body: const, write_to_field, const, sub = 4 nodes.
+                assert_eq!(func.regions[*body].nodes.len(), 4);
                 // Results: predicate + loop_var + cursor_state + output_state = 4.
                 assert_eq!(func.regions[*body].results.len(), 4);
             }
@@ -3519,8 +3332,7 @@ mod tests {
 
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let val = rb.read_bytes(4);
+            let val = rb.const_val(42);
             rb.write_to_field(val, 0, Width::W4);
             rb.set_results(&[]);
         }
@@ -3530,8 +3342,7 @@ mod tests {
 
         // Verify the output contains expected fragments.
         assert!(output.contains("lambda @0"), "missing lambda header");
-        assert!(output.contains("BoundsCheck(4)"), "missing BoundsCheck");
-        assert!(output.contains("ReadBytes(4)"), "missing ReadBytes");
+        assert!(output.contains("Const("), "missing Const");
         assert!(
             output.contains("WriteToField(offset=0, W4)"),
             "missing WriteToField"

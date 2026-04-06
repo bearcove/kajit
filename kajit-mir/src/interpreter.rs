@@ -749,49 +749,6 @@ fn execute_function_inner(
                     let value = exec_unaryop(*op, src);
                     state.write_vreg(dst.index(), value);
                 }
-                LinearOp::BoundsCheck { count } => {
-                    let count = *count as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                        break;
-                    }
-                }
-                LinearOp::ReadBytes { dst, count } => {
-                    let count = *count as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                        break;
-                    }
-                    let mut value = 0u64;
-                    for i in 0..count {
-                        value |= (state.input[state.cursor + i] as u64) << (i * 8);
-                    }
-                    state.cursor += count;
-                    state.write_vreg(dst.index(), value);
-                }
-                LinearOp::PeekByte { dst } => {
-                    if state.cursor >= state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                        break;
-                    }
-                    state.write_vreg(dst.index(), state.input[state.cursor] as u64);
-                }
-                LinearOp::AdvanceCursor { count } => {
-                    let count = *count as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                        break;
-                    }
-                    state.cursor += count;
-                }
-                LinearOp::AdvanceCursorBy { src } => {
-                    let count = state.read_vreg(src.index()) as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                        break;
-                    }
-                    state.cursor += count;
-                }
                 LinearOp::SaveCursor { dst } => {
                     let ptr = unsafe { state.input_base.add(state.cursor) } as usize as u64;
                     state.write_vreg(dst.index(), ptr);
@@ -1226,71 +1183,6 @@ fn execute_function_inner_with_event_trace(
                             value: trace_value,
                         },
                     );
-                }
-                LinearOp::BoundsCheck { count } => {
-                    let count = *count as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                    }
-                }
-                LinearOp::ReadBytes { dst, count } => {
-                    let count = *count as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                    } else {
-                        let mut value = 0u64;
-                        for i in 0..count {
-                            value |= (state.input[state.cursor + i] as u64) << (i * 8);
-                        }
-                        state.cursor += count;
-                        let trace_value = TraceValue::U64(value);
-                        state.write_vreg(dst.index(), value);
-                        state.write_trace_vreg(dst.index(), trace_value.clone());
-                        push_interpreter_event(
-                            trace,
-                            step_index,
-                            location,
-                            InterpreterEventKind::VregWrite {
-                                vreg: *dst,
-                                value: trace_value,
-                            },
-                        );
-                    }
-                }
-                LinearOp::PeekByte { dst } => {
-                    if state.cursor >= state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                    } else {
-                        let value = state.input[state.cursor] as u64;
-                        let trace_value = TraceValue::U64(value);
-                        state.write_vreg(dst.index(), value);
-                        state.write_trace_vreg(dst.index(), trace_value.clone());
-                        push_interpreter_event(
-                            trace,
-                            step_index,
-                            location,
-                            InterpreterEventKind::VregWrite {
-                                vreg: *dst,
-                                value: trace_value,
-                            },
-                        );
-                    }
-                }
-                LinearOp::AdvanceCursor { count } => {
-                    let count = *count as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                    } else {
-                        state.cursor += count;
-                    }
-                }
-                LinearOp::AdvanceCursorBy { src } => {
-                    let count = state.read_vreg(src.index()) as usize;
-                    if state.cursor + count > state.input.len() {
-                        state.trap(ErrorCode::UnexpectedEof);
-                    } else {
-                        state.cursor += count;
-                    }
                 }
                 LinearOp::SaveCursor { dst } => {
                     let value = unsafe { state.input_base.add(state.cursor) } as usize as u64;
@@ -2296,7 +2188,7 @@ mod tests {
         let b0 = cfg_mir::Block {
             id: cfg_mir::BlockId(0),
             params: Vec::new(),
-            insts: vec![cfg_mir::InstId(0), cfg_mir::InstId(1), cfg_mir::InstId(2)],
+            insts: vec![cfg_mir::InstId(0), cfg_mir::InstId(1)],
             term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
@@ -2313,16 +2205,15 @@ mod tests {
                 blocks: vec![b0],
                 edges: Vec::new(),
                 insts: vec![
-                    test_inst(0, LinearOp::BoundsCheck { count: 1 }),
                     test_inst(
-                        1,
-                        LinearOp::ReadBytes {
+                        0,
+                        LinearOp::Const {
                             dst: v(0),
-                            count: 1,
+                            value: 42,
                         },
                     ),
                     test_inst(
-                        2,
+                        1,
                         LinearOp::WriteToField {
                             src: v(0),
                             offset: 0,
@@ -2450,7 +2341,7 @@ mod tests {
         let (outcome, trace) =
             execute_program_with_event_trace(&program, &[0x2a]).expect("trace should execute");
 
-        assert_eq!(outcome.cursor, 1);
+        assert_eq!(outcome.cursor, 0);
         assert_eq!(outcome.output[0], 0x2a);
 
         let text = trace.render_text();
@@ -2458,10 +2349,9 @@ mod tests {
             text,
             "\
 #0000 step=0000 @0 b0 entry :: enter b0\n\
-#0001 step=0002 @0 b0 inst i1#1 :: write v0 = 0x2a\n\
-#0002 step=0002 @0 b0 inst i1#1 :: cursor 0 -> 1\n\
-#0003 step=0003 @0 b0 inst i2#2 :: write output+0+0 [2a]\n\
-#0004 step=0004 @0 b0 term t0 :: return [0x2a]"
+#0001 step=0001 @0 b0 inst i0#0 :: write v0 = 0x2a\n\
+#0002 step=0002 @0 b0 inst i1#1 :: write output+0+0 [2a]\n\
+#0003 step=0003 @0 b0 term t0 :: return [0x2a]"
         );
     }
 

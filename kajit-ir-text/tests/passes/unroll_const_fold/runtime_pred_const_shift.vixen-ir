@@ -11,9 +11,8 @@ lambda @0 @s0 (shape: "u8") {
     args: [%cs, %os]
     n0 = Const(0x0) [] -> [v0]
     n1 = Const(0x0) [] -> [v1]
-    n2 = BoundsCheck(1) [%cs:arg] -> [%cs]
-    n3 = ReadBytes(1) [%cs:n2] -> [v2, %cs]
-    n4 = theta(max=3) [v0, v1, v2, %cs:n3, %os:arg] {
+    n3 = Const(0x1) [] -> [v2]
+    n4 = theta(max=3) [v0, v1, v2, %cs:arg, %os:arg] {
       region @s1 {
         args: [arg0, arg1, arg2, %cs, %os]
         n5 = Const(0x7) [] -> [v3]

@@ -171,111 +171,6 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
-            LinearOp::BoundsCheck { count } => {
-                self.ectx.emit_bounds_check(*count);
-            }
-
-            LinearOp::ReadBytes { dst, count } => {
-                let cursor_enc = self.ectx.cursor_enc;
-                let rd = self.dst_enc_or_temp(*dst, R10);
-                match count {
-                    1 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm8(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                }),
-                                buf,
-                            )
-                        })
-                        .expect("movzx"),
-                    2 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm16(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                }),
-                                buf,
-                            )
-                        })
-                        .expect("movzx"),
-                    4 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r32_m(
-                                rd,
-                                Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                },
-                                buf,
-                            )
-                        })
-                        .expect("mov"),
-                    8 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r64_m(
-                                rd,
-                                Mem {
-                                    base: cursor_enc,
-                                    disp: 0,
-                                },
-                                buf,
-                            )
-                        })
-                        .expect("mov"),
-                    _ => panic!("unsupported ReadBytes count: {count}"),
-                }
-                if rd == R10 {
-                    self.store_to_vreg(*dst, R10);
-                }
-            }
-
-            LinearOp::PeekByte { dst } => {
-                let cursor_enc = self.ectx.cursor_enc;
-                let rd = self.dst_enc_or_temp(*dst, R10);
-                self.ectx
-                    .emit
-                    .emit_with(|buf| {
-                        x64::encode_movzx_r32_rm8(
-                            rd,
-                            Operand::Mem(Mem {
-                                base: cursor_enc,
-                                disp: 0,
-                            }),
-                            buf,
-                        )
-                    })
-                    .expect("movzx");
-                if rd == R10 {
-                    self.store_to_vreg(*dst, R10);
-                }
-            }
-
-            LinearOp::AdvanceCursor { count } => {
-                self.ectx.emit_advance_cursor_by(*count);
-            }
-
-            LinearOp::AdvanceCursorBy { src } => {
-                let cursor_enc = self.ectx.cursor_enc;
-                let src_enc = self.reg_for_vreg_with_temp(*src, R10);
-                self.ectx
-                    .emit
-                    .emit_with(|buf| x64::encode_add_r64_r64(cursor_enc, src_enc, buf))
-                    .expect("add cursor");
-            }
-
             LinearOp::WriteToField { src, offset, width } => {
                 let src_enc = self.reg_for_vreg_with_temp(*src, R10);
                 let out = self.output_enc;
@@ -613,10 +508,6 @@ impl<'a> EmitContext<'a> {
                     .emit
                     .emit_with(|buf| x64::encode_nop(buf))
                     .expect("nop");
-            }
-
-            LinearOp::SimdStringScan { .. } | LinearOp::SimdWhitespaceSkip => {
-                panic!("unsupported SIMD op in regalloc3 x86_64 backend");
             }
 
             LinearOp::FuncStart { .. }

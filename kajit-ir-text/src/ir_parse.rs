@@ -354,20 +354,7 @@ enum ConstRef {
 /// Parse an IrOp (the operation name with parameters).
 fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
     let cursor_ops = choice((
-        just("ReadBytes(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(|c| AstOp::Resolved(IrOp::ReadBytes { count: c })),
-        just("PeekByte").to(AstOp::Resolved(IrOp::PeekByte)),
-        just("AdvanceCursorBy").to(AstOp::Resolved(IrOp::AdvanceCursorBy)),
-        just("AdvanceCursor(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(|c| AstOp::Resolved(IrOp::AdvanceCursor { count: c })),
-        just("BoundsCheck(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(|c| AstOp::Resolved(IrOp::BoundsCheck { count: c })),
+        just("SaveInputEnd").to(AstOp::Resolved(IrOp::SaveInputEnd)),
         just("SaveCursor").to(AstOp::Resolved(IrOp::SaveCursor)),
         just("RestoreCursor").to(AstOp::Resolved(IrOp::RestoreCursor)),
     ));
@@ -493,9 +480,6 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(error_code())
             .then_ignore(just(")"))
             .map(|c| AstOp::Resolved(IrOp::ErrorExit { code: c })),
-        just("SaveInputEnd").to(AstOp::Resolved(IrOp::SaveInputEnd)),
-        just("SimdStringScan").to(AstOp::Resolved(IrOp::SimdStringScan)),
-        just("SimdWhitespaceSkip").to(AstOp::Resolved(IrOp::SimdWhitespaceSkip)),
     ));
 
     choice((cursor_ops, output_ops, stack_ops, arith_ops, call_ops))
@@ -1637,10 +1621,9 @@ mod tests {
 lambda @0 (shape: "u8") {
   region {
     args: [%cs, %os]
-    n0 = BoundsCheck(4) [%cs:arg] -> [%cs]
-    n1 = ReadBytes(4) [%cs:n0] -> [v0, %cs]
-    n2 = WriteToField(offset=0, W4) [v0, %os:arg] -> [%os]
-    results: [%cs:n1, %os:n2]
+    n0 = Const(0x2a) [] -> [v0]
+    n1 = WriteToField(offset=0, W4) [v0, %os:arg] -> [%os]
+    results: [%cs:arg, %os:n1]
   }
 }
 "#;
@@ -1654,7 +1637,7 @@ lambda @0 (shape: "u8") {
         let root_body = func.root_body();
         let region = &func.regions[root_body];
         assert_eq!(region.args.len(), 2); // %cs, %os
-        assert_eq!(region.nodes.len(), 3); // BoundsCheck, ReadBytes, WriteToField
+        assert_eq!(region.nodes.len(), 2); // Const, WriteToField
         assert_eq!(region.results.len(), 2);
     }
 
@@ -1741,8 +1724,7 @@ lambda @0 (shape: "u8") {
         let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(4);
-            let val = rb.read_bytes(4);
+            let val = rb.const_val(42);
             rb.write_to_field(val, 0, Width::W4);
             rb.set_results(&[]);
         }
@@ -1913,11 +1895,6 @@ lambda @0 (shape: "u8") {
             let mut rb = builder.root_region();
 
             // Cursor ops
-            rb.bounds_check(8);
-            let v0 = rb.read_bytes(4);
-            let _v1 = rb.peek_byte();
-            rb.advance_cursor(2);
-            rb.advance_cursor_by(v0);
             let saved = rb.save_cursor();
             rb.restore_cursor(saved);
 
@@ -1979,7 +1956,6 @@ lambda @0 (shape: "u8") {
         let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(1);
             let func_ptr = registry
                 .func_by_name("kajit_read_bool")
                 .expect("kajit_read_bool should be in registry");

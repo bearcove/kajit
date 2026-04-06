@@ -160,8 +160,6 @@ impl LinearOpDst for LinearOp {
             | Self::LoadFromAddr { dst, .. }
             | Self::SaveCursor { dst, .. }
             | Self::SaveInputEnd { dst, .. }
-            | Self::PeekByte { dst, .. }
-            | Self::ReadBytes { dst, .. }
             | Self::ReadFromField { dst, .. }
             | Self::SlotAddr { dst, .. }
             | Self::SaveOutPtr { dst, .. }
@@ -171,8 +169,6 @@ impl LinearOpDst for LinearOp {
             Self::CallIntrinsic { dst, .. } => *dst,
             // CallLambda has multiple results, not a single dst
             Self::CallLambda { .. } => None,
-            // SimdStringScan is special - it modifies pos/kind in place
-            Self::SimdStringScan { .. } => None,
             // Control flow operations (shouldn't appear in block.insts, but handle for completeness)
             Self::Label(_)
             | Self::Branch { .. }
@@ -187,11 +183,7 @@ impl LinearOpDst for LinearOp {
             | Self::WriteToSlot { .. }
             | Self::WriteToField { .. }
             | Self::RestoreCursor { .. }
-            | Self::AdvanceCursorBy { .. }
-            | Self::SetOutPtr { .. }
-            | Self::BoundsCheck { .. }
-            | Self::AdvanceCursor { .. }
-            | Self::SimdWhitespaceSkip => None,
+            | Self::SetOutPtr { .. } => None,
         }
     }
 }

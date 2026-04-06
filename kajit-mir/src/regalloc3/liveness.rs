@@ -103,8 +103,6 @@ impl<'a> LivenessAnalyzer<'a> {
                 | LinearOp::BinOp { dst, .. }
                 | LinearOp::UnaryOp { dst, .. }
                 | LinearOp::Copy { dst, .. }
-                | LinearOp::ReadBytes { dst, .. }
-                | LinearOp::PeekByte { dst }
                 | LinearOp::SaveCursor { dst }
                 | LinearOp::SaveInputEnd { dst }
                 | LinearOp::ReadFromField { dst, .. }
@@ -128,7 +126,6 @@ impl<'a> LivenessAnalyzer<'a> {
                 LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
                 LinearOp::UnaryOp { src, .. }
                 | LinearOp::Copy { src, .. }
-                | LinearOp::AdvanceCursorBy { src }
                 | LinearOp::RestoreCursor { src }
                 | LinearOp::WriteToField { src, .. }
                 | LinearOp::SetOutPtr { src }

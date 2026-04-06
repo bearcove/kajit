@@ -653,8 +653,7 @@ mod tests {
         let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(1);
-            let byte = rb.read_bytes(1);
+            let byte = rb.const_val(1);
             let _ = rb.gamma(byte, &[], 2, |branch_idx, branch| match branch_idx {
                 0 => {
                     let c = branch.const_val(11);
@@ -694,17 +693,20 @@ mod tests {
         let mut builder = IrBuilder::new("u8", 0);
         {
             let mut rb = builder.root_region();
-            rb.bounds_check(1);
-            let _ = rb.read_bytes(1);
+            let _ = rb.save_cursor();
+            let _ = rb.save_cursor();
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
         let root = func.root_body();
         let first = func.regions[root].nodes[0];
         let result_id = func.regions[root].results[0];
+        // Point result at first save_cursor's cursor state output (index 1).
+        // This creates a fork: both the second save_cursor and this result
+        // use the first save_cursor's cursor state output.
         func.region_results[result_id].source = PortSource::Node(OutputRef {
             node: first,
-            index: 0,
+            index: 1,
         });
 
         let err = verify(&func).expect_err("verifier should reject state forks");

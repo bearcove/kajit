@@ -113,8 +113,6 @@ fn rewrite_instructions(
                     | LinearOp::BinOp { dst, .. }
                     | LinearOp::UnaryOp { dst, .. }
                     | LinearOp::Copy { dst, .. }
-                    | LinearOp::ReadBytes { dst, .. }
-                    | LinearOp::PeekByte { dst }
                     | LinearOp::SaveCursor { dst }
                     | LinearOp::SaveInputEnd { dst }
                     | LinearOp::ReadFromField { dst, .. }

@@ -664,64 +664,6 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
-            LinearOp::BoundsCheck { count } => {
-                self.ectx.emit_bounds_check(*count);
-            }
-
-            LinearOp::ReadBytes { dst, count } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
-                let cursor = self.ectx.cursor_reg;
-                match count {
-                    1 => {
-                        self.ectx.emit.emit_ldrb_imm(rd, cursor, 0).expect("ldrb");
-                    }
-                    2 => {
-                        self.ectx.emit.emit_ldrh_imm(rd, cursor, 0).expect("ldrh");
-                    }
-                    4 => {
-                        self.ectx
-                            .emit
-                            .emit_ldr_imm(Width::W32, rd, cursor, 0)
-                            .expect("ldr");
-                    }
-                    8 => {
-                        self.ectx
-                            .emit
-                            .emit_ldr_imm(Width::X64, rd, cursor, 0)
-                            .expect("ldr");
-                    }
-                    _ => {
-                        self.ectx.emit.emit_nop().expect("nop");
-                        return;
-                    }
-                }
-                if rd == Reg::X16 {
-                    self.store_to_vreg(*dst, Reg::X16);
-                }
-            }
-
-            LinearOp::PeekByte { dst } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
-                let cursor = self.ectx.cursor_reg;
-                self.ectx.emit.emit_ldrb_imm(rd, cursor, 0).expect("ldrb");
-                if rd == Reg::X16 {
-                    self.store_to_vreg(*dst, Reg::X16);
-                }
-            }
-
-            LinearOp::AdvanceCursor { count } => {
-                self.ectx.emit_advance_cursor_by(*count);
-            }
-
-            LinearOp::AdvanceCursorBy { src } => {
-                let cursor = self.ectx.cursor_reg;
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
-                self.ectx
-                    .emit
-                    .emit_add_reg(Width::X64, cursor, cursor, src_reg)
-                    .expect("add");
-            }
-
             LinearOp::WriteToField { src, offset, width } => {
                 let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
                 // Out pointer is in x21
@@ -942,10 +884,6 @@ impl<'a> EmitContext<'a> {
             LinearOp::CallLambda { .. } => {
                 // TODO: multi-function support
                 self.ectx.emit.emit_nop().expect("nop");
-            }
-
-            LinearOp::SimdStringScan { .. } | LinearOp::SimdWhitespaceSkip => {
-                panic!("unsupported SIMD op in regalloc3 aarch64 backend");
             }
 
             LinearOp::FuncStart { .. }
@@ -2325,19 +2263,7 @@ pub fn compile_regalloc3_with_root_data_abi(
     // Check if the program uses cursor operations (BoundsCheck, ReadBytes, etc.)
     // that require the cursor to live in a fixed register.
     let ctx_cursor_abi = matches!(root_data_abi, crate::compiler::RootDecoderDataAbi::None);
-    let uses_cursor_ops = ctx_cursor_abi
-        && program.funcs.iter().any(|func| {
-            func.insts.iter().any(|inst| {
-                matches!(
-                    inst.op,
-                    kajit_lir::LinearOp::BoundsCheck { .. }
-                        | kajit_lir::LinearOp::ReadBytes { .. }
-                        | kajit_lir::LinearOp::PeekByte { .. }
-                        | kajit_lir::LinearOp::AdvanceCursor { .. }
-                        | kajit_lir::LinearOp::AdvanceCursorBy { .. }
-                )
-            })
-        });
+    let uses_cursor_ops = false;
 
     // For leaf functions with cursor ops, we still need x19/x20 for the cursor
     // and input end — just skip the callee-save overhead since we're a leaf.

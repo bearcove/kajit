@@ -286,58 +286,6 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
         IrOp::Nop => {}
 
         // ─── Cursor ops ───
-        IrOp::BoundsCheck { count } => {
-            let count = *count as usize;
-            if state.cursor + count > state.input.len() {
-                state.trap = Some(Trap {
-                    code: crate::ErrorCode::UnexpectedEof,
-                });
-            }
-        }
-        IrOp::ReadBytes { count } => {
-            let count = *count as usize;
-            if state.cursor + count > state.input.len() {
-                state.trap = Some(Trap {
-                    code: crate::ErrorCode::UnexpectedEof,
-                });
-                return;
-            }
-            let mut value = 0u64;
-            for i in 0..count {
-                value |= (state.input[state.cursor + i] as u64) << (i * 8);
-            }
-            state.cursor += count;
-            env.set_output(node_id, 0, value);
-        }
-        IrOp::PeekByte => {
-            if state.cursor >= state.input.len() {
-                state.trap = Some(Trap {
-                    code: crate::ErrorCode::UnexpectedEof,
-                });
-                return;
-            }
-            env.set_output(node_id, 0, state.input[state.cursor] as u64);
-        }
-        IrOp::AdvanceCursor { count } => {
-            let count = *count as usize;
-            if state.cursor + count > state.input.len() {
-                state.trap = Some(Trap {
-                    code: crate::ErrorCode::UnexpectedEof,
-                });
-                return;
-            }
-            state.cursor += count;
-        }
-        IrOp::AdvanceCursorBy => {
-            let count = data_inputs[0] as usize;
-            if state.cursor + count > state.input.len() {
-                state.trap = Some(Trap {
-                    code: crate::ErrorCode::UnexpectedEof,
-                });
-                return;
-            }
-            state.cursor += count;
-        }
         IrOp::SaveCursor => {
             // Save cursor as raw pointer (matches JIT/CFG-MIR semantics).
             let ptr = unsafe { state.input.as_ptr().add(state.cursor) } as u64;
@@ -444,16 +392,6 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
         IrOp::CallIntrinsic { .. } | IrOp::CallPure { .. } | IrOp::CallEffect { .. } => {
             // Intrinsics can't be interpreted without the function pointers.
             // Set outputs to 0.
-            for i in 0..node.outputs.len() {
-                if node.outputs[i].kind == crate::PortKind::Data {
-                    env.set_output(node_id, i as u16, 0);
-                }
-            }
-        }
-
-        // ─── SIMD ops (scalar fallback) ───
-        IrOp::SimdStringScan | IrOp::SimdWhitespaceSkip => {
-            // These are SIMD acceleration ops; scalar fallback: return 0.
             for i in 0..node.outputs.len() {
                 if node.outputs[i].kind == crate::PortKind::Data {
                     env.set_output(node_id, i as u16, 0);
