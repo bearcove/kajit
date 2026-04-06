@@ -51,7 +51,7 @@ impl LoopInfo {
         }
 
         // Step 2: For each loop header, compute the loop body
-        for (&header, &ref edges) in &backedges {
+        for (&header, edges) in &backedges {
             let body = compute_loop_body(func, header, edges);
             let exits = compute_loop_exits(func, &body);
 

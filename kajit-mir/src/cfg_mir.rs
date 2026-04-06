@@ -1757,7 +1757,7 @@ fn lower_function(
     //
     // For each block, collect phi_arg targets from ALL incoming edges.
     let mut block_param_sets = vec![Vec::<VReg>::new(); blocks.len()];
-    for (_bi, term) in block_terms.iter().enumerate() {
+    for term in block_terms.iter() {
         let successors = term.successors();
         for (succ_idx, succ) in successors.iter().enumerate() {
             for &(_src, tgt) in term.phi_args_for_successor(succ_idx) {
@@ -3187,15 +3187,15 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
                     // For compares, EITHER operand can be the immediate —
                     // the backend swaps operands to put the const on the RHS.
                     // ARM64 cmp immediate: 12-bit unsigned (0-4095).
-                    if let Some(value) = get_const_value(lhs) {
-                        if value > 4095 {
-                            use_kinds.insert(*lhs, UseKind::RequiresRegister);
-                        }
+                    if let Some(value) = get_const_value(lhs)
+                        && value > 4095
+                    {
+                        use_kinds.insert(*lhs, UseKind::RequiresRegister);
                     }
-                    if let Some(value) = get_const_value(rhs) {
-                        if value > 4095 {
-                            use_kinds.insert(*rhs, UseKind::RequiresRegister);
-                        }
+                    if let Some(value) = get_const_value(rhs)
+                        && value > 4095
+                    {
+                        use_kinds.insert(*rhs, UseKind::RequiresRegister);
                     }
                 } else {
                     // Non-compare: LHS always requires register
@@ -4163,12 +4163,11 @@ fn simplify_trivial_phis_in_function(func: &mut Function) {
                 }
             }
 
-            if is_trivial {
-                if let Some(replacement) = common_value {
-                    if replacement != param_vreg {
-                        trivial_params.push((param_idx, param_vreg, replacement));
-                    }
-                }
+            if is_trivial
+                && let Some(replacement) = common_value
+                && replacement != param_vreg
+            {
+                trivial_params.push((param_idx, param_vreg, replacement));
             }
         }
 

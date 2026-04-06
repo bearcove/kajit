@@ -71,8 +71,7 @@ impl AllocationMap {
 
     /// Write as JSON to a file.
     pub fn write_json(&self, path: &Path) -> Result<(), std::io::Error> {
-        let json = serde_json::to_string_pretty(self)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let json = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
         std::fs::write(path, json)
     }
 
@@ -149,18 +148,18 @@ impl LocationMap {
     pub fn location_at(&self, dwarf_line: u32, vreg_idx: u32) -> Option<&VRegLocation> {
         let loc = self.static_locations.get(&vreg_idx)?;
 
-        if self.call_lines.contains(&dwarf_line) {
-            if let VRegLocation::Register(preg) = loc {
-                // Caller-saved registers on aarch64: x0-x18
-                // (x19-x28 are callee-saved, x29=fp, x30=lr)
-                if *preg <= 18 {
-                    // The return value vreg is valid — the backend stores x0 → dst register
-                    if self.call_return_vregs.get(&dwarf_line) == Some(&vreg_idx) {
-                        return Some(loc);
-                    }
-                    // All other vregs in caller-saved registers: clobbered by the call
-                    return None;
+        if self.call_lines.contains(&dwarf_line)
+            && let VRegLocation::Register(preg) = loc
+        {
+            // Caller-saved registers on aarch64: x0-x18
+            // (x19-x28 are callee-saved, x29=fp, x30=lr)
+            if *preg <= 18 {
+                // The return value vreg is valid — the backend stores x0 → dst register
+                if self.call_return_vregs.get(&dwarf_line) == Some(&vreg_idx) {
+                    return Some(loc);
                 }
+                // All other vregs in caller-saved registers: clobbered by the call
+                return None;
             }
         }
 
@@ -361,25 +360,24 @@ impl LocationTracker {
             return;
         }
 
-        if let Some(block) = func.blocks.get(loc_before.block.index()) {
-            if let Some(&inst_id) = block.insts.get(loc_before.next_inst_index) {
-                let inst = &func.insts[inst_id.index()];
-                if let Some(def_vreg) = op_def_vreg(func, loc_before) {
-                    let aliases = match inst.op {
-                        kajit_lir::LinearOp::Copy { src, .. } => aliases_for_vreg(
-                            &self.owners,
-                            src.index() as u32,
-                        )
-                        .unwrap_or_else(|| BTreeSet::from([src.index() as u32])),
-                        _ => BTreeSet::from([def_vreg.index() as u32]),
-                    };
-                    assign_aliases(
-                        &mut self.owners,
-                        &map.static_locations,
-                        def_vreg.index() as u32,
-                        aliases,
-                    );
-                }
+        if let Some(block) = func.blocks.get(loc_before.block.index())
+            && let Some(&inst_id) = block.insts.get(loc_before.next_inst_index)
+        {
+            let inst = &func.insts[inst_id.index()];
+            if let Some(def_vreg) = op_def_vreg(func, loc_before) {
+                let aliases = match inst.op {
+                    kajit_lir::LinearOp::Copy { src, .. } => {
+                        aliases_for_vreg(&self.owners, src.index() as u32)
+                            .unwrap_or_else(|| BTreeSet::from([src.index() as u32]))
+                    }
+                    _ => BTreeSet::from([def_vreg.index() as u32]),
+                };
+                assign_aliases(
+                    &mut self.owners,
+                    &map.static_locations,
+                    def_vreg.index() as u32,
+                    aliases,
+                );
             }
         }
     }
@@ -465,10 +463,7 @@ fn aliases_for_vreg(
     (!aliases.is_empty()).then_some(aliases)
 }
 
-fn remove_vreg_from_all_locations(
-    owners: &mut HashMap<LocationKey, BTreeSet<u32>>,
-    vreg_idx: u32,
-) {
+fn remove_vreg_from_all_locations(owners: &mut HashMap<LocationKey, BTreeSet<u32>>, vreg_idx: u32) {
     owners.retain(|_, aliases| {
         aliases.remove(&vreg_idx);
         !aliases.is_empty()
@@ -524,8 +519,10 @@ fn apply_block_transfer(
             .map(|operand| operand.vreg)
         {
             let aliases = match inst.op {
-                kajit_lir::LinearOp::Copy { src, .. } => aliases_for_vreg(owners, src.index() as u32)
-                    .unwrap_or_else(|| BTreeSet::from([src.index() as u32])),
+                kajit_lir::LinearOp::Copy { src, .. } => {
+                    aliases_for_vreg(owners, src.index() as u32)
+                        .unwrap_or_else(|| BTreeSet::from([src.index() as u32]))
+                }
                 _ => BTreeSet::from([def.index() as u32]),
             };
             assign_aliases(owners, &map.static_locations, def.index() as u32, aliases);
@@ -689,7 +686,8 @@ pub fn compute_inst_source_locations(
                 if operand.kind != kajit_mir::cfg_mir::OperandKind::Use {
                     continue;
                 }
-                if let Some(loc) = current_location_from_owners(&owners, map, operand.vreg.index() as u32)
+                if let Some(loc) =
+                    current_location_from_owners(&owners, map, operand.vreg.index() as u32)
                 {
                     inst_source_locations.insert((inst_id, operand.vreg.index() as u32), loc);
                 }
@@ -714,11 +712,18 @@ pub fn compute_inst_source_locations(
                 .map(|operand| operand.vreg)
             {
                 let aliases = match inst.op {
-                    kajit_lir::LinearOp::Copy { src, .. } => aliases_for_vreg(&owners, src.index() as u32)
-                        .unwrap_or_else(|| BTreeSet::from([src.index() as u32])),
+                    kajit_lir::LinearOp::Copy { src, .. } => {
+                        aliases_for_vreg(&owners, src.index() as u32)
+                            .unwrap_or_else(|| BTreeSet::from([src.index() as u32]))
+                    }
                     _ => BTreeSet::from([def.index() as u32]),
                 };
-                assign_aliases(&mut owners, &map.static_locations, def.index() as u32, aliases);
+                assign_aliases(
+                    &mut owners,
+                    &map.static_locations,
+                    def.index() as u32,
+                    aliases,
+                );
             }
         }
     }
@@ -736,14 +741,10 @@ fn chosen_edge<'a>(
     let edge_id = match term {
         kajit_mir::cfg_mir::Terminator::Branch { edge } => Some(*edge),
         kajit_mir::cfg_mir::Terminator::BranchIf {
-            taken,
-            fallthrough,
-            ..
+            taken, fallthrough, ..
         }
         | kajit_mir::cfg_mir::Terminator::BranchIfZero {
-            taken,
-            fallthrough,
-            ..
+            taken, fallthrough, ..
         } => {
             let taken_edge = func.edges.get(taken.index())?;
             if taken_edge.to == loc_after.block {
@@ -892,7 +893,10 @@ mod tests {
                 at_terminator: true,
             },
         );
-        assert_eq!(tracker.location_for(&map, 3), Some(VRegLocation::StackSlot(16)));
+        assert_eq!(
+            tracker.location_for(&map, 3),
+            Some(VRegLocation::StackSlot(16))
+        );
         assert_eq!(tracker.location_for(&map, 1), None);
 
         tracker.observe_step(
@@ -910,7 +914,10 @@ mod tests {
                 at_terminator: true,
             },
         );
-        assert_eq!(tracker.location_for(&map, 1), Some(VRegLocation::StackSlot(16)));
+        assert_eq!(
+            tracker.location_for(&map, 1),
+            Some(VRegLocation::StackSlot(16))
+        );
         assert_eq!(tracker.location_for(&map, 3), None);
     }
 
@@ -963,11 +970,13 @@ mod tests {
 
         let mut map = LocationMap::default();
         map.static_locations.insert(1, VRegLocation::Register(5));
-        map.edit_clobbers
-            .insert(1, vec![VRegLocation::Register(5)]);
+        map.edit_clobbers.insert(1, vec![VRegLocation::Register(5)]);
 
         let mut tracker = LocationTracker::new(&map, &program);
-        assert_eq!(tracker.location_for(&map, 1), Some(VRegLocation::Register(5)));
+        assert_eq!(
+            tracker.location_for(&map, 1),
+            Some(VRegLocation::Register(5))
+        );
 
         tracker.observe_step(
             &map,
@@ -1030,7 +1039,10 @@ mod tests {
                 insts: vec![
                     cfg_mir::Inst {
                         id: cfg_mir::InstId(0),
-                        op: LinearOp::Copy { dst: v(1), src: v(2) },
+                        op: LinearOp::Copy {
+                            dst: v(1),
+                            src: v(2),
+                        },
                         operands: vec![
                             cfg_mir::Operand {
                                 vreg: v(1),
@@ -1104,7 +1116,10 @@ mod tests {
             },
         );
 
-        assert_eq!(tracker.location_for(&map, 2), Some(VRegLocation::Register(0)));
+        assert_eq!(
+            tracker.location_for(&map, 2),
+            Some(VRegLocation::Register(0))
+        );
 
         let edge_sources = compute_edge_source_locations(&map, &program);
         assert_eq!(
@@ -1220,8 +1235,8 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
         // Set macOS platform version (prevents "no platform load command" warning)
         let mut build_ver = object::write::MachOBuildVersion::default();
         build_ver.platform = object::macho::PLATFORM_MACOS;
-        build_ver.minos = (14 << 16) | (0 << 8); // macOS 14.0
-        build_ver.sdk = (14 << 16) | (0 << 8);
+        build_ver.minos = 14 << 16; // macOS 14.0
+        build_ver.sdk = 14 << 16;
         obj.set_macho_build_version(build_ver);
     }
 
@@ -1404,7 +1419,7 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
 fn dwarf_segment_name() -> Vec<u8> {
     #[cfg(target_os = "macos")]
     {
-        return b"__DWARF".to_vec();
+        b"__DWARF".to_vec()
     }
     #[cfg(target_os = "linux")]
     {
@@ -1415,7 +1430,7 @@ fn dwarf_segment_name() -> Vec<u8> {
 fn dwarf_debug_section_name(name: &str) -> Vec<u8> {
     #[cfg(target_os = "macos")]
     {
-        return format!("__{name}").into_bytes();
+        format!("__{name}").into_bytes()
     }
     #[cfg(target_os = "linux")]
     {
@@ -1430,7 +1445,7 @@ fn dwarf_text_relocation(
 ) -> object::write::Relocation {
     #[cfg(target_os = "macos")]
     {
-        return object::write::Relocation {
+        object::write::Relocation {
             offset: reloc.offset as u64,
             symbol: text_symbol,
             addend: reloc.addend + entry_offset as i64,
@@ -1439,7 +1454,7 @@ fn dwarf_text_relocation(
                 r_pcrel: false,
                 r_length: 3,
             },
-        };
+        }
     }
     #[cfg(target_os = "linux")]
     {
@@ -1767,13 +1782,13 @@ fn build_dsym_macho(
     symtab_data.extend_from_slice(&symbol_addr.to_le_bytes()); // n_value
 
     // Align data start to page boundary (4096) for __LINKEDIT
-    let data_start = ((header_and_cmds + 4095) / 4096) * 4096;
+    let data_start = header_and_cmds.div_ceil(4096) * 4096;
     let _padding = data_start - header_and_cmds;
 
     // Layout: [headers + padding] [LINKEDIT: symtab + strtab] [DWARF sections]
     let linkedit_fileoff = data_start;
     let linkedit_size = (symtab_data.len() + strtab.len()) as u32;
-    let linkedit_size_aligned = ((linkedit_size as u32 + 4095) / 4096) * 4096;
+    let linkedit_size_aligned = (linkedit_size as u32).div_ceil(4096) * 4096;
     let linkedit_vmaddr = text_vmaddr + text_vmsize;
 
     let dwarf_fileoff = linkedit_fileoff + linkedit_size_aligned;
@@ -1892,7 +1907,7 @@ fn build_dsym_macho(
         names
     };
 
-    for (_i, (name, &(off, size))) in section_names.iter().zip(section_offsets.iter()).enumerate() {
+    for (name, &(off, size)) in section_names.iter().zip(section_offsets.iter()) {
         let mut sectname = [0u8; 16];
         let len = name.len().min(16);
         sectname[..len].copy_from_slice(&name[..len]);
@@ -2121,10 +2136,10 @@ fn linux_native_static_libs() -> Result<Vec<String>, HarnessError> {
 
 #[cfg(target_os = "macos")]
 fn maybe_build_debug_bundle(exe_path: &Path, input: &HarnessInput) {
-    if let Some(dwarf) = &input.dwarf {
-        if let Err(e) = build_dsym(exe_path, dwarf, input.function_name, input.entry_offset) {
-            eprintln!("[harness] warning: dSYM creation failed: {e}");
-        }
+    if let Some(dwarf) = &input.dwarf
+        && let Err(e) = build_dsym(exe_path, dwarf, input.function_name, input.entry_offset)
+    {
+        eprintln!("[harness] warning: dSYM creation failed: {e}");
     }
 }
 

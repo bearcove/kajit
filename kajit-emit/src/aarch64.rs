@@ -1128,11 +1128,11 @@ impl Emitter {
         for _ in 0..16 {
             let mut resolved_any = false;
             for &(from, to) in &self.label_aliases {
-                if self.labels[from.0 as usize].is_none() {
-                    if let Some(target_offset) = self.labels[to.0 as usize] {
-                        self.labels[from.0 as usize] = Some(target_offset);
-                        resolved_any = true;
-                    }
+                if self.labels[from.0 as usize].is_none()
+                    && let Some(target_offset) = self.labels[to.0 as usize]
+                {
+                    self.labels[from.0 as usize] = Some(target_offset);
+                    resolved_any = true;
                 }
             }
             if !resolved_any {

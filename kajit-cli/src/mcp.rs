@@ -487,7 +487,7 @@ impl MirHandler {
             md.push_str(&format_event_markdown(event));
             md.push('\n');
         }
-        md.push_str(&format!("\n**Final state:**\n"));
+        md.push_str("\n**Final state:**\n");
         md.push_str(&format_state_markdown(&session.state()));
         Ok(json!({ "text": md }))
     }
@@ -780,7 +780,11 @@ impl MirHandler {
                 .debug_sessions
                 .get(&session_id)
                 .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-            let pc = session.lockstep.debugger.read_pc().map_err(|e| e.to_string())?;
+            let pc = session
+                .lockstep
+                .debugger
+                .read_pc()
+                .map_err(|e| e.to_string())?;
             let dwarf_line = session.lockstep.current_mapped_line();
             let cfg_line = session.current_line_text(dwarf_line);
             let lldb = session
@@ -859,20 +863,14 @@ impl MirHandler {
                         text.push_str(&format!(
                             "  def v{} -> {}\n",
                             vreg.index(),
-                            format_live_location(
-                                &session.lockstep,
-                                vreg.index() as u32
-                            )
+                            format_live_location(&session.lockstep, vreg.index() as u32)
                         ));
                     }
                     for vreg in use_vregs {
                         text.push_str(&format!(
                             "  use v{} -> {}\n",
                             vreg.index(),
-                            format_live_location(
-                                &session.lockstep,
-                                vreg.index() as u32
-                            )
+                            format_live_location(&session.lockstep, vreg.index() as u32)
                         ));
                     }
                 }
@@ -945,10 +943,7 @@ impl MirHandler {
         }
     }
 
-    fn debug_session_vregs(
-        &self,
-        args: &JsonMap<String, JsonValue>,
-    ) -> Result<JsonValue, String> {
+    fn debug_session_vregs(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
         #[cfg(not(feature = "lldb"))]
         {
             let _ = args;
@@ -1134,13 +1129,18 @@ impl DebugDiffSession {
             .iter()
             .next()
             .ok_or_else(|| "HIR module should contain at least one function".to_owned())?;
-        let destination = function
-            .destination_param()
-            .ok_or_else(|| "debug sessions require a destination-writing HIR function".to_owned())?;
+        let destination = function.destination_param().ok_or_else(|| {
+            "debug sessions require a destination-writing HIR function".to_owned()
+        })?;
         type_size(module, &destination.ty)
     }
 
-    fn new(format: &str, ty: &str, input_hex: &str, hir_path: Option<&str>) -> Result<Self, String> {
+    fn new(
+        format: &str,
+        ty: &str,
+        input_hex: &str,
+        hir_path: Option<&str>,
+    ) -> Result<Self, String> {
         let pipeline_opts = kajit::PipelineOptions::from_env();
         let (artifacts, output_size) = if let Some(hir_path) = hir_path {
             let hir_text = std::fs::read_to_string(hir_path)
@@ -1463,10 +1463,7 @@ fn format_edge_args(
 }
 
 #[cfg(feature = "lldb")]
-fn format_live_location(
-    lockstep: &LockstepSession<LldbJitDebugger>,
-    vreg_index: u32,
-) -> String {
+fn format_live_location(lockstep: &LockstepSession<LldbJitDebugger>, vreg_index: u32) -> String {
     match lockstep
         .location_tracker
         .location_for(&lockstep.location_map, vreg_index)
@@ -1481,10 +1478,7 @@ fn format_live_location(
 }
 
 #[cfg(feature = "lldb")]
-fn format_static_location(
-    lockstep: &LockstepSession<LldbJitDebugger>,
-    vreg_index: u32,
-) -> String {
+fn format_static_location(lockstep: &LockstepSession<LldbJitDebugger>, vreg_index: u32) -> String {
     match lockstep.location_map.static_locations.get(&vreg_index) {
         Some(kajit::harness::VRegLocation::Register(preg)) => {
             format!("reg {}", kajit::harness::LocationMap::reg_name(*preg))
@@ -1496,10 +1490,7 @@ fn format_static_location(
 }
 
 #[cfg(feature = "lldb")]
-fn describe_location(
-    lockstep: &LockstepSession<LldbJitDebugger>,
-    vreg_index: u32,
-) -> String {
+fn describe_location(lockstep: &LockstepSession<LldbJitDebugger>, vreg_index: u32) -> String {
     let live = format_live_location(lockstep, vreg_index);
     let static_loc = format_static_location(lockstep, vreg_index);
     if live == static_loc {
@@ -1889,9 +1880,9 @@ fn patch_tools_list_response(response: &mut JsonValue) {
 /// stdin/stdout bidirectionally. This lets the MCP connection survive
 /// rebuilds — just call the `reload` tool to restart the subprocess.
 async fn run_proxy() -> Result<(), String> {
+    use std::collections::HashSet;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
-    use std::collections::HashSet;
 
     let exe = std::env::current_exe().map_err(|e| format!("can't find self: {e}"))?;
     let mut pending_tool_list_ids = HashSet::<String>::new();
@@ -1930,9 +1921,9 @@ async fn run_proxy() -> Result<(), String> {
                     match result {
                         Ok(0) => return Ok(()), // EOF from client
                         Ok(_) => {
-                            if let Ok(parsed) = serde_json::from_str::<JsonValue>(&from_client) {
-                                if let Some(method) = parsed.get("method").and_then(|v| v.as_str()) {
-                                    if let Some(id_key) = parsed.get("id").and_then(request_id_key) {
+                            if let Ok(parsed) = serde_json::from_str::<JsonValue>(&from_client)
+                                && let Some(method) = parsed.get("method").and_then(|v| v.as_str())
+                                    && let Some(id_key) = parsed.get("id").and_then(request_id_key) {
                                         match method {
                                             "initialize" => {
                                                 pending_initialize_ids.insert(id_key);
@@ -1960,8 +1951,6 @@ async fn run_proxy() -> Result<(), String> {
                                             _ => {}
                                         }
                                     }
-                                }
-                            }
                             // Forward to child
                             child_stdin.write_all(from_client.as_bytes()).await.ok();
                             child_stdin.flush().await.ok();
@@ -1978,8 +1967,8 @@ async fn run_proxy() -> Result<(), String> {
                         }
                         Ok(_) => {
                             let mut outbound = from_child.clone();
-                            if let Ok(mut parsed) = serde_json::from_str::<JsonValue>(&from_child) {
-                                if let Some(id_key) = parsed.get("id").and_then(request_id_key) {
+                            if let Ok(mut parsed) = serde_json::from_str::<JsonValue>(&from_child)
+                                && let Some(id_key) = parsed.get("id").and_then(request_id_key) {
                                     if pending_initialize_ids.remove(&id_key) {
                                         patch_initialize_response(&mut parsed);
                                         outbound = serde_json::to_string(&parsed)
@@ -1992,7 +1981,6 @@ async fn run_proxy() -> Result<(), String> {
                                             .unwrap_or(from_child.clone());
                                     }
                                 }
-                            }
                             // Forward to client
                             proxy_stdout.write_all(outbound.as_bytes()).await.ok();
                             proxy_stdout.flush().await.ok();

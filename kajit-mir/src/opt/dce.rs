@@ -102,7 +102,7 @@ pub fn eliminate_dead_block_params(func: &mut Function) {
                     let mut new_args = Vec::new();
                     for (i, arg) in edge.args.iter().enumerate() {
                         if !dead_set.contains(&i) {
-                            new_args.push(arg.clone());
+                            new_args.push(*arg);
                         }
                     }
                     edge.args = new_args;

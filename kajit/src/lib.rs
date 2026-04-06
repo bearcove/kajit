@@ -682,7 +682,6 @@ pub fn differential_check_linear_ir_vs_jit_with_output_size(
 #[cfg(test)]
 mod differential_tests {
     use super::*;
-    use facet::Facet;
 
     const POSTCARD_U32_V0_RVSDG_SNAPSHOT: &str = include_str!(
         "../tests/snapshots/corpus__generated_rvsdg_postcard_scalar_u32__v0_x86_64.snap"

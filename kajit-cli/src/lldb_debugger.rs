@@ -52,7 +52,7 @@ impl LldbJitDebugger {
                 "target executable missing after create_target for {harness_path}"
             ))
         })?;
-        launch_info.set_arguments([input_hex].into_iter(), false);
+        launch_info.set_arguments([input_hex], false);
         launch_info.set_executable_file(&exe_file, true);
 
         let process = target

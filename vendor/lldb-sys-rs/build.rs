@@ -1,6 +1,11 @@
 use cc::Build;
 
-use std::{collections::BTreeSet, fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn llvm_config_candidates() -> Vec<String> {
     let mut candidates = Vec::new();
@@ -24,10 +29,9 @@ fn llvm_config_candidates() -> Vec<String> {
 
 fn run_llvm_config(llvm_config: &str, arg: &str) -> Result<String, String> {
     match Command::new(llvm_config).arg(arg).output() {
-        Ok(res) if res.status.success() => Ok(String::from_utf8(res.stdout)
-            .unwrap()
-            .trim()
-            .to_string()),
+        Ok(res) if res.status.success() => {
+            Ok(String::from_utf8(res.stdout).unwrap().trim().to_string())
+        }
         Ok(res) => Err(format!(
             "Could not run \"{} {}\": {}",
             llvm_config,
@@ -137,7 +141,10 @@ fn candidate_lib_dirs(llvm_config: Option<&str>) -> Vec<PathBuf> {
         push_dir(
             &mut candidates,
             &mut seen,
-            PathBuf::from(path.into_string().expect("LLDB_LIB_PATH contains invalid Unicode data")),
+            PathBuf::from(
+                path.into_string()
+                    .expect("LLDB_LIB_PATH contains invalid Unicode data"),
+            ),
         );
     }
     if let Some(llvm_config) = llvm_config
@@ -181,10 +188,10 @@ fn resolve_lldb_lib_dir(llvm_config: Option<&str>) -> PathBuf {
 }
 
 fn match_libname(name: &str) -> Option<String> {
-    if name.starts_with("liblldb.so") || name.starts_with("liblldb-") {
-        if let Some(pos) = name.rfind(".so") {
-            return Some(name["lib".len()..pos].into());
-        }
+    if (name.starts_with("liblldb.so") || name.starts_with("liblldb-"))
+        && let Some(pos) = name.rfind(".so")
+    {
+        return Some(name["lib".len()..pos].into());
     }
     if name.starts_with("liblldb") && name.ends_with(".dylib") {
         // Trim the leading "lib" and trailing ".dylib"

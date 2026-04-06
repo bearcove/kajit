@@ -1151,7 +1151,7 @@ impl IrFunc {
         }
 
         // For each branch, check what the result source is
-        for (branch_idx, &region_id) in regions.iter().enumerate() {
+        for &region_id in regions.iter() {
             let region = &self.regions[region_id];
             let Some(&result_id) = region.results.get(output_index) else {
                 return false;
@@ -1194,11 +1194,11 @@ impl IrFunc {
         // At least one must be passthrough (otherwise it's just two constants)
         let r0 = &self.regions[regions[0]];
         let r1 = &self.regions[regions[1]];
-        let r0_pt = r0.results.get(output_index).map_or(false, |&rid| {
+        let r0_pt = r0.results.get(output_index).is_some_and(|&rid| {
             matches!(self.region_results[rid].source,
                 PortSource::RegionArg(a) if r0.args.get(output_index) == Some(&a.arg))
         });
-        let r1_pt = r1.results.get(output_index).map_or(false, |&rid| {
+        let r1_pt = r1.results.get(output_index).is_some_and(|&rid| {
             matches!(self.region_results[rid].source,
                 PortSource::RegionArg(a) if r1.args.get(output_index) == Some(&a.arg))
         });

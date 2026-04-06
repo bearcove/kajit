@@ -1477,10 +1477,10 @@ pub fn allocate_cfg_program_regalloc3_native(
         // Build rematerialization map: spilled constants can be re-emitted as movz
         let mut rematerializable = HashMap::new();
         for inst in &func_mut.insts {
-            if let kajit_lir::LinearOp::Const { dst, value } = &inst.op {
-                if alloc_result.allocations.get(dst) == Some(&linear_scan::Allocation::Spill) {
-                    rematerializable.insert(*dst, *value);
-                }
+            if let kajit_lir::LinearOp::Const { dst, value } = &inst.op
+                && alloc_result.allocations.get(dst) == Some(&linear_scan::Allocation::Spill)
+            {
+                rematerializable.insert(*dst, *value);
             }
         }
 
@@ -3544,7 +3544,7 @@ pub fn differential_check_cfg_with_ignored_output_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use facet::Facet;
+
     use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, IrOp, Width, run_default_passes};
     use kajit_ir_text::parse_ir;
     use kajit_lir::linearize;

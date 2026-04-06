@@ -92,20 +92,20 @@ pub fn eliminate_constant_phis(func: &mut Function) -> bool {
                 }
 
                 // Verify replacement dominates this block (if it's an instruction result)
-                if let Some(def_block) = find_def_block_for_vreg(func, replacement) {
-                    if !dom.dominates(def_block, block.id) {
-                        if debug {
-                            eprintln!(
-                                "[const_phi] b{} param {} (v{}) → v{} SKIPPED (def in b{} doesn't dominate)",
-                                block.id.index(),
-                                param_idx,
-                                param_vreg.index(),
-                                replacement.index(),
-                                def_block.index()
-                            );
-                        }
-                        continue;
+                if let Some(def_block) = find_def_block_for_vreg(func, replacement)
+                    && !dom.dominates(def_block, block.id)
+                {
+                    if debug {
+                        eprintln!(
+                            "[const_phi] b{} param {} (v{}) → v{} SKIPPED (def in b{} doesn't dominate)",
+                            block.id.index(),
+                            param_idx,
+                            param_vreg.index(),
+                            replacement.index(),
+                            def_block.index()
+                        );
                     }
+                    continue;
                 }
                 // If no def_block, it's a function arg which dominates everything
 

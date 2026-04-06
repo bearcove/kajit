@@ -109,10 +109,10 @@ pub fn reduce_ir(
         round_reductions += r;
 
         // Compact arena between rounds to prevent unbounded growth.
-        if round_reductions > 0 {
-            if let Some(compact) = compact_fn {
-                current = compact(&current);
-            }
+        if round_reductions > 0
+            && let Some(compact) = compact_fn
+        {
+            current = compact(&current);
         }
 
         let after = count_nodes(&current);
@@ -174,7 +174,7 @@ fn pass_replace_with_const(
         let mut candidate = current.clone();
 
         // Check ID is still valid after clone.
-        if target.index() as usize >= candidate.nodes.len() {
+        if target.index() >= candidate.nodes.len() {
             continue;
         }
 
@@ -233,7 +233,7 @@ fn pass_collapse_gamma(
                 };
 
                 // Check the gamma still exists in the clone (same NodeId).
-                if gamma_id.index() as usize >= candidate.nodes.len() {
+                if gamma_id.index() >= candidate.nodes.len() {
                     continue;
                 }
                 if !matches!(&candidate.nodes[*gamma_id].kind, NodeKind::Gamma { .. }) {
@@ -389,7 +389,7 @@ fn pass_delete_nodes(
         candidates += 1;
 
         let mut candidate = current.clone();
-        if target.index() as usize >= candidate.nodes.len() {
+        if target.index() >= candidate.nodes.len() {
             continue;
         }
 
@@ -472,7 +472,7 @@ fn pass_bypass_theta(
         candidates += 1;
 
         let mut candidate = current.clone();
-        if theta_id.index() as usize >= candidate.nodes.len() {
+        if theta_id.index() >= candidate.nodes.len() {
             continue;
         }
         if !matches!(&candidate.nodes[theta_id].kind, NodeKind::Theta { .. }) {

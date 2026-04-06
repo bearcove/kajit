@@ -131,7 +131,7 @@ impl DefUseInfo {
 
     /// Returns true if the given vreg has no uses.
     pub fn is_unused(&self, vreg: VReg) -> bool {
-        self.uses.get(&vreg).map_or(true, |v| v.is_empty())
+        self.uses.get(&vreg).is_none_or(|v| v.is_empty())
     }
 
     /// Returns all vregs that are defined but never used.

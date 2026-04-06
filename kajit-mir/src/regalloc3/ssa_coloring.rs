@@ -256,7 +256,6 @@ fn spill_phase(
     // Process each block: check pressure at block entry (live-in + block params)
     // and after each instruction
     for block in func.live_blocks() {
-
         // Live values at block entry = live_in ∪ block_params
         let mut live: BTreeSet<VReg> = liveness.live_in.get(&block.id).cloned().unwrap_or_default();
         for &param in &block.params {
@@ -294,7 +293,7 @@ fn spill_phase(
                     if !liveness
                         .live_out
                         .get(&block.id)
-                        .map_or(false, |lo| lo.contains(src))
+                        .is_some_and(|lo| lo.contains(src))
                     {
                         live.remove(src);
                     }
@@ -514,7 +513,7 @@ fn compute_live_across_call(
                         continue;
                     }
                     let used_after = has_use_after_inst(func, block, vreg, inst_idx)
-                        || live_out.map_or(false, |lo| lo.contains(&vreg));
+                        || live_out.is_some_and(|lo| lo.contains(&vreg));
                     if used_after {
                         live_across_call.insert(vreg);
                     }
@@ -528,7 +527,7 @@ fn compute_live_across_call(
                         continue;
                     }
                     let used_after = has_use_after_inst(func, block, arg, inst_idx)
-                        || live_out.map_or(false, |lo| lo.contains(&arg));
+                        || live_out.is_some_and(|lo| lo.contains(&arg));
                     if used_after {
                         live_across_call.insert(arg);
                     }
@@ -541,7 +540,7 @@ fn compute_live_across_call(
                     continue;
                 }
                 let used_after = has_use_after_inst(func, block, param, inst_idx)
-                    || live_out.map_or(false, |lo| lo.contains(&param));
+                    || live_out.is_some_and(|lo| lo.contains(&param));
                 if used_after {
                     live_across_call.insert(param);
                 }
@@ -555,7 +554,7 @@ fn compute_live_across_call(
                         return;
                     }
                     let used_after = has_use_after_inst(func, block, *dst, inst_idx)
-                        || live_out.map_or(false, |lo| lo.contains(dst));
+                        || live_out.is_some_and(|lo| lo.contains(dst));
                     if used_after {
                         live_across_call.insert(*dst);
                     }
@@ -669,7 +668,7 @@ fn color_phase(
         if let Some(live_in) = liveness.live_in.get(&block_id) {
             if let Some(tv) = trace_vreg {
                 let in_live_in = live_in.contains(&tv);
-                let in_live_out = live_out.map_or(false, |lo| lo.contains(&tv));
+                let in_live_out = live_out.is_some_and(|lo| lo.contains(&tv));
                 if in_live_in || in_live_out {
                     eprintln!(
                         "[ra-trace] b{}: v{} live_in={} live_out={}",
@@ -824,19 +823,17 @@ fn color_phase(
                 }
                 let last = last_use_in_block.get(&(block_id, vreg)).copied();
                 let is_dying =
-                    last == Some(inst_order) && !live_out.map_or(false, |lo| lo.contains(&vreg));
-                if is_dying {
-                    if let Some(&preg) = coloring.get(&vreg) {
-                        dying_source_colors.push(preg);
-                        // For non-clobbering instructions, free dying source
-                        // colors so defs can reuse them (the def logically
-                        // happens after uses at the same instruction).
-                        // For clobbering instructions (calls), don't free —
-                        // the call clobbers caller-saved regs and the def goes
-                        // into the ABI return register, not the dying source's.
-                        if !inst.clobbers.caller_saved_gpr {
-                            to_free.push(preg);
-                        }
+                    last == Some(inst_order) && !live_out.is_some_and(|lo| lo.contains(&vreg));
+                if is_dying && let Some(&preg) = coloring.get(&vreg) {
+                    dying_source_colors.push(preg);
+                    // For non-clobbering instructions, free dying source
+                    // colors so defs can reuse them (the def logically
+                    // happens after uses at the same instruction).
+                    // For clobbering instructions (calls), don't free —
+                    // the call clobbers caller-saved regs and the def goes
+                    // into the ABI return register, not the dying source's.
+                    if !inst.clobbers.caller_saved_gpr {
+                        to_free.push(preg);
                     }
                 }
             }
@@ -855,10 +852,10 @@ fn color_phase(
                         continue;
                     }
                     for arg in &edge.args {
-                        if !spilled.contains(&arg.target) {
-                            if let Some(&tc) = coloring.get(&arg.target) {
-                                prefs.push((arg.source, tc));
-                            }
+                        if !spilled.contains(&arg.target)
+                            && let Some(&tc) = coloring.get(&arg.target)
+                        {
+                            prefs.push((arg.source, tc));
                         }
                     }
                 }
@@ -1030,14 +1027,14 @@ fn resolve_fixed_use_constraints(
                     // it into the required register.
                     continue;
                 }
-                if let Some(&actual_preg) = coloring.get(&operand.vreg) {
-                    if actual_preg != required_preg {
-                        edits.push(OperandEdit {
-                            before_inst: inst_id,
-                            from: actual_preg,
-                            to: required_preg,
-                        });
-                    }
+                if let Some(&actual_preg) = coloring.get(&operand.vreg)
+                    && actual_preg != required_preg
+                {
+                    edits.push(OperandEdit {
+                        before_inst: inst_id,
+                        from: actual_preg,
+                        to: required_preg,
+                    });
                 }
             }
         }
@@ -1579,7 +1576,7 @@ fn interferes(
         let w_idx = def_inst_idx.get(&w).copied().unwrap_or(0);
 
         // Determine which is defined first. Block-entry defs have order 0.
-        let (early, early_idx, late_idx) = if v_idx <= w_idx {
+        let (early, _early_idx, late_idx) = if v_idx <= w_idx {
             (v, v_idx, w_idx)
         } else {
             (w, w_idx, v_idx)
@@ -1597,7 +1594,7 @@ fn interferes(
         let early_live_out = liveness
             .live_out
             .get(&v_block)
-            .map_or(false, |lo| lo.contains(&early));
+            .is_some_and(|lo| lo.contains(&early));
         if early_live_out {
             return true;
         }
@@ -1615,7 +1612,7 @@ fn interferes(
         let v_live_in = liveness
             .live_in
             .get(&w_block)
-            .map_or(false, |li| li.contains(&v));
+            .is_some_and(|li| li.contains(&v));
         if !v_live_in {
             return false;
         }
@@ -1630,14 +1627,14 @@ fn interferes(
                 liveness
                     .live_out
                     .get(&w_block)
-                    .map_or(false, |lo| lo.contains(&v))
+                    .is_some_and(|lo| lo.contains(&v))
             }
         }
     } else if dom.dominates(w_block, v_block) {
         let w_live_in = liveness
             .live_in
             .get(&v_block)
-            .map_or(false, |li| li.contains(&w));
+            .is_some_and(|li| li.contains(&w));
         if !w_live_in {
             return false;
         }
@@ -1649,7 +1646,7 @@ fn interferes(
             None => liveness
                 .live_out
                 .get(&v_block)
-                .map_or(false, |lo| lo.contains(&w)),
+                .is_some_and(|lo| lo.contains(&w)),
         }
     } else {
         false

@@ -103,10 +103,11 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     }
     // Check region results in the parent region
     for &rid in &func.regions[parent_region].results {
-        if let PortSource::Node(oref) = &func.region_results[rid].source {
-            if oref.node == theta_id && (oref.index as usize) < loop_var_count {
-                output_has_consumer[oref.index as usize] = true;
-            }
+        if let PortSource::Node(oref) = &func.region_results[rid].source
+            && oref.node == theta_id
+            && (oref.index as usize) < loop_var_count
+        {
+            output_has_consumer[oref.index as usize] = true;
         }
     }
 
@@ -164,7 +165,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             })
             .unwrap_or(false);
         // Check 2: scalar temp + not multi-slot (structural safety).
-        let structurally_eligible = func
+        let _structurally_eligible = func
             .theta_port_slots
             .get(&theta_id)
             .and_then(|port_slots| port_slots.get(p))
@@ -187,7 +188,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
         // The output is unused. Verify the body arg is only used as a gamma
         // input (for break-path pass-through). If it's used in non-gamma
         // computation, the value matters and we can't safely remove the port.
-        let body_arg_id = func.regions[body].args[p];
+        let _body_arg_id = func.regions[body].args[p];
 
         if debug {
             eprintln!(
@@ -289,7 +290,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     }
 
     // Phase 2: For each dead port, replace uses and prepare for removal.
-    let parent_region = func.nodes[theta_id].region;
+    let _parent_region = func.nodes[theta_id].region;
     // Create a SINGLE shared Const(0) node for all dead port replacements.
     // Using one node prevents theta_loop_invariant_hoist from hoisting
     // multiple orphaned Const(0) copies as separate theta ports.
@@ -638,20 +639,22 @@ fn shift_output_refs_down(func: &mut IrFunc, node_id: NodeId, from: u16) {
     let all_node_ids: Vec<NodeId> = func.nodes.iter().map(|(id, _)| id).collect();
     for nid in all_node_ids {
         for input in &mut func.nodes[nid].inputs {
-            if let PortSource::Node(ref mut oref) = input.source {
-                if oref.node == node_id && oref.index >= from {
-                    oref.index -= 1;
-                }
+            if let PortSource::Node(ref mut oref) = input.source
+                && oref.node == node_id
+                && oref.index >= from
+            {
+                oref.index -= 1;
             }
         }
     }
 
     let all_result_ids: Vec<ResultId> = func.region_results.iter().map(|(id, _)| id).collect();
     for rid in all_result_ids {
-        if let PortSource::Node(ref mut oref) = func.region_results[rid].source {
-            if oref.node == node_id && oref.index >= from {
-                oref.index -= 1;
-            }
+        if let PortSource::Node(ref mut oref) = func.region_results[rid].source
+            && oref.node == node_id
+            && oref.index >= from
+        {
+            oref.index -= 1;
         }
     }
 }

@@ -152,13 +152,12 @@ fn rewrite_instructions(
 mod tests {
     use super::*;
     use crate::{
-        cfg_mir::{Block, BlockId, Clobbers, Terminator},
+        cfg_mir::{Block, BlockId, Terminator},
         regalloc3::{
             linear_scan::{Allocation, AllocationResult},
             machine_inst::{PReg, ScratchPolicy},
         },
     };
-    use kajit_lir::LinearOp;
 
     const TEST_SCRATCH: ScratchPolicy = ScratchPolicy {
         reserved: &[PReg(10), PReg(11)],

@@ -1152,10 +1152,8 @@ impl<'a> Linearizer<'a> {
             // Remove fusions added in this scan
             self.control_fusions
                 .retain(|_, v| !new_upstreams.contains(&v.upstream));
-        } else if new_count == 1 {
-            if std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
-                eprintln!("[fusion] committed: 1 candidate");
-            }
+        } else if new_count == 1 && std::env::var("KAJIT_CHAIN_ANALYSIS").is_ok() {
+            eprintln!("[fusion] committed: 1 candidate");
         }
     }
 
@@ -1827,11 +1825,10 @@ impl<'a> Linearizer<'a> {
         // Stage 14.3: if this gamma's predicate comes from a deferred upstream
         // gamma (control-state fusion), linearize the upstream inline with
         // two-landing routing, eliminating the predicate materialization.
-        if exit_ctx.is_none() {
-            if let Some(fusion) = self.control_fusions.get(&node_id).cloned() {
-                return self
-                    .try_linearize_fused_passthrough_exit(node_id, regions, &fusion, exit_ctx);
-            }
+        if exit_ctx.is_none()
+            && let Some(fusion) = self.control_fusions.get(&node_id).cloned()
+        {
+            return self.try_linearize_fused_passthrough_exit(node_id, regions, &fusion, exit_ctx);
         }
 
         let node = &self.func.nodes[node_id];
@@ -2689,14 +2686,14 @@ impl<'a> Linearizer<'a> {
         let mut more_entry_phis = Vec::new();
         for i in 0..passthrough_count {
             let src_input = &node.inputs[i + 1];
-            if src_input.kind == PortKind::Data {
-                if let Some(&arg_id) = more_region.args.get(i) {
-                    let arg = &self.func.region_args[arg_id];
-                    if let Some(dst_vreg) = arg.vreg {
-                        let src_vreg = self.resolve_vreg(src_input.source);
-                        self.record_vreg_scope(dst_vreg, more_region.debug_scope);
-                        more_entry_phis.push((src_vreg, dst_vreg));
-                    }
+            if src_input.kind == PortKind::Data
+                && let Some(&arg_id) = more_region.args.get(i)
+            {
+                let arg = &self.func.region_args[arg_id];
+                if let Some(dst_vreg) = arg.vreg {
+                    let src_vreg = self.resolve_vreg(src_input.source);
+                    self.record_vreg_scope(dst_vreg, more_region.debug_scope);
+                    more_entry_phis.push((src_vreg, dst_vreg));
                 }
             }
         }
@@ -4325,7 +4322,7 @@ impl<'a> Linearizer<'a> {
                         loop_var_count,
                         src_vreg.index(),
                         arg.vreg.map(|v| v.index()),
-                        arg.vreg.map_or(false, |v| v == src_vreg)
+                        arg.vreg == Some(src_vreg)
                     );
                 }
             }
@@ -5912,14 +5909,14 @@ lambda @0 (shape: "test") {
         let ir = linearize(&mut func);
         let mut self_copies = vec![];
         for (i, op) in ir.ops.iter().enumerate() {
-            if let LinearOp::Copy { dst, src } = op {
-                if dst == src {
-                    self_copies.push(format!(
-                        "  op[{i}]: Copy v{} -> v{}",
-                        src.index(),
-                        dst.index()
-                    ));
-                }
+            if let LinearOp::Copy { dst, src } = op
+                && dst == src
+            {
+                self_copies.push(format!(
+                    "  op[{i}]: Copy v{} -> v{}",
+                    src.index(),
+                    dst.index()
+                ));
             }
         }
         if !self_copies.is_empty() {

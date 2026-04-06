@@ -109,14 +109,10 @@ fn trace_recursive(
             }
         },
         PortSource::RegionArg(arg_ref) => {
-            let arg_index = match func.regions[arg_ref.region]
+            let arg_index = func.regions[arg_ref.region]
                 .args
                 .iter()
-                .position(|a| *a == arg_ref.arg)
-            {
-                Some(pos) => pos,
-                None => return None,
-            };
+                .position(|a| *a == arg_ref.arg)?;
 
             let Some(owner) = func.find_region_owner(arg_ref.region) else {
                 steps.push(ProvenanceStep::OrphanedRegionArg {

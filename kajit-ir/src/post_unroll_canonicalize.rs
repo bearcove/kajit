@@ -150,16 +150,16 @@ impl StateEnv {
                         }
 
                         // 4. All branches same constant (only for Role::Data).
-                        if allow_all_branches_same {
-                            if let Some(v) = self.all_branches_same(
+                        if allow_all_branches_same
+                            && let Some(v) = self.all_branches_same(
                                 func,
                                 out_ref.node,
                                 regions,
                                 output_index,
                                 depth,
-                            ) {
-                                return KnownValue::Const(v);
-                            }
+                            )
+                        {
+                            return KnownValue::Const(v);
                         }
 
                         KnownValue::Unknown
@@ -200,17 +200,17 @@ impl StateEnv {
                             func.regions[body_region].results.get(result_index)
                         {
                             let result_source = &func.region_results[result_id].source;
-                            if let PortSource::RegionArg(r) = result_source {
-                                if r.region == body_region && r.arg == arg_ref.arg {
-                                    if let Some(input) = func.nodes[owner].inputs.get(arg_index) {
-                                        return self.resolve_inner(
-                                            func,
-                                            &input.source,
-                                            depth + 1,
-                                            allow_all_branches_same,
-                                        );
-                                    }
-                                }
+                            if let PortSource::RegionArg(r) = result_source
+                                && r.region == body_region
+                                && r.arg == arg_ref.arg
+                                && let Some(input) = func.nodes[owner].inputs.get(arg_index)
+                            {
+                                return self.resolve_inner(
+                                    func,
+                                    &input.source,
+                                    depth + 1,
+                                    allow_all_branches_same,
+                                );
                             }
                         }
                         KnownValue::Unknown
@@ -379,13 +379,13 @@ fn materialize_known_predicate(func: &mut IrFunc, gamma_node: NodeId, env: &Stat
     let pred_source = func.nodes[gamma_node].inputs[0].source;
 
     // If already a Const node, nothing to do.
-    if let PortSource::Node(out) = pred_source {
-        if matches!(
+    if let PortSource::Node(out) = pred_source
+        && matches!(
             func.nodes[out.node].kind,
             NodeKind::Simple(IrOp::Const { .. })
-        ) {
-            return false;
-        }
+        )
+    {
+        return false;
     }
 
     // Role::Control — conservative resolver only.

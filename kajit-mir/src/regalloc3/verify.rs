@@ -94,10 +94,10 @@ pub fn verify(
 
     // Check 1: No scratch registers allocated to user vregs
     for (&vreg, &allocation) in &alloc.allocations {
-        if let Allocation::Reg(preg) = allocation {
-            if scratch.reserved.contains(&preg) {
-                errors.push(VerifyError::ScratchRegisterUsed { vreg, preg });
-            }
+        if let Allocation::Reg(preg) = allocation
+            && scratch.reserved.contains(&preg)
+        {
+            errors.push(VerifyError::ScratchRegisterUsed { vreg, preg });
         }
     }
 
@@ -126,7 +126,7 @@ fn check_conflicts(alloc: &AllocationResult, liveness: &LivenessInfo) -> Vec<Ver
     let mut reg_to_vregs: HashMap<PReg, Vec<VReg>> = HashMap::new();
     for (&vreg, &allocation) in &alloc.allocations {
         if let Allocation::Reg(preg) = allocation {
-            reg_to_vregs.entry(preg).or_insert_with(Vec::new).push(vreg);
+            reg_to_vregs.entry(preg).or_default().push(vreg);
         }
     }
 

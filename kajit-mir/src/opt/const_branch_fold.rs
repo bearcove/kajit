@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::cfg_mir::{Edge, EdgeArg, EdgeId, Function, Terminator};
+use crate::cfg_mir::{EdgeArg, EdgeId, Function, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
@@ -26,10 +26,10 @@ pub fn fold_const_branches(func: &mut Function) -> usize {
         if let LinearOp::Const { dst, value } = &inst.op {
             const_vals.insert(*dst, *value);
         }
-        if let LinearOp::Copy { dst, src } = &inst.op {
-            if let Some(&val) = const_vals.get(src) {
-                const_vals.insert(*dst, val);
-            }
+        if let LinearOp::Copy { dst, src } = &inst.op
+            && let Some(&val) = const_vals.get(src)
+        {
+            const_vals.insert(*dst, val);
         }
     }
 
@@ -51,11 +51,12 @@ pub fn fold_const_branches(func: &mut Function) -> usize {
             }
             let edge = &func.edges[live_preds[0].index()];
             for arg in &edge.args {
-                if let Some(&val) = const_vals.get(&arg.source) {
-                    if !const_vals.contains_key(&arg.target) {
-                        const_vals.insert(arg.target, val);
-                        propagated = true;
-                    }
+                if let Some(&val) = const_vals.get(&arg.source)
+                    && let std::collections::hash_map::Entry::Vacant(e) =
+                        const_vals.entry(arg.target)
+                {
+                    e.insert(val);
+                    propagated = true;
                 }
             }
         }
@@ -89,12 +90,13 @@ pub fn fold_const_branches(func: &mut Function) -> usize {
                 }
                 let edge = &func.edges[live_preds[0].index()];
                 for arg in &edge.args {
-                    if let Some(&val) = const_vals.get(&arg.source) {
-                        if !const_vals.contains_key(&arg.target) {
-                            const_vals.insert(arg.target, val);
-                            prop_changed = true;
-                            new_props = true;
-                        }
+                    if let Some(&val) = const_vals.get(&arg.source)
+                        && let std::collections::hash_map::Entry::Vacant(e) =
+                            const_vals.entry(arg.target)
+                    {
+                        e.insert(val);
+                        prop_changed = true;
+                        new_props = true;
                     }
                 }
             }
@@ -273,7 +275,7 @@ fn thread_const_phi_branches(func: &mut Function, const_vals: &HashMap<VReg, u64
         let succ_args = succ_edge.args.clone();
 
         let branch_block = &func.blocks[action.branch_block_idx];
-        let branch_params = branch_block.params.clone();
+        let _branch_params = branch_block.params.clone();
 
         let pred_edge = &func.edges[action.pred_edge_id.index()];
         let pred_args = pred_edge.args.clone();

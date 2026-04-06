@@ -415,11 +415,12 @@ impl DebuggerSession {
     }
 
     fn translate_debug_address_to_host_ptr(&self, raw: u64) -> u64 {
-        if let (Some(base), Some(end)) = (self.input_base_addr, self.input_end_addr) {
-            if raw >= base && raw <= end {
-                let offset = (raw - base) as usize;
-                return unsafe { self.input.as_ptr().add(offset) as u64 };
-            }
+        if let (Some(base), Some(end)) = (self.input_base_addr, self.input_end_addr)
+            && raw >= base
+            && raw <= end
+        {
+            let offset = (raw - base) as usize;
+            return unsafe { self.input.as_ptr().add(offset) as u64 };
         }
 
         if let Some(base) = self.output_base_addr {
@@ -658,7 +659,7 @@ impl DebuggerSession {
                         }
                     }
                     kajit_lir::UnaryOpKind::SignExtend { from_width } => {
-                        let bits = from_width.bytes() as u32 * 8;
+                        let bits = from_width.bytes() * 8;
                         let mask = 1u64 << (bits - 1);
                         (src_val ^ mask).wrapping_sub(mask)
                     }

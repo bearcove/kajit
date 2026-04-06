@@ -347,19 +347,19 @@ pub fn compile_pipeline_from_hir_module(
     registry: &crate::ir::IntrinsicRegistry,
     pipeline_opts: &PipelineOptions,
 ) -> PipelineArtifacts {
-    let root_data_abi = infer_root_decoder_data_abi(&module);
+    let root_data_abi = infer_root_decoder_data_abi(module);
     let hir_text = module.to_string();
 
     // Phase 2: IR + passes with timeline
-    let mut func = lower_hir_module(&module);
+    let mut func = lower_hir_module(module);
     let mut ir_opt_timeline = vec![(
         "initial".to_string(),
-        format!("{}", func.display_with_registry(&registry)),
+        format!("{}", func.display_with_registry(registry)),
     )];
     run_configured_default_passes_with_observer(&mut func, pipeline_opts, |pass_name, func| {
         ir_opt_timeline.push((
             pass_name.to_string(),
-            format!("{}", func.display_with_registry(&registry)),
+            format!("{}", func.display_with_registry(registry)),
         ));
     });
 
@@ -466,7 +466,7 @@ pub fn compile_pipeline_from_hir_module(
         unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
 
     let emitted_cfg_program = &ra3_alloc.cfg_program;
-    let listing = dwarf::build_cfg_mir_listing(emitted_cfg_program, Some(&registry));
+    let listing = dwarf::build_cfg_mir_listing(emitted_cfg_program, Some(registry));
 
     let decoder = CompiledDecoder {
         buf,
@@ -847,12 +847,12 @@ fn compile_linear_ir_decoder_with_options(
     if use_regalloc3 {
         use kajit_mir::regalloc3::machine_inst::PReg;
 
-        if !cfg_program.is_scalar {
-            if let Some(func) = cfg_program.funcs.first() {
-                cfg_program.extra_excluded_regs = (0..func.data_args.len())
-                    .map(|i| PReg(i as u8 + 2))
-                    .collect();
-            }
+        if !cfg_program.is_scalar
+            && let Some(func) = cfg_program.funcs.first()
+        {
+            cfg_program.extra_excluded_regs = (0..func.data_args.len())
+                .map(|i| PReg(i as u8 + 2))
+                .collect();
         }
 
         let is_leaf = cfg_program.funcs.iter().all(|func| {

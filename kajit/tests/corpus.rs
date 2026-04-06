@@ -4,9 +4,7 @@ use proptest::arbitrary::Arbitrary;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
-#[cfg(target_arch = "aarch64")]
-use yaxpeax_arm::armv8::a64::InstDecoder;
+use yaxpeax_arch::{Decoder, LengthedInstruction};
 #[cfg(target_arch = "x86_64")]
 use yaxpeax_x86::amd64::InstDecoder;
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -609,7 +607,7 @@ fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
 fn disassemble_code(_code: &[u8], _base_addr: usize) -> Vec<String> {
     vec!["(disassembly not supported on this architecture)".to_string()]
 }
-fn maybe_show_postcard_asm<T>(encoded: &[u8]) -> bool
+fn maybe_show_postcard_asm<T>(_encoded: &[u8]) -> bool
 where
     for<'input> T: Facet<'input> + serde::de::DeserializeOwned,
 {
@@ -2004,6 +2002,4 @@ mod postcard_input {
         assert_postcard_input_err_code::<Animal>(b"c", kajit::context::ErrorCode::UnknownVariant);
     }
 }
-mod panics {
-    use super::*;
-}
+mod panics {}

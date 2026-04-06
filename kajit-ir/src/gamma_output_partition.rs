@@ -111,16 +111,14 @@ fn rewrite_same_on_both_branches(
             }
         }
 
-        if is_same {
-            if let Some(arg_pos) = common_arg_pos {
-                let gamma_input_idx = arg_pos + 1;
-                let replacement = func.nodes[gamma_id].inputs[gamma_input_idx].source;
-                let output_ref = OutputRef {
-                    node: gamma_id,
-                    index: output_idx as u16,
-                };
-                rewrites.push((output_ref, replacement));
-            }
+        if is_same && let Some(arg_pos) = common_arg_pos {
+            let gamma_input_idx = arg_pos + 1;
+            let replacement = func.nodes[gamma_id].inputs[gamma_input_idx].source;
+            let output_ref = OutputRef {
+                node: gamma_id,
+                index: output_idx as u16,
+            };
+            rewrites.push((output_ref, replacement));
         }
     }
 

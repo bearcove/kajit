@@ -171,7 +171,6 @@ impl<'a> LivenessAnalyzer<'a> {
 
             // Process blocks in reverse order (better convergence)
             for block in self.func.live_blocks().rev() {
-
                 let old_live_in = self.live_in[&block.id].clone();
 
                 // Compute live-out from successors
@@ -271,7 +270,7 @@ impl<'a> LivenessAnalyzer<'a> {
                         // Live after def, add segment
                         intervals
                             .entry(def)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push((inst_point, block_exit));
                         live.remove(&def);
                     } else {
@@ -279,7 +278,7 @@ impl<'a> LivenessAnalyzer<'a> {
                         // (dead code, but still needs a register)
                         intervals
                             .entry(def)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push((inst_point, inst_point));
                     }
                 }
@@ -287,10 +286,7 @@ impl<'a> LivenessAnalyzer<'a> {
                 // Uses add liveness
                 for &use_vreg in &self.inst_uses[&inst_id] {
                     live.insert(use_vreg);
-                    use_points
-                        .entry(use_vreg)
-                        .or_insert_with(Vec::new)
-                        .push(inst_point);
+                    use_points.entry(use_vreg).or_default().push(inst_point);
                 }
             }
 
@@ -298,7 +294,7 @@ impl<'a> LivenessAnalyzer<'a> {
             for vreg in live {
                 intervals
                     .entry(vreg)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push((block_entry, block_exit));
             }
 
@@ -306,7 +302,7 @@ impl<'a> LivenessAnalyzer<'a> {
             for param in &block.params {
                 intervals
                     .entry(*param)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push((block_entry, block_exit));
             }
         }

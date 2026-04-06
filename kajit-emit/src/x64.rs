@@ -109,35 +109,37 @@ impl ExecutableBuffer {
     /// # Safety
     /// The caller must ensure `offset` points to a valid `mov r64, imm64` instruction.
     pub unsafe fn patch_u64_load(&self, offset: usize, value: u64) {
-        assert!(
-            offset + 10 <= self.len,
-            "patch_u64_load: offset {offset} + 10 > len {}",
-            self.len
-        );
-        let ptr = self.ptr.add(offset);
-
-        #[cfg(target_os = "macos")]
         unsafe {
-            pthread_jit_write_protect_np(0);
-        }
+            assert!(
+                offset + 10 <= self.len,
+                "patch_u64_load: offset {offset} + 10 > len {}",
+                self.len
+            );
+            let ptr = self.ptr.add(offset);
 
-        #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
-        }
+            #[cfg(target_os = "macos")]
+            unsafe {
+                pthread_jit_write_protect_np(0);
+            }
 
-        // The imm64 is at bytes [2..10] for a REX.W + B8+rd instruction.
-        let imm_ptr = ptr.add(2) as *mut u64;
-        unsafe { imm_ptr.write_unaligned(value) };
+            #[cfg(not(target_os = "macos"))]
+            unsafe {
+                mprotect(self.ptr, self.len, PROT_READ | PROT_WRITE);
+            }
 
-        #[cfg(target_os = "macos")]
-        unsafe {
-            pthread_jit_write_protect_np(1);
-        }
+            // The imm64 is at bytes [2..10] for a REX.W + B8+rd instruction.
+            let imm_ptr = ptr.add(2) as *mut u64;
+            unsafe { imm_ptr.write_unaligned(value) };
 
-        #[cfg(not(target_os = "macos"))]
-        unsafe {
-            mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
+            #[cfg(target_os = "macos")]
+            unsafe {
+                pthread_jit_write_protect_np(1);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            unsafe {
+                mprotect(self.ptr, self.len, PROT_READ | PROT_EXEC);
+            }
         }
     }
 }

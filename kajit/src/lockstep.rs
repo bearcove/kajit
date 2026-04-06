@@ -657,7 +657,10 @@ CONTROL FLOW DIVERGENCE at step {}
                         "VALUE DIVERGENCE at step {}, line {}\n\n",
                         self.jit_steps, executed_line
                     ));
-                    diag.push_str(&format!("  op: {}\n", self.current_line_text(executed_line)));
+                    diag.push_str(&format!(
+                        "  op: {}\n",
+                        self.current_line_text(executed_line)
+                    ));
                     let reg_name = match location {
                         VRegLocation::Register(p) => LocationMap::reg_name(p),
                         _ => "stk",
@@ -708,18 +711,18 @@ CONTROL FLOW DIVERGENCE at step {}
 
                             if let Some(jv) = jit_value {
                                 for &v in &sharing {
-                                    if let Some(&(val, line, _)) = self.verified.get(&v) {
-                                        if val == jv {
-                                            diag.push_str(&format!(
+                                    if let Some(&(val, line, _)) = self.verified.get(&v)
+                                        && val == jv
+                                    {
+                                        diag.push_str(&format!(
                                                 "\n  SUSPECT: v{} had value {} at line {} — same as JIT's current {}\n",
                                                 v, val, line, reg_name
                                             ));
-                                            diag.push_str(&format!(
-                                                "  → {} was NOT updated between line {} and line {}\n",
-                                                reg_name, line, executed_line
-                                            ));
-                                            diag.push_str("  → likely a missing phi/copy move on the edge into this block\n");
-                                        }
+                                        diag.push_str(&format!(
+                                            "  → {} was NOT updated between line {} and line {}\n",
+                                            reg_name, line, executed_line
+                                        ));
+                                        diag.push_str("  → likely a missing phi/copy move on the edge into this block\n");
                                     }
                                 }
                             }
@@ -1153,14 +1156,10 @@ fn chosen_edge_for_non_comparable<'a>(
     let edge_id = match term {
         kajit_mir::cfg_mir::Terminator::Branch { edge } => Some(*edge),
         kajit_mir::cfg_mir::Terminator::BranchIf {
-            taken,
-            fallthrough,
-            ..
+            taken, fallthrough, ..
         }
         | kajit_mir::cfg_mir::Terminator::BranchIfZero {
-            taken,
-            fallthrough,
-            ..
+            taken, fallthrough, ..
         } => {
             let taken_edge = func.edges.get(taken.index())?;
             if taken_edge.to == loc_after.block {
@@ -1368,7 +1367,7 @@ pub fn format_result(result: &LockstepResult) -> String {
             div.step, div.dwarf_line
         ));
         out.push_str(&format!("  source: {}\n", div.source_line));
-        out.push_str("\n");
+        out.push('\n');
 
         for diff in &div.vreg_diffs {
             let loc_str = match &diff.jit_location {

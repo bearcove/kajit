@@ -615,12 +615,12 @@ fn check_entry_liveness(func: &Function, errors: &mut Vec<SsaError>) {
 
     // Check terminator uses
     let term = &func.terms[entry_block.term.index()];
-    if let Some(condition) = term.condition_vreg() {
-        if !defined.contains(&condition) {
-            errors.push(SsaError::EntryLivein {
-                vreg: condition,
-                inst_index: entry_block.insts.len(),
-            });
-        }
+    if let Some(condition) = term.condition_vreg()
+        && !defined.contains(&condition)
+    {
+        errors.push(SsaError::EntryLivein {
+            vreg: condition,
+            inst_index: entry_block.insts.len(),
+        });
     }
 }

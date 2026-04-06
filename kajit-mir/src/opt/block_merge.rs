@@ -116,10 +116,8 @@ fn find_merge_candidate(func: &Function) -> Option<(BlockId, BlockId)> {
 
         // If block has params, the incoming edge MUST supply all of them
         // (and we'll substitute them through the outgoing edge args)
-        if !block.params.is_empty() {
-            if pred_edge.args.len() != block.params.len() {
-                continue;
-            }
+        if !block.params.is_empty() && pred_edge.args.len() != block.params.len() {
+            continue;
         }
 
         // Found a candidate!

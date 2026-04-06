@@ -1170,8 +1170,8 @@ hir_module {
 #[test]
 fn vixen_typed_function_add_lowers_to_ir() {
     use hir::{
-        BinaryOp, Literal, LocalId, Module, Type, VixenTypedExpr, VixenTypedFunction,
-        VixenTypedParam, VixenTypedStmt,
+        BinaryOp, LocalId, Module, Type, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
+        VixenTypedStmt,
     };
 
     let func = VixenTypedFunction {
@@ -1962,7 +1962,7 @@ fn vixen_typed_function_str_concat_compiles_and_runs() {
 /// `fn get_lit_len() -> u64 { return TypedLiteral("hello", Str).len }`
 #[test]
 fn field_projection_from_typed_literal() {
-    use hir::{LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedStmt};
+    use hir::{Module, VixenTypedExpr, VixenTypedFunction, VixenTypedStmt};
 
     let mut module = Module::new();
     let (_str_def, str_ty) = define_str_struct(&mut module);
@@ -1998,8 +1998,7 @@ fn field_projection_from_typed_literal() {
 #[test]
 fn field_projection_from_if_expr() {
     use hir::{
-        BinaryOp, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam, VixenTypedStmt,
     };
 
     let mut module = Module::new();
@@ -2081,11 +2080,11 @@ fn field_projection_from_if_expr() {
 fn field_projection_from_call_returning_str() {
     use hir::{
         LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction, VixenTypedLocal,
-        VixenTypedParam, VixenTypedStmt,
+        VixenTypedStmt,
     };
 
     let mut module = Module::new();
-    let (_str_def, str_ty) = define_str_struct(&mut module);
+    let (_str_def, _str_ty) = define_str_struct(&mut module);
     let _callables = module.install_runtime_memory_callables();
 
     // We'll test by calling memcpy (returns ptr) — it's a call returning u64.
@@ -2215,7 +2214,7 @@ fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
         base: Box::new(str_lit(s)),
         field: "ptr".to_string(),
     };
-    let str_lit_len = |s: &str| VixenTypedExpr::Field {
+    let _str_lit_len = |s: &str| VixenTypedExpr::Field {
         base: Box::new(str_lit(s)),
         field: "len".to_string(),
     };

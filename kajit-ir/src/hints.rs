@@ -47,12 +47,11 @@ pub type PortHintMap = HashMap<OutputId, PortHint>;
 /// TODO: Proper implementation when integrating with lowering pipeline.
 /// For now, returns empty hints (all vregs get default Low cost).
 pub fn analyze_spill_costs(_func: &IrFunc) -> PortHintMap {
-    let hints = PortHintMap::new();
     // TODO: Traverse func starting from func.root
     // - Visit each node recursively
     // - Track nesting depth
     // - Assign SpillCost::Medium/High to theta outputs based on nesting
-    hints
+    PortHintMap::new()
 }
 
 // Stub implementation - will be completed with lowering integration
@@ -87,10 +86,8 @@ impl<'a> SpillCostAnalyzer<'a> {
 
                 // Mark all theta outputs as loop-carried
                 for (output_idx, _) in node.outputs.iter().enumerate() {
-                    self.hints.insert(
-                        (node_id.index() as usize, output_idx),
-                        PortHint { spill_cost },
-                    );
+                    self.hints
+                        .insert((node_id.index(), output_idx), PortHint { spill_cost });
                 }
 
                 // Recursively analyze body (with increased nesting)
@@ -117,7 +114,7 @@ impl<'a> SpillCostAnalyzer<'a> {
                 // Mark as Low cost (default)
                 for (output_idx, _) in node.outputs.iter().enumerate() {
                     self.hints
-                        .entry((node_id.index() as usize, output_idx))
+                        .entry((node_id.index(), output_idx))
                         .or_insert(PortHint {
                             spill_cost: SpillCost::Low,
                         });
@@ -128,7 +125,7 @@ impl<'a> SpillCostAnalyzer<'a> {
             _ => {
                 for (output_idx, _) in node.outputs.iter().enumerate() {
                     self.hints
-                        .entry((node_id.index() as usize, output_idx))
+                        .entry((node_id.index(), output_idx))
                         .or_insert(PortHint {
                             spill_cost: SpillCost::Low,
                         });

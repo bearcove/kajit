@@ -73,7 +73,6 @@ fn postcard_vec_u32_v0_linear_49_has_term_cond_alloc() {
         .find(|f| f.lambda_id.index() == 1)
         .expect("lambda @1 alloc should exist");
 
-    let chosen_len;
     let mut raw = Vec::new();
     let allocs_len = lambda1
         .op_allocs
@@ -82,7 +81,7 @@ fn postcard_vec_u32_v0_linear_49_has_term_cond_alloc() {
         .unwrap_or(0);
     let is_term = matches!(op_id, kajit::regalloc_engine::cfg_mir::OpId::Term(_));
     raw.push((49usize, is_term, allocs_len));
-    chosen_len = allocs_len;
+    let chosen_len = allocs_len;
     assert!(
         chosen_len >= 1,
         "lambda @1 linear 49 should expose at least one alloc for branch cond; raw={raw:?}, chosen_len={chosen_len}"

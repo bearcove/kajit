@@ -204,7 +204,7 @@ fn compute_nesting_depth(func: &IrFunc, node_id: NodeId) -> u32 {
     // Walk up from the node's region to the root, counting thetas
     loop {
         // Find the node that owns this region
-        let owner = func.regions.iter().find_map(|(_, r)| {
+        let _owner = func.regions.iter().find_map(|(_, _r)| {
             // Skip: we're looking for a node whose body/branch IS this region
             None::<NodeId>
         });
@@ -391,21 +391,21 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
                 continue;
             }
             for (input_idx, input) in func.nodes[node_id].inputs.iter().enumerate() {
-                if let PortSource::Node(out_ref) = input.source {
-                    if out_ref.node == theta_node_id {
-                        let new_source = final_sources[out_ref.index as usize];
-                        uses_to_rewrite.push((node_id, input_idx, new_source));
-                    }
+                if let PortSource::Node(out_ref) = input.source
+                    && out_ref.node == theta_node_id
+                {
+                    let new_source = final_sources[out_ref.index as usize];
+                    uses_to_rewrite.push((node_id, input_idx, new_source));
                 }
             }
         }
         for &result_id in &region.results {
             let result = &func.region_results[result_id];
-            if let PortSource::Node(out_ref) = result.source {
-                if out_ref.node == theta_node_id {
-                    let new_source = final_sources[out_ref.index as usize];
-                    result_uses_to_rewrite.push((result_id, new_source));
-                }
+            if let PortSource::Node(out_ref) = result.source
+                && out_ref.node == theta_node_id
+            {
+                let new_source = final_sources[out_ref.index as usize];
+                result_uses_to_rewrite.push((result_id, new_source));
             }
         }
     }
@@ -442,20 +442,21 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
         let node_set: std::collections::HashSet<NodeId> = region.nodes.iter().copied().collect();
         for &nid in &region.nodes {
             for (i, input) in func.nodes[nid].inputs.iter().enumerate() {
-                if let PortSource::Node(out) = input.source {
-                    if out.node != nid && !node_set.contains(&out.node) {
-                        // Source is not in this region — check if it's in a parent
-                        let source_region = func.nodes[out.node].region;
-                        if source_region != region_id {
-                            eprintln!(
-                                "[unroll] SCOPE: n{} (region {:?}) input[{}] refs n{} (region {:?})",
-                                nid.index(),
-                                region_id,
-                                i,
-                                out.node.index(),
-                                source_region
-                            );
-                        }
+                if let PortSource::Node(out) = input.source
+                    && out.node != nid
+                    && !node_set.contains(&out.node)
+                {
+                    // Source is not in this region — check if it's in a parent
+                    let source_region = func.nodes[out.node].region;
+                    if source_region != region_id {
+                        eprintln!(
+                            "[unroll] SCOPE: n{} (region {:?}) input[{}] refs n{} (region {:?})",
+                            nid.index(),
+                            region_id,
+                            i,
+                            out.node.index(),
+                            source_region
+                        );
                     }
                 }
             }
@@ -475,10 +476,11 @@ fn topological_sort_region(func: &mut IrFunc, region_id: crate::RegionId) {
     for &nid in &nodes {
         let mut node_deps = Vec::new();
         for input in &func.nodes[nid].inputs {
-            if let PortSource::Node(out) = input.source {
-                if node_set.contains(&out.node) && out.node != nid {
-                    node_deps.push(out.node);
-                }
+            if let PortSource::Node(out) = input.source
+                && node_set.contains(&out.node)
+                && out.node != nid
+            {
+                node_deps.push(out.node);
             }
         }
         deps.insert(nid, node_deps);
@@ -650,7 +652,7 @@ fn build_unrolled_cascade(
         nodes: Vec::new(),
     });
     // Branch 0 results: just pass through the args
-    for (_i, &arg_id) in branch0_args.iter().enumerate() {
+    for &arg_id in branch0_args.iter() {
         let result_id = func.region_results.push(crate::RegionResult {
             kind: func.region_args[arg_id].kind,
             source: PortSource::RegionArg(crate::RegionArgRef {

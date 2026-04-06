@@ -2155,10 +2155,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
     fn find_field_byte_offset(&self, fields: &[hir::FieldDef], field_name: &str) -> usize {
         // If the target field has an explicit offset, use it
         for f in fields {
-            if f.name == field_name {
-                if let Some(offset) = f.offset {
-                    return offset as usize;
-                }
+            if f.name == field_name
+                && let Some(offset) = f.offset
+            {
+                return offset as usize;
             }
         }
         // Fallback: compute offset by summing sizes of preceding fields
@@ -2267,9 +2267,7 @@ fn hir_function_uses_effect_calls(module: &hir::Module, function: &hir::Function
     fn expr_uses_effects(module: &hir::Module, expr: &hir::Expr) -> bool {
         match expr {
             hir::Expr::Call(call) => {
-                let id = match call.target {
-                    hir::CallTarget::Callable(id) => id,
-                };
+                let hir::CallTarget::Callable(id) = call.target;
                 if RuntimeDialectLowerer::requires_memory_state(module.callables[id].intrinsic) {
                     return true;
                 }
@@ -2307,7 +2305,7 @@ fn hir_function_uses_effect_calls(module: &hir::Module, function: &hir::Function
                     || block_uses_effects(module, &then_block.statements)
                     || else_block
                         .as_ref()
-                        .map_or(false, |b| block_uses_effects(module, &b.statements))
+                        .is_some_and(|b| block_uses_effects(module, &b.statements))
             }
             hir::StmtKind::Loop { body, .. } => block_uses_effects(module, &body.statements),
             hir::StmtKind::Match { scrutinee, arms } => {

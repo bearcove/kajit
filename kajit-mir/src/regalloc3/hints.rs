@@ -25,11 +25,12 @@ use kajit_ir::VReg;
 use std::collections::HashMap;
 
 /// Spill cost hint (simple classification)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum SpillCost {
     /// Rematerializable constant (essentially free to spill — just re-emit movz)
     Rematerializable,
     /// Not loop-carried (cheap to spill)
+    #[default]
     Low,
     /// Loop-carried in single loop (expensive to spill)
     Medium,
@@ -46,12 +47,6 @@ impl SpillCost {
             SpillCost::Medium => 20,
             SpillCost::High => 200,
         }
-    }
-}
-
-impl Default for SpillCost {
-    fn default() -> Self {
-        SpillCost::Low
     }
 }
 

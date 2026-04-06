@@ -843,143 +843,6 @@ fn extract_minimizer_status_line(output: &str) -> Option<String> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use kajit::ir::{LambdaId, VReg};
-
-    use super::{
-        DebugCfgMirCommand, extract_case_cfg_mir, extract_case_debug_cfg_mir_output,
-        extract_case_input_hex, extract_case_minimized_cfg_mir, extract_minimizer_status_line,
-        parse_debug_cfg_mir_args, parse_hex_bytes, parse_minimize_cfg_mir_args,
-    };
-
-    #[test]
-    fn parse_hex_bytes_accepts_compact_hex() {
-        assert_eq!(parse_hex_bytes("808001").unwrap(), vec![0x80, 0x80, 0x01]);
-    }
-
-    #[test]
-    fn parse_hex_bytes_accepts_byte_list() {
-        assert_eq!(
-            parse_hex_bytes("[0x80, 0x80, 0x01]").unwrap(),
-            vec![0x80, 0x80, 0x01]
-        );
-    }
-
-    #[test]
-    fn extract_case_input_hex_finds_structured_line() {
-        assert_eq!(
-            extract_case_input_hex("noise\nKAJIT_CASE_INPUT_HEX=2a00ff\nmore noise"),
-            Some("2a00ff".to_owned())
-        );
-    }
-
-    #[test]
-    fn extract_case_cfg_mir_finds_marker_block() {
-        assert_eq!(
-            extract_case_cfg_mir(
-                "noise\nKAJIT_CASE_CFG_MIR_BEGIN\nfunc @0 {}\nKAJIT_CASE_CFG_MIR_END\nmore"
-            ),
-            Some("func @0 {}\n".to_owned())
-        );
-    }
-
-    #[test]
-    fn parse_minimize_cfg_mir_args_accepts_raw_hex() {
-        let args = vec!["seed.cfg".to_owned(), "2a00ff".to_owned()];
-        let (path, input, label, corpus_test) =
-            parse_minimize_cfg_mir_args(&args).expect("args should parse");
-        assert_eq!(path, "seed.cfg");
-        assert_eq!(input, vec![0x2a, 0x00, 0xff]);
-        assert_eq!(label, "2a00ff");
-        assert_eq!(corpus_test, None);
-    }
-
-    #[test]
-    fn extract_case_minimized_cfg_mir_finds_marker_block() {
-        assert_eq!(
-            extract_case_minimized_cfg_mir(
-                "noise\nKAJIT_CASE_MINIMIZED_CFG_MIR_BEGIN\nfunc @0 {}\nKAJIT_CASE_MINIMIZED_CFG_MIR_END\nmore"
-            ),
-            Some("func @0 {}\n".to_owned())
-        );
-    }
-
-    #[test]
-    fn extract_case_debug_cfg_mir_output_finds_marker_block() {
-        assert_eq!(
-            extract_case_debug_cfg_mir_output(
-                "noise\nKAJIT_CASE_DEBUG_CFG_MIR_BEGIN\ncursor: 1\nKAJIT_CASE_DEBUG_CFG_MIR_END\nmore"
-            ),
-            Some("cursor: 1\n".to_owned())
-        );
-    }
-
-    #[test]
-    fn parse_debug_cfg_mir_args_accepts_why_vreg() {
-        let args = vec![
-            "why-vreg".to_owned(),
-            "seed.cfg".to_owned(),
-            "2a".to_owned(),
-            "--vreg".to_owned(),
-            "47".to_owned(),
-        ];
-        let parsed = parse_debug_cfg_mir_args(&args).expect("args should parse");
-        assert_eq!(parsed.path, "seed.cfg");
-        assert_eq!(parsed.input, vec![0x2a]);
-        assert_eq!(parsed.input_label, "2a");
-        assert_eq!(parsed.corpus_test, None);
-        assert_eq!(
-            parsed.command,
-            DebugCfgMirCommand::WhyVreg {
-                vreg: VReg::new(47)
-            }
-        );
-    }
-
-    #[test]
-    fn parse_debug_cfg_mir_args_accepts_block_query() {
-        let args = vec![
-            "block".to_owned(),
-            "seed.cfg".to_owned(),
-            "2a".to_owned(),
-            "--block".to_owned(),
-            "17".to_owned(),
-            "--lambda".to_owned(),
-            "1".to_owned(),
-        ];
-        let parsed = parse_debug_cfg_mir_args(&args).expect("args should parse");
-        assert_eq!(
-            parsed.command,
-            DebugCfgMirCommand::Block {
-                lambda: LambdaId::new(1),
-                block: kajit_mir::cfg_mir::BlockId(17)
-            }
-        );
-    }
-
-    #[test]
-    fn parse_debug_cfg_mir_args_accepts_lldb_ref() {
-        let args = vec![
-            "lldb-ref".to_owned(),
-            "seed.cfg".to_owned(),
-            "2a".to_owned(),
-        ];
-        let parsed = parse_debug_cfg_mir_args(&args).expect("args should parse");
-        assert_eq!(parsed.command, DebugCfgMirCommand::LldbRef);
-    }
-
-    #[test]
-    fn extract_minimizer_status_line_finds_interestingness_failure() {
-        assert_eq!(
-            extract_minimizer_status_line(
-                "noise\nseed program is not differentially interesting for input 012a\nmore"
-            ),
-            Some("seed program is not differentially interesting for input 012a".to_owned())
-        );
-    }
-}
-
 fn install() {
     let root = workspace_root();
     let package = "kajit-cli";
@@ -1165,4 +1028,141 @@ fn write_file(path: &Path, content: &str) {
         fs::create_dir_all(parent).expect("create parent directory");
     }
     fs::write(path, content).expect("write generated file");
+}
+
+#[cfg(test)]
+mod tests {
+    use kajit::ir::{LambdaId, VReg};
+
+    use super::{
+        DebugCfgMirCommand, extract_case_cfg_mir, extract_case_debug_cfg_mir_output,
+        extract_case_input_hex, extract_case_minimized_cfg_mir, extract_minimizer_status_line,
+        parse_debug_cfg_mir_args, parse_hex_bytes, parse_minimize_cfg_mir_args,
+    };
+
+    #[test]
+    fn parse_hex_bytes_accepts_compact_hex() {
+        assert_eq!(parse_hex_bytes("808001").unwrap(), vec![0x80, 0x80, 0x01]);
+    }
+
+    #[test]
+    fn parse_hex_bytes_accepts_byte_list() {
+        assert_eq!(
+            parse_hex_bytes("[0x80, 0x80, 0x01]").unwrap(),
+            vec![0x80, 0x80, 0x01]
+        );
+    }
+
+    #[test]
+    fn extract_case_input_hex_finds_structured_line() {
+        assert_eq!(
+            extract_case_input_hex("noise\nKAJIT_CASE_INPUT_HEX=2a00ff\nmore noise"),
+            Some("2a00ff".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_case_cfg_mir_finds_marker_block() {
+        assert_eq!(
+            extract_case_cfg_mir(
+                "noise\nKAJIT_CASE_CFG_MIR_BEGIN\nfunc @0 {}\nKAJIT_CASE_CFG_MIR_END\nmore"
+            ),
+            Some("func @0 {}\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_minimize_cfg_mir_args_accepts_raw_hex() {
+        let args = vec!["seed.cfg".to_owned(), "2a00ff".to_owned()];
+        let (path, input, label, corpus_test) =
+            parse_minimize_cfg_mir_args(&args).expect("args should parse");
+        assert_eq!(path, "seed.cfg");
+        assert_eq!(input, vec![0x2a, 0x00, 0xff]);
+        assert_eq!(label, "2a00ff");
+        assert_eq!(corpus_test, None);
+    }
+
+    #[test]
+    fn extract_case_minimized_cfg_mir_finds_marker_block() {
+        assert_eq!(
+            extract_case_minimized_cfg_mir(
+                "noise\nKAJIT_CASE_MINIMIZED_CFG_MIR_BEGIN\nfunc @0 {}\nKAJIT_CASE_MINIMIZED_CFG_MIR_END\nmore"
+            ),
+            Some("func @0 {}\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn extract_case_debug_cfg_mir_output_finds_marker_block() {
+        assert_eq!(
+            extract_case_debug_cfg_mir_output(
+                "noise\nKAJIT_CASE_DEBUG_CFG_MIR_BEGIN\ncursor: 1\nKAJIT_CASE_DEBUG_CFG_MIR_END\nmore"
+            ),
+            Some("cursor: 1\n".to_owned())
+        );
+    }
+
+    #[test]
+    fn parse_debug_cfg_mir_args_accepts_why_vreg() {
+        let args = vec![
+            "why-vreg".to_owned(),
+            "seed.cfg".to_owned(),
+            "2a".to_owned(),
+            "--vreg".to_owned(),
+            "47".to_owned(),
+        ];
+        let parsed = parse_debug_cfg_mir_args(&args).expect("args should parse");
+        assert_eq!(parsed.path, "seed.cfg");
+        assert_eq!(parsed.input, vec![0x2a]);
+        assert_eq!(parsed.input_label, "2a");
+        assert_eq!(parsed.corpus_test, None);
+        assert_eq!(
+            parsed.command,
+            DebugCfgMirCommand::WhyVreg {
+                vreg: VReg::new(47)
+            }
+        );
+    }
+
+    #[test]
+    fn parse_debug_cfg_mir_args_accepts_block_query() {
+        let args = vec![
+            "block".to_owned(),
+            "seed.cfg".to_owned(),
+            "2a".to_owned(),
+            "--block".to_owned(),
+            "17".to_owned(),
+            "--lambda".to_owned(),
+            "1".to_owned(),
+        ];
+        let parsed = parse_debug_cfg_mir_args(&args).expect("args should parse");
+        assert_eq!(
+            parsed.command,
+            DebugCfgMirCommand::Block {
+                lambda: LambdaId::new(1),
+                block: kajit_mir::cfg_mir::BlockId(17)
+            }
+        );
+    }
+
+    #[test]
+    fn parse_debug_cfg_mir_args_accepts_lldb_ref() {
+        let args = vec![
+            "lldb-ref".to_owned(),
+            "seed.cfg".to_owned(),
+            "2a".to_owned(),
+        ];
+        let parsed = parse_debug_cfg_mir_args(&args).expect("args should parse");
+        assert_eq!(parsed.command, DebugCfgMirCommand::LldbRef);
+    }
+
+    #[test]
+    fn extract_minimizer_status_line_finds_interestingness_failure() {
+        assert_eq!(
+            extract_minimizer_status_line(
+                "noise\nseed program is not differentially interesting for input 012a\nmore"
+            ),
+            Some("seed program is not differentially interesting for input 012a".to_owned())
+        );
+    }
 }

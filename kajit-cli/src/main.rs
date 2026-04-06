@@ -247,7 +247,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
 
     if dump("harness") {
         let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
-        let output_dir = std::path::PathBuf::from(format!("/tmp/kajit-harness"));
+        let output_dir = std::path::PathBuf::from("/tmp/kajit-harness".to_string());
         let base_name = format!("harness_{format}_{ty}");
         let listing_path = output_dir.join(format!("{base_name}.cfg-mir"));
 
@@ -291,7 +291,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
 
                 // If we have input, run it
                 let input = input_hex
-                    .map(|h| parse_hex(h))
+                    .map(parse_hex)
                     .unwrap_or_else(|| make_test_input(format, ty));
                 let hex_input: String = input.iter().map(|b| format!("{b:02x}")).collect();
 
@@ -320,7 +320,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
     if dump("exec") || dump_all {
         // Get input: either from --input flag or auto-generate
         let input = input_hex
-            .map(|h| parse_hex(h))
+            .map(parse_hex)
             .unwrap_or_else(|| make_test_input(format, ty));
 
         let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
@@ -569,7 +569,7 @@ fn cmd_reduce_ir(format: &str, ty: &str, spec: &str) {
     );
 
     // Output the reduced IR.
-    let output_text = format!("{}", reduced.display_with_registry(&*registry));
+    let output_text = format!("{}", reduced.display_with_registry(&registry));
     let output_file = format!(
         "reduced_{}_{}.vixen-ir",
         format,

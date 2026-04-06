@@ -149,14 +149,13 @@ impl<'a> EmitContext<'a> {
     /// Get hardware register for a vreg, or use a temp register and load from spill slot.
     /// For spilled constants, rematerializes with movz instead of loading from stack.
     fn reg_for_vreg_with_temp(&mut self, vreg: kajit_ir::VReg, temp: Reg) -> Reg {
-        if let Some(inst_id) = self.current_inst {
-            if let Some(loc) = self
+        if let Some(inst_id) = self.current_inst
+            && let Some(loc) = self
                 .inst_source_locations
                 .get(&(inst_id, vreg.index() as u32))
                 .cloned()
-            {
-                return self.reg_for_location_with_temp(&loc, temp);
-            }
+        {
+            return self.reg_for_location_with_temp(&loc, temp);
         }
 
         if let Some(preg) = self.preg_for_vreg(vreg) {
@@ -397,7 +396,7 @@ impl<'a> EmitContext<'a> {
                 .map(|(&dst, &src)| (dst, src));
 
             if let Some((dst, src)) = ready {
-                Self::emit_loc_move(&mut self.ectx, src, dst);
+                Self::emit_loc_move(self.ectx, src, dst);
                 deps.remove(&dst);
                 continue;
             }
@@ -441,7 +440,7 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
-            Self::emit_loc_move(&mut self.ectx, cycle_src, cycle_dst);
+            Self::emit_loc_move(self.ectx, cycle_src, cycle_dst);
         }
     }
 
@@ -449,10 +448,10 @@ impl<'a> EmitContext<'a> {
     fn resolve_vreg_to_loc(&self, vreg: kajit_ir::VReg) -> Option<EdgeLoc> {
         if let Some(preg) = self.preg_for_vreg(vreg) {
             Some(EdgeLoc::Reg(self.preg_to_reg(preg)))
-        } else if let Some(slot) = self.alloc_func.spill_slot_for_vreg(vreg) {
-            Some(EdgeLoc::Stack(self.ectx.base_frame + slot.0 * 8))
         } else {
-            None // dead
+            self.alloc_func
+                .spill_slot_for_vreg(vreg)
+                .map(|slot| EdgeLoc::Stack(self.ectx.base_frame + slot.0 * 8))
         }
     }
 
@@ -1556,22 +1555,22 @@ impl<'a> EmitContext<'a> {
             // Find the defining CmpXx instruction in this block
             for &inst_id in block.insts.iter().rev() {
                 let inst = &func.insts[inst_id.index()];
-                if let LinearOp::BinOp { op, dst, .. } = &inst.op {
-                    if *dst == cond {
-                        let condition = match op {
-                            BinOpKind::CmpEq => Some(Condition::Eq),
-                            BinOpKind::CmpNe => Some(Condition::Ne),
-                            BinOpKind::CmpLt => Some(Condition::Lo),
-                            BinOpKind::CmpLe => Some(Condition::Ls),
-                            BinOpKind::CmpGt => Some(Condition::Hi),
-                            BinOpKind::CmpGe => Some(Condition::Hs),
-                            _ => None,
-                        };
-                        if let Some(cc) = condition {
-                            fusable.insert(cond, cc);
-                        }
-                        break;
+                if let LinearOp::BinOp { op, dst, .. } = &inst.op
+                    && *dst == cond
+                {
+                    let condition = match op {
+                        BinOpKind::CmpEq => Some(Condition::Eq),
+                        BinOpKind::CmpNe => Some(Condition::Ne),
+                        BinOpKind::CmpLt => Some(Condition::Lo),
+                        BinOpKind::CmpLe => Some(Condition::Ls),
+                        BinOpKind::CmpGt => Some(Condition::Hi),
+                        BinOpKind::CmpGe => Some(Condition::Hs),
+                        _ => None,
+                    };
+                    if let Some(cc) = condition {
+                        fusable.insert(cond, cc);
                     }
+                    break;
                 }
             }
         }
@@ -2157,10 +2156,10 @@ impl<'a> EmitContext<'a> {
             // Skip only pure alias trampoline blocks (aliased above, no code to emit).
             if block.insts.is_empty() {
                 let term = &self.func.terms[block.term.0 as usize];
-                if let Terminator::Branch { edge } = term {
-                    if !self.edge_has_moves(*edge) {
-                        continue;
-                    }
+                if let Terminator::Branch { edge } = term
+                    && !self.edge_has_moves(*edge)
+                {
+                    continue;
                 }
             }
             let term = &self.func.terms[block.term.0 as usize];
@@ -2321,7 +2320,7 @@ pub fn compile_regalloc3_with_root_data_abi(
     let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32;
     let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
-    let edge_tmp_base = slot_base + (actual_slot_count as u32 * 8);
+    let edge_tmp_base = slot_base + (actual_slot_count * 8);
 
     // Check if the program uses cursor operations (BoundsCheck, ReadBytes, etc.)
     // that require the cursor to live in a fixed register.
@@ -2381,7 +2380,7 @@ pub fn compile_regalloc3_with_root_data_abi(
     let (entry, error_exit) = if is_scalar_function {
         // Scalar function prologue: frame setup, callee-saved register
         // save, and data_arg moves from ABI registers to RA-assigned registers.
-        let entry = ectx.emit.current_offset() as u32;
+        let entry = ectx.emit.current_offset();
         let error_exit = ectx.emit.new_label();
         let frame_size = ectx.frame_size;
 
@@ -2425,31 +2424,31 @@ pub fn compile_regalloc3_with_root_data_abi(
         // Materialize scalar data_args from ABI registers into their assigned homes.
         // Spilled args must be stored before any register shuffles so later moves
         // cannot clobber their ABI source registers.
-        if let Some(alloc_func) = alloc.functions.first() {
-            if let Some(func) = program.funcs.first() {
-                for (i, &arg) in func.data_args.iter().enumerate() {
-                    let abi_reg = Reg::from_raw(i as u8);
-                    if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
-                        let offset = ectx.base_frame + (slot.0 * 8);
-                        ectx.emit
-                            .emit_str_imm(Width::X64, abi_reg, Reg::SP, offset)
-                            .expect("str spilled data_arg");
-                    }
+        if let Some(alloc_func) = alloc.functions.first()
+            && let Some(func) = program.funcs.first()
+        {
+            for (i, &arg) in func.data_args.iter().enumerate() {
+                let abi_reg = Reg::from_raw(i as u8);
+                if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
+                    let offset = ectx.base_frame + (slot.0 * 8);
+                    ectx.emit
+                        .emit_str_imm(Width::X64, abi_reg, Reg::SP, offset)
+                        .expect("str spilled data_arg");
                 }
+            }
 
-                let mut arg_moves = Vec::new();
-                for (i, &arg) in func.data_args.iter().enumerate() {
-                    let abi_reg = Reg::from_raw(i as u8);
-                    if let Some(preg) = alloc_func.preg_for_vreg(arg) {
-                        let assigned = Reg::from_raw(preg.0);
-                        if assigned != abi_reg {
-                            arg_moves.push((assigned, abi_reg));
-                        }
+            let mut arg_moves = Vec::new();
+            for (i, &arg) in func.data_args.iter().enumerate() {
+                let abi_reg = Reg::from_raw(i as u8);
+                if let Some(preg) = alloc_func.preg_for_vreg(arg) {
+                    let assigned = Reg::from_raw(preg.0);
+                    if assigned != abi_reg {
+                        arg_moves.push((assigned, abi_reg));
                     }
                 }
-                if !arg_moves.is_empty() {
-                    emit_parallel_reg_moves(&mut ectx, &arg_moves, Reg::X16);
-                }
+            }
+            if !arg_moves.is_empty() {
+                emit_parallel_reg_moves(&mut ectx, &arg_moves, Reg::X16);
             }
         }
 
@@ -2459,33 +2458,32 @@ pub fn compile_regalloc3_with_root_data_abi(
         ectx.begin_func_with_config(&prologue_config)
     };
 
-    if !is_scalar_function {
-        if let Some(alloc_func) = alloc.functions.first() {
-            if let Some(func) = program.funcs.first() {
-                for (i, &arg) in func.data_args.iter().enumerate() {
-                    let abi_reg = Reg::from_raw(i as u8 + 2);
-                    if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
-                        let offset = ectx.base_frame + (slot.0 * 8);
-                        ectx.emit
-                            .emit_str_imm(Width::X64, abi_reg, Reg::SP, offset)
-                            .expect("str spilled decoder data_arg");
-                    }
-                }
+    if !is_scalar_function
+        && let Some(alloc_func) = alloc.functions.first()
+        && let Some(func) = program.funcs.first()
+    {
+        for (i, &arg) in func.data_args.iter().enumerate() {
+            let abi_reg = Reg::from_raw(i as u8 + 2);
+            if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
+                let offset = ectx.base_frame + (slot.0 * 8);
+                ectx.emit
+                    .emit_str_imm(Width::X64, abi_reg, Reg::SP, offset)
+                    .expect("str spilled decoder data_arg");
+            }
+        }
 
-                let mut arg_moves = Vec::new();
-                for (i, &arg) in func.data_args.iter().enumerate() {
-                    let abi_reg = Reg::from_raw(i as u8 + 2);
-                    if let Some(preg) = alloc_func.preg_for_vreg(arg) {
-                        let assigned = Reg::from_raw(preg.0);
-                        if assigned != abi_reg {
-                            arg_moves.push((assigned, abi_reg));
-                        }
-                    }
-                }
-                if !arg_moves.is_empty() {
-                    emit_parallel_reg_moves(&mut ectx, &arg_moves, Reg::X16);
+        let mut arg_moves = Vec::new();
+        for (i, &arg) in func.data_args.iter().enumerate() {
+            let abi_reg = Reg::from_raw(i as u8 + 2);
+            if let Some(preg) = alloc_func.preg_for_vreg(arg) {
+                let assigned = Reg::from_raw(preg.0);
+                if assigned != abi_reg {
+                    arg_moves.push((assigned, abi_reg));
                 }
             }
+        }
+        if !arg_moves.is_empty() {
+            emit_parallel_reg_moves(&mut ectx, &arg_moves, Reg::X16);
         }
     }
 
@@ -2571,85 +2569,81 @@ pub fn compile_regalloc3_with_root_data_abi(
     ectx.bind_label(success_exit);
     if is_scalar_function {
         // Scalar function epilogue: move data_results to x0, x1, ..., restore frame, ret.
-        if let Some(func) = program.funcs.first() {
-            if let Some(alloc_func) = alloc.functions.first() {
-                // Resolve each result vreg to its physical location.
-                let result_regs: Vec<Option<Reg>> = func
-                    .data_results
-                    .iter()
-                    .map(|&vreg| {
-                        if let Some(preg) = alloc_func.preg_for_vreg(vreg) {
-                            Some(Reg::from_raw(preg.0))
-                        } else if let Some(slot) = alloc_func.spill_slot_for_vreg(vreg) {
-                            // Load spilled values into scratch first.
-                            let offset = ectx.base_frame + (slot.0 * 8);
-                            ectx.emit
-                                .emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, offset)
-                                .expect("ldr result from spill");
-                            Some(Reg::X16)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+        if let Some(func) = program.funcs.first()
+            && let Some(alloc_func) = alloc.functions.first()
+        {
+            // Resolve each result vreg to its physical location.
+            let result_regs: Vec<Option<Reg>> = func
+                .data_results
+                .iter()
+                .map(|&vreg| {
+                    if let Some(preg) = alloc_func.preg_for_vreg(vreg) {
+                        Some(Reg::from_raw(preg.0))
+                    } else if let Some(slot) = alloc_func.spill_slot_for_vreg(vreg) {
+                        // Load spilled values into scratch first.
+                        let offset = ectx.base_frame + (slot.0 * 8);
+                        ectx.emit
+                            .emit_ldr_imm(Width::X64, Reg::X16, Reg::SP, offset)
+                            .expect("ldr result from spill");
+                        Some(Reg::X16)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
-                // Emit parallel move: check if any target is a source for a
-                // later move and use x9 as scratch to break cycles.
-                let n = result_regs.len();
-                let mut done = vec![false; n];
-                for round in 0..n + 1 {
-                    let mut progress = false;
-                    for i in 0..n {
-                        if done[i] {
-                            continue;
-                        }
-                        let target = Reg::from_raw(i as u8);
-                        let Some(src) = result_regs[i] else {
-                            done[i] = true;
-                            continue;
-                        };
-                        if src == target {
-                            done[i] = true;
-                            progress = true;
-                            continue;
-                        }
-                        // Check if target is needed as source by an undone move.
-                        let blocked =
-                            (0..n).any(|j| !done[j] && j != i && result_regs[j] == Some(target));
-                        if !blocked || round == n {
-                            // If blocked on last round, use scratch to break cycle.
-                            if blocked {
-                                // Save the blocking value through scratch.
-                                let blocker = (0..n)
-                                    .find(|&j| !done[j] && j != i && result_regs[j] == Some(target))
-                                    .unwrap();
-                                ectx.emit
-                                    .emit_mov_reg(Width::X64, Reg::X16, target)
-                                    .expect("mov scratch");
-                                ectx.emit
-                                    .emit_mov_reg(Width::X64, target, src)
-                                    .expect("mov result");
-                                ectx.emit
-                                    .emit_mov_reg(
-                                        Width::X64,
-                                        Reg::from_raw(blocker as u8),
-                                        Reg::X16,
-                                    )
-                                    .expect("mov from scratch");
-                                done[i] = true;
-                                done[blocker] = true;
-                            } else {
-                                ectx.emit
-                                    .emit_mov_reg(Width::X64, target, src)
-                                    .expect("mov result to return reg");
-                                done[i] = true;
-                            }
-                            progress = true;
-                        }
+            // Emit parallel move: check if any target is a source for a
+            // later move and use x9 as scratch to break cycles.
+            let n = result_regs.len();
+            let mut done = vec![false; n];
+            for round in 0..n + 1 {
+                let mut progress = false;
+                for i in 0..n {
+                    if done[i] {
+                        continue;
                     }
-                    if done.iter().all(|&d| d) || !progress {
-                        break;
+                    let target = Reg::from_raw(i as u8);
+                    let Some(src) = result_regs[i] else {
+                        done[i] = true;
+                        continue;
+                    };
+                    if src == target {
+                        done[i] = true;
+                        progress = true;
+                        continue;
                     }
+                    // Check if target is needed as source by an undone move.
+                    let blocked =
+                        (0..n).any(|j| !done[j] && j != i && result_regs[j] == Some(target));
+                    if !blocked || round == n {
+                        // If blocked on last round, use scratch to break cycle.
+                        if blocked {
+                            // Save the blocking value through scratch.
+                            let blocker = (0..n)
+                                .find(|&j| !done[j] && j != i && result_regs[j] == Some(target))
+                                .unwrap();
+                            ectx.emit
+                                .emit_mov_reg(Width::X64, Reg::X16, target)
+                                .expect("mov scratch");
+                            ectx.emit
+                                .emit_mov_reg(Width::X64, target, src)
+                                .expect("mov result");
+                            ectx.emit
+                                .emit_mov_reg(Width::X64, Reg::from_raw(blocker as u8), Reg::X16)
+                                .expect("mov from scratch");
+                            done[i] = true;
+                            done[blocker] = true;
+                        } else {
+                            ectx.emit
+                                .emit_mov_reg(Width::X64, target, src)
+                                .expect("mov result to return reg");
+                            done[i] = true;
+                        }
+                        progress = true;
+                    }
+                }
+                if done.iter().all(|&d| d) || !progress {
+                    break;
                 }
             }
         }
@@ -2775,7 +2769,7 @@ fn regalloc3_extra_saved_pairs(alloc: &AllocatedCfgProgramRa3) -> u32 {
     };
 
     for func in &alloc.functions {
-        for (_, a) in &func.allocations {
+        for a in func.allocations.values() {
             observe(a);
         }
     }

@@ -200,10 +200,8 @@ fn run_simplify_trivial_gammas_pass(func: &mut IrFunc) {
 
 fn run_dead_theta_ports_pass(func: &mut IrFunc) {
     let removed = crate::dead_theta_ports::eliminate_dead_theta_ports(func);
-    if removed > 0 {
-        if std::env::var("KAJIT_DEBUG_DEAD_THETA").is_ok() {
-            eprintln!("[dead_theta_ports] removed {} dead ports total", removed);
-        }
+    if removed > 0 && std::env::var("KAJIT_DEBUG_DEAD_THETA").is_ok() {
+        eprintln!("[dead_theta_ports] removed {} dead ports total", removed);
     }
     debug_verify(func, "dead_theta_ports");
 }

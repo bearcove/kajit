@@ -83,12 +83,9 @@ impl PipelineOptions {
 
     // r[impl compiler.opts.pass-registry]
     pub fn set_option(&mut self, name: &str, enabled: bool) -> Result<(), ParseError> {
-        match name {
-            "all_opts" => {
-                self.all_opts = Some(enabled);
-                return Ok(());
-            }
-            _ => {}
+        if name == "all_opts" {
+            self.all_opts = Some(enabled);
+            return Ok(());
         }
 
         let pass_name = name.strip_prefix(PASS_OPTION_PREFIX).unwrap_or(name);
@@ -195,8 +192,8 @@ mod tests {
     #[test]
     fn parse_supports_per_pass_toggles() {
         let got = PipelineOptions::parse("-pass.inline_apply,+theta_loop_invariant_hoist").unwrap();
-        assert_eq!(got.resolve_pass("inline_apply", true), false);
-        assert_eq!(got.resolve_pass("theta_loop_invariant_hoist", false), true);
+        assert!(!got.resolve_pass("inline_apply", true));
+        assert!(got.resolve_pass("theta_loop_invariant_hoist", false));
     }
 
     // r[verify compiler.opts.invalid]
@@ -213,15 +210,15 @@ mod tests {
     // r[verify compiler.opts.api]
     fn resolve_falls_back_to_callsite_defaults() {
         let got = PipelineOptions::default();
-        assert_eq!(got.resolve_all_opts(false), false);
-        assert_eq!(got.resolve_pass("inline_apply", true), true);
+        assert!(!got.resolve_all_opts(false));
+        assert!(got.resolve_pass("inline_apply", true));
     }
 
     #[test]
     // r[verify compiler.opts.api]
     fn resolve_prefers_explicit_overrides() {
         let got = PipelineOptions::parse("-all_opts").unwrap();
-        assert_eq!(got.resolve_all_opts(true), false);
+        assert!(!got.resolve_all_opts(true));
     }
 
     #[test]
@@ -229,7 +226,7 @@ mod tests {
     fn from_env_reads_kajit_opts() {
         with_kajit_opts_env(Some("-all_opts"), || {
             let got = PipelineOptions::from_env();
-            assert_eq!(got.resolve_all_opts(true), false);
+            assert!(!got.resolve_all_opts(true));
         });
     }
 
@@ -238,7 +235,7 @@ mod tests {
     fn from_env_reads_per_pass_toggles() {
         with_kajit_opts_env(Some("-pass.inline_apply"), || {
             let got = PipelineOptions::from_env();
-            assert_eq!(got.resolve_pass("inline_apply", true), false);
+            assert!(!got.resolve_pass("inline_apply", true));
         });
     }
 

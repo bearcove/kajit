@@ -369,7 +369,7 @@ mod tests {
                 MoveOp::Move { dst, .. } => {
                     dsts.insert(*dst);
                 }
-                MoveOp::MoveToTemp { dst_temp, .. } => {
+                MoveOp::MoveToTemp { dst_temp: _, .. } => {
                     // Temp is intermediate, not final dst
                 }
                 MoveOp::Swap { .. } => {}

@@ -762,19 +762,19 @@ fn emit_instruction(
             emitter.emit_neg_reg(*width, *rd, *rm).map_err(map_err)
         }
         Instruction::AndImm { width, rd, rn, imm } => emitter
-            .emit_and_imm(*width, *rd, *rn, *imm as u64)
+            .emit_and_imm(*width, *rd, *rn, *imm)
             .map_err(map_err),
         Instruction::AndReg { width, rd, rn, rm } => {
             emitter.emit_and_reg(*width, *rd, *rn, *rm).map_err(map_err)
         }
         Instruction::OrrImm { width, rd, rn, imm } => emitter
-            .emit_orr_imm(*width, *rd, *rn, *imm as u64)
+            .emit_orr_imm(*width, *rd, *rn, *imm)
             .map_err(map_err),
         Instruction::OrrReg { width, rd, rn, rm } => {
             emitter.emit_orr_reg(*width, *rd, *rn, *rm).map_err(map_err)
         }
         Instruction::EorImm { width, rd, rn, imm } => emitter
-            .emit_eor_imm(*width, *rd, *rn, *imm as u64)
+            .emit_eor_imm(*width, *rd, *rn, *imm)
             .map_err(map_err),
         Instruction::EorReg { width, rd, rn, rm } => {
             emitter.emit_eor_reg(*width, *rd, *rn, *rm).map_err(map_err)
@@ -827,28 +827,28 @@ fn emit_instruction(
             rn,
             offset,
         } => emitter
-            .emit_ldr_imm(*width, *rt, *rn, *offset as u32)
+            .emit_ldr_imm(*width, *rt, *rn, *offset)
             .map_err(map_err),
-        Instruction::LdrbImm { rt, rn, offset } => emitter
-            .emit_ldrb_imm(*rt, *rn, *offset as u32)
-            .map_err(map_err),
-        Instruction::LdrhImm { rt, rn, offset } => emitter
-            .emit_ldrh_imm(*rt, *rn, *offset as u32)
-            .map_err(map_err),
+        Instruction::LdrbImm { rt, rn, offset } => {
+            emitter.emit_ldrb_imm(*rt, *rn, *offset).map_err(map_err)
+        }
+        Instruction::LdrhImm { rt, rn, offset } => {
+            emitter.emit_ldrh_imm(*rt, *rn, *offset).map_err(map_err)
+        }
         Instruction::StrImm {
             width,
             rt,
             rn,
             offset,
         } => emitter
-            .emit_str_imm(*width, *rt, *rn, *offset as u32)
+            .emit_str_imm(*width, *rt, *rn, *offset)
             .map_err(map_err),
-        Instruction::StrbImm { rt, rn, offset } => emitter
-            .emit_strb_imm(*rt, *rn, *offset as u32)
-            .map_err(map_err),
-        Instruction::StrhImm { rt, rn, offset } => emitter
-            .emit_strh_imm(*rt, *rn, *offset as u32)
-            .map_err(map_err),
+        Instruction::StrbImm { rt, rn, offset } => {
+            emitter.emit_strb_imm(*rt, *rn, *offset).map_err(map_err)
+        }
+        Instruction::StrhImm { rt, rn, offset } => {
+            emitter.emit_strh_imm(*rt, *rn, *offset).map_err(map_err)
+        }
         Instruction::Stp {
             width,
             rt1,
@@ -931,9 +931,7 @@ fn emit_instruction(
         }
         Instruction::LoadExtern { .. } => {
             // LoadExtern should have been expanded before assembly
-            return Err(
-                "LoadExtern pseudo-instruction must be expanded before assembly".to_string(),
-            );
+            Err("LoadExtern pseudo-instruction must be expanded before assembly".to_string())
         }
     }
 }

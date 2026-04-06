@@ -1000,10 +1000,10 @@ impl Lowerer<'_> {
 
             // Also track copies of consts (needed for immediate-only const copies)
             for inst in &func.insts {
-                if let kajit_lir::LinearOp::Copy { dst, src } = &inst.op {
-                    if let Some(value) = self.const_vregs[src.index()] {
-                        self.const_vregs[dst.index()] = Some(value);
-                    }
+                if let kajit_lir::LinearOp::Copy { dst, src } = &inst.op
+                    && let Some(value) = self.const_vregs[src.index()]
+                {
+                    self.const_vregs[dst.index()] = Some(value);
                 }
             }
 

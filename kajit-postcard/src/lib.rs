@@ -34,6 +34,12 @@ pub struct PostcardHirLowerer {
     next_stmt: u32,
 }
 
+impl Default for PostcardHirLowerer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PostcardHirLowerer {
     pub fn new() -> Self {
         let mut module = hir::Module::new();

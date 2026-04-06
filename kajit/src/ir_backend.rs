@@ -87,7 +87,6 @@ pub fn compile_linear_ir_with_alloc_and_mode(
 mod tests {
     use super::*;
     use crate::ir::{IrBuilder, Width};
-    use facet::Facet;
 
     #[test]
     fn compile_linear_ir_records_backend_op_ranges() {

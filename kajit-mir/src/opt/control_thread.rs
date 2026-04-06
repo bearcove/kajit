@@ -125,10 +125,10 @@ fn build_const_map(func: &Function) -> HashMap<VReg, u64> {
         if let LinearOp::Const { dst, value } = &inst.op {
             const_vals.insert(*dst, *value);
         }
-        if let LinearOp::Copy { dst, src } = &inst.op {
-            if let Some(&val) = const_vals.get(src) {
-                const_vals.insert(*dst, val);
-            }
+        if let LinearOp::Copy { dst, src } = &inst.op
+            && let Some(&val) = const_vals.get(src)
+        {
+            const_vals.insert(*dst, val);
         }
     }
     const_vals

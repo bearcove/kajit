@@ -387,10 +387,11 @@ fn batch_shift_output_refs(func: &mut IrFunc, node_id: NodeId, from: u16, delta:
     let all_node_ids: Vec<NodeId> = func.nodes.iter().map(|(id, _)| id).collect();
     for &nid in &all_node_ids {
         for input in &mut func.nodes[nid].inputs {
-            if let PortSource::Node(ref mut oref) = input.source {
-                if oref.node == node_id && oref.index >= from {
-                    oref.index += delta;
-                }
+            if let PortSource::Node(ref mut oref) = input.source
+                && oref.node == node_id
+                && oref.index >= from
+            {
+                oref.index += delta;
             }
         }
     }
@@ -398,10 +399,11 @@ fn batch_shift_output_refs(func: &mut IrFunc, node_id: NodeId, from: u16, delta:
     let all_result_ids: Vec<crate::ResultId> =
         func.region_results.iter().map(|(id, _)| id).collect();
     for &rid in &all_result_ids {
-        if let PortSource::Node(ref mut oref) = func.region_results[rid].source {
-            if oref.node == node_id && oref.index >= from {
-                oref.index += delta;
-            }
+        if let PortSource::Node(ref mut oref) = func.region_results[rid].source
+            && oref.node == node_id
+            && oref.index >= from
+        {
+            oref.index += delta;
         }
     }
 }
@@ -414,10 +416,11 @@ fn remap_slot_values(
     delta: u16,
 ) {
     for val in slot_values.values_mut() {
-        if let PortSource::Node(oref) = val {
-            if oref.node == node_id && oref.index >= from {
-                oref.index += delta;
-            }
+        if let PortSource::Node(oref) = val
+            && oref.node == node_id
+            && oref.index >= from
+        {
+            oref.index += delta;
         }
     }
 }
@@ -506,10 +509,10 @@ fn promote_gamma(
         let result = promote_region(func, branch_region, all_slots, slot_access, branch_slots);
         // Map consumed branch args back to parent slot_values.
         for (&slot, &arg_src) in &arg_sources {
-            if result.consumed_initial_values.contains(&arg_src) {
-                if let Some(&parent_src) = slot_values.get(&slot) {
-                    consumed_parent_sources.insert(parent_src);
-                }
+            if result.consumed_initial_values.contains(&arg_src)
+                && let Some(&parent_src) = slot_values.get(&slot)
+            {
+                consumed_parent_sources.insert(parent_src);
             }
         }
         let final_vals = result.final_values;
@@ -779,17 +782,17 @@ fn promote_theta(
 
     // Assertion: no body args escaped into the parent's slot_values.
     for (&slot, val) in slot_values.iter() {
-        if let PortSource::RegionArg(aref) = val {
-            if aref.region == body {
-                panic!(
-                    "[slot2reg] SCOPING BUG: after promoting theta {:?}, \
+        if let PortSource::RegionArg(aref) = val
+            && aref.region == body
+        {
+            panic!(
+                "[slot2reg] SCOPING BUG: after promoting theta {:?}, \
                      parent slot_values[slot {}] still references body region arg {:?}. \
                      Should be a theta output.",
-                    node_id,
-                    slot.index(),
-                    aref.arg,
-                );
-            }
+                node_id,
+                slot.index(),
+                aref.arg,
+            );
         }
     }
 }
@@ -800,12 +803,12 @@ fn promote_theta(
 /// Check if a region (direct nodes only) contains a WriteToSlot(slot, Const(0)).
 fn has_write_const0_in_region(func: &IrFunc, region: RegionId, slot: SlotId) -> bool {
     for &nid in &func.regions[region].nodes {
-        if let NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. }) = &func.nodes[nid].kind {
-            if *s == slot {
-                let write_source = &func.nodes[nid].inputs[0].source;
-                if resolve_to_const_value(func, *write_source) == Some(0) {
-                    return true;
-                }
+        if let NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. }) = &func.nodes[nid].kind
+            && *s == slot
+        {
+            let write_source = &func.nodes[nid].inputs[0].source;
+            if resolve_to_const_value(func, *write_source) == Some(0) {
+                return true;
             }
         }
     }

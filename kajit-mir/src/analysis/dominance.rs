@@ -90,10 +90,10 @@ impl DominanceInfo {
             if block_id == entry {
                 continue;
             }
-            if let Some(&parent) = idom.get(&block_id) {
-                if parent != block_id {
-                    dom_tree.entry(parent).or_default().push(block_id);
-                }
+            if let Some(&parent) = idom.get(&block_id)
+                && parent != block_id
+            {
+                dom_tree.entry(parent).or_default().push(block_id);
             }
         }
 
