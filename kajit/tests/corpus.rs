@@ -466,7 +466,6 @@ fn debug_cfg_mir_command_from_env() -> Result<kajit_mir::DebugCfgMirCommand, Str
     match command.as_str() {
         "run" => Ok(kajit_mir::DebugCfgMirCommand::Run),
         "trace" => Ok(kajit_mir::DebugCfgMirCommand::Trace),
-        "diff" => Ok(kajit_mir::DebugCfgMirCommand::Diff),
         "lldb-ref" => Ok(kajit_mir::DebugCfgMirCommand::LldbRef),
         "why-vreg" => {
             let raw = std::env::var(DEBUG_CFG_MIR_VREG_ENV)
@@ -495,7 +494,7 @@ fn debug_cfg_mir_command_from_env() -> Result<kajit_mir::DebugCfgMirCommand, Str
             })
         }
         other => Err(format!(
-            "unsupported {DEBUG_CFG_MIR_COMMAND_ENV}={other:?}; expected run, trace, diff, why-vreg, or block"
+            "unsupported {DEBUG_CFG_MIR_COMMAND_ENV}={other:?}; expected run, trace, why-vreg, or block"
         )),
     }
 }

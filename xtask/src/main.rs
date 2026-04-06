@@ -199,7 +199,6 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
     let command = match command_name.as_str() {
         "run" => DebugCfgMirCommand::Run,
         "trace" => DebugCfgMirCommand::Trace,
-        "diff" => DebugCfgMirCommand::Diff,
         "lldb-ref" => DebugCfgMirCommand::LldbRef,
         "why-vreg" => DebugCfgMirCommand::WhyVreg { vreg: VReg::new(0) },
         "block" => DebugCfgMirCommand::Block {
@@ -255,7 +254,6 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
     let command = match command {
         DebugCfgMirCommand::Run => DebugCfgMirCommand::Run,
         DebugCfgMirCommand::Trace => DebugCfgMirCommand::Trace,
-        DebugCfgMirCommand::Diff => DebugCfgMirCommand::Diff,
         DebugCfgMirCommand::LldbRef => DebugCfgMirCommand::LldbRef,
         DebugCfgMirCommand::WhyVreg { .. } => DebugCfgMirCommand::WhyVreg {
             vreg: VReg::new(vreg? as u32),
@@ -343,10 +341,7 @@ fn debug_cfg_mir_via_corpus_test(
             command.env("KAJIT_DEBUG_CFG_MIR_BLOCK", block.0.to_string());
             command.env("KAJIT_DEBUG_CFG_MIR_LAMBDA", lambda.index().to_string());
         }
-        DebugCfgMirCommand::Run
-        | DebugCfgMirCommand::Trace
-        | DebugCfgMirCommand::Diff
-        | DebugCfgMirCommand::LldbRef => {}
+        DebugCfgMirCommand::Run | DebugCfgMirCommand::Trace | DebugCfgMirCommand::LldbRef => {}
     }
 
     let run_output = command
@@ -383,7 +378,6 @@ fn debug_cfg_mir_command_name(command: &DebugCfgMirCommand) -> &'static str {
     match command {
         DebugCfgMirCommand::Run => "run",
         DebugCfgMirCommand::Trace => "trace",
-        DebugCfgMirCommand::Diff => "diff",
         DebugCfgMirCommand::LldbRef => "lldb-ref",
         DebugCfgMirCommand::WhyVreg { .. } => "why-vreg",
         DebugCfgMirCommand::Block { .. } => "block",

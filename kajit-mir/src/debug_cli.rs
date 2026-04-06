@@ -1,6 +1,6 @@
 use crate::{
-    DifferentialCheckResult, InterpreterEventKind, InterpreterOutcome, allocate_cfg_program,
-    cfg_mir, differential_check_cfg, execute_program, execute_program_with_event_trace,
+    InterpreterEventKind, InterpreterOutcome, cfg_mir, execute_program,
+    execute_program_with_event_trace,
 };
 use kajit_ir::IntrinsicRegistry;
 use std::collections::BTreeMap;
@@ -9,7 +9,6 @@ use std::collections::BTreeMap;
 pub enum DebugCfgMirCommand {
     Run,
     Trace,
-    Diff,
     LldbRef,
     WhyVreg {
         vreg: kajit_ir::VReg,
@@ -48,13 +47,6 @@ pub fn run_debug_cfg_mir_command_with_registry(
                 text.push('\n');
             }
             Ok(text)
-        }
-        DebugCfgMirCommand::Diff => {
-            let allocated = allocate_cfg_program(program)
-                .map_err(|err| format!("regalloc2 allocation failed: {err}"))?;
-            Ok(render_differential_check_result(&differential_check_cfg(
-                program, &allocated, input,
-            )))
         }
         DebugCfgMirCommand::LldbRef => render_lldb_reference(program, input, registry),
         DebugCfgMirCommand::WhyVreg { vreg } => {
@@ -259,45 +251,6 @@ fn render_interpreter_outcome(outcome: &InterpreterOutcome) -> String {
     out.push_str(&bytes_to_hex(&outcome.output));
     out.push('\n');
     out
-}
-
-fn render_differential_check_result(result: &DifferentialCheckResult) -> String {
-    match result {
-        DifferentialCheckResult::Match { steps, .. } => {
-            format!("match after {steps} steps\n")
-        }
-        DifferentialCheckResult::Diverged(divergence) => {
-            let mut out = String::new();
-            out.push_str(&format!(
-                "diverged at step {} field {}\n",
-                divergence.step_index, divergence.field
-            ));
-            out.push_str(&format!(
-                "ideal: position=b{}:{}:{} cursor={} trap={:?} returned={} output={}\n",
-                divergence.ideal.position.block.0,
-                divergence.ideal.position.next_inst_index,
-                divergence.ideal.position.at_terminator,
-                divergence.ideal.cursor,
-                divergence.ideal.trap,
-                divergence.ideal.returned,
-                bytes_to_hex(&divergence.ideal.output)
-            ));
-            out.push_str(&format!(
-                "post:  position=b{}:{}:{} cursor={} trap={:?} returned={} output={}\n",
-                divergence.post_regalloc.position.block.0,
-                divergence.post_regalloc.position.next_inst_index,
-                divergence.post_regalloc.position.at_terminator,
-                divergence.post_regalloc.cursor,
-                divergence.post_regalloc.trap,
-                divergence.post_regalloc.returned,
-                bytes_to_hex(&divergence.post_regalloc.output)
-            ));
-            out
-        }
-        DifferentialCheckResult::Error(message) => {
-            format!("differential error: {message}\n")
-        }
-    }
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {

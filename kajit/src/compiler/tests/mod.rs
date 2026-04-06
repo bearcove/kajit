@@ -2058,7 +2058,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
-    let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
     let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
     #[cfg(target_arch = "aarch64")]
@@ -2263,7 +2263,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
     };
     let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
     #[cfg(target_arch = "aarch64")]
-    let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
     let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
     #[cfg(target_arch = "aarch64")]
@@ -2452,7 +2452,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
-    let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
     let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
     #[cfg(target_arch = "aarch64")]
@@ -2804,7 +2804,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
-    let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
     let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
@@ -2963,7 +2963,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         data_blobs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
-    let reg = regalloc2::PReg::new(19, regalloc2::RegClass::Int);
+    let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
     let reg = regalloc2::PReg::new(12, regalloc2::RegClass::Int);
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
