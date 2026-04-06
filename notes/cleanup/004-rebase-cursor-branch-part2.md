@@ -1,4 +1,6 @@
-# Rebase cursor branch Part 2 (backend ABI + regalloc fixes)
+# Rebase cursor branch Part 2 (backend ABI + regalloc fixes) — DONE
+
+Already on main (cherry-picked previously).
 
 3 commits from `codex/borrowed-cursor-abi-wip` with backend ABI plumbing and real bug fixes.
 

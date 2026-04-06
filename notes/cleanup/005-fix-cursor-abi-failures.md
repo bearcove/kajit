@@ -1,4 +1,6 @@
-# Fix remaining cursor ABI failures
+# Fix remaining cursor ABI failures — DONE
+
+All tests pass (borrowed_header, multi_options, differential harness).
 
 Debug and fix the 2-3 native bugs in the borrowed-cursor path.
 

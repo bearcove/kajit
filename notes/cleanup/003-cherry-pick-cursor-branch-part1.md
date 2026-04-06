@@ -1,4 +1,6 @@
-# Cherry-pick cursor branch Part 1 (HIR refactoring)
+# Cherry-pick cursor branch Part 1 (HIR refactoring) — DONE
+
+Already on main (cherry-picked previously).
 
 14 commits on `codex/borrowed-cursor-abi-wip` that make HIR lowering generic. These are the architectural core of the generalization.
 
