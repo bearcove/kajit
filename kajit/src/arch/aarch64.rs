@@ -15,9 +15,6 @@ pub struct EmitCtx {
     pub base_frame: u32,
     /// Total frame size (base + extra, 16-byte aligned).
     pub frame_size: u32,
-    /// Whether this is a leaf function (no bl instructions).
-    /// Leaf functions skip saving x29/x30 and frame pointer setup.
-    pub is_leaf: bool,
     /// Shared error trampoline labels: error code → label.
     /// Each error site emits `b .Lerr_<code>` instead of the full 3-instruction
     /// sequence. The shared blocks are emitted near the epilogue.
@@ -32,26 +29,6 @@ pub struct EmitCtx {
 //   x21 = out pointer (non-leaf) or x0 (leaf)
 //   x22 = ctx pointer (non-leaf) or x1 (leaf)
 
-/// Controls which registers the prologue/epilogue use for fixed ABI roles.
-#[derive(Debug, Clone)]
-pub struct PrologueConfig {
-    /// Whether to save/restore x21/x22 and move args.
-    /// When false (leaf optimization), output_ptr stays in x0 and ctx_ptr in x1.
-    pub save_x21_x22: bool,
-    /// Whether to save/restore x19/x20. When false, the prologue/epilogue skip
-    /// the stp/ldp for these registers (leaf functions that don't modify them).
-    pub save_x19_x20: bool,
-}
-
-impl Default for PrologueConfig {
-    fn default() -> Self {
-        Self {
-            save_x21_x22: true,
-            save_x19_x20: true,
-        }
-    }
-}
-
 impl EmitCtx {
     /// Create an EmitCtx for regalloc-driven lowering that saves extra
     /// callee-saved register pairs (x23..x28) as needed.
@@ -61,10 +38,10 @@ impl EmitCtx {
             "aarch64 regalloc supports at most 3 extra callee-saved pairs, got {extra_saved_pairs}"
         );
         let base = if is_leaf { LEAF_BASE_FRAME } else { BASE_FRAME };
-        Self::new_with_base(extra_stack, base + extra_saved_pairs * 16, is_leaf)
+        Self::new_with_base(extra_stack, base + extra_saved_pairs * 16)
     }
 
-    fn new_with_base(extra_stack: u32, base_frame: u32, is_leaf: bool) -> Self {
+    fn new_with_base(extra_stack: u32, base_frame: u32) -> Self {
         let frame_size = (base_frame + extra_stack + 15) & !15;
         let mut emit = Emitter::new();
         emit.enable_capture(); // Capture assembly instructions for dump/parse workflow
@@ -75,17 +52,12 @@ impl EmitCtx {
             error_exit,
             base_frame,
             frame_size,
-            is_leaf,
             error_trampolines: std::collections::HashMap::new(),
             error_ctx_reg: None,
         }
     }
 
     // ── Call helpers ──────────────────────────────────────────────────
-    //
-    // These small helpers factor out the repeated patterns around function
-    // calls in the JIT: flushing/reloading the cached cursor, loading a
-    // function pointer, and checking the error flag.
 
     pub(crate) fn emit_add_imm_any(&mut self, rd: Reg, rn: Reg, imm: u32) {
         self.emit_add_sub_imm_chunks(rd, rn, imm, false);
@@ -138,169 +110,6 @@ impl EmitCtx {
 
             imm -= chunk;
             base = rd;
-        }
-    }
-
-    /// Emit a function prologue. Returns the entry offset and a fresh error_exit label.
-    ///
-    /// The returned error_exit label must be passed to `end_func` when done emitting
-    /// this function's body.
-    ///
-    /// # Register assignments after prologue
-    /// - x19 = cached input_ptr
-    /// - x20 = cached input_end
-    /// - x21 = out pointer
-    /// - x22 = ctx pointer
-    pub fn begin_func_with_config(&mut self, config: &PrologueConfig) -> (u32, LabelId) {
-        let error_exit = self.emit.new_label();
-        let entry = self.emit.current_offset();
-        let frame_size = self.frame_size;
-        let base = if self.is_leaf {
-            LEAF_BASE_FRAME
-        } else {
-            BASE_FRAME
-        };
-
-        let extra_pairs = ((self.base_frame - base) / 16) as usize;
-        assert!(
-            extra_pairs <= 3,
-            "unsupported extra callee-saved pair count"
-        );
-
-        if frame_size > 0 {
-            self.emit_sub_imm_any(Reg::SP, Reg::SP, frame_size);
-        }
-
-        let mut offset: i16 = 0;
-
-        if !self.is_leaf {
-            self.emit
-                .emit_stp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, offset)
-                .expect("stp");
-            offset += 16;
-        }
-        if config.save_x19_x20 {
-            self.emit
-                .emit_stp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, offset)
-                .expect("stp");
-            offset += 16;
-        }
-        if config.save_x21_x22 {
-            self.emit
-                .emit_stp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, offset)
-                .expect("stp");
-            offset += 16;
-        }
-        if extra_pairs >= 1 {
-            self.emit
-                .emit_stp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, offset)
-                .expect("stp");
-            offset += 16;
-        }
-        if extra_pairs >= 2 {
-            self.emit
-                .emit_stp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, offset)
-                .expect("stp");
-            offset += 16;
-        }
-        if extra_pairs >= 3 {
-            self.emit
-                .emit_stp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, offset)
-                .expect("stp");
-        }
-        if !self.is_leaf {
-            self.emit
-                .emit_add_imm(aarch64::Width::X64, Reg::X29, Reg::SP, 0, false)
-                .expect("add");
-        }
-
-        // Move output/ctx to callee-saved registers if non-leaf.
-        let _ctx_reg = if config.save_x21_x22 {
-            self.emit
-                .emit_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X0)
-                .expect("mov");
-            self.emit
-                .emit_mov_reg(aarch64::Width::X64, Reg::X22, Reg::X1)
-                .expect("mov");
-            Reg::X22
-        } else {
-            // Keep args in x0/x1 — no moves needed
-            Reg::X1
-        };
-
-        self.error_exit = error_exit;
-        (entry, error_exit)
-    }
-
-    /// Emit the success epilogue and error exit for the current function.
-    ///
-    /// `error_exit` must be the label returned by the corresponding `begin_func` call.
-    pub fn end_func_with_config(&mut self, error_exit: LabelId, config: &PrologueConfig) {
-        let frame_size = self.frame_size;
-        let base = if self.is_leaf {
-            LEAF_BASE_FRAME
-        } else {
-            BASE_FRAME
-        };
-        let extra_pairs = ((self.base_frame - base) / 16) as usize;
-        assert!(
-            extra_pairs <= 3,
-            "unsupported extra callee-saved pair count"
-        );
-
-        // Emit epilogue (success path), then error exit with same epilogue
-        for is_error in [false, true] {
-            if is_error {
-                self.emit.bind_label(error_exit).expect("bind");
-            }
-
-            // Restore callee-saved registers in reverse order
-            let mut restore_base = base;
-            if !config.save_x21_x22 {
-                restore_base -= 16;
-            }
-            if !config.save_x19_x20 {
-                restore_base -= 16;
-            }
-            let mut offset: i16 = restore_base as i16 + (extra_pairs as i16 - 1) * 16;
-            if extra_pairs >= 3 {
-                self.emit
-                    .emit_ldp(aarch64::Width::X64, Reg::X27, Reg::X28, Reg::SP, offset)
-                    .expect("ldp");
-                offset -= 16;
-            }
-            if extra_pairs >= 2 {
-                self.emit
-                    .emit_ldp(aarch64::Width::X64, Reg::X25, Reg::X26, Reg::SP, offset)
-                    .expect("ldp");
-                offset -= 16;
-            }
-            if extra_pairs >= 1 {
-                self.emit
-                    .emit_ldp(aarch64::Width::X64, Reg::X23, Reg::X24, Reg::SP, offset)
-                    .expect("ldp");
-            }
-            if config.save_x21_x22 {
-                let x21_offset: i16 = if self.is_leaf { 16 } else { 32 };
-                self.emit
-                    .emit_ldp(aarch64::Width::X64, Reg::X21, Reg::X22, Reg::SP, x21_offset)
-                    .expect("ldp");
-            }
-            if config.save_x19_x20 {
-                let x19_offset: i16 = if self.is_leaf { 0 } else { 16 };
-                self.emit
-                    .emit_ldp(aarch64::Width::X64, Reg::X19, Reg::X20, Reg::SP, x19_offset)
-                    .expect("ldp");
-            }
-            if !self.is_leaf {
-                self.emit
-                    .emit_ldp(aarch64::Width::X64, Reg::X29, Reg::X30, Reg::SP, 0)
-                    .expect("ldp");
-            }
-            if frame_size > 0 {
-                self.emit_add_imm_any(Reg::SP, Reg::SP, frame_size);
-            }
-            self.emit.emit_ret().expect("ret");
         }
     }
 

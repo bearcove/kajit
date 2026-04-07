@@ -2134,7 +2134,7 @@ impl IrFunc {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.fmt_source(f, &inp.source)?;
+                    self.fmt_source(f, &inp.source, node.region)?;
                 }
                 write!(f, "] -> [")?;
                 for (i, out) in node.outputs.iter().enumerate() {
@@ -2157,12 +2157,12 @@ impl IrFunc {
                 let inputs_pad = "  ".repeat(indent + 1);
                 write!(f, "{inputs_pad}pred: ")?;
                 if let Some(inp) = node.inputs.first() {
-                    self.fmt_source(f, &inp.source)?;
+                    self.fmt_source(f, &inp.source, node.region)?;
                 }
                 writeln!(f)?;
                 for (i, inp) in node.inputs.iter().skip(1).enumerate() {
                     write!(f, "{inputs_pad}in{i}: ")?;
-                    self.fmt_source(f, &inp.source)?;
+                    self.fmt_source(f, &inp.source, node.region)?;
                     writeln!(f)?;
                 }
                 writeln!(f, "{pad}] {{")?;
@@ -2197,7 +2197,7 @@ impl IrFunc {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.fmt_source(f, &inp.source)?;
+                    self.fmt_source(f, &inp.source, node.region)?;
                 }
                 writeln!(f, "] {{")?;
                 self.fmt_region(f, *body, indent + 1, registry)?;
@@ -2222,7 +2222,7 @@ impl IrFunc {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.fmt_source(f, &inp.source)?;
+                    self.fmt_source(f, &inp.source, node.region)?;
                 }
                 write!(f, "] -> [")?;
                 for (i, out) in node.outputs.iter().enumerate() {
@@ -2275,7 +2275,7 @@ impl IrFunc {
                 write!(f, ", ")?;
             }
             let result = &self.region_results[result_id];
-            self.fmt_source(f, &result.source)?;
+            self.fmt_source(f, &result.source, region_id)?;
         }
         writeln!(f, "]")?;
 
@@ -2370,7 +2370,12 @@ impl IrFunc {
         write!(f, "{value:#x}")
     }
 
-    fn fmt_source(&self, f: &mut fmt::Formatter<'_>, source: &PortSource) -> fmt::Result {
+    fn fmt_source(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        source: &PortSource,
+        current_region: RegionId,
+    ) -> fmt::Result {
         match source {
             PortSource::Node(oref) => {
                 let out = &self.nodes[oref.node].outputs[oref.index as usize];
@@ -2395,10 +2400,23 @@ impl IrFunc {
                     .iter()
                     .position(|&id| id == aref.arg)
                     .unwrap_or(0);
+                let cross_region = aref.region != current_region;
                 match arg.kind {
-                    PortKind::Data => write!(f, "arg{}", display_index),
+                    PortKind::Data => {
+                        if cross_region {
+                            let scope = self.regions[aref.region].debug_scope;
+                            write!(f, "@s{}.arg{}", scope.index(), display_index)
+                        } else {
+                            write!(f, "arg{}", display_index)
+                        }
+                    }
                     PortKind::State => {
-                        write!(f, "%ms:arg")
+                        if cross_region {
+                            let scope = self.regions[aref.region].debug_scope;
+                            write!(f, "%ms:@s{}.arg", scope.index())
+                        } else {
+                            write!(f, "%ms:arg")
+                        }
                     }
                 }
             }

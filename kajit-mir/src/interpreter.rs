@@ -342,34 +342,6 @@ impl<'a> InterpreterState<'a> {
         self.trace_vregs[idx] = value;
     }
 
-    fn ensure_output_len(&mut self, len: usize) {
-        if self.output.len() < len {
-            self.output.resize(len, 0);
-        }
-    }
-
-    fn out_ptr_in_output(&self) -> Option<usize> {
-        let base = self.output.as_ptr() as usize;
-        let end = base + self.output.len();
-        let ptr = self.out_ptr as usize;
-        if ptr >= base && ptr <= end {
-            Some(ptr - base)
-        } else {
-            None
-        }
-    }
-
-    fn ensure_output_range_for_out_ptr(&mut self, offset: usize, width_bytes: usize) {
-        let Some(ptr_offset) = self.out_ptr_in_output() else {
-            return;
-        };
-        let needed = ptr_offset
-            .saturating_add(offset)
-            .saturating_add(width_bytes);
-        self.ensure_output_len(needed);
-        self.out_ptr = unsafe { self.output.as_mut_ptr().add(ptr_offset) };
-    }
-
     fn trap(&mut self, code: ErrorCode) {
         if self.trap.is_none() {
             self.trap = Some(InterpreterTrap {

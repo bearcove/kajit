@@ -31,8 +31,6 @@ struct State<'a> {
     input: &'a [u8],
     /// Output buffer.
     output: Vec<u8>,
-    /// Current output write pointer offset.
-    out_ptr: usize,
     /// Abstract stack slots.
     slots: Vec<u64>,
     /// Address-based slot memory (8-byte stride).
@@ -52,7 +50,6 @@ impl<'a> State<'a> {
         Self {
             input,
             output: vec![0u8; output_size],
-            out_ptr: 0,
             slots: Vec::new(),
             slot_mem: Vec::new(),
             trap: None,
@@ -71,13 +68,6 @@ impl<'a> State<'a> {
         let needed = (slot + num_slots) * SLOT_STRIDE;
         if needed > self.slot_mem.len() {
             self.slot_mem.resize(needed, 0);
-        }
-    }
-
-    fn ensure_output(&mut self, offset: usize, width: usize) {
-        let end = self.out_ptr + offset + width;
-        if end > self.output.len() {
-            self.output.resize(end, 0);
         }
     }
 

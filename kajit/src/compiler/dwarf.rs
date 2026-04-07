@@ -239,18 +239,6 @@ pub(super) fn scalar_field_dwarf_width(shape: &'static Shape) -> Option<u8> {
     }
 }
 
-pub(super) fn dwarf_expr_for_out_field(
-    target_arch: crate::jit_dwarf::DwarfTargetArch,
-    offset: u32,
-    size: u8,
-) -> Vec<u8> {
-    let regs = deser_debug_registers(target_arch);
-    let out_ptr_reg =
-        crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, regs.out_ptr_hw)
-            .expect("out_ptr register should map to a DWARF register");
-    crate::jit_dwarf::expr_breg_deref_size_stack_value(out_ptr_reg, offset as i64, size)
-}
-
 pub(super) fn cfg_semantic_field_dwarf_variables(
     root_shape: &'static Shape,
     program: &crate::regalloc_engine::cfg_mir::Program,

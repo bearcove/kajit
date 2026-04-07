@@ -25,8 +25,12 @@ enum AstSource {
     StateNode { domain: u32, node: u32 },
     /// `%ms:arg`, `%ms:arg`, `%s2:arg` — state from region argument
     StateArg(u32),
-    /// `arg0`, `arg1` — data value from region argument
+    /// `arg0`, `arg1` — data value from region argument (current region)
     RegionArg(u16),
+    /// `@s0.arg1` — data value from a specific region's argument (cross-region)
+    QualifiedRegionArg { scope: u32, arg_idx: u16 },
+    /// `%ms:@s0.arg` — state from a specific region's argument (cross-region)
+    QualifiedStateArg { scope: u32 },
     /// `n1.2` — node output by index (fallback when no vreg)
     NodeOutput(u32, u16),
 }
@@ -203,9 +207,21 @@ fn source<'src>() -> impl Parser<'src, &'src str, AstSource, Extra<'src>> + Clon
         .then_ignore(just(":n"))
         .then(uint32())
         .map(|(domain, node)| AstSource::StateNode { domain, node });
+    // %ms:@s0.arg — qualified cross-region state arg
+    let qualified_state_arg = state_domain_ref()
+        .then_ignore(just(":@s"))
+        .then(uint32())
+        .then_ignore(just(".arg"))
+        .map(|(_domain, scope)| AstSource::QualifiedStateArg { scope });
     let state_arg = state_domain_ref()
         .then_ignore(just(":arg"))
         .map(AstSource::StateArg);
+    // @s0.arg1 — qualified cross-region data arg
+    let qualified_region_arg = just("@s")
+        .ignore_then(uint32())
+        .then_ignore(just(".arg"))
+        .then(uint16())
+        .map(|(scope, arg_idx)| AstSource::QualifiedRegionArg { scope, arg_idx });
     let region_arg = just("arg").ignore_then(uint16()).map(AstSource::RegionArg);
     let node_output = just("n")
         .ignore_then(uint32())
@@ -214,7 +230,15 @@ fn source<'src>() -> impl Parser<'src, &'src str, AstSource, Extra<'src>> + Clon
         .map(|(n, i)| AstSource::NodeOutput(n, i));
     let vreg = just("v").ignore_then(uint32()).map(AstSource::VReg);
 
-    choice((state_arg, state_node, region_arg, node_output, vreg))
+    choice((
+        qualified_state_arg,
+        state_arg,
+        state_node,
+        qualified_region_arg,
+        region_arg,
+        node_output,
+        vreg,
+    ))
 }
 
 /// Parse an output port.
@@ -1325,6 +1349,48 @@ fn resolve_source(
                 }),
                 PortKind::Data,
             ))
+        }
+        AstSource::QualifiedRegionArg { scope, arg_idx } => {
+            let target_scope = DebugScopeId::new(*scope);
+            let target_region = func
+                .regions
+                .iter()
+                .find(|(_, r)| r.debug_scope == target_scope)
+                .map(|(id, _)| id)
+                .unwrap_or_else(|| panic!("no region with scope @s{scope}"));
+            let region = &func.regions[target_region];
+            let arg_id = region.args[*arg_idx as usize];
+            Ok((
+                PortSource::RegionArg(RegionArgRef {
+                    region: target_region,
+                    arg: arg_id,
+                }),
+                PortKind::Data,
+            ))
+        }
+        AstSource::QualifiedStateArg { scope } => {
+            let target_scope = DebugScopeId::new(*scope);
+            let target_region = func
+                .regions
+                .iter()
+                .find(|(_, r)| r.debug_scope == target_scope)
+                .map(|(id, _)| id)
+                .unwrap_or_else(|| panic!("no region with scope @s{scope}"));
+            let region = &func.regions[target_region];
+            let kind = PortKind::State;
+            for &arg_id in &region.args {
+                let arg = &func.region_args[arg_id];
+                if arg.kind == kind {
+                    return Ok((
+                        PortSource::RegionArg(RegionArgRef {
+                            region: target_region,
+                            arg: arg_id,
+                        }),
+                        kind,
+                    ));
+                }
+            }
+            panic!("no state arg in region @s{scope}");
         }
         AstSource::NodeOutput(n, idx) => {
             let node_id = node_map[n];

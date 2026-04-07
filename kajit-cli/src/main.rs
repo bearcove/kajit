@@ -335,20 +335,44 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         let ir_registry = kajit::symbol_registry_for_shape(shape);
         match kajit_ir_text::parse_ir(ir_text, &ir_registry) {
             Ok(ir_func) => {
-                let ir_result = kajit_ir::interpret::interpret(&ir_func, &input, output_size);
-                match &ir_result.trap {
-                    None => {
-                        eprintln!("ok");
+                let input_clone = input.clone();
+                let handle = std::thread::spawn(move || {
+                    kajit_ir::interpret::interpret(&ir_func, &input_clone, output_size)
+                });
+                let timeout = std::time::Duration::from_secs(5);
+                let start = std::time::Instant::now();
+                loop {
+                    if handle.is_finished() {
+                        match handle.join() {
+                            Ok(ir_result) => match &ir_result.trap {
+                                None => {
+                                    eprintln!("ok");
+                                    println!(
+                                        "  rvsdg out:   {} ({})",
+                                        encode_hex(&ir_result.output),
+                                        ir_result.output.len()
+                                    );
+                                }
+                                Some(t) => {
+                                    eprintln!("trap");
+                                    println!("  rvsdg:       TRAP ({:?})", t.code);
+                                }
+                            },
+                            Err(_) => {
+                                eprintln!("CRASHED");
+                                println!("  rvsdg:       interpreter panicked");
+                            }
+                        }
+                        break;
+                    }
+                    if start.elapsed() > timeout {
+                        eprintln!("TIMEOUT ({}s)", timeout.as_secs());
                         println!(
-                            "  rvsdg out:   {} ({})",
-                            encode_hex(&ir_result.output),
-                            ir_result.output.len()
+                            "  rvsdg:       timed out (RVSDG interpreter cannot interpret pointer-based ops without real addresses)"
                         );
+                        break;
                     }
-                    Some(t) => {
-                        eprintln!("trap");
-                        println!("  rvsdg:       TRAP ({:?})", t.code);
-                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                 }
             }
             Err(e) => {
@@ -378,27 +402,51 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             }
         }
 
-        // Run JIT (may hang on buggy programs — run after interpreter)
+        // Run JIT (may hang or crash on buggy programs)
         eprint!("  [3/3] jit... ");
-        let jit_result = kajit::deserialize_raw(&artifacts.decoder, &input, output_size);
-        match &jit_result {
-            Ok(bytes) => {
-                eprintln!("ok");
-                println!("  jit output:  {} ({})", encode_hex(bytes), bytes.len());
+        let decoder_ptr = &artifacts.decoder as *const kajit::CompiledDecoder as usize;
+        let input_clone = input.clone();
+        let jit_handle = std::thread::spawn(move || {
+            let decoder = unsafe { &*(decoder_ptr as *const kajit::CompiledDecoder) };
+            kajit::deserialize_raw(decoder, &input_clone, output_size)
+        });
+        let timeout = std::time::Duration::from_secs(5);
+        let start = std::time::Instant::now();
+        let jit_result: Option<Result<Vec<u8>, kajit::DeserError>> = loop {
+            if jit_handle.is_finished() {
+                match jit_handle.join() {
+                    Ok(Ok(bytes)) => {
+                        eprintln!("ok");
+                        println!("  jit output:  {} ({})", encode_hex(&bytes), bytes.len());
+                        break Some(Ok(bytes));
+                    }
+                    Ok(Err(e)) => {
+                        eprintln!("error");
+                        println!("  jit error:   {e}");
+                        break Some(Err(e));
+                    }
+                    Err(_) => {
+                        eprintln!("CRASHED");
+                        println!("  jit:         panicked or crashed");
+                        break None;
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("error");
-                println!("  jit error:   {e}");
+            if start.elapsed() > timeout {
+                eprintln!("TIMEOUT ({}s)", timeout.as_secs());
+                println!("  jit:         timed out");
+                break None;
             }
-        }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
 
         // Compare
         use kajit_mir::opt::reduce::InterpOutcome;
         match (&jit_result, &interp_result) {
-            (Ok(jit), InterpOutcome::Returned(interp)) if jit == interp => {
+            (Some(Ok(jit)), InterpOutcome::Returned(interp)) if jit == interp => {
                 println!("  match:       YES");
             }
-            (Ok(jit), InterpOutcome::Returned(interp)) => {
+            (Some(Ok(jit)), InterpOutcome::Returned(interp)) => {
                 println!("  match:       NO — DIVERGENCE");
                 // Show byte-by-byte diff
                 let max_len = jit.len().max(interp.len());
