@@ -4272,11 +4272,12 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_produces_valid_cfg_program() {
-        let mut builder = IrBuilder::new("u32", 0);
+        let (mut builder, data_args) = IrBuilder::new_with_data_args("u32", 0, 1);
         {
             let mut rb = builder.root_region();
+            let out_ptr = data_args[0];
             let value = rb.const_val(42);
-            rb.write_to_field(value, 0, Width::W4);
+            rb.store_to_addr(out_ptr, value, Width::W4);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
@@ -4292,9 +4293,10 @@ mod tests {
 
     #[test]
     fn lower_linear_ir_models_gamma_join_block_params() {
-        let mut builder = IrBuilder::new("u32", 0);
+        let (mut builder, data_args) = IrBuilder::new_with_data_args("u32", 0, 1);
         {
             let mut rb = builder.root_region();
+            let out_ptr = data_args[0];
             let pred = rb.const_val(0);
             let out = rb.gamma(pred, &[], 2, |branch_idx, bb| {
                 let val = if branch_idx == 0 {
@@ -4304,7 +4306,7 @@ mod tests {
                 };
                 bb.set_results(&[val]);
             });
-            rb.write_to_field(out[0], 0, Width::W4);
+            rb.store_to_addr(out_ptr, out[0], Width::W4);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
