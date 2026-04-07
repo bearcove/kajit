@@ -298,6 +298,12 @@ impl JitDebugger for LldbJitDebugger {
         Ok(frame.line_entry().map(|le| le.line()).unwrap_or(0))
     }
 
+    fn interrupt_handle(&self) -> Option<Box<dyn kajit::lockstep::InterruptHandle>> {
+        Some(Box::new(LldbInterruptHandle {
+            process: self.process.clone(),
+        }))
+    }
+
     fn disassemble_around_pc(&self, context: usize) -> Result<String, DebugError> {
         let thread = self.process.selected_thread();
         let frame = thread.selected_frame();
@@ -350,6 +356,20 @@ impl JitDebugger for LldbJitDebugger {
                 .collect::<Vec<_>>()
                 .join("\n"))
         }
+    }
+}
+
+struct LldbInterruptHandle {
+    process: SBProcess,
+}
+
+// SBProcess is internally refcounted and thread-safe
+unsafe impl Send for LldbInterruptHandle {}
+unsafe impl Sync for LldbInterruptHandle {}
+
+impl kajit::lockstep::InterruptHandle for LldbInterruptHandle {
+    fn interrupt(&self) {
+        let _ = self.process.stop();
     }
 }
 

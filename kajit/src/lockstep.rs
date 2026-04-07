@@ -115,6 +115,51 @@ pub trait JitDebugger {
 
     /// Get disassembly around the current PC (a few instructions before/after).
     fn disassemble_around_pc(&self, context: usize) -> Result<String, DebugError>;
+
+    /// Return a handle that can interrupt the debuggee from another thread.
+    /// Returns None if interruption is not supported.
+    fn interrupt_handle(&self) -> Option<Box<dyn InterruptHandle>>;
+}
+
+/// Thread-safe handle to interrupt a debuggee process.
+pub trait InterruptHandle: Send + Sync {
+    fn interrupt(&self);
+}
+
+/// RAII watchdog: interrupts the debuggee if dropped after 5s.
+struct StepWatchdog {
+    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl StepWatchdog {
+    fn new(debugger: &impl JitDebugger) -> Self {
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let thread = if let Some(handle) = debugger.interrupt_handle() {
+            let done2 = done.clone();
+            Some(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    std::thread::sleep(Duration::from_millis(100));
+                    if done2.load(std::sync::atomic::Ordering::Relaxed) {
+                        return;
+                    }
+                }
+                handle.interrupt();
+            }))
+        } else {
+            None
+        };
+        Self { done, thread }
+    }
+}
+
+impl Drop for StepWatchdog {
+    fn drop(&mut self) {
+        self.done.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
 }
 
 impl<T: JitDebugger + ?Sized> JitDebugger for &mut T {
@@ -152,6 +197,10 @@ impl<T: JitDebugger + ?Sized> JitDebugger for &mut T {
 
     fn disassemble_around_pc(&self, context: usize) -> Result<String, DebugError> {
         (**self).disassemble_around_pc(context)
+    }
+
+    fn interrupt_handle(&self) -> Option<Box<dyn InterruptHandle>> {
+        (**self).interrupt_handle()
     }
 }
 
@@ -339,6 +388,9 @@ impl<D: JitDebugger> LockstepSession<D> {
             )?;
             return Ok(self.finish_with_result(result));
         }
+
+        // Spawn a watchdog that interrupts the debuggee if step_forward takes >5s.
+        let _watchdog = StepWatchdog::new(&self.debugger);
 
         // Capture register state BEFORE stepping — the step may clobber registers
         // (e.g. ABI arg setup for call_intrinsic overwrites argument registers).

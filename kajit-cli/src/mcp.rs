@@ -619,7 +619,17 @@ impl MirHandler {
                     out.push_str(&msg);
                     break;
                 }
-                let _ = append_log(&log_path, &format!(">>> starting step {}...", i + 1));
+                let cur_line = session.lockstep.current_mapped_line();
+                let cur_text = session.current_line_text(cur_line);
+                let _ = append_log(
+                    &log_path,
+                    &format!(
+                        ">>> step {} | about to execute line {}: {}",
+                        i + 1,
+                        cur_line,
+                        cur_text.trim()
+                    ),
+                );
                 let step = session.step_forward()?;
                 let _ = append_log(&log_path, &step);
                 out.push_str(&step);
