@@ -146,7 +146,8 @@ fn main() {
     match command.as_deref() {
         Some("install") => {
             let dev = command_args.iter().any(|a| a == "--dev");
-            install(dev);
+            let sanitize = !command_args.iter().any(|a| a == "--no-sanitize");
+            install(dev, sanitize);
         }
         Some("gen") => {
             generate_synthetic();
@@ -799,7 +800,7 @@ fn extract_minimizer_status_line(output: &str) -> Option<String> {
     })
 }
 
-fn install(dev: bool) {
+fn install(dev: bool, sanitize: bool) {
     let root = workspace_root();
     let package = "kajit-cli";
     let binary = platform_binary_name("kajit");
@@ -810,11 +811,30 @@ fn install(dev: bool) {
         ("release", "release")
     };
 
-    println!("building {package} in {mode} mode...");
+    if sanitize {
+        println!("building {package} in {mode} mode with AddressSanitizer...");
+    } else {
+        println!("building {package} in {mode} mode...");
+    }
     let mut cmd = Command::new("cargo");
+    if sanitize {
+        cmd.arg("+nightly");
+    }
     cmd.args(["build", "-p", package]);
     if !dev {
         cmd.arg("--release");
+    }
+    if sanitize {
+        // Use --target to separate host (proc-macro) and target compilation.
+        // Without this, proc macros get ASan-instrumented and crash when
+        // loaded into rustc.
+        let target = if cfg!(target_arch = "aarch64") {
+            "aarch64-apple-darwin"
+        } else {
+            "x86_64-apple-darwin"
+        };
+        cmd.arg("--target").arg(target);
+        cmd.env("RUSTFLAGS", "-Zsanitizer=address");
     }
     let status = cmd
         .current_dir(&root)
@@ -824,7 +844,19 @@ fn install(dev: bool) {
         std::process::exit(status.code().unwrap_or(1));
     }
 
-    let src = root.join("target").join(profile_dir).join(&binary);
+    let src = if sanitize {
+        let target = if cfg!(target_arch = "aarch64") {
+            "aarch64-apple-darwin"
+        } else {
+            "x86_64-apple-darwin"
+        };
+        root.join("target")
+            .join(target)
+            .join(profile_dir)
+            .join(&binary)
+    } else {
+        root.join("target").join(profile_dir).join(&binary)
+    };
     if !src.exists() {
         eprintln!("build finished but binary not found at {}", src.display());
         std::process::exit(1);

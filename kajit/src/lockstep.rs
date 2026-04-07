@@ -7,6 +7,7 @@
 
 use crate::harness::{LocationMap, LocationTracker, VRegLocation};
 use kajit_lir::{BinOpKind, LinearOp};
+use std::time::{Duration, Instant};
 
 /// A divergence found by the lockstep debugger.
 #[derive(Debug, Clone)]
@@ -105,6 +106,8 @@ pub enum DebugError {
     ProcessExited(i32),
     /// Process killed by signal (SIGSEGV=11, SIGBUS=10, SIGABRT=6, etc.)
     ProcessSignaled(i32),
+    /// Wall-clock timeout while stepping (likely infinite loop in JIT code).
+    Timeout(String),
     LldbError(String),
     Io(std::io::Error),
 }
@@ -122,6 +125,7 @@ impl std::fmt::Display for DebugError {
                 };
                 write!(f, "process killed by signal {sig} ({name})")
             }
+            DebugError::Timeout(msg) => write!(f, "timeout: {msg}"),
             DebugError::LldbError(msg) => write!(f, "lldb: {msg}"),
             DebugError::Io(e) => write!(f, "io: {e}"),
         }
@@ -315,6 +319,17 @@ impl<D: JitDebugger> LockstepSession<D> {
                 )?;
                 return Ok(self.finish_with_result(result));
             }
+            Err(DebugError::Timeout(msg)) => {
+                let result = handle_jit_exit(
+                    &mut self.interpreter,
+                    &self.op_to_line,
+                    &self.listing_lines,
+                    self.jit_steps,
+                    self.prev_dwarf_line,
+                    &format!("timeout: {msg}"),
+                )?;
+                return Ok(self.finish_with_result(result));
+            }
             Err(e) => return Err(e),
         };
 
@@ -330,7 +345,14 @@ impl<D: JitDebugger> LockstepSession<D> {
         let mut executed_tracker = None;
         let mut executed_non_comparable = None;
         let mut synced = false;
-        for _ in 0..500 {
+        let interp_deadline = Instant::now() + STEP_TIMEOUT;
+        for interp_step in 0..500u32 {
+            if interp_step % 50 == 49 && Instant::now() > interp_deadline {
+                return Err(DebugError::Timeout(format!(
+                    "interpreter sync loop timed out after {interp_step} steps \
+                     (trying to sync from line {executed_line} to line {dwarf_line})"
+                )));
+            }
             let pre_loc = self.interpreter.state().location;
             let pre_line = loc_to_line(&self.op_to_line, &pre_loc);
 
@@ -930,14 +952,32 @@ fn current_line_from_pc(
     Ok(debugger.current_source_line().unwrap_or(0))
 }
 
+/// Maximum wall-clock time for a single `step_to_next_mapped_line` call.
+/// If the JIT code is stuck in an infinite loop (e.g. inside a call_intrinsic),
+/// `step_instruction_over` blocks until the call returns — this deadline
+/// ensures we don't hang the MCP server forever.
+const STEP_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn step_to_next_mapped_line(
     debugger: &mut dyn JitDebugger,
     entry_pc: u64,
     code_line_ranges: &[CodeLineRange],
     start_line: u32,
 ) -> Result<u32, DebugError> {
-    for _ in 0..4096 {
+    let deadline = Instant::now() + STEP_TIMEOUT;
+    for i in 0..4096u32 {
         debugger.step_instruction_over()?;
+        if Instant::now() > deadline {
+            let pc = debugger.read_pc().unwrap_or(0);
+            let disasm = debugger
+                .disassemble_around_pc(8)
+                .unwrap_or_else(|_| "(disassembly unavailable)".to_string());
+            return Err(DebugError::Timeout(format!(
+                "timed out after {i} instruction steps \
+                 (line {start_line}, pc=0x{pc:x}). JIT code likely in infinite loop.\n\n\
+                 Disassembly around stuck PC:\n{disasm}"
+            )));
+        }
         let line = current_line_from_pc(debugger, entry_pc, code_line_ranges)?;
         if line != 0 && line != start_line {
             return Ok(line);
