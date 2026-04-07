@@ -90,15 +90,17 @@ The work is: make the frontend use them instead of the shortcut ops, then delete
 the shortcut ops and their backend/interpreter handling.
 
 ### Order
-1. Make out_ptr a real vreg: frontend emits Store/Load, delete WriteToField/ReadFromField/SaveOutPtr/SetOutPtr
-2. Make ctx_ptr a real vreg: CallIntrinsic gets explicit ctx arg (prep for 011-3)
+1. ✅ Make out_ptr a real vreg: frontend emits Store/Load, delete WriteToField/ReadFromField/SaveOutPtr/SetOutPtr
+2. ✅ Make ctx_ptr a real vreg: CallIntrinsic gets explicit ctx arg, delete field_offset, delete output_enc
 3. Delete ZigzagDecode — frontend emits shift+xor
 4. Unify three Call ops into one
 5. Replace SlotAddr/WriteToSlot/ReadFromSlot with StackAlloc+Store/Load
 6. Kill is_scalar, unify prologues (the easy part, once the above is done)
 7. Keep DWARF correct: update semantic-field DWARF to not depend on WriteToField / pinned out_ptr
 
-Each step should leave tests passing.
+Known bugs from steps 1-2 (tracked separately):
+- 011-2a: interpreter double-ctx bug (run_call_intrinsic prepends ctx but args already have it)
+- 011-2b: IR text round-trip broken for multiple data_args
 
 ## Depends on
 
