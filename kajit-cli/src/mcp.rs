@@ -610,15 +610,16 @@ impl MirHandler {
             let _ = std::fs::write(&log_path, "");
 
             let mut out = format!("**Debug session {}**\n\n", session_id);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             for i in 0..count {
                 if i > 0 && std::time::Instant::now() > deadline {
                     let msg =
-                        format!("TIMEOUT: completed {i}/{count} steps in 30s, stopping early\n");
+                        format!("TIMEOUT: completed {i}/{count} steps in 5s, stopping early\n");
                     let _ = append_log(&log_path, &msg);
                     out.push_str(&msg);
                     break;
                 }
+                let _ = append_log(&log_path, &format!(">>> starting step {}...", i + 1));
                 let step = session.step_forward()?;
                 let _ = append_log(&log_path, &step);
                 out.push_str(&step);
