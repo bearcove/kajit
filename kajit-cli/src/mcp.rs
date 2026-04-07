@@ -660,7 +660,7 @@ impl MirHandler {
             });
 
             // Hard 10s timeout on the entire tool call
-            let result = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+            match rx.recv_timeout(std::time::Duration::from_secs(10)) {
                 Ok(mut out) => {
                     let _ = worker.join();
                     out.push('\n');
@@ -674,8 +674,7 @@ impl MirHandler {
                     let _ = state.debug_sessions.remove(&session_id);
                     Err("debug_session_step timed out after 10s (session destroyed)".to_string())
                 }
-            };
-            result
+            }
         }
     }
 

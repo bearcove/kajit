@@ -31,11 +31,11 @@ impl<'a> EmitContext<'a> {
         }
         match &inst.op {
             LinearOp::Copy { dst, src } => {
-                if let (Some(sp), Some(dp)) = (self.preg_for_vreg(*src), self.preg_for_vreg(*dst)) {
-                    if sp == dp {
-                        self.current_inst = None;
-                        return;
-                    }
+                if let (Some(sp), Some(dp)) = (self.preg_for_vreg(*src), self.preg_for_vreg(*dst))
+                    && sp == dp
+                {
+                    self.current_inst = None;
+                    return;
                 }
                 let src_enc = self.reg_for_vreg_with_temp(*src, R10);
                 self.store_to_vreg(*dst, src_enc);
@@ -289,10 +289,7 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::CallLambda { .. } => {
-                self.ectx
-                    .emit
-                    .emit_with(|buf| x64::encode_nop(buf))
-                    .expect("nop");
+                self.ectx.emit.emit_with(x64::encode_nop).expect("nop");
             }
 
             LinearOp::FuncStart { .. }
@@ -395,40 +392,40 @@ impl<'a> EmitContext<'a> {
         // Shifts: x86_64 variable shifts require the shift amount in CL (rcx low byte).
         if matches!(kind, BinOpKind::Shl | BinOpKind::Shr | BinOpKind::Sar) {
             // Try immediate shift for constant shift amounts.
-            if let Some(&shift_val) = self.const_values.get(&rhs) {
-                if shift_val < 64 {
-                    let lhs_enc = self.reg_for_vreg_with_temp(lhs, R10);
-                    // For 2-operand destructive: load into result, then shift in-place.
-                    let rd = self.dst_enc_or_temp(dst, R10);
-                    if rd != lhs_enc {
-                        self.ectx
-                            .emit
-                            .emit_with(|buf| x64::encode_mov_r64_r64(rd, lhs_enc, buf))
-                            .expect("mov");
-                    }
-                    match kind {
-                        BinOpKind::Shl => self
-                            .ectx
-                            .emit
-                            .emit_with(|buf| x64::encode_shl_r64_imm8(rd, shift_val as u8, buf))
-                            .expect("shl imm"),
-                        BinOpKind::Shr => self
-                            .ectx
-                            .emit
-                            .emit_with(|buf| x64::encode_shr_r64_imm8(rd, shift_val as u8, buf))
-                            .expect("shr imm"),
-                        BinOpKind::Sar => self
-                            .ectx
-                            .emit
-                            .emit_with(|buf| x64::encode_sar_r64_imm8(rd, shift_val as u8, buf))
-                            .expect("sar imm"),
-                        _ => unreachable!(),
-                    }
-                    if rd == R10 {
-                        self.store_to_vreg(dst, R10);
-                    }
-                    return;
+            if let Some(&shift_val) = self.const_values.get(&rhs)
+                && shift_val < 64
+            {
+                let lhs_enc = self.reg_for_vreg_with_temp(lhs, R10);
+                // For 2-operand destructive: load into result, then shift in-place.
+                let rd = self.dst_enc_or_temp(dst, R10);
+                if rd != lhs_enc {
+                    self.ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_mov_r64_r64(rd, lhs_enc, buf))
+                        .expect("mov");
                 }
+                match kind {
+                    BinOpKind::Shl => self
+                        .ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_shl_r64_imm8(rd, shift_val as u8, buf))
+                        .expect("shl imm"),
+                    BinOpKind::Shr => self
+                        .ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_shr_r64_imm8(rd, shift_val as u8, buf))
+                        .expect("shr imm"),
+                    BinOpKind::Sar => self
+                        .ectx
+                        .emit
+                        .emit_with(|buf| x64::encode_sar_r64_imm8(rd, shift_val as u8, buf))
+                        .expect("sar imm"),
+                    _ => unreachable!(),
+                }
+                if rd == R10 {
+                    self.store_to_vreg(dst, R10);
+                }
+                return;
             }
 
             // Variable shift: move shift amount into rcx, lhs into r10, shift r10.
@@ -480,26 +477,26 @@ impl<'a> EmitContext<'a> {
         }
 
         // Try immediate form for add/sub with 32-bit const.
-        if matches!(kind, BinOpKind::Add | BinOpKind::Sub) {
-            if let Some(imm) = self.imm32_const(rhs) {
-                match kind {
-                    BinOpKind::Add => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_add_r64_imm32(rd, imm, buf))
-                        .expect("add imm"),
-                    BinOpKind::Sub => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_sub_r64_imm32(rd, imm, buf))
-                        .expect("sub imm"),
-                    _ => unreachable!(),
-                }
-                if rd == R10 {
-                    self.store_to_vreg(dst, R10);
-                }
-                return;
+        if matches!(kind, BinOpKind::Add | BinOpKind::Sub)
+            && let Some(imm) = self.imm32_const(rhs)
+        {
+            match kind {
+                BinOpKind::Add => self
+                    .ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_add_r64_imm32(rd, imm, buf))
+                    .expect("add imm"),
+                BinOpKind::Sub => self
+                    .ectx
+                    .emit
+                    .emit_with(|buf| x64::encode_sub_r64_imm32(rd, imm, buf))
+                    .expect("sub imm"),
+                _ => unreachable!(),
             }
+            if rd == R10 {
+                self.store_to_vreg(dst, R10);
+            }
+            return;
         }
 
         let rhs_enc = self.reg_for_vreg_with_temp(rhs, R11);

@@ -953,12 +953,7 @@ fn infer_output_size(func: &cfg_mir::Function) -> usize {
         .blocks
         .iter()
         .flat_map(|block| block.insts.iter())
-        .filter_map(|inst_id| {
-            let inst = func.inst(*inst_id)?;
-            match &inst.op {
-                _ => None,
-            }
-        })
+        .filter_map(|_inst_id| -> Option<usize> { None })
         .max()
         .unwrap_or(0);
     from_fields.max(func.output_size)

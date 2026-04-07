@@ -880,7 +880,7 @@ pub fn interpret(program: &Program, input: &[u8]) -> InterpOutcome {
     if state.returned {
         InterpOutcome::Returned(state.output.clone())
     } else if let Some(trap) = &state.trap {
-        InterpOutcome::Trapped(trap.clone())
+        InterpOutcome::Trapped(*trap)
     } else {
         InterpOutcome::TimedOut
     }

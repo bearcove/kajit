@@ -201,10 +201,10 @@ impl<'a> EmitContext<'a> {
             // Skip pure trampoline blocks (no insts, plain Branch, no edge moves).
             if block.insts.is_empty() {
                 let term = &self.func.terms[block.term.0 as usize];
-                if let Terminator::Branch { edge } = term {
-                    if !self.edge_has_moves(*edge) {
-                        continue;
-                    }
+                if let Terminator::Branch { edge } = term
+                    && !self.edge_has_moves(*edge)
+                {
+                    continue;
                 }
             }
             let term = &self.func.terms[block.term.0 as usize];

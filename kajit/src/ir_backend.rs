@@ -78,6 +78,10 @@ impl BackendBuf {
         self.code().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn source_map(&self) -> &kajit_emit::SourceMap {
         match self {
             BackendBuf::X86_64(buf) => &buf.source_map,

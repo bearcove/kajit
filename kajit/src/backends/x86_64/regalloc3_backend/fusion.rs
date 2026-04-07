@@ -67,22 +67,22 @@ pub(super) fn compute_fusable_cmps(func: &Function) -> HashMap<kajit_ir::VReg, x
         let mut cmp_condition = None;
         for (i, &inst_id) in block.insts.iter().enumerate() {
             let inst = &func.insts[inst_id.index()];
-            if let LinearOp::BinOp { op, dst, .. } = &inst.op {
-                if *dst == cond {
-                    cmp_condition = match op {
-                        BinOpKind::CmpEq => Some(x64::Condition::Eq),
-                        BinOpKind::CmpNe => Some(x64::Condition::Ne),
-                        BinOpKind::CmpLt => Some(x64::Condition::Lo),
-                        BinOpKind::CmpLe => Some(x64::Condition::Ls),
-                        BinOpKind::CmpGt => Some(x64::Condition::Hi),
-                        BinOpKind::CmpGe => Some(x64::Condition::Hs),
-                        _ => None,
-                    };
-                    if cmp_condition.is_some() {
-                        cmp_idx = Some(i);
-                    }
-                    break;
+            if let LinearOp::BinOp { op, dst, .. } = &inst.op
+                && *dst == cond
+            {
+                cmp_condition = match op {
+                    BinOpKind::CmpEq => Some(x64::Condition::Eq),
+                    BinOpKind::CmpNe => Some(x64::Condition::Ne),
+                    BinOpKind::CmpLt => Some(x64::Condition::Lo),
+                    BinOpKind::CmpLe => Some(x64::Condition::Ls),
+                    BinOpKind::CmpGt => Some(x64::Condition::Hi),
+                    BinOpKind::CmpGe => Some(x64::Condition::Hs),
+                    _ => None,
+                };
+                if cmp_condition.is_some() {
+                    cmp_idx = Some(i);
                 }
+                break;
             }
         }
 

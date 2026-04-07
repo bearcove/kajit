@@ -104,7 +104,7 @@ pub fn compile_regalloc3(
     let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32;
     let mut ectx = EmitCtx::new_regalloc(extra_stack, base_frame, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
-    let edge_tmp_base = slot_base + (actual_slot_count as u32 * 8);
+    let edge_tmp_base = slot_base + (actual_slot_count * 8);
 
     // Emit prologue.
     let (entry, error_exit) =
@@ -532,7 +532,7 @@ fn regalloc3_extra_saved_pairs(alloc: &AllocatedCfgProgramRa3) -> u32 {
     };
 
     for func in &alloc.functions {
-        for (_, a) in &func.allocations {
+        for a in func.allocations.values() {
             observe(a, &mut max_pair);
         }
     }

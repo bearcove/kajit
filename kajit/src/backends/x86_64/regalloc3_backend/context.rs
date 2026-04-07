@@ -118,14 +118,13 @@ impl<'a> EmitContext<'a> {
     /// For spilled constants, rematerializes with mov imm instead of loading from stack.
     pub fn reg_for_vreg_with_temp(&mut self, vreg: kajit_ir::VReg, temp_enc: u8) -> u8 {
         // Check inst-local source locations (from edge/operand edit resolution).
-        if let Some(inst_id) = self.current_inst {
-            if let Some(loc) = self
+        if let Some(inst_id) = self.current_inst
+            && let Some(loc) = self
                 .inst_source_locations
                 .get(&(inst_id, vreg.index() as u32))
                 .cloned()
-            {
-                return self.enc_for_location_with_temp(&loc, temp_enc);
-            }
+        {
+            return self.enc_for_location_with_temp(&loc, temp_enc);
         }
 
         if let Some(preg) = self.preg_for_vreg(vreg) {

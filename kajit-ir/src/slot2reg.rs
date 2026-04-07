@@ -807,7 +807,7 @@ fn has_write_const0_in_region(func: &IrFunc, region: RegionId, slot: SlotId) -> 
             && *s == slot
         {
             let write_source = &func.nodes[nid].inputs[0].source;
-            if crate::dead_theta_ports::resolve_to_const(func, &write_source) == Some(0) {
+            if crate::dead_theta_ports::resolve_to_const(func, write_source) == Some(0) {
                 return true;
             }
         }
@@ -845,7 +845,7 @@ fn has_nonzero_write_shallow(func: &IrFunc, region: RegionId, slot: SlotId) -> b
         match &func.nodes[nid].kind {
             NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. }) if *s == slot => {
                 let src = &func.nodes[nid].inputs[0].source;
-                if crate::dead_theta_ports::resolve_to_const(func, &src) != Some(0) {
+                if crate::dead_theta_ports::resolve_to_const(func, src) != Some(0) {
                     return true;
                 }
             }
@@ -868,7 +868,7 @@ fn has_nonzero_write_in_region(func: &IrFunc, region: RegionId, slot: SlotId) ->
         match &func.nodes[nid].kind {
             NodeKind::Simple(IrOp::WriteToSlot { slot: s, .. }) if *s == slot => {
                 let write_source = &func.nodes[nid].inputs[0].source;
-                if crate::dead_theta_ports::resolve_to_const(func, &write_source) != Some(0) {
+                if crate::dead_theta_ports::resolve_to_const(func, write_source) != Some(0) {
                     return true;
                 }
             }
