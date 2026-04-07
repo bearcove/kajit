@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Lockstep differential debugger.
 //!
 //! Drives the CFG-MIR interpreter and a JIT process (via LLDB) simultaneously,
@@ -8,6 +7,62 @@
 use crate::harness::{LocationMap, LocationTracker, VRegLocation};
 use kajit_lir::{BinOpKind, LinearOp};
 use std::time::{Duration, Instant};
+
+/// Snapshot of JIT register/stack state captured before stepping.
+/// Used to compare vreg values for the executed op without ABI clobber interference.
+#[derive(Debug, Clone)]
+struct RegisterSnapshot {
+    sp: u64,
+    /// Register values indexed by hw encoding (0..=28 for aarch64).
+    regs: std::collections::HashMap<u8, u64>,
+    /// Stack memory reads cached by address.
+    stack_cache: std::collections::HashMap<u64, u64>,
+}
+
+impl RegisterSnapshot {
+    /// Capture current register state from the debugger.
+    fn capture(debugger: &impl JitDebugger) -> Result<Self, DebugError> {
+        let sp = debugger.read_sp()?;
+        let mut regs = std::collections::HashMap::new();
+        // Capture all GP registers (aarch64: x0-x28, x86_64: 0-15)
+        for preg in 0..=28u8 {
+            if let Ok(val) = debugger.read_register(preg) {
+                regs.insert(preg, val);
+            }
+        }
+        Ok(Self {
+            sp,
+            regs,
+            stack_cache: std::collections::HashMap::new(),
+        })
+    }
+
+    /// Read a vreg value from this snapshot.
+    fn read_vreg(
+        &mut self,
+        debugger: &impl JitDebugger,
+        location: &VRegLocation,
+    ) -> Result<Option<u64>, DebugError> {
+        match location {
+            VRegLocation::Register(preg) => Ok(self.regs.get(preg).copied()),
+            VRegLocation::StackSlot(offset) => {
+                let addr = self.sp + *offset as u64;
+                if let Some(&cached) = self.stack_cache.get(&addr) {
+                    return Ok(Some(cached));
+                }
+                let val = debugger
+                    .read_memory(addr, 8)
+                    .ok()
+                    .map(|b| u64::from_le_bytes(b[..8].try_into().unwrap()));
+                if let Some(v) = val {
+                    self.stack_cache.insert(addr, v);
+                }
+                Ok(val)
+            }
+            VRegLocation::Constant(val) => Ok(Some(*val)),
+        }
+    }
+}
 
 /// A divergence found by the lockstep debugger.
 #[derive(Debug, Clone)]
@@ -284,6 +339,10 @@ impl<D: JitDebugger> LockstepSession<D> {
             )?;
             return Ok(self.finish_with_result(result));
         }
+
+        // Capture register state BEFORE stepping — the step may clobber registers
+        // (e.g. ABI arg setup for call_intrinsic overwrites argument registers).
+        let mut pre_step_snapshot = RegisterSnapshot::capture(&self.debugger)?;
 
         let dwarf_line = match step_to_next_mapped_line(
             &mut self.debugger,
@@ -564,13 +623,12 @@ LOCKSTEP DESYNC at JIT step {}
                     compare_tracker.location_for(&self.location_map, d.index() as u32)
                 }),
             ) {
-                let sp = self.debugger.read_sp()?;
                 let iv = if dst.index() < state.vregs.len() {
                     state.vregs[dst.index()]
                 } else {
                     0
                 };
-                let jv = read_vreg_from_jit(&self.debugger, &location, sp)?;
+                let jv = pre_step_snapshot.read_vreg(&self.debugger, &location)?;
                 vreg_diffs.push(VRegDiff {
                     vreg_index: dst.index() as u32,
                     interpreter_value: iv,
@@ -643,8 +701,7 @@ CONTROL FLOW DIVERGENCE at step {}
                     0
                 };
 
-                let sp = self.debugger.read_sp()?;
-                let jit_value = read_vreg_from_jit(&self.debugger, &location, sp)?;
+                let jit_value = pre_step_snapshot.read_vreg(&self.debugger, &location)?;
 
                 if jit_value != Some(interp_value) {
                     let mut vreg_diffs = vec![VRegDiff {
@@ -664,7 +721,7 @@ CONTROL FLOW DIVERGENCE at step {}
                             } else {
                                 0
                             };
-                            let use_jit = read_vreg_from_jit(&self.debugger, &use_loc, sp)?;
+                            let use_jit = pre_step_snapshot.read_vreg(&self.debugger, &use_loc)?;
                             vreg_diffs.push(VRegDiff {
                                 vreg_index: use_idx,
                                 interpreter_value: use_interp,
@@ -1327,25 +1384,6 @@ JIT EARLY EXIT at step {jit_steps}
         }),
         completed: false,
     })
-}
-
-/// Read a vreg's value from the JIT process.
-fn read_vreg_from_jit(
-    debugger: &dyn JitDebugger,
-    location: &VRegLocation,
-    sp: u64,
-) -> Result<Option<u64>, DebugError> {
-    match location {
-        VRegLocation::Register(preg) => Ok(debugger.read_register(*preg).ok()),
-        VRegLocation::StackSlot(offset) => {
-            let addr = sp + *offset as u64;
-            Ok(debugger
-                .read_memory(addr, 8)
-                .ok()
-                .map(|b| u64::from_le_bytes(b[..8].try_into().unwrap())))
-        }
-        VRegLocation::Constant(val) => Ok(Some(*val)),
-    }
 }
 
 /// Extract def vreg, use vregs, and whether this op produces a pointer value.
