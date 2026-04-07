@@ -517,9 +517,10 @@ pub fn infer_linear_ir_output_size(ir: &linearize::LinearIr) -> usize {
         .ops
         .iter()
         .filter_map(|op| match op {
-            linearize::LinearOp::WriteToField { offset, width, .. }
-            | linearize::LinearOp::ReadFromField { offset, width, .. } => {
-                Some(*offset as usize + width.bytes() as usize)
+            linearize::LinearOp::StoreToAddr { .. } | linearize::LinearOp::LoadFromAddr { .. } => {
+                // General-purpose IR no longer carries static offsets;
+                // output size is determined by FuncStart.
+                None
             }
             _ => None,
         })

@@ -99,8 +99,6 @@ pub(super) fn compute_fusable_cmps(func: &Function) -> HashMap<kajit_ir::VReg, x
                     | LinearOp::StoreToAddr { .. }
                     | LinearOp::WriteToSlot { .. }
                     | LinearOp::ReadFromSlot { .. }
-                    | LinearOp::WriteToField { .. }
-                    | LinearOp::ReadFromField { .. }
                     | LinearOp::Const { .. }
                     | LinearOp::SlotAddr { .. }
                     | LinearOp::Copy { .. }

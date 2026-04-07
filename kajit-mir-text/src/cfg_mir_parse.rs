@@ -171,16 +171,12 @@ enum AstOp {
     BinOp(BinOpKind),
     UnaryOp(UnaryOpKind),
     Copy,
-    Store(u32, Width),
-    Load(u32, Width),
     StoreAddr(Width),
     LoadAddr(Width),
-    SaveOutPtr,
-    SetOutPtr,
     SlotAddr(u32),
     WriteSlot(u32),
     ReadSlot(u32),
-    CallIntrinsic(IntrinsicRef, u32),
+    CallIntrinsic(IntrinsicRef),
     CallPure(IntrinsicRef),
     CallEffect(IntrinsicRef),
     CallLambda(u32),
@@ -199,18 +195,6 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             )
             .then_ignore(just(")"))
             .map(AstOp::Const),
-        just("store([")
-            .ignore_then(uint32())
-            .then_ignore(just(":"))
-            .then(width())
-            .then_ignore(just("])"))
-            .map(|(o, w)| AstOp::Store(o, w)),
-        just("load([")
-            .ignore_then(uint32())
-            .then_ignore(just(":"))
-            .then(width())
-            .then_ignore(just("])"))
-            .map(|(o, w)| AstOp::Load(o, w)),
         just("store_addr([")
             .ignore_then(width())
             .then_ignore(just("])"))
@@ -233,10 +217,8 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .map(AstOp::ReadSlot),
         just("call_intrinsic(")
             .ignore_then(intrinsic_ref())
-            .then_ignore(just(",").then(ws()).then(just("fo=")))
-            .then(uint32())
             .then_ignore(just(")"))
-            .map(|(func, fo)| AstOp::CallIntrinsic(func, fo)),
+            .map(AstOp::CallIntrinsic),
     ));
 
     let parameterized2 = choice((
@@ -291,11 +273,7 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .map(|w| AstOp::UnaryOp(UnaryOpKind::SignExtend { from_width: w })),
     ));
 
-    let simple = choice((
-        just("copy").to(AstOp::Copy),
-        just("save_out_ptr").to(AstOp::SaveOutPtr),
-        just("set_out_ptr").to(AstOp::SetOutPtr),
-    ));
+    let simple = choice((just("copy").to(AstOp::Copy),));
 
     choice((parameterized, parameterized2, binops, unaryops, simple))
 }
@@ -899,30 +877,6 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
             })?,
             width: *width,
         },
-        AstOp::Store(offset, width) => LinearOp::WriteToField {
-            src: src.ok_or_else(|| ParseError {
-                message: format!("inst i{} store missing src", ast.id.0),
-            })?,
-            offset: *offset,
-            width: *width,
-        },
-        AstOp::Load(offset, width) => LinearOp::ReadFromField {
-            dst: dst.ok_or_else(|| ParseError {
-                message: format!("inst i{} load missing dst", ast.id.0),
-            })?,
-            offset: *offset,
-            width: *width,
-        },
-        AstOp::SaveOutPtr => LinearOp::SaveOutPtr {
-            dst: dst.ok_or_else(|| ParseError {
-                message: format!("inst i{} save_out_ptr missing dst", ast.id.0),
-            })?,
-        },
-        AstOp::SetOutPtr => LinearOp::SetOutPtr {
-            src: src.ok_or_else(|| ParseError {
-                message: format!("inst i{} set_out_ptr missing src", ast.id.0),
-            })?,
-        },
         AstOp::SlotAddr(slot) => LinearOp::SlotAddr {
             dst: dst.ok_or_else(|| ParseError {
                 message: format!("inst i{} slot_addr missing dst", ast.id.0),
@@ -941,11 +895,10 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
             })?,
             slot: SlotId::new(*slot),
         },
-        AstOp::CallIntrinsic(func, field_offset) => LinearOp::CallIntrinsic {
+        AstOp::CallIntrinsic(func) => LinearOp::CallIntrinsic {
             func: resolve_intrinsic(func, registry)?,
             args: ast.body.uses.iter().map(|(v, _, _)| *v).collect(),
             dst,
-            field_offset: *field_offset,
         },
         AstOp::CallPure(func) => LinearOp::CallPure {
             func: resolve_intrinsic(func, registry)?,

@@ -113,8 +113,6 @@ fn rewrite_instructions(
                     | LinearOp::BinOp { dst, .. }
                     | LinearOp::UnaryOp { dst, .. }
                     | LinearOp::Copy { dst, .. }
-                    | LinearOp::ReadFromField { dst, .. }
-                    | LinearOp::SaveOutPtr { dst }
                     | LinearOp::SlotAddr { dst, .. }
                     | LinearOp::LoadFromAddr { dst, .. } => Some(*dst),
                     LinearOp::CallIntrinsic { dst, .. } => *dst,

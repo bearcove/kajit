@@ -82,89 +82,6 @@ impl<'a> EmitContext<'a> {
                 self.emit_unary(*op, *dst, *src);
             }
 
-            LinearOp::WriteToField { src, offset, width } => {
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
-                // Out pointer is in x21
-                match width {
-                    kajit_ir::Width::W1 => {
-                        self.ectx
-                            .emit
-                            .emit_strb_imm(src_reg, self.output_reg, *offset)
-                            .expect("strb");
-                    }
-                    kajit_ir::Width::W2 => {
-                        self.ectx
-                            .emit
-                            .emit_strh_imm(src_reg, self.output_reg, *offset)
-                            .expect("strh");
-                    }
-                    kajit_ir::Width::W4 => {
-                        self.ectx
-                            .emit
-                            .emit_str_imm(Width::W32, src_reg, self.output_reg, *offset)
-                            .expect("str");
-                    }
-                    kajit_ir::Width::W8 => {
-                        self.ectx
-                            .emit
-                            .emit_str_imm(Width::X64, src_reg, self.output_reg, *offset)
-                            .expect("str");
-                    }
-                }
-            }
-
-            LinearOp::ReadFromField { dst, offset, width } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
-                match width {
-                    kajit_ir::Width::W1 => {
-                        self.ectx
-                            .emit
-                            .emit_ldrb_imm(rd, self.output_reg, *offset)
-                            .expect("ldrb");
-                    }
-                    kajit_ir::Width::W2 => {
-                        self.ectx
-                            .emit
-                            .emit_ldrh_imm(rd, self.output_reg, *offset)
-                            .expect("ldrh");
-                    }
-                    kajit_ir::Width::W4 => {
-                        self.ectx
-                            .emit
-                            .emit_ldr_imm(Width::W32, rd, self.output_reg, *offset)
-                            .expect("ldr");
-                    }
-                    kajit_ir::Width::W8 => {
-                        self.ectx
-                            .emit
-                            .emit_ldr_imm(Width::X64, rd, self.output_reg, *offset)
-                            .expect("ldr");
-                    }
-                }
-                if rd == Reg::X16 {
-                    self.store_to_vreg(*dst, Reg::X16);
-                }
-            }
-
-            LinearOp::SaveOutPtr { dst } => {
-                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, rd, self.output_reg)
-                    .expect("mov");
-                if rd == Reg::X16 {
-                    self.store_to_vreg(*dst, Reg::X16);
-                }
-            }
-
-            LinearOp::SetOutPtr { src } => {
-                let src_reg = self.reg_for_vreg_with_temp(*src, Reg::X16);
-                self.ectx
-                    .emit
-                    .emit_mov_reg(Width::X64, self.output_reg, src_reg)
-                    .expect("mov");
-            }
-
             LinearOp::SlotAddr { dst, slot } => {
                 let rd = self.dst_reg_or_temp(*dst, Reg::X16);
                 let off = self.slot_off(slot.index() as u32);
@@ -286,13 +203,8 @@ impl<'a> EmitContext<'a> {
                 self.ectx.emit_error_with_ctx_reg(*code, self.ctx_reg);
             }
 
-            LinearOp::CallIntrinsic {
-                func,
-                args,
-                dst,
-                field_offset,
-            } => {
-                self.emit_call_intrinsic(*func, args, *dst, Some(*field_offset));
+            LinearOp::CallIntrinsic { func, args, dst } => {
+                self.emit_call_intrinsic(*func, args, *dst, None);
             }
 
             LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {

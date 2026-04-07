@@ -1010,9 +1010,7 @@ impl LinearOpDst for LinearOp {
             | Self::BinOp { dst, .. }
             | Self::UnaryOp { dst, .. }
             | Self::LoadFromAddr { dst, .. }
-            | Self::ReadFromField { dst, .. }
             | Self::SlotAddr { dst, .. }
-            | Self::SaveOutPtr { dst, .. }
             | Self::ReadFromSlot { dst, .. }
             | Self::CallPure { dst, .. }
             | Self::CallEffect { dst, .. } => Some(*dst),
@@ -1025,10 +1023,7 @@ impl LinearOpDst for LinearOp {
             | Self::JumpTable { .. }
             | Self::ErrorExit { .. } => None,
             Self::FuncStart { .. } | Self::FuncEnd => None,
-            Self::StoreToAddr { .. }
-            | Self::WriteToSlot { .. }
-            | Self::WriteToField { .. }
-            | Self::SetOutPtr { .. } => None,
+            Self::StoreToAddr { .. } | Self::WriteToSlot { .. } => None,
         }
     }
 }

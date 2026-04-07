@@ -177,7 +177,7 @@ pub struct DebuggerSession {
     pub input_base_addr: Option<u64>,
     /// When set, input-end operations return this value instead of input.len().
     pub input_end_addr: Option<u64>,
-    /// When set, SaveOutPtr returns this value instead of an abstract offset.
+    /// When set, output pointer operations return this value instead of an abstract offset.
     pub output_base_addr: Option<u64>,
     /// When set, the root decoder cursor-ref argument is modeled as a real
     /// `RuntimeCursorArg*`, so loads/stores through that pointer are reflected
@@ -528,25 +528,6 @@ impl DebuggerSession {
                 let rhs = self.read_vreg(rhs.index());
                 self.write_vreg(dst.index(), exec_binop(*op, lhs, rhs));
             }
-            LinearOp::WriteToField { src, offset, width } => {
-                let value = self.read_vreg(src.index());
-                let base = *offset as usize;
-                let width = width.bytes() as usize;
-                self.ensure_output_len(base + width);
-                for i in 0..width {
-                    self.output[base + i] = ((value >> (i * 8)) & 0xff) as u8;
-                }
-            }
-            LinearOp::ReadFromField { dst, offset, width } => {
-                let base = *offset as usize;
-                let width = width.bytes() as usize;
-                self.ensure_output_len(base + width);
-                let mut value = 0u64;
-                for i in 0..width {
-                    value |= (self.output[base + i] as u64) << (i * 8);
-                }
-                self.write_vreg(dst.index(), value);
-            }
             LinearOp::LoadFromAddr { dst, addr, width } => {
                 let raw_addr = self.read_vreg(addr.index()) as usize;
                 if let Some(value) = self.load_root_cursor_arg(raw_addr, width.bytes() as usize) {
@@ -611,13 +592,6 @@ impl DebuggerSession {
                 };
                 self.write_vreg(dst.index(), result);
             }
-            LinearOp::SaveOutPtr { dst } => {
-                let value = self.output_base_addr.unwrap_or(0);
-                self.write_vreg(dst.index(), value);
-            }
-            LinearOp::SetOutPtr { src: _ } => {
-                // No-op in interpreter (output is managed separately)
-            }
             LinearOp::SlotAddr { dst, slot } => {
                 // Slot addresses: use high addresses that won't collide with cursor
                 let addr = 0x1_0000_0000u64
@@ -646,13 +620,8 @@ impl DebuggerSession {
             LinearOp::ErrorExit { code } => {
                 self.trap(*code);
             }
-            LinearOp::CallIntrinsic {
-                func,
-                args,
-                dst,
-                field_offset,
-            } => {
-                self.execute_call_intrinsic(func.0, args, *dst, *field_offset)?;
+            LinearOp::CallIntrinsic { func, args, dst } => {
+                self.execute_call_intrinsic(func.0, args, *dst)?;
             }
             LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
                 self.execute_call_pure(func.0, args, *dst)?;
@@ -677,7 +646,6 @@ impl DebuggerSession {
         func_addr: usize,
         args: &[kajit_ir::VReg],
         dst: Option<kajit_ir::VReg>,
-        field_offset: u32,
     ) -> Result<(), DebuggerError> {
         // Collect arg values
         let arg_values: Vec<u64> = args
@@ -698,10 +666,9 @@ impl DebuggerSession {
         let ctx_ptr = &mut ctx as *mut RuntimeDeserContext;
 
         // Determine out_ptr: for side-effect calls (dst=None), pass a pointer
-        // into the output buffer at the given field_offset.
+        // into the output buffer.
         let out_ptr: Option<*mut u8> = if dst.is_none() {
-            let offset = field_offset as usize;
-            Some(unsafe { self.output.as_mut_ptr().add(offset) })
+            Some(self.output.as_mut_ptr())
         } else {
             None
         };
@@ -976,10 +943,6 @@ fn infer_output_size(func: &cfg_mir::Function) -> usize {
         .filter_map(|inst_id| {
             let inst = func.inst(*inst_id)?;
             match &inst.op {
-                LinearOp::WriteToField { offset, width, .. }
-                | LinearOp::ReadFromField { offset, width, .. } => {
-                    Some(*offset as usize + width.bytes() as usize)
-                }
                 _ => None,
             }
         })
@@ -1067,23 +1030,13 @@ mod tests {
                 output_size: 0,
                 blocks: vec![b0],
                 edges: Vec::new(),
-                insts: vec![
-                    test_inst(
-                        0,
-                        LinearOp::Const {
-                            dst: v(0),
-                            value: 0x2a,
-                        },
-                    ),
-                    test_inst(
-                        1,
-                        LinearOp::WriteToField {
-                            src: v(0),
-                            offset: 0,
-                            width: Width::W1,
-                        },
-                    ),
-                ],
+                insts: vec![test_inst(
+                    0,
+                    LinearOp::Const {
+                        dst: v(0),
+                        value: 0x2a,
+                    },
+                )],
                 terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 1,
@@ -1193,7 +1146,6 @@ mod tests {
                         func: kajit_ir::IntrinsicFn(test_validate_utf8_range as *const () as usize),
                         args: vec![v(0), v(1)],
                         dst: None,
-                        field_offset: 0,
                     },
                     operands: vec![
                         cfg_mir::Operand {

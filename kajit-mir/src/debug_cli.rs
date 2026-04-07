@@ -303,23 +303,13 @@ mod tests {
                 output_size: 0,
                 blocks: vec![block],
                 edges: Vec::new(),
-                insts: vec![
-                    test_inst(
-                        0,
-                        LinearOp::Const {
-                            dst: v(0),
-                            value: 42,
-                        },
-                    ),
-                    test_inst(
-                        1,
-                        LinearOp::WriteToField {
-                            src: v(0),
-                            offset: 0,
-                            width: Width::W8,
-                        },
-                    ),
-                ],
+                insts: vec![test_inst(
+                    0,
+                    LinearOp::Const {
+                        dst: v(0),
+                        value: 42,
+                    },
+                )],
                 terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 1,

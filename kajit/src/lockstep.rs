@@ -1347,7 +1347,7 @@ pub fn op_def_uses_and_kind(
     // Ops that produce pointer values (interpreter uses different base addresses)
     let is_pointer = matches!(
         inst.op,
-        LinearOp::SaveOutPtr { .. } | LinearOp::SlotAddr { .. } | LinearOp::LoadFromAddr { .. }
+        LinearOp::SlotAddr { .. } | LinearOp::LoadFromAddr { .. }
     );
 
     (def, uses, is_pointer)

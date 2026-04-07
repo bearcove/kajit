@@ -747,34 +747,9 @@ fn execute_function_inner(
                     let value = exec_unaryop(*op, src);
                     state.write_vreg(dst.index(), value);
                 }
-                LinearOp::WriteToField { src, offset, width } => {
-                    let value = state.read_vreg(src.index());
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    state.ensure_output_range_for_out_ptr(base, width_bytes);
-                    unsafe {
-                        let dst = state.out_ptr.add(base);
-                        for i in 0..width_bytes {
-                            *dst.add(i) = ((value >> (i * 8)) & 0xff) as u8;
-                        }
-                    }
-                }
                 LinearOp::ErrorExit { code } => {
                     state.trap(*code);
                     break;
-                }
-                LinearOp::ReadFromField { dst, offset, width } => {
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    state.ensure_output_range_for_out_ptr(base, width_bytes);
-                    let mut value = 0u64;
-                    unsafe {
-                        let src = state.out_ptr.add(base);
-                        for i in 0..width_bytes {
-                            value |= (*src.add(i) as u64) << (i * 8);
-                        }
-                    }
-                    state.write_vreg(dst.index(), value);
                 }
                 LinearOp::StoreToAddr { addr, src, width } => {
                     let dst = state.read_vreg(addr.index()) as *mut u8;
@@ -797,12 +772,6 @@ fn execute_function_inner(
                     }
                     state.write_vreg(dst.index(), value);
                 }
-                LinearOp::SaveOutPtr { dst } => {
-                    state.write_vreg(dst.index(), state.out_ptr as u64);
-                }
-                LinearOp::SetOutPtr { src } => {
-                    state.out_ptr = state.read_vreg(src.index()) as *mut u8;
-                }
                 LinearOp::SlotAddr { dst, slot } => {
                     let addr = state.slot_addr_value(slot.index());
                     state.write_vreg(dst.index(), addr);
@@ -816,22 +785,10 @@ fn execute_function_inner(
                     let value = state.read_slot_value(slot);
                     state.write_vreg(dst.index(), value);
                 }
-                LinearOp::CallIntrinsic {
-                    func,
-                    args,
-                    dst,
-                    field_offset,
-                } => {
+                LinearOp::CallIntrinsic { func, args, dst } => {
                     let args_values: Vec<u64> =
                         args.iter().map(|v| state.read_vreg(v.index())).collect();
-                    let out_ptr = if dst.is_none() {
-                        let offset = *field_offset as usize;
-                        state.ensure_output_range_for_out_ptr(offset, 64);
-                        Some(unsafe { state.out_ptr.add(offset) })
-                    } else {
-                        None
-                    };
-                    let ret = run_call_intrinsic(state, func.0, &args_values, out_ptr);
+                    let ret = run_call_intrinsic(state, func.0, &args_values, None);
                     if state.trap.is_some() {
                         break;
                     }
@@ -1165,44 +1122,8 @@ fn execute_function_inner_with_event_trace(
                         },
                     );
                 }
-                LinearOp::WriteToField { src, offset, width } => {
-                    let value = state.read_vreg(src.index());
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    state.ensure_output_range_for_out_ptr(base, width_bytes);
-                    unsafe {
-                        let dst = state.out_ptr.add(base);
-                        for i in 0..width_bytes {
-                            *dst.add(i) = ((value >> (i * 8)) & 0xff) as u8;
-                        }
-                    }
-                }
                 LinearOp::ErrorExit { code } => {
                     state.trap(*code);
-                }
-                LinearOp::ReadFromField { dst, offset, width } => {
-                    let width_bytes = width.bytes() as usize;
-                    let base = *offset as usize;
-                    state.ensure_output_range_for_out_ptr(base, width_bytes);
-                    let mut value = 0u64;
-                    unsafe {
-                        let src = state.out_ptr.add(base);
-                        for i in 0..width_bytes {
-                            value |= (*src.add(i) as u64) << (i * 8);
-                        }
-                    }
-                    let trace_value = TraceValue::U64(value);
-                    state.write_vreg(dst.index(), value);
-                    state.write_trace_vreg(dst.index(), trace_value.clone());
-                    push_interpreter_event(
-                        trace,
-                        step_index,
-                        location,
-                        InterpreterEventKind::VregWrite {
-                            vreg: *dst,
-                            value: trace_value,
-                        },
-                    );
                 }
                 LinearOp::StoreToAddr { addr, src, width } => {
                     let dst = state.read_vreg(addr.index()) as *mut u8;
@@ -1249,35 +1170,6 @@ fn execute_function_inner_with_event_trace(
                         InterpreterEventKind::VregWrite {
                             vreg: *dst,
                             value: trace_value,
-                        },
-                    );
-                }
-                LinearOp::SaveOutPtr { dst } => {
-                    let raw = state.out_ptr as u64;
-                    let trace_value = state.trace_out_ptr.clone();
-                    state.write_vreg(dst.index(), raw);
-                    state.write_trace_vreg(dst.index(), trace_value.clone());
-                    push_interpreter_event(
-                        trace,
-                        step_index,
-                        location,
-                        InterpreterEventKind::VregWrite {
-                            vreg: *dst,
-                            value: trace_value,
-                        },
-                    );
-                }
-                LinearOp::SetOutPtr { src } => {
-                    let before = state.trace_out_ptr.clone();
-                    state.out_ptr = state.read_vreg(src.index()) as *mut u8;
-                    state.trace_out_ptr = state.read_trace_vreg(src.index());
-                    push_interpreter_event(
-                        trace,
-                        step_index,
-                        location,
-                        InterpreterEventKind::OutPtrSet {
-                            before,
-                            after: state.trace_out_ptr.clone(),
                         },
                     );
                 }
@@ -1328,22 +1220,10 @@ fn execute_function_inner_with_event_trace(
                         },
                     );
                 }
-                LinearOp::CallIntrinsic {
-                    func,
-                    args,
-                    dst,
-                    field_offset,
-                } => {
+                LinearOp::CallIntrinsic { func, args, dst } => {
                     let args_values: Vec<u64> =
                         args.iter().map(|v| state.read_vreg(v.index())).collect();
-                    let out_ptr = if dst.is_none() {
-                        let offset = *field_offset as usize;
-                        state.ensure_output_range_for_out_ptr(offset, 64);
-                        Some(unsafe { state.out_ptr.add(offset) })
-                    } else {
-                        None
-                    };
-                    let ret = run_call_intrinsic(state, func.0, &args_values, out_ptr);
+                    let ret = run_call_intrinsic(state, func.0, &args_values, None);
                     if let Some(dst) = dst {
                         let trace_value = TraceValue::U64(ret);
                         state.write_vreg(dst.index(), ret);
@@ -1956,13 +1836,8 @@ fn infer_output_size(func: &cfg_mir::Function) -> usize {
         .iter()
         .flat_map(|block| block.insts.iter())
         .filter_map(|inst_id| {
-            let inst = func.inst(*inst_id)?;
-            match &inst.op {
-                LinearOp::WriteToField { offset, width, .. } => {
-                    Some(*offset as usize + width.bytes() as usize)
-                }
-                _ => None,
-            }
+            let _inst = func.inst(*inst_id)?;
+            None::<usize>
         })
         .max()
         .unwrap_or(0);
@@ -2146,23 +2021,13 @@ mod tests {
                 output_size: 0,
                 blocks: vec![b0],
                 edges: Vec::new(),
-                insts: vec![
-                    test_inst(
-                        0,
-                        LinearOp::Const {
-                            dst: v(0),
-                            value: 42,
-                        },
-                    ),
-                    test_inst(
-                        1,
-                        LinearOp::WriteToField {
-                            src: v(0),
-                            offset: 0,
-                            width: Width::W1,
-                        },
-                    ),
-                ],
+                insts: vec![test_inst(
+                    0,
+                    LinearOp::Const {
+                        dst: v(0),
+                        value: 42,
+                    },
+                )],
                 terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 1,

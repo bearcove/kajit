@@ -2545,7 +2545,6 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
                     ),
                     args: Vec::new(),
                     dst: None,
-                    field_offset: 0,
                 },
                 operands: Vec::new(),
                 clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
@@ -2558,7 +2557,6 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
                     ),
                     args: Vec::new(),
                     dst: None,
-                    field_offset: 1,
                 },
                 operands: Vec::new(),
                 clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
@@ -2739,7 +2737,6 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
                 ),
                 args: Vec::new(),
                 dst: None,
-                field_offset: 0,
             },
             operands: Vec::new(),
             clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
@@ -3018,10 +3015,9 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
             },
             crate::regalloc_engine::cfg_mir::Inst {
                 id: inst2,
-                op: crate::linearize::LinearOp::WriteToField {
+                op: crate::linearize::LinearOp::WriteToSlot {
                     src: v1,
-                    offset: 0,
-                    width: crate::ir::Width::W1,
+                    slot: crate::ir::SlotId::new(0),
                 },
                 operands: vec![crate::regalloc_engine::cfg_mir::Operand {
                     vreg: v1,
@@ -3049,7 +3045,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
     let program = crate::regalloc_engine::cfg_mir::Program {
         funcs: vec![func],
         vreg_count: 2,
-        slot_count: 0,
+        slot_count: 1,
         param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,

@@ -366,17 +366,12 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
                         .inst(*inst_id)
                         .expect("cfg instruction should exist for semantic debug field");
                     let writes_field = match &inst.op {
-                        crate::linearize::LinearOp::WriteToField { offset, .. } => {
-                            *offset == field.offset as u32
-                        }
-                        crate::linearize::LinearOp::CallIntrinsic { field_offset, .. } => {
-                            *field_offset == field.offset as u32
-                        }
                         // General-purpose IR: field writes become a generic StoreToAddr (or a Call)
                         // with debug provenance attached. At this point we only need to find a
                         // single op that (a) carries the field debug value and (b) is actually
                         // an effectful write/call site.
                         crate::linearize::LinearOp::StoreToAddr { .. }
+                        | crate::linearize::LinearOp::CallIntrinsic { .. }
                         | crate::linearize::LinearOp::CallLambda { .. } => true,
                         _ => false,
                     };

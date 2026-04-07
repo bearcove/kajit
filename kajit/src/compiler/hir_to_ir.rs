@@ -14,6 +14,8 @@ struct StructuralHirIrLowerer<'a> {
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
     /// Output base pointer — data_args[0], a real vreg.
     out_ptr: crate::ir::PortSource,
+    /// Context pointer — data_args[1], a real vreg.
+    ctx_ptr: crate::ir::PortSource,
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
@@ -75,21 +77,30 @@ impl RuntimeDialectLowerer {
             .iter()
             .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
+        let ctx = lowerer.ctx_ptr;
         match lowerer.callable_intrinsic(call) {
-            Some(hir::RuntimeIntrinsic::AllocPersistent) => rb.call_intrinsic(
-                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize),
-                &args,
-                0,
-                true,
-            ),
-            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => rb.call_intrinsic(
-                crate::ir::IntrinsicFn(
-                    intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
-                ),
-                &args,
-                0,
-                true,
-            ),
+            Some(hir::RuntimeIntrinsic::AllocPersistent) => {
+                let mut full_args = vec![ctx];
+                full_args.extend_from_slice(&args);
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_alloc_persistent as *const () as usize,
+                    ),
+                    &full_args,
+                    true,
+                )
+            }
+            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => {
+                let mut full_args = vec![ctx];
+                full_args.extend_from_slice(&args);
+                rb.call_intrinsic(
+                    crate::ir::IntrinsicFn(
+                        intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
+                    ),
+                    &full_args,
+                    true,
+                )
+            }
             _ => None,
         }
     }
@@ -111,17 +122,15 @@ impl RuntimeDialectLowerer {
                 true
             }
             Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
-                let args = call
-                    .args
-                    .iter()
-                    .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
-                    .collect::<Vec<_>>();
+                let mut full_args = vec![lowerer.ctx_ptr];
+                for arg in &call.args {
+                    full_args.push(lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty));
+                }
                 rb.call_intrinsic(
                     crate::ir::IntrinsicFn(
                         intrinsics::kajit_validate_utf8_range as *const () as usize,
                     ),
-                    &args,
-                    0,
+                    &full_args,
                     false,
                 );
                 true
@@ -190,12 +199,12 @@ impl RuntimeDialectLowerer {
         if let hir::Expr::AddrOf(place) = &call.args[1] {
             match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
+                    let out_addr = lowerer.out_field_addr(rb, offset);
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
                             intrinsics::kajit_option_init_none_ctx as *const () as usize,
                         ),
-                        &[init_fn],
-                        offset as u32,
+                        &[lowerer.ctx_ptr, init_fn, out_addr],
                         false,
                     );
                     return;
@@ -228,12 +237,12 @@ impl RuntimeDialectLowerer {
         if let hir::Expr::AddrOf(place) = &call.args[1] {
             match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
+                    let out_addr = lowerer.out_field_addr(rb, offset);
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
                             intrinsics::kajit_option_init_some_ctx as *const () as usize,
                         ),
-                        &[init_fn, payload_addr],
-                        offset as u32,
+                        &[lowerer.ctx_ptr, init_fn, payload_addr, out_addr],
                         false,
                     );
                     return;
@@ -256,6 +265,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         module: &'a hir::Module,
         function: &'a hir::Function,
         out_ptr: crate::ir::PortSource,
+        ctx_ptr: crate::ir::PortSource,
         data_arg_sources: &[crate::ir::PortSource],
     ) -> Self {
         let mut local_slots = std::collections::HashMap::new();
@@ -281,6 +291,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             local_slots,
             local_types,
             out_ptr,
+            ctx_ptr,
             _marker: std::marker::PhantomData,
         };
         lowerer.initialize_params(rb, function, data_arg_sources);
@@ -3066,13 +3077,18 @@ fn build_structural_hir_ir_impl(module: &hir::Module) -> crate::ir::IrFunc {
     let (mut builder, data_arg_sources) =
         crate::ir::IrBuilder::new_with_data_args(label, output_size, total_data_args);
     let out_ptr = data_arg_sources[0];
-    // ctx_ptr = data_arg_sources[1] — not yet used explicitly (011-3)
+    let ctx_ptr = data_arg_sources[1];
     let hir_param_sources = data_arg_sources[2..].to_vec();
-    // Memory domain is now builtin — no need to add it explicitly.
     {
         let mut rb = builder.root_region();
-        let lowerer =
-            StructuralHirIrLowerer::new(&mut rb, module, function, out_ptr, &hir_param_sources);
+        let lowerer = StructuralHirIrLowerer::new(
+            &mut rb,
+            module,
+            function,
+            out_ptr,
+            ctx_ptr,
+            &hir_param_sources,
+        );
         lowerer.lower_block(&mut rb, &function.body.statements, dest_local, dest_ty);
         rb.set_results(&[]);
     }

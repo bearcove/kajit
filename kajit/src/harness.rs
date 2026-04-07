@@ -942,10 +942,9 @@ mod tests {
                 edges: Vec::new(),
                 insts: vec![cfg_mir::Inst {
                     id: cfg_mir::InstId(0),
-                    op: LinearOp::WriteToField {
+                    op: LinearOp::WriteToSlot {
                         src: v(1),
-                        offset: 0,
-                        width: kajit_ir::Width::W8,
+                        slot: kajit_ir::SlotId::new(0),
                     },
                     operands: vec![cfg_mir::Operand {
                         vreg: v(1),
@@ -958,7 +957,7 @@ mod tests {
                 terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 2,
-            slot_count: 0,
+            slot_count: 1,
             param_slot_count: 0,
             debug: Default::default(),
             hints: Default::default(),

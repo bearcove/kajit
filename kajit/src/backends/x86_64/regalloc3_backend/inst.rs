@@ -77,138 +77,6 @@ impl<'a> EmitContext<'a> {
                 self.emit_unary(*op, *dst, *src);
             }
 
-            LinearOp::WriteToField { src, offset, width } => {
-                let src_enc = self.reg_for_vreg_with_temp(*src, R10);
-                let out = self.output_enc;
-                let off = *offset as i32;
-                match width {
-                    kajit_ir::Width::W1 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_mov_m_r8(out, off, src_enc, buf))
-                        .expect("mov"),
-                    kajit_ir::Width::W2 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_mov_m_r16(out, off, src_enc, buf))
-                        .expect("mov"),
-                    kajit_ir::Width::W4 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_m_r32(
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                src_enc,
-                                buf,
-                            )
-                        })
-                        .expect("mov"),
-                    kajit_ir::Width::W8 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_m_r64(
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                src_enc,
-                                buf,
-                            )
-                        })
-                        .expect("mov"),
-                }
-            }
-
-            LinearOp::ReadFromField { dst, offset, width } => {
-                let out = self.output_enc;
-                let off = *offset as i32;
-                let rd = self.dst_enc_or_temp(*dst, R10);
-                match width {
-                    kajit_ir::Width::W1 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm8(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: out,
-                                    disp: off,
-                                }),
-                                buf,
-                            )
-                        })
-                        .expect("movzx"),
-                    kajit_ir::Width::W2 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_movzx_r32_rm16(
-                                rd,
-                                Operand::Mem(Mem {
-                                    base: out,
-                                    disp: off,
-                                }),
-                                buf,
-                            )
-                        })
-                        .expect("movzx"),
-                    kajit_ir::Width::W4 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r32_m(
-                                rd,
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                buf,
-                            )
-                        })
-                        .expect("mov"),
-                    kajit_ir::Width::W8 => self
-                        .ectx
-                        .emit
-                        .emit_with(|buf| {
-                            x64::encode_mov_r64_m(
-                                rd,
-                                Mem {
-                                    base: out,
-                                    disp: off,
-                                },
-                                buf,
-                            )
-                        })
-                        .expect("mov"),
-                }
-                if rd == R10 {
-                    self.store_to_vreg(*dst, R10);
-                }
-            }
-
-            LinearOp::SaveOutPtr { dst } => {
-                let rd = self.dst_enc_or_temp(*dst, R10);
-                self.ectx
-                    .emit
-                    .emit_with(|buf| x64::encode_mov_r64_r64(rd, self.output_enc, buf))
-                    .expect("mov");
-                if rd == R10 {
-                    self.store_to_vreg(*dst, R10);
-                }
-            }
-
-            LinearOp::SetOutPtr { src } => {
-                let src_enc = self.reg_for_vreg_with_temp(*src, R10);
-                self.ectx
-                    .emit
-                    .emit_with(|buf| x64::encode_mov_r64_r64(self.output_enc, src_enc, buf))
-                    .expect("mov");
-            }
-
             LinearOp::SlotAddr { dst, slot } => {
                 let rd = self.dst_enc_or_temp(*dst, R10);
                 let off = self.slot_off(slot.index() as u32) as i32;
@@ -396,13 +264,8 @@ impl<'a> EmitContext<'a> {
                 self.ectx.emit_error_with_ctx(*code, self.ctx_enc);
             }
 
-            LinearOp::CallIntrinsic {
-                func,
-                args,
-                dst,
-                field_offset,
-            } => {
-                self.emit_call_intrinsic(*func, args, *dst, Some(*field_offset));
+            LinearOp::CallIntrinsic { func, args, dst } => {
+                self.emit_call_intrinsic(*func, args, *dst, None);
             }
 
             LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
