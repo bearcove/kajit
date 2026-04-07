@@ -100,8 +100,6 @@ pub fn allocate_cfg_program_regalloc3_native(
     let mut functions = Vec::with_capacity(program.funcs.len());
     let mut modified_funcs = Vec::with_capacity(program.funcs.len());
 
-    let abi_arg_offset: u8 = if program.is_scalar { 0 } else { 2 };
-
     for func in &program.funcs {
         let mut func_mut = func.clone();
 
@@ -128,30 +126,8 @@ pub fn allocate_cfg_program_regalloc3_native(
         // Pre-color data_args to their ABI argument registers.
         let mut fixed_colors = std::collections::HashMap::new();
         for (i, &arg_vreg) in func.data_args.iter().enumerate() {
-            let abi_preg = machine_inst::PReg(i as u8 + abi_arg_offset);
-            let preferred_preg = if abi_arg_offset == 2 {
-                // Non-scalar: prefer callee-saved registers for data_args
-                #[cfg(target_arch = "aarch64")]
-                {
-                    machine_inst::PReg(23 + i as u8)
-                }
-                #[cfg(target_arch = "x86_64")]
-                {
-                    // Prefer callee-saved: r12(12), r13(13), r14(14), r15(15), rbx(3), rbp(5)
-                    const CALLEE_SAVED: [u8; 6] = [12, 13, 14, 15, 3, 5];
-                    machine_inst::PReg(
-                        CALLEE_SAVED
-                            .get(i)
-                            .copied()
-                            .unwrap_or(i as u8 + abi_arg_offset),
-                    )
-                }
-            } else {
-                abi_preg
-            };
-            if !program.extra_excluded_regs.contains(&preferred_preg) {
-                fixed_colors.insert(arg_vreg, preferred_preg);
-            } else if !program.extra_excluded_regs.contains(&abi_preg) {
+            let abi_preg = machine_inst::PReg(i as u8);
+            if !program.extra_excluded_regs.contains(&abi_preg) {
                 fixed_colors.insert(arg_vreg, abi_preg);
             }
         }
@@ -223,7 +199,6 @@ pub fn allocate_cfg_program_regalloc3_native(
         vreg_count: program.vreg_count,
         slot_count: program.slot_count,
         param_slot_count: program.param_slot_count,
-        is_scalar: program.is_scalar,
         debug: program.debug.clone(),
         hints: program.hints.clone(),
         extra_excluded_regs: program.extra_excluded_regs.clone(),

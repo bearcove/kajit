@@ -865,8 +865,6 @@ pub struct IrFunc {
     pub slot_count: u32,
     /// Number of data args passed in calling-convention registers.
     pub param_slot_count: u32,
-    /// True for scalar functions (plain calling convention, no decoder ABI).
-    pub is_scalar: bool,
     /// Slots that are part of a multi-slot group (struct sub-fields).
     pub multi_slot_group: std::collections::BTreeSet<SlotId>,
     /// Slots that are scalar temporaries from HIR locals (not struct sub-fields,
@@ -1120,7 +1118,6 @@ impl IrBuilder {
             vreg_count: 0,
             slot_count: 0,
             param_slot_count: 0,
-            is_scalar: false,
             lambdas: Vec::new(),
             data_blobs: Vec::new(),
             multi_slot_group: std::collections::BTreeSet::new(),

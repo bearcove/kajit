@@ -509,8 +509,6 @@ pub struct LinearIr {
     pub slot_count: u32,
     /// Number of data args passed in calling-convention registers.
     pub param_slot_count: u32,
-    /// True for scalar functions (plain calling convention, no decoder ABI).
-    pub is_scalar: bool,
     /// Preserved debug scope provenance copied from RVSDG.
     pub debug: LinearDebugProvenance,
     /// Embedded constant data blobs (string literals, etc.).
@@ -4569,7 +4567,6 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
         vreg_count,
         slot_count: func.slot_count(),
         param_slot_count: func.param_slot_count,
-        is_scalar: func.is_scalar,
         data_blobs: func.data_blobs.clone(),
         debug: LinearDebugProvenance {
             scopes: func.debug_scopes.clone(),

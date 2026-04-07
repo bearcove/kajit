@@ -180,8 +180,6 @@ pub struct Program {
     pub slot_count: u32,
     /// Number of data args passed in calling-convention registers.
     pub param_slot_count: u32,
-    /// True for scalar functions (plain calling convention, no decoder ABI).
-    pub is_scalar: bool,
     pub debug: ProgramDebugProvenance,
     pub hints: crate::regalloc3::hints::HintMap,
     /// Extra physical registers excluded from allocation (e.g., x0/x1 when used
@@ -1920,7 +1918,6 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
         vreg_count: ir.vreg_count,
         slot_count: ir.slot_count,
         param_slot_count: ir.param_slot_count,
-        is_scalar: ir.is_scalar,
         debug: ProgramDebugProvenance {
             scopes: ir.debug.scopes.clone(),
             values: ir.debug.values.clone(),
@@ -4550,7 +4547,6 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             param_slot_count: 0,
-            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 99),
@@ -4592,7 +4588,6 @@ mod tests {
             vreg_count: 3,
             slot_count: 0,
             param_slot_count: 0,
-            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 42),
@@ -4631,7 +4626,6 @@ mod tests {
             vreg_count: 3,
             slot_count: 0,
             param_slot_count: 0,
-            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 make_const(0, 0, 42),
                 make_const(1, 1, 42),
@@ -4746,7 +4740,6 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             param_slot_count: 0,
-            is_scalar: false,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
@@ -4806,7 +4799,6 @@ mod tests {
             vreg_count: 2,
             slot_count: 0,
             param_slot_count: 0,
-            is_scalar: false,
             funcs: vec![two_block_const_param_func()],
             debug: Default::default(),
             hints: Default::default(),
@@ -5274,7 +5266,6 @@ mod tests {
             vreg_count: 4,
             slot_count: 0,
             param_slot_count: 0,
-            is_scalar: false,
             funcs: vec![single_block_func(vec![
                 Inst {
                     id: InstId(0),

@@ -1034,10 +1034,7 @@ fn debug_postcard_borrowed_header_harness() {
         .map(|func| crate::harness::AllocationMap::from_regalloc3(func, base_frame))
         .unwrap_or_default();
 
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &ra3_alloc,
-        root_data_abi,
-    );
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
         super::materialize_backend_result(result);
@@ -2016,7 +2013,6 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
-        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -2214,7 +2210,6 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
-        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -2398,7 +2393,6 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
-        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
@@ -2594,7 +2588,6 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         vreg_count: 0,
         slot_count: 0,
         param_slot_count: 0,
-        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
@@ -2753,7 +2746,6 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         vreg_count: 1,
         slot_count: 0,
         param_slot_count: 0,
-        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,
@@ -2907,7 +2899,6 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
-        is_scalar: false,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
             scopes,
             values,

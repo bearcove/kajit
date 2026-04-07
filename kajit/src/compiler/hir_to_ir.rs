@@ -2267,7 +2267,6 @@ fn build_scalar_hir_ir(module: &hir::Module, function: &hir::Function) -> crate:
     }
     let mut func = builder.finish();
     func.param_slot_count = param_word_count as u32;
-    func.is_scalar = true;
     func
 }
 
@@ -3042,14 +3041,20 @@ fn build_structural_hir_ir_impl(module: &hir::Module) -> crate::ir::IrFunc {
 
     let label = &function.name;
     let output_size = structural_hir_type_size(module, dest_ty);
-    let param_word_count = function
+    let param_word_count: usize = function
         .params
         .iter()
         .filter(|param| !param.is_destination())
         .map(|param| StructuralHirIrLowerer::slot_count_for_type(module, &param.ty))
         .sum();
+    // data_args layout: [output_ptr, ctx_ptr, ...hir_params...]
+    // output_ptr and ctx_ptr are implicit in the IR (used by WriteToField, CallIntrinsic)
+    // but explicit in the ABI so the calling convention is uniform.
+    let total_data_args = 2 + param_word_count;
     let (mut builder, data_arg_sources) =
-        crate::ir::IrBuilder::new_with_data_args(label, output_size, param_word_count);
+        crate::ir::IrBuilder::new_with_data_args(label, output_size, total_data_args);
+    // Skip data_arg_sources[0] (output_ptr) and [1] (ctx_ptr) — they're ABI placeholders.
+    let data_arg_sources = data_arg_sources[2..].to_vec();
     // Memory domain is now builtin — no need to add it explicitly.
     {
         let mut rb = builder.root_region();

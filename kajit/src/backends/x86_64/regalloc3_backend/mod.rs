@@ -45,13 +45,6 @@ pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
 
 /// Compile CFG-MIR with regalloc3 allocations to x86_64 machine code.
 pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult {
-    compile_regalloc3_with_root_data_abi(alloc, crate::compiler::RootDecoderDataAbi::None)
-}
-
-pub fn compile_regalloc3_with_root_data_abi(
-    alloc: &AllocatedCfgProgramRa3,
-    _root_data_abi: crate::compiler::RootDecoderDataAbi,
-) -> LinearBackendResult {
     let program = &alloc.cfg_program;
 
     let max_spillslots = alloc
@@ -110,55 +103,33 @@ pub fn compile_regalloc3_with_root_data_abi(
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
     let edge_tmp_base = slot_base + (actual_slot_count as u32 * 8);
 
-    let is_scalar_function = program.is_scalar;
-
-    // Register assignments for non-leaf decoder functions:
-    //   cursor → r12 (callee-saved, loaded from ctx.input_ptr in prologue)
-    //   end    → r13 (callee-saved, loaded from ctx.input_end in prologue)
-    //   output → r14 (callee-saved, from ABI arg)
-    //   ctx    → r15 (callee-saved, from ABI arg)
-    //
-    // For leaf functions:
-    //   output → rdi (SysV) / rcx (Win64) — stays in ABI arg register
-    //   ctx    → rsi (SysV) / rdx (Win64)
-    //   cursor/end loaded on demand from ctx
-    #[cfg(not(windows))]
-    let (leaf_output_enc, leaf_ctx_enc): (u8, u8) = (7, 6); // rdi, rsi
-    #[cfg(windows)]
-    let (leaf_output_enc, leaf_ctx_enc): (u8, u8) = (1, 2); // rcx, rdx
-
-    let (output_enc, ctx_enc) = if is_leaf && !is_scalar_function {
-        (leaf_output_enc, leaf_ctx_enc)
-    } else if is_scalar_function {
-        // Scalar functions: output/ctx are not used the same way.
-        // Use r14/r15 as legacy for non-leaf, leaf doesn't need them.
-        if is_leaf {
-            (leaf_output_enc, leaf_ctx_enc)
+    // Derive output_enc / ctx_enc from RA-assigned registers for data_args[0] / [1].
+    // These default to the ABI arg registers if no data_args exist (pure scalar).
+    let (output_enc, ctx_enc) =
+        if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
+            let out = func
+                .data_args
+                .first()
+                .and_then(|&v| alloc_func.preg_for_vreg(v))
+                .map(|p| p.0)
+                .unwrap_or(scalar_abi_arg_enc(0));
+            let ctx = func
+                .data_args
+                .get(1)
+                .and_then(|&v| alloc_func.preg_for_vreg(v))
+                .map(|p| p.0)
+                .unwrap_or(scalar_abi_arg_enc(1));
+            (out, ctx)
         } else {
-            (14, 15)
-        }
-    } else {
-        (14, 15)
-    };
+            (scalar_abi_arg_enc(0), scalar_abi_arg_enc(1))
+        };
 
-    // Update ectx register encodings for the regalloc3 backend.
     ectx.output_enc = output_enc;
     ectx.ctx_enc = ctx_enc;
 
     // Emit prologue.
-    let (entry, error_exit) = if is_scalar_function {
-        emit_scalar_prologue(&mut ectx, alloc, program, extra_saved_pairs, is_leaf)
-    } else {
-        emit_decoder_prologue(
-            &mut ectx,
-            alloc,
-            program,
-            extra_saved_pairs,
-            is_leaf,
-            output_enc,
-            ctx_enc,
-        )
-    };
+    let (entry, error_exit) =
+        emit_scalar_prologue(&mut ectx, alloc, program, extra_saved_pairs, is_leaf);
 
     // Create success exit label.
     let success_exit = ectx.new_label();
@@ -222,19 +193,13 @@ pub fn compile_regalloc3_with_root_data_abi(
 
     // Bind success exit and emit epilogue.
     ectx.bind_label(success_exit);
-    if is_scalar_function {
-        emit_scalar_epilogue(&mut ectx, alloc, program, extra_saved_pairs);
-        ectx.emit.bind_label(error_exit).expect("bind error_exit");
-        // Error: return 0.
-        ectx.emit
-            .emit_with(|buf| x64::encode_xor_r32_r32(0, 0, buf))
-            .expect("xor rax,rax");
-        emit_scalar_epilogue_restore(&mut ectx, extra_saved_pairs);
-    } else {
-        emit_decoder_epilogue(&mut ectx, extra_saved_pairs);
-        ectx.emit.bind_label(error_exit).expect("bind error_exit");
-        emit_decoder_error_epilogue(&mut ectx, extra_saved_pairs);
-    }
+    emit_scalar_epilogue(&mut ectx, alloc, program, extra_saved_pairs);
+    ectx.emit.bind_label(error_exit).expect("bind error_exit");
+    // Error: return 0.
+    ectx.emit
+        .emit_with(|buf| x64::encode_xor_r32_r32(0, 0, buf))
+        .expect("xor rax,rax");
+    emit_scalar_epilogue_restore(&mut ectx, extra_saved_pairs);
 
     // Append data section.
     let mut data_blob_offsets = Vec::new();
@@ -352,96 +317,6 @@ fn emit_scalar_prologue(
     (entry, error_exit)
 }
 
-/// Emit prologue for a decoder function (with ctx, cursor, etc.).
-///
-/// Unlike the legacy `begin_func`, this does NOT hardcode r12-r15 assignments.
-/// The allocator assigns data_args to arbitrary registers; we move from ABI
-/// positions to allocated locations.
-fn emit_decoder_prologue(
-    ectx: &mut EmitCtx,
-    alloc: &AllocatedCfgProgramRa3,
-    program: &cfg_mir::Program,
-    extra_saved_pairs: u32,
-    is_leaf: bool,
-    output_enc: u8,
-    ctx_enc: u8,
-) -> (u32, x64::LabelId) {
-    let error_exit = ectx.emit.new_label();
-    let entry = ectx.emit.current_offset();
-    let frame_size = ectx.frame_size;
-
-    // push rbp; sub rsp, frame_size
-    ectx.emit
-        .emit_with(|buf| {
-            x64::encode_push_r64(5, buf)?;
-            x64::encode_sub_r64_imm32(4, frame_size, buf)
-        })
-        .expect("decoder prologue frame");
-
-    // Save callee-saved registers used by regalloc.
-    emit_save_callee_saved(ectx, extra_saved_pairs);
-
-    // Move output_ptr and ctx from ABI arg registers to their assigned locations.
-    // SysV: rdi=out, rsi=ctx; Win64: rcx=out, rdx=ctx
-    #[cfg(not(windows))]
-    let (abi_out, abi_ctx): (u8, u8) = (7, 6); // rdi, rsi
-    #[cfg(windows)]
-    let (abi_out, abi_ctx): (u8, u8) = (1, 2); // rcx, rdx
-
-    if !is_leaf {
-        // Non-leaf: move out/ctx to their target registers (e.g. r14, r15).
-        if output_enc != abi_out {
-            ectx.emit
-                .emit_with(|buf| x64::encode_mov_r64_r64(output_enc, abi_out, buf))
-                .expect("mov out");
-        }
-        if ctx_enc != abi_ctx {
-            ectx.emit
-                .emit_with(|buf| x64::encode_mov_r64_r64(ctx_enc, abi_ctx, buf))
-                .expect("mov ctx");
-        }
-    }
-
-    // Store spilled data_args.
-    if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
-        for (i, &arg) in func.data_args.iter().enumerate() {
-            let abi_enc = decoder_data_arg_enc(i);
-            if let Some(slot) = alloc_func.spill_slot_for_vreg(arg) {
-                let offset = (ectx.base_frame + (slot.0 * 8)) as i32;
-                ectx.emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_m_r64(
-                            Mem {
-                                base: 4,
-                                disp: offset,
-                            },
-                            abi_enc,
-                            buf,
-                        )
-                    })
-                    .expect("store spilled decoder data_arg");
-            }
-        }
-
-        let mut arg_moves = Vec::new();
-        for (i, &arg) in func.data_args.iter().enumerate() {
-            let abi_enc = decoder_data_arg_enc(i);
-            if let Some(preg) = alloc_func.preg_for_vreg(arg) {
-                let assigned = preg.0;
-                if assigned != abi_enc {
-                    arg_moves.push((assigned, abi_enc));
-                }
-            }
-        }
-        if !arg_moves.is_empty() {
-            emit_parallel_reg_moves(ectx, &arg_moves, 10);
-        }
-    }
-
-    ectx.error_exit = error_exit;
-    (entry, error_exit)
-}
-
 /// Emit scalar epilogue (move results to return regs, restore, ret).
 fn emit_scalar_epilogue(
     ectx: &mut EmitCtx,
@@ -495,32 +370,6 @@ fn emit_scalar_epilogue_restore(ectx: &mut EmitCtx, extra_saved_pairs: u32) {
             x64::encode_ret(buf)
         })
         .expect("scalar epilogue");
-}
-
-/// Emit decoder success epilogue: write cursor back to ctx, restore callee-saved, ret.
-fn emit_decoder_epilogue(ectx: &mut EmitCtx, extra_saved_pairs: u32) {
-    emit_restore_callee_saved(ectx, extra_saved_pairs);
-    let frame_size = ectx.frame_size;
-    ectx.emit
-        .emit_with(|buf| {
-            x64::encode_add_r64_imm32(4, frame_size, buf)?;
-            x64::encode_pop_r64(5, buf)?;
-            x64::encode_ret(buf)
-        })
-        .expect("decoder epilogue");
-}
-
-/// Emit decoder error epilogue: just restore callee-saved and ret (error code already in ctx).
-fn emit_decoder_error_epilogue(ectx: &mut EmitCtx, extra_saved_pairs: u32) {
-    emit_restore_callee_saved(ectx, extra_saved_pairs);
-    let frame_size = ectx.frame_size;
-    ectx.emit
-        .emit_with(|buf| {
-            x64::encode_add_r64_imm32(4, frame_size, buf)?;
-            x64::encode_pop_r64(5, buf)?;
-            x64::encode_ret(buf)
-        })
-        .expect("decoder error epilogue");
 }
 
 // ── Callee-saved register save/restore ──────────────────────────────────
@@ -668,16 +517,6 @@ fn scalar_abi_arg_enc(index: usize) -> u8 {
     #[cfg(windows)]
     const ABI_ARGS: &[u8] = &[1, 2, 8, 9]; // rcx, rdx, r8, r9
     ABI_ARGS[index]
-}
-
-/// Decoder data_arg register encoding (args after out_ptr and ctx).
-/// SysV: out=rdi, ctx=rsi, data0=rdx, data1=rcx, data2=r8, data3=r9.
-fn decoder_data_arg_enc(index: usize) -> u8 {
-    #[cfg(not(windows))]
-    const DATA_ARGS: &[u8] = &[2, 1, 8, 9]; // rdx, rcx, r8, r9
-    #[cfg(windows)]
-    const DATA_ARGS: &[u8] = &[8, 9]; // r8, r9
-    DATA_ARGS[index]
 }
 
 /// Count how many extra callee-saved register pairs are used by regalloc3.

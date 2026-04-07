@@ -672,7 +672,6 @@ fn resolve_program(ast: AstProgram, registry: &IntrinsicRegistry) -> Result<Prog
         vreg_count: ast.vreg_count,
         slot_count: ast.slot_count,
         param_slot_count: 0,
-        is_scalar: false,
         debug: Default::default(),
         hints: Default::default(),
         extra_excluded_regs: vec![],

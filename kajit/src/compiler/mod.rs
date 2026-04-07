@@ -246,15 +246,9 @@ pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
 
     // Phase 6: Backend compilation
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &alloc,
-        RootDecoderDataAbi::None,
-    );
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &alloc,
-        RootDecoderDataAbi::None,
-    );
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc);
     let entry = result.entry as usize;
 
     CompiledFunction {
@@ -307,61 +301,7 @@ pub fn compile_pipeline_from_hir_module(
 
     // Phase 5: CFG-MIR lowering + optimization (ONCE — used for everything)
     let hints = Default::default();
-    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
-
-    // For leaf decoder functions: exclude ABI arg registers from allocation
-    // (kept for output_ptr/ctx_ptr). Scalar functions don't need this.
-    if !cfg_program.is_scalar {
-        use kajit_mir::regalloc3::machine_inst::PReg;
-
-        if let Some(func) = cfg_program.funcs.first() {
-            #[cfg(target_arch = "aarch64")]
-            {
-                cfg_program.extra_excluded_regs = (0..func.data_args.len())
-                    .map(|i| PReg(i as u8 + 2))
-                    .collect();
-            }
-            #[cfg(target_arch = "x86_64")]
-            {
-                // SysV: data_args arrive at rdx(2), rcx(1), r8(8), r9(9)
-                #[cfg(not(windows))]
-                const DATA_ARG_ENCS: &[u8] = &[2, 1, 8, 9];
-                #[cfg(windows)]
-                const DATA_ARG_ENCS: &[u8] = &[8, 9];
-                cfg_program.extra_excluded_regs = func
-                    .data_args
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, _)| DATA_ARG_ENCS.get(i).map(|&enc| PReg(enc)))
-                    .collect();
-            }
-        }
-
-        let is_leaf = cfg_program.funcs.iter().all(|func| {
-            func.insts.iter().all(|inst| {
-                !matches!(
-                    inst.op,
-                    kajit_lir::LinearOp::CallIntrinsic { .. }
-                        | kajit_lir::LinearOp::CallPure { .. }
-                        | kajit_lir::LinearOp::CallEffect { .. }
-                        | kajit_lir::LinearOp::CallLambda { .. }
-                )
-            })
-        });
-        if is_leaf {
-            #[cfg(target_arch = "aarch64")]
-            cfg_program
-                .extra_excluded_regs
-                .extend([PReg(0), PReg(1), PReg(15)]);
-            #[cfg(target_arch = "x86_64")]
-            {
-                #[cfg(not(windows))]
-                cfg_program.extra_excluded_regs.extend([PReg(7), PReg(6)]); // rdi, rsi
-                #[cfg(windows)]
-                cfg_program.extra_excluded_regs.extend([PReg(1), PReg(2)]); // rcx, rdx
-            }
-        }
-    }
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
 
     // Phase 6: Register allocation + backend compilation from the ONE cfg_program
     let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
@@ -384,15 +324,9 @@ pub fn compile_pipeline_from_hir_module(
     );
 
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &ra3_alloc,
-        root_data_abi,
-    );
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &ra3_alloc,
-        root_data_abi,
-    );
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let (buf, entry, _source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
@@ -646,97 +580,18 @@ fn compile_linear_ir_decoder_with_options(
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
     let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
-    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
+    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
     let root_data_abi = match root_data_abi {
         RootDecoderDataAbi::None => infer_root_decoder_data_abi_from_cfg(&cfg_program),
         explicit => explicit,
     };
 
-    // Exclude ABI registers from allocation
-    #[cfg(target_arch = "aarch64")]
-    {
-        use kajit_mir::regalloc3::machine_inst::PReg;
-
-        if !cfg_program.is_scalar
-            && let Some(func) = cfg_program.funcs.first()
-        {
-            cfg_program.extra_excluded_regs = (0..func.data_args.len())
-                .map(|i| PReg(i as u8 + 2))
-                .collect();
-        }
-
-        let is_leaf = cfg_program.funcs.iter().all(|func| {
-            func.insts.iter().all(|inst| {
-                !matches!(
-                    inst.op,
-                    kajit_lir::LinearOp::CallIntrinsic { .. }
-                        | kajit_lir::LinearOp::CallPure { .. }
-                        | kajit_lir::LinearOp::CallEffect { .. }
-                        | kajit_lir::LinearOp::CallLambda { .. }
-                )
-            })
-        });
-        if is_leaf {
-            // x0/x1: keep output_ptr/ctx_ptr in place (no moves to x21/x22)
-            // x15: reserved for cursor writeback (avoiding callee-save overhead)
-            cfg_program
-                .extra_excluded_regs
-                .extend([PReg(0), PReg(1), PReg(15)]);
-        }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    {
-        use kajit_mir::regalloc3::machine_inst::PReg;
-
-        if !cfg_program.is_scalar {
-            if let Some(func) = cfg_program.funcs.first() {
-                // Exclude data_arg ABI positions: SysV rdx(2), rcx(1), r8(8), r9(9)
-                #[cfg(not(windows))]
-                const DATA_ARG_ENCS: &[u8] = &[2, 1, 8, 9];
-                #[cfg(windows)]
-                const DATA_ARG_ENCS: &[u8] = &[8, 9];
-                cfg_program.extra_excluded_regs = func
-                    .data_args
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, _)| DATA_ARG_ENCS.get(i).map(|&enc| PReg(enc)))
-                    .collect();
-            }
-        }
-
-        let is_leaf = cfg_program.funcs.iter().all(|func| {
-            func.insts.iter().all(|inst| {
-                !matches!(
-                    inst.op,
-                    kajit_lir::LinearOp::CallIntrinsic { .. }
-                        | kajit_lir::LinearOp::CallPure { .. }
-                        | kajit_lir::LinearOp::CallEffect { .. }
-                        | kajit_lir::LinearOp::CallLambda { .. }
-                )
-            })
-        });
-        if is_leaf {
-            // rdi(7)/rsi(6): keep output_ptr/ctx_ptr in ABI arg registers
-            #[cfg(not(windows))]
-            cfg_program.extra_excluded_regs.extend([PReg(7), PReg(6)]);
-            #[cfg(windows)]
-            cfg_program.extra_excluded_regs.extend([PReg(1), PReg(2)]);
-        }
-    }
-
     let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &alloc,
-        root_data_abi,
-    );
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &alloc,
-        root_data_abi,
-    );
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc);
     let (buf, entry, source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
     #[cfg(target_arch = "aarch64")]
@@ -827,15 +682,9 @@ fn compile_cfg_mir_decoder_with_options(
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &alloc,
-        root_data_abi,
-    );
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3_with_root_data_abi(
-        &alloc,
-        root_data_abi,
-    );
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc);
     let (buf, entry, source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
     #[cfg(target_arch = "aarch64")]
@@ -928,9 +777,10 @@ fn infer_root_decoder_data_abi_from_cfg(
     let Some(root) = cfg_program.funcs.first() else {
         return RootDecoderDataAbi::None;
     };
-    match root.data_args.as_slice() {
-        [] => RootDecoderDataAbi::None,
-        [_] => RootDecoderDataAbi::CursorRef,
+    // With unified ABI: data_args[0]=output_ptr, data_args[1]=ctx_ptr,
+    // data_args[2..] are extra args. CursorRef means there's exactly one extra arg.
+    match root.data_args.len() {
+        3 => RootDecoderDataAbi::CursorRef,
         _ => RootDecoderDataAbi::None,
     }
 }
