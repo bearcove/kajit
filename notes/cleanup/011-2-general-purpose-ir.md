@@ -9,15 +9,15 @@ primitives before they reach the IR.
 ## Current deserializer ops to remove
 
 ### Output ops → Store/Load with explicit base vreg
-- `WriteToField { offset, width }` → `Store { width }` with `Add(out_ptr, Const(offset))` as address
-- `ReadFromField { offset, width }` → `Load { width }` with `Add(out_ptr, Const(offset))` as address
+- `WriteToField { offset, width }` → `StoreToAddr { width }` with `Add(out_ptr, Const(offset))` as address
+- `ReadFromField { offset, width }` → `LoadFromAddr { width }` with `Add(out_ptr, Const(offset))` as address
 - `SaveOutPtr` → just use the out_ptr vreg directly (it's a data value)
 - `SetOutPtr` → just assign to the out_ptr vreg (or `Add` for offset)
 
 ### Slot ops → StackAlloc + Store/Load
 - `SlotAddr { slot, num_slots }` → `StackAlloc { size, align }` returns address vreg
-- `WriteToSlot { slot }` → `Store` to stack-allocated address
-- `ReadFromSlot { slot }` → `Load` from stack-allocated address
+- `WriteToSlot { slot }` → `StoreToAddr` to stack-allocated address
+- `ReadFromSlot { slot }` → `LoadFromAddr` from stack-allocated address
 
 ### Call ops → one unified Call
 - `CallIntrinsic` (implicit ctx, implicit error check) → `Call` with ctx as explicit arg
@@ -42,6 +42,25 @@ not state-threaded magic.
 - `ErrorExit` emission → gone (it's just Store + Return now)
 - Delete `emit_decoder_prologue/epilogue`, `begin_func_with_config/end_func_with_config`
 - All functions use the scalar prologue/epilogue (already partially done)
+
+## DWARF / debug impact (must stay correct during cleanup)
+
+This change removes two current DWARF assumptions:
+
+1. **“Field write” detection keys off special ops.** Today `cfg_semantic_field_dwarf_variables`
+   looks for `WriteToField` / `CallIntrinsic(field_offset)` to decide when a semantic output
+   field becomes available. Once field writes become `StoreToAddr`, that match must move to
+   debug provenance (e.g. `DebugValueKind::Field`) rather than op variants.
+
+2. **`out_ptr` / `ctx` are currently modeled as fixed physical registers.** Today both the
+   “always present” DWARF vars (`deser_dwarf_variables`) and the field-location expression
+   (`dwarf_expr_for_out_field`) assume a pinned `out_ptr` register. Once `out_ptr` / `ctx_ptr`
+   become normal vregs, DWARF must either:
+   - compute field locations from the allocated location of the `out_ptr` vreg (+ offset), or
+   - temporarily drop semantic field variables until we can express `*(out_ptr + k)` in DWARF.
+
+**Cleanup-mode approach:** keep this minimal and mechanical — no “smart” analysis. The only
+requirement is that we don’t emit *wrong* debug info.
 
 ## Regalloc impact
 
@@ -77,6 +96,7 @@ the shortcut ops and their backend/interpreter handling.
 4. Unify three Call ops into one
 5. Replace SlotAddr/WriteToSlot/ReadFromSlot with StackAlloc+Store/Load
 6. Kill is_scalar, unify prologues (the easy part, once the above is done)
+7. Keep DWARF correct: update semantic-field DWARF to not depend on WriteToField / pinned out_ptr
 
 Each step should leave tests passing.
 

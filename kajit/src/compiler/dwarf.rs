@@ -254,6 +254,7 @@ pub(super) fn dwarf_expr_for_out_field(
 pub(super) fn cfg_semantic_field_dwarf_variables(
     root_shape: &'static Shape,
     program: &crate::regalloc_engine::cfg_mir::Program,
+    location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
     target_arch: crate::jit_dwarf::DwarfTargetArch,
@@ -261,6 +262,8 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
     let Some(backend_debug_info) = backend_debug_info else {
         return Vec::new();
     };
+    const PTR_WIDTH_BYTES: u8 = 8;
+
     let root_scope = program.debug.root_scope;
     let op_ranges = backend_op_ranges_by_op(backend_debug_info, code_ptr);
     let root_lambda = crate::ir::LambdaId::new(0);
@@ -271,6 +274,65 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
         .max()
     else {
         return Vec::new();
+    };
+
+    let out_ptr = program
+        .funcs
+        .iter()
+        .find(|func| func.lambda_id == root_lambda)
+        .and_then(|func| func.data_args.first().copied());
+    let Some(out_ptr) = out_ptr else {
+        return Vec::new();
+    };
+
+    let out_ptr_locations = backend_debug_info
+        .op_infos
+        .iter()
+        .filter(|op_info| op_info.lambda_id == root_lambda.index() as u32)
+        .filter_map(|op_info| {
+            let out_ptr_loc = location_map.location_at(op_info.line, out_ptr.index() as u32)?;
+            Some((op_info, out_ptr_loc.clone()))
+        })
+        .flat_map(|(op_info, out_ptr_loc)| {
+            op_info.code_ranges.iter().map(move |range| {
+                let start = (code_ptr as u64) + (range.start_offset as u64);
+                let end = (code_ptr as u64) + (range.end_offset as u64);
+                (start, end, out_ptr_loc.clone())
+            })
+        })
+        .collect::<Vec<_>>();
+    let out_ptr_locations = {
+        let mut ranges = out_ptr_locations;
+        ranges.sort_by_key(|(start, _, _)| *start);
+        let mut out = Vec::<(u64, u64, crate::harness::VRegLocation)>::new();
+        for (start, end, loc) in ranges {
+            if end <= start {
+                continue;
+            }
+            let mut gap_fill = None::<(u64, u64, crate::harness::VRegLocation)>;
+            if let Some((_, prev_end, prev_loc)) = out.last_mut() {
+                // If there's a gap, conservatively extend the previous location through it.
+                if *prev_end < start {
+                    gap_fill = Some((*prev_end, start, prev_loc.clone()));
+                }
+                // Merge adjacent/overlapping segments with identical locations.
+                if prev_loc == &loc && start <= *prev_end {
+                    *prev_end = (*prev_end).max(end);
+                    continue;
+                }
+            }
+            if let Some(gap_fill) = gap_fill {
+                out.push(gap_fill);
+            }
+            out.push((start, end, loc));
+        }
+        // Ensure coverage up to code_end if we have any location info at all.
+        if let Some((_, last_end, last_loc)) = out.last().cloned()
+            && last_end < code_end
+        {
+            out.push((last_end, code_end, last_loc));
+        }
+        out
     };
 
     let (fields, _) = collect_fields(root_shape);
@@ -310,6 +372,12 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
                         crate::linearize::LinearOp::CallIntrinsic { field_offset, .. } => {
                             *field_offset == field.offset as u32
                         }
+                        // General-purpose IR: field writes become a generic StoreToAddr (or a Call)
+                        // with debug provenance attached. At this point we only need to find a
+                        // single op that (a) carries the field debug value and (b) is actually
+                        // an effectful write/call site.
+                        crate::linearize::LinearOp::StoreToAddr { .. }
+                        | crate::linearize::LinearOp::CallLambda { .. } => true,
                         _ => false,
                     };
                     if !writes_field {
@@ -334,6 +402,47 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
             continue;
         }
 
+        let mut locations = Vec::<crate::jit_dwarf::DwarfLocationRange>::new();
+        for (start, end, out_ptr_loc) in &out_ptr_locations {
+            let start = (*start).max(available_start);
+            let end = (*end).min(code_end);
+            if end <= start {
+                continue;
+            }
+            let expr = match out_ptr_loc {
+                crate::harness::VRegLocation::Register(preg) => {
+                    let Some(out_ptr_reg) =
+                        crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, *preg)
+                    else {
+                        continue;
+                    };
+                    crate::jit_dwarf::expr_breg_deref_size_stack_value(
+                        out_ptr_reg,
+                        field.offset as i64,
+                        width,
+                    )
+                }
+                crate::harness::VRegLocation::StackSlot(offset) => {
+                    let mut expr =
+                        crate::jit_dwarf::expr_fbreg_deref_size(*offset as i64, PTR_WIDTH_BYTES);
+                    expr.extend(crate::jit_dwarf::expr_plus_uconst(field.offset as u64));
+                    expr.extend(crate::jit_dwarf::expr_deref_size(width));
+                    expr.extend(crate::jit_dwarf::expr_stack_value());
+                    expr
+                }
+                crate::harness::VRegLocation::Constant(_) => continue,
+            };
+            locations.push(crate::jit_dwarf::DwarfLocationRange {
+                start,
+                end,
+                expression: expr,
+            });
+        }
+        let locations = merge_dwarf_location_ranges(locations);
+        if locations.is_empty() {
+            continue;
+        }
+
         out.push(ScopedDwarfVariable {
             scope: root_scope,
             lexical_ranges: vec![crate::jit_dwarf::JitDebugRange {
@@ -342,17 +451,7 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
             }],
             variable: crate::jit_dwarf::DwarfVariable {
                 name: field.name.to_string(),
-                location: crate::jit_dwarf::DwarfVariableLocation::List(vec![
-                    crate::jit_dwarf::DwarfLocationRange {
-                        start: available_start,
-                        end: code_end,
-                        expression: dwarf_expr_for_out_field(
-                            target_arch,
-                            field.offset as u32,
-                            width,
-                        ),
-                    },
-                ]),
+                location: crate::jit_dwarf::DwarfVariableLocation::List(locations),
             },
         });
     }
@@ -365,8 +464,7 @@ pub(super) fn dwarf_expr_for_vreg_location(
 ) -> Option<Vec<u8>> {
     match location {
         crate::harness::VRegLocation::Register(preg) => {
-            let dwarf_reg =
-                crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, *preg)?;
+            let dwarf_reg = crate::jit_dwarf::dwarf_register_from_hw_encoding(target_arch, *preg)?;
             Some(crate::jit_dwarf::expr_reg(dwarf_reg))
         }
         crate::harness::VRegLocation::StackSlot(offset) => {
@@ -658,7 +756,9 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                     | crate::regalloc_engine::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
                         *remaining_uses.entry(*cond).or_default() += 1;
                     }
-                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable { predicate, .. } => {
+                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable {
+                        predicate, ..
+                    } => {
                         *remaining_uses.entry(*predicate).or_default() += 1;
                     }
                     crate::regalloc_engine::cfg_mir::Terminator::Return
@@ -711,7 +811,9 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                             used_now.push(operand.vreg);
                         }
                         crate::regalloc_engine::cfg_mir::OperandKind::Def => {
-                            let dest = lexical_intro_ranges_by_vreg.entry(operand.vreg).or_default();
+                            let dest = lexical_intro_ranges_by_vreg
+                                .entry(operand.vreg)
+                                .or_default();
                             dest.extend(op_ranges.iter().map(|(start, end)| {
                                 crate::jit_dwarf::JitDebugRange {
                                     low_pc: *start,
@@ -776,7 +878,9 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                             used_now.push(*cond);
                         }
                     }
-                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable { predicate, .. } => {
+                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable {
+                        predicate, ..
+                    } => {
                         if location_map
                             .static_locations
                             .contains_key(&(predicate.index() as u32))
@@ -794,8 +898,7 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                 if remaining_uses.get(vreg).copied().unwrap_or(0) == 0 {
                     continue;
                 }
-                let Some(location) = location_map.location_at(op_line, vreg.index() as u32)
-                else {
+                let Some(location) = location_map.location_at(op_line, vreg.index() as u32) else {
                     continue;
                 };
                 let Some(expr) = dwarf_expr_for_vreg_location(location, target_arch) else {
@@ -843,7 +946,13 @@ pub(super) fn cfg_value_dwarf_variables(
     target_arch: crate::jit_dwarf::DwarfTargetArch,
     suppress_semantic_vregs: bool,
 ) -> Vec<ScopedDwarfVariable> {
-    cfg_vreg_dwarf_variable_infos(program, location_map, backend_debug_info, code_ptr, target_arch)
+    cfg_vreg_dwarf_variable_infos(
+        program,
+        location_map,
+        backend_debug_info,
+        code_ptr,
+        target_arch,
+    )
     .into_iter()
     .filter_map(|(vreg, info): (crate::ir::VReg, VRegDwarfVariableInfo)| {
         if suppress_semantic_vregs && program.vreg_debug_value(vreg).is_some() {
@@ -976,6 +1085,7 @@ pub(super) fn cfg_mir_dwarf_variables(
         cfg_variables.extend(cfg_semantic_field_dwarf_variables(
             root_shape,
             program,
+            location_map,
             backend_debug_info,
             code_ptr,
             target_arch,

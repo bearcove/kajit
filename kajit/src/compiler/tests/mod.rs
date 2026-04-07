@@ -10,7 +10,7 @@ use super::{
     CompiledDecoder, build_jit_debug_info_from_source_map, build_postcard_decoder_hir,
     build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
     cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, deser_dwarf_variables,
-    dwarf_expr_for_out_field, jit_dwarf_target_arch, lower_hir_module, normalize_debug_line_rows,
+    jit_dwarf_target_arch, lower_hir_module, normalize_debug_line_rows,
     run_default_passes_from_env,
 };
 
@@ -2523,7 +2523,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: block_id,
-        data_args: Vec::new(),
+        data_args: vec![crate::ir::VReg::new(0)],
         data_results: Vec::new(),
         output_size: 0,
         blocks: vec![crate::regalloc_engine::cfg_mir::Block {
@@ -2585,7 +2585,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
     });
     let program = crate::regalloc_engine::cfg_mir::Program {
         funcs: vec![func],
-        vreg_count: 0,
+        vreg_count: 1,
         slot_count: 0,
         param_slot_count: 0,
         debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
@@ -2636,9 +2636,16 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         ],
     };
 
+    let out_ptr_preg = match jit_dwarf_target_arch() {
+        crate::jit_dwarf::DwarfTargetArch::X86_64 => 14,
+        crate::jit_dwarf::DwarfTargetArch::Aarch64 => 21,
+    };
+    let location_map = test_location_map(&[(0, out_ptr_preg)], &[], &[]);
+
     let vars = cfg_semantic_field_dwarf_variables(
         <Bools as Facet>::SHAPE,
         &program,
+        &location_map,
         Some(&backend_debug_info),
         0x1000 as *const u8,
         jit_dwarf_target_arch(),
@@ -2664,8 +2671,11 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         }]
     );
 
-    let expected_expr_a = dwarf_expr_for_out_field(jit_dwarf_target_arch(), 0, 1);
-    let expected_expr_b = dwarf_expr_for_out_field(jit_dwarf_target_arch(), 1, 1);
+    let out_ptr_reg =
+        crate::jit_dwarf::dwarf_register_from_hw_encoding(jit_dwarf_target_arch(), out_ptr_preg)
+            .expect("out_ptr preg should map to a DWARF register");
+    let expected_expr_a = crate::jit_dwarf::expr_breg_deref_size_stack_value(out_ptr_reg, 0, 1);
+    let expected_expr_b = crate::jit_dwarf::expr_breg_deref_size_stack_value(out_ptr_reg, 1, 1);
     match &vars[0].variable.location {
         crate::jit_dwarf::DwarfVariableLocation::List(locations) => {
             assert_eq!(locations.len(), 1);
@@ -2683,6 +2693,148 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
             assert_eq!(locations[0].start, 0x1018);
             assert_eq!(locations[0].end, 0x1028);
             assert_eq!(locations[0].expression, expected_expr_b);
+        }
+        crate::jit_dwarf::DwarfVariableLocation::Expr(_) => {
+            panic!("semantic field vars should use ranged locations")
+        }
+    }
+}
+
+#[test]
+fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
+    #[derive(Facet)]
+    struct Bools {
+        a: bool,
+    }
+
+    let inst_a = crate::regalloc_engine::cfg_mir::InstId::new(0);
+    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
+    let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
+    let op_a = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_a);
+    let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
+    let root_scope = crate::ir::DebugScopeId::new(0);
+
+    let func = crate::regalloc_engine::cfg_mir::Function {
+        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+        lambda_id: crate::ir::LambdaId::new(0),
+        entry: block_id,
+        data_args: vec![crate::ir::VReg::new(0)],
+        data_results: Vec::new(),
+        output_size: 0,
+        blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+            id: block_id,
+            params: Vec::new(),
+            insts: vec![inst_a],
+            term: term_id,
+            preds: Vec::new(),
+            succs: Vec::new(),
+            dead: false,
+        }],
+        edges: Vec::new(),
+        insts: vec![crate::regalloc_engine::cfg_mir::Inst {
+            id: inst_a,
+            op: crate::linearize::LinearOp::CallIntrinsic {
+                func: crate::ir::IntrinsicFn(
+                    crate::intrinsics::kajit_read_bool as *const () as usize,
+                ),
+                args: Vec::new(),
+                dst: None,
+                field_offset: 0,
+            },
+            operands: Vec::new(),
+            clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+        }],
+        terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+    };
+
+    let mut scopes = crate::ir::Arena::new();
+    scopes.push(crate::ir::DebugScope {
+        parent: None,
+        kind: crate::ir::DebugScopeKind::LambdaBody {
+            lambda_id: crate::ir::LambdaId::new(0),
+        },
+    });
+    let mut values = crate::ir::Arena::new();
+    let debug_a = values.push(crate::ir::DebugValue {
+        name: "a".to_string(),
+        kind: crate::ir::DebugValueKind::Field { offset: 0 },
+    });
+
+    let program = crate::regalloc_engine::cfg_mir::Program {
+        funcs: vec![func],
+        vreg_count: 1,
+        slot_count: 0,
+        param_slot_count: 0,
+        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+            scopes,
+            values,
+            root_scope: Some(root_scope),
+            op_scopes: std::collections::HashMap::new(),
+            op_values: std::collections::HashMap::from([(
+                (crate::ir::LambdaId::new(0), op_a),
+                debug_a,
+            )]),
+            vreg_scopes: Vec::new(),
+            vreg_values: Vec::new(),
+        },
+        hints: Default::default(),
+        extra_excluded_regs: vec![],
+        data_blobs: vec![],
+    };
+
+    let backend_debug_info = crate::ir_backend::BackendDebugInfo {
+        op_infos: vec![
+            crate::ir_backend::BackendOpDebugInfo {
+                lambda_id: 0,
+                op_id: op_a,
+                line: 10,
+                code_ranges: vec![crate::ir_backend::BackendCodeRange {
+                    start_offset: 0,
+                    end_offset: 8,
+                }],
+            },
+            crate::ir_backend::BackendOpDebugInfo {
+                lambda_id: 0,
+                op_id: term_op,
+                line: 20,
+                code_ranges: vec![crate::ir_backend::BackendCodeRange {
+                    start_offset: 16,
+                    end_offset: 24,
+                }],
+            },
+        ],
+    };
+
+    let stack_offset = 64u32;
+    let location_map = crate::harness::LocationMap {
+        static_locations: std::collections::HashMap::from([(
+            0u32,
+            crate::harness::VRegLocation::StackSlot(stack_offset),
+        )]),
+        call_lines: std::collections::HashSet::new(),
+        call_return_vregs: std::collections::HashMap::new(),
+        edit_clobbers: std::collections::HashMap::new(),
+        num_spill_slots: 0,
+    };
+
+    let vars = cfg_semantic_field_dwarf_variables(
+        <Bools as Facet>::SHAPE,
+        &program,
+        &location_map,
+        Some(&backend_debug_info),
+        0x1000 as *const u8,
+        jit_dwarf_target_arch(),
+    );
+
+    assert_eq!(vars.len(), 1);
+    let mut expected = crate::jit_dwarf::expr_fbreg_deref_size(stack_offset as i64, 8);
+    expected.extend(crate::jit_dwarf::expr_plus_uconst(0));
+    expected.extend(crate::jit_dwarf::expr_deref_size(1));
+    expected.extend(crate::jit_dwarf::expr_stack_value());
+    match &vars[0].variable.location {
+        crate::jit_dwarf::DwarfVariableLocation::List(locations) => {
+            assert_eq!(locations.len(), 1);
+            assert_eq!(locations[0].expression, expected);
         }
         crate::jit_dwarf::DwarfVariableLocation::Expr(_) => {
             panic!("semantic field vars should use ranged locations")

@@ -28,6 +28,13 @@ longer has any special-case code for error checking.
 - Delete entirely. Frontend emits `Store(ctx + ERROR_OFFSET, code)` + return.
 - The backend's `emit_error_trampolines` / `emit_error_with_ctx` go away.
 
+### DWARF note
+
+Today `deser_dwarf_variables` exposes `error_code` / `error_offset` using `ctx` as a fixed
+register base. Once 011-2 makes `ctx_ptr` a normal vreg, that expression will be wrong unless
+we also teach DWARF emission how to express `*(ctx + k)` based on vreg allocation, or we drop
+those variables during cleanup.
+
 ## Depends on
 
 011-2 step 2 (ctx_ptr as real vreg, unified Call op).
