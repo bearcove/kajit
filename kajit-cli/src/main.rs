@@ -8,6 +8,10 @@ use figue as args;
 /// kajit — JIT deserializer toolkit
 #[derive(Facet, Debug)]
 struct Args {
+    /// Standard CLI options
+    #[facet(flatten)]
+    builtins: args::FigueBuiltins,
+
     #[facet(args::subcommand)]
     command: Command,
 }

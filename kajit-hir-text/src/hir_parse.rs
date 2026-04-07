@@ -57,7 +57,16 @@ fn ws<'src>() -> impl Parser<'src, &'src str, (), Extra<'src>> + Clone {
 }
 
 fn token<'src>(text: &'static str) -> impl Parser<'src, &'src str, (), Extra<'src>> + Clone {
-    just(text).padded_by(ws()).ignored()
+    // Use keyword for alphabetic tokens (reports whole word in errors),
+    // just() for punctuation/symbols
+    if text.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        text::keyword::<_, _, Extra<'src>>(text)
+            .ignored()
+            .padded_by(ws())
+            .boxed()
+    } else {
+        just(text).padded_by(ws()).ignored().labelled(text).boxed()
+    }
 }
 
 fn uint32<'src>() -> impl Parser<'src, &'src str, u32, Extra<'src>> + Clone {
