@@ -90,24 +90,6 @@ pub enum LinearOp {
         src: VReg,
     },
 
-    // ── Output ──
-    WriteToField {
-        src: VReg,
-        offset: u32,
-        width: Width,
-    },
-    ReadFromField {
-        dst: VReg,
-        offset: u32,
-        width: Width,
-    },
-    SaveOutPtr {
-        dst: VReg,
-    },
-    SetOutPtr {
-        src: VReg,
-    },
-
     // ── Stack ──
     SlotAddr {
         dst: VReg,
@@ -137,7 +119,6 @@ pub enum LinearOp {
         func: IntrinsicFn,
         args: Vec<VReg>,
         dst: Option<VReg>,
-        field_offset: u32,
     },
     CallPure {
         func: IntrinsicFn,
@@ -192,7 +173,7 @@ pub enum LinearOp {
         lambda_id: LambdaId,
         label: String,
         /// Minimum output buffer size in bytes. Used by the interpreter/simulator
-        /// to allocate the output buffer when static inference from WriteToField is insufficient.
+        /// to allocate the output buffer when static inference from StoreToAddr is insufficient.
         output_size: usize,
         data_args: Vec<VReg>,
         data_results: Vec<VReg>,
@@ -217,12 +198,6 @@ impl LinearOp {
                 f(rhs);
             }
             UnaryOp { src, .. } | Copy { src, .. } => f(src),
-
-            // Output
-            WriteToField { src, .. } => f(src),
-            ReadFromField { .. } => {}
-            SaveOutPtr { .. } => {}
-            SetOutPtr { src } => f(src),
 
             // Stack
             SlotAddr { .. } => {}
@@ -320,8 +295,6 @@ impl LinearOp {
             | BinOp { dst, .. }
             | UnaryOp { dst, .. }
             | Copy { dst, .. }
-            | ReadFromField { dst, .. }
-            | SaveOutPtr { dst }
             | SlotAddr { dst, .. }
             | LoadFromAddr { dst, .. }
             | ReadFromSlot { dst, .. }
@@ -371,9 +344,7 @@ impl LinearOp {
             }
 
             // No defs
-            WriteToField { .. }
-            | SetOutPtr { .. }
-            | StoreToAddr { .. }
+            StoreToAddr { .. }
             | WriteToSlot { .. }
             | Label(_)
             | ErrorExit { .. }
@@ -396,11 +367,6 @@ impl LinearOp {
                 f(dst);
                 f(src);
             }
-
-            WriteToField { src, .. } => f(src),
-            ReadFromField { dst, .. } => f(dst),
-            SaveOutPtr { dst } => f(dst),
-            SetOutPtr { src } => f(src),
 
             SlotAddr { dst, .. } => f(dst),
             StoreToAddr { addr, src, .. } => {
@@ -1148,34 +1114,6 @@ impl<'a> Linearizer<'a> {
                 );
             }
 
-            // ── Output ops ──
-            IrOp::WriteToField { offset, width } => {
-                self.emit_node(
-                    node,
-                    LinearOp::WriteToField {
-                        src: data_in(0),
-                        offset: *offset,
-                        width: *width,
-                    },
-                );
-            }
-            IrOp::ReadFromField { offset, width } => {
-                self.emit_node(
-                    node,
-                    LinearOp::ReadFromField {
-                        dst: data_dst(0),
-                        offset: *offset,
-                        width: *width,
-                    },
-                );
-            }
-            IrOp::SaveOutPtr => {
-                self.emit_node(node, LinearOp::SaveOutPtr { dst: data_dst(0) });
-            }
-            IrOp::SetOutPtr => {
-                self.emit_node(node, LinearOp::SetOutPtr { src: data_in(0) });
-            }
-
             // ── Stack ops ──
             IrOp::SlotAddr { slot, .. } => {
                 self.emit_node(
@@ -1230,7 +1168,6 @@ impl<'a> Linearizer<'a> {
                 func,
                 arg_count,
                 has_result,
-                field_offset,
             } => {
                 let args: Vec<VReg> = (0..*arg_count as usize).map(&data_in).collect();
                 let dst = if *has_result { Some(data_dst(0)) } else { None };
@@ -1240,7 +1177,6 @@ impl<'a> Linearizer<'a> {
                         func: *func,
                         args,
                         dst,
-                        field_offset: *field_offset,
                     },
                 );
             }
@@ -3972,8 +3908,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         LinearOp::UnaryOp { src, .. } => vec![*src],
         LinearOp::Copy { src, .. } => vec![*src],
-        LinearOp::WriteToField { src, .. } => vec![*src],
-        LinearOp::SetOutPtr { src } => vec![*src],
         LinearOp::StoreToAddr { addr, src, .. } => vec![*addr, *src],
         LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
         LinearOp::WriteToSlot { src, .. } => vec![*src],
@@ -4007,8 +3941,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::FuncEnd => func_end_uses.unwrap_or_default().to_vec(),
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
-        | LinearOp::ReadFromField { .. }
-        | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
@@ -4023,8 +3955,6 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::BinOp { dst, .. } => vec![*dst],
         LinearOp::UnaryOp { dst, .. } => vec![*dst],
         LinearOp::Copy { dst, .. } => vec![*dst],
-        LinearOp::ReadFromField { dst, .. } => vec![*dst],
-        LinearOp::SaveOutPtr { dst } => vec![*dst],
         LinearOp::SlotAddr { dst, .. } => vec![*dst],
         LinearOp::LoadFromAddr { dst, .. } => vec![*dst],
         LinearOp::ReadFromSlot { dst, .. } => vec![*dst],
@@ -4032,9 +3962,7 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::CallPure { dst, .. } | LinearOp::CallEffect { dst, .. } => vec![*dst],
         LinearOp::FuncStart { data_args, .. } => data_args.clone(),
         LinearOp::CallLambda { results, .. } => results.clone(),
-        LinearOp::WriteToField { .. }
-        | LinearOp::SetOutPtr { .. }
-        | LinearOp::StoreToAddr { .. }
+        LinearOp::StoreToAddr { .. }
         | LinearOp::WriteToSlot { .. }
         | LinearOp::Label(_)
         | LinearOp::Branch { .. }
@@ -4075,8 +4003,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         }
         LinearOp::UnaryOp { src, .. } => rewrite(src, &mut resolve),
         LinearOp::Copy { src, .. } => rewrite(src, &mut resolve),
-        LinearOp::WriteToField { src, .. } => rewrite(src, &mut resolve),
-        LinearOp::SetOutPtr { src } => rewrite(src, &mut resolve),
         LinearOp::StoreToAddr { addr, src, .. } => {
             rewrite(addr, &mut resolve);
             rewrite(src, &mut resolve);
@@ -4119,8 +4045,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         LinearOp::JumpTable { predicate, .. } => rewrite(predicate, &mut resolve),
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
-        | LinearOp::ReadFromField { .. }
-        | LinearOp::SaveOutPtr { .. }
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
@@ -4672,22 +4596,6 @@ fn fmt_op(
             write!(f, " = copy ")?;
             fmt_vreg(f, *src)
         }
-        LinearOp::WriteToField { src, offset, width } => {
-            write!(f, "store [{offset}:{width}] ")?;
-            fmt_vreg(f, *src)
-        }
-        LinearOp::ReadFromField { dst, offset, width } => {
-            fmt_vreg(f, *dst)?;
-            write!(f, " = load [{offset}:{width}]")
-        }
-        LinearOp::SaveOutPtr { dst } => {
-            fmt_vreg(f, *dst)?;
-            write!(f, " = save_out_ptr")
-        }
-        LinearOp::SetOutPtr { src } => {
-            write!(f, "set_out_ptr ")?;
-            fmt_vreg(f, *src)
-        }
         LinearOp::SlotAddr { dst, slot } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = slot_addr {}", slot.index())
@@ -4711,12 +4619,7 @@ fn fmt_op(
             fmt_vreg(f, *dst)?;
             write!(f, " = slot[{}]", slot.index())
         }
-        LinearOp::CallIntrinsic {
-            func,
-            args,
-            dst,
-            field_offset,
-        } => {
+        LinearOp::CallIntrinsic { func, args, dst } => {
             if let Some(d) = dst {
                 fmt_vreg(f, *d)?;
                 write!(f, " = ")?;
@@ -4730,7 +4633,7 @@ fn fmt_op(
                 }
                 fmt_vreg(f, *a)?;
             }
-            write!(f, ") @{field_offset}")
+            write!(f, ")")
         }
         LinearOp::CallPure { func, args, dst } => {
             fmt_vreg(f, *dst)?;
@@ -4943,30 +4846,31 @@ mod tests {
 
     #[test]
     fn linearize_simple_chain() {
-        // Const(42) → WriteToField(offset=0, W4)
+        // Const(42) → StoreToAddr
         let mut builder = IrBuilder::new("u32", 0);
         {
             let mut rb = builder.root_region();
             let data = rb.const_val(42);
-            rb.write_to_field(data, 0, Width::W4);
+            let addr = rb.const_val(0);
+            rb.store_to_addr(addr, data, Width::W4);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
         let ir = linearize(&mut func);
 
-        // Expected: FuncStart, Const(42), WriteToField, FuncEnd
+        // Expected: FuncStart, Const(42), Const(0), StoreToAddr, FuncEnd
         assert!(matches!(ir.ops[0], LinearOp::FuncStart { .. }));
         assert!(matches!(ir.ops[1], LinearOp::Const { .. }));
+        assert!(matches!(ir.ops[2], LinearOp::Const { .. }));
         assert!(matches!(
-            ir.ops[2],
-            LinearOp::WriteToField {
-                offset: 0,
+            ir.ops[3],
+            LinearOp::StoreToAddr {
                 width: Width::W4,
                 ..
             }
         ));
-        assert!(matches!(ir.ops[3], LinearOp::FuncEnd));
-        assert_eq!(ir.ops.len(), 4);
+        assert!(matches!(ir.ops[4], LinearOp::FuncEnd));
+        assert_eq!(ir.ops.len(), 5);
     }
 
     #[test]
@@ -5031,7 +4935,8 @@ mod tests {
                 bb.set_results(&[val]);
             });
             assert_eq!(results.len(), 1);
-            rb.write_to_field(results[0], 0, Width::W4);
+            let addr = rb.const_val(0);
+            rb.store_to_addr(addr, results[0], Width::W4);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
@@ -5158,9 +5063,9 @@ mod tests {
             LinearOp::Const { dst: v0, value: 7 },
             LinearOp::Copy { dst: v1, src: v0 },
             LinearOp::Copy { dst: v2, src: v1 },
-            LinearOp::WriteToField {
+            LinearOp::StoreToAddr {
+                addr: v0,
                 src: v2,
-                offset: 0,
                 width: Width::W4,
             },
             LinearOp::FuncEnd,
@@ -5176,7 +5081,7 @@ mod tests {
             .count();
         assert_eq!(copy_count, 0, "dead copy chain should be eliminated");
         let write_src = ops.iter().find_map(|op| match op {
-            LinearOp::WriteToField { src, .. } => Some(*src),
+            LinearOp::StoreToAddr { src, .. } => Some(*src),
             _ => None,
         });
         assert_eq!(write_src, Some(v0), "store should use propagated source");
@@ -5227,9 +5132,9 @@ mod tests {
             LinearOp::Const { dst: v0, value: 7 },
             LinearOp::Copy { dst: v1, src: v0 },
             LinearOp::Copy { dst: v2, src: v1 },
-            LinearOp::WriteToField {
+            LinearOp::StoreToAddr {
+                addr: v0,
                 src: v2,
-                offset: 0,
                 width: Width::W4,
             },
             LinearOp::FuncEnd,
@@ -5243,8 +5148,8 @@ mod tests {
         assert_eq!(ops.len(), op_values.len(), "debug values must stay aligned");
         let write_index = ops
             .iter()
-            .position(|op| matches!(op, LinearOp::WriteToField { .. }))
-            .expect("optimized ops should still contain write");
+            .position(|op| matches!(op, LinearOp::StoreToAddr { .. }))
+            .expect("optimized ops should still contain store");
         assert_eq!(
             op_values[write_index],
             Some(debug_value),
@@ -5292,7 +5197,7 @@ lambda @0 (shape: "test") {
       }
     } -> [%ms]
     n13 = ReadFromSlot(0) [%ms:n14] -> [v8, %ms]
-    n15 = WriteToField(offset=0, W4) [v8, %ms:n13] -> [%ms]
+    n15 = StoreToAddr(W4) [v7, v8, %ms:n13] -> [%ms]
     results: [%ms:n15]
   }
 }
@@ -5341,7 +5246,7 @@ lambda @0 (shape: "test") {
         results: [v7, v6, v7, %ms:n8]
       }
     } -> [v8, v9, %ms]
-    n9 = WriteToField(offset=0, W4) [v8, %ms:n10] -> [%ms]
+    n9 = StoreToAddr(W4) [v8, v8, %ms:n10] -> [%ms]
     results: [%ms:n9]
   }
 }

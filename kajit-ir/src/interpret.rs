@@ -283,39 +283,6 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
         }
         IrOp::Nop => {}
 
-        // ─── Output ops ───
-        IrOp::WriteToField { offset, width } => {
-            let value = data_inputs[0];
-            let off = *offset as usize;
-            let w = width.bytes() as usize;
-            state.ensure_output(off, w);
-            let base = state.out_ptr + off;
-            let bytes = value.to_le_bytes();
-            state.output[base..base + w].copy_from_slice(&bytes[..w]);
-        }
-        IrOp::ReadFromField { offset, width } => {
-            let off = *offset as usize;
-            let w = width.bytes() as usize;
-            state.ensure_output(off, w);
-            let base = state.out_ptr + off;
-            let mut value = 0u64;
-            for i in 0..w {
-                value |= (state.output[base + i] as u64) << (i * 8);
-            }
-            env.set_output(node_id, 0, value);
-        }
-        IrOp::SaveOutPtr => {
-            // Return raw pointer to current output position.
-            let ptr = unsafe { state.output.as_ptr().add(state.out_ptr) } as u64;
-            env.set_output(node_id, 0, ptr);
-        }
-        IrOp::SetOutPtr => {
-            // Restore output pointer from raw pointer.
-            let ptr = data_inputs[0] as usize;
-            let base = state.output.as_ptr() as usize;
-            state.out_ptr = ptr.wrapping_sub(base);
-        }
-
         // ─── Slot ops ───
         IrOp::WriteToSlot { slot } => {
             let s = slot.index();

@@ -12,6 +12,8 @@ struct StructuralHirIrLowerer<'a> {
     module: &'a hir::Module,
     local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
+    /// Output base pointer — data_args[0], a real vreg.
+    out_ptr: crate::ir::PortSource,
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
@@ -253,6 +255,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
         rb: &mut RegionBuilder<'_>,
         module: &'a hir::Module,
         function: &'a hir::Function,
+        out_ptr: crate::ir::PortSource,
         data_arg_sources: &[crate::ir::PortSource],
     ) -> Self {
         let mut local_slots = std::collections::HashMap::new();
@@ -277,10 +280,21 @@ impl<'a> StructuralHirIrLowerer<'a> {
             module,
             local_slots,
             local_types,
+            out_ptr,
             _marker: std::marker::PhantomData,
         };
         lowerer.initialize_params(rb, function, data_arg_sources);
         lowerer
+    }
+
+    /// Compute the address `out_ptr + offset` for field access.
+    fn out_field_addr(&self, rb: &mut RegionBuilder<'_>, offset: usize) -> crate::ir::PortSource {
+        if offset == 0 {
+            self.out_ptr
+        } else {
+            let offset_val = rb.const_val(offset as u64);
+            rb.binop(crate::ir::IrOp::Add, self.out_ptr, offset_val)
+        }
     }
 
     fn initialize_params(
@@ -833,7 +847,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 match resolved {
                     ResolvedStructuralPlace::Destination { ty, offset } => {
                         let width = self.scalar_width_for_hir_type(ty);
-                        rb.write_to_field(scalar, offset as u32, width);
+                        let addr = self.out_field_addr(rb, offset);
+                        rb.store_to_addr(addr, scalar, width);
                     }
                     ResolvedStructuralPlace::Local {
                         ty,
@@ -861,8 +876,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     );
                     let data = self.lower_scalar_expr(rb, data, dest_local, dest_ty);
                     let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
-                    rb.write_to_field(data, offset as u32, crate::ir::Width::W8);
-                    rb.write_to_field(len, (offset + 8) as u32, crate::ir::Width::W8);
+                    let addr = self.out_field_addr(rb, offset);
+                    rb.store_to_addr(addr, data, crate::ir::Width::W8);
+                    let addr = self.out_field_addr(rb, offset + 8);
+                    rb.store_to_addr(addr, len, crate::ir::Width::W8);
                 }
                 ResolvedStructuralPlace::Local {
                     ty,
@@ -927,7 +944,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                                 .expect("variant must exist") as u64
                         });
                     let value = rb.const_val(disc);
-                    rb.write_to_field(value, offset as u32, disc_ir_width);
+                    let addr = self.out_field_addr(rb, offset);
+                    rb.store_to_addr(addr, value, disc_ir_width);
                     for hir_field in &hir_variant.fields {
                         let (_, expr) = fields
                             .iter()
@@ -997,7 +1015,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 match resolved {
                     ResolvedStructuralPlace::Destination { ty, offset } => {
                         let width = self.scalar_width_for_hir_type(ty);
-                        rb.write_to_field(scalar, offset as u32, width);
+                        let addr = self.out_field_addr(rb, offset);
+                        rb.store_to_addr(addr, scalar, width);
                     }
                     ResolvedStructuralPlace::Local {
                         ty,
@@ -1093,7 +1112,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Expr::Call(_) => {
                 let scalar = self.lower_scalar_expr(rb, expr, dest_local, dest_ty);
                 let width = self.scalar_width_for_hir_type(ty);
-                rb.write_to_field(scalar, offset as u32, width);
+                let addr = self.out_field_addr(rb, offset);
+                rb.store_to_addr(addr, scalar, width);
             }
             hir::Expr::Local(local) => self.copy_local_into_dest_offset(rb, *local, ty, offset),
             hir::Expr::Index { base, index } => {
@@ -1124,11 +1144,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             for slot_index in 0..slot_count {
                                 let slot = Self::slot_at(storage, slot_offset + slot_index);
                                 let value = rb.read_from_slot(slot);
-                                rb.write_to_field(
-                                    value,
-                                    (offset + slot_index * 8) as u32,
-                                    crate::ir::Width::W8,
-                                );
+                                let addr = self.out_field_addr(rb, offset + slot_index * 8);
+                                rb.store_to_addr(addr, value, crate::ir::Width::W8);
                             }
                         }
                         ResolvedStructuralPlace::Indirect {
@@ -1141,11 +1158,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                             for word_index in 0..full_words {
                                 let src_addr = self.add_byte_offset(rb, addr, word_index * 8);
                                 let value = rb.load_from_addr(src_addr, crate::ir::Width::W8);
-                                rb.write_to_field(
-                                    value,
-                                    (offset + word_index * 8) as u32,
-                                    crate::ir::Width::W8,
-                                );
+                                let dst_addr = self.out_field_addr(rb, offset + word_index * 8);
+                                rb.store_to_addr(dst_addr, value, crate::ir::Width::W8);
                             }
                             if remainder != 0 {
                                 let src_addr = self.add_byte_offset(rb, addr, full_words * 8);
@@ -1156,7 +1170,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                                     _ => panic!("unsupported indirect remainder width {remainder}"),
                                 };
                                 let value = rb.load_from_addr(src_addr, width);
-                                rb.write_to_field(value, (offset + full_words * 8) as u32, width);
+                                let dst_addr = self.out_field_addr(rb, offset + full_words * 8);
+                                rb.store_to_addr(dst_addr, value, width);
                             }
                         }
                     }
@@ -1169,12 +1184,14 @@ impl<'a> StructuralHirIrLowerer<'a> {
             hir::Expr::Literal(hir::Literal::Unit) => {}
             hir::Expr::Literal(hir::Literal::Bool(value)) => {
                 let value = rb.const_val(u64::from(*value));
-                rb.write_to_field(value, offset as u32, crate::ir::Width::W1);
+                let addr = self.out_field_addr(rb, offset);
+                rb.store_to_addr(addr, value, crate::ir::Width::W1);
             }
             hir::Expr::Literal(hir::Literal::Integer(value)) => {
                 let value = rb.const_val(*value);
                 let width = self.scalar_width_for_hir_type(ty);
-                rb.write_to_field(value, offset as u32, width);
+                let addr = self.out_field_addr(rb, offset);
+                rb.store_to_addr(addr, value, width);
             }
             hir::Expr::Str { data, len } => {
                 assert!(
@@ -1183,8 +1200,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 );
                 let data = self.lower_scalar_expr(rb, data, dest_local, dest_ty);
                 let len = self.lower_scalar_expr(rb, len, dest_local, dest_ty);
-                rb.write_to_field(data, offset as u32, crate::ir::Width::W8);
-                rb.write_to_field(len, (offset + 8) as u32, crate::ir::Width::W8);
+                let addr = self.out_field_addr(rb, offset);
+                rb.store_to_addr(addr, data, crate::ir::Width::W8);
+                let addr = self.out_field_addr(rb, offset + 8);
+                rb.store_to_addr(addr, len, crate::ir::Width::W8);
             }
             hir::Expr::Variant {
                 variant, fields, ..
@@ -1208,15 +1227,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
         let full_words = size / 8;
         let remainder = size % 8;
         for word_index in 0..full_words {
-            let value = rb.read_from_field(
-                (source_offset + word_index * 8) as u32,
-                crate::ir::Width::W8,
-            );
-            rb.write_to_field(
-                value,
-                (target_offset + word_index * 8) as u32,
-                crate::ir::Width::W8,
-            );
+            let src_addr = self.out_field_addr(rb, source_offset + word_index * 8);
+            let value = rb.load_from_addr(src_addr, crate::ir::Width::W8);
+            let dst_addr = self.out_field_addr(rb, target_offset + word_index * 8);
+            rb.store_to_addr(dst_addr, value, crate::ir::Width::W8);
         }
         if remainder != 0 {
             let width = match remainder {
@@ -1225,8 +1239,10 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 4 => crate::ir::Width::W4,
                 _ => panic!("unsupported indexed destination remainder width {remainder}"),
             };
-            let value = rb.read_from_field((source_offset + full_words * 8) as u32, width);
-            rb.write_to_field(value, (target_offset + full_words * 8) as u32, width);
+            let src_addr = self.out_field_addr(rb, source_offset + full_words * 8);
+            let value = rb.load_from_addr(src_addr, width);
+            let dst_addr = self.out_field_addr(rb, target_offset + full_words * 8);
+            rb.store_to_addr(dst_addr, value, width);
         }
     }
 
@@ -1242,7 +1258,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
         if self.is_simple_scalar_hir_type(ty) {
             let value = rb.read_from_slot(storage.base_slot);
             let width = self.scalar_width_for_hir_type(ty);
-            rb.write_to_field(value, offset as u32, width);
+            let addr = self.out_field_addr(rb, offset);
+            rb.store_to_addr(addr, value, width);
             return;
         }
 
@@ -1253,11 +1270,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
         for slot_index in 0..full_slots {
             let slot = crate::ir::SlotId::new(storage.base_slot.index() as u32 + slot_index as u32);
             let value = rb.read_from_slot(slot);
-            rb.write_to_field(
-                value,
-                (offset + slot_index * 8) as u32,
-                crate::ir::Width::W8,
-            );
+            let addr = self.out_field_addr(rb, offset + slot_index * 8);
+            rb.store_to_addr(addr, value, crate::ir::Width::W8);
         }
 
         if remainder != 0 {
@@ -1269,7 +1283,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 4 => crate::ir::Width::W4,
                 _ => panic!("unsupported remainder width {remainder}"),
             };
-            rb.write_to_field(value, (offset + full_slots * 8) as u32, width);
+            let addr = self.out_field_addr(rb, offset + full_slots * 8);
+            rb.store_to_addr(addr, value, width);
         }
     }
 
@@ -1320,7 +1335,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 match self.resolve_place(rb, &place, dest_local, dest_ty) {
                     ResolvedStructuralPlace::Destination { ty, offset } => {
                         let width = self.scalar_width_for_hir_type(ty);
-                        rb.read_from_field(offset as u32, width)
+                        let addr = self.out_field_addr(rb, offset);
+                        rb.load_from_addr(addr, width)
                     }
                     ResolvedStructuralPlace::Local {
                         ty,
@@ -1447,7 +1463,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     matches!(ty, hir::Type::Str { .. } | hir::Type::Slice { .. }),
                     "slice_data/slice_len require a slice-like destination, got {ty:?}"
                 );
-                rb.read_from_field((offset + word_index * 8) as u32, crate::ir::Width::W8)
+                let addr = self.out_field_addr(rb, offset + word_index * 8);
+                rb.load_from_addr(addr, crate::ir::Width::W8)
             }
             ResolvedStructuralPlace::Indirect { ty, addr } => {
                 assert!(
@@ -1530,8 +1547,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
 
         match self.resolve_place(rb, place, dest_local, dest_ty) {
             ResolvedStructuralPlace::Destination { offset, .. } => {
-                let base = rb.save_out_ptr();
-                self.add_byte_offset(rb, base, offset)
+                self.add_byte_offset(rb, self.out_ptr, offset)
             }
             ResolvedStructuralPlace::Local {
                 ty,
@@ -1614,11 +1630,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 for word_index in 0..full_words {
                     let src_addr = self.add_byte_offset(rb, addr, word_index * 8);
                     let value = rb.load_from_addr(src_addr, crate::ir::Width::W8);
-                    rb.write_to_field(
-                        value,
-                        (target_offset + word_index * 8) as u32,
-                        crate::ir::Width::W8,
-                    );
+                    let dst_addr = self.out_field_addr(rb, target_offset + word_index * 8);
+                    rb.store_to_addr(dst_addr, value, crate::ir::Width::W8);
                 }
                 if remainder != 0 {
                     let src_addr = self.add_byte_offset(rb, addr, full_words * 8);
@@ -1631,7 +1644,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         ),
                     };
                     let value = rb.load_from_addr(src_addr, width);
-                    rb.write_to_field(value, (target_offset + full_words * 8) as u32, width);
+                    let dst_addr = self.out_field_addr(rb, target_offset + full_words * 8);
+                    rb.store_to_addr(dst_addr, value, width);
                 }
             }
             ResolvedDynamicIndex::Local { ty, addr } => {
@@ -1643,11 +1657,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                         slot_index * crate::ir::SLOT_ADDR_STRIDE_BYTES,
                     );
                     let value = rb.load_from_addr(src_addr, crate::ir::Width::W8);
-                    rb.write_to_field(
-                        value,
-                        (target_offset + slot_index * 8) as u32,
-                        crate::ir::Width::W8,
-                    );
+                    let dst_addr = self.out_field_addr(rb, target_offset + slot_index * 8);
+                    rb.store_to_addr(dst_addr, value, crate::ir::Width::W8);
                 }
             }
         }
@@ -1670,7 +1681,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
                     );
                 };
                 let elem_size = self.hir_type_size(element);
-                let mut base_addr = rb.save_out_ptr();
+                let mut base_addr = self.out_ptr;
                 if offset != 0 {
                     let offset_val = rb.const_val(offset as u64);
                     base_addr = rb.binop(crate::ir::IrOp::Add, base_addr, offset_val);
@@ -2190,7 +2201,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
             .try_into()
             .expect("enum discriminant must fit in u64");
         let value = rb.const_val(disc);
-        rb.write_to_field(value, offset as u32, disc_ir_width);
+        let addr = self.out_field_addr(rb, offset);
+        rb.store_to_addr(addr, value, disc_ir_width);
         for hir_field in &hir_variant.fields {
             let (_, expr) = fields
                 .iter()
@@ -3048,17 +3060,19 @@ fn build_structural_hir_ir_impl(module: &hir::Module) -> crate::ir::IrFunc {
         .map(|param| StructuralHirIrLowerer::slot_count_for_type(module, &param.ty))
         .sum();
     // data_args layout: [output_ptr, ctx_ptr, ...hir_params...]
-    // output_ptr and ctx_ptr are implicit in the IR (used by WriteToField, CallIntrinsic)
-    // but explicit in the ABI so the calling convention is uniform.
+    // output_ptr is a real vreg used by Store/Load ops.
+    // ctx_ptr is a real vreg (used by CallIntrinsic — will become explicit in 011-3).
     let total_data_args = 2 + param_word_count;
     let (mut builder, data_arg_sources) =
         crate::ir::IrBuilder::new_with_data_args(label, output_size, total_data_args);
-    // Skip data_arg_sources[0] (output_ptr) and [1] (ctx_ptr) — they're ABI placeholders.
-    let data_arg_sources = data_arg_sources[2..].to_vec();
+    let out_ptr = data_arg_sources[0];
+    // ctx_ptr = data_arg_sources[1] — not yet used explicitly (011-3)
+    let hir_param_sources = data_arg_sources[2..].to_vec();
     // Memory domain is now builtin — no need to add it explicitly.
     {
         let mut rb = builder.root_region();
-        let lowerer = StructuralHirIrLowerer::new(&mut rb, module, function, &data_arg_sources);
+        let lowerer =
+            StructuralHirIrLowerer::new(&mut rb, module, function, out_ptr, &hir_param_sources);
         lowerer.lower_block(&mut rb, &function.body.statements, dest_local, dest_ty);
         rb.set_results(&[]);
     }

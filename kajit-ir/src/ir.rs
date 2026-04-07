@@ -587,24 +587,6 @@ pub enum NodeKind {
 /// `Inputs: [port_kind, ...] Outputs: [port_kind, ...]`
 #[derive(Debug, Clone)]
 pub enum IrOp {
-    // ── Output ops ──────────────────────────────────────────────────
-    // r[impl ir.ops.output]
-    /// Write src to out+offset.
-    /// Inputs: [Data, StateOutput]. Outputs: [StateOutput].
-    WriteToField { offset: u32, width: Width },
-
-    /// Read from out+offset.
-    /// Inputs: [StateOutput]. Outputs: [Data, StateOutput].
-    ReadFromField { offset: u32, width: Width },
-
-    /// Save the current output pointer (`out` base) as a data value.
-    /// Inputs: [StateOutput]. Outputs: [Data, StateOutput].
-    SaveOutPtr,
-
-    /// Set the current output pointer (`out` base) from a data value.
-    /// Inputs: [Data, StateOutput]. Outputs: [StateOutput].
-    SetOutPtr,
-
     // ── Stack ops ───────────────────────────────────────────────────
     // r[impl ir.ops.stack]
     /// Compute the address of a stack slot (`sp + slot_offset`).
@@ -719,7 +701,6 @@ pub enum IrOp {
         func: IntrinsicFn,
         arg_count: u8,
         has_result: bool,
-        field_offset: u32,
     },
 
     /// Call a pure function (no side effects).
@@ -809,11 +790,7 @@ impl IrOp {
             | IrOp::ReadFromSlot { .. }
             | IrOp::ErrorExit { .. }
             | IrOp::StoreToAddr { .. }
-            | IrOp::LoadFromAddr { .. }
-            | IrOp::WriteToField { .. }
-            | IrOp::ReadFromField { .. }
-            | IrOp::SaveOutPtr
-            | IrOp::SetOutPtr => Effect::SideEffect,
+            | IrOp::LoadFromAddr { .. } => Effect::SideEffect,
 
             // Barrier ops
             IrOp::CallIntrinsic { .. } => Effect::Barrier,
@@ -1482,88 +1459,6 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
-    // ── Output operations (auto-threaded) ───────────────────────────
-
-    /// Write a value to out+offset.
-    pub fn write_to_field(&mut self, src: PortSource, offset: u32, width: Width) {
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![
-                InputPort {
-                    kind: PortKind::Data,
-                    source: src,
-                },
-                InputPort {
-                    kind: PortKind::State,
-                    source: self.state_source,
-                },
-            ],
-            outputs: vec![Self::state_output(self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::WriteToField { offset, width }),
-        });
-        self.set_state_source(PortSource::Node(OutputRef { node, index: 0 }));
-    }
-
-    /// Read from out+offset. Returns data output.
-    pub fn read_from_field(&mut self, offset: u32, width: Width) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: PortKind::State,
-                source: self.state_source,
-            }],
-            outputs: vec![data_out, Self::state_output(self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::ReadFromField { offset, width }),
-        });
-        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Save the current output pointer (`out` base). Returns data output.
-    pub fn save_out_ptr(&mut self) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: PortKind::State,
-                source: self.state_source,
-            }],
-            outputs: vec![data_out, Self::state_output(self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::SaveOutPtr),
-        });
-        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Set the current output pointer (`out` base).
-    pub fn set_out_ptr(&mut self, ptr: PortSource) {
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![
-                InputPort {
-                    kind: PortKind::Data,
-                    source: ptr,
-                },
-                InputPort {
-                    kind: PortKind::State,
-                    source: self.state_source,
-                },
-            ],
-            outputs: vec![Self::state_output(self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::SetOutPtr),
-        });
-        self.set_state_source(PortSource::Node(OutputRef { node, index: 0 }));
-    }
-
     /// Compute the address of a stack slot (`sp + slot_offset`).
     /// `num_slots` is the number of consecutive 8-byte slots that may be accessed
     /// through the returned pointer (used to prevent slot_to_reg promotion).
@@ -1678,7 +1573,6 @@ impl<'a> RegionBuilder<'a> {
         &mut self,
         func: IntrinsicFn,
         args: &[PortSource],
-        field_offset: u32,
         has_result: bool,
     ) -> Option<PortSource> {
         let mut inputs: Vec<InputPort> = args
@@ -1707,7 +1601,6 @@ impl<'a> RegionBuilder<'a> {
                 func,
                 arg_count: args.len() as u8,
                 has_result,
-                field_offset,
             }),
         });
 
@@ -2397,14 +2290,6 @@ impl IrFunc {
         registry: Option<&IntrinsicRegistry>,
     ) -> fmt::Result {
         match op {
-            IrOp::WriteToField { offset, width } => {
-                write!(f, "WriteToField(offset={offset}, {width})")
-            }
-            IrOp::ReadFromField { offset, width } => {
-                write!(f, "ReadFromField(offset={offset}, {width})")
-            }
-            IrOp::SaveOutPtr => write!(f, "SaveOutPtr"),
-            IrOp::SetOutPtr => write!(f, "SetOutPtr"),
             IrOp::SlotAddr { slot, num_slots } => {
                 write!(f, "SlotAddr({}, n={})", slot.index(), num_slots)
             }
@@ -2438,12 +2323,10 @@ impl IrFunc {
             IrOp::CmpGe => write!(f, "CmpGe"),
             IrOp::ZigzagDecode { wide } => write!(f, "ZigzagDecode(wide={wide})"),
             IrOp::SignExtend { from_width } => write!(f, "SignExtend(from={from_width})"),
-            IrOp::CallIntrinsic {
-                func, field_offset, ..
-            } => {
+            IrOp::CallIntrinsic { func, .. } => {
                 write!(f, "CallIntrinsic(")?;
                 Self::fmt_intrinsic(f, *func, registry)?;
-                write!(f, ", field_offset={field_offset})")
+                write!(f, ")")
             }
             IrOp::CallPure { func, .. } => {
                 write!(f, "CallPure(")?;
@@ -2687,28 +2570,10 @@ mod tests {
         );
 
         assert_eq!(
-            IrOp::WriteToField {
-                offset: 0,
-                width: Width::W4
-            }
-            .effect(),
-            Effect::SideEffect
-        );
-        assert_eq!(
-            IrOp::ReadFromField {
-                offset: 0,
-                width: Width::W4
-            }
-            .effect(),
-            Effect::SideEffect
-        );
-
-        assert_eq!(
             IrOp::CallIntrinsic {
                 func: IntrinsicFn(0),
                 arg_count: 0,
                 has_result: false,
-                field_offset: 0,
             }
             .effect(),
             Effect::Barrier
@@ -2742,18 +2607,10 @@ mod tests {
             .has_side_effects()
         );
         assert!(
-            IrOp::WriteToField {
-                offset: 0,
-                width: Width::W4
-            }
-            .has_side_effects()
-        );
-        assert!(
             IrOp::CallIntrinsic {
                 func: IntrinsicFn(0),
                 arg_count: 0,
                 has_result: false,
-                field_offset: 0,
             }
             .has_side_effects()
         );
@@ -2775,12 +2632,14 @@ mod tests {
             let _results = rb.gamma(tag, &[], 2, |branch_idx, branch| match branch_idx {
                 0 => {
                     let val = branch.const_val(4);
-                    branch.write_to_field(val, 0, Width::W4);
+                    let addr = branch.const_val(0);
+                    branch.store_to_addr(addr, val, Width::W4);
                     branch.set_results(&[]);
                 }
                 1 => {
                     let val = branch.const_val(8);
-                    branch.write_to_field(val, 0, Width::W8);
+                    let addr = branch.const_val(0);
+                    branch.store_to_addr(addr, val, Width::W8);
                     branch.set_results(&[]);
                 }
                 _ => unreachable!(),
@@ -2800,9 +2659,9 @@ mod tests {
         match &gamma.kind {
             NodeKind::Gamma { regions } => {
                 assert_eq!(regions.len(), 2);
-                // Each branch has 2 nodes: const, write_to_field.
-                assert_eq!(func.regions[regions[0]].nodes.len(), 2);
-                assert_eq!(func.regions[regions[1]].nodes.len(), 2);
+                // Each branch has 3 nodes: const, const(addr), store_to_addr.
+                assert_eq!(func.regions[regions[0]].nodes.len(), 3);
+                assert_eq!(func.regions[regions[1]].nodes.len(), 3);
                 // Each branch has 1 result (memory state).
                 assert_eq!(func.regions[regions[0]].results.len(), 1);
                 assert_eq!(func.regions[regions[1]].results.len(), 1);
@@ -2933,7 +2792,8 @@ mod tests {
         {
             let mut rb = builder.root_region();
             let val = rb.const_val(42);
-            rb.write_to_field(val, 0, Width::W4);
+            let addr = rb.const_val(0);
+            rb.store_to_addr(addr, val, Width::W4);
             rb.set_results(&[]);
         }
 
@@ -2943,10 +2803,7 @@ mod tests {
         // Verify the output contains expected fragments.
         assert!(output.contains("lambda @0"), "missing lambda header");
         assert!(output.contains("Const("), "missing Const");
-        assert!(
-            output.contains("WriteToField(offset=0, W4)"),
-            "missing WriteToField"
-        );
+        assert!(output.contains("StoreToAddr(W4)"), "missing StoreToAddr");
         assert!(output.contains("results:"), "missing results");
     }
 }

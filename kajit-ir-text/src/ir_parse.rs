@@ -316,33 +316,6 @@ enum ConstRef {
 
 /// Parse an IrOp (the operation name with parameters).
 fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
-    let output_ops = choice((
-        just("WriteToField(offset=")
-            .ignore_then(uint32())
-            .then_ignore(just(",").then(ws()))
-            .then(width())
-            .then_ignore(just(")"))
-            .map(|(o, w)| {
-                AstOp::Resolved(IrOp::WriteToField {
-                    offset: o,
-                    width: w,
-                })
-            }),
-        just("ReadFromField(offset=")
-            .ignore_then(uint32())
-            .then_ignore(just(",").then(ws()))
-            .then(width())
-            .then_ignore(just(")"))
-            .map(|(o, w)| {
-                AstOp::Resolved(IrOp::ReadFromField {
-                    offset: o,
-                    width: w,
-                })
-            }),
-        just("SaveOutPtr").to(AstOp::Resolved(IrOp::SaveOutPtr)),
-        just("SetOutPtr").to(AstOp::Resolved(IrOp::SetOutPtr)),
-    ));
-
     let stack_ops = choice((
         just("SlotAddr(")
             .ignore_then(uint32())
@@ -418,13 +391,8 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
     let call_ops = choice((
         just("CallIntrinsic(")
             .ignore_then(intrinsic_ref())
-            .then_ignore(just(",").then(ws()).then(just("field_offset=")))
-            .then(uint32())
             .then_ignore(just(")"))
-            .map(|(func, fo)| AstOp::CallIntrinsic {
-                func,
-                field_offset: fo,
-            }),
+            .map(|func| AstOp::CallIntrinsic { func }),
         just("CallPure(")
             .ignore_then(intrinsic_ref())
             .then_ignore(just(")"))
@@ -439,7 +407,7 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .map(|c| AstOp::Resolved(IrOp::ErrorExit { code: c })),
     ));
 
-    choice((output_ops, stack_ops, arith_ops, call_ops))
+    choice((stack_ops, arith_ops, call_ops))
 }
 
 /// AST op — some ops are fully resolved, some need intrinsic lookup.
@@ -447,16 +415,9 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
 enum AstOp {
     Resolved(IrOp),
     Const(ConstRef),
-    CallIntrinsic {
-        func: IntrinsicRef,
-        field_offset: u32,
-    },
-    CallPure {
-        func: IntrinsicRef,
-    },
-    CallEffect {
-        func: IntrinsicRef,
-    },
+    CallIntrinsic { func: IntrinsicRef },
+    CallPure { func: IntrinsicRef },
+    CallEffect { func: IntrinsicRef },
 }
 
 /// Parse a region arg: `%ms`, `%ms`, `arg0`, `arg1`, etc.
@@ -1026,11 +987,7 @@ fn resolve_node(
 
             // Patch CallIntrinsic/CallPure arg_count and has_result from actual ports.
             let resolved_op = match resolved_op {
-                IrOp::CallIntrinsic {
-                    func: f,
-                    field_offset,
-                    ..
-                } => {
+                IrOp::CallIntrinsic { func: f, .. } => {
                     let data_inputs = resolved_inputs
                         .iter()
                         .filter(|i| i.kind == PortKind::Data)
@@ -1040,7 +997,6 @@ fn resolve_node(
                         func: f,
                         arg_count: data_inputs as u8,
                         has_result,
-                        field_offset,
                     }
                 }
                 IrOp::CallPure { func: f, .. } => {
@@ -1424,17 +1380,12 @@ fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseErr
         AstOp::Const(value) => Ok(IrOp::Const {
             value: resolve_const(value, registry)?,
         }),
-        AstOp::CallIntrinsic { func, field_offset } => {
+        AstOp::CallIntrinsic { func } => {
             let intrinsic = resolve_intrinsic(func, registry)?;
-            // Count args from the inputs (they'll be resolved separately).
-            // For now, arg_count and has_result are inferred from the node's
-            // input/output ports during resolve_node. But IrOp needs them.
-            // We'll set them to 0/false here and patch them in resolve_node.
             Ok(IrOp::CallIntrinsic {
                 func: intrinsic,
                 arg_count: 0,      // patched later from actual inputs
                 has_result: false, // patched later from actual outputs
-                field_offset: *field_offset,
             })
         }
         AstOp::CallPure { func } => {
@@ -1489,8 +1440,9 @@ lambda @0 (shape: "u8") {
   region {
     args: [%ms]
     n0 = Const(0x2a) [] -> [v0]
-    n1 = WriteToField(offset=0, W4) [v0, %ms:arg] -> [%ms]
-    results: [%ms:n1]
+    n1 = Const(0x0) [] -> [v1]
+    n2 = StoreToAddr(W4) [v1, v0, %ms:arg] -> [%ms]
+    results: [%ms:n2]
   }
 }
 "#;
@@ -1504,7 +1456,7 @@ lambda @0 (shape: "u8") {
         let root_body = func.root_body();
         let region = &func.regions[root_body];
         assert_eq!(region.args.len(), 1); // %ms
-        assert_eq!(region.nodes.len(), 2); // Const, WriteToField
+        assert_eq!(region.nodes.len(), 3); // Const, Const, StoreToAddr
         assert_eq!(region.results.len(), 1);
     }
 
@@ -1517,7 +1469,7 @@ lambda @0 (shape: "u8") {
     n0 = Const(0x2a) [] -> [v0]
     n1 = Const(0x10) [] -> [v1]
     n2 = Add [v0, v1] -> [v2]
-    n3 = WriteToField(offset=0, W8) [v2, %ms:arg] -> [%ms]
+    n3 = StoreToAddr(W8) [v0, v2, %ms:arg] -> [%ms]
     results: [%ms:n3]
   }
 }
@@ -1562,8 +1514,9 @@ lambda @0 (shape: "u8") {
           results: [v2, %ms:arg]
         }
     } -> [v3, %ms]
-    n4 = WriteToField(offset=0, W4) [v3, %ms:n1] -> [%ms]
-    results: [%ms:n4]
+    n4 = Const(0x0) [] -> [v4]
+    n5 = StoreToAddr(W4) [v4, v3, %ms:n1] -> [%ms]
+    results: [%ms:n5]
   }
 }
 "#;
@@ -1573,7 +1526,7 @@ lambda @0 (shape: "u8") {
 
         let root_body = func.root_body();
         let region = &func.regions[root_body];
-        assert_eq!(region.nodes.len(), 3); // Const, gamma, WriteToField
+        assert_eq!(region.nodes.len(), 4); // Const, gamma, Const, StoreToAddr
 
         let gamma_node = &func.nodes[region.nodes[1]];
         match &gamma_node.kind {
@@ -1673,7 +1626,7 @@ lambda @0 (shape: "u8") {
 lambda @0 (shape: "u8") {
   region {
     args: [%ms]
-    n0 = CallIntrinsic(@nonexistent, field_offset=0) [%ms:arg] -> [%ms]
+    n0 = CallIntrinsic(@nonexistent) [%ms:arg] -> [%ms]
     results: [%ms:n0]
   }
 }

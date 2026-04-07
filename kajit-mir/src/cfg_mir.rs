@@ -900,21 +900,15 @@ fn fmt_cfg_op_name(
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::Copy { .. } => write!(f, "copy"),
-        LinearOp::WriteToField { offset, width, .. } => write!(f, "store([{offset}:{width}])"),
-        LinearOp::ReadFromField { offset, width, .. } => write!(f, "load([{offset}:{width}])"),
-        LinearOp::SaveOutPtr { .. } => write!(f, "save_out_ptr"),
-        LinearOp::SetOutPtr { .. } => write!(f, "set_out_ptr"),
         LinearOp::SlotAddr { slot, .. } => write!(f, "slot_addr({})", slot.index()),
         LinearOp::StoreToAddr { width, .. } => write!(f, "store_addr([{width}])"),
         LinearOp::LoadFromAddr { width, .. } => write!(f, "load_addr([{width}])"),
         LinearOp::WriteToSlot { slot, .. } => write!(f, "write_slot({})", slot.index()),
         LinearOp::ReadFromSlot { slot, .. } => write!(f, "read_slot({})", slot.index()),
-        LinearOp::CallIntrinsic {
-            func, field_offset, ..
-        } => {
+        LinearOp::CallIntrinsic { func, .. } => {
             write!(f, "call_intrinsic(")?;
             fmt_intrinsic(f, *func, registry)?;
-            write!(f, ", fo={field_offset})")
+            write!(f, ")")
         }
         LinearOp::CallPure { func, .. } => {
             write!(f, "call_pure(")?;
@@ -940,8 +934,6 @@ fn linearop_dst(op: &LinearOp) -> Option<VReg> {
         | LinearOp::BinOp { dst, .. }
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
-        | LinearOp::ReadFromField { dst, .. }
-        | LinearOp::SaveOutPtr { dst }
         | LinearOp::SlotAddr { dst, .. }
         | LinearOp::LoadFromAddr { dst, .. }
         | LinearOp::ReadFromSlot { dst, .. }
@@ -958,8 +950,6 @@ fn linearop_uses(op: &LinearOp) -> Vec<VReg> {
         LinearOp::BinOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         LinearOp::UnaryOp { src, .. }
         | LinearOp::Copy { src, .. }
-        | LinearOp::WriteToField { src, .. }
-        | LinearOp::SetOutPtr { src }
         | LinearOp::WriteToSlot { src, .. } => vec![*src],
         LinearOp::StoreToAddr { addr, src, .. } => vec![*addr, *src],
         LinearOp::LoadFromAddr { addr, .. } => vec![*addr],
@@ -1296,8 +1286,6 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
     match &op {
         LinearOp::Const { dst, .. }
         | LinearOp::DataAddr { dst, .. }
-        | LinearOp::ReadFromField { dst, .. }
-        | LinearOp::SaveOutPtr { dst }
         | LinearOp::SlotAddr { dst, .. }
         | LinearOp::ReadFromSlot { dst, .. } => {
             push_def(&mut operands, *dst, None);
@@ -1333,9 +1321,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
             push_use(&mut operands, *src, None);
             push_def(&mut operands, *dst, None);
         }
-        LinearOp::WriteToField { src, .. }
-        | LinearOp::SetOutPtr { src }
-        | LinearOp::WriteToSlot { src, .. } => {
+        LinearOp::WriteToSlot { src, .. } => {
             push_use(&mut operands, *src, None);
         }
         LinearOp::StoreToAddr { addr, src, .. } => {
@@ -1343,10 +1329,10 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
             push_use(&mut operands, *src, None);
         }
         LinearOp::CallIntrinsic { args, dst, .. } => {
-            // Args are uses (kept alive until call). The backend handles ABI
-            // marshalling with a parallel move solver to avoid clobbering.
-            for &arg in args {
-                push_use(&mut operands, arg, None);
+            // Args now include ctx_ptr as first arg and out_addr as last arg
+            // (when needed). Map them to ABI arg registers directly.
+            for (i, &arg) in args.iter().enumerate() {
+                push_use(&mut operands, arg, Some(FixedReg::AbiArg(i as u8)));
             }
             if let Some(dst) = dst {
                 push_def(&mut operands, *dst, Some(FixedReg::AbiRet(0)));
@@ -2725,18 +2711,12 @@ fn global_copy_propagation(func: &mut Function) {
                 LinearOp::WriteToSlot { src, .. } => {
                     changed |= rewrite_use(src);
                 }
-                LinearOp::WriteToField { src, .. } => {
-                    changed |= rewrite_use(src);
-                }
                 LinearOp::StoreToAddr { addr, src, .. } => {
                     changed |= rewrite_use(addr);
                     changed |= rewrite_use(src);
                 }
                 LinearOp::LoadFromAddr { addr, .. } => {
                     changed |= rewrite_use(addr);
-                }
-                LinearOp::SetOutPtr { src } => {
-                    changed |= rewrite_use(src);
                 }
                 LinearOp::BranchIf { cond, .. } | LinearOp::BranchIfZero { cond, .. } => {
                     changed |= rewrite_use(cond);
