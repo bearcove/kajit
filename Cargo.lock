@@ -1424,6 +1424,7 @@ dependencies = [
  "chumsky",
  "kajit-hir",
  "kajit-parse-util",
+ "kajit-types",
 ]
 
 [[package]]

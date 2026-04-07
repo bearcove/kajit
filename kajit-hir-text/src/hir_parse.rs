@@ -598,12 +598,28 @@ fn expr<'src>() -> impl Parser<'src, &'src str, Expr, Extra<'src>> + Clone {
     recursive(|expr| {
         let local = local_id().map(Expr::Local);
 
+        let extern_addr = just('@')
+            .ignore_then(
+                any()
+                    .filter(|c: &char| c.is_alphanumeric() || *c == '_' || *c == '.')
+                    .repeated()
+                    .at_least(1)
+                    .collect::<String>(),
+            )
+            .padded_by(ws())
+            .map(|name| {
+                Expr::Literal(Literal::ExternAddr {
+                    symbol: kajit_types::SymbolName::new(name),
+                })
+            });
+
         let literal = choice((
             token("()").to(Expr::Literal(Literal::Unit)),
             token("true").to(Expr::Literal(Literal::Bool(true))),
             token("false").to(Expr::Literal(Literal::Bool(false))),
             uint64().map(|value| Expr::Literal(Literal::Integer(value))),
             quoted_string().map(|value| Expr::Literal(Literal::String(value))),
+            extern_addr,
         ));
 
         let call = token("call")
@@ -1974,5 +1990,39 @@ hir_module {
         let text = lowered.to_string();
         let reparsed = parse_hir(&text).expect("HIR text should parse");
         assert_eq!(reparsed, lowered);
+    }
+
+    #[test]
+    fn round_trips_extern_addr_literal() {
+        let mut module = Module::new();
+        module.add_function(Function {
+            name: "use_extern".to_owned(),
+            region_params: vec![],
+            store_params: vec![],
+            params: vec![],
+            locals: vec![],
+            return_type: Type::u(64),
+            scopes: vec![Scope {
+                id: ScopeId::new(0),
+                parent: None,
+                comment: None,
+            }],
+            body: Block {
+                scope: ScopeId::new(0),
+                statements: vec![Stmt {
+                    id: StmtId::new(0),
+                    kind: StmtKind::Return(Some(Expr::Literal(Literal::ExternAddr {
+                        symbol: kajit_types::SymbolName::new("postcard.option_init_some"),
+                    }))),
+                }],
+            },
+        });
+        let text = module.to_string();
+        assert!(
+            text.contains("@postcard.option_init_some"),
+            "display should use @ syntax: {text}"
+        );
+        let reparsed = parse_hir(&text).expect("round-tripped ExternAddr should parse");
+        assert_eq!(reparsed, module);
     }
 }
