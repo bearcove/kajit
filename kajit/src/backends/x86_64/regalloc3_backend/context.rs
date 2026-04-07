@@ -6,10 +6,10 @@ use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
 use std::collections::HashMap;
 
-use crate::arch::EmitCtx;
+use crate::arch::x64::EmitCtx;
 use crate::harness::VRegLocation;
 
-use super::{DataRelocInfo, IntrinsicCallSiteInfo};
+use crate::ir_backend::{DataRelocInfo, IntrinsicCallSiteInfo};
 
 /// Context for emitting a single function.
 pub(super) struct EmitContext<'a> {

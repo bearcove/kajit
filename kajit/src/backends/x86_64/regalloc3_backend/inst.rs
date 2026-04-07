@@ -60,7 +60,7 @@ impl<'a> EmitContext<'a> {
                 let code_offset = self.ectx.emit.code_len();
                 let dest_enc = self.dst_enc_or_temp(*dst, R10);
                 self.emit_load_u64_fixed(dest_enc, 0);
-                self.data_relocs.push(super::DataRelocInfo {
+                self.data_relocs.push(crate::ir_backend::DataRelocInfo {
                     code_offset,
                     blob_id: *blob_id,
                 });

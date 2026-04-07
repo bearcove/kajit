@@ -12,27 +12,13 @@ use kajit_mir::cfg_mir;
 use kajit_mir::regalloc3_result::AllocatedCfgProgramRa3;
 use std::collections::HashMap;
 
-use crate::arch::EmitCtx;
+use crate::arch::x64::EmitCtx;
 use crate::harness::{
     AllocationMap, LocationMap, compute_edge_source_locations, compute_inst_source_locations,
 };
-use crate::ir_backend::LinearBackendResult;
+use crate::ir_backend::{BackendBuf, LinearBackendResult};
 
 use context::{EmitContext, emit_parallel_reg_moves};
-
-/// Recorded intrinsic call site for harness relocation.
-#[derive(Debug, Clone)]
-pub struct IntrinsicCallSiteInfo {
-    pub code_offset: usize,
-    pub func: kajit_ir::IntrinsicFn,
-}
-
-/// Recorded data blob address site for relocation.
-#[derive(Debug, Clone)]
-pub struct DataRelocInfo {
-    pub code_offset: usize,
-    pub blob_id: u32,
-}
 
 /// Compute the base frame offset for spill slots (past callee-saved register save area).
 pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
@@ -49,9 +35,9 @@ pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
         })
     });
     let base = if is_leaf {
-        crate::arch::LEAF_BASE_FRAME
+        crate::arch::x64::LEAF_BASE_FRAME
     } else {
-        crate::arch::BASE_FRAME
+        crate::arch::x64::BASE_FRAME
     };
     base + extra_saved_pairs * 16
 }
@@ -63,7 +49,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
 pub fn compile_regalloc3_with_root_data_abi(
     alloc: &AllocatedCfgProgramRa3,
-    root_data_abi: crate::compiler::RootDecoderDataAbi,
+    _root_data_abi: crate::compiler::RootDecoderDataAbi,
 ) -> LinearBackendResult {
     let program = &alloc.cfg_program;
 
@@ -113,9 +99,9 @@ pub fn compile_regalloc3_with_root_data_abi(
         .unwrap_or(0);
 
     let base_frame = if is_leaf {
-        crate::arch::LEAF_BASE_FRAME
+        crate::arch::x64::LEAF_BASE_FRAME
     } else {
-        crate::arch::BASE_FRAME
+        crate::arch::x64::BASE_FRAME
     } + extra_saved_pairs * 16;
 
     let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32;
@@ -284,7 +270,7 @@ pub fn compile_regalloc3_with_root_data_abi(
 
     let source_map = buf.source_map.clone();
     LinearBackendResult {
-        buf,
+        buf: BackendBuf::X86_64(buf),
         entry,
         source_map: if source_map.is_empty() {
             None
@@ -292,6 +278,7 @@ pub fn compile_regalloc3_with_root_data_abi(
             Some(source_map)
         },
         backend_debug_info: None,
+        asm_program: None,
         intrinsic_call_sites,
         data_relocs,
     }

@@ -19,25 +19,59 @@ pub struct BackendDebugInfo {
     pub op_infos: Vec<BackendOpDebugInfo>,
 }
 
-#[cfg(target_arch = "x86_64")]
-pub struct LinearBackendResult {
-    pub buf: kajit_emit::x64::FinalizedEmission,
-    pub entry: u32,
-    pub source_map: Option<kajit_emit::SourceMap>,
-    pub backend_debug_info: Option<BackendDebugInfo>,
-    pub intrinsic_call_sites:
-        Vec<crate::backends::x86_64::regalloc3_backend::IntrinsicCallSiteInfo>,
-    pub data_relocs: Vec<crate::backends::x86_64::regalloc3_backend::DataRelocInfo>,
+/// Recorded intrinsic call site for harness relocation.
+#[derive(Debug, Clone)]
+pub struct IntrinsicCallSiteInfo {
+    pub code_offset: usize,
+    pub func: kajit_ir::IntrinsicFn,
 }
 
-#[cfg(target_arch = "aarch64")]
+/// Recorded data blob address site for relocation.
+#[derive(Debug, Clone)]
+pub struct DataRelocInfo {
+    pub code_offset: usize,
+    pub blob_id: u32,
+}
+
 pub struct LinearBackendResult {
-    pub buf: kajit_emit::aarch64::FinalizedEmission,
+    pub buf: BackendBuf,
     pub entry: u32,
     pub source_map: Option<kajit_emit::SourceMap>,
     pub backend_debug_info: Option<BackendDebugInfo>,
     pub asm_program: Option<kajit_emit::aarch64_asm::Program>,
-    pub intrinsic_call_sites:
-        Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
-    pub data_relocs: Vec<crate::backends::aarch64::regalloc3_backend::DataRelocInfo>,
+    pub intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
+    pub data_relocs: Vec<DataRelocInfo>,
+}
+
+/// Architecture-specific finalized code buffer.
+pub enum BackendBuf {
+    X86_64(kajit_emit::x64::FinalizedEmission),
+    Aarch64(kajit_emit::aarch64::FinalizedEmission),
+}
+
+impl BackendBuf {
+    pub fn code(&self) -> &[u8] {
+        match self {
+            BackendBuf::X86_64(buf) => buf.exec.as_ref(),
+            BackendBuf::Aarch64(buf) => &buf.code,
+        }
+    }
+
+    pub fn code_ptr(&self) -> *const u8 {
+        match self {
+            BackendBuf::X86_64(buf) => buf.exec.as_ptr(),
+            BackendBuf::Aarch64(buf) => buf.code_ptr(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.code().len()
+    }
+
+    pub fn source_map(&self) -> &kajit_emit::SourceMap {
+        match self {
+            BackendBuf::X86_64(buf) => &buf.source_map,
+            BackendBuf::Aarch64(buf) => &buf.source_map,
+        }
+    }
 }

@@ -4,8 +4,8 @@ use kajit_emit::x64::{self, Mem};
 
 use crate::context::CTX_ERROR_CODE;
 
-use super::IntrinsicCallSiteInfo;
 use super::context::EmitContext;
+use crate::ir_backend::IntrinsicCallSiteInfo;
 
 const R10: u8 = 10;
 const RAX: u8 = 0;

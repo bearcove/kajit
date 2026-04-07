@@ -5,32 +5,14 @@ use kajit_mir::cfg_mir::{self, Function, Inst, Terminator};
 use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::{AllocatedCfgFunctionRa3, AllocatedCfgProgramRa3};
 
-use crate::arch::EmitCtx;
+use crate::arch::aarch64::EmitCtx;
 use crate::harness::{
     AllocationMap, LocationMap, VRegLocation, compute_edge_source_locations,
     compute_inst_source_locations,
 };
-use crate::ir_backend::LinearBackendResult;
+use crate::ir_backend::{BackendBuf, DataRelocInfo, IntrinsicCallSiteInfo, LinearBackendResult};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use std::collections::HashMap;
-
-/// Recorded intrinsic call site for harness relocation.
-#[derive(Debug, Clone)]
-pub struct IntrinsicCallSiteInfo {
-    /// Offset in the code buffer of the first `movz` instruction.
-    pub code_offset: usize,
-    /// The intrinsic function pointer (for looking up the symbol name).
-    pub func: kajit_ir::IntrinsicFn,
-}
-
-/// Recorded data blob address site for relocation.
-#[derive(Debug, Clone)]
-pub struct DataRelocInfo {
-    /// Offset in the code buffer of the first `movz` instruction (4-instruction fixed sequence).
-    pub code_offset: usize,
-    /// Index into data_blobs.
-    pub blob_id: u32,
-}
 
 /// Physical location for edge move resolution.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -2093,9 +2075,9 @@ pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
         })
     });
     let base = if is_leaf {
-        crate::arch::LEAF_BASE_FRAME
+        crate::arch::aarch64::LEAF_BASE_FRAME
     } else {
-        crate::arch::BASE_FRAME
+        crate::arch::aarch64::BASE_FRAME
     };
     base + extra_saved_pairs * 16
 }
@@ -2178,7 +2160,7 @@ pub fn compile_regalloc3_with_root_data_abi(
         true
     };
 
-    let prologue_config = crate::arch::PrologueConfig {
+    let prologue_config = crate::arch::aarch64::PrologueConfig {
         save_x21_x22: !is_leaf,
         save_x19_x20: need_save_x19_x20,
     };
@@ -2544,7 +2526,7 @@ pub fn compile_regalloc3_with_root_data_abi(
 
     let source_map = buf.source_map.clone();
     LinearBackendResult {
-        buf,
+        buf: BackendBuf::Aarch64(buf),
         entry,
         source_map: if source_map.is_empty() {
             None

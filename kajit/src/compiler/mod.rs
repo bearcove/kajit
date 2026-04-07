@@ -23,17 +23,13 @@ pub(crate) use kajit_postcard::{build_postcard_decoder_hir, supports_postcard_de
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
 pub struct CompiledDecoder {
-    #[cfg(target_arch = "x86_64")]
-    buf: kajit_emit::x64::FinalizedEmission,
-    #[cfg(target_arch = "aarch64")]
-    buf: kajit_emit::aarch64::FinalizedEmission,
+    buf: crate::ir_backend::BackendBuf,
     cfg_mir_line_text_by_line: Vec<String>,
     entry: usize,
     func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
     root_data_abi: RootDecoderDataAbi,
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
-    #[cfg(target_arch = "aarch64")]
     asm_program: Option<kajit_emit::aarch64_asm::Program>,
 }
 
@@ -47,10 +43,7 @@ pub enum RootDecoderDataAbi {
 /// A compiled scalar function. Owns the executable buffer containing JIT'd machine code.
 /// Uses standard calling convention: args in x0..x7, return value in x0.
 pub struct CompiledFunction {
-    #[cfg(target_arch = "x86_64")]
-    buf: kajit_emit::x64::FinalizedEmission,
-    #[cfg(target_arch = "aarch64")]
-    buf: kajit_emit::aarch64::FinalizedEmission,
+    buf: crate::ir_backend::BackendBuf,
     entry: usize,
 }
 
@@ -58,26 +51,12 @@ impl CompiledFunction {
     /// Get the entry point as a raw function pointer.
     /// The caller is responsible for casting to the correct signature.
     pub fn as_ptr(&self) -> *const u8 {
-        #[cfg(target_arch = "aarch64")]
-        {
-            unsafe { self.buf.code_ptr().add(self.entry) }
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            unsafe { self.buf.exec.as_ptr().add(self.entry) }
-        }
+        unsafe { self.buf.code_ptr().add(self.entry) }
     }
 
     /// The raw executable code buffer.
     pub fn code(&self) -> &[u8] {
-        #[cfg(target_arch = "x86_64")]
-        {
-            return self.buf.exec.as_ref();
-        }
-        #[cfg(target_arch = "aarch64")]
-        {
-            &self.buf.code
-        }
+        self.buf.code()
     }
 }
 
@@ -92,15 +71,7 @@ impl CompiledDecoder {
 
     /// The raw executable code buffer.
     pub fn code(&self) -> &[u8] {
-        #[cfg(target_arch = "x86_64")]
-        {
-            return self.buf.exec.as_ref();
-        }
-
-        #[cfg(target_arch = "aarch64")]
-        {
-            &self.buf.code
-        }
+        self.buf.code()
     }
 
     /// Byte offset of the entry point within the code buffer.
@@ -119,11 +90,10 @@ impl CompiledDecoder {
 
     /// Deterministic machine-emission trace annotated with CFG-MIR provenance.
     pub fn emission_trace_text(&self) -> Result<String, kajit_emit::TraceError> {
-        #[cfg(target_arch = "x86_64")]
-        let entries = self.buf.trace_entries()?;
-
-        #[cfg(target_arch = "aarch64")]
-        let entries = self.buf.trace_entries()?;
+        let entries = match &self.buf {
+            crate::ir_backend::BackendBuf::X86_64(buf) => buf.trace_entries()?,
+            crate::ir_backend::BackendBuf::Aarch64(buf) => buf.trace_entries()?,
+        };
 
         Ok(format_emission_trace_entries(
             &entries,
@@ -179,18 +149,10 @@ impl CompiledDecoder {
 
     /// Source map (code offset → DWARF line).
     fn source_map(&self) -> Option<&kajit_emit::SourceMap> {
-        #[cfg(target_arch = "aarch64")]
-        {
-            Some(&self.buf.source_map)
-        }
-        #[cfg(target_arch = "x86_64")]
-        {
-            Some(&self.buf.source_map)
-        }
+        Some(self.buf.source_map())
     }
 
     /// ARM64 assembly text (captured instructions before encoding).
-    #[cfg(target_arch = "aarch64")]
     pub fn assembly_text(&self) -> Option<String> {
         self.asm_program.as_ref().map(|p| format!("{}", p))
     }
@@ -198,11 +160,10 @@ impl CompiledDecoder {
 
 pub(crate) const DEFAULT_PRE_LINEARIZATION_PASSES_ENABLED: bool = true;
 
-#[cfg(target_arch = "aarch64")]
 pub(crate) fn materialize_backend_result(
     result: crate::ir_backend::LinearBackendResult,
 ) -> (
-    kajit_emit::aarch64::FinalizedEmission,
+    crate::ir_backend::BackendBuf,
     usize,
     Option<kajit_emit::SourceMap>,
     Option<crate::ir_backend::BackendDebugInfo>,
@@ -224,27 +185,6 @@ pub(crate) fn materialize_backend_result(
         backend_debug_info,
         asm_program,
     )
-}
-
-#[cfg(target_arch = "x86_64")]
-pub(crate) fn materialize_backend_result(
-    result: crate::ir_backend::LinearBackendResult,
-) -> (
-    kajit_emit::x64::FinalizedEmission,
-    usize,
-    Option<kajit_emit::SourceMap>,
-    Option<crate::ir_backend::BackendDebugInfo>,
-    (), // placeholder for asm_program (aarch64-only)
-) {
-    let crate::ir_backend::LinearBackendResult {
-        buf,
-        entry,
-        source_map,
-        backend_debug_info,
-        intrinsic_call_sites: _,
-        data_relocs: _,
-    } = result;
-    (buf, entry as usize, source_map, backend_debug_info, ())
 }
 
 /// All intermediate artifacts from a compilation pipeline run.
@@ -269,12 +209,7 @@ pub struct PipelineArtifacts {
     /// Per-program-point vreg location map (call-clobber aware, replaces alloc_map for lockstep)
     pub location_map: crate::harness::LocationMap,
     /// Intrinsic call sites in the JIT code (for harness relocation)
-    #[cfg(target_arch = "aarch64")]
-    pub intrinsic_call_sites:
-        Vec<crate::backends::aarch64::regalloc3_backend::IntrinsicCallSiteInfo>,
-    #[cfg(target_arch = "x86_64")]
-    pub intrinsic_call_sites:
-        Vec<crate::backends::x86_64::regalloc3_backend::IntrinsicCallSiteInfo>,
+    pub intrinsic_call_sites: Vec<crate::ir_backend::IntrinsicCallSiteInfo>,
     /// Exact machine-code ranges for emitted CFG ops.
     pub backend_debug_info: Option<crate::ir_backend::BackendDebugInfo>,
     /// The post-optimization CFG-MIR program (same one the JIT compiled).
