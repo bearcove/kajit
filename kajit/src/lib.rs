@@ -33,18 +33,6 @@ use context::{DeserContext, ErrorCode};
 pub use format::DecoderKind;
 pub use pipeline_opts::{CompileTarget, PipelineOptions};
 
-#[repr(C)]
-struct RuntimeSliceU8 {
-    ptr: *const u8,
-    len: usize,
-}
-
-#[repr(C)]
-struct RuntimeCursorArg {
-    bytes: RuntimeSliceU8,
-    pos: u64,
-}
-
 /// Compile a deserializer for the given shape and format.
 pub fn compile_decoder(shape: &'static facet::Shape, kind: DecoderKind) -> CompiledDecoder {
     compiler::compile_decoder(shape, kind)
@@ -394,24 +382,7 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
 
 fn invoke_decoder(deser: &CompiledDecoder, output: *mut u8, ctx: &mut DeserContext) {
     unsafe {
-        match deser.root_data_abi() {
-            crate::compiler::RootDecoderDataAbi::None => {
-                (deser.func())(output, ctx);
-            }
-            crate::compiler::RootDecoderDataAbi::CursorRef => {
-                let mut cursor = RuntimeCursorArg {
-                    bytes: RuntimeSliceU8 {
-                        ptr: ctx.input_ptr,
-                        len: ctx.remaining(),
-                    },
-                    pos: 0,
-                };
-                let func: unsafe extern "C" fn(*mut u8, *mut DeserContext, *mut RuntimeCursorArg) =
-                    core::mem::transmute(deser.func());
-                func(output, ctx, &mut cursor);
-                ctx.input_ptr = cursor.bytes.ptr.wrapping_add(cursor.pos as usize);
-            }
-        }
+        (deser.func())(output, ctx);
     }
 }
 

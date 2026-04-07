@@ -27,17 +27,9 @@ pub struct CompiledDecoder {
     cfg_mir_line_text_by_line: Vec<String>,
     entry: usize,
     func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
-    root_data_abi: RootDecoderDataAbi,
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
     asm_program: Option<kajit_emit::aarch64_asm::Program>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RootDecoderDataAbi {
-    #[default]
-    None,
-    CursorRef,
 }
 
 /// A compiled scalar function. Owns the executable buffer containing JIT'd machine code.
@@ -65,10 +57,6 @@ impl CompiledDecoder {
         self.func
     }
 
-    pub(crate) fn root_data_abi(&self) -> RootDecoderDataAbi {
-        self.root_data_abi
-    }
-
     /// The raw executable code buffer.
     pub fn code(&self) -> &[u8] {
         self.buf.code()
@@ -82,10 +70,6 @@ impl CompiledDecoder {
     /// Whether `from_str` can safely enable trusted UTF-8 mode for this format.
     pub fn supports_trusted_utf8_input(&self) -> bool {
         self.trusted_utf8_input
-    }
-
-    pub fn uses_root_cursor_arg(&self) -> bool {
-        matches!(self.root_data_abi, RootDecoderDataAbi::CursorRef)
     }
 
     /// Deterministic machine-emission trace annotated with CFG-MIR provenance.
@@ -290,7 +274,6 @@ pub fn compile_pipeline_from_hir_module(
     registry: &crate::ir::IntrinsicRegistry,
     pipeline_opts: &PipelineOptions,
 ) -> PipelineArtifacts {
-    let root_data_abi = infer_root_decoder_data_abi(module);
     let hir_text = module.to_string();
 
     // Phase 2: IR + passes with timeline
@@ -365,7 +348,6 @@ pub fn compile_pipeline_from_hir_module(
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
-        root_data_abi,
         trusted_utf8_input,
         _jit_registration: None, // JIT debug registration handled by the old path if needed
         #[cfg(target_arch = "aarch64")]
@@ -509,7 +491,6 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
 ) -> CompiledDecoder {
     let registry = symbol_registry_for_shape(shape);
     let (module, symbol_table) = build_postcard_decoder_hir(shape);
-    let root_data_abi = infer_root_decoder_data_abi(&module);
     let mut func = lower_hir_module(&module);
     run_configured_default_passes(&mut func, &pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
@@ -521,7 +502,6 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
         pipeline_opts,
         Some(&registry),
         Some(shape),
-        root_data_abi,
     )
 }
 
@@ -571,7 +551,6 @@ pub fn compile_linear_ir_decoder(
         PipelineOptions::from_env(),
         None,
         None,
-        RootDecoderDataAbi::None,
     )
 }
 
@@ -605,15 +584,10 @@ fn compile_linear_ir_decoder_with_options(
     pipeline_opts: PipelineOptions,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     root_shape: Option<&'static Shape>,
-    root_data_abi: RootDecoderDataAbi,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
     let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
     let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
-    let root_data_abi = match root_data_abi {
-        RootDecoderDataAbi::None => infer_root_decoder_data_abi_from_cfg(&cfg_program),
-        explicit => explicit,
-    };
 
     let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
@@ -698,7 +672,6 @@ fn compile_linear_ir_decoder_with_options(
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
-        root_data_abi,
         trusted_utf8_input,
         _jit_registration: Some(registration),
         #[cfg(target_arch = "aarch64")]
@@ -714,7 +687,6 @@ fn compile_cfg_mir_decoder_with_options(
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
 
-    let root_data_abi = infer_root_decoder_data_abi_from_cfg(cfg_program);
     let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(cfg_program)
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
@@ -790,43 +762,10 @@ fn compile_cfg_mir_decoder_with_options(
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
-        root_data_abi,
         trusted_utf8_input,
         _jit_registration: Some(registration),
         #[cfg(target_arch = "aarch64")]
         asm_program,
-    }
-}
-
-fn infer_root_decoder_data_abi(module: &hir::Module) -> RootDecoderDataAbi {
-    let Some((_, function)) = module.functions.iter().next() else {
-        return RootDecoderDataAbi::None;
-    };
-    let non_destination_params: Vec<_> = function
-        .params
-        .iter()
-        .filter(|param| !param.is_destination())
-        .collect();
-    match non_destination_params.as_slice() {
-        [] => RootDecoderDataAbi::None,
-        [param] if matches!(param.ty, hir::Type::Ref { mutable: true, .. }) => {
-            RootDecoderDataAbi::CursorRef
-        }
-        _ => RootDecoderDataAbi::None,
-    }
-}
-
-fn infer_root_decoder_data_abi_from_cfg(
-    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
-) -> RootDecoderDataAbi {
-    let Some(root) = cfg_program.funcs.first() else {
-        return RootDecoderDataAbi::None;
-    };
-    // With unified ABI: data_args[0]=output_ptr, data_args[1]=ctx_ptr,
-    // data_args[2..] are extra args. CursorRef means there's exactly one extra arg.
-    match root.data_args.len() {
-        3 => RootDecoderDataAbi::CursorRef,
-        _ => RootDecoderDataAbi::None,
     }
 }
 

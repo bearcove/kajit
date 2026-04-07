@@ -221,7 +221,6 @@ pub(crate) fn compile_structural_hir_decoder(
     module: &hir::Module,
 ) -> CompiledDecoder {
     let registry = super::symbol_registry_for_shape(shape);
-    let root_data_abi = super::infer_root_decoder_data_abi(module);
     let mut func = build_structural_hir_ir(module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
@@ -231,7 +230,6 @@ pub(crate) fn compile_structural_hir_decoder(
         crate::pipeline_opts::PipelineOptions::from_env(),
         Some(&registry),
         Some(shape),
-        root_data_abi,
     )
 }
 
@@ -1019,8 +1017,6 @@ fn debug_postcard_borrowed_header_harness() {
     let shape = <BorrowedHeader<'static>>::SHAPE;
     let (module, _symbol_table) = build_postcard_decoder_hir(shape);
     let registry = super::symbol_registry_for_shape(shape);
-    let root_data_abi = super::infer_root_decoder_data_abi(&module);
-
     let mut func = build_structural_hir_ir(&module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
@@ -1054,7 +1050,6 @@ fn debug_postcard_borrowed_header_harness() {
         cfg_mir_line_text_by_line: listing.line_text_by_line,
         entry,
         func,
-        root_data_abi,
         trusted_utf8_input: false,
         _jit_registration: None,
         #[cfg(target_arch = "aarch64")]
@@ -1088,7 +1083,7 @@ fn debug_postcard_borrowed_header_harness() {
         dwarf,
         cfg_mir_lines: decoder.cfg_mir_lines(),
         function_name: "kajit_decode",
-        uses_root_cursor_arg: decoder.uses_root_cursor_arg(),
+        uses_root_cursor_arg: false,
         alloc_map: Some(&alloc_map),
         intrinsic_calls,
         extern_addr_relocs,
