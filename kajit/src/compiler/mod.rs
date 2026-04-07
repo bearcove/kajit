@@ -16,8 +16,6 @@ use crate::intrinsics;
 use crate::ir::{RegionBuilder, Width as IrWidth};
 use crate::pipeline_opts::PipelineOptions;
 
-#[cfg(test)]
-pub(crate) use hir_to_ir::build_structural_hir_ir;
 pub use hir_to_ir::lower_hir_module;
 pub(crate) use kajit_postcard::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 
@@ -283,6 +281,10 @@ pub fn compile_pipeline_from_hir_module(
 
     // Phase 2: IR + passes with timeline
     let mut func = lower_hir_module(module);
+    eprintln!(
+        "=== RVSDG IR (initial) ===\n{}\n=== END IR ===",
+        func.display_with_registry(registry)
+    );
     let mut ir_opt_timeline = vec![(
         "initial".to_string(),
         format!("{}", func.display_with_registry(registry)),
@@ -496,7 +498,15 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
     let registry = symbol_registry_for_shape(shape);
     let (module, symbol_table) = build_postcard_decoder_hir(shape);
     let mut func = lower_hir_module(&module);
+    eprintln!(
+        "=== RVSDG IR before passes ===\n{}\n=== END IR ===",
+        func.display_with_registry(&registry)
+    );
     run_configured_default_passes(&mut func, &pipeline_opts);
+    eprintln!(
+        "=== RVSDG IR after passes ===\n{}\n=== END IR ===",
+        func.display_with_registry(&registry)
+    );
     let linear = crate::linearize::linearize(&mut func);
     let mut pipeline_opts = pipeline_opts;
     pipeline_opts.symbol_table = symbol_table;

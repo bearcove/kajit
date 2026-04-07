@@ -1239,15 +1239,17 @@ impl<'a> Linearizer<'a> {
 
         // Try passthrough-exit lowering: if one branch is data-passthrough,
         // emit conditional exit to shared landing block + inline the other.
-        if self.try_linearize_passthrough_exit(node_id, regions, None) {
-            return;
-        }
+        if std::env::var("KAJIT_NO_CHAIN").is_err() {
+            if self.try_linearize_passthrough_exit(node_id, regions, None) {
+                return;
+            }
 
-        // Control-only chain exit: if ALL data outputs are control-only booleans
-        // (is_more flags), the "done" branch exits directly to the chain landing
-        // and the "more" (passthrough) branch falls through.
-        if self.try_linearize_control_only_chain_exit(node_id, regions) {
-            return;
+            // Control-only chain exit: if ALL data outputs are control-only booleans
+            // (is_more flags), the "done" branch exits directly to the chain landing
+            // and the "more" (passthrough) branch falls through.
+            if self.try_linearize_control_only_chain_exit(node_id, regions) {
+                return;
+            }
         }
 
         let node = &self.func.nodes[node_id];

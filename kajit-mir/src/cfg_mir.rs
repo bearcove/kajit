@@ -1927,6 +1927,7 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
                 for (i, error) in errors.iter().enumerate() {
                     eprintln!("  {}. {}", i + 1, error);
                 }
+                eprintln!("\nCFG-MIR at point of failure:\n{cfg}");
                 panic!("SSA validation failed before optimization passes");
             }
         }

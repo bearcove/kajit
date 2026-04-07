@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::{
     CompiledDecoder, build_jit_debug_info_from_source_map, build_postcard_decoder_hir,
-    build_structural_hir_ir, cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
+    cfg_mir_dwarf_variables, cfg_semantic_field_dwarf_variables,
     cfg_semantic_named_dwarf_variables, cfg_value_dwarf_variables, deser_dwarf_variables,
     jit_dwarf_target_arch, lower_hir_module, normalize_debug_line_rows,
     run_default_passes_from_env,
@@ -221,7 +221,7 @@ pub(crate) fn compile_structural_hir_decoder(
     module: &hir::Module,
 ) -> CompiledDecoder {
     let registry = super::symbol_registry_for_shape(shape);
-    let mut func = build_structural_hir_ir(module);
+    let mut func = lower_hir_module(module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     super::compile_linear_ir_decoder_with_options(
@@ -1017,7 +1017,7 @@ fn debug_postcard_borrowed_header_harness() {
     let shape = <BorrowedHeader<'static>>::SHAPE;
     let (module, _symbol_table) = build_postcard_decoder_hir(shape);
     let registry = super::symbol_registry_for_shape(shape);
-    let mut func = build_structural_hir_ir(&module);
+    let mut func = lower_hir_module(&module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default();
@@ -3151,7 +3151,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
 #[ignore]
 fn postcard_option_scalar_matches_differential_harness() {
     let (module, _symbol_table) = build_postcard_decoder_hir(<MaybeCount>::SHAPE);
-    let mut func = build_structural_hir_ir(&module);
+    let mut func = lower_hir_module(&module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     let output_size = std::mem::size_of::<MaybeCount>();
