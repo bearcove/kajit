@@ -647,78 +647,52 @@ impl DebuggerSession {
         args: &[kajit_ir::VReg],
         dst: Option<kajit_ir::VReg>,
     ) -> Result<(), DebuggerError> {
-        // Collect arg values
+        // Collect arg values — args[0] is ctx_ptr, already a valid pointer.
         let arg_values: Vec<u64> = args
             .iter()
             .map(|v| self.translate_debug_address_to_host_ptr(self.read_vreg(v.index())))
             .collect();
 
-        // Build a temporary runtime context
-        let mut ctx = RuntimeDeserContext {
-            input_ptr: unsafe { self.input.as_ptr().add(self.cursor) },
-            input_end: unsafe { self.input.as_ptr().add(self.input.len()) },
-            error: RuntimeErrorSlot { code: 0, offset: 0 },
-            key_scratch_ptr: std::ptr::null_mut(),
-            key_scratch_cap: 0,
-            trusted_utf8: false,
-        };
+        // Sync cursor into the ctx struct that args[0] points to.
+        let ctx_ptr = arg_values[0] as *mut RuntimeDeserContext;
+        unsafe {
+            (*ctx_ptr).input_ptr = self.input.as_ptr().add(self.cursor);
+            (*ctx_ptr).input_end = self.input.as_ptr().add(self.input.len());
+            (*ctx_ptr).error.code = 0;
+            (*ctx_ptr).error.offset = 0;
+        }
 
-        let ctx_ptr = &mut ctx as *mut RuntimeDeserContext;
-
-        // Determine out_ptr: for side-effect calls (dst=None), pass a pointer
-        // into the output buffer.
-        let out_ptr: Option<*mut u8> = if dst.is_none() {
-            Some(self.output.as_mut_ptr())
-        } else {
-            None
-        };
-
-        // Call the intrinsic
+        // Call with args as-is (ctx_ptr is already args[0]).
         let ret = unsafe {
-            match (out_ptr, arg_values.len()) {
-                (None, 0) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext) -> u64 =
-                        core::mem::transmute(func_addr);
-                    f(ctx_ptr)
+            match arg_values.len() {
+                1 => {
+                    let f: unsafe extern "C" fn(u64) -> u64 = core::mem::transmute(func_addr);
+                    f(arg_values[0])
                 }
-                (None, 1) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64) -> u64 =
-                        core::mem::transmute(func_addr);
-                    f(ctx_ptr, arg_values[0])
+                2 => {
+                    let f: unsafe extern "C" fn(u64, u64) -> u64 = core::mem::transmute(func_addr);
+                    f(arg_values[0], arg_values[1])
                 }
-                (None, 2) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64) -> u64 =
+                3 => {
+                    let f: unsafe extern "C" fn(u64, u64, u64) -> u64 =
                         core::mem::transmute(func_addr);
-                    f(ctx_ptr, arg_values[0], arg_values[1])
+                    f(arg_values[0], arg_values[1], arg_values[2])
                 }
-                (None, 3) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64) -> u64 =
+                4 => {
+                    let f: unsafe extern "C" fn(u64, u64, u64, u64) -> u64 =
                         core::mem::transmute(func_addr);
-                    f(ctx_ptr, arg_values[0], arg_values[1], arg_values[2])
+                    f(arg_values[0], arg_values[1], arg_values[2], arg_values[3])
                 }
-                (Some(out), 0) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, *mut u8) =
+                5 => {
+                    let f: unsafe extern "C" fn(u64, u64, u64, u64, u64) -> u64 =
                         core::mem::transmute(func_addr);
-                    f(ctx_ptr, out);
-                    0
-                }
-                (Some(out), 1) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, *mut u8) =
-                        core::mem::transmute(func_addr);
-                    f(ctx_ptr, arg_values[0], out);
-                    0
-                }
-                (Some(out), 2) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, *mut u8) =
-                        core::mem::transmute(func_addr);
-                    f(ctx_ptr, arg_values[0], arg_values[1], out);
-                    0
-                }
-                (Some(out), 3) => {
-                    let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, *mut u8) =
-                        core::mem::transmute(func_addr);
-                    f(ctx_ptr, arg_values[0], arg_values[1], arg_values[2], out);
-                    0
+                    f(
+                        arg_values[0],
+                        arg_values[1],
+                        arg_values[2],
+                        arg_values[3],
+                        arg_values[4],
+                    )
                 }
                 _ => {
                     return Err(DebuggerError::UnsupportedOp {
@@ -732,15 +706,17 @@ impl DebuggerSession {
             }
         };
 
-        // Update cursor from context
-        self.cursor = unsafe { ctx.input_ptr.offset_from(self.input.as_ptr()) as usize };
+        // Sync cursor back from ctx.
+        self.cursor = unsafe { (*ctx_ptr).input_ptr.offset_from(self.input.as_ptr()) as usize };
 
-        // Check for errors
-        if ctx.error.code != 0 {
-            self.trap(error_code_from_u32(ctx.error.code));
+        // Check for errors.
+        unsafe {
+            if (*ctx_ptr).error.code != 0 {
+                self.trap(error_code_from_u32((*ctx_ptr).error.code));
+            }
         }
 
-        // Store return value
+        // Store return value.
         if let Some(dst) = dst {
             self.write_vreg(dst.index(), ret);
         }

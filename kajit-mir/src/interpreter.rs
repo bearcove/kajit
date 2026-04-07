@@ -662,16 +662,36 @@ fn seed_root_data_args(
     let Some(root) = program.funcs.first() else {
         return Err(InterpreterError::NoFunctions);
     };
-    match root.data_args.as_slice() {
-        [] => Ok(()),
-        [arg] => {
-            let cursor_ptr = state.init_root_cursor_arg();
-            state.write_vreg(arg.index(), cursor_ptr);
-            state.write_trace_vreg(arg.index(), TraceValue::U64(cursor_ptr));
-            Ok(())
-        }
-        args => Err(InterpreterError::UnsupportedRootDataArgs { count: args.len() }),
+    let args = &root.data_args;
+    if args.is_empty() {
+        return Ok(());
     }
+
+    // data_args layout: [out_ptr, ctx_ptr, ...extra (e.g. cursor)...]
+    // out_ptr = pointer to output buffer
+    let out_ptr_val = state.out_ptr as u64;
+    state.write_vreg(args[0].index(), out_ptr_val);
+    state.write_trace_vreg(args[0].index(), TraceValue::OutputPtr { offset: 0 });
+
+    if args.len() >= 2 {
+        // ctx_ptr = pointer to interpreter's DeserContext
+        let ctx_ptr_val = &mut state.ctx as *mut _ as u64;
+        state.write_vreg(args[1].index(), ctx_ptr_val);
+        state.write_trace_vreg(args[1].index(), TraceValue::U64(ctx_ptr_val));
+    }
+
+    if args.len() >= 3 {
+        // Extra data_args (e.g. cursor ref)
+        let cursor_ptr = state.init_root_cursor_arg();
+        state.write_vreg(args[2].index(), cursor_ptr);
+        state.write_trace_vreg(args[2].index(), TraceValue::U64(cursor_ptr));
+    }
+
+    if args.len() > 3 {
+        return Err(InterpreterError::UnsupportedRootDataArgs { count: args.len() });
+    }
+
+    Ok(())
 }
 
 pub fn execute_function_with_trace(
@@ -788,7 +808,7 @@ fn execute_function_inner(
                 LinearOp::CallIntrinsic { func, args, dst } => {
                     let args_values: Vec<u64> =
                         args.iter().map(|v| state.read_vreg(v.index())).collect();
-                    let ret = run_call_intrinsic(state, func.0, &args_values, None);
+                    let ret = run_call_intrinsic(state, func.0, &args_values);
                     if state.trap.is_some() {
                         break;
                     }
@@ -1223,7 +1243,7 @@ fn execute_function_inner_with_event_trace(
                 LinearOp::CallIntrinsic { func, args, dst } => {
                     let args_values: Vec<u64> =
                         args.iter().map(|v| state.read_vreg(v.index())).collect();
-                    let ret = run_call_intrinsic(state, func.0, &args_values, None);
+                    let ret = run_call_intrinsic(state, func.0, &args_values);
                     if let Some(dst) = dst {
                         let trace_value = TraceValue::U64(ret);
                         state.write_vreg(dst.index(), ret);
@@ -1685,85 +1705,18 @@ fn error_code_from_u32(code: u32) -> ErrorCode {
     }
 }
 
-fn run_call_intrinsic(
-    state: &mut InterpreterState<'_>,
-    func: usize,
-    args: &[u64],
-    out_ptr: Option<*mut u8>,
-) -> u64 {
+fn run_call_intrinsic(state: &mut InterpreterState<'_>, func: usize, args: &[u64]) -> u64 {
+    // Sync cursor state into ctx before the call.
     state.ctx.input_ptr = unsafe { state.input_base.add(state.cursor) };
     state.ctx.input_end = unsafe { state.input_base.add(state.input.len()) };
     state.ctx.error.code = 0;
     state.ctx.error.offset = 0;
 
-    let ctx_ptr = &mut state.ctx as *mut RuntimeDeserContext;
+    // Args already include ctx_ptr as args[0] and any out_addr as needed.
+    // Just pass them through like run_call_pure.
+    let ret = run_call_pure(func, args);
 
-    let ret = unsafe {
-        match (out_ptr, args.len()) {
-            (None, 0) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext) -> u64 =
-                    core::mem::transmute(func);
-                f(ctx_ptr)
-            }
-            (None, 1) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64) -> u64 =
-                    core::mem::transmute(func);
-                f(ctx_ptr, args[0])
-            }
-            (None, 2) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64) -> u64 =
-                    core::mem::transmute(func);
-                f(ctx_ptr, args[0], args[1])
-            }
-            (None, 3) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64) -> u64 =
-                    core::mem::transmute(func);
-                f(ctx_ptr, args[0], args[1], args[2])
-            }
-            (None, 4) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, u64) -> u64 =
-                    core::mem::transmute(func);
-                f(ctx_ptr, args[0], args[1], args[2], args[3])
-            }
-            (None, 5) => {
-                let f: unsafe extern "C" fn(
-                    *mut RuntimeDeserContext,
-                    u64,
-                    u64,
-                    u64,
-                    u64,
-                    u64,
-                ) -> u64 = core::mem::transmute(func);
-                f(ctx_ptr, args[0], args[1], args[2], args[3], args[4])
-            }
-            (Some(out), 0) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, *mut u8) =
-                    core::mem::transmute(func);
-                f(ctx_ptr, out);
-                0
-            }
-            (Some(out), 1) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, *mut u8) =
-                    core::mem::transmute(func);
-                f(ctx_ptr, args[0], out);
-                0
-            }
-            (Some(out), 2) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, *mut u8) =
-                    core::mem::transmute(func);
-                f(ctx_ptr, args[0], args[1], out);
-                0
-            }
-            (Some(out), 3) => {
-                let f: unsafe extern "C" fn(*mut RuntimeDeserContext, u64, u64, u64, *mut u8) =
-                    core::mem::transmute(func);
-                f(ctx_ptr, args[0], args[1], args[2], out);
-                0
-            }
-            _ => 0,
-        }
-    };
-
+    // Sync cursor back from ctx after the call.
     state.cursor = unsafe { state.ctx.input_ptr.offset_from(state.input_base) as usize };
     if state.ctx.error.code != 0 {
         let code = error_code_from_u32(state.ctx.error.code);
