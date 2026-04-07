@@ -18,6 +18,11 @@ struct RuntimeDeserContext {
     trusted_utf8: bool,
 }
 
+// Safety: RuntimeDeserContext contains raw pointers that are only dereferenced
+// transiently during execute_call_intrinsic, while the DebuggerSession holds
+// &mut self. The pointers are re-synced from owned data before each use.
+unsafe impl Send for RuntimeDeserContext {}
+
 #[repr(C)]
 struct RuntimeErrorSlot {
     code: u32,
@@ -185,6 +190,8 @@ pub struct DebuggerSession {
     pub root_cursor_arg_addr: Option<u64>,
     /// Embedded constant data blobs (string literals, etc.).
     data_blobs: Vec<Vec<u8>>,
+    /// Runtime deserialization context, passed to intrinsics as ctx_ptr (data_args[1]).
+    ctx: RuntimeDeserContext,
 }
 
 impl DebuggerSession {
@@ -214,6 +221,14 @@ impl DebuggerSession {
             output_base_addr: None,
             root_cursor_arg_addr: None,
             data_blobs: program.data_blobs.clone(),
+            ctx: RuntimeDeserContext {
+                input_ptr: std::ptr::null(),
+                input_end: std::ptr::null(),
+                error: RuntimeErrorSlot { code: 0, offset: 0 },
+                key_scratch_ptr: std::ptr::null_mut(),
+                key_scratch_cap: 0,
+                trusted_utf8: false,
+            },
         })
     }
 
@@ -253,8 +268,27 @@ impl DebuggerSession {
 
     pub fn set_root_cursor_arg_addr(&mut self, addr: u64) {
         self.root_cursor_arg_addr = Some(addr);
-        if let Some(&data_arg) = self.func.data_args.first() {
+        // data_args layout: [out_ptr, ctx_ptr, cursor_ref]
+        // cursor_ref is data_args[2], not data_args[0]
+        if self.func.data_args.len() >= 3 {
+            self.write_vreg(self.func.data_args[2].index(), addr);
+        } else if let Some(&data_arg) = self.func.data_args.first() {
+            // Legacy: single data_arg is the cursor
             self.write_vreg(data_arg.index(), addr);
+        }
+    }
+
+    /// Seed data_args[0] (out_ptr) and data_args[1] (ctx_ptr) with real addresses.
+    pub fn seed_root_data_args(&mut self) {
+        // data_args[0] = out_ptr
+        if let Some(&out_arg) = self.func.data_args.first() {
+            let out_ptr = self.output.as_ptr() as u64;
+            self.write_vreg(out_arg.index(), out_ptr);
+        }
+        // data_args[1] = ctx_ptr
+        if self.func.data_args.len() >= 2 {
+            let ctx_ptr = &mut self.ctx as *mut _ as u64;
+            self.write_vreg(self.func.data_args[1].index(), ctx_ptr);
         }
     }
 
@@ -647,51 +681,53 @@ impl DebuggerSession {
         args: &[kajit_ir::VReg],
         dst: Option<kajit_ir::VReg>,
     ) -> Result<(), DebuggerError> {
-        // Collect arg values — args[0] is ctx_ptr, already a valid pointer.
+        // Collect arg values, translating debug addresses to host pointers.
         let arg_values: Vec<u64> = args
             .iter()
             .map(|v| self.translate_debug_address_to_host_ptr(self.read_vreg(v.index())))
             .collect();
 
-        // Sync cursor into the ctx struct that args[0] points to.
-        let ctx_ptr = arg_values[0] as *mut RuntimeDeserContext;
-        unsafe {
-            (*ctx_ptr).input_ptr = self.input.as_ptr().add(self.cursor);
-            (*ctx_ptr).input_end = self.input.as_ptr().add(self.input.len());
-            (*ctx_ptr).error.code = 0;
-            (*ctx_ptr).error.offset = 0;
+        // Sync cursor into self.ctx before calling the intrinsic.
+        self.ctx.input_ptr = unsafe { self.input.as_ptr().add(self.cursor) };
+        self.ctx.input_end = unsafe { self.input.as_ptr().add(self.input.len()) };
+        self.ctx.error.code = 0;
+        self.ctx.error.offset = 0;
+
+        // Replace args[0] (ctx_ptr vreg) with a pointer to self.ctx.
+        let mut call_args = arg_values;
+        if !call_args.is_empty() {
+            call_args[0] = &mut self.ctx as *mut RuntimeDeserContext as u64;
         }
 
-        // Call with args as-is (ctx_ptr is already args[0]).
         let ret = unsafe {
-            match arg_values.len() {
+            match call_args.len() {
                 1 => {
                     let f: unsafe extern "C" fn(u64) -> u64 = core::mem::transmute(func_addr);
-                    f(arg_values[0])
+                    f(call_args[0])
                 }
                 2 => {
                     let f: unsafe extern "C" fn(u64, u64) -> u64 = core::mem::transmute(func_addr);
-                    f(arg_values[0], arg_values[1])
+                    f(call_args[0], call_args[1])
                 }
                 3 => {
                     let f: unsafe extern "C" fn(u64, u64, u64) -> u64 =
                         core::mem::transmute(func_addr);
-                    f(arg_values[0], arg_values[1], arg_values[2])
+                    f(call_args[0], call_args[1], call_args[2])
                 }
                 4 => {
                     let f: unsafe extern "C" fn(u64, u64, u64, u64) -> u64 =
                         core::mem::transmute(func_addr);
-                    f(arg_values[0], arg_values[1], arg_values[2], arg_values[3])
+                    f(call_args[0], call_args[1], call_args[2], call_args[3])
                 }
                 5 => {
                     let f: unsafe extern "C" fn(u64, u64, u64, u64, u64) -> u64 =
                         core::mem::transmute(func_addr);
                     f(
-                        arg_values[0],
-                        arg_values[1],
-                        arg_values[2],
-                        arg_values[3],
-                        arg_values[4],
+                        call_args[0],
+                        call_args[1],
+                        call_args[2],
+                        call_args[3],
+                        call_args[4],
                     )
                 }
                 _ => {
@@ -699,21 +735,19 @@ impl DebuggerSession {
                         block: self.current,
                         op: format!(
                             "CallIntrinsic with {} args (unsupported arity)",
-                            arg_values.len()
+                            call_args.len()
                         ),
                     });
                 }
             }
         };
 
-        // Sync cursor back from ctx.
-        self.cursor = unsafe { (*ctx_ptr).input_ptr.offset_from(self.input.as_ptr()) as usize };
+        // Sync cursor back from self.ctx.
+        self.cursor = unsafe { self.ctx.input_ptr.offset_from(self.input.as_ptr()) as usize };
 
         // Check for errors.
-        unsafe {
-            if (*ctx_ptr).error.code != 0 {
-                self.trap(error_code_from_u32((*ctx_ptr).error.code));
-            }
+        if self.ctx.error.code != 0 {
+            self.trap(error_code_from_u32(self.ctx.error.code));
         }
 
         // Store return value.

@@ -848,6 +848,7 @@ pub fn interpret(program: &Program, input: &[u8]) -> InterpOutcome {
     });
     if has_intrinsics {
         session.set_real_addresses();
+        session.seed_root_data_args();
     }
 
     let max_steps = std::env::var("KAJIT_INTERP_STEPS")
