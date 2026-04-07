@@ -1,0 +1,16 @@
+[package]
+name = "kajit-vtables"
+version = "0.1.0"
+edition = "2024"
+
+[package.metadata]
+
+[package.metadata."docs.rs"]
+rustdoc-args = ["--html-in-header", "arborium-header.html"]
+
+[dependencies]
+facet = "0.44"
+paste = "1"
+
+[dev-dependencies]
+kajit-format = { path = "../kajit-format" }

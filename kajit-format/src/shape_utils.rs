@@ -232,6 +232,121 @@ pub fn is_string_like_scalar(scalar_type: ScalarType) -> bool {
     )
 }
 
+/// Mangle a type identifier into a valid C symbol component.
+///
+/// Replaces `<` with `_L`, `>` with `_R`, `,` with `_C`, `::` with `_`,
+/// spaces with nothing, and any other non-alphanumeric char with `_`.
+pub fn mangle_type_id(type_id: &str) -> String {
+    let mut out = String::with_capacity(type_id.len());
+    let mut chars = type_id.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '<' => out.push_str("_L"),
+            '>' => out.push_str("_R"),
+            ',' => out.push_str("_C"),
+            ':' if chars.peek() == Some(&':') => {
+                chars.next();
+                out.push('_');
+            }
+            ' ' => {}
+            c if c.is_ascii_alphanumeric() || c == '_' => out.push(c),
+            _ => out.push('_'),
+        }
+    }
+    out
+}
+
+/// Vtable entry kinds that can be exported as external symbols.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VtableEntry {
+    OptionInitSome,
+    OptionInitNone,
+}
+
+impl VtableEntry {
+    pub fn suffix(self) -> &'static str {
+        match self {
+            VtableEntry::OptionInitSome => "option_init_some",
+            VtableEntry::OptionInitNone => "option_init_none",
+        }
+    }
+}
+
+/// Build the `#[no_mangle]` symbol name for a vtable entry on a given shape.
+///
+/// Uses `Display` formatting of the shape (which includes type parameters)
+/// to produce a unique, deterministic symbol name.
+///
+/// For example, `Option<u32>` + `OptionInitSome` → `"kajit_vtable_option_init_some__Option_Lu32_R"`.
+pub fn vtable_symbol_name(shape: &Shape, entry: VtableEntry) -> String {
+    // Shape's Display impl produces the full parameterized name (e.g. "Option<u32>")
+    let full_name = format!("{shape}");
+    format!(
+        "kajit_vtable_{}__{}",
+        entry.suffix(),
+        mangle_type_id(&full_name)
+    )
+}
+
+/// Collect all vtable entries needed for a shape tree.
+///
+/// Recursively walks the shape and its fields/variants to find all
+/// Option types that need vtable exports.
+pub fn collect_vtable_entries(shape: &'static Shape, out: &mut Vec<(&'static Shape, VtableEntry)>) {
+    collect_vtable_entries_inner(shape, out, &mut HashSet::new());
+}
+
+fn collect_vtable_entries_inner(
+    shape: &'static Shape,
+    out: &mut Vec<(&'static Shape, VtableEntry)>,
+    visited: &mut HashSet<*const Shape>,
+) {
+    if !visited.insert(shape as *const Shape) {
+        return;
+    }
+
+    match &shape.def {
+        Def::Option(opt_def) => {
+            out.push((shape, VtableEntry::OptionInitSome));
+            out.push((shape, VtableEntry::OptionInitNone));
+            collect_vtable_entries_inner(opt_def.t, out, visited);
+        }
+        Def::List(list_def) => {
+            collect_vtable_entries_inner(list_def.t, out, visited);
+        }
+        Def::Map(map_def) => {
+            collect_vtable_entries_inner(map_def.k, out, visited);
+            collect_vtable_entries_inner(map_def.v, out, visited);
+        }
+        Def::Set(set_def) => {
+            collect_vtable_entries_inner(set_def.t, out, visited);
+        }
+        Def::Pointer(ptr_def) => {
+            if let Some(pointee) = ptr_def.pointee {
+                collect_vtable_entries_inner(pointee, out, visited);
+            }
+        }
+        _ => {}
+    }
+
+    // Also walk struct/enum fields via the type system
+    match &shape.ty {
+        Type::User(UserType::Struct(s)) => {
+            for field in s.fields {
+                collect_vtable_entries_inner(field.shape(), out, visited);
+            }
+        }
+        Type::User(UserType::Enum(e)) => {
+            for variant in e.variants {
+                for field in variant.data.fields {
+                    collect_vtable_entries_inner(field.shape(), out, visited);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn instantiated_shape_symbol_key(shape: &'static Shape) -> String {
     let mut out = String::new();
     append_instantiated_shape_symbol_key(shape, &mut out);

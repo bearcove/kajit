@@ -16,8 +16,7 @@ use crate::arch::x64::EmitCtx;
 use crate::harness::{
     AllocationMap, LocationMap, compute_edge_source_locations, compute_inst_source_locations,
 };
-use crate::ir_backend::DataRelocInfo;
-use crate::ir_backend::{BackendBuf, LinearBackendResult};
+use crate::ir_backend::{BackendBuf, DataRelocInfo, ExternAddrRelocInfo, LinearBackendResult};
 
 use context::{EmitContext, emit_parallel_reg_moves};
 
@@ -128,6 +127,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     // Compile first function.
     let mut intrinsic_call_sites = Vec::new();
     let mut data_relocs = Vec::<DataRelocInfo>::new();
+    let mut extern_addr_relocs = Vec::<ExternAddrRelocInfo>::new();
     if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
         let mut const_values = HashMap::new();
         for inst in &func.insts {
@@ -165,6 +165,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             line_map,
             intrinsic_call_sites: Vec::new(),
             data_relocs: Vec::new(),
+            extern_addr_relocs: Vec::new(),
             fused_cmps,
             fused_addr_offsets,
             fused_skip,
@@ -179,6 +180,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         ctx.emit_function();
         intrinsic_call_sites = ctx.intrinsic_call_sites.clone();
         data_relocs = ctx.data_relocs.clone();
+        extern_addr_relocs = ctx.extern_addr_relocs.clone();
     }
 
     // Bind success exit and emit epilogue.
@@ -224,6 +226,13 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         }
     }
 
+    // Patch extern addr relocations with in-process values.
+    for reloc in &extern_addr_relocs {
+        unsafe {
+            buf.exec.patch_u64_load(reloc.code_offset, reloc.value);
+        }
+    }
+
     let source_map = buf.source_map.clone();
     LinearBackendResult {
         buf: BackendBuf::X86_64(buf),
@@ -237,6 +246,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         asm_program: None,
         intrinsic_call_sites,
         data_relocs,
+        extern_addr_relocs,
     }
 }
 

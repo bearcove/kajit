@@ -623,6 +623,13 @@ pub enum IrOp {
     /// Inputs: []. Outputs: [Data].
     DataAddr { blob_id: u32 },
 
+    /// Load the address of an external symbol (e.g. a vtable function pointer).
+    ///
+    /// At JIT time, `value` is the in-process function pointer.
+    /// In standalone harness mode, `symbol` is used to emit a linker relocation.
+    /// Inputs: []. Outputs: [Data].
+    ExternAddr { symbol: String, value: u64 },
+
     /// Binary addition.
     /// Inputs: [Data, Data]. Outputs: [Data].
     Add,
@@ -762,6 +769,7 @@ impl IrOp {
             // Pure ops
             IrOp::Const { .. }
             | IrOp::DataAddr { .. }
+            | IrOp::ExternAddr { .. }
             | IrOp::Add
             | IrOp::Sub
             | IrOp::Mul
@@ -1401,6 +1409,20 @@ impl<'a> RegionBuilder<'a> {
         let id = self.func.data_blobs.len() as u32;
         self.func.data_blobs.push(bytes);
         id
+    }
+
+    /// Add an ExternAddr node for a relocatable symbol (e.g. vtable function pointer).
+    pub fn extern_addr(&mut self, symbol: String, value: u64) -> PortSource {
+        let out = self.data_output();
+        let node = self.add_node(Node {
+            region: self.region,
+            debug_scope: self.debug_scope,
+            debug_value: self.debug_value,
+            inputs: vec![],
+            outputs: vec![out],
+            kind: NodeKind::Simple(IrOp::ExternAddr { symbol, value }),
+        });
+        PortSource::Node(OutputRef { node, index: 0 })
     }
 
     /// Add a DataAddr node that produces the runtime address of a data blob.
@@ -2305,6 +2327,9 @@ impl IrFunc {
                 write!(f, "Const(")?;
                 Self::fmt_const(f, *value, registry)?;
                 write!(f, ")")
+            }
+            IrOp::ExternAddr { symbol, .. } => {
+                write!(f, "ExternAddr(@{symbol})")
             }
             IrOp::Add => write!(f, "Add"),
             IrOp::Sub => write!(f, "Sub"),

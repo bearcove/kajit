@@ -719,7 +719,9 @@ fn execute_function_inner(
                 .inst(inst_id)
                 .ok_or(InterpreterError::UnknownInst { inst: inst_id })?;
             match &inst.op {
-                LinearOp::Const { dst, value } => state.write_vreg(dst.index(), *value),
+                LinearOp::Const { dst, value } | LinearOp::ExternAddr { dst, value, .. } => {
+                    state.write_vreg(dst.index(), *value)
+                }
                 LinearOp::DataAddr { dst, blob_id } => {
                     let blob = &program.data_blobs[*blob_id as usize];
                     state.write_vreg(dst.index(), blob.as_ptr() as u64);
@@ -1052,7 +1054,7 @@ fn execute_function_inner_with_event_trace(
             let before_trap = state.trap;
 
             match &inst.op {
-                LinearOp::Const { dst, value } => {
+                LinearOp::Const { dst, value } | LinearOp::ExternAddr { dst, value, .. } => {
                     let trace_value = TraceValue::U64(*value);
                     state.write_vreg(dst.index(), *value);
                     state.write_trace_vreg(dst.index(), trace_value.clone());

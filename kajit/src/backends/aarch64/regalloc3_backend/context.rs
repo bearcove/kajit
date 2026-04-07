@@ -7,7 +7,7 @@ use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
 
 use crate::arch::aarch64::EmitCtx;
 use crate::harness::VRegLocation;
-use crate::ir_backend::{DataRelocInfo, IntrinsicCallSiteInfo};
+use crate::ir_backend::{DataRelocInfo, ExternAddrRelocInfo, IntrinsicCallSiteInfo};
 use kajit_emit::aarch64::{Condition, LabelId};
 use std::collections::HashMap;
 
@@ -39,6 +39,8 @@ pub(super) struct EmitContext<'a> {
     pub(super) intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
     /// Recorded data blob address sites for relocation.
     pub(super) data_relocs: Vec<DataRelocInfo>,
+    /// Recorded external symbol address sites for relocation.
+    pub(super) extern_addr_relocs: Vec<ExternAddrRelocInfo>,
     /// VRegs whose CmpXx can be fused with the terminator branch (skip cset, emit b.cc).
     pub(super) fused_cmps: HashMap<kajit_ir::VReg, Condition>,
     /// Or vregs that should be emitted as bfi. Maps Or's dst → (byte_src, accum, lsb, width).

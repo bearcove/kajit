@@ -177,6 +177,7 @@ pub(crate) fn materialize_backend_result(
         asm_program,
         intrinsic_call_sites: _,
         data_relocs: _,
+        extern_addr_relocs: _,
     } = result;
     (
         buf,

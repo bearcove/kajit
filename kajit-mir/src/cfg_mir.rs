@@ -897,6 +897,7 @@ fn fmt_cfg_op_name(
             write!(f, ")")
         }
         LinearOp::DataAddr { blob_id, .. } => write!(f, "data_addr({blob_id})"),
+        LinearOp::ExternAddr { symbol, .. } => write!(f, "extern_addr(@{symbol})"),
         LinearOp::BinOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::Copy { .. } => write!(f, "copy"),
@@ -931,6 +932,7 @@ fn linearop_dst(op: &LinearOp) -> Option<VReg> {
     match op {
         LinearOp::Const { dst, .. }
         | LinearOp::DataAddr { dst, .. }
+        | LinearOp::ExternAddr { dst, .. }
         | LinearOp::BinOp { dst, .. }
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
@@ -1286,6 +1288,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
     match &op {
         LinearOp::Const { dst, .. }
         | LinearOp::DataAddr { dst, .. }
+        | LinearOp::ExternAddr { dst, .. }
         | LinearOp::SlotAddr { dst, .. }
         | LinearOp::ReadFromSlot { dst, .. } => {
             push_def(&mut operands, *dst, None);
@@ -3933,6 +3936,7 @@ fn make_value_key_simple(op: &LinearOp) -> Option<ValueKey> {
 fn get_def_vreg(op: &LinearOp) -> Option<VReg> {
     match op {
         LinearOp::Const { dst, .. }
+        | LinearOp::ExternAddr { dst, .. }
         | LinearOp::BinOp { dst, .. }
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }

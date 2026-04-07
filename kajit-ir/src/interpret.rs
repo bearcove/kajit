@@ -241,6 +241,9 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
             let blob = &func.data_blobs[*blob_id as usize];
             env.set_output(node_id, 0, blob.as_ptr() as u64);
         }
+        IrOp::ExternAddr { value, .. } => {
+            env.set_output(node_id, 0, *value);
+        }
         IrOp::Add
         | IrOp::Sub
         | IrOp::Mul

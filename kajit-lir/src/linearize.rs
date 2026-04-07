@@ -73,6 +73,13 @@ pub enum LinearOp {
         dst: VReg,
         blob_id: u32,
     },
+    /// Load the address of an external symbol (vtable function pointer etc.).
+    /// At JIT time uses `value`; in harness mode, `symbol` is used for relocation.
+    ExternAddr {
+        dst: VReg,
+        symbol: String,
+        value: u64,
+    },
     BinOp {
         op: BinOpKind,
         dst: VReg,
@@ -192,7 +199,7 @@ impl LinearOp {
         use LinearOp::*;
         match self {
             // Values
-            Const { .. } | DataAddr { .. } => {}
+            Const { .. } | DataAddr { .. } | ExternAddr { .. } => {}
             BinOp { lhs, rhs, .. } => {
                 f(lhs);
                 f(rhs);
@@ -292,6 +299,7 @@ impl LinearOp {
         match self {
             Const { dst, .. }
             | DataAddr { dst, .. }
+            | ExternAddr { dst, .. }
             | BinOp { dst, .. }
             | UnaryOp { dst, .. }
             | Copy { dst, .. }
@@ -357,7 +365,7 @@ impl LinearOp {
     pub fn for_each_vreg_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
         use LinearOp::*;
         match self {
-            Const { dst, .. } | DataAddr { dst, .. } => f(dst),
+            Const { dst, .. } | DataAddr { dst, .. } | ExternAddr { dst, .. } => f(dst),
             BinOp { dst, lhs, rhs, .. } => {
                 f(dst);
                 f(lhs);
@@ -1069,6 +1077,16 @@ impl<'a> Linearizer<'a> {
                     LinearOp::DataAddr {
                         dst: data_dst(0),
                         blob_id: *blob_id,
+                    },
+                );
+            }
+            IrOp::ExternAddr { symbol, value } => {
+                self.emit_node(
+                    node,
+                    LinearOp::ExternAddr {
+                        dst: data_dst(0),
+                        symbol: symbol.clone(),
+                        value: *value,
                     },
                 );
             }
@@ -3941,6 +3959,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         LinearOp::FuncEnd => func_end_uses.unwrap_or_default().to_vec(),
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
+        | LinearOp::ExternAddr { .. }
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
@@ -3951,7 +3970,9 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
 
 fn op_defs(op: &LinearOp) -> Vec<VReg> {
     match op {
-        LinearOp::Const { dst, .. } | LinearOp::DataAddr { dst, .. } => vec![*dst],
+        LinearOp::Const { dst, .. }
+        | LinearOp::DataAddr { dst, .. }
+        | LinearOp::ExternAddr { dst, .. } => vec![*dst],
         LinearOp::BinOp { dst, .. } => vec![*dst],
         LinearOp::UnaryOp { dst, .. } => vec![*dst],
         LinearOp::Copy { dst, .. } => vec![*dst],
@@ -4045,6 +4066,7 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         LinearOp::JumpTable { predicate, .. } => rewrite(predicate, &mut resolve),
         LinearOp::Const { .. }
         | LinearOp::DataAddr { .. }
+        | LinearOp::ExternAddr { .. }
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
@@ -4578,6 +4600,10 @@ fn fmt_op(
         LinearOp::DataAddr { dst, blob_id } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = data_addr({blob_id})")
+        }
+        LinearOp::ExternAddr { dst, symbol, .. } => {
+            fmt_vreg(f, *dst)?;
+            write!(f, " = extern_addr(@{symbol})")
         }
         LinearOp::BinOp { op, dst, lhs, rhs } => {
             fmt_vreg(f, *dst)?;

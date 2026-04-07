@@ -69,6 +69,21 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
+            LinearOp::ExternAddr { dst, symbol, value } => {
+                let code_offset = self.ectx.emit.code_len();
+                let dest_enc = self.dst_enc_or_temp(*dst, R10);
+                self.emit_load_u64_fixed(dest_enc, 0);
+                self.extern_addr_relocs
+                    .push(crate::ir_backend::ExternAddrRelocInfo {
+                        code_offset,
+                        value: *value,
+                        symbol: symbol.clone(),
+                    });
+                if self.preg_for_vreg(*dst).is_none() {
+                    self.store_to_vreg(*dst, R10);
+                }
+            }
+
             LinearOp::BinOp { op, dst, lhs, rhs } => {
                 self.emit_binop(*op, *dst, *lhs, *rhs);
             }

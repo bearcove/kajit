@@ -33,6 +33,17 @@ pub struct DataRelocInfo {
     pub blob_id: u32,
 }
 
+/// Recorded external symbol address site for relocation (vtable function pointers etc.).
+#[derive(Debug, Clone)]
+pub struct ExternAddrRelocInfo {
+    /// Offset in the code buffer of the first instruction in the fixed-length load sequence.
+    pub code_offset: usize,
+    /// The in-process value (used for JIT patching).
+    pub value: u64,
+    /// Symbol name for linker relocation in standalone harness mode.
+    pub symbol: String,
+}
+
 pub struct LinearBackendResult {
     pub buf: BackendBuf,
     pub entry: u32,
@@ -41,6 +52,7 @@ pub struct LinearBackendResult {
     pub asm_program: Option<kajit_emit::aarch64_asm::Program>,
     pub intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
     pub data_relocs: Vec<DataRelocInfo>,
+    pub extern_addr_relocs: Vec<ExternAddrRelocInfo>,
 }
 
 /// Architecture-specific finalized code buffer.

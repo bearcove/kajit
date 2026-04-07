@@ -15,6 +15,7 @@ members = [
   "kajit-cli",
   "kajit-mir-text",
   "kajit-parse-util",
+  "kajit-vtables",
   "xtask",
   "vendor/lldb-rs",
   "vendor/lldb-sys-rs",

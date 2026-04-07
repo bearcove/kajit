@@ -3,7 +3,7 @@
 use kajit_emit::aarch64::{Condition, Reg, Width};
 use kajit_mir::cfg_mir::Inst;
 
-use crate::ir_backend::DataRelocInfo;
+use crate::ir_backend::{DataRelocInfo, ExternAddrRelocInfo};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 
 use super::context::EmitContext;
@@ -68,6 +68,26 @@ impl<'a> EmitContext<'a> {
                 self.data_relocs.push(DataRelocInfo {
                     code_offset,
                     blob_id: *blob_id,
+                });
+                if self.preg_for_vreg(*dst).is_none() {
+                    self.store_to_vreg(*dst, Reg::X16);
+                }
+            }
+
+            LinearOp::ExternAddr { dst, symbol, value } => {
+                // Emit a fixed 4-instruction sequence with placeholder 0.
+                // Patched at JIT time with the actual value, or relocated in harness mode.
+                let code_offset = self.ectx.emit.code_len();
+                let dest_reg = if let Some(preg) = self.preg_for_vreg(*dst) {
+                    self.preg_to_reg(preg)
+                } else {
+                    Reg::X16
+                };
+                self.emit_load_u64_fixed(dest_reg, 0);
+                self.extern_addr_relocs.push(ExternAddrRelocInfo {
+                    code_offset,
+                    value: *value,
+                    symbol: symbol.clone(),
                 });
                 if self.preg_for_vreg(*dst).is_none() {
                     self.store_to_vreg(*dst, Reg::X16);

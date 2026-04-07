@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use crate::arch::x64::EmitCtx;
 use crate::harness::VRegLocation;
 
-use crate::ir_backend::{DataRelocInfo, IntrinsicCallSiteInfo};
+use crate::ir_backend::{DataRelocInfo, ExternAddrRelocInfo, IntrinsicCallSiteInfo};
 
 /// Context for emitting a single function.
 pub(super) struct EmitContext<'a> {
@@ -30,6 +30,8 @@ pub(super) struct EmitContext<'a> {
     pub intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
     /// Recorded data blob address sites for relocation.
     pub data_relocs: Vec<DataRelocInfo>,
+    /// Recorded external symbol address sites for relocation.
+    pub extern_addr_relocs: Vec<ExternAddrRelocInfo>,
     /// VRegs whose CmpXx can be fused with the terminator branch (skip setcc, emit jcc directly).
     pub fused_cmps: HashMap<kajit_ir::VReg, x64::Condition>,
     /// Pre-computed base+offset info for LoadFromAddr fusion.
