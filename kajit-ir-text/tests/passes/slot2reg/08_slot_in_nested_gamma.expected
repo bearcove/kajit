@@ -1,6 +1,3 @@
-state_domains {
-  d0 = memory
-}
 scopes {
   s0 = lambda_body(@0)
   s1 = gamma_branch(0) parent s0

@@ -167,18 +167,6 @@ pub struct LambdaMarker;
 /// A lambda identifier for cross-referencing between IrFuncs.
 pub type LambdaId = Id<LambdaMarker>;
 
-/// A named RVSDG state domain.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StateDomain {
-    pub name: String,
-}
-/// A state-domain identifier used for generic state tokens.
-pub type StateDomainId = Id<StateDomain>;
-
-/// The single built-in state domain for all side-effecting operations.
-pub const MEMORY_STATE_DOMAIN: StateDomainId = StateDomainId::new(0);
-/// The built-in memory state domain name.
-pub const MEMORY_STATE_DOMAIN_NAME: &str = "memory";
 /// Byte stride between adjacent abstract slot addresses.
 pub const SLOT_ADDR_STRIDE_BYTES: usize = 8;
 
@@ -383,29 +371,15 @@ impl Default for IntrinsicRegistry {
 pub enum PortKind {
     /// Carries a data value (backed by a VReg at runtime).
     Data,
-    /// Carries a named state token (orders operations in that state domain).
-    State(StateDomainId),
+    /// Carries a state token (orders side-effecting operations).
+    State,
 }
 
 impl PortKind {
-    pub const fn state(domain: StateDomainId) -> Self {
-        Self::State(domain)
-    }
-
-    pub const fn state_domain(self) -> Option<StateDomainId> {
-        match self {
-            Self::Data => None,
-            Self::State(domain) => Some(domain),
-        }
-    }
-
     pub const fn is_state(self) -> bool {
-        matches!(self, Self::State(_))
+        matches!(self, Self::State)
     }
 }
-
-/// The built-in memory state token kind.
-pub const MEMORY_STATE_PORT: PortKind = PortKind::State(MEMORY_STATE_DOMAIN);
 
 // r[impl ir.edges.data]
 // r[impl ir.edges.state]
@@ -783,14 +757,11 @@ pub enum IrOp {
 pub enum Effect {
     /// No side effects. Data edges only. Can be reordered, CSE'd, DCE'd.
     Pure,
-    /// Reads or mutates a named state domain.
-    Domain(StateDomainId),
+    /// Reads or mutates state (side-effecting).
+    SideEffect,
     /// May touch any state (full barrier).
     Barrier,
 }
-
-/// The built-in memory effect kind.
-pub const MEMORY_EFFECT: Effect = Effect::Domain(MEMORY_STATE_DOMAIN);
 
 /// Per-op metadata used by optimization passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -842,7 +813,7 @@ impl IrOp {
             | IrOp::WriteToField { .. }
             | IrOp::ReadFromField { .. }
             | IrOp::SaveOutPtr
-            | IrOp::SetOutPtr => Effect::Domain(MEMORY_STATE_DOMAIN),
+            | IrOp::SetOutPtr => Effect::SideEffect,
 
             // Barrier ops
             IrOp::CallIntrinsic { .. } => Effect::Barrier,
@@ -886,8 +857,6 @@ pub struct IrFunc {
     pub region_args: Arena<RegionArg>,
     /// All region results (referenced by ResultId).
     pub region_results: Arena<RegionResult>,
-    /// Named state domains used by state ports and effects.
-    pub state_domains: Arena<StateDomain>,
     /// The root lambda node.
     pub root: NodeId,
     /// Next VReg to allocate.
@@ -925,29 +894,6 @@ pub struct IrFunc {
 }
 
 impl IrFunc {
-    pub fn builtin_state_domains() -> Arena<StateDomain> {
-        let mut domains = Arena::new();
-        let memory = domains.push(StateDomain {
-            name: MEMORY_STATE_DOMAIN_NAME.to_owned(),
-        });
-        debug_assert_eq!(memory, MEMORY_STATE_DOMAIN);
-        domains
-    }
-
-    pub fn add_state_domain(&mut self, name: impl Into<String>) -> StateDomainId {
-        self.state_domains.push(StateDomain { name: name.into() })
-    }
-
-    pub fn has_state_domain(&self, id: StateDomainId) -> bool {
-        id.index() < self.state_domains.len()
-    }
-
-    pub fn state_domain_name(&self, id: StateDomainId) -> Option<&str> {
-        self.state_domains
-            .iter()
-            .find_map(|(domain_id, domain)| (domain_id == id).then_some(domain.name.as_str()))
-    }
-
     /// Allocate a fresh virtual register.
     pub fn fresh_vreg(&mut self) -> VReg {
         let id = VReg::new(self.vreg_count);
@@ -1170,7 +1116,6 @@ impl IrBuilder {
             regions: Arena::new(),
             region_args: Arena::new(),
             region_results: Arena::new(),
-            state_domains: IrFunc::builtin_state_domains(),
             root: NodeId::new(0), // placeholder, set below
             vreg_count: 0,
             slot_count: 0,
@@ -1194,17 +1139,13 @@ impl IrBuilder {
         });
         func.root_debug_scope = root_debug_scope;
 
-        // Create the root lambda's body region.
-        // Standard arguments: all declared state domains.
-        let mut root_args = Vec::with_capacity(func.state_domains.len());
-        for (domain_id, _) in func.state_domains.iter() {
-            let arg_id = func.region_args.push(RegionArg {
-                kind: PortKind::state(domain_id),
-                vreg: None,
-                debug_value: None,
-            });
-            root_args.push(arg_id);
-        }
+        // Create the root lambda's body region with a single state arg.
+        let state_arg = func.region_args.push(RegionArg {
+            kind: PortKind::State,
+            vreg: None,
+            debug_value: None,
+        });
+        let root_args = vec![state_arg];
         let body = func.regions.push(Region {
             debug_scope: root_debug_scope,
             args: root_args,
@@ -1276,28 +1217,6 @@ impl IrBuilder {
     }
 
     /// Add a new named state domain before any lambda bodies are populated.
-    pub fn add_state_domain(&mut self, name: impl Into<String>) -> StateDomainId {
-        let domain_id = self.func.add_state_domain(name);
-        let lambda_ids: Vec<_> = (0..self.func.lambdas.len())
-            .map(|idx| LambdaId::new(idx as u32))
-            .collect();
-        for lambda_id in lambda_ids {
-            let body = self.func.lambda_body(lambda_id);
-            let region = &mut self.func.regions[body];
-            assert!(
-                region.nodes.is_empty() && region.results.is_empty(),
-                "state domains must be declared before populating lambda bodies"
-            );
-            let arg_id = self.func.region_args.push(RegionArg {
-                kind: PortKind::state(domain_id),
-                vreg: None,
-                debug_value: None,
-            });
-            region.args.push(arg_id);
-        }
-        domain_id
-    }
-
     /// Create a new lambda and return its ID.
     pub fn create_lambda(&mut self, label: impl Into<String>, output_size: usize) -> LambdaId {
         self.create_lambda_with_data_args(label, output_size, 0)
@@ -1315,7 +1234,7 @@ impl IrBuilder {
             parent: Some(self.func.root_debug_scope),
             kind: DebugScopeKind::LambdaBody { lambda_id },
         });
-        let mut args = Vec::with_capacity(data_arg_count + self.func.state_domains.len());
+        let mut args = Vec::with_capacity(data_arg_count + 1);
         for _ in 0..data_arg_count {
             let arg_id = self.func.region_args.push(RegionArg {
                 kind: PortKind::Data,
@@ -1324,14 +1243,12 @@ impl IrBuilder {
             });
             args.push(arg_id);
         }
-        for (domain_id, _) in self.func.state_domains.iter() {
-            let arg_id = self.func.region_args.push(RegionArg {
-                kind: PortKind::state(domain_id),
-                vreg: None,
-                debug_value: None,
-            });
-            args.push(arg_id);
-        }
+        let state_arg = self.func.region_args.push(RegionArg {
+            kind: PortKind::State,
+            vreg: None,
+            debug_value: None,
+        });
+        args.push(state_arg);
         let body = self.func.regions.push(Region {
             debug_scope,
             args,
@@ -1360,32 +1277,20 @@ impl IrBuilder {
         let body = self.func.lambda_body(id);
         let debug_scope = self.func.regions[body].debug_scope;
         let arg_count = self.func.regions[body].args.len();
-        let state_count = self.func.state_domains.len();
-        assert!(
-            arg_count >= state_count,
-            "lambda body must have declared state args"
-        );
-        let data_arg_count = arg_count - state_count;
-        let state_sources = self
-            .func
-            .state_domains
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let arg_id = self.func.regions[body].args[data_arg_count + i];
-                PortSource::RegionArg(RegionArgRef {
-                    region: body,
-                    arg: arg_id,
-                })
-            })
-            .collect();
+        assert!(arg_count >= 1, "lambda body must have a state arg");
+        // State arg is always last.
+        let state_arg_id = self.func.regions[body].args[arg_count - 1];
+        let state_source = PortSource::RegionArg(RegionArgRef {
+            region: body,
+            arg: state_arg_id,
+        });
 
         RegionBuilder {
             func: &mut self.func,
             region: body,
             debug_scope,
             debug_value: None,
-            state_sources,
+            state_source,
         }
     }
 
@@ -1405,7 +1310,7 @@ pub struct RegionBuilder<'a> {
     region: RegionId,
     debug_scope: DebugScopeId,
     debug_value: Option<DebugValueId>,
-    state_sources: Vec<PortSource>,
+    state_source: PortSource,
 }
 
 impl<'a> RegionBuilder<'a> {
@@ -1414,9 +1319,9 @@ impl<'a> RegionBuilder<'a> {
         self.region
     }
 
-    /// Current memory state token source.
+    /// Current state token source.
     pub fn memory_state(&self) -> PortSource {
-        self.state_source(MEMORY_STATE_DOMAIN)
+        self.state_source
     }
 
     /// Access the underlying IrFunc (for fresh_vreg, fresh_slot, etc.).
@@ -1482,26 +1387,22 @@ impl<'a> RegionBuilder<'a> {
         }
     }
 
-    fn state_source(&self, domain: StateDomainId) -> PortSource {
-        self.state_sources[domain.index()]
+    fn set_state_source(&mut self, source: PortSource) {
+        self.state_source = source;
     }
 
-    fn set_state_source(&mut self, domain: StateDomainId, source: PortSource) {
-        self.state_sources[domain.index()] = source;
-    }
-
-    fn state_output(domain: StateDomainId, debug_scope: DebugScopeId) -> OutputPort {
+    fn state_output(debug_scope: DebugScopeId) -> OutputPort {
         OutputPort {
-            kind: PortKind::state(domain),
+            kind: PortKind::State,
             vreg: None,
             debug_scope,
         }
     }
 
-    fn state_input(&self, domain: StateDomainId) -> InputPort {
+    fn state_input(&self) -> InputPort {
         InputPort {
-            kind: PortKind::state(domain),
-            source: self.state_source(domain),
+            kind: PortKind::State,
+            source: self.state_source,
         }
     }
 
@@ -1598,17 +1499,14 @@ impl<'a> RegionBuilder<'a> {
                     source: src,
                 },
                 InputPort {
-                    kind: MEMORY_STATE_PORT,
-                    source: self.state_source(MEMORY_STATE_DOMAIN),
+                    kind: PortKind::State,
+                    source: self.state_source,
                 },
             ],
-            outputs: vec![Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope)],
+            outputs: vec![Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::WriteToField { offset, width }),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 0 }));
     }
 
     /// Read from out+offset. Returns data output.
@@ -1619,19 +1517,13 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: MEMORY_STATE_PORT,
-                source: self.state_source(MEMORY_STATE_DOMAIN),
+                kind: PortKind::State,
+                source: self.state_source,
             }],
-            outputs: vec![
-                data_out,
-                Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope),
-            ],
+            outputs: vec![data_out, Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::ReadFromField { offset, width }),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
@@ -1643,19 +1535,13 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: MEMORY_STATE_PORT,
-                source: self.state_source(MEMORY_STATE_DOMAIN),
+                kind: PortKind::State,
+                source: self.state_source,
             }],
-            outputs: vec![
-                data_out,
-                Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope),
-            ],
+            outputs: vec![data_out, Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::SaveOutPtr),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
@@ -1671,17 +1557,14 @@ impl<'a> RegionBuilder<'a> {
                     source: ptr,
                 },
                 InputPort {
-                    kind: MEMORY_STATE_PORT,
-                    source: self.state_source(MEMORY_STATE_DOMAIN),
+                    kind: PortKind::State,
+                    source: self.state_source,
                 },
             ],
-            outputs: vec![Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope)],
+            outputs: vec![Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::SetOutPtr),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 0 }));
     }
 
     /// Compute the address of a stack slot (`sp + slot_offset`).
@@ -1712,17 +1595,14 @@ impl<'a> RegionBuilder<'a> {
                     source: src,
                 },
                 InputPort {
-                    kind: MEMORY_STATE_PORT,
-                    source: self.state_source(MEMORY_STATE_DOMAIN),
+                    kind: PortKind::State,
+                    source: self.state_source,
                 },
             ],
-            outputs: vec![Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope)],
+            outputs: vec![Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::WriteToSlot { slot }),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 0 }));
     }
 
     /// Read a value from an abstract stack slot.
@@ -1733,19 +1613,13 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: MEMORY_STATE_PORT,
-                source: self.state_source(MEMORY_STATE_DOMAIN),
+                kind: PortKind::State,
+                source: self.state_source,
             }],
-            outputs: vec![
-                data_out,
-                Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope),
-            ],
+            outputs: vec![data_out, Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::ReadFromSlot { slot }),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
@@ -1765,17 +1639,14 @@ impl<'a> RegionBuilder<'a> {
                     source: src,
                 },
                 InputPort {
-                    kind: MEMORY_STATE_PORT,
-                    source: self.state_source(MEMORY_STATE_DOMAIN),
+                    kind: PortKind::State,
+                    source: self.state_source,
                 },
             ],
-            outputs: vec![Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope)],
+            outputs: vec![Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::StoreToAddr { width }),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 0 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 0 }));
     }
 
     /// Load a scalar value from a computed address.
@@ -1791,20 +1662,14 @@ impl<'a> RegionBuilder<'a> {
                     source: addr,
                 },
                 InputPort {
-                    kind: MEMORY_STATE_PORT,
-                    source: self.state_source(MEMORY_STATE_DOMAIN),
+                    kind: PortKind::State,
+                    source: self.state_source,
                 },
             ],
-            outputs: vec![
-                data_out,
-                Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope),
-            ],
+            outputs: vec![data_out, Self::state_output(self.debug_scope)],
             kind: NodeKind::Simple(IrOp::LoadFromAddr { width }),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
@@ -1826,18 +1691,14 @@ impl<'a> RegionBuilder<'a> {
                 source: src,
             })
             .collect();
-        for (domain_id, _) in self.func.state_domains.iter() {
-            inputs.push(self.state_input(domain_id));
-        }
+        inputs.push(self.state_input());
 
         let mut outputs = Vec::new();
         if has_result {
             outputs.push(self.data_output());
         }
-        let state_output_base = outputs.len() as u16;
-        for (domain_id, _) in self.func.state_domains.iter() {
-            outputs.push(Self::state_output(domain_id, self.debug_scope));
-        }
+        let state_output_index = outputs.len() as u16;
+        outputs.push(Self::state_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
@@ -1853,21 +1714,10 @@ impl<'a> RegionBuilder<'a> {
             }),
         });
 
-        let state_domain_ids: Vec<_> = self
-            .func
-            .state_domains
-            .iter()
-            .map(|(domain_id, _)| domain_id)
-            .collect();
-        for (offset, domain_id) in state_domain_ids.into_iter().enumerate() {
-            self.set_state_source(
-                domain_id,
-                PortSource::Node(OutputRef {
-                    node,
-                    index: state_output_base + offset as u16,
-                }),
-            );
-        }
+        self.set_state_source(PortSource::Node(OutputRef {
+            node,
+            index: state_output_index,
+        }));
 
         if has_result {
             Some(PortSource::Node(OutputRef { node, index: 0 }))
@@ -1914,11 +1764,11 @@ impl<'a> RegionBuilder<'a> {
             })
             .collect();
         inputs.push(InputPort {
-            kind: MEMORY_STATE_PORT,
-            source: self.state_source(MEMORY_STATE_DOMAIN),
+            kind: PortKind::State,
+            source: self.state_source,
         });
         let data_out = self.data_output();
-        let state_out = Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope);
+        let state_out = Self::state_output(self.debug_scope);
         let node = self.add_node(Node {
             region: self.region,
             debug_scope: self.debug_scope,
@@ -1930,10 +1780,7 @@ impl<'a> RegionBuilder<'a> {
                 arg_count: args.len() as u8,
             }),
         });
-        self.set_state_source(
-            MEMORY_STATE_DOMAIN,
-            PortSource::Node(OutputRef { node, index: 1 }),
-        );
+        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
@@ -1946,8 +1793,8 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: MEMORY_STATE_PORT,
-                source: self.state_source(MEMORY_STATE_DOMAIN),
+                kind: PortKind::State,
+                source: self.state_source,
             }],
             outputs: vec![],
             kind: NodeKind::Simple(IrOp::ErrorExit { code }),
@@ -1975,8 +1822,8 @@ impl<'a> RegionBuilder<'a> {
         // Create sub-regions, one per branch.
         let mut region_ids = Vec::with_capacity(branch_count);
         for branch_index in 0..branch_count {
-            // Each region gets: passthrough data args + all state domain args.
-            let mut args = Vec::with_capacity(passthrough.len() + self.func.state_domains.len());
+            // Each region gets: [passthrough data args..., state arg].
+            let mut args = Vec::with_capacity(passthrough.len() + 1);
             for &pt in passthrough {
                 let arg_id = self.func.region_args.push(RegionArg {
                     kind: PortKind::Data,
@@ -1985,14 +1832,13 @@ impl<'a> RegionBuilder<'a> {
                 });
                 args.push(arg_id);
             }
-            for (domain_id, _) in self.func.state_domains.iter() {
-                let arg_id = self.func.region_args.push(RegionArg {
-                    kind: PortKind::state(domain_id),
-                    vreg: None,
-                    debug_value: None,
-                });
-                args.push(arg_id);
-            }
+            // State arg (last)
+            let state_arg_id = self.func.region_args.push(RegionArg {
+                kind: PortKind::State,
+                vreg: None,
+                debug_value: None,
+            });
+            args.push(state_arg_id);
 
             let debug_scope = self.func.debug_scopes.push(DebugScope {
                 parent: Some(self.debug_scope),
@@ -2012,43 +1858,29 @@ impl<'a> RegionBuilder<'a> {
         // Build each branch.
         for (i, &region) in region_ids.iter().enumerate() {
             let debug_scope = self.func.regions[region].debug_scope;
-            let state_sources = self
-                .func
-                .state_domains
-                .iter()
-                .enumerate()
-                .map(|(j, _)| {
-                    let arg_id = self.func.regions[region].args[passthrough.len() + j];
-                    PortSource::RegionArg(RegionArgRef {
-                        region,
-                        arg: arg_id,
-                    })
-                })
-                .collect();
+            let state_arg_id = *self.func.regions[region].args.last().unwrap();
+            let state_source = PortSource::RegionArg(RegionArgRef {
+                region,
+                arg: state_arg_id,
+            });
 
             let mut branch_builder = RegionBuilder {
                 func: self.func,
                 region,
                 debug_scope,
                 debug_value: self.debug_value,
-                state_sources,
+                state_source,
             };
             build_branch(i, &mut branch_builder);
         }
 
         // Determine the number of data results from the first branch.
-        // All branches must produce the same number of results (RVSDG invariant).
-        let state_count = self.func.state_domains.len();
-        // Results layout: [data_results..., state domains...].
+        // Results layout: [data_results..., state_result].
         let total_results = self.func.regions[region_ids[0]].results.len();
-        assert!(
-            total_results >= state_count,
-            "gamma branch must have state results for all declared domains"
-        );
-        let data_result_count = total_results - state_count;
+        let data_result_count = total_results - 1; // last is state
 
-        // Build the gamma node's inputs: predicate + passthrough + state tokens.
-        let mut inputs = Vec::with_capacity(1 + passthrough.len() + state_count);
+        // Build the gamma node's inputs: predicate + passthrough + state.
+        let mut inputs = Vec::with_capacity(1 + passthrough.len() + 1);
         inputs.push(InputPort {
             kind: PortKind::Data,
             source: predicate,
@@ -2059,20 +1891,16 @@ impl<'a> RegionBuilder<'a> {
                 source: pt,
             });
         }
-        for (domain_id, _) in self.func.state_domains.iter() {
-            inputs.push(self.state_input(domain_id));
-        }
+        inputs.push(self.state_input());
 
-        // Build outputs: data results + state tokens.
-        let mut outputs = Vec::with_capacity(data_result_count + state_count);
+        // Build outputs: data results + state.
+        let mut outputs = Vec::with_capacity(data_result_count + 1);
         let mut data_outputs = Vec::with_capacity(data_result_count);
         for _ in 0..data_result_count {
             outputs.push(self.data_output());
         }
-        let state_output_base = outputs.len() as u16;
-        for (domain_id, _) in self.func.state_domains.iter() {
-            outputs.push(Self::state_output(domain_id, self.debug_scope));
-        }
+        let state_output_index = outputs.len() as u16;
+        outputs.push(Self::state_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
@@ -2085,21 +1913,10 @@ impl<'a> RegionBuilder<'a> {
             },
         });
 
-        let state_domain_ids: Vec<_> = self
-            .func
-            .state_domains
-            .iter()
-            .map(|(domain_id, _)| domain_id)
-            .collect();
-        for (offset, domain_id) in state_domain_ids.into_iter().enumerate() {
-            self.set_state_source(
-                domain_id,
-                PortSource::Node(OutputRef {
-                    node,
-                    index: state_output_base + offset as u16,
-                }),
-            );
-        }
+        self.set_state_source(PortSource::Node(OutputRef {
+            node,
+            index: state_output_index,
+        }));
 
         // Return data output sources.
         for i in 0..data_result_count {
@@ -2115,9 +1932,8 @@ impl<'a> RegionBuilder<'a> {
     ///
     /// `loop_vars`: initial values for loop-carried variables.
     /// `build_body`: called with a [`RegionBuilder`] for the body.
-    ///   The body region receives `[loop_vars..., output_state, memory_state]`
-    ///   as arguments.
-    ///   Must call `set_results` with `[predicate, loop_vars..., ...]`.
+    ///   The body region receives `[loop_vars..., state]` as arguments.
+    ///   Must call `set_results` with `[predicate, loop_vars..., state]`.
     ///   Predicate 0 = exit, nonzero = continue.
     ///
     /// Returns the final values of the loop variables after the loop exits.
@@ -2126,9 +1942,8 @@ impl<'a> RegionBuilder<'a> {
         loop_vars: &[PortSource],
         build_body: impl FnOnce(&mut RegionBuilder<'_>),
     ) -> Vec<PortSource> {
-        let state_count = self.func.state_domains.len();
-        // Create the body region with args: [loop_vars..., state domains...].
-        let mut args = Vec::with_capacity(loop_vars.len() + state_count);
+        // Create the body region with args: [loop_vars..., state].
+        let mut args = Vec::with_capacity(loop_vars.len() + 1);
         for &loop_var in loop_vars {
             let arg_id = self.func.region_args.push(RegionArg {
                 kind: PortKind::Data,
@@ -2137,14 +1952,13 @@ impl<'a> RegionBuilder<'a> {
             });
             args.push(arg_id);
         }
-        for (domain_id, _) in self.func.state_domains.iter() {
-            let arg_id = self.func.region_args.push(RegionArg {
-                kind: PortKind::state(domain_id),
-                vreg: None,
-                debug_value: None,
-            });
-            args.push(arg_id);
-        }
+        // State arg (last)
+        let state_arg_id = self.func.region_args.push(RegionArg {
+            kind: PortKind::State,
+            vreg: None,
+            debug_value: None,
+        });
+        args.push(state_arg_id);
 
         let body_debug_scope = self.func.debug_scopes.push(DebugScope {
             parent: Some(self.debug_scope),
@@ -2158,60 +1972,47 @@ impl<'a> RegionBuilder<'a> {
         });
 
         // Build the body.
-        let state_sources = self
-            .func
-            .state_domains
-            .iter()
-            .enumerate()
-            .map(|(j, _)| {
-                let arg_id = self.func.regions[body].args[loop_vars.len() + j];
-                PortSource::RegionArg(RegionArgRef {
-                    region: body,
-                    arg: arg_id,
-                })
-            })
-            .collect();
+        let state_source = PortSource::RegionArg(RegionArgRef {
+            region: body,
+            arg: state_arg_id,
+        });
 
         let mut body_builder = RegionBuilder {
             func: self.func,
             region: body,
             debug_scope: body_debug_scope,
             debug_value: self.debug_value,
-            state_sources,
+            state_source,
         };
         build_body(&mut body_builder);
 
-        // Body results layout: [predicate, loop_vars..., state domains...].
+        // Body results layout: [predicate, loop_vars..., state].
         let total_results = self.func.regions[body].results.len();
         assert!(
-            total_results > state_count,
-            "theta body must have predicate plus state results for all declared domains"
+            total_results >= 2,
+            "theta body must have at least predicate and state"
         );
-        let data_result_count = total_results - state_count; // predicate + loop_vars
+        let data_result_count = total_results - 1; // minus state
         let loop_var_count = data_result_count - 1; // minus predicate
 
-        // Build theta node inputs: [loop_vars..., state domains...].
-        let mut inputs = Vec::with_capacity(loop_vars.len() + state_count);
+        // Build theta node inputs: [loop_vars..., state].
+        let mut inputs = Vec::with_capacity(loop_vars.len() + 1);
         for &lv in loop_vars {
             inputs.push(InputPort {
                 kind: PortKind::Data,
                 source: lv,
             });
         }
-        for (domain_id, _) in self.func.state_domains.iter() {
-            inputs.push(self.state_input(domain_id));
-        }
+        inputs.push(self.state_input());
 
-        // Outputs: [loop_vars..., state domains...].
-        let mut outputs = Vec::with_capacity(loop_var_count + state_count);
+        // Outputs: [loop_vars..., state].
+        let mut outputs = Vec::with_capacity(loop_var_count + 1);
         let mut data_outputs = Vec::new();
         for _ in 0..loop_var_count {
             outputs.push(self.data_output());
         }
-        let state_output_base = outputs.len() as u16;
-        for (domain_id, _) in self.func.state_domains.iter() {
-            outputs.push(Self::state_output(domain_id, self.debug_scope));
-        }
+        let state_output_index = outputs.len() as u16;
+        outputs.push(Self::state_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
@@ -2225,21 +2026,10 @@ impl<'a> RegionBuilder<'a> {
             },
         });
 
-        let state_domain_ids: Vec<_> = self
-            .func
-            .state_domains
-            .iter()
-            .map(|(domain_id, _)| domain_id)
-            .collect();
-        for (offset, domain_id) in state_domain_ids.into_iter().enumerate() {
-            self.set_state_source(
-                domain_id,
-                PortSource::Node(OutputRef {
-                    node,
-                    index: state_output_base + offset as u16,
-                }),
-            );
-        }
+        self.set_state_source(PortSource::Node(OutputRef {
+            node,
+            index: state_output_index,
+        }));
 
         for i in 0..loop_var_count {
             data_outputs.push(PortSource::Node(OutputRef {
@@ -2290,25 +2080,21 @@ impl<'a> RegionBuilder<'a> {
         args: &[PortSource],
         result_count: usize,
     ) -> Vec<PortSource> {
-        let mut inputs = Vec::with_capacity(args.len() + self.func.state_domains.len());
+        let mut inputs = Vec::with_capacity(args.len() + 1);
         for &arg in args {
             inputs.push(InputPort {
                 kind: PortKind::Data,
                 source: arg,
             });
         }
-        for (domain_id, _) in self.func.state_domains.iter() {
-            inputs.push(self.state_input(domain_id));
-        }
+        inputs.push(self.state_input());
 
-        let mut outputs = Vec::with_capacity(result_count + self.func.state_domains.len());
+        let mut outputs = Vec::with_capacity(result_count + 1);
         for _ in 0..result_count {
             outputs.push(self.data_output());
         }
-        let state_output_base = outputs.len() as u16;
-        for (domain_id, _) in self.func.state_domains.iter() {
-            outputs.push(Self::state_output(domain_id, self.debug_scope));
-        }
+        let state_output_index = outputs.len() as u16;
+        outputs.push(Self::state_output(self.debug_scope));
 
         let node = self.add_node(Node {
             region: self.region,
@@ -2319,21 +2105,10 @@ impl<'a> RegionBuilder<'a> {
             kind: NodeKind::Apply { target },
         });
 
-        let state_domain_ids: Vec<_> = self
-            .func
-            .state_domains
-            .iter()
-            .map(|(domain_id, _)| domain_id)
-            .collect();
-        for (offset, domain_id) in state_domain_ids.into_iter().enumerate() {
-            self.set_state_source(
-                domain_id,
-                PortSource::Node(OutputRef {
-                    node,
-                    index: state_output_base + offset as u16,
-                }),
-            );
-        }
+        self.set_state_source(PortSource::Node(OutputRef {
+            node,
+            index: state_output_index,
+        }));
 
         (0..result_count)
             .map(|i| {
@@ -2362,14 +2137,12 @@ impl<'a> RegionBuilder<'a> {
             self.func.regions[self.region].results.push(result_id);
         }
 
-        // Add state results for all declared domains
-        for (domain_id, _) in self.func.state_domains.iter() {
-            let result_id = self.func.region_results.push(RegionResult {
-                kind: PortKind::state(domain_id),
-                source: self.state_source(domain_id),
-            });
-            self.func.regions[self.region].results.push(result_id);
-        }
+        // Append state result (current state token)
+        let state_result_id = self.func.region_results.push(RegionResult {
+            kind: PortKind::State,
+            source: self.state_source,
+        });
+        self.func.regions[self.region].results.push(state_result_id);
     }
 
     /// Allocate a fresh stack slot.
@@ -2414,7 +2187,6 @@ pub struct IrFuncDisplay<'a> {
 
 impl<'a> fmt::Display for IrFuncDisplay<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.func.fmt_state_domains(f)?;
         self.func.fmt_debug_scopes(f)?;
         self.func.fmt_node(f, self.func.root, 0, self.registry)
     }
@@ -2730,11 +2502,8 @@ impl IrFunc {
                             write!(f, "n{}.{}", oref.node.index(), oref.index)
                         }
                     }
-                    PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => {
+                    PortKind::State => {
                         write!(f, "%ms:n{}", oref.node.index())
-                    }
-                    PortKind::State(domain) => {
-                        write!(f, "%s{}:n{}", domain.index(), oref.node.index())
                     }
                 }
             }
@@ -2748,10 +2517,9 @@ impl IrFunc {
                     .unwrap_or(0);
                 match arg.kind {
                     PortKind::Data => write!(f, "arg{}", display_index),
-                    PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => {
+                    PortKind::State => {
                         write!(f, "%ms:arg")
                     }
-                    PortKind::State(domain) => write!(f, "%s{}:arg", domain.index()),
                 }
             }
         }
@@ -2771,8 +2539,7 @@ impl IrFunc {
                     write!(f, "?")?;
                 }
             }
-            PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => write!(f, "%ms")?,
-            PortKind::State(domain) => write!(f, "%s{}", domain.index())?,
+            PortKind::State => write!(f, "%ms")?,
         }
 
         if out.debug_scope != default_scope {
@@ -2790,18 +2557,8 @@ impl IrFunc {
     ) -> fmt::Result {
         match arg.kind {
             PortKind::Data => write!(f, "arg{index}"),
-            PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => write!(f, "%ms"),
-            PortKind::State(domain) => write!(f, "%s{}", domain.index()),
+            PortKind::State => write!(f, "%ms"),
         }
-    }
-
-    fn fmt_state_domains(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "state_domains {{")?;
-        for (domain_id, domain) in self.state_domains.iter() {
-            writeln!(f, "  d{} = {}", domain_id.index(), domain.name)?;
-        }
-        writeln!(f, "}}")?;
-        Ok(())
     }
 
     fn fmt_debug_scopes(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -2938,7 +2695,7 @@ mod tests {
                 width: Width::W4
             }
             .effect(),
-            MEMORY_EFFECT
+            Effect::SideEffect
         );
         assert_eq!(
             IrOp::ReadFromField {
@@ -2946,7 +2703,7 @@ mod tests {
                 width: Width::W4
             }
             .effect(),
-            MEMORY_EFFECT
+            Effect::SideEffect
         );
 
         assert_eq!(
@@ -2966,7 +2723,7 @@ mod tests {
                 arg_count: 0,
             }
             .effect(),
-            MEMORY_EFFECT
+            Effect::SideEffect
         );
         assert!(
             IrOp::CallEffect {

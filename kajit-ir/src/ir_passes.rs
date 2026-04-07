@@ -557,7 +557,7 @@ fn hoist_theta_constants_as_args(func: &mut IrFunc, theta: NodeId) -> bool {
     // All theta-related structures have layout: [loop_vars..., state_domains...]
     // (Body results also have a predicate prefix: [predicate, loop_vars..., state_domains...])
     // We must insert the new hoisted constant as a loop_var, BEFORE the state domains.
-    let state_count = func.state_domains.len();
+    let state_count = 1;
 
     // Insert theta input before state domains
     let input_insert_pos = func.nodes[theta].inputs.len() - state_count;

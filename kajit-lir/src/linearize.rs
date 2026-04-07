@@ -1336,7 +1336,7 @@ impl<'a> Linearizer<'a> {
         // Collect entry phi_args for each branch: (source=gamma_input, target=branch_region_arg).
         // Include even self-referential phis (src == dst) since slot2reg can make
         // gamma inputs and region args share the same vreg.
-        let state_count = self.func.state_domains.len();
+        let state_count = 1;
         let passthrough_count = node.inputs.len() - 1 - state_count;
         let mut branch_entry_phis: Vec<Vec<(VReg, VReg)>> = Vec::new();
         for &region_id in regions.iter() {
@@ -1476,7 +1476,7 @@ impl<'a> Linearizer<'a> {
 
         let node = &self.func.nodes[node_id];
         let predicate = self.resolve_vreg(node.inputs[0].source);
-        let state_count = self.func.state_domains.len();
+        let state_count = 1;
         let passthrough_count = node.inputs.len() - 1 - state_count;
 
         let data_output_count = node
@@ -1680,7 +1680,7 @@ impl<'a> Linearizer<'a> {
 
         let node = &self.func.nodes[node_id];
         let predicate = self.resolve_vreg(node.inputs[0].source);
-        let state_count = self.func.state_domains.len();
+        let state_count = 1;
         let passthrough_count = node.inputs.len() - 1 - state_count;
         let data_output_count = node
             .outputs
@@ -2333,7 +2333,7 @@ impl<'a> Linearizer<'a> {
         }
 
         // Entry phis for the "more" (passthrough) branch
-        let state_count = self.func.state_domains.len();
+        let state_count = 1;
         let passthrough_count = node.inputs.len() - 1 - state_count;
         let more_region = &self.func.regions[more_branch];
         let mut more_entry_phis = Vec::new();
@@ -2955,7 +2955,7 @@ impl<'a> Linearizer<'a> {
         exit_ctx: Option<ChainInheritedState>,
     ) -> bool {
         let ds_node = &self.func.nodes[downstream_id];
-        let state_count = self.func.state_domains.len();
+        let state_count = 1;
         let ds_passthrough_count = ds_node.inputs.len() - 1 - state_count;
         let ds_data_output_count = ds_node
             .outputs
@@ -3691,7 +3691,7 @@ impl<'a> Linearizer<'a> {
     /// Emit Copy ops for passthrough data inputs entering a gamma branch region.
     fn emit_gamma_entry_copies(&mut self, node: &Node, region_id: RegionId) {
         let region = &self.func.regions[region_id];
-        let state_count = self.func.state_domains.len();
+        let state_count = 1;
         // Inputs layout: [predicate, passthrough..., state domains...]
         // Region args layout: [passthrough..., state domains...]
         // Skip predicate (input 0), skip state inputs at the end.
@@ -3761,7 +3761,7 @@ impl<'a> Linearizer<'a> {
 
         let node = &self.func.nodes[node_id];
         let body_region = &self.func.regions[body];
-        let state_count = self.func.state_domains.len();
+        let state_count = 1;
 
         // Theta inputs: [loop_vars..., state domains...]
         // Body args: [loop_vars..., state domains...]

@@ -10,9 +10,8 @@ use chumsky::prelude::*;
 use kajit_ir::ErrorCode;
 use kajit_ir::{
     Arena, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry,
-    IrFunc, IrOp, LambdaId, MEMORY_STATE_DOMAIN, MEMORY_STATE_DOMAIN_NAME, Node, NodeId, NodeKind,
-    OutputPort, OutputRef, PortKind, PortSource, Region, RegionArg, RegionArgRef, RegionId,
-    RegionResult, SlotId, StateDomain, StateDomainId, VReg, Width,
+    IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
+    Region, RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, VReg, Width,
 };
 
 // ─── AST types (first pass) ────────────────────────────────────────────────
@@ -99,12 +98,6 @@ enum AstRegionArg {
     State(u32), // %ms, %ms, %s2
 }
 
-#[derive(Debug, Clone)]
-struct AstStateDomainDef {
-    id: u32,
-    name: String,
-}
-
 /// A parsed lambda (unresolved).
 #[derive(Debug, Clone)]
 struct AstLambda {
@@ -131,7 +124,6 @@ struct AstScopeDef {
 
 #[derive(Debug, Clone)]
 struct AstProgram {
-    state_domains: Vec<AstStateDomainDef>,
     scopes: Vec<AstScopeDef>,
     lambdas: Vec<AstLambda>,
 }
@@ -167,10 +159,7 @@ fn uint16<'src>() -> impl Parser<'src, &'src str, u16, Extra<'src>> + Clone {
 }
 
 fn state_domain_ref<'src>() -> impl Parser<'src, &'src str, u32, Extra<'src>> + Clone {
-    choice((
-        just("%ms").to(MEMORY_STATE_DOMAIN.index() as u32),
-        just("%s").ignore_then(uint32()),
-    ))
+    choice((just("%ms").to(0u32), just("%s").ignore_then(uint32())))
 }
 
 /// Parse a width: W1, W2, W4, W8.
@@ -273,30 +262,6 @@ fn scopes_block<'src>() -> impl Parser<'src, &'src str, Vec<AstScopeDef>, Extra<
         .ignore_then(just("{"))
         .ignore_then(ws())
         .ignore_then(scope_def().padded_by(ws()).repeated().collect::<Vec<_>>())
-        .then_ignore(ws().then(just("}")))
-}
-
-fn state_domain_def<'src>() -> impl Parser<'src, &'src str, AstStateDomainDef, Extra<'src>> + Clone
-{
-    just("d")
-        .ignore_then(uint32())
-        .then_ignore(ws().then(just("=")).then(ws()))
-        .then(symbol_name())
-        .map(|(id, name)| AstStateDomainDef { id, name })
-}
-
-fn state_domains_block<'src>()
--> impl Parser<'src, &'src str, Vec<AstStateDomainDef>, Extra<'src>> + Clone {
-    just("state_domains")
-        .padded_by(ws())
-        .ignore_then(just("{"))
-        .ignore_then(ws())
-        .ignore_then(
-            state_domain_def()
-                .padded_by(ws())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
         .then_ignore(ws().then(just("}")))
 }
 
@@ -695,20 +660,17 @@ fn lambda<'src>() -> impl Parser<'src, &'src str, AstLambda, Extra<'src>> + Clon
 }
 
 fn program<'src>() -> impl Parser<'src, &'src str, AstProgram, Extra<'src>> + Clone {
-    state_domains_block()
+    scopes_block()
         .padded_by(ws())
         .or_not()
         .then(
-            scopes_block().padded_by(ws()).or_not().then(
-                lambda()
-                    .padded_by(ws())
-                    .repeated()
-                    .at_least(1)
-                    .collect::<Vec<_>>(),
-            ),
+            lambda()
+                .padded_by(ws())
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<_>>(),
         )
-        .map(|(state_domains, (scopes, lambdas))| AstProgram {
-            state_domains: state_domains.unwrap_or_default(),
+        .map(|(scopes, lambdas)| AstProgram {
             scopes: scopes.unwrap_or_default(),
             lambdas,
         })
@@ -751,11 +713,6 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
         regions: Arena::new(),
         region_args: Arena::new(),
         region_results: Arena::new(),
-        state_domains: if program.state_domains.is_empty() {
-            IrFunc::builtin_state_domains()
-        } else {
-            Arena::new()
-        },
         root: NodeId::new(0),
         vreg_count: 0,
         slot_count: 0,
@@ -771,10 +728,6 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
         root_debug_scope: DebugScopeId::new(0),
         data_blobs: Vec::new(),
     };
-
-    if !program.state_domains.is_empty() {
-        build_explicit_state_domains(&mut func, &program.state_domains)?;
-    }
 
     if program.scopes.is_empty() {
         func.root_debug_scope = func.debug_scopes.push(DebugScope {
@@ -881,40 +834,6 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
     Ok(func)
 }
 
-fn build_explicit_state_domains(
-    func: &mut IrFunc,
-    state_domains: &[AstStateDomainDef],
-) -> Result<(), ParseError> {
-    for domain in state_domains {
-        let expected = func.state_domains.len() as u32;
-        if domain.id != expected {
-            return Err(ParseError {
-                message: format!(
-                    "state domain IDs must be dense and in order: expected d{expected}, found d{}",
-                    domain.id
-                ),
-            });
-        }
-        func.state_domains.push(StateDomain {
-            name: domain.name.clone(),
-        });
-    }
-
-    if func.state_domains.len() <= MEMORY_STATE_DOMAIN.index() {
-        return Err(ParseError {
-            message: "explicit state domains must define d0 = memory".to_string(),
-        });
-    }
-
-    if func.state_domains[MEMORY_STATE_DOMAIN].name != MEMORY_STATE_DOMAIN_NAME {
-        return Err(ParseError {
-            message: format!("explicit state domains must define d0 = {MEMORY_STATE_DOMAIN_NAME}"),
-        });
-    }
-
-    Ok(())
-}
-
 fn build_explicit_scopes(func: &mut IrFunc, scopes: &[AstScopeDef]) -> Result<(), ParseError> {
     for scope in scopes {
         let expected = func.debug_scopes.len() as u32;
@@ -970,16 +889,6 @@ fn lookup_scope(func: &IrFunc, scope: u32) -> Result<DebugScopeId, ParseError> {
     Ok(scope_id)
 }
 
-fn lookup_state_domain(func: &IrFunc, domain: u32) -> Result<StateDomainId, ParseError> {
-    let domain_id = StateDomainId::new(domain);
-    if !func.has_state_domain(domain_id) {
-        return Err(ParseError {
-            message: format!("unknown state domain d{domain}"),
-        });
-    }
-    Ok(domain_id)
-}
-
 fn find_lambda_body_scope(func: &IrFunc, lambda_id: LambdaId) -> Result<DebugScopeId, ParseError> {
     func.debug_scopes
         .iter()
@@ -1030,8 +939,8 @@ fn resolve_region(
                 vreg: None,
                 debug_value: None,
             },
-            AstRegionArg::State(domain) => RegionArg {
-                kind: PortKind::state(lookup_state_domain(func, *domain)?),
+            AstRegionArg::State(_domain) => RegionArg {
+                kind: PortKind::State,
                 vreg: None,
                 debug_value: None,
             },
@@ -1271,21 +1180,16 @@ fn resolve_node(
                 .collect::<Result<_, _>>()?;
 
             // Theta invariant checks: textual IR must follow builder semantics.
-            // inputs: [loop_vars..., state_domains...]
-            // body args: [loop_vars..., state_domains...]
-            // body results: [pred, loop_vars..., state_domains...]
-            // outputs: [loop_vars..., state_domains...]
-            let state_count = func.state_domains.len();
-            if resolved_inputs.len() < state_count {
-                return Err(ParseError {
-                    message: format!("theta n{id} must have at least {state_count} state inputs"),
-                });
-            }
-            if resolved_outputs.len() < state_count {
-                return Err(ParseError {
-                    message: format!("theta n{id} must have at least {state_count} state outputs"),
-                });
-            }
+            // inputs: [loop_vars..., state_tokens...]
+            // body args: [loop_vars..., state_tokens...]
+            // body results: [pred, loop_vars..., state_tokens...]
+            // outputs: [loop_vars..., state_tokens...]
+            // Count trailing state ports from the resolved inputs.
+            let state_count = resolved_inputs
+                .iter()
+                .rev()
+                .take_while(|i| i.kind == PortKind::State)
+                .count();
 
             let body_region = &func.regions[body_id];
             if body_region.args.len() != resolved_inputs.len() {
@@ -1305,31 +1209,6 @@ fn resolve_node(
                         resolved_outputs.len() + 1
                     ),
                 });
-            }
-
-            // Check trailing state domains on inputs/outputs/args/results.
-            let in_len = resolved_inputs.len();
-            let out_len = resolved_outputs.len();
-            let body_arg_count = body_region.args.len();
-            let body_res_count = body_region.results.len();
-            for s in 0..state_count {
-                let in_kind = resolved_inputs[in_len - state_count + s].kind;
-                let out_kind = resolved_outputs[out_len - state_count + s].kind;
-                let arg_kind =
-                    func.region_args[body_region.args[body_arg_count - state_count + s]].kind;
-                let res_kind =
-                    func.region_results[body_region.results[body_res_count - state_count + s]].kind;
-                if in_kind == PortKind::Data
-                    || out_kind == PortKind::Data
-                    || arg_kind == PortKind::Data
-                    || res_kind == PortKind::Data
-                {
-                    return Err(ParseError {
-                        message: format!(
-                            "theta n{id} trailing state domain {s} must be state ports, not data"
-                        ),
-                    });
-                }
             }
 
             let body_res_first_kind = func.region_results[body_region.results[0]].kind;
@@ -1444,9 +1323,11 @@ fn resolve_source(
             // This shouldn't happen in our format, but panic clearly.
             panic!("unresolved vreg v{v}");
         }
-        AstSource::StateNode { domain, node: n } => {
-            let domain = lookup_state_domain(func, *domain)?;
-            let kind = PortKind::state(domain);
+        AstSource::StateNode {
+            domain: _domain,
+            node: n,
+        } => {
+            let kind = PortKind::State;
             let node_id = node_map[n];
             let node = &func.nodes[node_id];
             for (idx, out) in node.outputs.iter().enumerate() {
@@ -1460,11 +1341,10 @@ fn resolve_source(
                     ));
                 }
             }
-            panic!("no state domain d{} output on node n{n}", domain.index());
+            panic!("no state output on node n{n}");
         }
-        AstSource::StateArg(domain) => {
-            let domain = lookup_state_domain(func, *domain)?;
-            let kind = PortKind::state(domain);
+        AstSource::StateArg(_domain) => {
+            let kind = PortKind::State;
             let region = &func.regions[region_id];
             for &arg_id in &region.args {
                 let arg = &func.region_args[arg_id];
@@ -1478,7 +1358,7 @@ fn resolve_source(
                     ));
                 }
             }
-            panic!("no state domain d{} arg in region", domain.index());
+            panic!("no state arg in region");
         }
         AstSource::RegionArg(idx) => {
             let region = &func.regions[region_id];
@@ -1526,8 +1406,8 @@ fn resolve_output(
                 debug_scope,
             }
         }
-        AstOutput::State(domain) => OutputPort {
-            kind: PortKind::state(lookup_state_domain(func, *domain)?),
+        AstOutput::State(_domain) => OutputPort {
+            kind: PortKind::State,
             vreg: None,
             debug_scope,
         },
@@ -1789,57 +1669,6 @@ lambda @0 (shape: "u8") {
     }
 
     #[test]
-    fn round_trip_generic_state_domain() {
-        let input = r#"
-state_domains {
-  d0 = memory
-  d1 = planner
-}
-lambda @0 (shape: "u8") {
-  region {
-    args: [%ms, %s1]
-    n0 = Const(0x2a) [] -> [v0]
-    results: [%ms:arg, %s1:arg]
-  }
-}
-"#;
-
-        let registry = IntrinsicRegistry::empty();
-        let func = parse_ir(input, &registry).unwrap();
-        assert_eq!(func.state_domains.len(), 2);
-        assert_eq!(func.state_domains[StateDomainId::new(1)].name, "planner");
-
-        let text1 = format!("{}", func.display_with_registry(&registry));
-        let func2 = parse_ir(&text1, &registry).unwrap();
-        let text2 = format!("{}", func2.display_with_registry(&registry));
-
-        assert_eq!(
-            text1, text2,
-            "round trip failed:\n--- original ---\n{text1}\n--- reparsed ---\n{text2}"
-        );
-    }
-
-    #[test]
-    fn parse_unknown_state_domain_fails() {
-        let input = r#"
-lambda @0 (shape: "u8") {
-  region {
-    args: [%ms, %s1]
-    results: [%ms:arg, %s1:arg]
-  }
-}
-"#;
-
-        let registry = IntrinsicRegistry::empty();
-        let err = match parse_ir(input, &registry) {
-            Ok(_) => panic!("expected parse error"),
-            Err(err) => err,
-        };
-
-        assert!(err.message.contains("unknown state domain d1"));
-    }
-
-    #[test]
     fn parse_error_unknown_intrinsic() {
         let input = r#"
 lambda @0 (shape: "u8") {
@@ -1964,9 +1793,6 @@ lambda @0 (shape: "u8") {
     #[test]
     fn parse_and_round_trip_explicit_debug_scopes() {
         let input = r#"
-state_domains {
-  d0 = memory
-}
 scopes {
   s0 = lambda_body(@0)
   s1 = theta_body parent s0

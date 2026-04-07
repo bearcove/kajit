@@ -68,7 +68,7 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
     let state_count = func.nodes[theta_id]
         .inputs
         .iter()
-        .filter(|ip| matches!(ip.kind, PortKind::State(_)))
+        .filter(|ip| matches!(ip.kind, PortKind::State))
         .count();
     let loop_var_count = func.nodes[theta_id].inputs.len() - state_count;
 

@@ -355,7 +355,7 @@ fn batch_insert_data_outputs(
         return vec![];
     }
 
-    let state_count = func.state_domains.len();
+    let state_count = 1;
     let insert_base = func.nodes[node_id].outputs.len() - state_count;
 
     // Insert all new outputs at once
@@ -426,7 +426,7 @@ fn remap_slot_values(
 }
 
 fn insert_data_input(func: &mut IrFunc, node_id: NodeId, source: PortSource) {
-    let state_count = func.state_domains.len();
+    let state_count = 1;
     let insert_idx = func.nodes[node_id].inputs.len() - state_count;
     func.nodes[node_id].inputs.insert(
         insert_idx,
@@ -438,7 +438,7 @@ fn insert_data_input(func: &mut IrFunc, node_id: NodeId, source: PortSource) {
 }
 
 fn insert_data_region_arg(func: &mut IrFunc, region: RegionId) -> PortSource {
-    let state_count = func.state_domains.len();
+    let state_count = 1;
     let insert_idx = func.regions[region].args.len() - state_count;
     let arg_id = func.region_args.push(RegionArg {
         kind: PortKind::Data,
@@ -453,7 +453,7 @@ fn insert_data_region_arg(func: &mut IrFunc, region: RegionId) -> PortSource {
 }
 
 fn insert_data_region_result(func: &mut IrFunc, region: RegionId, source: PortSource) {
-    let state_count = func.state_domains.len();
+    let state_count = 1;
     let insert_idx = func.regions[region].results.len() - state_count;
     let result_id = func.region_results.push(RegionResult {
         kind: PortKind::Data,
@@ -477,7 +477,7 @@ fn promote_gamma(
 ) -> HashSet<PortSource> {
     let mut consumed_parent_sources: HashSet<PortSource> = HashSet::new();
     let debug_scope = func.nodes[node_id].debug_scope;
-    let state_count = func.state_domains.len();
+    let state_count = 1;
 
     // Phase 1: Add inputs and region args for all slots.
     for &slot in slots_to_thread {

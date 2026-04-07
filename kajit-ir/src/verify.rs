@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    DebugScopeId, IrFunc, IrOp, LambdaId, MEMORY_STATE_DOMAIN, NodeId, NodeKind, OutputRef,
-    PortKind, PortSource, RegionArgRef, RegionId, StateDomainId,
+    DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource,
+    RegionArgRef, RegionId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -20,9 +20,6 @@ struct StateUsage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VerifyError {
-    InvalidStateDomain {
-        domain: StateDomainId,
-    },
     InvalidLambdaNode {
         lambda: LambdaId,
         node: NodeId,
@@ -130,10 +127,6 @@ fn region_exists(func: &IrFunc, region: RegionId) -> bool {
 
 fn debug_scope_exists(func: &IrFunc, scope: DebugScopeId) -> bool {
     scope.index() < func.debug_scopes.len()
-}
-
-fn state_domain_exists(func: &IrFunc, domain: StateDomainId) -> bool {
-    func.has_state_domain(domain)
 }
 
 fn is_state_kind(kind: PortKind) -> bool {
@@ -318,12 +311,6 @@ fn state_source(source: PortSource, func: &IrFunc) -> StateProducer {
 }
 
 pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
-    if !state_domain_exists(func, MEMORY_STATE_DOMAIN) {
-        return Err(VerifyError::InvalidStateDomain {
-            domain: MEMORY_STATE_DOMAIN,
-        });
-    }
-
     if !debug_scope_exists(func, func.root_debug_scope) {
         return Err(VerifyError::InvalidDebugScope {
             scope: func.root_debug_scope,
@@ -346,14 +333,6 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 scope: region.debug_scope,
             });
         }
-        for &arg_id in &region.args {
-            let arg = &func.region_args[arg_id];
-            if let Some(domain) = arg.kind.state_domain()
-                && !state_domain_exists(func, domain)
-            {
-                return Err(VerifyError::InvalidStateDomain { domain });
-            }
-        }
         let mut positions: HashMap<NodeId, usize> = HashMap::with_capacity(region.nodes.len());
         for (idx, &node_id) in region.nodes.iter().enumerate() {
             positions.insert(node_id, idx);
@@ -372,18 +351,8 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         scope: output.debug_scope,
                     });
                 }
-                if let Some(domain) = output.kind.state_domain()
-                    && !state_domain_exists(func, domain)
-                {
-                    return Err(VerifyError::InvalidStateDomain { domain });
-                }
             }
             for (input_index, input) in node.inputs.iter().enumerate() {
-                if let Some(domain) = input.kind.state_domain()
-                    && !state_domain_exists(func, domain)
-                {
-                    return Err(VerifyError::InvalidStateDomain { domain });
-                }
                 match input.source {
                     PortSource::Node(source) => {
                         let kind = check_node_source(func, source, input.kind).map_err(|_| {
@@ -466,11 +435,6 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
 
         for (result_index, &result_id) in region.results.iter().enumerate() {
             let result = &func.region_results[result_id];
-            if let Some(domain) = result.kind.state_domain()
-                && !state_domain_exists(func, domain)
-            {
-                return Err(VerifyError::InvalidStateDomain { domain });
-            }
             match result.source {
                 PortSource::Node(source) => {
                     let kind = check_node_source(func, source, result.kind).map_err(|_| {
@@ -533,22 +497,17 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         }
     }
 
-    let mut state_uses: HashMap<StateDomainId, HashMap<StateProducer, StateUsage>> = HashMap::new();
+    // State chain validation: track uses of each state producer (single implicit domain)
+    let mut state_uses: HashMap<StateProducer, StateUsage> = HashMap::new();
     for &region_id in &region_order {
         let region = &func.regions[region_id];
         for &node_id in &region.nodes {
             let node = &func.nodes[node_id];
             for input in &node.inputs {
-                let producer = state_source(input.source, func);
-                if let Some(domain) = input.kind.state_domain() {
-                    let usage = state_uses
-                        .entry(domain)
-                        .or_default()
-                        .entry(producer)
-                        .or_default();
-                    if domain == MEMORY_STATE_DOMAIN
-                        && matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. }))
-                    {
+                if input.kind.is_state() {
+                    let producer = state_source(input.source, func);
+                    let usage = state_uses.entry(producer).or_default();
+                    if matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. })) {
                         usage.error_exit_sinks += 1;
                     } else {
                         usage.chain_uses += 1;
@@ -558,14 +517,9 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
         }
         for &result_id in &region.results {
             let result = &func.region_results[result_id];
-            let producer = state_source(result.source, func);
-            if let Some(domain) = result.kind.state_domain() {
-                state_uses
-                    .entry(domain)
-                    .or_default()
-                    .entry(producer)
-                    .or_default()
-                    .chain_uses += 1;
+            if result.kind.is_state() {
+                let producer = state_source(result.source, func);
+                state_uses.entry(producer).or_default().chain_uses += 1;
             }
         }
     }
@@ -581,10 +535,8 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 region: region_id,
                 arg: arg_id,
             });
-            let domain = arg.kind.state_domain().unwrap();
             let usage = state_uses
-                .get(&domain)
-                .and_then(|uses| uses.get(&state_source(producer, func)))
+                .get(&state_source(producer, func))
                 .copied()
                 .unwrap_or_default();
             if usage.chain_uses != 1 {
@@ -594,7 +546,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     uses: usage.chain_uses,
                 });
             }
-            if domain == MEMORY_STATE_DOMAIN && usage.error_exit_sinks > 1 {
+            if usage.error_exit_sinks > 1 {
                 return Err(VerifyError::StateErrorExitSinkViolation {
                     producer,
                     sinks: usage.error_exit_sinks,
@@ -612,10 +564,8 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     node: node_id,
                     index: output_index as u16,
                 });
-                let domain = output.kind.state_domain().unwrap();
                 let usage = state_uses
-                    .get(&domain)
-                    .and_then(|uses| uses.get(&state_source(producer, func)))
+                    .get(&state_source(producer, func))
                     .copied()
                     .unwrap_or_default();
                 if usage.chain_uses != 1 {
@@ -625,7 +575,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         uses: usage.chain_uses,
                     });
                 }
-                if domain == MEMORY_STATE_DOMAIN && usage.error_exit_sinks > 1 {
+                if usage.error_exit_sinks > 1 {
                     return Err(VerifyError::StateErrorExitSinkViolation {
                         producer,
                         sinks: usage.error_exit_sinks,
@@ -746,25 +696,6 @@ mod tests {
         assert!(matches!(
             err,
             VerifyError::StateErrorExitSinkViolation { sinks: 2, .. }
-        ));
-    }
-
-    #[test]
-    fn verify_rejects_unknown_state_domains() {
-        let mut builder = IrBuilder::new("u8", 0);
-        {
-            let mut rb = builder.root_region();
-            rb.set_results(&[]);
-        }
-        let mut func = builder.finish();
-        let root = func.root_body();
-        let arg_id = func.regions[root].args[0];
-        func.region_args[arg_id].kind = PortKind::state(StateDomainId::new(99));
-
-        let err = verify(&func).expect_err("verifier should reject unknown state domains");
-        assert!(matches!(
-            err,
-            VerifyError::InvalidStateDomain { domain } if domain == StateDomainId::new(99)
         ));
     }
 }

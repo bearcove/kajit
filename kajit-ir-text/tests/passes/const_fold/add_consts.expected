@@ -1,6 +1,3 @@
-state_domains {
-  d0 = memory
-}
 scopes {
   s0 = lambda_body(@0)
 }

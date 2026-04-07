@@ -74,7 +74,7 @@ fn rewrite_same_on_both_branches(
         let first_result_id = func.regions[regions[0]].results[output_idx];
         if matches!(
             func.region_results[first_result_id].kind,
-            crate::PortKind::State(_)
+            crate::PortKind::State
         ) {
             continue;
         }
