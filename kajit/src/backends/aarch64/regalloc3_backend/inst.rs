@@ -204,7 +204,7 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::CallIntrinsic { func, args, dst } => {
-                self.emit_call_intrinsic(*func, args, *dst, None);
+                self.emit_call_intrinsic(*func, args, *dst);
             }
 
             LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {

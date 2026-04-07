@@ -216,13 +216,8 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
         let edge_source_locations = compute_edge_source_locations(&location_map, program);
         let inst_source_locations = compute_inst_source_locations(&location_map, program);
 
-        // Derive output_reg / ctx_reg from RA-assigned registers for data_args[0]/[1].
-        let output_reg = func
-            .data_args
-            .first()
-            .and_then(|&v| alloc_func.preg_for_vreg(v))
-            .map(|p| Reg::from_raw(p.0))
-            .unwrap_or(Reg::X0);
+        // Derive ctx_reg from RA-assigned register for data_args[1].
+        // Used by ErrorExit (will be removed in 011-3).
         let ctx_reg = func
             .data_args
             .get(1)
@@ -246,7 +241,6 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             fused_bfi,
             fused_skip,
             fused_addr_offsets,
-            output_reg,
             ctx_reg,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),

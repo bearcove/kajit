@@ -103,28 +103,19 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
     let edge_tmp_base = slot_base + (actual_slot_count as u32 * 8);
 
-    // Derive output_enc / ctx_enc from RA-assigned registers for data_args[0] / [1].
-    // These default to the ABI arg registers if no data_args exist (pure scalar).
-    let (output_enc, ctx_enc) =
+    // Derive ctx_enc from RA-assigned register for data_args[1].
+    // Used by ErrorExit (will be removed in 011-3).
+    let ctx_enc =
         if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
-            let out = func
-                .data_args
-                .first()
-                .and_then(|&v| alloc_func.preg_for_vreg(v))
-                .map(|p| p.0)
-                .unwrap_or(scalar_abi_arg_enc(0));
-            let ctx = func
-                .data_args
+            func.data_args
                 .get(1)
                 .and_then(|&v| alloc_func.preg_for_vreg(v))
                 .map(|p| p.0)
-                .unwrap_or(scalar_abi_arg_enc(1));
-            (out, ctx)
+                .unwrap_or(scalar_abi_arg_enc(1))
         } else {
-            (scalar_abi_arg_enc(0), scalar_abi_arg_enc(1))
+            scalar_abi_arg_enc(1)
         };
 
-    ectx.output_enc = output_enc;
     ectx.ctx_enc = ctx_enc;
 
     // Emit prologue.
@@ -177,7 +168,6 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             fused_cmps,
             fused_addr_offsets,
             fused_skip,
-            output_enc,
             ctx_enc,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),

@@ -36,9 +36,8 @@ pub(super) struct EmitContext<'a> {
     pub fused_addr_offsets: HashMap<kajit_ir::VReg, (kajit_ir::VReg, u64)>,
     /// Intermediate vregs whose instructions should be skipped (fused away).
     pub fused_skip: std::collections::HashSet<kajit_ir::VReg>,
-    /// Output pointer register encoding.
-    pub output_enc: u8,
-    /// Context pointer register encoding.
+    /// Context pointer register encoding — derived from data_args[1] RA allocation.
+    /// Used by ErrorExit (will be removed in 011-3).
     pub ctx_enc: u8,
     /// Set to true when emitting the last block before the success epilogue.
     pub is_last_emitted_block: bool,

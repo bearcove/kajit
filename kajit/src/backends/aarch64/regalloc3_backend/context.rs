@@ -43,9 +43,8 @@ pub(super) struct EmitContext<'a> {
     pub(super) fused_cmps: HashMap<kajit_ir::VReg, Condition>,
     /// Or vregs that should be emitted as bfi. Maps Or's dst → (byte_src, accum, lsb, width).
     pub(super) fused_bfi: HashMap<kajit_ir::VReg, BfiInfo>,
-    /// Output pointer register (x0 for leaf, x21 for non-leaf).
-    pub(super) output_reg: Reg,
-    /// Context pointer register (x1 for leaf, x22 for non-leaf).
+    /// Context pointer register — derived from data_args[1] RA allocation.
+    /// Used by ErrorExit (will be removed in 011-3).
     pub(super) ctx_reg: Reg,
     /// Intermediate vregs (And/Shl results) whose instructions should be skipped.
     pub(super) fused_skip: std::collections::HashSet<kajit_ir::VReg>,
