@@ -609,40 +609,73 @@ impl MirHandler {
             // Truncate log file at start of each step batch
             let _ = std::fs::write(&log_path, "");
 
-            let mut out = format!("**Debug session {}**\n\n", session_id);
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            for i in 0..count {
-                if i > 0 && std::time::Instant::now() > deadline {
-                    let msg =
-                        format!("TIMEOUT: completed {i}/{count} steps in 5s, stopping early\n");
-                    let _ = append_log(&log_path, &msg);
-                    out.push_str(&msg);
-                    break;
+            let (tx, rx) = std::sync::mpsc::channel();
+            let session_ptr = session as *mut DebugDiffSession as usize;
+            let log_path_clone = log_path.clone();
+
+            // Run stepping in a background thread so we can timeout the whole call
+            let worker = std::thread::spawn(move || {
+                // SAFETY: the main thread blocks on rx.recv_timeout below,
+                // so `session` stays alive for the duration of this thread.
+                let session = unsafe { &mut *(session_ptr as *mut DebugDiffSession) };
+
+                let mut out = format!("**Debug session {}**\n\n", session_id);
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                for i in 0..count {
+                    if i > 0 && std::time::Instant::now() > deadline {
+                        let msg =
+                            format!("TIMEOUT: completed {i}/{count} steps in 5s, stopping early\n");
+                        let _ = append_log(&log_path_clone, &msg);
+                        out.push_str(&msg);
+                        break;
+                    }
+                    let cur_line = session.lockstep.current_mapped_line();
+                    let cur_text = session.current_line_text(cur_line);
+                    let mut step_log = format!(
+                        ">>> step {} | about to execute line {}: {}",
+                        i + 1,
+                        cur_line,
+                        cur_text.trim()
+                    );
+                    if let Some(vreg_info) = session.dump_current_op_vregs() {
+                        step_log.push_str(&format!("\n    {}", vreg_info));
+                    }
+                    let _ = append_log(&log_path_clone, &step_log);
+                    match session.step_forward() {
+                        Ok(step) => {
+                            let _ = append_log(&log_path_clone, &step);
+                            out.push_str(&step);
+                            out.push('\n');
+                            if !session.is_running() {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            out.push_str(&format!("ERROR: {e}\n"));
+                            break;
+                        }
+                    }
                 }
-                let cur_line = session.lockstep.current_mapped_line();
-                let cur_text = session.current_line_text(cur_line);
-                let mut step_log = format!(
-                    ">>> step {} | about to execute line {}: {}",
-                    i + 1,
-                    cur_line,
-                    cur_text.trim()
-                );
-                // Dump vreg values for the current op
-                if let Some(vreg_info) = session.dump_current_op_vregs() {
-                    step_log.push_str(&format!("\n    {}", vreg_info));
+                let _ = tx.send(out);
+            });
+
+            // Hard 10s timeout on the entire tool call
+            let result = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+                Ok(mut out) => {
+                    let _ = worker.join();
+                    out.push('\n');
+                    out.push_str(&session.snapshot_markdown(session_id));
+                    Ok(json!({ "text": out }))
                 }
-                let _ = append_log(&log_path, &step_log);
-                let step = session.step_forward()?;
-                let _ = append_log(&log_path, &step);
-                out.push_str(&step);
-                out.push('\n');
-                if !session.is_running() {
-                    break;
+                Err(_) => {
+                    let _ =
+                        append_log(&log_path, "HARD TIMEOUT: MCP tool call timed out after 10s");
+                    // Worker thread is leaked — session is toast
+                    let _ = state.debug_sessions.remove(&session_id);
+                    Err("debug_session_step timed out after 10s (session destroyed)".to_string())
                 }
-            }
-            out.push('\n');
-            out.push_str(&session.snapshot_markdown(session_id));
-            Ok(json!({ "text": out }))
+            };
+            result
         }
     }
 
