@@ -318,20 +318,6 @@ where
     })
 }
 
-// === Field offset ===
-
-pub fn field_offset<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Option<u32>, ParserExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    just(Token::At)
-        .ignore_then(uint64())
-        .map(|v| Some(v as u32))
-        .or_not()
-        .map(|opt| opt.flatten())
-}
-
 // === Pattern parser ===
 
 pub fn pattern<'tokens, 'src: 'tokens, I>()
