@@ -548,7 +548,9 @@ impl DebuggerSession {
 
     fn execute_op(&mut self, block: cfg_mir::BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
         match op {
-            LinearOp::Const { dst, value } => self.write_vreg(dst.index(), *value),
+            LinearOp::Const { dst, value } | LinearOp::ExternAddr { dst, value, .. } => {
+                self.write_vreg(dst.index(), *value)
+            }
             LinearOp::DataAddr { dst, blob_id } => {
                 let blob = &self.data_blobs[*blob_id as usize];
                 self.write_vreg(dst.index(), blob.as_ptr() as u64);

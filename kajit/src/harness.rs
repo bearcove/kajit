@@ -2137,7 +2137,8 @@ fn patch_object_dwarf(
 fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), HarnessError> {
     // Find the kajit staticlib for intrinsic resolution.
     // Build it if needed: `cargo rustc -p kajit --crate-type=staticlib`
-    let staticlib = find_or_build_staticlib()?;
+    let staticlib = find_or_build_staticlib("kajit", "libkajit.a")?;
+    let vtables_lib = find_or_build_staticlib("kajit-vtables", "libkajit_vtables.a")?;
 
     let mut command = std::process::Command::new("cc");
     command.arg("-O0");
@@ -2156,12 +2157,23 @@ fn link_harness(c_path: &Path, obj_path: &Path, exe_path: &Path) -> Result<(), H
         command.arg("-g0");
     }
 
-    command
-        .arg("-o")
-        .arg(exe_path)
-        .arg(c_path)
-        .arg(obj_path)
-        .arg(&staticlib);
+    command.arg("-o").arg(exe_path).arg(c_path).arg(obj_path);
+
+    command.arg(&staticlib);
+
+    // Force-load the vtables staticlib so its #[no_mangle] symbols are
+    // available for the JIT object file's ExternAddr relocations.
+    #[cfg(target_os = "macos")]
+    {
+        command.arg("-Wl,-force_load").arg(&vtables_lib);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        command
+            .arg("-Wl,--whole-archive")
+            .arg(&vtables_lib)
+            .arg("-Wl,--no-whole-archive");
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -2238,12 +2250,15 @@ fn maybe_build_debug_bundle(exe_path: &Path, input: &HarnessInput) {
 fn maybe_build_debug_bundle(_exe_path: &Path, _input: &HarnessInput) {}
 
 /// Find or build the kajit staticlib for linking intrinsics into standalone harnesses.
-fn find_or_build_staticlib() -> Result<std::path::PathBuf, HarnessError> {
+fn find_or_build_staticlib(
+    package: &str,
+    lib_filename: &str,
+) -> Result<std::path::PathBuf, HarnessError> {
     // Check common locations for an existing staticlib
     let candidates = [
-        "target/debug/libkajit.a",
-        "target/release/libkajit.a",
-        "../target/debug/libkajit.a",
+        format!("target/debug/{lib_filename}"),
+        format!("target/release/{lib_filename}"),
+        format!("../target/debug/{lib_filename}"),
     ];
     for path in &candidates {
         let p = std::path::PathBuf::from(path);
@@ -2253,15 +2268,15 @@ fn find_or_build_staticlib() -> Result<std::path::PathBuf, HarnessError> {
     }
 
     // Try to build it
-    eprintln!("[harness] building kajit staticlib...");
+    eprintln!("[harness] building {package} staticlib...");
     let output = std::process::Command::new("cargo")
-        .args(["rustc", "-p", "kajit", "--crate-type=staticlib"])
+        .args(["rustc", "-p", package, "--crate-type=staticlib"])
         .output()
         .map_err(|e| HarnessError::Io("build staticlib", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(HarnessError::Link(format!(
-            "failed to build kajit staticlib: {stderr}"
+            "failed to build {package} staticlib: {stderr}"
         )));
     }
 
@@ -2273,9 +2288,9 @@ fn find_or_build_staticlib() -> Result<std::path::PathBuf, HarnessError> {
         }
     }
 
-    Err(HarnessError::Link(
-        "kajit staticlib not found after build".into(),
-    ))
+    Err(HarnessError::Link(format!(
+        "{package} staticlib not found after build"
+    )))
 }
 
 #[derive(Debug)]
