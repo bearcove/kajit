@@ -123,10 +123,6 @@ pub fn compile_regalloc3_with_root_data_abi(
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
     let edge_tmp_base = slot_base + (actual_slot_count as u32 * 8);
 
-    // Determine cursor ABI.
-    let ctx_cursor_abi = matches!(root_data_abi, crate::compiler::RootDecoderDataAbi::None);
-    let uses_cursor_ops = false;
-
     let is_scalar_function = program.is_scalar;
 
     // Register assignments for non-leaf decoder functions:
@@ -158,16 +154,6 @@ pub fn compile_regalloc3_with_root_data_abi(
         (14, 15)
     };
 
-    // Cursor writeback register: use ectx.cursor_enc (default 12=r12 for non-leaf).
-    // For leaf functions, cursor is loaded on demand from ctx, but we still need
-    // a register for the cached cursor during bounds checks + reads.
-    let cursor_writeback_enc = if is_leaf && !uses_cursor_ops {
-        // No cursor ops → use r10 as dummy (won't be used).
-        10
-    } else {
-        ectx.cursor_enc
-    };
-
     // Update ectx register encodings for the regalloc3 backend.
     ectx.output_enc = output_enc;
     ectx.ctx_enc = ctx_enc;
@@ -182,8 +168,6 @@ pub fn compile_regalloc3_with_root_data_abi(
             program,
             extra_saved_pairs,
             is_leaf,
-            ctx_cursor_abi,
-            uses_cursor_ops,
             output_enc,
             ctx_enc,
         )
@@ -237,8 +221,6 @@ pub fn compile_regalloc3_with_root_data_abi(
             fused_skip,
             output_enc,
             ctx_enc,
-            sync_ctx_cursor_around_calls: ctx_cursor_abi && !is_leaf,
-            cursor_writeback_enc,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),
             edge_source_locations,
@@ -262,11 +244,7 @@ pub fn compile_regalloc3_with_root_data_abi(
             .expect("xor rax,rax");
         emit_scalar_epilogue_restore(&mut ectx, extra_saved_pairs);
     } else {
-        emit_decoder_epilogue(
-            &mut ectx,
-            extra_saved_pairs,
-            ctx_cursor_abi && uses_cursor_ops,
-        );
+        emit_decoder_epilogue(&mut ectx, extra_saved_pairs);
         ectx.emit.bind_label(error_exit).expect("bind error_exit");
         emit_decoder_error_epilogue(&mut ectx, extra_saved_pairs);
     }
@@ -397,8 +375,6 @@ fn emit_decoder_prologue(
     program: &cfg_mir::Program,
     extra_saved_pairs: u32,
     is_leaf: bool,
-    ctx_cursor_abi: bool,
-    uses_cursor_ops: bool,
     output_enc: u8,
     ctx_enc: u8,
 ) -> (u32, x64::LabelId) {
@@ -435,58 +411,6 @@ fn emit_decoder_prologue(
             ectx.emit
                 .emit_with(|buf| x64::encode_mov_r64_r64(ctx_enc, abi_ctx, buf))
                 .expect("mov ctx");
-        }
-
-        // Load cursor/end from ctx.
-        if ctx_cursor_abi && uses_cursor_ops {
-            let cursor_enc = ectx.cursor_enc;
-            let end_enc = ectx.end_enc;
-            ectx.emit
-                .emit_with(|buf| {
-                    x64::encode_mov_r64_m(
-                        cursor_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_PTR as i32,
-                        },
-                        buf,
-                    )?;
-                    x64::encode_mov_r64_m(
-                        end_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_END as i32,
-                        },
-                        buf,
-                    )
-                })
-                .expect("load cursor/end");
-        }
-    } else {
-        // Leaf: out/ctx stay in ABI arg registers.
-        if uses_cursor_ops && ctx_cursor_abi {
-            let cursor_enc = ectx.cursor_enc;
-            let end_enc = ectx.end_enc;
-            ectx.emit
-                .emit_with(|buf| {
-                    x64::encode_mov_r64_m(
-                        cursor_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_PTR as i32,
-                        },
-                        buf,
-                    )?;
-                    x64::encode_mov_r64_m(
-                        end_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: crate::context::CTX_INPUT_END as i32,
-                        },
-                        buf,
-                    )
-                })
-                .expect("load cursor/end for leaf");
         }
     }
 
@@ -586,23 +510,7 @@ fn emit_scalar_epilogue_restore(ectx: &mut EmitCtx, extra_saved_pairs: u32) {
 }
 
 /// Emit decoder success epilogue: write cursor back to ctx, restore callee-saved, ret.
-fn emit_decoder_epilogue(ectx: &mut EmitCtx, extra_saved_pairs: u32, writeback_cursor: bool) {
-    if writeback_cursor {
-        let ctx_enc = ectx.ctx_enc;
-        let cursor_enc = ectx.cursor_enc;
-        ectx.emit
-            .emit_with(|buf| {
-                x64::encode_mov_m_r64(
-                    Mem {
-                        base: ctx_enc,
-                        disp: crate::context::CTX_INPUT_PTR as i32,
-                    },
-                    cursor_enc,
-                    buf,
-                )
-            })
-            .expect("writeback cursor");
-    }
+fn emit_decoder_epilogue(ectx: &mut EmitCtx, extra_saved_pairs: u32) {
     emit_restore_callee_saved(ectx, extra_saved_pairs);
     let frame_size = ectx.frame_size;
     ectx.emit

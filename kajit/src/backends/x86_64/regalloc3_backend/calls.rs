@@ -2,7 +2,7 @@
 
 use kajit_emit::x64::{self, Mem};
 
-use crate::context::{CTX_ERROR_CODE, CTX_INPUT_PTR};
+use crate::context::CTX_ERROR_CODE;
 
 use super::IntrinsicCallSiteInfo;
 use super::context::EmitContext;
@@ -23,23 +23,6 @@ impl<'a> EmitContext<'a> {
         let error_exit = self.ectx.error_exit;
         let ctx_enc = self.ctx_enc;
         let output_enc = self.output_enc;
-
-        if self.sync_ctx_cursor_around_calls {
-            let cursor_enc = self.cursor_writeback_enc;
-            self.ectx
-                .emit
-                .emit_with(|buf| {
-                    x64::encode_mov_m_r64(
-                        Mem {
-                            base: ctx_enc,
-                            disp: CTX_INPUT_PTR as i32,
-                        },
-                        cursor_enc,
-                        buf,
-                    )
-                })
-                .expect("sync cursor to ctx");
-        }
 
         // Adjust out_ptr for field offset if needed.
         if let Some(off) = field_offset {
@@ -127,23 +110,6 @@ impl<'a> EmitContext<'a> {
                     .emit_with(|buf| x64::encode_sub_r64_imm32(output_enc, off, buf))
                     .expect("sub out_ptr offset");
             }
-        }
-
-        if self.sync_ctx_cursor_around_calls {
-            let cursor_enc = self.cursor_writeback_enc;
-            self.ectx
-                .emit
-                .emit_with(|buf| {
-                    x64::encode_mov_r64_m(
-                        cursor_enc,
-                        Mem {
-                            base: ctx_enc,
-                            disp: CTX_INPUT_PTR as i32,
-                        },
-                        buf,
-                    )
-                })
-                .expect("reload cursor from ctx");
         }
 
         // Check error after call.

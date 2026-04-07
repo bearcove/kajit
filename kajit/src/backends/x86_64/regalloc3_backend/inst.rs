@@ -3,8 +3,6 @@
 use kajit_emit::x64::{self, Mem, Operand};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 
-use crate::context::{CTX_INPUT_END, CTX_INPUT_PTR};
-
 use super::context::EmitContext;
 
 // Scratch register encodings (reserved by SCRATCH_POLICY, never allocated).

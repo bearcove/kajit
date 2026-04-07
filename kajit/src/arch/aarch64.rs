@@ -1,6 +1,6 @@
 use kajit_emit::aarch64::{self, Emitter, LabelId, Reg};
 
-use crate::context::{CTX_ERROR_CODE, CTX_INPUT_END, CTX_INPUT_PTR};
+use crate::context::CTX_ERROR_CODE;
 
 /// Base frame size: 3 pairs of callee-saved registers = 48 bytes.
 pub const BASE_FRAME: u32 = 48;
@@ -41,15 +41,6 @@ pub struct PrologueConfig {
     /// Whether to save/restore x19/x20. When false, the prologue/epilogue skip
     /// the stp/ldp for these registers (leaf functions that don't modify them).
     pub save_x19_x20: bool,
-    /// Whether the prologue loads cursor/end into x19/x20 and the epilogue
-    /// writes x19 back. When false (leaf + regalloc3), cursor/input_end are loaded
-    /// from the context struct directly, and the epilogue uses `cursor_writeback_reg`.
-    pub load_cursor_x19_x20: bool,
-    /// Register to read the cursor from for the success-path writeback.
-    /// Only used when `load_cursor_x19_x20` is false.
-    pub cursor_writeback_reg: Option<Reg>,
-    /// Whether the success epilogue should write the cursor back to ctx.input_ptr.
-    pub writeback_cursor_to_ctx: bool,
 }
 
 impl Default for PrologueConfig {
@@ -57,9 +48,6 @@ impl Default for PrologueConfig {
         Self {
             save_x21_x22: true,
             save_x19_x20: true,
-            load_cursor_x19_x20: true,
-            cursor_writeback_reg: None,
-            writeback_cursor_to_ctx: true,
         }
     }
 }
@@ -226,8 +214,8 @@ impl EmitCtx {
                 .expect("add");
         }
 
-        // ctx_reg: x1 (leaf without x21/x22 save) or x22 (default)
-        let ctx_reg = if config.save_x21_x22 {
+        // Move output/ctx to callee-saved registers if non-leaf.
+        let _ctx_reg = if config.save_x21_x22 {
             self.emit
                 .emit_mov_reg(aarch64::Width::X64, Reg::X21, Reg::X0)
                 .expect("mov");
@@ -239,15 +227,6 @@ impl EmitCtx {
             // Keep args in x0/x1 — no moves needed
             Reg::X1
         };
-
-        if config.load_cursor_x19_x20 {
-            self.emit
-                .emit_ldr_imm(aarch64::Width::X64, Reg::X19, ctx_reg, CTX_INPUT_PTR)
-                .expect("ldr");
-            self.emit
-                .emit_ldr_imm(aarch64::Width::X64, Reg::X20, ctx_reg, CTX_INPUT_END)
-                .expect("ldr");
-        }
 
         self.error_exit = error_exit;
         (entry, error_exit)
@@ -269,23 +248,10 @@ impl EmitCtx {
             "unsupported extra callee-saved pair count"
         );
 
-        // ctx_reg for cursor writeback: x1 if leaf without x21/x22 save, x22 otherwise
-        let ctx_reg = if config.save_x21_x22 {
-            Reg::X22
-        } else {
-            Reg::X1
-        };
-
         // Emit epilogue (success path), then error exit with same epilogue
         for is_error in [false, true] {
             if is_error {
                 self.emit.bind_label(error_exit).expect("bind");
-            } else if config.writeback_cursor_to_ctx {
-                // Write back cursor before returning on success
-                let cursor_reg = config.cursor_writeback_reg.unwrap_or(Reg::X19);
-                self.emit
-                    .emit_str_imm(aarch64::Width::X64, cursor_reg, ctx_reg, CTX_INPUT_PTR)
-                    .expect("str");
             }
 
             // Restore callee-saved registers in reverse order

@@ -66,8 +66,6 @@ struct EmitContext<'a> {
     output_reg: Reg,
     /// Context pointer register (x1 for leaf, x22 for non-leaf).
     ctx_reg: Reg,
-    /// Whether intrinsic/lambda calls should sync the fixed cursor register through ctx.input_ptr.
-    sync_ctx_cursor_around_calls: bool,
     /// Intermediate vregs (And/Shl results) whose instructions should be skipped.
     fused_skip: std::collections::HashSet<kajit_ir::VReg>,
     /// Fused base+offset info for LoadFromAddr.
@@ -1145,17 +1143,9 @@ impl<'a> EmitContext<'a> {
         dst: Option<kajit_ir::VReg>,
         field_offset: Option<u32>,
     ) {
-        use crate::context::{CTX_ERROR_CODE, CTX_INPUT_PTR};
+        use crate::context::CTX_ERROR_CODE;
 
         let error_exit = self.ectx.error_exit;
-
-        if self.sync_ctx_cursor_around_calls {
-            // Legacy cursor-ABI path: host calls observe the cursor through ctx.input_ptr.
-            self.ectx
-                .emit
-                .emit_str_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
-                .expect("str cursor");
-        }
 
         // Adjust out_ptr for field offset if needed
         if let Some(off) = field_offset
@@ -1239,13 +1229,6 @@ impl<'a> EmitContext<'a> {
                     false,
                 )
                 .expect("sub out_ptr");
-        }
-
-        if self.sync_ctx_cursor_around_calls {
-            self.ectx
-                .emit
-                .emit_ldr_imm(Width::X64, Reg::X19, self.ctx_reg, CTX_INPUT_PTR)
-                .expect("ldr cursor");
         }
 
         // Check error after call
@@ -2124,7 +2107,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
 pub fn compile_regalloc3_with_root_data_abi(
     alloc: &AllocatedCfgProgramRa3,
-    root_data_abi: crate::compiler::RootDecoderDataAbi,
+    _root_data_abi: crate::compiler::RootDecoderDataAbi,
 ) -> LinearBackendResult {
     let program = &alloc.cfg_program;
 
@@ -2182,20 +2165,6 @@ pub fn compile_regalloc3_with_root_data_abi(
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
     let edge_tmp_base = slot_base + (actual_slot_count * 8);
 
-    // Check if the program uses cursor operations (BoundsCheck, ReadBytes, etc.)
-    // that require the cursor to live in a fixed register.
-    let ctx_cursor_abi = matches!(root_data_abi, crate::compiler::RootDecoderDataAbi::None);
-    let uses_cursor_ops = false;
-
-    // For leaf functions with cursor ops, we still need x19/x20 for the cursor
-    // and input end — just skip the callee-save overhead since we're a leaf.
-    let leaf_needs_cursor = is_leaf && uses_cursor_ops;
-    let cursor_writeback_reg = if is_leaf && !leaf_needs_cursor {
-        Reg::X15
-    } else {
-        Reg::X19
-    };
-
     // Check if regalloc actually uses x19 or x20 for anything.
     let uses_x19_x20 = alloc.functions.iter().any(|f| {
         f.allocations.values().any(|a| {
@@ -2203,23 +2172,15 @@ pub fn compile_regalloc3_with_root_data_abi(
         })
     });
     let need_save_x19_x20 = if is_leaf {
-        // Leaf: save x19/x20 if regalloc uses them, or if we load cursor into them.
-        uses_x19_x20 || leaf_needs_cursor
+        uses_x19_x20
     } else {
-        // Non-leaf: always save (prologue modifies x19/x20).
+        // Non-leaf: always save (prologue may use x19/x20).
         true
     };
 
     let prologue_config = crate::arch::PrologueConfig {
         save_x21_x22: !is_leaf,
         save_x19_x20: need_save_x19_x20,
-        load_cursor_x19_x20: ctx_cursor_abi && (!is_leaf || leaf_needs_cursor),
-        cursor_writeback_reg: if is_leaf && !leaf_needs_cursor {
-            Some(cursor_writeback_reg)
-        } else {
-            None
-        },
-        writeback_cursor_to_ctx: ctx_cursor_abi,
     };
 
     let is_scalar_function = program.is_scalar;
@@ -2400,7 +2361,6 @@ pub fn compile_regalloc3_with_root_data_abi(
             fused_addr_offsets,
             output_reg,
             ctx_reg,
-            sync_ctx_cursor_around_calls: ctx_cursor_abi,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),
             edge_source_locations,
