@@ -1610,7 +1610,8 @@ lambda @0 (shape: "u8") {
         {
             let mut rb = builder.root_region();
             let val = rb.const_val(42);
-            rb.write_to_field(val, 0, Width::W4);
+            let addr = rb.const_val(0u64);
+            rb.store_to_addr(addr, val, Width::W4);
             rb.set_results(&[]);
         }
         let func = builder.finish();
@@ -1641,7 +1642,8 @@ lambda @0 (shape: "u8") {
                 };
                 bb.set_results(&[val]);
             });
-            rb.write_to_field(out[0], 0, Width::W4);
+            let addr = rb.const_val(0u64);
+            rb.store_to_addr(addr, out[0], Width::W4);
             rb.set_results(&[]);
         }
         let func = builder.finish();
@@ -1727,12 +1729,9 @@ lambda @0 (shape: "u8") {
         {
             let mut rb = builder.root_region();
 
-            // Output ops
+            // Constant
             let val = rb.const_val(42);
-            rb.write_to_field(val, 0, Width::W4);
-            let _read = rb.read_from_field(0, Width::W4);
-            let ptr = rb.save_out_ptr();
-            rb.set_out_ptr(ptr);
+            let _ = val;
 
             // Arithmetic
             let a = rb.const_val(1);
@@ -1788,7 +1787,7 @@ lambda @0 (shape: "u8") {
             let func_ptr = registry
                 .func_by_name("kajit_read_bool")
                 .expect("kajit_read_bool should be in registry");
-            rb.call_intrinsic(func_ptr, &[], 0, false);
+            rb.call_intrinsic(func_ptr, &[], false);
             rb.set_results(&[]);
         }
         let func = builder.finish();

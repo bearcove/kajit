@@ -1296,7 +1296,8 @@ mod tests {
         {
             let mut rb = builder.lambda_region(child);
             let b = rb.const_val(0);
-            rb.write_to_field(b, 0, Width::W1);
+            let addr = rb.const_val(0u64);
+            rb.store_to_addr(addr, b, Width::W1);
             rb.set_results(&[]);
         }
         {

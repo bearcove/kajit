@@ -2560,7 +2560,7 @@ mod tests {
 
     #[test]
     fn linear_chain_state_threading() {
-        // Build: read_from_slot -> write_to_field
+        // Build: read_from_slot -> store_to_addr
         // Verify that each stateful op's input is the previous one's output.
         let mut builder = IrBuilder::new(test_label(), 0);
         let slot = builder.alloc_slot();
@@ -2582,8 +2582,9 @@ mod tests {
             let after_read = rb.memory_state();
             assert_ne!(after_read, initial_ms);
 
-            // write_to_field (also memory-domain now — single domain)
-            rb.write_to_field(data, 0, Width::W4);
+            // store_to_addr (also memory-domain now — single domain)
+            let addr = rb.const_val(0u64);
+            rb.store_to_addr(addr, data, Width::W4);
             let after_write = rb.memory_state();
             assert_ne!(after_write, after_read); // state advanced again
 
@@ -2592,8 +2593,8 @@ mod tests {
 
         let func = builder.finish();
 
-        // 2 nodes in the root region.
-        assert_eq!(func.regions[func.root_body()].nodes.len(), 2);
+        // 3 nodes in the root region: read_from_slot, const(addr), store_to_addr.
+        assert_eq!(func.regions[func.root_body()].nodes.len(), 3);
     }
 
     #[test]
@@ -2728,7 +2729,8 @@ mod tests {
 
                 // Write a const to field.
                 let val = body.const_val(42);
-                body.write_to_field(val, 0, Width::W4);
+                let addr = body.const_val(0u64);
+                body.store_to_addr(addr, val, Width::W4);
 
                 // Decrement counter.
                 let one = body.const_val(1);
@@ -2751,8 +2753,8 @@ mod tests {
         let theta = &func.nodes[theta_id];
         match &theta.kind {
             NodeKind::Theta { body, .. } => {
-                // Body: const, write_to_field, const, sub = 4 nodes.
-                assert_eq!(func.regions[*body].nodes.len(), 4);
+                // Body: const, const, store_to_addr, const, sub = 5 nodes.
+                assert_eq!(func.regions[*body].nodes.len(), 5);
                 // Results: predicate + loop_var + memory_state = 3.
                 assert_eq!(func.regions[*body].results.len(), 3);
             }

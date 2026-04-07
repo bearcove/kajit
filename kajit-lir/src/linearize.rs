@@ -5029,7 +5029,6 @@ mod tests {
             rb.call_intrinsic(
                 IntrinsicFn(dummy_intrinsic as *const () as usize),
                 &[],
-                0,
                 false,
             );
             rb.set_results(&[]);
@@ -5050,7 +5049,8 @@ mod tests {
         {
             let mut rb = builder.root_region();
             let data = rb.const_val(42);
-            rb.write_to_field(data, 0, Width::W4);
+            let addr = rb.const_val(0u64);
+            rb.store_to_addr(addr, data, Width::W4);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
@@ -5062,7 +5062,7 @@ mod tests {
             "display should start with func:\n{display}"
         );
         assert!(
-            display.contains("store [0:W4]"),
+            display.contains("store_addr [W4]"),
             "display should contain store:\n{display}"
         );
         assert!(

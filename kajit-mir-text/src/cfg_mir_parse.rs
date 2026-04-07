@@ -1013,7 +1013,8 @@ cfg_program vregs=1 slots=0 {
         {
             let mut rb = builder.root_region();
             let val = rb.const_val(42);
-            rb.write_to_field(val, 0, Width::W4);
+            let addr = rb.const_val(0u64);
+            rb.store_to_addr(addr, val, Width::W4);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
@@ -1046,7 +1047,7 @@ cfg_program vregs=1 slots=0 {
             let func = registry
                 .func_by_name("test_intrinsic")
                 .expect("registered intrinsic should resolve");
-            rb.call_intrinsic(func, &[], 0, false);
+            rb.call_intrinsic(func, &[], false);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();
