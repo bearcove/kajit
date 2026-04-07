@@ -1431,6 +1431,7 @@ dependencies = [
 name = "kajit-hir-text"
 version = "0.1.0"
 dependencies = [
+ "ariadne 0.5.1",
  "chumsky",
  "kajit-hir",
  "kajit-parse-util",

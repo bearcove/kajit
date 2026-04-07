@@ -1,14 +1,4 @@
-use chumsky::prelude::*;
-
-use kajit_hir::{
-    AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableId,
-    CallableKind, CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr,
-    FieldDef, Function, FunctionId, GenericArg, GenericParam, Id, Literal, LocalDecl, LocalId,
-    LocalKind, MatchArm, MemoryWidth, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt,
-    StmtId, StmtKind, StoreId, Type, TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
-};
-
-type Extra<'src> = extra::Err<Rich<'src, char>>;
+use kajit_hir::Module;
 
 #[derive(Debug, Clone)]
 struct ParsedRegion {
@@ -57,12 +47,22 @@ fn ws<'src>() -> impl Parser<'src, &'src str, (), Extra<'src>> + Clone {
 }
 
 fn token<'src>(text: &'static str) -> impl Parser<'src, &'src str, (), Extra<'src>> + Clone {
-    // Use keyword for alphabetic tokens (reports whole word in errors),
-    // just() for punctuation/symbols
     if text.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
-        text::keyword::<_, _, Extra<'src>>(text)
-            .ignored()
+        // Match a whole identifier, then check it equals the expected keyword.
+        // This way chumsky never partially consumes input on keyword mismatch.
+        text::ident::<_, Extra<'src>>()
+            .try_map(move |s: &str, span| {
+                if s == text {
+                    Ok(())
+                } else {
+                    Err(Rich::custom(
+                        span,
+                        format!("expected '{text}', found '{s}'"),
+                    ))
+                }
+            })
             .padded_by(ws())
+            .labelled(text)
             .boxed()
     } else {
         just(text).padded_by(ws()).ignored().labelled(text).boxed()
@@ -499,6 +499,7 @@ fn local_kind<'src>() -> impl Parser<'src, &'src str, LocalKind, Extra<'src>> + 
         token("temp").to(LocalKind::Temp),
         token("destination").to(LocalKind::Destination),
     ))
+    .labelled("local kind (param, let, temp, or destination)")
 }
 
 fn local_decl<'src>() -> impl Parser<'src, &'src str, LocalDecl, Extra<'src>> + Clone {
@@ -840,132 +841,67 @@ fn stmt<'src>() -> impl Parser<'src, &'src str, Stmt, Extra<'src>> + Clone {
             .then_ignore(token("}"))
             .map(|(scope, statements)| Block { scope, statements });
 
-        let if_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("if"))
-            .then(expr.clone())
-            .then(block.clone())
-            .then(token("else").ignore_then(block.clone()).or_not())
-            .map(|(((id, condition), then_block), else_block)| Stmt {
-                id,
-                kind: StmtKind::If {
+        // Parse common "stmtN:" prefix once, then branch on keyword.
+        // This way chumsky sees all keyword alternatives at the same point
+        // and can list them all in error messages.
+        let stmt_body = choice((
+            token("if")
+                .ignore_then(expr.clone())
+                .then(block.clone())
+                .then(token("else").ignore_then(block.clone()).or_not())
+                .map(|((condition, then_block), else_block)| StmtKind::If {
                     condition,
                     then_block,
                     else_block,
-                },
-            });
-
-        let loop_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("loop"))
-            .then(block.clone())
-            .map(|(id, body)| Stmt {
-                id,
-                kind: StmtKind::Loop {
+                }),
+            token("loop")
+                .ignore_then(block.clone())
+                .map(|body| StmtKind::Loop {
                     body,
                     max_iterations: None,
-                },
-            });
-
-        let match_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("match"))
-            .then(expr.clone())
-            .then_ignore(token("{"))
-            .then(
-                token("arm")
-                    .ignore_then(pattern())
-                    .then(block.clone())
-                    .map(|(pattern, body)| MatchArm { pattern, body })
-                    .repeated()
-                    .collect::<Vec<_>>(),
-            )
-            .then_ignore(token("}"))
-            .map(|((id, scrutinee), arms)| Stmt {
-                id,
-                kind: StmtKind::Match { scrutinee, arms },
-            });
-
-        let init_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("init"))
-            .then(place.clone())
-            .then_ignore(token("="))
-            .then(expr.clone())
-            .map(|((id, place), value)| Stmt {
-                id,
-                kind: StmtKind::Init { place, value },
-            });
-
-        let assign_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("assign"))
-            .then(place.clone())
-            .then_ignore(token("="))
-            .then(expr.clone())
-            .map(|((id, place), value)| Stmt {
-                id,
-                kind: StmtKind::Assign { place, value },
-            });
-
-        let store_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("store"))
-            .then(memory_width())
-            .then(expr.clone())
-            .then_ignore(token("="))
-            .then(expr.clone())
-            .map(|(((id, width), addr), value)| Stmt {
-                id,
-                kind: StmtKind::Store { addr, width, value },
-            });
-
-        let expr_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("expr"))
-            .then(expr.clone())
-            .map(|(id, expr)| Stmt {
-                id,
-                kind: StmtKind::Expr(expr),
-            });
-
-        let break_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("break"))
-            .map(|id| Stmt {
-                id,
-                kind: StmtKind::Break,
-            });
-
-        let continue_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("continue"))
-            .map(|id| Stmt {
-                id,
-                kind: StmtKind::Continue,
-            });
-
-        let return_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("return"))
-            .then(expr.clone().or_not())
-            .map(|(id, expr)| Stmt {
-                id,
-                kind: StmtKind::Return(expr),
-            });
-
-        choice((
-            if_stmt,
-            loop_stmt,
-            match_stmt,
-            init_stmt,
-            assign_stmt,
-            store_stmt,
-            expr_stmt,
-            break_stmt,
-            continue_stmt,
-            return_stmt,
+                }),
+            token("match")
+                .ignore_then(expr.clone())
+                .then_ignore(token("{"))
+                .then(
+                    token("arm")
+                        .ignore_then(pattern())
+                        .then(block.clone())
+                        .map(|(pattern, body)| MatchArm { pattern, body })
+                        .repeated()
+                        .collect::<Vec<_>>(),
+                )
+                .then_ignore(token("}"))
+                .map(|(scrutinee, arms)| StmtKind::Match { scrutinee, arms }),
+            token("init")
+                .ignore_then(place.clone())
+                .then_ignore(token("="))
+                .then(expr.clone())
+                .map(|(place, value)| StmtKind::Init { place, value }),
+            token("assign")
+                .ignore_then(place.clone())
+                .then_ignore(token("="))
+                .then(expr.clone())
+                .map(|(place, value)| StmtKind::Assign { place, value }),
+            token("store")
+                .ignore_then(memory_width())
+                .then(expr.clone())
+                .then_ignore(token("="))
+                .then(expr.clone())
+                .map(|((width, addr), value)| StmtKind::Store { addr, width, value }),
+            token("expr").ignore_then(expr.clone()).map(StmtKind::Expr),
+            token("break").to(StmtKind::Break),
+            token("continue").to(StmtKind::Continue),
+            token("return")
+                .ignore_then(expr.clone().or_not())
+                .map(StmtKind::Return),
         ))
+        .labelled("statement keyword");
+
+        stmt_id()
+            .then_ignore(token(":"))
+            .then(stmt_body)
+            .map(|(id, kind)| Stmt { id, kind })
     })
 }
 
@@ -1164,11 +1100,7 @@ fn build_module(parsed: ParsedModule) -> Result<Module, String> {
 }
 
 pub fn parse_hir(text: &str) -> Result<Module, String> {
-    let parsed = module_parser()
-        .parse(text)
-        .into_result()
-        .map_err(|errs| kajit_parse_util::format_rich_errors(text, errs))?;
-    build_module(parsed)
+    crate::token_parser::parse_hir_v2(text)
 }
 
 #[cfg(test)]

@@ -20,6 +20,7 @@ pub enum Token<'src> {
     Comma,
     Eq,
     At,
+    ExternSymbol(&'src str), // @symbol.name
     Amp,
     Minus,
 
@@ -199,6 +200,7 @@ impl fmt::Display for Token<'_> {
             Token::Comma => write!(f, ","),
             Token::Eq => write!(f, "="),
             Token::At => write!(f, "@"),
+            Token::ExternSymbol(s) => write!(f, "@{s}"),
             Token::Amp => write!(f, "&"),
             Token::Minus => write!(f, "-"),
 
@@ -521,7 +523,23 @@ pub fn lexer<'src>() -> impl Parser<'src, &'src str, Vec<Spanned<Token<'src>>>, 
         just(':').to(Token::Colon),
         just(',').to(Token::Comma),
         just('=').to(Token::Eq),
-        just('@').to(Token::At),
+        // @symbol.name (extern addr — must contain '.') or bare @ (scope annotation)
+        just('@')
+            .ignore_then(
+                any()
+                    .filter(|c: &char| c.is_alphanumeric() || *c == '_' || *c == '.')
+                    .repeated()
+                    .at_least(1)
+                    .to_slice()
+                    .try_map(|s: &str, span| {
+                        if s.contains('.') {
+                            Ok(Token::ExternSymbol(s))
+                        } else {
+                            Err(Rich::custom(span, "not an extern symbol"))
+                        }
+                    }),
+            )
+            .or(just('@').to(Token::At)),
         just('&').to(Token::Amp),
         just('-').to(Token::Minus),
     ));
