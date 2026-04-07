@@ -1204,8 +1204,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let addr = self.out_field_addr(rb, offset);
                 rb.store_to_addr(addr, value, width);
             }
-            hir::Expr::Literal(hir::Literal::ExternAddr { symbol, value }) => {
-                let value = rb.extern_addr(symbol.clone(), *value);
+            hir::Expr::Literal(hir::Literal::ExternAddr { symbol }) => {
+                let value = rb.extern_addr(symbol.clone());
                 let width = self.scalar_width_for_hir_type(ty);
                 let addr = self.out_field_addr(rb, offset);
                 rb.store_to_addr(addr, value, width);
@@ -1315,8 +1315,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
         match expr {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
             hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
-            hir::Expr::Literal(hir::Literal::ExternAddr { symbol, value }) => {
-                rb.extern_addr(symbol.clone(), *value)
+            hir::Expr::Literal(hir::Literal::ExternAddr { symbol }) => {
+                rb.extern_addr(symbol.clone())
             }
             hir::Expr::Local(local) => {
                 let slot = self.local_slots[local].base_slot;
@@ -2979,8 +2979,8 @@ impl<'a> ScalarHirIrLowerer<'a> {
         match expr {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
             hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
-            hir::Expr::Literal(hir::Literal::ExternAddr { symbol, value }) => {
-                rb.extern_addr(symbol.clone(), *value)
+            hir::Expr::Literal(hir::Literal::ExternAddr { symbol }) => {
+                rb.extern_addr(symbol.clone())
             }
             hir::Expr::Local(local) => {
                 let values = self.get_local_values(*local);

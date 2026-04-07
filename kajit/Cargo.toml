@@ -33,6 +33,7 @@ kajit-format = { path = "../kajit-format" }
 kajit-hir = { path = "../kajit-hir" }
 kajit-malum = { path = "../kajit-malum" }
 kajit-postcard = { path = "../kajit-postcard" }
+kajit-types = { path = "../kajit-types" }
 
 [dev-dependencies]
 kajit-hir-text = { path = "../kajit-hir-text" }

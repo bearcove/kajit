@@ -66,6 +66,8 @@ pub(super) struct EmitContext<'a> {
     /// Actual source homes for instruction use operands at instruction entry.
     pub(super) inst_source_locations: HashMap<(cfg_mir::InstId, u32), VRegLocation>,
     pub(super) current_inst: Option<cfg_mir::InstId>,
+    /// External symbol resolution table.
+    pub(super) symbol_table: &'a kajit_types::SymbolTable,
 }
 
 pub(super) fn emit_parallel_reg_moves(ectx: &mut EmitCtx, moves: &[(Reg, Reg)], temp: Reg) {

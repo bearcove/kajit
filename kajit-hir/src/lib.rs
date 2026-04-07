@@ -1505,10 +1505,9 @@ pub enum Literal {
     Integer(u64),
     String(String),
     /// Address of an external symbol (vtable function pointer etc.).
-    /// Carries the in-process value for JIT and a symbol name for relocation.
+    /// The runtime address is resolved from a symbol table at emit time.
     ExternAddr {
-        symbol: String,
-        value: u64,
+        symbol: kajit_types::SymbolName,
     },
 }
 

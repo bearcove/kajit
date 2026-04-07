@@ -153,7 +153,7 @@ pub fn debug_ir_and_cfg_mir_text(
     shape: &'static facet::Shape,
     kind: DecoderKind,
 ) -> (String, String) {
-    let module = compiler::build_decoder_hir(shape, kind);
+    let (module, _symbol_table) = compiler::build_decoder_hir(shape, kind);
     let mut func = compiler::lower_hir_module(&module);
     compiler::run_default_passes_from_env(&mut func);
     let registry = symbol_registry_for_shape(shape);
@@ -180,7 +180,7 @@ pub fn debug_cfg_mir(
     shape: &'static facet::Shape,
     kind: DecoderKind,
 ) -> regalloc_engine::cfg_mir::Program {
-    let module = compiler::build_decoder_hir(shape, kind);
+    let (module, _symbol_table) = compiler::build_decoder_hir(shape, kind);
     let mut func = compiler::lower_hir_module(&module);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
@@ -194,7 +194,8 @@ pub fn debug_cfg_mir(
 /// new semantic HIR. It currently targets postcard semantics only and supports
 /// a deliberately narrow subset needed to exercise borrowed-output decoding.
 pub fn debug_postcard_hir(shape: &'static facet::Shape) -> kajit_hir::Module {
-    compiler::build_postcard_decoder_hir(shape)
+    let (module, _symbol_table) = compiler::build_postcard_decoder_hir(shape);
+    module
 }
 
 /// Build the current prototype postcard HIR and render it in canonical text form.
@@ -206,12 +207,13 @@ pub fn debug_postcard_hir_text(shape: &'static facet::Shape) -> String {
 ///
 /// Dispatches to the appropriate HIR builder based on the decoder kind.
 pub fn debug_hir_text(shape: &'static facet::Shape, kind: DecoderKind) -> String {
-    compiler::build_decoder_hir(shape, kind).to_string()
+    let (module, _symbol_table) = compiler::build_decoder_hir(shape, kind);
+    module.to_string()
 }
 
 /// Build postcard RVSDG by building postcard HIR and lowering it to IR.
 pub fn debug_postcard_ir_via_hir_text(shape: &'static facet::Shape) -> String {
-    let module = compiler::build_postcard_decoder_hir(shape);
+    let (module, _symbol_table) = compiler::build_postcard_decoder_hir(shape);
     let func = compiler::lower_hir_module(&module);
     let registry = symbol_registry_for_shape(shape);
     format!("{}", func.display_with_registry(&registry))
@@ -234,7 +236,7 @@ pub fn compile_postcard_decoder_via_structural_hir(
 
 /// Build decoder IR (after default pre-regalloc passes) and return the Linear IR.
 pub fn debug_linear_ir(shape: &'static facet::Shape, kind: DecoderKind) -> linearize::LinearIr {
-    let module = compiler::build_decoder_hir(shape, kind);
+    let (module, _symbol_table) = compiler::build_decoder_hir(shape, kind);
     let mut func = compiler::lower_hir_module(&module);
     compiler::run_default_passes_from_env(&mut func);
     linearize::linearize(&mut func)
@@ -264,7 +266,7 @@ pub fn debug_ir_opt_timeline_text_with_options(
     kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
 ) -> Vec<(String, String)> {
-    let module = compiler::build_decoder_hir(shape, kind);
+    let (module, _symbol_table) = compiler::build_decoder_hir(shape, kind);
     let mut func = compiler::lower_hir_module(&module);
     let registry = symbol_registry_for_shape(shape);
     let mut checkpoints = vec![(

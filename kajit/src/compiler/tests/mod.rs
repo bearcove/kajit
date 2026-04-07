@@ -236,7 +236,7 @@ pub(crate) fn compile_structural_hir_decoder(
 }
 
 fn compile_postcard_decoder_via_structural_hir(shape: &'static Shape) -> CompiledDecoder {
-    let module = build_postcard_decoder_hir(shape);
+    let (module, _symbol_table) = build_postcard_decoder_hir(shape);
     compile_structural_hir_decoder(shape, &module)
 }
 
@@ -411,7 +411,7 @@ fn instantiated_shape_symbol_key_includes_const_params() {
 
 #[test]
 fn postcard_hir_models_borrowed_output_structs() {
-    let module = build_postcard_decoder_hir(<BorrowedHeader<'static>>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<BorrowedHeader<'static>>::SHAPE);
     assert_eq!(module.functions.len(), 1);
 
     let (_, function) = module.functions.iter().next().unwrap();
@@ -470,7 +470,7 @@ fn postcard_hir_models_borrowed_output_structs() {
 
 #[test]
 fn postcard_hir_models_owned_output_strings() {
-    let module = build_postcard_decoder_hir(<OwnedHeader>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<OwnedHeader>::SHAPE);
     let (_, function) = module.functions.iter().next().unwrap();
 
     fn block_contains_call_named(module: &hir::Module, block: &hir::Block, name: &str) -> bool {
@@ -563,7 +563,7 @@ fn compile_decoder_prefers_hir_for_supported_postcard_bool_field() {
 
 #[test]
 fn postcard_hir_models_float_scalars_without_reader_calls() {
-    let module = build_postcard_decoder_hir(<FloatHeader>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<FloatHeader>::SHAPE);
 
     assert!(
         module.callable_named("postcard.read_f32").is_none(),
@@ -577,7 +577,7 @@ fn postcard_hir_models_float_scalars_without_reader_calls() {
 
 #[test]
 fn postcard_hir_models_char_without_reader_calls() {
-    let module = build_postcard_decoder_hir(<CharHeader>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<CharHeader>::SHAPE);
 
     assert!(
         module.callable_named("postcard.read_char").is_none(),
@@ -593,9 +593,9 @@ fn postcard_hir_models_char_without_reader_calls() {
 
 #[test]
 fn postcard_hir_models_128bit_scalars_without_reader_calls() {
-    let unsigned = build_postcard_decoder_hir(<BigUnsigned>::SHAPE);
-    let signed = build_postcard_decoder_hir(<BigSigned>::SHAPE);
-    let optional = build_postcard_decoder_hir(<MaybeBigUnsigned>::SHAPE);
+    let (unsigned, _) = build_postcard_decoder_hir(<BigUnsigned>::SHAPE);
+    let (signed, _) = build_postcard_decoder_hir(<BigSigned>::SHAPE);
+    let (optional, _) = build_postcard_decoder_hir(<MaybeBigUnsigned>::SHAPE);
 
     assert!(
         unsigned.callable_named("postcard.read_u128").is_none(),
@@ -613,7 +613,7 @@ fn postcard_hir_models_128bit_scalars_without_reader_calls() {
 
 #[test]
 fn postcard_hir_models_option_borrowed_fields() {
-    let module = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
     let (_, function) = module.functions.iter().next().unwrap();
     let input_region = function.region_params[0];
 
@@ -734,7 +734,8 @@ fn postcard_hir_text_round_trips() {
         .name("postcard_hir_text_round_trips".to_owned())
         .stack_size(32 * 1024 * 1024)
         .spawn(|| {
-            let module = build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
+            let (module, _symbol_table) =
+                build_postcard_decoder_hir(<MaybeBorrowedName<'static>>::SHAPE);
             let text = module.to_string();
             let reparsed = parse_hir(&text).expect("postcard HIR text should parse");
 
@@ -823,7 +824,7 @@ fn postcard_hir_lowering_decodes_option_u128_field() {
 
 #[test]
 fn postcard_hir_models_unit_enums() {
-    let module = build_postcard_decoder_hir(<UnitAnimal>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<UnitAnimal>::SHAPE);
     let (_, function) = module.functions.iter().next().unwrap();
 
     assert!(
@@ -879,7 +880,7 @@ fn postcard_hir_models_unit_enums() {
 
 #[test]
 fn postcard_hir_models_payload_enums() {
-    let module = build_postcard_decoder_hir(<PayloadAnimal<'static>>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<PayloadAnimal<'static>>::SHAPE);
     let (_, function) = module.functions.iter().next().unwrap();
 
     let arms = function
@@ -954,13 +955,13 @@ fn postcard_hir_models_payload_enums() {
 // pre-existing: HIR round-trip mismatch on max_iterations
 #[test]
 fn postcard_hir_scalar_array_u32_4() {
-    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
     insta::assert_snapshot!(module.to_string());
 }
 
 #[test]
 fn postcard_hir_models_arrays() {
-    let module = build_postcard_decoder_hir(<BorrowedArrayHolder<'static>>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<BorrowedArrayHolder<'static>>::SHAPE);
     let (_, function) = module.functions.iter().next().unwrap();
 
     // Array elements should be decoded in a loop, not unrolled
@@ -1016,7 +1017,7 @@ fn postcard_hir_lowering_decodes_borrowed_header() {
 #[cfg(target_os = "linux")]
 fn debug_postcard_borrowed_header_harness() {
     let shape = <BorrowedHeader<'static>>::SHAPE;
-    let module = build_postcard_decoder_hir(shape);
+    let (module, _symbol_table) = build_postcard_decoder_hir(shape);
     let registry = super::symbol_registry_for_shape(shape);
     let root_data_abi = super::infer_root_decoder_data_abi(&module);
 
@@ -1034,7 +1035,9 @@ fn debug_postcard_borrowed_header_harness() {
         .map(|func| crate::harness::AllocationMap::from_regalloc3(func, base_frame))
         .unwrap_or_default();
 
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
+    let empty_symbols = kajit_types::SymbolTable::new();
+    let result =
+        crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc, &empty_symbols);
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let extern_addr_relocs = result.extern_addr_relocs.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
@@ -1610,7 +1613,7 @@ fn postcard_hir_lowering_decodes_multi_options() {
     std::fs::write("/tmp/multiopt.hir.txt", hir).expect("write MultiOpt HIR dump");
     let cfg = crate::debug_cfg_mir_text(<MultiOpt>::SHAPE, crate::DecoderKind::Postcard);
     std::fs::write("/tmp/multiopt.cfg.txt", cfg).expect("write MultiOpt CFG dump");
-    let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
     let mut ir = lower_hir_module(&module);
     crate::compiler::run_default_passes_from_env(&mut ir);
     let linear = crate::linearize::linearize(&mut ir);
@@ -1745,7 +1748,7 @@ fn postcard_hir_lowering_decodes_enum_in_struct_field() {
 #[test]
 #[ignore = "ideal interpreter does not support scalar ABI yet"]
 fn postcard_hir_lowering_array_path_matches_jit_differential_harness() {
-    let module = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<ScalarArrayHolder>::SHAPE);
     let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
     let output_size = std::mem::size_of::<ScalarArrayHolder>();
@@ -1765,7 +1768,7 @@ fn postcard_hir_lowering_array_path_matches_jit_differential_harness() {
 #[test]
 #[ignore = "ideal interpreter does not support scalar ABI yet"]
 fn postcard_hir_lowering_multi_options_matches_jit_differential_harness() {
-    let module = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<MultiOpt>::SHAPE);
     let mut func = lower_hir_module(&module);
     let linear = crate::linearize::linearize(&mut func);
     let encoded = ::postcard::to_allocvec(&MultiOpt {
@@ -3150,7 +3153,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
 #[test]
 #[ignore]
 fn postcard_option_scalar_matches_differential_harness() {
-    let module = build_postcard_decoder_hir(<MaybeCount>::SHAPE);
+    let (module, _symbol_table) = build_postcard_decoder_hir(<MaybeCount>::SHAPE);
     let mut func = build_structural_hir_ir(&module);
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);

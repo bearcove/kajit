@@ -192,6 +192,8 @@ pub struct DebuggerSession {
     data_blobs: Vec<Vec<u8>>,
     /// Runtime deserialization context, passed to intrinsics as ctx_ptr (data_args[1]).
     ctx: RuntimeDeserContext,
+    /// External symbol resolution table.
+    symbol_table: kajit_types::SymbolTable,
 }
 
 impl DebuggerSession {
@@ -229,6 +231,7 @@ impl DebuggerSession {
                 key_scratch_cap: 0,
                 trusted_utf8: false,
             },
+            symbol_table: kajit_types::SymbolTable::new(),
         })
     }
 
@@ -465,6 +468,8 @@ impl DebuggerSession {
             }
         }
 
+        // Slot addresses are now real host pointers (into self.slots),
+        // so they pass through here without translation.
         raw
     }
 
@@ -548,8 +553,10 @@ impl DebuggerSession {
 
     fn execute_op(&mut self, block: cfg_mir::BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
         match op {
-            LinearOp::Const { dst, value } | LinearOp::ExternAddr { dst, value, .. } => {
-                self.write_vreg(dst.index(), *value)
+            LinearOp::Const { dst, value } => self.write_vreg(dst.index(), *value),
+            LinearOp::ExternAddr { dst, symbol } => {
+                let addr = self.symbol_table.resolve(symbol).as_u64();
+                self.write_vreg(dst.index(), addr)
             }
             LinearOp::DataAddr { dst, blob_id } => {
                 let blob = &self.data_blobs[*blob_id as usize];
@@ -629,9 +636,9 @@ impl DebuggerSession {
                 self.write_vreg(dst.index(), result);
             }
             LinearOp::SlotAddr { dst, slot } => {
-                // Slot addresses: use high addresses that won't collide with cursor
-                let addr = 0x1_0000_0000u64
-                    + (slot.index() as u64) * kajit_ir::SLOT_ADDR_STRIDE_BYTES as u64;
+                let base = slot.index() * kajit_ir::SLOT_ADDR_STRIDE_BYTES;
+                self.ensure_slots_len(base + kajit_ir::SLOT_ADDR_STRIDE_BYTES);
+                let addr = unsafe { self.slots.as_ptr().add(base) as u64 };
                 self.write_vreg(dst.index(), addr);
             }
             LinearOp::WriteToSlot { src, slot } => {

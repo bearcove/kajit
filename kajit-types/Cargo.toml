@@ -1,5 +1,5 @@
 [package]
-name = "kajit-ir"
+name = "kajit-types"
 version = "0.1.0"
 edition = "2024"
 
@@ -7,9 +7,3 @@ edition = "2024"
 
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
-
-[dependencies]
-kajit-types = { path = "../kajit-types" }
-
-[dev-dependencies]
-kajit-ir-text = { path = "../kajit-ir-text" }

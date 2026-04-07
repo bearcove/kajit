@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use kajit_types::SymbolTable;
+
 use crate::{ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, RegionArgRef, RegionId};
 
 /// Interpreter outcome.
@@ -41,12 +43,14 @@ struct State<'a> {
     steps: u64,
     /// Max steps.
     max_steps: u64,
+    /// External symbol resolution table.
+    symbol_table: SymbolTable,
 }
 
 const SLOT_STRIDE: usize = 8;
 
 impl<'a> State<'a> {
-    fn new(input: &'a [u8], output_size: usize) -> Self {
+    fn new(input: &'a [u8], output_size: usize, symbol_table: SymbolTable) -> Self {
         Self {
             input,
             output: vec![0u8; output_size],
@@ -55,6 +59,7 @@ impl<'a> State<'a> {
             trap: None,
             steps: 0,
             max_steps: 1_000_000,
+            symbol_table,
         }
     }
 
@@ -129,8 +134,13 @@ impl Env {
 /// Execute an IrFunc on the given input bytes.
 ///
 /// `output_size` is the expected size of the output buffer (from the shape).
-pub fn interpret(func: &IrFunc, input: &[u8], output_size: usize) -> Outcome {
-    let mut state = State::new(input, output_size);
+pub fn interpret(
+    func: &IrFunc,
+    input: &[u8],
+    output_size: usize,
+    symbol_table: SymbolTable,
+) -> Outcome {
+    let mut state = State::new(input, output_size, symbol_table);
     let mut env = Env::new();
 
     // Find the root lambda and execute its body.
@@ -241,8 +251,9 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
             let blob = &func.data_blobs[*blob_id as usize];
             env.set_output(node_id, 0, blob.as_ptr() as u64);
         }
-        IrOp::ExternAddr { value, .. } => {
-            env.set_output(node_id, 0, *value);
+        IrOp::ExternAddr { symbol } => {
+            let addr = state.symbol_table.resolve(symbol).as_u64();
+            env.set_output(node_id, 0, addr);
         }
         IrOp::Add
         | IrOp::Sub

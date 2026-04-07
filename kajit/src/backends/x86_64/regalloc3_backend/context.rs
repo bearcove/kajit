@@ -50,6 +50,8 @@ pub(super) struct EmitContext<'a> {
     /// Actual source homes for instruction use operands at instruction entry.
     pub inst_source_locations: HashMap<(cfg_mir::InstId, u32), VRegLocation>,
     pub current_inst: Option<cfg_mir::InstId>,
+    /// External symbol resolution table.
+    pub symbol_table: &'a kajit_types::SymbolTable,
 }
 
 /// Emit a set of parallel register moves using Briggs-style cycle resolution.

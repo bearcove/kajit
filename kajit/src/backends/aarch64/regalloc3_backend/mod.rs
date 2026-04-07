@@ -51,7 +51,10 @@ pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
 }
 
 /// Compile CFG-MIR with regalloc3 allocations to aarch64 machine code.
-pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult {
+pub fn compile_regalloc3(
+    alloc: &AllocatedCfgProgramRa3,
+    symbol_table: &kajit_types::SymbolTable,
+) -> LinearBackendResult {
     let program = &alloc.cfg_program;
 
     // Calculate max spillslots and extra callee-saved pairs needed
@@ -249,6 +252,7 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
             edge_source_locations,
             inst_source_locations,
             current_inst: None,
+            symbol_table,
         };
 
         ctx.emit_function();
@@ -416,8 +420,9 @@ pub fn compile_regalloc3(alloc: &AllocatedCfgProgramRa3) -> LinearBackendResult 
 
     // Patch extern addr relocations with in-process values (for JIT execution).
     for reloc in &extern_addr_relocs {
+        let addr = symbol_table.resolve(&reloc.symbol).as_u64();
         unsafe {
-            buf.exec.patch_u64_load(reloc.code_offset, reloc.value);
+            buf.exec.patch_u64_load(reloc.code_offset, addr);
         }
     }
 

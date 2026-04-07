@@ -32,6 +32,8 @@ pub struct PostcardHirLowerer {
     pub locals: Vec<hir::LocalDecl>,
     next_local: u32,
     next_stmt: u32,
+    /// Collects external symbol → runtime address mappings during HIR generation.
+    pub symbol_table: kajit_types::SymbolTable,
 }
 
 impl Default for PostcardHirLowerer {
@@ -57,11 +59,20 @@ impl PostcardHirLowerer {
             locals: Vec::new(),
             next_local: 2,
             next_stmt: 0,
+            symbol_table: kajit_types::SymbolTable::new(),
         }
     }
 
-    fn finish(self) -> hir::Module {
-        self.module
+    fn finish(self) -> (hir::Module, kajit_types::SymbolTable) {
+        (self.module, self.symbol_table)
+    }
+
+    /// Register an external symbol with its runtime address and return the SymbolName.
+    fn register_extern(&mut self, name: String, addr: *const ()) -> kajit_types::SymbolName {
+        let sym = kajit_types::SymbolName::new(name);
+        self.symbol_table
+            .insert(sym.clone(), kajit_types::RuntimeAddr::from_ptr(addr));
+        sym
     }
 
     fn next_local(&mut self) -> hir::LocalId {
@@ -2799,8 +2810,10 @@ impl PostcardHirLowerer {
                         target: hir::CallTarget::Callable(option_init_some),
                         args: vec![
                             hir::Expr::Literal(hir::Literal::ExternAddr {
-                                symbol: vtable_symbol_name(shape, VtableEntry::OptionInitSome),
-                                value: opt_def.vtable.init_some as *const () as usize as u64,
+                                symbol: self.register_extern(
+                                    vtable_symbol_name(shape, VtableEntry::OptionInitSome),
+                                    opt_def.vtable.init_some as *const (),
+                                ),
                             }),
                             hir::Expr::AddrOf(Box::new(place.clone())),
                             hir::Expr::AddrOf(Box::new(hir::Place::Local(payload_local))),
@@ -2826,8 +2839,10 @@ impl PostcardHirLowerer {
                         target: hir::CallTarget::Callable(option_init_some),
                         args: vec![
                             hir::Expr::Literal(hir::Literal::ExternAddr {
-                                symbol: vtable_symbol_name(shape, VtableEntry::OptionInitSome),
-                                value: opt_def.vtable.init_some as *const () as usize as u64,
+                                symbol: self.register_extern(
+                                    vtable_symbol_name(shape, VtableEntry::OptionInitSome),
+                                    opt_def.vtable.init_some as *const (),
+                                ),
                             }),
                             hir::Expr::AddrOf(Box::new(place.clone())),
                             hir::Expr::AddrOf(Box::new(hir::Place::Local(payload_local))),
@@ -2846,8 +2861,10 @@ impl PostcardHirLowerer {
                     target: hir::CallTarget::Callable(option_init_none),
                     args: vec![
                         hir::Expr::Literal(hir::Literal::ExternAddr {
-                            symbol: vtable_symbol_name(shape, VtableEntry::OptionInitNone),
-                            value: opt_def.vtable.init_none as *const () as usize as u64,
+                            symbol: self.register_extern(
+                                vtable_symbol_name(shape, VtableEntry::OptionInitNone),
+                                opt_def.vtable.init_none as *const (),
+                            ),
                         }),
                         hir::Expr::AddrOf(Box::new(place)),
                     ],
@@ -3090,7 +3107,9 @@ impl PostcardHirLowerer {
     }
 }
 
-pub fn build_postcard_decoder_hir(shape: &'static Shape) -> hir::Module {
+pub fn build_postcard_decoder_hir(
+    shape: &'static Shape,
+) -> (hir::Module, kajit_types::SymbolTable) {
     let mut lowerer = PostcardHirLowerer::new();
     let root_type = lowerer.lower_type(shape);
     let cursor_local = lowerer.next_local();

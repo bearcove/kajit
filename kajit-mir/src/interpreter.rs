@@ -277,6 +277,7 @@ struct InterpreterState<'a> {
     root_cursor_arg: Option<Box<RuntimeCursorArg>>,
     trap: Option<InterpreterTrap>,
     trace_out_ptr: TraceValue,
+    symbol_table: kajit_types::SymbolTable,
 }
 
 impl<'a> InterpreterState<'a> {
@@ -300,6 +301,7 @@ impl<'a> InterpreterState<'a> {
             root_cursor_arg: None,
             trap: None,
             trace_out_ptr: TraceValue::OutputPtr { offset: 0 },
+            symbol_table: kajit_types::SymbolTable::new(),
         }
     }
 
@@ -719,8 +721,10 @@ fn execute_function_inner(
                 .inst(inst_id)
                 .ok_or(InterpreterError::UnknownInst { inst: inst_id })?;
             match &inst.op {
-                LinearOp::Const { dst, value } | LinearOp::ExternAddr { dst, value, .. } => {
-                    state.write_vreg(dst.index(), *value)
+                LinearOp::Const { dst, value } => state.write_vreg(dst.index(), *value),
+                LinearOp::ExternAddr { dst, symbol } => {
+                    let addr = state.symbol_table.resolve(symbol).as_u64();
+                    state.write_vreg(dst.index(), addr)
                 }
                 LinearOp::DataAddr { dst, blob_id } => {
                     let blob = &program.data_blobs[*blob_id as usize];
@@ -1054,9 +1058,24 @@ fn execute_function_inner_with_event_trace(
             let before_trap = state.trap;
 
             match &inst.op {
-                LinearOp::Const { dst, value } | LinearOp::ExternAddr { dst, value, .. } => {
+                LinearOp::Const { dst, value } => {
                     let trace_value = TraceValue::U64(*value);
                     state.write_vreg(dst.index(), *value);
+                    state.write_trace_vreg(dst.index(), trace_value.clone());
+                    push_interpreter_event(
+                        trace,
+                        step_index,
+                        location,
+                        InterpreterEventKind::VregWrite {
+                            vreg: *dst,
+                            value: trace_value,
+                        },
+                    );
+                }
+                LinearOp::ExternAddr { dst, symbol } => {
+                    let addr = state.symbol_table.resolve(symbol).as_u64();
+                    let trace_value = TraceValue::U64(addr);
+                    state.write_vreg(dst.index(), addr);
                     state.write_trace_vreg(dst.index(), trace_value.clone());
                     push_interpreter_event(
                         trace,

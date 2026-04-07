@@ -74,11 +74,10 @@ pub enum LinearOp {
         blob_id: u32,
     },
     /// Load the address of an external symbol (vtable function pointer etc.).
-    /// At JIT time uses `value`; in harness mode, `symbol` is used for relocation.
+    /// The runtime address is resolved from a symbol table at emit/interpret time.
     ExternAddr {
         dst: VReg,
-        symbol: String,
-        value: u64,
+        symbol: kajit_types::SymbolName,
     },
     BinOp {
         op: BinOpKind,
@@ -1080,13 +1079,12 @@ impl<'a> Linearizer<'a> {
                     },
                 );
             }
-            IrOp::ExternAddr { symbol, value } => {
+            IrOp::ExternAddr { symbol } => {
                 self.emit_node(
                     node,
                     LinearOp::ExternAddr {
                         dst: data_dst(0),
                         symbol: symbol.clone(),
-                        value: *value,
                     },
                 );
             }

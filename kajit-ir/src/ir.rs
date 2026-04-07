@@ -624,11 +624,9 @@ pub enum IrOp {
     DataAddr { blob_id: u32 },
 
     /// Load the address of an external symbol (e.g. a vtable function pointer).
-    ///
-    /// At JIT time, `value` is the in-process function pointer.
-    /// In standalone harness mode, `symbol` is used to emit a linker relocation.
+    /// The runtime address is resolved from a SymbolTable at emit/interpret time.
     /// Inputs: []. Outputs: [Data].
-    ExternAddr { symbol: String, value: u64 },
+    ExternAddr { symbol: kajit_types::SymbolName },
 
     /// Binary addition.
     /// Inputs: [Data, Data]. Outputs: [Data].
@@ -1412,7 +1410,7 @@ impl<'a> RegionBuilder<'a> {
     }
 
     /// Add an ExternAddr node for a relocatable symbol (e.g. vtable function pointer).
-    pub fn extern_addr(&mut self, symbol: String, value: u64) -> PortSource {
+    pub fn extern_addr(&mut self, symbol: kajit_types::SymbolName) -> PortSource {
         let out = self.data_output();
         let node = self.add_node(Node {
             region: self.region,
@@ -1420,7 +1418,7 @@ impl<'a> RegionBuilder<'a> {
             debug_value: self.debug_value,
             inputs: vec![],
             outputs: vec![out],
-            kind: NodeKind::Simple(IrOp::ExternAddr { symbol, value }),
+            kind: NodeKind::Simple(IrOp::ExternAddr { symbol }),
         });
         PortSource::Node(OutputRef { node, index: 0 })
     }

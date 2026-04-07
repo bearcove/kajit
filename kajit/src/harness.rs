@@ -1273,7 +1273,7 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
 
     for reloc in &input.extern_addr_relocs {
         let sym_id = obj.add_symbol(Symbol {
-            name: reloc.symbol.as_bytes().to_vec(),
+            name: reloc.symbol.as_str().as_bytes().to_vec(),
             value: 0,
             size: 0,
             kind: SymbolKind::Data,

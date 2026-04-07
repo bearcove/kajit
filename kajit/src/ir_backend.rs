@@ -38,10 +38,8 @@ pub struct DataRelocInfo {
 pub struct ExternAddrRelocInfo {
     /// Offset in the code buffer of the first instruction in the fixed-length load sequence.
     pub code_offset: usize,
-    /// The in-process value (used for JIT patching).
-    pub value: u64,
     /// Symbol name for linker relocation in standalone harness mode.
-    pub symbol: String,
+    pub symbol: kajit_types::SymbolName,
 }
 
 pub struct LinearBackendResult {

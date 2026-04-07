@@ -338,7 +338,12 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             Ok(ir_func) => {
                 let input_clone = input.clone();
                 let handle = std::thread::spawn(move || {
-                    kajit_ir::interpret::interpret(&ir_func, &input_clone, output_size)
+                    kajit_ir::interpret::interpret(
+                        &ir_func,
+                        &input_clone,
+                        output_size,
+                        kajit_types::SymbolTable::new(),
+                    )
                 });
                 let timeout = std::time::Duration::from_secs(5);
                 let start = std::time::Instant::now();

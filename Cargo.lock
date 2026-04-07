@@ -1348,6 +1348,7 @@ dependencies = [
  "kajit-mir",
  "kajit-mir-text",
  "kajit-postcard",
+ "kajit-types",
  "libc",
  "object 0.36.7",
  "postcard",
@@ -1376,6 +1377,7 @@ dependencies = [
  "kajit-lir",
  "kajit-mir",
  "kajit-mir-text",
+ "kajit-types",
  "lldb",
  "rust-mcp-sdk",
  "serde",
@@ -1412,6 +1414,7 @@ name = "kajit-hir"
 version = "0.1.0"
 dependencies = [
  "kajit-ir",
+ "kajit-types",
 ]
 
 [[package]]
@@ -1428,6 +1431,7 @@ name = "kajit-ir"
 version = "0.1.0"
 dependencies = [
  "kajit-ir-text",
+ "kajit-types",
 ]
 
 [[package]]
@@ -1447,6 +1451,7 @@ version = "0.1.0"
 dependencies = [
  "kajit-ir",
  "kajit-ir-text",
+ "kajit-types",
 ]
 
 [[package]]
@@ -1465,6 +1470,7 @@ dependencies = [
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
+ "kajit-types",
 ]
 
 [[package]]
@@ -1494,7 +1500,12 @@ dependencies = [
  "kajit-format",
  "kajit-hir",
  "kajit-malum",
+ "kajit-types",
 ]
+
+[[package]]
+name = "kajit-types"
+version = "0.1.0"
 
 [[package]]
 name = "kajit-vtables"

@@ -248,10 +248,13 @@ pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
     // Phase 6: Backend compilation
+    let empty_symbols = kajit_types::SymbolTable::new();
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
+    let result =
+        crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc, &empty_symbols);
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc);
+    let result =
+        crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc, &empty_symbols);
     let entry = result.entry as usize;
 
     CompiledFunction {
@@ -267,7 +270,7 @@ pub fn compile_pipeline(
     pipeline_opts: &PipelineOptions,
 ) -> PipelineArtifacts {
     let registry = symbol_registry_for_shape(shape);
-    let module = build_decoder_hir(shape, kind);
+    let (module, _symbol_table) = build_decoder_hir(shape, kind);
     compile_pipeline_from_hir_module(&module, &registry, pipeline_opts)
 }
 
@@ -327,9 +330,15 @@ pub fn compile_pipeline_from_hir_module(
     );
 
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
+        &ra3_alloc,
+        &pipeline_opts.symbol_table,
+    );
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(
+        &ra3_alloc,
+        &pipeline_opts.symbol_table,
+    );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let extern_addr_relocs = result.extern_addr_relocs.clone();
     let (buf, entry, _source_map, backend_debug_info, asm_program) =
@@ -388,7 +397,7 @@ pub fn compile_pre_opt_cfg(
     pipeline_opts: &PipelineOptions,
 ) -> kajit_mir::cfg_mir::Program {
     // Phase 1: HIR
-    let module = build_decoder_hir(shape, kind);
+    let (module, _symbol_table) = build_decoder_hir(shape, kind);
 
     // Phase 2: IR + passes
     let mut func = lower_hir_module(&module);
@@ -475,7 +484,10 @@ pub fn emission_trace_text_with_options(
         .unwrap_or_else(|err| panic!("failed to format emission trace: {err:?}"))
 }
 
-pub(crate) fn build_decoder_hir(shape: &'static Shape, kind: DecoderKind) -> hir::Module {
+pub(crate) fn build_decoder_hir(
+    shape: &'static Shape,
+    kind: DecoderKind,
+) -> (hir::Module, kajit_types::SymbolTable) {
     match kind {
         DecoderKind::Postcard => build_postcard_decoder_hir(shape),
     }
@@ -486,11 +498,13 @@ pub(crate) fn compile_postcard_decoder_via_hir_with_options(
     pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
     let registry = symbol_registry_for_shape(shape);
-    let module = build_postcard_decoder_hir(shape);
+    let (module, symbol_table) = build_postcard_decoder_hir(shape);
     let root_data_abi = infer_root_decoder_data_abi(&module);
     let mut func = lower_hir_module(&module);
     run_configured_default_passes(&mut func, &pipeline_opts);
     let linear = crate::linearize::linearize(&mut func);
+    let mut pipeline_opts = pipeline_opts;
+    pipeline_opts.symbol_table = symbol_table;
     compile_linear_ir_decoder_with_options(
         &linear,
         false,
@@ -578,7 +592,7 @@ pub(crate) fn compile_cfg_mir_decoder_with_registry(
 fn compile_linear_ir_decoder_with_options(
     ir: &crate::linearize::LinearIr,
     trusted_utf8_input: bool,
-    _pipeline_opts: PipelineOptions,
+    pipeline_opts: PipelineOptions,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     root_shape: Option<&'static Shape>,
     root_data_abi: RootDecoderDataAbi,
@@ -594,9 +608,15 @@ fn compile_linear_ir_decoder_with_options(
     let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
+        &alloc,
+        &pipeline_opts.symbol_table,
+    );
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc);
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(
+        &alloc,
+        &pipeline_opts.symbol_table,
+    );
     let (buf, entry, source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
     #[cfg(target_arch = "aarch64")]
@@ -678,7 +698,7 @@ fn compile_cfg_mir_decoder_with_options(
     cfg_program: &crate::regalloc_engine::cfg_mir::Program,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     trusted_utf8_input: bool,
-    _pipeline_opts: PipelineOptions,
+    pipeline_opts: PipelineOptions,
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
 
@@ -687,9 +707,15 @@ fn compile_cfg_mir_decoder_with_options(
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
 
     #[cfg(target_arch = "aarch64")]
-    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc);
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
+        &alloc,
+        &pipeline_opts.symbol_table,
+    );
     #[cfg(target_arch = "x86_64")]
-    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc);
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(
+        &alloc,
+        &pipeline_opts.symbol_table,
+    );
     let (buf, entry, source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
     #[cfg(target_arch = "aarch64")]

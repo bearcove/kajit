@@ -17,3 +17,4 @@ facet = "0.44"
 kajit-format = { path = "../kajit-format" }
 kajit-hir = { path = "../kajit-hir" }
 kajit-malum = { path = "../kajit-malum" }
+kajit-types = { path = "../kajit-types" }

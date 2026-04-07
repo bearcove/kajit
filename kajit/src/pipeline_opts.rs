@@ -8,6 +8,37 @@ const PASS_OPTION_PREFIX: &str = "pass.";
 pub struct PipelineOptions {
     pub all_opts: Option<bool>,
     pass_overrides: BTreeMap<String, bool>,
+    /// External symbol resolution table (vtable function pointers, etc.).
+    pub symbol_table: kajit_types::SymbolTable,
+}
+
+impl PipelineOptions {
+    pub fn builder() -> PipelineOptionsBuilder {
+        PipelineOptionsBuilder::default()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PipelineOptionsBuilder {
+    inner: PipelineOptions,
+}
+
+impl PipelineOptionsBuilder {
+    pub fn from_env(mut self) -> Self {
+        let env_opts = PipelineOptions::from_env();
+        self.inner.all_opts = env_opts.all_opts;
+        self.inner.pass_overrides = env_opts.pass_overrides;
+        self
+    }
+
+    pub fn symbol_table(mut self, table: kajit_types::SymbolTable) -> Self {
+        self.inner.symbol_table = table;
+        self
+    }
+
+    pub fn build(self) -> PipelineOptions {
+        self.inner
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
