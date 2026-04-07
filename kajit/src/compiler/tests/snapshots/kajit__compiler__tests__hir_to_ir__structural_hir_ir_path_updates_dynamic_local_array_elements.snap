@@ -3,15 +3,14 @@ source: kajit/src/compiler/tests/hir_to_ir.rs
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
-  d0 = output
-  d1 = memory
+  d0 = memory
 }
 scopes {
   s0 = lambda_body(@0)
 }
 lambda @0 @s0 (shape: "dynamic_index_summary", output_size: 4) {
   region @s0 {
-    args: [arg0, %os, %ms]
+    args: [arg0, %ms]
     n1 = WriteToSlot(0) [arg0, %ms:arg] -> [%ms]
     n2 = Const(0x2) [] -> [v0]
     n3 = WriteToSlot(5) [v0, %ms:n1] -> [%ms]
@@ -28,7 +27,7 @@ lambda @0 @s0 (shape: "dynamic_index_summary", output_size: 4) {
     n14 = Mul [v7, v9] -> [v10]
     n15 = Add [v8, v10] -> [v11]
     n16 = LoadFromAddr(W8) [v11, %ms:n11] -> [v12, %ms]
-    n17 = WriteToField(offset=0, W8) [v12, %os:arg] -> [%os]
-    results: [%os:n17, %ms:n16]
+    n17 = WriteToField(offset=0, W8) [v12, %ms:n16] -> [%ms]
+    results: [%ms:n17]
   }
 }

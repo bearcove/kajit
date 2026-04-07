@@ -175,13 +175,9 @@ pub struct StateDomain {
 /// A state-domain identifier used for generic state tokens.
 pub type StateDomainId = Id<StateDomain>;
 
-/// The built-in output state domain.
-pub const OUTPUT_STATE_DOMAIN: StateDomainId = StateDomainId::new(0);
-/// The built-in computed-address memory state domain.
-pub const MEMORY_STATE_DOMAIN: StateDomainId = StateDomainId::new(1);
-/// The built-in output state domain name.
-pub const OUTPUT_STATE_DOMAIN_NAME: &str = "output";
-/// The built-in computed-address memory state domain name.
+/// The single built-in state domain for all side-effecting operations.
+pub const MEMORY_STATE_DOMAIN: StateDomainId = StateDomainId::new(0);
+/// The built-in memory state domain name.
 pub const MEMORY_STATE_DOMAIN_NAME: &str = "memory";
 /// Byte stride between adjacent abstract slot addresses.
 pub const SLOT_ADDR_STRIDE_BYTES: usize = 8;
@@ -408,9 +404,7 @@ impl PortKind {
     }
 }
 
-/// The built-in output state token kind.
-pub const OUTPUT_STATE_PORT: PortKind = PortKind::State(OUTPUT_STATE_DOMAIN);
-/// The built-in computed-address memory state token kind.
+/// The built-in memory state token kind.
 pub const MEMORY_STATE_PORT: PortKind = PortKind::State(MEMORY_STATE_DOMAIN);
 
 // r[impl ir.edges.data]
@@ -795,9 +789,7 @@ pub enum Effect {
     Barrier,
 }
 
-/// The built-in output effect kind.
-pub const OUTPUT_EFFECT: Effect = Effect::Domain(OUTPUT_STATE_DOMAIN);
-/// The built-in computed-address memory effect kind.
+/// The built-in memory effect kind.
 pub const MEMORY_EFFECT: Effect = Effect::Domain(MEMORY_STATE_DOMAIN);
 
 /// Per-op metadata used by optimization passes.
@@ -846,13 +838,11 @@ impl IrOp {
             | IrOp::ReadFromSlot { .. }
             | IrOp::ErrorExit { .. }
             | IrOp::StoreToAddr { .. }
-            | IrOp::LoadFromAddr { .. } => Effect::Domain(MEMORY_STATE_DOMAIN),
-
-            // Output ops
-            IrOp::WriteToField { .. }
+            | IrOp::LoadFromAddr { .. }
+            | IrOp::WriteToField { .. }
             | IrOp::ReadFromField { .. }
             | IrOp::SaveOutPtr
-            | IrOp::SetOutPtr => Effect::Domain(OUTPUT_STATE_DOMAIN),
+            | IrOp::SetOutPtr => Effect::Domain(MEMORY_STATE_DOMAIN),
 
             // Barrier ops
             IrOp::CallIntrinsic { .. } => Effect::Barrier,
@@ -937,10 +927,6 @@ pub struct IrFunc {
 impl IrFunc {
     pub fn builtin_state_domains() -> Arena<StateDomain> {
         let mut domains = Arena::new();
-        let output = domains.push(StateDomain {
-            name: OUTPUT_STATE_DOMAIN_NAME.to_owned(),
-        });
-        debug_assert_eq!(output, OUTPUT_STATE_DOMAIN);
         let memory = domains.push(StateDomain {
             name: MEMORY_STATE_DOMAIN_NAME.to_owned(),
         });
@@ -1428,11 +1414,6 @@ impl<'a> RegionBuilder<'a> {
         self.region
     }
 
-    /// Current output state token source.
-    pub fn output_state(&self) -> PortSource {
-        self.state_source(OUTPUT_STATE_DOMAIN)
-    }
-
     /// Current memory state token source.
     pub fn memory_state(&self) -> PortSource {
         self.state_source(MEMORY_STATE_DOMAIN)
@@ -1617,15 +1598,15 @@ impl<'a> RegionBuilder<'a> {
                     source: src,
                 },
                 InputPort {
-                    kind: OUTPUT_STATE_PORT,
-                    source: self.state_source(OUTPUT_STATE_DOMAIN),
+                    kind: MEMORY_STATE_PORT,
+                    source: self.state_source(MEMORY_STATE_DOMAIN),
                 },
             ],
-            outputs: vec![Self::state_output(OUTPUT_STATE_DOMAIN, self.debug_scope)],
+            outputs: vec![Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope)],
             kind: NodeKind::Simple(IrOp::WriteToField { offset, width }),
         });
         self.set_state_source(
-            OUTPUT_STATE_DOMAIN,
+            MEMORY_STATE_DOMAIN,
             PortSource::Node(OutputRef { node, index: 0 }),
         );
     }
@@ -1638,17 +1619,17 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: OUTPUT_STATE_PORT,
-                source: self.state_source(OUTPUT_STATE_DOMAIN),
+                kind: MEMORY_STATE_PORT,
+                source: self.state_source(MEMORY_STATE_DOMAIN),
             }],
             outputs: vec![
                 data_out,
-                Self::state_output(OUTPUT_STATE_DOMAIN, self.debug_scope),
+                Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope),
             ],
             kind: NodeKind::Simple(IrOp::ReadFromField { offset, width }),
         });
         self.set_state_source(
-            OUTPUT_STATE_DOMAIN,
+            MEMORY_STATE_DOMAIN,
             PortSource::Node(OutputRef { node, index: 1 }),
         );
         PortSource::Node(OutputRef { node, index: 0 })
@@ -1662,17 +1643,17 @@ impl<'a> RegionBuilder<'a> {
             debug_scope: self.debug_scope,
             debug_value: self.debug_value,
             inputs: vec![InputPort {
-                kind: OUTPUT_STATE_PORT,
-                source: self.state_source(OUTPUT_STATE_DOMAIN),
+                kind: MEMORY_STATE_PORT,
+                source: self.state_source(MEMORY_STATE_DOMAIN),
             }],
             outputs: vec![
                 data_out,
-                Self::state_output(OUTPUT_STATE_DOMAIN, self.debug_scope),
+                Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope),
             ],
             kind: NodeKind::Simple(IrOp::SaveOutPtr),
         });
         self.set_state_source(
-            OUTPUT_STATE_DOMAIN,
+            MEMORY_STATE_DOMAIN,
             PortSource::Node(OutputRef { node, index: 1 }),
         );
         PortSource::Node(OutputRef { node, index: 0 })
@@ -1690,15 +1671,15 @@ impl<'a> RegionBuilder<'a> {
                     source: ptr,
                 },
                 InputPort {
-                    kind: OUTPUT_STATE_PORT,
-                    source: self.state_source(OUTPUT_STATE_DOMAIN),
+                    kind: MEMORY_STATE_PORT,
+                    source: self.state_source(MEMORY_STATE_DOMAIN),
                 },
             ],
-            outputs: vec![Self::state_output(OUTPUT_STATE_DOMAIN, self.debug_scope)],
+            outputs: vec![Self::state_output(MEMORY_STATE_DOMAIN, self.debug_scope)],
             kind: NodeKind::Simple(IrOp::SetOutPtr),
         });
         self.set_state_source(
-            OUTPUT_STATE_DOMAIN,
+            MEMORY_STATE_DOMAIN,
             PortSource::Node(OutputRef { node, index: 0 }),
         );
     }
@@ -2749,9 +2730,6 @@ impl IrFunc {
                             write!(f, "n{}.{}", oref.node.index(), oref.index)
                         }
                     }
-                    PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => {
-                        write!(f, "%os:n{}", oref.node.index())
-                    }
                     PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => {
                         write!(f, "%ms:n{}", oref.node.index())
                     }
@@ -2770,9 +2748,6 @@ impl IrFunc {
                     .unwrap_or(0);
                 match arg.kind {
                     PortKind::Data => write!(f, "arg{}", display_index),
-                    PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => {
-                        write!(f, "%os:arg")
-                    }
                     PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => {
                         write!(f, "%ms:arg")
                     }
@@ -2796,7 +2771,6 @@ impl IrFunc {
                     write!(f, "?")?;
                 }
             }
-            PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => write!(f, "%os")?,
             PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => write!(f, "%ms")?,
             PortKind::State(domain) => write!(f, "%s{}", domain.index())?,
         }
@@ -2816,7 +2790,6 @@ impl IrFunc {
     ) -> fmt::Result {
         match arg.kind {
             PortKind::Data => write!(f, "arg{index}"),
-            PortKind::State(domain) if domain == OUTPUT_STATE_DOMAIN => write!(f, "%os"),
             PortKind::State(domain) if domain == MEMORY_STATE_DOMAIN => write!(f, "%ms"),
             PortKind::State(domain) => write!(f, "%s{}", domain.index()),
         }
@@ -2915,32 +2888,26 @@ mod tests {
         let slot = builder.alloc_slot();
 
         let body = builder.func.root_body();
-        let initial_os = PortSource::RegionArg(RegionArgRef {
-            region: body,
-            arg: builder.func.regions[body].args[0],
-        });
         let initial_ms = PortSource::RegionArg(RegionArgRef {
             region: body,
-            arg: builder.func.regions[body].args[1],
+            arg: builder.func.regions[body].args[0],
         });
 
         {
             let mut rb = builder.root_region();
 
             // Check initial state.
-            assert_eq!(rb.output_state(), initial_os);
             assert_eq!(rb.memory_state(), initial_ms);
 
             // read_from_slot (memory-domain op)
             let data = rb.read_from_slot(slot);
-            let after_read_ms = rb.memory_state();
-            assert_ne!(after_read_ms, initial_ms);
-            assert_eq!(rb.output_state(), initial_os); // output unchanged
+            let after_read = rb.memory_state();
+            assert_ne!(after_read, initial_ms);
 
-            // write_to_field (output-domain op)
+            // write_to_field (also memory-domain now — single domain)
             rb.write_to_field(data, 0, Width::W4);
-            assert_eq!(rb.memory_state(), after_read_ms); // memory unchanged by output op
-            assert_ne!(rb.output_state(), initial_os); // output updated
+            let after_write = rb.memory_state();
+            assert_ne!(after_write, after_read); // state advanced again
 
             rb.set_results(&[]);
         };
@@ -2971,7 +2938,7 @@ mod tests {
                 width: Width::W4
             }
             .effect(),
-            OUTPUT_EFFECT
+            MEMORY_EFFECT
         );
         assert_eq!(
             IrOp::ReadFromField {
@@ -2979,7 +2946,7 @@ mod tests {
                 width: Width::W4
             }
             .effect(),
-            OUTPUT_EFFECT
+            MEMORY_EFFECT
         );
 
         assert_eq!(
@@ -3082,9 +3049,9 @@ mod tests {
                 // Each branch has 2 nodes: const, write_to_field.
                 assert_eq!(func.regions[regions[0]].nodes.len(), 2);
                 assert_eq!(func.regions[regions[1]].nodes.len(), 2);
-                // Each branch has 2 results (cursor state + output state).
-                assert_eq!(func.regions[regions[0]].results.len(), 2);
-                assert_eq!(func.regions[regions[1]].results.len(), 2);
+                // Each branch has 1 result (memory state).
+                assert_eq!(func.regions[regions[0]].results.len(), 1);
+                assert_eq!(func.regions[regions[1]].results.len(), 1);
             }
             _ => panic!("expected gamma node"),
         }
@@ -3132,8 +3099,8 @@ mod tests {
             NodeKind::Theta { body, .. } => {
                 // Body: const, write_to_field, const, sub = 4 nodes.
                 assert_eq!(func.regions[*body].nodes.len(), 4);
-                // Results: predicate + loop_var + cursor_state + output_state = 4.
-                assert_eq!(func.regions[*body].results.len(), 4);
+                // Results: predicate + loop_var + memory_state = 3.
+                assert_eq!(func.regions[*body].results.len(), 3);
             }
             _ => panic!("expected theta node"),
         }

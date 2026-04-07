@@ -1,22 +1,22 @@
 lambda @0 (shape: "test") {
   region {
-    args: [%ms, %os]
+    args: [%ms]
     n0 = Const(0x0) [] -> [v0]
     n1 = WriteToSlot(0) [v0, %ms:arg] -> [%ms]
-    n8 = theta [%ms:n1, %os:arg] {
+    n8 = theta [%ms:n1] {
       region {
-        args: [%ms, %os]
+        args: [%ms]
         n2 = ReadFromSlot(0) [%ms:arg] -> [v1, %ms]
         n3 = Const(0x1) [] -> [v2]
         n4 = Add [v1, v2] -> [v3]
         n5 = WriteToSlot(0) [v3, %ms:n2] -> [%ms]
         n6 = Const(0xa) [] -> [v4]
         n7 = Sub [v4, v3] -> [v5]
-        results: [v5, %ms:n5, %os:arg]
+        results: [v5, %ms:n5]
       }
-    } -> [%ms, %os]
+    } -> [%ms]
     n9 = ReadFromSlot(0) [%ms:n8] -> [v6, %ms]
-    n10 = WriteToField(offset=0, W4) [v6, %os:n8] -> [%os]
-    results: [%ms:n9, %os:n10]
+    n10 = WriteToField(offset=0, W4) [v6, %ms:n9] -> [%ms]
+    results: [%ms:n10]
   }
 }

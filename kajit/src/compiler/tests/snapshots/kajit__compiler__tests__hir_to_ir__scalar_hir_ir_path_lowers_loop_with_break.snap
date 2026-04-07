@@ -3,8 +3,7 @@ source: kajit/src/compiler/tests/hir_to_ir.rs
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
-  d0 = output
-  d1 = memory
+  d0 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -20,92 +19,88 @@ scopes {
 }
 lambda @0 @s0 (shape: "count_to_five") {
   region @s0 {
-    args: [%os, %ms]
+    args: [%ms]
     n1 = Const(0x0) [] -> [v0]
-    n20 = theta [%os:arg, %ms:arg] {
+    n20 = theta [%ms:arg] {
       region @s1 {
-        args: [%os, %ms]
+        args: [%ms]
         n2 = Const(0x1) [] -> [v1]
         n3 = WriteToSlot(0) [v1, %ms:arg] -> [%ms]
         n4 = WriteToSlot(1) [v1, %ms:n3] -> [%ms]
         n5 = ReadFromSlot(0) [%ms:n4] -> [v2, %ms]
         n14 = gamma [
           pred: v2
-          in0: %os:arg
-          in1: %ms:n5
+          in0: %ms:n5
         ] {
           branch 0:
             region @s2 {
-              args: [%os, %ms]
-              results: [%os:arg, %ms:arg]
+              args: [%ms]
+              results: [%ms:arg]
             }
           branch 1:
             region @s3 {
-              args: [%os, %ms]
+              args: [%ms]
               n6 = Const(0x5) [] -> [v3]
               n7 = CmpEq [v0, v3] -> [v4]
               n13 = gamma [
                 pred: v4
-                in0: %os:arg
-                in1: %ms:arg
+                in0: %ms:arg
               ] {
                 branch 0:
                   region @s4 {
-                    args: [%os, %ms]
-                    results: [%os:arg, %ms:arg]
+                    args: [%ms]
+                    results: [%ms:arg]
                   }
                 branch 1:
                   region @s5 {
-                    args: [%os, %ms]
+                    args: [%ms]
                     n8 = ReadFromSlot(0) [%ms:arg] -> [v5, %ms]
                     n12 = gamma [
                       pred: v5
-                      in0: %os:arg
-                      in1: %ms:n8
+                      in0: %ms:n8
                     ] {
                       branch 0:
                         region @s6 {
-                          args: [%os, %ms]
-                          results: [%os:arg, %ms:arg]
+                          args: [%ms]
+                          results: [%ms:arg]
                         }
                       branch 1:
                         region @s7 {
-                          args: [%os, %ms]
+                          args: [%ms]
                           n9 = Const(0x0) [] -> [v6]
                           n10 = WriteToSlot(0) [v6, %ms:arg] -> [%ms]
                           n11 = WriteToSlot(1) [v6, %ms:n10] -> [%ms]
-                          results: [%os:arg, %ms:n11]
+                          results: [%ms:n11]
                         }
-                    } -> [%os, %ms]
-                    results: [%os:n12, %ms:n12]
+                    } -> [%ms]
+                    results: [%ms:n12]
                   }
-              } -> [%os, %ms]
-              results: [%os:n13, %ms:n13]
+              } -> [%ms]
+              results: [%ms:n13]
             }
-        } -> [%os, %ms]
+        } -> [%ms]
         n15 = ReadFromSlot(0) [%ms:n14] -> [v7, %ms]
         n18 = gamma [
           pred: v7
-          in0: %os:n14
-          in1: %ms:n15
+          in0: %ms:n15
         ] {
           branch 0:
             region @s8 {
-              args: [%os, %ms]
-              results: [%os:arg, %ms:arg]
+              args: [%ms]
+              results: [%ms:arg]
             }
           branch 1:
             region @s9 {
-              args: [%os, %ms]
+              args: [%ms]
               n16 = Const(0x1) [] -> [v8]
               n17 = Add [v0, v8] -> [v9]
-              results: [%os:arg, %ms:arg]
+              results: [%ms:arg]
             }
-        } -> [%os, %ms]
+        } -> [%ms]
         n19 = ReadFromSlot(1) [%ms:n18] -> [v10, %ms]
-        results: [v10, %os:n18, %ms:n19]
+        results: [v10, %ms:n19]
       }
-    } -> [%os, %ms]
-    results: [v9, %os:n20, %ms:n20]
+    } -> [%ms]
+    results: [v9, %ms:n20]
   }
 }

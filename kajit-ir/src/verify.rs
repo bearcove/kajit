@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    DebugScopeId, IrFunc, IrOp, LambdaId, MEMORY_STATE_DOMAIN, NodeId, NodeKind,
-    OUTPUT_STATE_DOMAIN, OutputRef, PortKind, PortSource, RegionArgRef, RegionId, StateDomainId,
+    DebugScopeId, IrFunc, IrOp, LambdaId, MEMORY_STATE_DOMAIN, NodeId, NodeKind, OutputRef,
+    PortKind, PortSource, RegionArgRef, RegionId, StateDomainId,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -318,11 +318,6 @@ fn state_source(source: PortSource, func: &IrFunc) -> StateProducer {
 }
 
 pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
-    if !state_domain_exists(func, OUTPUT_STATE_DOMAIN) {
-        return Err(VerifyError::InvalidStateDomain {
-            domain: OUTPUT_STATE_DOMAIN,
-        });
-    }
     if !state_domain_exists(func, MEMORY_STATE_DOMAIN) {
         return Err(VerifyError::InvalidStateDomain {
             domain: MEMORY_STATE_DOMAIN,
@@ -701,7 +696,7 @@ mod tests {
         let mut func = builder.finish();
         let root = func.root_body();
         let first = func.regions[root].nodes[0];
-        let result_id = func.regions[root].results[1];
+        let result_id = func.regions[root].results[0];
         // Point result at first read_from_slot's memory state output (index 1).
         // This creates a fork: both the second read_from_slot and this result
         // use the first read_from_slot's memory state output.

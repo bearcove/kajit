@@ -1,6 +1,5 @@
 state_domains {
-  d0 = output
-  d1 = memory
+  d0 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -8,7 +7,7 @@ scopes {
 }
 lambda @0 @s0 (shape: "u8") {
   region @s0 {
-    args: [%ms, %os]
+    args: [%ms]
     n1 = Const(0x0) [] -> [v0]
     n2 = Const(0x0) [] -> [v1]
     n3 = Const(0x1) [] -> [v2]
@@ -36,7 +35,7 @@ lambda @0 @s0 (shape: "u8") {
     n33 @s1 = Const(0x4000) [] -> [?]
     n34 @s1 = Const(0x4081) [] -> [?]
     n35 @s1 = Const(0x3) [] -> [?]
-    n11 = WriteToField(offset=0, W4) [n34.0, %os:arg] -> [%os]
-    results: [%ms:arg, %os:n11]
+    n11 = WriteToField(offset=0, W4) [n34.0, %ms:arg] -> [%ms]
+    results: [%ms:n11]
   }
 }

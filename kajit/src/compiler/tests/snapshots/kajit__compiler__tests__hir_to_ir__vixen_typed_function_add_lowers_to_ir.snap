@@ -3,16 +3,15 @@ source: kajit/src/compiler/tests/hir_to_ir.rs
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
-  d0 = output
-  d1 = memory
+  d0 = memory
 }
 scopes {
   s0 = lambda_body(@0)
 }
 lambda @0 @s0 (shape: "add") {
   region @s0 {
-    args: [arg0, arg1, %os, %ms]
+    args: [arg0, arg1, %ms]
     n1 = Add [arg0, arg1] -> [v0]
-    results: [v0, %os:arg, %ms:arg]
+    results: [v0, %ms:arg]
   }
 }

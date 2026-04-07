@@ -3,15 +3,14 @@ source: kajit/src/compiler/tests/hir_to_ir.rs
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
-  d0 = output
-  d1 = memory
+  d0 = memory
 }
 scopes {
   s0 = lambda_body(@0)
 }
 lambda @0 @s0 (shape: "dynamic_aggregate_summary", output_size: 16) {
   region @s0 {
-    args: [arg0, %os, %ms]
+    args: [arg0, %ms]
     n1 = WriteToSlot(0) [arg0, %ms:arg] -> [%ms]
     n2 = Const(0x1) [] -> [v0]
     n3 = WriteToSlot(1) [v0, %ms:n1] -> [%ms]
@@ -29,11 +28,11 @@ lambda @0 @s0 (shape: "dynamic_aggregate_summary", output_size: 16) {
     n15 = Mul [v5, v7] -> [v8]
     n16 = Add [v6, v8] -> [v9]
     n17 = LoadFromAddr(W8) [v9, %ms:n12] -> [v10, %ms]
-    n18 = WriteToField(offset=0, W8) [v10, %os:arg] -> [%os]
+    n18 = WriteToField(offset=0, W8) [v10, %ms:n17] -> [%ms]
     n19 = Const(0x8) [] -> [v11]
     n20 = Add [v9, v11] -> [v12]
-    n21 = LoadFromAddr(W8) [v12, %ms:n17] -> [v13, %ms]
-    n22 = WriteToField(offset=8, W8) [v13, %os:n18] -> [%os]
-    results: [%os:n22, %ms:n21]
+    n21 = LoadFromAddr(W8) [v12, %ms:n18] -> [v13, %ms]
+    n22 = WriteToField(offset=8, W8) [v13, %ms:n21] -> [%ms]
+    results: [%ms:n22]
   }
 }

@@ -1,6 +1,5 @@
 state_domains {
-  d0 = output
-  d1 = memory
+  d0 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -9,28 +8,27 @@ scopes {
 }
 lambda @0 @s0 (shape: "test") {
   region @s0 {
-    args: [%ms, %os]
+    args: [%ms]
     n1 = Const(0x2a) [] -> [v0]
     n3 = Const(0x0) [] -> [v1]
     n7 = gamma [
       pred: v1
       in0: v0
       in1: %ms:arg
-      in2: %os:arg
     ] {
       branch 0:
         region @s1 {
-          args: [arg0, %ms, %os]
-          n5 = WriteToField(offset=0, W4) [arg0, %os:arg] -> [%os]
-          results: [arg0, %ms:arg, %os:n5]
+          args: [arg0, %ms]
+          n5 = WriteToField(offset=0, W4) [arg0, %ms:arg] -> [%ms]
+          results: [arg0, %ms:n5]
         }
       branch 1:
         region @s2 {
-          args: [arg0, %ms, %os]
+          args: [arg0, %ms]
           n6 = ErrorExit(UnexpectedEof) [%ms:arg] -> []
-          results: [arg0, %ms:arg, %os:arg]
+          results: [arg0, %ms:arg]
         }
-    } -> [v3, %ms, %os]
-    results: [%ms:n7, %os:n7]
+    } -> [v3, %ms]
+    results: [%ms:n7]
   }
 }

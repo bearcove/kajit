@@ -1,29 +1,28 @@
 lambda @0 (shape: "test") {
   region {
-    args: [%ms, %os]
+    args: [%ms]
     n0 = Const(0x0) [] -> [v0]
     n7 = gamma [
       pred: v0
       in0: %ms:arg
-      in1: %os:arg
     ] {
       branch 0:
         region {
-          args: [%ms, %os]
+          args: [%ms]
           n1 = Const(0xa) [] -> [v1]
           n2 = WriteToSlot(0) [v1, %ms:arg] -> [%ms]
-          results: [%ms:n2, %os:arg]
+          results: [%ms:n2]
         }
       branch 1:
         region {
-          args: [%ms, %os]
+          args: [%ms]
           n3 = Const(0x14) [] -> [v2]
           n4 = WriteToSlot(0) [v2, %ms:arg] -> [%ms]
-          results: [%ms:n4, %os:arg]
+          results: [%ms:n4]
         }
-    } -> [%ms, %os]
+    } -> [%ms]
     n5 = ReadFromSlot(0) [%ms:n7] -> [v3, %ms]
-    n6 = WriteToField(offset=0, W4) [v3, %os:n7] -> [%os]
-    results: [%ms:n5, %os:n6]
+    n6 = WriteToField(offset=0, W4) [v3, %ms:n5] -> [%ms]
+    results: [%ms:n6]
   }
 }

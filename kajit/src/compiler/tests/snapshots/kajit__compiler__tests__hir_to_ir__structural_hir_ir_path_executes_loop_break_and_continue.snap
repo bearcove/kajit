@@ -3,8 +3,7 @@ source: kajit/src/compiler/tests/hir_to_ir.rs
 expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegistry::empty()))"
 ---
 state_domains {
-  d0 = output
-  d1 = memory
+  d0 = memory
 }
 scopes {
   s0 = lambda_body(@0)
@@ -28,109 +27,104 @@ scopes {
 }
 lambda @0 @s0 (shape: "loop_break_continue", output_size: 4) {
   region @s0 {
-    args: [arg0, %os, %ms]
+    args: [arg0, %ms]
     n1 = WriteToSlot(0) [arg0, %ms:arg] -> [%ms]
     n2 = Const(0x0) [] -> [v0]
     n3 = WriteToSlot(1) [v0, %ms:n1] -> [%ms]
     n4 = Const(0x0) [] -> [v1]
     n5 = WriteToSlot(2) [v1, %ms:n3] -> [%ms]
-    n47 = theta [%os:arg, %ms:n5] {
+    n47 = theta [%ms:n5] {
       region @s1 {
-        args: [%os, %ms]
+        args: [%ms]
         n6 = Const(0x1) [] -> [v2]
         n7 = WriteToSlot(3) [v2, %ms:arg] -> [%ms]
         n8 = WriteToSlot(4) [v2, %ms:n7] -> [%ms]
         n9 = ReadFromSlot(3) [%ms:n8] -> [v3, %ms]
         n19 = gamma [
           pred: v3
-          in0: %os:arg
-          in1: %ms:n9
+          in0: %ms:n9
         ] {
           branch 0:
             region @s2 {
-              args: [%os, %ms]
-              results: [%os:arg, %ms:arg]
+              args: [%ms]
+              results: [%ms:arg]
             }
           branch 1:
             region @s3 {
-              args: [%os, %ms]
+              args: [%ms]
               n10 = ReadFromSlot(1) [%ms:arg] -> [v4, %ms]
               n11 = Const(0x5) [] -> [v5]
               n12 = CmpEq [v4, v5] -> [v6]
               n18 = gamma [
                 pred: v6
-                in0: %os:arg
-                in1: %ms:n10
+                in0: %ms:n10
               ] {
                 branch 0:
                   region @s4 {
-                    args: [%os, %ms]
-                    results: [%os:arg, %ms:arg]
+                    args: [%ms]
+                    results: [%ms:arg]
                   }
                 branch 1:
                   region @s5 {
-                    args: [%os, %ms]
+                    args: [%ms]
                     n13 = ReadFromSlot(3) [%ms:arg] -> [v7, %ms]
                     n17 = gamma [
                       pred: v7
-                      in0: %os:arg
-                      in1: %ms:n13
+                      in0: %ms:n13
                     ] {
                       branch 0:
                         region @s6 {
-                          args: [%os, %ms]
-                          results: [%os:arg, %ms:arg]
+                          args: [%ms]
+                          results: [%ms:arg]
                         }
                       branch 1:
                         region @s7 {
-                          args: [%os, %ms]
+                          args: [%ms]
                           n14 = Const(0x0) [] -> [v8]
                           n15 = WriteToSlot(3) [v8, %ms:arg] -> [%ms]
                           n16 = WriteToSlot(4) [v8, %ms:n15] -> [%ms]
-                          results: [%os:arg, %ms:n16]
+                          results: [%ms:n16]
                         }
-                    } -> [%os, %ms]
-                    results: [%os:n17, %ms:n17]
+                    } -> [%ms]
+                    results: [%ms:n17]
                   }
-              } -> [%os, %ms]
-              results: [%os:n18, %ms:n18]
+              } -> [%ms]
+              results: [%ms:n18]
             }
-        } -> [%os, %ms]
+        } -> [%ms]
         n20 = ReadFromSlot(3) [%ms:n19] -> [v9, %ms]
         n25 = gamma [
           pred: v9
-          in0: %os:n19
-          in1: %ms:n20
+          in0: %ms:n20
         ] {
           branch 0:
             region @s8 {
-              args: [%os, %ms]
-              results: [%os:arg, %ms:arg]
+              args: [%ms]
+              results: [%ms:arg]
             }
           branch 1:
             region @s9 {
-              args: [%os, %ms]
+              args: [%ms]
               n21 = ReadFromSlot(1) [%ms:arg] -> [v10, %ms]
               n22 = Const(0x1) [] -> [v11]
               n23 = Add [v10, v11] -> [v12]
               n24 = WriteToSlot(1) [v12, %ms:n21] -> [%ms]
-              results: [%os:arg, %ms:n24]
+              results: [%ms:n24]
             }
-        } -> [%os, %ms]
+        } -> [%ms]
         n26 = ReadFromSlot(3) [%ms:n25] -> [v13, %ms]
         n39 = gamma [
           pred: v13
-          in0: %os:n25
-          in1: %ms:n26
+          in0: %ms:n26
         ] {
           branch 0:
             region @s10 {
-              args: [%os, %ms]
-              results: [%os:arg, %ms:arg]
+              args: [%ms]
+              results: [%ms:arg]
             }
           branch 1:
             region @s11 {
-              args: [%os, %ms]
+              args: [%ms]
               n27 = ReadFromSlot(1) [%ms:arg] -> [v14, %ms]
               n28 = Const(0x1) [] -> [v15]
               n29 = And [v14, v15] -> [v16]
@@ -138,71 +132,68 @@ lambda @0 @s0 (shape: "loop_break_continue", output_size: 4) {
               n31 = CmpEq [v16, v17] -> [v18]
               n38 = gamma [
                 pred: v18
-                in0: %os:arg
-                in1: %ms:n27
+                in0: %ms:n27
               ] {
                 branch 0:
                   region @s12 {
-                    args: [%os, %ms]
-                    results: [%os:arg, %ms:arg]
+                    args: [%ms]
+                    results: [%ms:arg]
                   }
                 branch 1:
                   region @s13 {
-                    args: [%os, %ms]
+                    args: [%ms]
                     n32 = ReadFromSlot(3) [%ms:arg] -> [v19, %ms]
                     n37 = gamma [
                       pred: v19
-                      in0: %os:arg
-                      in1: %ms:n32
+                      in0: %ms:n32
                     ] {
                       branch 0:
                         region @s14 {
-                          args: [%os, %ms]
-                          results: [%os:arg, %ms:arg]
+                          args: [%ms]
+                          results: [%ms:arg]
                         }
                       branch 1:
                         region @s15 {
-                          args: [%os, %ms]
+                          args: [%ms]
                           n33 = Const(0x0) [] -> [v20]
                           n34 = Const(0x1) [] -> [v21]
                           n35 = WriteToSlot(3) [v20, %ms:arg] -> [%ms]
                           n36 = WriteToSlot(4) [v21, %ms:n35] -> [%ms]
-                          results: [%os:arg, %ms:n36]
+                          results: [%ms:n36]
                         }
-                    } -> [%os, %ms]
-                    results: [%os:n37, %ms:n37]
+                    } -> [%ms]
+                    results: [%ms:n37]
                   }
-              } -> [%os, %ms]
-              results: [%os:n38, %ms:n38]
+              } -> [%ms]
+              results: [%ms:n38]
             }
-        } -> [%os, %ms]
+        } -> [%ms]
         n40 = ReadFromSlot(3) [%ms:n39] -> [v22, %ms]
         n45 = gamma [
           pred: v22
-          in0: %os:n39
-          in1: %ms:n40
+          in0: %ms:n40
         ] {
           branch 0:
             region @s16 {
-              args: [%os, %ms]
-              results: [%os:arg, %ms:arg]
+              args: [%ms]
+              results: [%ms:arg]
             }
           branch 1:
             region @s17 {
-              args: [%os, %ms]
+              args: [%ms]
               n41 = ReadFromSlot(2) [%ms:arg] -> [v23, %ms]
               n42 = ReadFromSlot(1) [%ms:n41] -> [v24, %ms]
               n43 = Add [v23, v24] -> [v25]
               n44 = WriteToSlot(2) [v25, %ms:n42] -> [%ms]
-              results: [%os:arg, %ms:n44]
+              results: [%ms:n44]
             }
-        } -> [%os, %ms]
+        } -> [%ms]
         n46 = ReadFromSlot(4) [%ms:n45] -> [v26, %ms]
-        results: [v26, %os:n45, %ms:n46]
+        results: [v26, %ms:n46]
       }
-    } -> [%os, %ms]
+    } -> [%ms]
     n48 = ReadFromSlot(2) [%ms:n47] -> [v27, %ms]
-    n49 = WriteToField(offset=0, W4) [v27, %os:n47] -> [%os]
-    results: [%os:n49, %ms:n48]
+    n49 = WriteToField(offset=0, W4) [v27, %ms:n48] -> [%ms]
+    results: [%ms:n49]
   }
 }
