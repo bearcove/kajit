@@ -330,45 +330,66 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         println!("  output_size: {output_size}");
 
         // Run RVSDG interpreter (pre-linearization, ideal semantics).
+        eprint!("  [1/3] rvsdg interpreter... ");
         let ir_text = &artifacts.ir_opt_timeline[0].1;
         let ir_registry = kajit::symbol_registry_for_shape(shape);
         match kajit_ir_text::parse_ir(ir_text, &ir_registry) {
             Ok(ir_func) => {
                 let ir_result = kajit_ir::interpret::interpret(&ir_func, &input, output_size);
                 match &ir_result.trap {
-                    None => println!(
-                        "  rvsdg out:   {} ({})",
-                        encode_hex(&ir_result.output),
-                        ir_result.output.len()
-                    ),
-                    Some(t) => println!("  rvsdg:       TRAP ({:?})", t.code),
+                    None => {
+                        eprintln!("ok");
+                        println!(
+                            "  rvsdg out:   {} ({})",
+                            encode_hex(&ir_result.output),
+                            ir_result.output.len()
+                        );
+                    }
+                    Some(t) => {
+                        eprintln!("trap");
+                        println!("  rvsdg:       TRAP ({:?})", t.code);
+                    }
                 }
             }
-            Err(e) => println!("  rvsdg:       parse error: {e}"),
+            Err(e) => {
+                eprintln!("parse error");
+                println!("  rvsdg:       parse error: {e}");
+            }
         }
 
         // Run CFG-MIR interpreter (post-linearization)
+        eprint!("  [2/3] cfg-mir interpreter... ");
         let interp_result = kajit_mir::opt::reduce::interpret(&artifacts.cfg_program, &input);
         match &interp_result {
             kajit_mir::opt::reduce::InterpOutcome::Returned(bytes) => {
-                println!("  interp out:  {} ({})", encode_hex(bytes), bytes.len())
+                eprintln!("ok");
+                println!("  interp out:  {} ({})", encode_hex(bytes), bytes.len());
             }
             kajit_mir::opt::reduce::InterpOutcome::Trapped(trap) => {
+                eprintln!("trap");
                 println!(
                     "  interp:      TRAP ({:?} at offset {})",
                     trap.code, trap.offset
-                )
+                );
             }
             kajit_mir::opt::reduce::InterpOutcome::TimedOut => {
-                println!("  interp:      TIMEOUT")
+                eprintln!("TIMEOUT");
+                println!("  interp:      TIMEOUT");
             }
         }
 
         // Run JIT (may hang on buggy programs — run after interpreter)
+        eprint!("  [3/3] jit... ");
         let jit_result = kajit::deserialize_raw(&artifacts.decoder, &input, output_size);
         match &jit_result {
-            Ok(bytes) => println!("  jit output:  {} ({})", encode_hex(bytes), bytes.len()),
-            Err(e) => println!("  jit error:   {e}"),
+            Ok(bytes) => {
+                eprintln!("ok");
+                println!("  jit output:  {} ({})", encode_hex(bytes), bytes.len());
+            }
+            Err(e) => {
+                eprintln!("error");
+                println!("  jit error:   {e}");
+            }
         }
 
         // Compare
