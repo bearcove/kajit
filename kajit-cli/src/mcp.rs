@@ -605,16 +605,22 @@ impl MirHandler {
                 .get_mut(&session_id)
                 .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
 
+            let log_path = format!("/tmp/kajit-lockstep-{session_id}.log");
+            // Truncate log file at start of each step batch
+            let _ = std::fs::write(&log_path, "");
+
             let mut out = format!("**Debug session {}**\n\n", session_id);
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
             for i in 0..count {
                 if i > 0 && std::time::Instant::now() > deadline {
-                    out.push_str(&format!(
-                        "TIMEOUT: completed {i}/{count} steps in 30s, stopping early\n"
-                    ));
+                    let msg =
+                        format!("TIMEOUT: completed {i}/{count} steps in 30s, stopping early\n");
+                    let _ = append_log(&log_path, &msg);
+                    out.push_str(&msg);
                     break;
                 }
                 let step = session.step_forward()?;
+                let _ = append_log(&log_path, &step);
                 out.push_str(&step);
                 out.push('\n');
                 if !session.is_running() {
@@ -1542,6 +1548,16 @@ fn arg_opt_str(args: &JsonMap<String, JsonValue>, key: &str) -> Option<String> {
     args.get(key)
         .and_then(JsonValue::as_str)
         .map(ToOwned::to_owned)
+}
+
+fn append_log(path: &str, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(f, "{line}")?;
+    f.flush()
 }
 
 fn arg_u64(args: &JsonMap<String, JsonValue>, key: &str) -> Result<u64, String> {
