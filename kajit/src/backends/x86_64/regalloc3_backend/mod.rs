@@ -16,6 +16,7 @@ use crate::arch::x64::EmitCtx;
 use crate::harness::{
     AllocationMap, LocationMap, compute_edge_source_locations, compute_inst_source_locations,
 };
+use crate::ir_backend::DataRelocInfo;
 use crate::ir_backend::{BackendBuf, LinearBackendResult};
 
 use context::{EmitContext, emit_parallel_reg_moves};
