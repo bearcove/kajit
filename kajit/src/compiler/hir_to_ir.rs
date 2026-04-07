@@ -1204,6 +1204,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 let addr = self.out_field_addr(rb, offset);
                 rb.store_to_addr(addr, value, width);
             }
+            hir::Expr::Literal(hir::Literal::ExternAddr { symbol, value }) => {
+                let value = rb.extern_addr(symbol.clone(), *value);
+                let width = self.scalar_width_for_hir_type(ty);
+                let addr = self.out_field_addr(rb, offset);
+                rb.store_to_addr(addr, value, width);
+            }
             hir::Expr::Str { data, len } => {
                 assert!(
                     matches!(ty, hir::Type::Str { .. }),
@@ -1309,6 +1315,9 @@ impl<'a> StructuralHirIrLowerer<'a> {
         match expr {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
             hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
+            hir::Expr::Literal(hir::Literal::ExternAddr { symbol, value }) => {
+                rb.extern_addr(symbol.clone(), *value)
+            }
             hir::Expr::Local(local) => {
                 let slot = self.local_slots[local].base_slot;
                 rb.read_from_slot(slot)
@@ -1984,7 +1993,8 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 }
             }
             hir::Expr::Literal(hir::Literal::Bool(_)) => hir::Type::Bool,
-            hir::Expr::Literal(hir::Literal::Integer(_)) => hir::Type::u(64),
+            hir::Expr::Literal(hir::Literal::Integer(_))
+            | hir::Expr::Literal(hir::Literal::ExternAddr { .. }) => hir::Type::u(64),
             hir::Expr::Literal(hir::Literal::String(_)) => hir::Type::Str {
                 region: hir::RegionId::new(0),
             },
@@ -2445,6 +2455,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
             }
             hir::Expr::Literal(hir::Literal::Bool(_)) => hir::Type::Bool,
             hir::Expr::Literal(hir::Literal::Integer(_)) => hir::Type::u(64),
+            hir::Expr::Literal(hir::Literal::ExternAddr { .. }) => hir::Type::u(64),
             hir::Expr::Literal(hir::Literal::String(_)) => {
                 // String literals produce (ptr, len) — a built-in Str type.
                 hir::Type::Str {
@@ -2968,6 +2979,9 @@ impl<'a> ScalarHirIrLowerer<'a> {
         match expr {
             hir::Expr::Literal(hir::Literal::Bool(value)) => rb.const_val(u64::from(*value)),
             hir::Expr::Literal(hir::Literal::Integer(value)) => rb.const_val(*value),
+            hir::Expr::Literal(hir::Literal::ExternAddr { symbol, value }) => {
+                rb.extern_addr(symbol.clone(), *value)
+            }
             hir::Expr::Local(local) => {
                 let values = self.get_local_values(*local);
                 assert_eq!(values.len(), 1, "lower_expr on multi-word local");

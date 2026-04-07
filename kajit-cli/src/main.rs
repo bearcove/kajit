@@ -281,6 +281,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             uses_root_cursor_arg: artifacts.decoder.uses_root_cursor_arg(),
             alloc_map: Some(&artifacts.alloc_map),
             intrinsic_calls,
+            extern_addr_relocs: artifacts.extern_addr_relocs.clone(),
         };
 
         match kajit::harness::generate_harness(&harness_input, &output_dir, &base_name) {
@@ -811,6 +812,7 @@ fn cmd_debug_diff(format: &str, ty: &str, input_hex: &str) {
         uses_root_cursor_arg: artifacts.decoder.uses_root_cursor_arg(),
         alloc_map: Some(&artifacts.alloc_map),
         intrinsic_calls,
+        extern_addr_relocs: artifacts.extern_addr_relocs.clone(),
     };
 
     let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use facet::{Def, EnumRepr, ListDef, ScalarType, Shape, Type, UserType};
 use kajit_format::{
-    FieldEmitInfo, SkippedFieldInfo, collect_variants, discriminant_size, get_option_def,
-    get_pointer_def, is_unit,
+    FieldEmitInfo, SkippedFieldInfo, VtableEntry, collect_variants, discriminant_size,
+    get_option_def, get_pointer_def, is_unit, vtable_symbol_name,
 };
 use kajit_hir as hir;
 
@@ -2798,9 +2798,10 @@ impl PostcardHirLowerer {
                     kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                         target: hir::CallTarget::Callable(option_init_some),
                         args: vec![
-                            hir::Expr::Literal(hir::Literal::Integer(
-                                opt_def.vtable.init_some as *const () as usize as u64,
-                            )),
+                            hir::Expr::Literal(hir::Literal::ExternAddr {
+                                symbol: vtable_symbol_name(shape, VtableEntry::OptionInitSome),
+                                value: opt_def.vtable.init_some as *const () as usize as u64,
+                            }),
                             hir::Expr::AddrOf(Box::new(place.clone())),
                             hir::Expr::AddrOf(Box::new(hir::Place::Local(payload_local))),
                         ],
@@ -2824,9 +2825,10 @@ impl PostcardHirLowerer {
                     kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                         target: hir::CallTarget::Callable(option_init_some),
                         args: vec![
-                            hir::Expr::Literal(hir::Literal::Integer(
-                                opt_def.vtable.init_some as *const () as usize as u64,
-                            )),
+                            hir::Expr::Literal(hir::Literal::ExternAddr {
+                                symbol: vtable_symbol_name(shape, VtableEntry::OptionInitSome),
+                                value: opt_def.vtable.init_some as *const () as usize as u64,
+                            }),
                             hir::Expr::AddrOf(Box::new(place.clone())),
                             hir::Expr::AddrOf(Box::new(hir::Place::Local(payload_local))),
                         ],
@@ -2843,9 +2845,10 @@ impl PostcardHirLowerer {
                 kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                     target: hir::CallTarget::Callable(option_init_none),
                     args: vec![
-                        hir::Expr::Literal(hir::Literal::Integer(
-                            opt_def.vtable.init_none as *const () as usize as u64,
-                        )),
+                        hir::Expr::Literal(hir::Literal::ExternAddr {
+                            symbol: vtable_symbol_name(shape, VtableEntry::OptionInitNone),
+                            value: opt_def.vtable.init_none as *const () as usize as u64,
+                        }),
                         hir::Expr::AddrOf(Box::new(place)),
                     ],
                 })),

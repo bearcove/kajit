@@ -727,6 +727,7 @@ impl fmt::Display for ExprDisplay<'_> {
                 Literal::Bool(value) => write!(f, "{value}"),
                 Literal::Integer(value) => write!(f, "{value:#x}"),
                 Literal::String(value) => write!(f, "{}", quoted(value)),
+                Literal::ExternAddr { symbol, .. } => write!(f, "@{symbol}"),
             },
             Expr::Local(local) => write!(f, "l{}", local.index()),
             Expr::Deref(base) => write!(

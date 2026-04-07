@@ -1044,7 +1044,8 @@ impl Module {
         match expr {
             VixenTypedExpr::Literal(Literal::Unit) => Ok(Type::unit()),
             VixenTypedExpr::Literal(Literal::Bool(_)) => Ok(Type::bool()),
-            VixenTypedExpr::Literal(Literal::Integer(_)) => Ok(Type::u(64)),
+            VixenTypedExpr::Literal(Literal::Integer(_))
+            | VixenTypedExpr::Literal(Literal::ExternAddr { .. }) => Ok(Type::u(64)),
             VixenTypedExpr::Literal(Literal::String(_)) => {
                 Err(VixenLoweringError::CannotInferExprType {
                     expr: "string literal",
@@ -1503,6 +1504,12 @@ pub enum Literal {
     Bool(bool),
     Integer(u64),
     String(String),
+    /// Address of an external symbol (vtable function pointer etc.).
+    /// Carries the in-process value for JIT and a symbol name for relocation.
+    ExternAddr {
+        symbol: String,
+        value: u64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,5 +1,8 @@
 #![allow(clippy::approx_constant)]
 
+// Force-link kajit-vtables so its #[no_mangle] symbols end up in the staticlib.
+extern crate kajit_vtables;
+
 pub mod alt_asm;
 pub(crate) mod arch;
 pub mod backends;

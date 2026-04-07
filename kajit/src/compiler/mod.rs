@@ -211,6 +211,8 @@ pub struct PipelineArtifacts {
     pub location_map: crate::harness::LocationMap,
     /// Intrinsic call sites in the JIT code (for harness relocation)
     pub intrinsic_call_sites: Vec<crate::ir_backend::IntrinsicCallSiteInfo>,
+    /// External address relocs (vtable function pointers) for harness relocation
+    pub extern_addr_relocs: Vec<crate::ir_backend::ExternAddrRelocInfo>,
     /// Exact machine-code ranges for emitted CFG ops.
     pub backend_debug_info: Option<crate::ir_backend::BackendDebugInfo>,
     /// The post-optimization CFG-MIR program (same one the JIT compiled).
@@ -329,6 +331,7 @@ pub fn compile_pipeline_from_hir_module(
     #[cfg(target_arch = "x86_64")]
     let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
+    let extern_addr_relocs = result.extern_addr_relocs.clone();
     let (buf, entry, _source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
 
@@ -368,6 +371,7 @@ pub fn compile_pipeline_from_hir_module(
         alloc_map,
         location_map,
         intrinsic_call_sites,
+        extern_addr_relocs,
         backend_debug_info,
         cfg_program: emitted_cfg_program.clone(),
         decoder,

@@ -1156,6 +1156,8 @@ pub struct HarnessInput<'a> {
     pub alloc_map: Option<&'a AllocationMap>,
     /// Intrinsic call sites that need address patching.
     pub intrinsic_calls: Vec<IntrinsicCallSite>,
+    /// External address relocations (vtable function pointers).
+    pub extern_addr_relocs: Vec<crate::ir_backend::ExternAddrRelocInfo>,
 }
 
 /// Generate a standalone test harness.
@@ -1265,6 +1267,34 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
         intrinsic_relocs.push((off, sym_id));
     }
 
+    // Patch extern addr sites: replace movz/movk/movk/movk (16 bytes) with adrp/add/nop/nop
+    // so the linker can resolve vtable function pointer symbols.
+    let mut extern_addr_reloc_entries: Vec<(usize, object::write::SymbolId)> = Vec::new();
+
+    for reloc in &input.extern_addr_relocs {
+        let sym_id = obj.add_symbol(Symbol {
+            name: reloc.symbol.as_bytes().to_vec(),
+            value: 0,
+            size: 0,
+            kind: SymbolKind::Data,
+            scope: SymbolScope::Dynamic,
+            weak: false,
+            section: SymbolSection::Undefined,
+            flags: SymbolFlags::None,
+        });
+
+        // Rewrite movz/movk/movk/movk (16 bytes) to adrp/add/nop/nop (16 bytes).
+        let off = reloc.code_offset;
+        let adrp = 0x90000010u32; // adrp x16, #0 (imm filled by linker)
+        let add = 0x91000210u32; // add x16, x16, #0 (imm filled by linker)
+        let nop = 0xD503201Fu32; // nop
+        code[off..off + 4].copy_from_slice(&adrp.to_le_bytes());
+        code[off + 4..off + 8].copy_from_slice(&add.to_le_bytes());
+        code[off + 8..off + 12].copy_from_slice(&nop.to_le_bytes());
+        code[off + 12..off + 16].copy_from_slice(&nop.to_le_bytes());
+        extern_addr_reloc_entries.push((off, sym_id));
+    }
+
     // Add .text section with (possibly patched) JIT code
     let text_section = obj.section_id(object::write::StandardSection::Text);
     obj.append_section_data(text_section, &code, 16);
@@ -1331,6 +1361,71 @@ fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessErr
                 },
             )
             .expect("add relocation");
+        }
+    }
+
+    // Add relocations for extern addr (vtable pointer) sites — same pattern as intrinsics
+    for &(off, sym_id) in &extern_addr_reloc_entries {
+        #[cfg(target_os = "macos")]
+        {
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: off as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_PAGE21,
+                        r_pcrel: true,
+                        r_length: 2,
+                    },
+                    addend: 0,
+                },
+            )
+            .expect("extern addr adrp relocation");
+
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: (off + 4) as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_PAGEOFF12,
+                        r_pcrel: false,
+                        r_length: 2,
+                    },
+                    addend: 0,
+                },
+            )
+            .expect("extern addr add relocation");
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: off as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::Elf {
+                        r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
+                    },
+                    addend: 0,
+                },
+            )
+            .expect("extern addr adrp relocation");
+
+            obj.add_relocation(
+                text_section,
+                Relocation {
+                    offset: (off + 4) as u64,
+                    symbol: sym_id,
+                    flags: RelocationFlags::Elf {
+                        r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
+                    },
+                    addend: 0,
+                },
+            )
+            .expect("extern addr add relocation");
         }
     }
 

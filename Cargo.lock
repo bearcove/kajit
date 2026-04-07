@@ -1348,6 +1348,7 @@ dependencies = [
  "kajit-mir",
  "kajit-mir-text",
  "kajit-postcard",
+ "kajit-vtables",
  "libc",
  "object 0.36.7",
  "postcard",

@@ -1036,6 +1036,7 @@ fn debug_postcard_borrowed_header_harness() {
 
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc);
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
+    let extern_addr_relocs = result.extern_addr_relocs.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
         super::materialize_backend_result(result);
     let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
@@ -1084,6 +1085,7 @@ fn debug_postcard_borrowed_header_harness() {
         uses_root_cursor_arg: decoder.uses_root_cursor_arg(),
         alloc_map: Some(&alloc_map),
         intrinsic_calls,
+        extern_addr_relocs,
     };
 
     let exe_path = crate::harness::generate_harness(&harness_input, &output_dir, base_name)

@@ -1257,6 +1257,7 @@ impl DebugDiffSession {
             uses_root_cursor_arg: artifacts.decoder.uses_root_cursor_arg(),
             alloc_map: Some(&artifacts.alloc_map),
             intrinsic_calls,
+            extern_addr_relocs: artifacts.extern_addr_relocs.clone(),
         };
 
         let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)
