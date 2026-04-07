@@ -628,7 +628,9 @@ LOCKSTEP DESYNC at JIT step {}
                 } else {
                     0
                 };
-                let jv = pre_step_snapshot.read_vreg(&self.debugger, &location)?;
+                // Def vreg: read AFTER step (the instruction just wrote it)
+                let sp = self.debugger.read_sp()?;
+                let jv = read_vreg_live(&self.debugger, &location, sp)?;
                 vreg_diffs.push(VRegDiff {
                     vreg_index: dst.index() as u32,
                     interpreter_value: iv,
@@ -701,7 +703,9 @@ CONTROL FLOW DIVERGENCE at step {}
                     0
                 };
 
-                let jit_value = pre_step_snapshot.read_vreg(&self.debugger, &location)?;
+                // Def vreg: read AFTER step (the instruction just wrote it)
+                let post_sp = self.debugger.read_sp()?;
+                let jit_value = read_vreg_live(&self.debugger, &location, post_sp)?;
 
                 if jit_value != Some(interp_value) {
                     let mut vreg_diffs = vec![VRegDiff {
@@ -1384,6 +1388,25 @@ JIT EARLY EXIT at step {jit_steps}
         }),
         completed: false,
     })
+}
+
+/// Read a vreg's current (live) value from the JIT process.
+fn read_vreg_live(
+    debugger: &impl JitDebugger,
+    location: &VRegLocation,
+    sp: u64,
+) -> Result<Option<u64>, DebugError> {
+    match location {
+        VRegLocation::Register(preg) => Ok(debugger.read_register(*preg).ok()),
+        VRegLocation::StackSlot(offset) => {
+            let addr = sp + *offset as u64;
+            Ok(debugger
+                .read_memory(addr, 8)
+                .ok()
+                .map(|b| u64::from_le_bytes(b[..8].try_into().unwrap())))
+        }
+        VRegLocation::Constant(val) => Ok(Some(*val)),
+    }
 }
 
 /// Extract def vreg, use vregs, and whether this op produces a pointer value.
