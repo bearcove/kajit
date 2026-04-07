@@ -704,8 +704,13 @@ CONTROL FLOW DIVERGENCE at step {}
                 };
 
                 // Def vreg: read AFTER step (the instruction just wrote it)
-                let post_sp = self.debugger.read_sp()?;
-                let jit_value = read_vreg_live(&self.debugger, &location, post_sp)?;
+                // Use vreg (no def): read from pre-step snapshot (may be clobbered by next op's ABI setup)
+                let jit_value = if def_vreg.is_some() {
+                    let post_sp = self.debugger.read_sp()?;
+                    read_vreg_live(&self.debugger, &location, post_sp)?
+                } else {
+                    pre_step_snapshot.read_vreg(&self.debugger, &location)?
+                };
 
                 if jit_value != Some(interp_value) {
                     let mut vreg_diffs = vec![VRegDiff {
