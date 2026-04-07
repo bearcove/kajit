@@ -621,15 +621,17 @@ impl MirHandler {
                 }
                 let cur_line = session.lockstep.current_mapped_line();
                 let cur_text = session.current_line_text(cur_line);
-                let _ = append_log(
-                    &log_path,
-                    &format!(
-                        ">>> step {} | about to execute line {}: {}",
-                        i + 1,
-                        cur_line,
-                        cur_text.trim()
-                    ),
+                let mut step_log = format!(
+                    ">>> step {} | about to execute line {}: {}",
+                    i + 1,
+                    cur_line,
+                    cur_text.trim()
                 );
+                // Dump vreg values for the current op
+                if let Some(vreg_info) = session.dump_current_op_vregs() {
+                    step_log.push_str(&format!("\n    {}", vreg_info));
+                }
+                let _ = append_log(&log_path, &step_log);
                 let step = session.step_forward()?;
                 let _ = append_log(&log_path, &step);
                 out.push_str(&step);
@@ -1257,6 +1259,46 @@ impl DebugDiffSession {
 
     fn current_line_text(&self, line: u32) -> String {
         self.lockstep.current_line_text(line)
+    }
+
+    fn dump_current_op_vregs(&self) -> Option<String> {
+        use kajit::lockstep::op_def_uses_and_kind;
+        let func = &self.lockstep.cfg_program.funcs[0];
+        let loc = &self.lockstep.interpreter.state().location;
+        let (_def, uses, _) = op_def_uses_and_kind(func, loc);
+        if uses.is_empty() {
+            return None;
+        }
+        let state = self.lockstep.interpreter.state();
+        let mut parts = Vec::new();
+        for vreg in &uses {
+            let iv = if vreg.index() < state.vregs.len() {
+                state.vregs[vreg.index()]
+            } else {
+                0
+            };
+            let jit_val = self
+                .lockstep
+                .debugger
+                .read_register(
+                    self.lockstep
+                        .location_tracker
+                        .location_for(&self.lockstep.location_map, vreg.index() as u32)
+                        .and_then(|loc| match loc {
+                            kajit::harness::VRegLocation::Register(p) => Some(p),
+                            _ => None,
+                        })
+                        .unwrap_or(255),
+                )
+                .ok();
+            parts.push(format!(
+                "v{}=interp:{}{}",
+                vreg.index(),
+                iv,
+                jit_val.map(|j| format!(",jit:{j}")).unwrap_or_default()
+            ));
+        }
+        Some(parts.join(" | "))
     }
 
     fn step_forward(&mut self) -> Result<String, String> {
