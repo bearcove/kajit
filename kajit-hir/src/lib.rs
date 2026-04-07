@@ -1440,9 +1440,6 @@ pub enum StmtKind {
         scrutinee: Expr,
         arms: Vec<MatchArm>,
     },
-    Fail {
-        code: ErrorCode,
-    },
     Break,
     Continue,
     Return(Option<Expr>),
@@ -3089,9 +3086,7 @@ mod tests {
                     },
                     Stmt {
                         id: StmtId::new(2),
-                        kind: StmtKind::Fail {
-                            code: ErrorCode::UnexpectedEof,
-                        },
+                        kind: StmtKind::Return(None),
                     },
                 ],
             },
@@ -3100,6 +3095,6 @@ mod tests {
         let text = module.to_string();
         assert!(text.contains("slice_data("));
         assert!(text.contains("slice_len("));
-        assert!(text.contains("fail UnexpectedEof"));
+        assert!(text.contains("return"));
     }
 }

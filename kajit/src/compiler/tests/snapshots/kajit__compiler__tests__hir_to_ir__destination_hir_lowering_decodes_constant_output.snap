@@ -7,10 +7,10 @@ scopes {
 }
 lambda @0 @s0 (shape: "const_number", output_size: 4) {
   region @s0 {
-    args: [arg0, %ms]
-    n1 = WriteToSlot(0) [arg0, %ms:arg] -> [%ms]
+    args: [arg0, arg1, %ms]
+    n1 = WriteToSlot(0) [arg1, %ms:arg] -> [%ms]
     n2 = Const(0x2a) [] -> [v0]
-    n3 = WriteToField(offset=0, W4) [v0, %ms:n1] -> [%ms]
+    n3 = StoreToAddr(W4) [arg0, v0, %ms:n1] -> [%ms]
     results: [%ms:n3]
   }
 }

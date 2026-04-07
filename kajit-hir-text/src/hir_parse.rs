@@ -2,11 +2,10 @@ use chumsky::prelude::*;
 
 use kajit_hir::{
     AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallSignature, CallTarget, CallableId,
-    CallableKind, CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass,
-    ErrorCode, Expr, FieldDef, Function, FunctionId, GenericArg, GenericParam, Id, Literal,
-    LocalDecl, LocalId, LocalKind, MatchArm, MemoryWidth, Module, Pattern, PatternField, Place,
-    Scope, ScopeId, Stmt, StmtId, StmtKind, StoreId, Type, TypeDef, TypeDefId, TypeDefKind,
-    UnaryOp, VariantDef,
+    CallableKind, CallableSpec, ControlTransfer, DomainAccess, DomainEffect, EffectClass, Expr,
+    FieldDef, Function, FunctionId, GenericArg, GenericParam, Id, Literal, LocalDecl, LocalId,
+    LocalKind, MatchArm, MemoryWidth, Module, Pattern, PatternField, Place, Scope, ScopeId, Stmt,
+    StmtId, StmtKind, StoreId, Type, TypeDef, TypeDefId, TypeDefKind, UnaryOp, VariantDef,
 };
 
 type Extra<'src> = extra::Err<Rich<'src, char>>;
@@ -153,31 +152,6 @@ fn stmt_id<'src>() -> impl Parser<'src, &'src str, StmtId, Extra<'src>> + Clone 
         .ignore_then(uint32())
         .map(StmtId::new)
         .padded_by(ws())
-}
-
-fn error_code<'src>() -> impl Parser<'src, &'src str, ErrorCode, Extra<'src>> + Clone {
-    choice((
-        token("Ok").to(ErrorCode::Ok),
-        token("UnexpectedEof").to(ErrorCode::UnexpectedEof),
-        token("InvalidVarint").to(ErrorCode::InvalidVarint),
-        token("InvalidUtf8").to(ErrorCode::InvalidUtf8),
-        token("UnsupportedShape").to(ErrorCode::UnsupportedShape),
-        token("ExpectedObjectStart").to(ErrorCode::ExpectedObjectStart),
-        token("ExpectedColon").to(ErrorCode::ExpectedColon),
-        token("ExpectedStringKey").to(ErrorCode::ExpectedStringKey),
-        token("UnterminatedString").to(ErrorCode::UnterminatedString),
-        token("InvalidJsonNumber").to(ErrorCode::InvalidJsonNumber),
-        token("MissingRequiredField").to(ErrorCode::MissingRequiredField),
-        token("UnexpectedCharacter").to(ErrorCode::UnexpectedCharacter),
-        token("NumberOutOfRange").to(ErrorCode::NumberOutOfRange),
-        token("InvalidBool").to(ErrorCode::InvalidBool),
-        token("UnknownVariant").to(ErrorCode::UnknownVariant),
-        token("ExpectedTagKey").to(ErrorCode::ExpectedTagKey),
-        token("AmbiguousVariant").to(ErrorCode::AmbiguousVariant),
-        token("AllocError").to(ErrorCode::AllocError),
-        token("InvalidEscapeSequence").to(ErrorCode::InvalidEscapeSequence),
-        token("UnknownField").to(ErrorCode::UnknownField),
-    ))
 }
 
 fn generic_params<'src>() -> impl Parser<'src, &'src str, Vec<GenericParam>, Extra<'src>> + Clone {
@@ -954,15 +928,6 @@ fn stmt<'src>() -> impl Parser<'src, &'src str, Stmt, Extra<'src>> + Clone {
                 kind: StmtKind::Break,
             });
 
-        let fail_stmt = stmt_id()
-            .then_ignore(token(":"))
-            .then_ignore(token("fail"))
-            .then(error_code())
-            .map(|(id, code)| Stmt {
-                id,
-                kind: StmtKind::Fail { code },
-            });
-
         let continue_stmt = stmt_id()
             .then_ignore(token(":"))
             .then_ignore(token("continue"))
@@ -988,7 +953,6 @@ fn stmt<'src>() -> impl Parser<'src, &'src str, Stmt, Extra<'src>> + Clone {
             assign_stmt,
             store_stmt,
             expr_stmt,
-            fail_stmt,
             break_stmt,
             continue_stmt,
             return_stmt,
@@ -1673,7 +1637,7 @@ hir_module {
     }
 
     #[test]
-    fn round_trips_slice_view_and_fail_statements() {
+    fn round_trips_slice_view_statements() {
         let text = r#"
 hir_module {
   regions [
@@ -1705,16 +1669,16 @@ hir_module {
       body @sc0 {
         stmt0: expr slice_data(field(l0, "bytes"))
         stmt1: expr slice_len(field(l0, "bytes"))
-        stmt2: fail UnexpectedEof
+        stmt2: return
       }
     }
   ]
 }
 "#;
 
-        let module = parse_hir(text).expect("slice views and fail should parse");
+        let module = parse_hir(text).expect("slice views should parse");
         let round_trip = module.to_string();
-        let reparsed = parse_hir(&round_trip).expect("round-tripped slice/fail HIR should parse");
+        let reparsed = parse_hir(&round_trip).expect("round-tripped slice HIR should parse");
         assert_eq!(module, reparsed);
     }
 

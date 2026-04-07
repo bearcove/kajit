@@ -25,6 +25,9 @@ pub struct PostcardHirLowerer {
     module: hir::Module,
     input_region: hir::RegionId,
     cursor_type: hir::TypeDefId,
+    deser_context_type: hir::TypeDefId,
+    /// The LocalId for the `ctx: &mut DeserContext` parameter.
+    ctx_local: hir::LocalId,
     string_raw_type: Option<hir::TypeDefId>,
     bits128_raw_type: Option<hir::TypeDefId>,
     type_defs_by_shape: HashMap<*const Shape, hir::TypeDefId>,
@@ -47,11 +50,15 @@ impl PostcardHirLowerer {
         let mut module = hir::Module::new();
         let input_region = module.add_region("input");
         let cursor_type = kajit_format::hir_helpers::add_cursor_type(&mut module, input_region);
+        let deser_context_type = kajit_format::hir_helpers::add_deser_context_type(&mut module);
 
         Self {
             module,
             input_region,
             cursor_type,
+            deser_context_type,
+            // Set properly in build_postcard_decoder_hir after allocating param locals.
+            ctx_local: hir::LocalId::new(0),
             string_raw_type: None,
             bits128_raw_type: None,
             type_defs_by_shape: HashMap::new(),
@@ -108,6 +115,30 @@ impl PostcardHirLowerer {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Init { place, value },
         });
+    }
+
+    /// Generate HIR statements that write an error code to `ctx.error_code` and return.
+    /// This replaces the old `Fail { code }` statement.
+    fn error_stmts(&mut self, code: hir::ErrorCode) -> Vec<hir::Stmt> {
+        let ctx_local = self.ctx_local;
+        vec![
+            hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Assign {
+                    place: hir::Place::Field {
+                        base: Box::new(hir::Place::Deref {
+                            base: Box::new(hir::Expr::Local(ctx_local)),
+                        }),
+                        field: "error_code".to_owned(),
+                    },
+                    value: hir::Expr::Literal(hir::Literal::Integer(code as u64)),
+                },
+            },
+            hir::Stmt {
+                id: self.next_stmt_id(),
+                kind: hir::StmtKind::Return(None),
+            },
+        ]
     }
 
     fn shape_has_input_borrow(shape: &'static Shape) -> bool {
@@ -613,10 +644,7 @@ impl PostcardHirLowerer {
                 condition: fail_condition,
                 then_block: hir::Block {
                     scope: hir::ScopeId::new(0),
-                    statements: vec![hir::Stmt {
-                        id: self.next_stmt_id(),
-                        kind: hir::StmtKind::Fail { code },
-                    }],
+                    statements: self.error_stmts(code),
                 },
                 else_block: Some(hir::Block {
                     scope: hir::ScopeId::new(0),
@@ -699,12 +727,7 @@ impl PostcardHirLowerer {
                         condition: invalid,
                         then_block: hir::Block {
                             scope: hir::ScopeId::new(0),
-                            statements: vec![hir::Stmt {
-                                id: self.next_stmt_id(),
-                                kind: hir::StmtKind::Fail {
-                                    code: hir::ErrorCode::InvalidBool,
-                                },
-                            }],
+                            statements: self.error_stmts(hir::ErrorCode::InvalidBool),
                         },
                         else_block: Some(hir::Block {
                             scope: hir::ScopeId::new(0),
@@ -849,12 +872,7 @@ impl PostcardHirLowerer {
                     },
                     then_block: hir::Block {
                         scope: hir::ScopeId::new(0),
-                        statements: vec![hir::Stmt {
-                            id: self.next_stmt_id(),
-                            kind: hir::StmtKind::Fail {
-                                code: hir::ErrorCode::InvalidVarint,
-                            },
-                        }],
+                        statements: self.error_stmts(hir::ErrorCode::InvalidVarint),
                     },
                     else_block: Some(ok_block),
                 },
@@ -984,12 +1002,7 @@ impl PostcardHirLowerer {
         let then_block = if byte_index + 1 == max_bytes {
             hir::Block {
                 scope: hir::ScopeId::new(0),
-                statements: vec![hir::Stmt {
-                    id: self.next_stmt_id(),
-                    kind: hir::StmtKind::Fail {
-                        code: hir::ErrorCode::InvalidVarint,
-                    },
-                }],
+                statements: self.error_stmts(hir::ErrorCode::InvalidVarint),
             }
         } else {
             let mut block = hir::Block {
@@ -1109,12 +1122,7 @@ impl PostcardHirLowerer {
                 condition: invalid_len,
                 then_block: hir::Block {
                     scope: hir::ScopeId::new(0),
-                    statements: vec![hir::Stmt {
-                        id: self.next_stmt_id(),
-                        kind: hir::StmtKind::Fail {
-                            code: hir::ErrorCode::InvalidUtf8,
-                        },
-                    }],
+                    statements: self.error_stmts(hir::ErrorCode::InvalidUtf8),
                 },
                 else_block: Some(hir::Block {
                     scope: hir::ScopeId::new(0),
@@ -1471,12 +1479,7 @@ impl PostcardHirLowerer {
                 condition: invalid,
                 then_block: hir::Block {
                     scope: hir::ScopeId::new(0),
-                    statements: vec![hir::Stmt {
-                        id: self.next_stmt_id(),
-                        kind: hir::StmtKind::Fail {
-                            code: hir::ErrorCode::UnknownVariant,
-                        },
-                    }],
+                    statements: self.error_stmts(hir::ErrorCode::UnknownVariant),
                 },
                 else_block: Some(hir::Block {
                     scope: hir::ScopeId::new(0),
@@ -2306,12 +2309,7 @@ impl PostcardHirLowerer {
                     },
                     then_block: hir::Block {
                         scope: hir::ScopeId::new(0),
-                        statements: vec![hir::Stmt {
-                            id: self.next_stmt_id(),
-                            kind: hir::StmtKind::Fail {
-                                code: hir::ErrorCode::InvalidVarint,
-                            },
-                        }],
+                        statements: self.error_stmts(hir::ErrorCode::InvalidVarint),
                     },
                     else_block: Some(hir::Block {
                         scope: hir::ScopeId::new(0),
@@ -2344,12 +2342,7 @@ impl PostcardHirLowerer {
                     },
                     then_block: hir::Block {
                         scope: hir::ScopeId::new(0),
-                        statements: vec![hir::Stmt {
-                            id: self.next_stmt_id(),
-                            kind: hir::StmtKind::Fail {
-                                code: hir::ErrorCode::NumberOutOfRange,
-                            },
-                        }],
+                        statements: self.error_stmts(hir::ErrorCode::NumberOutOfRange),
                     },
                     else_block: Some(hir::Block {
                         scope: hir::ScopeId::new(0),
@@ -2518,12 +2511,7 @@ impl PostcardHirLowerer {
                                 },
                                 then_block: hir::Block {
                                     scope: hir::ScopeId::new(0),
-                                    statements: vec![hir::Stmt {
-                                        id: self.next_stmt_id(),
-                                        kind: hir::StmtKind::Fail {
-                                            code: hir::ErrorCode::InvalidVarint,
-                                        },
-                                    }],
+                                    statements: self.error_stmts(hir::ErrorCode::InvalidVarint),
                                 },
                                 else_block: Some(hir::Block {
                                     scope: hir::ScopeId::new(0),
@@ -2585,12 +2573,7 @@ impl PostcardHirLowerer {
                 },
                 then_block: hir::Block {
                     scope: hir::ScopeId::new(0),
-                    statements: vec![hir::Stmt {
-                        id: self.next_stmt_id(),
-                        kind: hir::StmtKind::Fail {
-                            code: hir::ErrorCode::InvalidVarint,
-                        },
-                    }],
+                    statements: self.error_stmts(hir::ErrorCode::InvalidVarint),
                 },
                 else_block: Some(hir::Block {
                     scope: hir::ScopeId::new(0),
@@ -2630,12 +2613,7 @@ impl PostcardHirLowerer {
                     },
                     then_block: hir::Block {
                         scope: hir::ScopeId::new(0),
-                        statements: vec![hir::Stmt {
-                            id: self.next_stmt_id(),
-                            kind: hir::StmtKind::Fail {
-                                code: hir::ErrorCode::NumberOutOfRange,
-                            },
-                        }],
+                        statements: self.error_stmts(hir::ErrorCode::NumberOutOfRange),
                     },
                     else_block: Some(hir::Block {
                         scope: hir::ScopeId::new(0),
@@ -3114,6 +3092,8 @@ pub fn build_postcard_decoder_hir(
     let root_type = lowerer.lower_type(shape);
     let cursor_local = lowerer.next_local();
     let out_local = lowerer.next_local();
+    let ctx_local = lowerer.next_local();
+    lowerer.ctx_local = ctx_local;
     let root_scope = hir::ScopeId::new(0);
     let mut statements = Vec::new();
     lowerer.lower_shape_into_place(
@@ -3128,6 +3108,7 @@ pub fn build_postcard_decoder_hir(
     });
     let locals = std::mem::take(&mut lowerer.locals);
 
+    let deser_context_type = lowerer.deser_context_type;
     lowerer.module.add_function(hir::Function {
         name: format!("decode_{}", shape.type_identifier.replace("::", "_")),
         region_params: vec![lowerer.input_region],
@@ -3147,6 +3128,12 @@ pub fn build_postcard_decoder_hir(
                 name: "out".to_owned(),
                 ty: root_type,
                 kind: hir::LocalKind::Destination,
+            },
+            hir::Parameter {
+                local: ctx_local,
+                name: "ctx".to_owned(),
+                ty: hir::Type::mut_ref(hir::Type::named(deser_context_type, vec![])),
+                kind: hir::LocalKind::Param,
             },
         ],
         locals,

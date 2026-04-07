@@ -83,7 +83,7 @@ hir_module {
       body @sc0 {
         stmt0: init l2 = 0x2
         stmt1: if false @sc0 {
-          stmt2: fail InvalidBool
+          stmt2: return
         } else @sc0 {
         }
         stmt3: assign l2 = binary bitor(l2, 0x4)
@@ -233,15 +233,12 @@ hir_module {
     let linear = crate::linearize::linearize(&mut func);
     let decoder = crate::compiler::compile_linear_ir_decoder(&linear, false);
     let mut out = 0u64;
-    let mut ctx = crate::context::DeserContext::from_bytes(&[]);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext, u64) =
-        unsafe { core::mem::transmute(decoder.func()) };
+    let func: unsafe extern "C" fn(*mut u8, u64) = unsafe { core::mem::transmute(decoder.func()) };
 
     unsafe {
-        func(&mut out as *mut u64 as *mut u8, &mut ctx, 0x2a);
+        func(&mut out as *mut u64 as *mut u8, 0x2a);
     }
 
-    assert_eq!(ctx.error.code, 0);
     assert_eq!(out, 0x2a);
 }
 

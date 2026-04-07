@@ -12,10 +12,10 @@ struct StructuralHirIrLowerer<'a> {
     module: &'a hir::Module,
     local_slots: std::collections::HashMap<hir::LocalId, StructuralLocalStorage>,
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
-    /// Output base pointer — data_args[0], a real vreg.
+    /// Output base pointer — first data arg, a real vreg.
     out_ptr: crate::ir::PortSource,
-    /// Context pointer — data_args[1], a real vreg.
-    ctx_ptr: crate::ir::PortSource,
+    /// LocalId of the context parameter (typed `&mut DeserContext`), if present.
+    ctx_local: Option<hir::LocalId>,
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
@@ -77,7 +77,7 @@ impl RuntimeDialectLowerer {
             .iter()
             .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
-        let ctx = lowerer.ctx_ptr;
+        let ctx = lowerer.ctx_ptr(rb);
         match lowerer.callable_intrinsic(call) {
             Some(hir::RuntimeIntrinsic::AllocPersistent) => {
                 let mut full_args = vec![ctx];
@@ -122,7 +122,7 @@ impl RuntimeDialectLowerer {
                 true
             }
             Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
-                let mut full_args = vec![lowerer.ctx_ptr];
+                let mut full_args = vec![lowerer.ctx_ptr(rb)];
                 for arg in &call.args {
                     full_args.push(lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty));
                 }
@@ -200,11 +200,12 @@ impl RuntimeDialectLowerer {
             match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
                     let out_addr = lowerer.out_field_addr(rb, offset);
+                    let ctx = lowerer.ctx_ptr(rb);
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
                             intrinsics::kajit_option_init_none_ctx as *const () as usize,
                         ),
-                        &[lowerer.ctx_ptr, init_fn, out_addr],
+                        &[ctx, init_fn, out_addr],
                         false,
                     );
                     return;
@@ -238,11 +239,12 @@ impl RuntimeDialectLowerer {
             match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
                     let out_addr = lowerer.out_field_addr(rb, offset);
+                    let ctx = lowerer.ctx_ptr(rb);
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
                             intrinsics::kajit_option_init_some_ctx as *const () as usize,
                         ),
-                        &[lowerer.ctx_ptr, init_fn, payload_addr, out_addr],
+                        &[ctx, init_fn, payload_addr, out_addr],
                         false,
                     );
                     return;
@@ -265,17 +267,25 @@ impl<'a> StructuralHirIrLowerer<'a> {
         module: &'a hir::Module,
         function: &'a hir::Function,
         out_ptr: crate::ir::PortSource,
-        ctx_ptr: crate::ir::PortSource,
         data_arg_sources: &[crate::ir::PortSource],
     ) -> Self {
         let mut local_slots = std::collections::HashMap::new();
         let mut local_types = std::collections::HashMap::new();
+        // Find the ctx local by looking for a &mut ref to a struct named "DeserContext"
+        let mut ctx_local = None;
         for param in &function.params {
             if !param.is_destination() {
                 local_slots.insert(
                     param.local,
                     Self::alloc_local_storage(rb, module, &param.ty),
                 );
+                if let hir::Type::Ref { pointee, .. } = &param.ty {
+                    if let hir::Type::Named { def, .. } = pointee.as_ref() {
+                        if module.type_defs[*def].name == "DeserContext" {
+                            ctx_local = Some(param.local);
+                        }
+                    }
+                }
             }
             local_types.insert(param.local, &param.ty);
         }
@@ -291,7 +301,7 @@ impl<'a> StructuralHirIrLowerer<'a> {
             local_slots,
             local_types,
             out_ptr,
-            ctx_ptr,
+            ctx_local,
             _marker: std::marker::PhantomData,
         };
         lowerer.initialize_params(rb, function, data_arg_sources);
@@ -299,6 +309,15 @@ impl<'a> StructuralHirIrLowerer<'a> {
     }
 
     /// Compute the address `out_ptr + offset` for field access.
+    /// Read the context pointer from the ctx local's slot.
+    fn ctx_ptr(&self, rb: &mut RegionBuilder<'_>) -> crate::ir::PortSource {
+        let local = self
+            .ctx_local
+            .expect("no DeserContext param found in HIR function");
+        let slot = self.local_slots[&local].base_slot;
+        rb.read_from_slot(slot)
+    }
+
     fn out_field_addr(&self, rb: &mut RegionBuilder<'_>, offset: usize) -> crate::ir::PortSource {
         if offset == 0 {
             self.out_ptr
@@ -435,7 +454,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
                 self.lower_assign_like(rb, place, value, dest_local, dest_ty);
             }
             hir::StmtKind::Expr(expr) => self.lower_effect_expr(rb, expr, dest_local, dest_ty),
-            hir::StmtKind::Fail { code } => rb.error_exit(*code),
             hir::StmtKind::Store { addr, width, value } => {
                 let addr = self.lower_scalar_expr(rb, addr, dest_local, dest_ty);
                 let value = self.lower_scalar_expr(rb, value, dest_local, dest_ty);
@@ -2698,10 +2716,6 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 None
             }
             hir::StmtKind::Expr(_) => None,
-            hir::StmtKind::Fail { code } => {
-                rb.error_exit(*code);
-                None
-            }
             hir::StmtKind::If {
                 condition,
                 then_block,
@@ -3084,25 +3098,18 @@ fn build_structural_hir_ir_impl(module: &hir::Module) -> crate::ir::IrFunc {
         .filter(|param| !param.is_destination())
         .map(|param| StructuralHirIrLowerer::slot_count_for_type(module, &param.ty))
         .sum();
-    // data_args layout: [output_ptr, ctx_ptr, ...hir_params...]
+    // data_args layout: [output_ptr, ...hir_params...]
     // output_ptr is a real vreg used by Store/Load ops.
-    // ctx_ptr is a real vreg (used by CallIntrinsic — will become explicit in 011-3).
-    let total_data_args = 2 + param_word_count;
+    // HIR params (cursor, ctx, etc.) follow — their order is defined by the HIR function.
+    let total_data_args = 1 + param_word_count;
     let (mut builder, data_arg_sources) =
         crate::ir::IrBuilder::new_with_data_args(label, output_size, total_data_args);
     let out_ptr = data_arg_sources[0];
-    let ctx_ptr = data_arg_sources[1];
-    let hir_param_sources = data_arg_sources[2..].to_vec();
+    let hir_param_sources = data_arg_sources[1..].to_vec();
     {
         let mut rb = builder.root_region();
-        let lowerer = StructuralHirIrLowerer::new(
-            &mut rb,
-            module,
-            function,
-            out_ptr,
-            ctx_ptr,
-            &hir_param_sources,
-        );
+        let lowerer =
+            StructuralHirIrLowerer::new(&mut rb, module, function, out_ptr, &hir_param_sources);
         lowerer.lower_block(&mut rb, &function.body.statements, dest_local, dest_ty);
         rb.set_results(&[]);
     }
