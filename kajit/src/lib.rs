@@ -31,7 +31,7 @@ pub use compiler::{
 };
 use context::{DeserContext, ErrorCode};
 pub use format::DecoderKind;
-pub use pipeline_opts::PipelineOptions;
+pub use pipeline_opts::{CompileTarget, PipelineOptions};
 
 #[repr(C)]
 struct RuntimeSliceU8 {

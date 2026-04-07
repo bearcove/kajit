@@ -4,12 +4,24 @@ const KAJIT_OPTS_ENV: &str = "KAJIT_OPTS";
 const KAJIT_OPTS_HELP: &str = "help";
 const PASS_OPTION_PREFIX: &str = "pass.";
 
+/// Whether to produce JIT-executable code or a relocatable object.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompileTarget {
+    /// Resolve all symbols now, produce executable memory for in-process calls.
+    #[default]
+    Jit,
+    /// Emit relocatable machine code; symbols stay unresolved.
+    Object,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PipelineOptions {
     pub all_opts: Option<bool>,
     pass_overrides: BTreeMap<String, bool>,
     /// External symbol resolution table (vtable function pointers, etc.).
     pub symbol_table: kajit_types::SymbolTable,
+    /// Whether to produce JIT code or a relocatable object.
+    pub compile_target: CompileTarget,
 }
 
 impl PipelineOptions {
@@ -33,6 +45,11 @@ impl PipelineOptionsBuilder {
 
     pub fn symbol_table(mut self, table: kajit_types::SymbolTable) -> Self {
         self.inner.symbol_table = table;
+        self
+    }
+
+    pub fn compile_target(mut self, target: CompileTarget) -> Self {
+        self.inner.compile_target = target;
         self
     }
 

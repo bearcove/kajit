@@ -46,6 +46,7 @@ pub fn compute_base_frame(alloc: &AllocatedCfgProgramRa3) -> u32 {
 pub fn compile_regalloc3(
     alloc: &AllocatedCfgProgramRa3,
     symbol_table: &kajit_types::SymbolTable,
+    compile_target: crate::pipeline_opts::CompileTarget,
 ) -> LinearBackendResult {
     let program = &alloc.cfg_program;
 
@@ -179,6 +180,7 @@ pub fn compile_regalloc3(
             inst_source_locations,
             current_inst: None,
             symbol_table,
+            compile_target,
         };
 
         ctx.emit_function();
@@ -218,23 +220,25 @@ pub fn compile_regalloc3(
 
     let buf = ectx.finalize();
 
-    // Patch data address relocations.
-    if !data_relocs.is_empty() {
-        let base = buf.exec.as_ptr() as u64;
-        for reloc in &data_relocs {
-            let blob_offset = data_blob_offsets[reloc.blob_id as usize];
-            let addr = base + blob_offset as u64;
+    // In JIT mode, patch relocations with actual in-process addresses.
+    // In Object mode, leave them unresolved for the linker.
+    if compile_target == crate::pipeline_opts::CompileTarget::Jit {
+        if !data_relocs.is_empty() {
+            let base = buf.exec.as_ptr() as u64;
+            for reloc in &data_relocs {
+                let blob_offset = data_blob_offsets[reloc.blob_id as usize];
+                let addr = base + blob_offset as u64;
+                unsafe {
+                    buf.exec.patch_u64_load(reloc.code_offset, addr);
+                }
+            }
+        }
+
+        for reloc in &extern_addr_relocs {
+            let addr = symbol_table.resolve(&reloc.symbol).as_u64();
             unsafe {
                 buf.exec.patch_u64_load(reloc.code_offset, addr);
             }
-        }
-    }
-
-    // Patch extern addr relocations with in-process values.
-    for reloc in &extern_addr_relocs {
-        let addr = symbol_table.resolve(&reloc.symbol).as_u64();
-        unsafe {
-            buf.exec.patch_u64_load(reloc.code_offset, addr);
         }
     }
 

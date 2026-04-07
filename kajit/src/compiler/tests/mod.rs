@@ -1036,8 +1036,11 @@ fn debug_postcard_borrowed_header_harness() {
         .unwrap_or_default();
 
     let empty_symbols = kajit_types::SymbolTable::new();
-    let result =
-        crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&ra3_alloc, &empty_symbols);
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
+        &ra3_alloc,
+        &empty_symbols,
+        crate::pipeline_opts::CompileTarget::Jit,
+    );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let extern_addr_relocs = result.extern_addr_relocs.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =

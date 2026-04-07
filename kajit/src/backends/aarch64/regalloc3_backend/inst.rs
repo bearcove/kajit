@@ -75,10 +75,15 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ExternAddr { dst, symbol } => {
-                // Emit a fixed 4-instruction sequence. At JIT time, we emit the
-                // resolved value directly. In harness mode, 0 is emitted and
-                // the relocation info is used to patch with adrp/add.
-                let value = self.symbol_table.resolve(symbol).as_u64();
+                // Emit a fixed 4-instruction sequence. In JIT mode, emit the
+                // resolved value directly. In Object mode, emit 0 as a
+                // placeholder — the relocation info is used to patch later.
+                let value = match self.compile_target {
+                    crate::pipeline_opts::CompileTarget::Jit => {
+                        self.symbol_table.resolve(symbol).as_u64()
+                    }
+                    crate::pipeline_opts::CompileTarget::Object => 0,
+                };
                 let code_offset = self.ectx.emit.code_len();
                 let dest_reg = if let Some(preg) = self.preg_for_vreg(*dst) {
                     self.preg_to_reg(preg)

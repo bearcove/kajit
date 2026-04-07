@@ -52,6 +52,8 @@ pub(super) struct EmitContext<'a> {
     pub current_inst: Option<cfg_mir::InstId>,
     /// External symbol resolution table.
     pub symbol_table: &'a kajit_types::SymbolTable,
+    /// Whether we're emitting for JIT or object file.
+    pub compile_target: crate::pipeline_opts::CompileTarget,
 }
 
 /// Emit a set of parallel register moves using Briggs-style cycle resolution.

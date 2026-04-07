@@ -250,11 +250,17 @@ pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
     // Phase 6: Backend compilation
     let empty_symbols = kajit_types::SymbolTable::new();
     #[cfg(target_arch = "aarch64")]
-    let result =
-        crate::backends::aarch64::regalloc3_backend::compile_regalloc3(&alloc, &empty_symbols);
+    let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
+        &alloc,
+        &empty_symbols,
+        crate::pipeline_opts::CompileTarget::Jit,
+    );
     #[cfg(target_arch = "x86_64")]
-    let result =
-        crate::backends::x86_64::regalloc3_backend::compile_regalloc3(&alloc, &empty_symbols);
+    let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(
+        &alloc,
+        &empty_symbols,
+        crate::pipeline_opts::CompileTarget::Jit,
+    );
     let entry = result.entry as usize;
 
     CompiledFunction {
@@ -270,8 +276,10 @@ pub fn compile_pipeline(
     pipeline_opts: &PipelineOptions,
 ) -> PipelineArtifacts {
     let registry = symbol_registry_for_shape(shape);
-    let (module, _symbol_table) = build_decoder_hir(shape, kind);
-    compile_pipeline_from_hir_module(&module, &registry, pipeline_opts)
+    let (module, symbol_table) = build_decoder_hir(shape, kind);
+    let mut opts = pipeline_opts.clone();
+    opts.symbol_table = symbol_table;
+    compile_pipeline_from_hir_module(&module, &registry, &opts)
 }
 
 /// Run the full compilation pipeline from an already-built HIR module.
@@ -333,11 +341,13 @@ pub fn compile_pipeline_from_hir_module(
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
         &ra3_alloc,
         &pipeline_opts.symbol_table,
+        pipeline_opts.compile_target,
     );
     #[cfg(target_arch = "x86_64")]
     let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(
         &ra3_alloc,
         &pipeline_opts.symbol_table,
+        pipeline_opts.compile_target,
     );
     let intrinsic_call_sites = result.intrinsic_call_sites.clone();
     let extern_addr_relocs = result.extern_addr_relocs.clone();
@@ -611,11 +621,13 @@ fn compile_linear_ir_decoder_with_options(
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
         &alloc,
         &pipeline_opts.symbol_table,
+        pipeline_opts.compile_target,
     );
     #[cfg(target_arch = "x86_64")]
     let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(
         &alloc,
         &pipeline_opts.symbol_table,
+        pipeline_opts.compile_target,
     );
     let (buf, entry, source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
@@ -710,11 +722,13 @@ fn compile_cfg_mir_decoder_with_options(
     let result = crate::backends::aarch64::regalloc3_backend::compile_regalloc3(
         &alloc,
         &pipeline_opts.symbol_table,
+        pipeline_opts.compile_target,
     );
     #[cfg(target_arch = "x86_64")]
     let result = crate::backends::x86_64::regalloc3_backend::compile_regalloc3(
         &alloc,
         &pipeline_opts.symbol_table,
+        pipeline_opts.compile_target,
     );
     let (buf, entry, source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);

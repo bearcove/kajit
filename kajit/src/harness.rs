@@ -1215,7 +1215,7 @@ pub fn generate_harness(
     Ok(exe_path)
 }
 
-fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {
+pub fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {
     use object::write::{Object, Relocation, Symbol, SymbolSection};
     use object::{
         Architecture, BinaryFormat, Endianness, RelocationFlags, SectionKind, SymbolFlags,

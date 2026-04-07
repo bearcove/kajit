@@ -70,7 +70,12 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ExternAddr { dst, symbol } => {
-                let value = self.symbol_table.resolve(symbol).as_u64();
+                let value = match self.compile_target {
+                    crate::pipeline_opts::CompileTarget::Jit => {
+                        self.symbol_table.resolve(symbol).as_u64()
+                    }
+                    crate::pipeline_opts::CompileTarget::Object => 0,
+                };
                 let code_offset = self.ectx.emit.code_len();
                 let dest_enc = self.dst_enc_or_temp(*dst, R10);
                 self.emit_load_u64_fixed(dest_enc, value);

@@ -68,6 +68,8 @@ pub(super) struct EmitContext<'a> {
     pub(super) current_inst: Option<cfg_mir::InstId>,
     /// External symbol resolution table.
     pub(super) symbol_table: &'a kajit_types::SymbolTable,
+    /// Whether we're emitting for JIT or object file.
+    pub(super) compile_target: crate::pipeline_opts::CompileTarget,
 }
 
 pub(super) fn emit_parallel_reg_moves(ectx: &mut EmitCtx, moves: &[(Reg, Reg)], temp: Reg) {

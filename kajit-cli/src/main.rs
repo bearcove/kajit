@@ -33,8 +33,19 @@ enum Command {
         input_hex: Option<String>,
     },
 
-    /// Compile a type and dump pipeline stages
+    /// Compile a source file (.vixen-hir, .vixen-ir, .vixen-mir, .vixen-asm)
     Compile {
+        /// Path to source file
+        #[facet(args::positional)]
+        path: String,
+
+        /// Stages to dump: hir, ir, linear, cfg, emit, asm, all
+        #[facet(args::named, args::short = 's', default)]
+        stage: Option<String>,
+    },
+
+    /// Compile a format decoder for a type and dump pipeline stages
+    CompileFormat {
         /// Format: postcard
         #[facet(args::positional)]
         format: String,
@@ -96,7 +107,10 @@ fn main() {
         Command::Eval { cfg_mir, input_hex } => {
             cmd_eval(&cfg_mir, input_hex.as_deref().unwrap_or(""));
         }
-        Command::Compile {
+        Command::Compile { path, stage } => {
+            cmd_compile_file(&path, stage.as_deref().unwrap_or("all"));
+        }
+        Command::CompileFormat {
             format,
             ty,
             stage,
@@ -183,7 +197,97 @@ fn print_interpreter_state(state: &kajit_mir::DebuggerState) {
     }
 }
 
-// ─── compile: full pipeline dump ─────────────────────────────────────────────
+// ─── compile: source file compilation ───────────────────────────────────────
+
+fn cmd_compile_file(path: &str, stages: &str) {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    let source = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read {path}: {e}");
+        std::process::exit(1);
+    });
+
+    match ext {
+        "vixen-hir" => {
+            let module = kajit_hir_text::parse_hir(&source).unwrap_or_else(|e| {
+                eprintln!("error: failed to parse HIR: {e}");
+                std::process::exit(1);
+            });
+            let registry = kajit_ir::IntrinsicRegistry::empty();
+            let pipeline_opts = kajit::PipelineOptions::builder()
+                .from_env()
+                .compile_target(kajit::CompileTarget::Object)
+                .build();
+
+            let artifacts =
+                kajit::compile_pipeline_from_hir_module(&module, &registry, &pipeline_opts);
+
+            let dump = |name: &str| stages == "all" || stages.split(',').any(|s| s == name);
+
+            if dump("hir") {
+                println!("=== HIR ===");
+                println!("{}", module);
+            }
+            if dump("ir") {
+                for (label, text) in &artifacts.ir_opt_timeline {
+                    println!("=== IR ({label}) ===");
+                    println!("{text}");
+                }
+            }
+            if dump("cfg") {
+                println!("=== CFG-MIR ===");
+                println!("{}", artifacts.cfg_text);
+            }
+            if dump("asm") || dump("emit") {
+                println!("=== ASM ===");
+                println!("{}", artifacts.asm_text);
+            }
+
+            // Emit object file
+            let stem = std::path::Path::new(path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("output");
+            let obj_path = format!("{stem}.o");
+
+            let code = artifacts.decoder.code();
+            let harness_input = kajit::harness::HarnessInput {
+                code,
+                entry_offset: artifacts.decoder.entry_offset(),
+                output_size: 0,
+                dwarf: None,
+                cfg_mir_lines: &[],
+                function_name: stem,
+                uses_root_cursor_arg: false,
+                alloc_map: None,
+                intrinsic_calls: vec![],
+                extern_addr_relocs: artifacts.extern_addr_relocs.clone(),
+            };
+            kajit::harness::build_object_file(&harness_input, std::path::Path::new(&obj_path))
+                .unwrap_or_else(|e| {
+                    eprintln!("error: failed to write object file: {e}");
+                    std::process::exit(1);
+                });
+            eprintln!("wrote {obj_path}");
+        }
+        "vixen-ir" | "vixen-mir" | "vixen-asm" => {
+            eprintln!("error: .{ext} compilation not yet implemented");
+            std::process::exit(1);
+        }
+        _ => {
+            eprintln!(
+                "error: unknown file extension '.{ext}', expected one of: \
+                 .vixen-hir, .vixen-ir, .vixen-mir, .vixen-asm"
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
+// ─── compile-format: format decoder pipeline dump ───────────────────────────
 
 fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
     let kind = match format {
