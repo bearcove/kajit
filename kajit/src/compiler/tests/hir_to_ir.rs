@@ -233,7 +233,8 @@ hir_module {
     let linear = crate::linearize::linearize(&mut func);
     let decoder = crate::compiler::compile_linear_ir_decoder(&linear, false);
     let mut out = 0u64;
-    let func: unsafe extern "C" fn(*mut u8, u64) = unsafe { core::mem::transmute(decoder.func()) };
+    let func: unsafe extern "C" fn(*mut u8, u64) =
+        unsafe { core::mem::transmute(decoder.func_ptr()) };
 
     unsafe {
         func(&mut out as *mut u64 as *mut u8, 0x2a);

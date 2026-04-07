@@ -381,8 +381,10 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
 }
 
 fn invoke_decoder(deser: &CompiledDecoder, output: *mut u8, ctx: &mut DeserContext) {
+    let func: unsafe extern "C" fn(*mut u8, *mut DeserContext) =
+        unsafe { core::mem::transmute(deser.func_ptr()) };
     unsafe {
-        (deser.func())(output, ctx);
+        func(output, ctx);
     }
 }
 

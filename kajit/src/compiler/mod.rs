@@ -26,7 +26,7 @@ pub struct CompiledDecoder {
     buf: crate::ir_backend::BackendBuf,
     cfg_mir_line_text_by_line: Vec<String>,
     entry: usize,
-    func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
+    func: *const u8,
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
     asm_program: Option<kajit_emit::aarch64_asm::Program>,
@@ -52,8 +52,13 @@ impl CompiledFunction {
     }
 }
 
+// Safety: the JIT code buffer is immutable and pinned for the lifetime of CompiledDecoder.
+unsafe impl Send for CompiledDecoder {}
+unsafe impl Sync for CompiledDecoder {}
+
 impl CompiledDecoder {
-    pub(crate) fn func(&self) -> unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) {
+    /// Raw entry point pointer. Caller casts to the appropriate signature.
+    pub(crate) fn func_ptr(&self) -> *const u8 {
         self.func
     }
 
@@ -337,8 +342,7 @@ pub fn compile_pipeline_from_hir_module(
     let (buf, entry, _source_map, backend_debug_info, asm_program) =
         materialize_backend_result(result);
 
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+    let func = unsafe { buf.code_ptr().add(entry) };
 
     let emitted_cfg_program = &ra3_alloc.cfg_program;
     let listing = dwarf::build_cfg_mir_listing(emitted_cfg_program, Some(registry));
@@ -616,8 +620,7 @@ fn compile_linear_ir_decoder_with_options(
         .unwrap_or_default();
     let dwarf_location_map =
         crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &alloc.cfg_program, &alloc);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+    let func = unsafe { buf.code_ptr().add(entry) };
     let listing = build_cfg_mir_listing(&cfg_program, registry);
     let root_label = ir.ops.iter().find_map(|op| match op {
         crate::linearize::LinearOp::FuncStart {
@@ -715,8 +718,7 @@ fn compile_cfg_mir_decoder_with_options(
         .unwrap_or_default();
     let dwarf_location_map =
         crate::harness::LocationMap::from_alloc_map_and_cfg(&alloc_map, &alloc.cfg_program, &alloc);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+    let func = unsafe { buf.code_ptr().add(entry) };
     let listing = build_cfg_mir_listing(cfg_program, registry);
 
     let root_display_name = "kajit::decode::cfg_mir_text".to_string();

@@ -1041,8 +1041,7 @@ fn debug_postcard_borrowed_header_harness() {
     let extern_addr_relocs = result.extern_addr_relocs.clone();
     let (buf, entry, _source_map, _backend_debug_info, asm_program) =
         super::materialize_backend_result(result);
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { core::mem::transmute(buf.code_ptr().add(entry)) };
+    let func = unsafe { buf.code_ptr().add(entry) };
     let listing = super::build_cfg_mir_listing(&cfg_program, Some(&registry));
 
     let decoder = CompiledDecoder {

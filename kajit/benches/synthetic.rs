@@ -568,7 +568,15 @@ fn register_bench_case<T>(
                     Some(alt_decoder) => {
                         let alt_decoder = Arc::new(alt_decoder);
                         let alt_preflight_result = catch_unwind(AssertUnwindSafe(|| {
-                            let func = alt_decoder.func();
+                            let func = unsafe {
+                                core::mem::transmute::<
+                                    _,
+                                    unsafe extern "C" fn(
+                                        *mut u8,
+                                        *mut kajit::context::DeserContext,
+                                    ),
+                                >(alt_decoder.func_ptr())
+                            };
                             let mut out = std::mem::MaybeUninit::<T>::uninit();
                             let mut ctx = kajit::context::DeserContext::new(&postcard_data[..]);
                             unsafe {
@@ -593,7 +601,17 @@ fn register_bench_case<T>(
                                             let data = Arc::clone(&postcard_data);
                                             let alt_decoder = Arc::clone(&alt_decoder);
                                             move |runner| {
-                                                let func = alt_decoder.func();
+                                                let func = unsafe {
+                                                    core::mem::transmute::<
+                                                        _,
+                                                        unsafe extern "C" fn(
+                                                            *mut u8,
+                                                            *mut kajit::context::DeserContext,
+                                                        ),
+                                                    >(
+                                                        alt_decoder.func_ptr()
+                                                    )
+                                                };
                                                 runner.run(|| {
                                                     let mut out =
                                                         std::mem::MaybeUninit::<T>::uninit();

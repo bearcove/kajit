@@ -6,13 +6,19 @@ use std::path::PathBuf;
 #[cfg(target_arch = "aarch64")]
 pub struct AltDecoder {
     buf: kajit_emit::aarch64::FinalizedEmission,
-    func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext),
+    func: *const u8,
 }
+
+// Safety: the assembled code buffer is immutable and pinned for the lifetime of AltDecoder.
+#[cfg(target_arch = "aarch64")]
+unsafe impl Send for AltDecoder {}
+#[cfg(target_arch = "aarch64")]
+unsafe impl Sync for AltDecoder {}
 
 #[cfg(target_arch = "aarch64")]
 impl AltDecoder {
-    /// Get the callable function pointer.
-    pub fn func(&self) -> unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) {
+    /// Raw entry point pointer. Caller casts to the appropriate signature.
+    pub fn func_ptr(&self) -> *const u8 {
         self.func
     }
 
@@ -64,10 +70,7 @@ pub fn load_alt_decoder(
     // Assemble to executable code
     let buf = kajit_emit_text::assemble(&expanded).ok()?;
 
-    // Create function pointer
-    let func_ptr = buf.code_ptr();
-    let func: unsafe extern "C" fn(*mut u8, *mut crate::context::DeserContext) =
-        unsafe { std::mem::transmute(func_ptr) };
+    let func = buf.code_ptr();
 
     Some(AltDecoder { buf, func })
 }
