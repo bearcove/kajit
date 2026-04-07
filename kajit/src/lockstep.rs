@@ -144,6 +144,7 @@ impl StepWatchdog {
                         return;
                     }
                 }
+                eprintln!("[lockstep watchdog] 5s timeout — interrupting debuggee");
                 handle.interrupt();
             }))
         } else {

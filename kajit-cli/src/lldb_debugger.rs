@@ -5,9 +5,6 @@ use lldb::*;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
 
 /// LLDB-based JIT debugger that drives a standalone harness process.
 #[allow(dead_code)]
@@ -177,41 +174,9 @@ impl JitDebugger for LldbJitDebugger {
             return Err(DebugError::ProcessExited(0));
         }
 
-        // Spawn a watchdog thread that interrupts the process if step_instruction
-        // (step over) blocks too long — e.g. when the called function has an
-        // infinite loop.
-        let done = Arc::new(AtomicBool::new(false));
-        let done2 = done.clone();
-        let process_clone = self.process.clone();
-        let watchdog = std::thread::spawn(move || {
-            // Check every 100ms so we don't overshoot by much
-            for _ in 0..50 {
-                std::thread::sleep(Duration::from_millis(100));
-                if done2.load(Ordering::Relaxed) {
-                    return false; // step completed in time
-                }
-            }
-            // 5 seconds elapsed — interrupt the process
-            let _ = process_clone.stop();
-            true
-        });
-
         let thread = self.process.selected_thread();
         let step_result = thread.step_instruction(true);
-        done.store(true, Ordering::Relaxed);
-        let timed_out = watchdog.join().unwrap_or(false);
-
         step_result.map_err(|e| DebugError::LldbError(format!("step_instruction: {e}")))?;
-
-        if timed_out {
-            // The watchdog interrupted the process. Report where we are.
-            let pc = self.process.selected_thread().selected_frame().pc();
-            let disasm = self.disassemble_around_pc(8).unwrap_or_default();
-            return Err(DebugError::Timeout(format!(
-                "step_instruction_over blocked for >5s (likely infinite loop in called function). \
-                 pc=0x{pc:x}\n\nDisassembly:\n{disasm}"
-            )));
-        }
 
         if !self.process.is_stopped() {
             self.exited = true;
