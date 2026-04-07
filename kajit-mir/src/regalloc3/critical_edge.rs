@@ -158,7 +158,7 @@ fn split_edge(func: &mut Function, edge_id: EdgeId) {
                 *default = edge1_id;
             }
         }
-        Terminator::Return | Terminator::ErrorExit { .. } => {}
+        Terminator::Return => {}
     }
 
     // Update successor's predecessor list

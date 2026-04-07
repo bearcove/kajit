@@ -106,21 +106,6 @@ pub fn compile_regalloc3(
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
     let edge_tmp_base = slot_base + (actual_slot_count as u32 * 8);
 
-    // Derive ctx_enc from RA-assigned register for data_args[1].
-    // Used by ErrorExit (will be removed in 011-3).
-    let ctx_enc =
-        if let (Some(func), Some(alloc_func)) = (program.funcs.first(), alloc.functions.first()) {
-            func.data_args
-                .get(1)
-                .and_then(|&v| alloc_func.preg_for_vreg(v))
-                .map(|p| p.0)
-                .unwrap_or(scalar_abi_arg_enc(1))
-        } else {
-            scalar_abi_arg_enc(1)
-        };
-
-    ectx.ctx_enc = ctx_enc;
-
     // Emit prologue.
     let (entry, error_exit) =
         emit_scalar_prologue(&mut ectx, alloc, program, extra_saved_pairs, is_leaf);
@@ -173,7 +158,6 @@ pub fn compile_regalloc3(
             fused_cmps,
             fused_addr_offsets,
             fused_skip,
-            ctx_enc,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),
             edge_source_locations,

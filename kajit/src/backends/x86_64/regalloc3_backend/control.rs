@@ -144,10 +144,6 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
-            Terminator::ErrorExit { code } => {
-                self.ectx.emit_error_with_ctx(*code, self.ctx_enc);
-            }
-
             Terminator::JumpTable {
                 predicate, targets, ..
             } => {

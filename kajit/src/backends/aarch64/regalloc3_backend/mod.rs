@@ -221,15 +221,6 @@ pub fn compile_regalloc3(
         let edge_source_locations = compute_edge_source_locations(&location_map, program);
         let inst_source_locations = compute_inst_source_locations(&location_map, program);
 
-        // Derive ctx_reg from RA-assigned register for data_args[1].
-        // Used by ErrorExit (will be removed in 011-3).
-        let ctx_reg = func
-            .data_args
-            .get(1)
-            .and_then(|&v| alloc_func.preg_for_vreg(v))
-            .map(|p| Reg::from_raw(p.0))
-            .unwrap_or(Reg::X1);
-
         let mut ctx = EmitContext {
             ectx: &mut ectx,
             func,
@@ -247,7 +238,6 @@ pub fn compile_regalloc3(
             fused_bfi,
             fused_skip,
             fused_addr_offsets,
-            ctx_reg,
             is_last_emitted_block: false,
             edge_trampoline_labels: HashMap::new(),
             edge_source_locations,
@@ -379,9 +369,6 @@ pub fn compile_regalloc3(
         .emit_mov_reg(Width::X64, Reg::X0, Reg::XZR)
         .expect("mov x0, xzr");
     emit_epilogue(&mut ectx);
-
-    // Emit shared error trampolines.
-    ectx.emit_error_trampolines();
 
     // Append data section to the code buffer (before finalization so it's
     // included in the mmap'd executable buffer).

@@ -212,11 +212,17 @@ pub(super) fn deser_dwarf_variables(
         ("ctx", crate::jit_dwarf::expr_reg(ctx_reg)),
         (
             "error_code",
-            crate::jit_dwarf::expr_breg(ctx_reg, crate::context::CTX_ERROR_CODE as i64),
+            crate::jit_dwarf::expr_breg(
+                ctx_reg,
+                core::mem::offset_of!(crate::context::DeserContext, error.code) as i64,
+            ),
         ),
         (
             "error_offset",
-            crate::jit_dwarf::expr_breg(ctx_reg, crate::context::CTX_ERROR_OFFSET as i64),
+            crate::jit_dwarf::expr_breg(
+                ctx_reg,
+                core::mem::offset_of!(crate::context::DeserContext, error.offset) as i64,
+            ),
         ),
     ]
     .into_iter()
@@ -745,7 +751,6 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                         *remaining_uses.entry(*predicate).or_default() += 1;
                     }
                     crate::regalloc_engine::cfg_mir::Terminator::Return
-                    | crate::regalloc_engine::cfg_mir::Terminator::ErrorExit { .. }
                     | crate::regalloc_engine::cfg_mir::Terminator::Branch { .. } => {}
                 }
             }
@@ -873,7 +878,6 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                         }
                     }
                     crate::regalloc_engine::cfg_mir::Terminator::Return
-                    | crate::regalloc_engine::cfg_mir::Terminator::ErrorExit { .. }
                     | crate::regalloc_engine::cfg_mir::Terminator::Branch { .. } => {}
                 }
             }

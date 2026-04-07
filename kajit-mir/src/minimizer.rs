@@ -227,9 +227,7 @@ fn used_vregs(func: &cfg_mir::Function) -> BTreeSet<kajit_ir::VReg> {
             cfg_mir::Terminator::JumpTable { predicate, .. } => {
                 used.insert(*predicate);
             }
-            cfg_mir::Terminator::Return
-            | cfg_mir::Terminator::ErrorExit { .. }
-            | cfg_mir::Terminator::Branch { .. } => {}
+            cfg_mir::Terminator::Return | cfg_mir::Terminator::Branch { .. } => {}
         }
     }
     for edge in &func.edges {
@@ -508,9 +506,6 @@ fn remap_terminator(
 ) -> Option<cfg_mir::Terminator> {
     match term {
         cfg_mir::Terminator::Return => Some(cfg_mir::Terminator::Return),
-        cfg_mir::Terminator::ErrorExit { code } => {
-            Some(cfg_mir::Terminator::ErrorExit { code: *code })
-        }
         cfg_mir::Terminator::Branch { edge } => Some(cfg_mir::Terminator::Branch {
             edge: edge_map[edge.index()]?,
         }),
@@ -589,36 +584,21 @@ mod tests {
                     },
                 ],
                 edges: Vec::new(),
-                insts: vec![
-                    cfg_mir::Inst {
-                        id: cfg_mir::InstId::new(0),
-                        op: LinearOp::Const {
-                            dst: vreg(0),
-                            value: 1,
-                        },
-                        operands: vec![cfg_mir::Operand {
-                            vreg: vreg(0),
-                            kind: cfg_mir::OperandKind::Def,
-                            class: cfg_mir::RegClass::Gpr,
-                            fixed: None,
-                        }],
-                        clobbers: cfg_mir::Clobbers::default(),
+                insts: vec![cfg_mir::Inst {
+                    id: cfg_mir::InstId::new(0),
+                    op: LinearOp::Const {
+                        dst: vreg(0),
+                        value: 1,
                     },
-                    cfg_mir::Inst {
-                        id: cfg_mir::InstId::new(1),
-                        op: LinearOp::ErrorExit {
-                            code: ErrorCode::InvalidVarint,
-                        },
-                        operands: Vec::new(),
-                        clobbers: cfg_mir::Clobbers::default(),
-                    },
-                ],
-                terms: vec![
-                    cfg_mir::Terminator::Return,
-                    cfg_mir::Terminator::ErrorExit {
-                        code: ErrorCode::InvalidVarint,
-                    },
-                ],
+                    operands: vec![cfg_mir::Operand {
+                        vreg: vreg(0),
+                        kind: cfg_mir::OperandKind::Def,
+                        class: cfg_mir::RegClass::Gpr,
+                        fixed: None,
+                    }],
+                    clobbers: cfg_mir::Clobbers::default(),
+                }],
+                terms: vec![cfg_mir::Terminator::Return],
             }],
             vreg_count: 1,
             slot_count: 0,

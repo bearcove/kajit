@@ -660,9 +660,6 @@ impl DebuggerSession {
                 }
                 self.write_vreg(dst.index(), value);
             }
-            LinearOp::ErrorExit { code } => {
-                self.trap(*code);
-            }
             LinearOp::CallIntrinsic { func, args, dst } => {
                 self.execute_call_intrinsic(func.0, args, *dst)?;
             }
@@ -848,9 +845,6 @@ impl DebuggerSession {
         match term {
             cfg_mir::Terminator::Return => {
                 self.returned = true;
-            }
-            cfg_mir::Terminator::ErrorExit { code } => {
-                self.trap(*code);
             }
             cfg_mir::Terminator::Branch { edge } => {
                 self.apply_edge(*edge)?;

@@ -28,10 +28,6 @@
 use crate::ir_passes::{CloneCtx, clone_region_into, remap_source};
 use crate::{IrFunc, NodeId, NodeKind, OutputRef, PortSource, Region, RegionArg};
 
-fn region_has_error_exit(func: &IrFunc, region: crate::RegionId) -> bool {
-    crate::const_fold::region_has_error_exit(func, region)
-}
-
 /// Maximum iterations we're willing to unroll.
 const MAX_UNROLL: u32 = 10;
 
@@ -946,9 +942,6 @@ fn eval_with_env_inner(
                     let output_index = out_ref.index as usize;
                     let mut common: Option<u64> = None;
                     for &region_id in regions {
-                        if region_has_error_exit(func, region_id) {
-                            continue;
-                        }
                         let result_id = *func.regions[region_id].results.get(output_index)?;
                         let result_source = &func.region_results[result_id].source;
                         let branch_val = eval_with_env_inner(

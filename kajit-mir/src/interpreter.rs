@@ -344,15 +344,6 @@ impl<'a> InterpreterState<'a> {
         self.trace_vregs[idx] = value;
     }
 
-    fn trap(&mut self, code: ErrorCode) {
-        if self.trap.is_none() {
-            self.trap = Some(InterpreterTrap {
-                code,
-                offset: self.cursor as u32,
-            });
-        }
-    }
-
     fn ensure_slot(&mut self, slot: usize) {
         if slot >= self.slots.len() {
             self.slots.resize(slot + 1, 0);
@@ -745,10 +736,6 @@ fn execute_function_inner(
                     let value = exec_unaryop(*op, src);
                     state.write_vreg(dst.index(), value);
                 }
-                LinearOp::ErrorExit { code } => {
-                    state.trap(*code);
-                    break;
-                }
                 LinearOp::StoreToAddr { addr, src, width } => {
                     let dst = state.read_vreg(addr.index()) as *mut u8;
                     let value = state.read_vreg(src.index());
@@ -916,21 +903,6 @@ fn execute_function_inner(
                     .map(|vreg| state.read_vreg(vreg.index()))
                     .collect::<Vec<_>>();
                 return Ok(data_results);
-            }
-            cfg_mir::Terminator::ErrorExit { code } => {
-                state.trap(*code);
-                trace.push(InterpreterTraceEntry {
-                    step_index,
-                    block: block.id,
-                    next_inst_index: block.insts.len(),
-                    at_terminator: true,
-                    cursor: state.cursor,
-                    vregs: state.vregs.clone(),
-                    output: state.output.clone(),
-                    trap: state.trap,
-                    returned: false,
-                });
-                return Ok(Vec::new());
             }
             cfg_mir::Terminator::Branch { edge } => {
                 let target = apply_edge(func, &block_indices, state, *edge)?;
@@ -1134,9 +1106,6 @@ fn execute_function_inner_with_event_trace(
                             value: trace_value,
                         },
                     );
-                }
-                LinearOp::ErrorExit { code } => {
-                    state.trap(*code);
                 }
                 LinearOp::StoreToAddr { addr, src, width } => {
                     let dst = state.read_vreg(addr.index()) as *mut u8;
@@ -1475,18 +1444,6 @@ fn execute_function_inner_with_event_trace(
                     .map(|vreg| state.read_vreg(vreg.index()))
                     .collect::<Vec<_>>();
                 return Ok(data_results);
-            }
-            cfg_mir::Terminator::ErrorExit { code } => {
-                state.trap(*code);
-                if let Some(trap) = state.trap {
-                    push_interpreter_event(
-                        trace,
-                        step_index,
-                        location,
-                        InterpreterEventKind::Trap { trap },
-                    );
-                }
-                return Ok(Vec::new());
             }
             cfg_mir::Terminator::Branch { edge } => {
                 let next = apply_edge_with_event_trace(

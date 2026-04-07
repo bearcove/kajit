@@ -7,7 +7,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 
-use kajit_ir::ErrorCode;
 use kajit_ir::{
     Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, Id, IntrinsicRegistry, IrFunc, IrOp,
     LambdaId, Node, NodeId, NodeKind, OutputUseKind, PortKind, PortSource, RegionId, SlotId, VReg,
@@ -169,11 +168,6 @@ pub enum LinearOp {
         default: LabelId,
     },
 
-    // ── Error ──
-    ErrorExit {
-        code: ErrorCode,
-    },
-
     // ── Function structure ──
     FuncStart {
         lambda_id: LambdaId,
@@ -228,7 +222,7 @@ impl LinearOp {
             }
 
             // Control flow
-            Label(_) | ErrorExit { .. } => {}
+            Label(_) => {}
             Branch { phi_args, .. } => {
                 for (src, _dst) in phi_args {
                     f(src);
@@ -351,12 +345,7 @@ impl LinearOp {
             }
 
             // No defs
-            StoreToAddr { .. }
-            | WriteToSlot { .. }
-            | Label(_)
-            | ErrorExit { .. }
-            | JumpTable { .. }
-            | FuncEnd => {}
+            StoreToAddr { .. } | WriteToSlot { .. } | Label(_) | JumpTable { .. } | FuncEnd => {}
         }
     }
 
@@ -402,7 +391,7 @@ impl LinearOp {
                 f(dst);
             }
 
-            Label(_) | ErrorExit { .. } => {}
+            Label(_) => {}
             Branch { phi_args, .. } => {
                 for (src, dst) in phi_args {
                     f(src);
@@ -1217,11 +1206,6 @@ impl<'a> Linearizer<'a> {
                         dst: data_dst(0),
                     },
                 );
-            }
-
-            // ── Error ──
-            IrOp::ErrorExit { code } => {
-                self.emit_node(node, LinearOp::ErrorExit { code: *code });
             }
 
             IrOp::Nop => {
@@ -3617,25 +3601,9 @@ impl<'a> Linearizer<'a> {
     }
 
     /// Check if a region's ONLY code path is an error exit (no normal return).
-    /// A region is error-only if it directly contains ErrorExit and no gamma/theta
-    /// nodes (which would provide alternative code paths).
-    fn region_is_error_only(&self, region_id: RegionId) -> bool {
-        let region = &self.func.regions[region_id];
-        let has_error = region.nodes.iter().any(|&nid| {
-            matches!(
-                &self.func.nodes[nid].kind,
-                NodeKind::Simple(IrOp::ErrorExit { .. })
-            )
-        });
-        let has_structural = region.nodes.iter().any(|&nid| {
-            matches!(
-                &self.func.nodes[nid].kind,
-                NodeKind::Gamma { .. } | NodeKind::Theta { .. }
-            )
-        });
-        // If the region has an error exit and no structural nodes (gamma/theta),
-        // it's purely an error path.
-        has_error && !has_structural
+    /// ErrorExit has been removed; this always returns false.
+    fn region_is_error_only(&self, _region_id: RegionId) -> bool {
+        false
     }
 
     /// Emit Copy ops for passthrough data inputs entering a gamma branch region.
@@ -3914,7 +3882,6 @@ fn is_block_terminator(op: &LinearOp) -> bool {
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. }
-            | LinearOp::ErrorExit { .. }
             | LinearOp::FuncEnd
     )
 }
@@ -3961,7 +3928,6 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
-        | LinearOp::ErrorExit { .. }
         | LinearOp::FuncStart { .. } => Vec::new(),
     }
 }
@@ -3988,7 +3954,6 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         | LinearOp::BranchIf { .. }
         | LinearOp::BranchIfZero { .. }
         | LinearOp::JumpTable { .. }
-        | LinearOp::ErrorExit { .. }
         | LinearOp::FuncEnd => Vec::new(),
     }
 }
@@ -4068,7 +4033,6 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         | LinearOp::SlotAddr { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
-        | LinearOp::ErrorExit { .. }
         | LinearOp::FuncStart { .. }
         | LinearOp::FuncEnd => {}
     }
@@ -4147,7 +4111,7 @@ fn build_blocks(ops: &[LinearOp]) -> Vec<LinearBlock> {
                         .expect("jumptable default label must be block entry"),
                 );
             }
-            LinearOp::ErrorExit { .. } | LinearOp::FuncEnd => {}
+            LinearOp::FuncEnd => {}
             _ => {
                 if bi + 1 < blocks.len() {
                     succs.push(bi + 1);
@@ -4424,21 +4388,9 @@ fn unify_one_sided_gamma_vregs(func: &mut IrFunc) {
 }
 
 /// Check if a region is error-only (static version, no Linearizer self needed).
-fn region_is_error_only_static(func: &IrFunc, region_id: RegionId) -> bool {
-    let region = &func.regions[region_id];
-    let has_error = region.nodes.iter().any(|&nid| {
-        matches!(
-            &func.nodes[nid].kind,
-            NodeKind::Simple(IrOp::ErrorExit { .. })
-        )
-    });
-    let has_structured_control = region.nodes.iter().any(|&nid| {
-        matches!(
-            &func.nodes[nid].kind,
-            NodeKind::Gamma { .. } | NodeKind::Theta { .. }
-        )
-    });
-    has_error && !has_structured_control
+/// ErrorExit has been removed; this always returns false.
+fn region_is_error_only_static(_func: &IrFunc, _region_id: RegionId) -> bool {
+    false
 }
 
 /// Assign VRegs to all data output ports and region args that don't have one.
@@ -4787,7 +4739,6 @@ fn fmt_op(
             }
             write!(f, "] default L{}", default.index())
         }
-        LinearOp::ErrorExit { code } => write!(f, "error_exit {code:?}"),
         LinearOp::CallLambda {
             target,
             args,

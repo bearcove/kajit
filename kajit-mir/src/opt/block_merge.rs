@@ -377,7 +377,7 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
                     *default = new_edge;
                 }
             }
-            crate::cfg_mir::Terminator::Return | crate::cfg_mir::Terminator::ErrorExit { .. } => {}
+            crate::cfg_mir::Terminator::Return => {}
         }
     }
 

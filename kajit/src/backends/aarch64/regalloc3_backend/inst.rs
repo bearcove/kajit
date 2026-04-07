@@ -225,10 +225,6 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
-            LinearOp::ErrorExit { code } => {
-                self.ectx.emit_error_with_ctx_reg(*code, self.ctx_reg);
-            }
-
             LinearOp::CallIntrinsic { func, args, dst } => {
                 self.emit_call_intrinsic(*func, args, *dst);
             }

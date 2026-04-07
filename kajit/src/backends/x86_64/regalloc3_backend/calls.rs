@@ -1,8 +1,6 @@
 //! Call emission for x86_64 regalloc3 backend.
 
-use kajit_emit::x64::{self, Mem};
-
-use crate::context::CTX_ERROR_CODE;
+use kajit_emit::x64;
 
 use super::context::EmitContext;
 use crate::ir_backend::IntrinsicCallSiteInfo;
@@ -62,32 +60,6 @@ impl<'a> EmitContext<'a> {
             code_offset: call_site_offset,
             func,
         });
-
-        // Check error after call (TODO: will become explicit IR in 011-3).
-        // ctx_ptr was args[0], now in rdi (SysV) / rcx (Win64).
-        // After the call, the ABI register may have been clobbered.
-        // Reload ctx from vreg allocation.
-        let ctx_vreg = args[0];
-        let ctx_enc = self.reg_for_vreg_with_temp(ctx_vreg, R10);
-        let error_exit = self.ectx.error_exit;
-        self.ectx
-            .emit
-            .emit_with(|buf| {
-                x64::encode_mov_r32_m(
-                    R10,
-                    Mem {
-                        base: ctx_enc,
-                        disp: CTX_ERROR_CODE as i32,
-                    },
-                    buf,
-                )?;
-                x64::encode_test_r32_r32(R10, R10, buf)
-            })
-            .expect("check error");
-        self.ectx
-            .emit
-            .emit_jnz_label(error_exit)
-            .expect("jnz error");
 
         // Store result if needed (return value is in rax).
         if let Some(dst) = dst {

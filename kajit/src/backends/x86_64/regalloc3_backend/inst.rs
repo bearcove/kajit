@@ -280,10 +280,6 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
-            LinearOp::ErrorExit { code } => {
-                self.ectx.emit_error_with_ctx(*code, self.ctx_enc);
-            }
-
             LinearOp::CallIntrinsic { func, args, dst } => {
                 self.emit_call_intrinsic(*func, args, *dst);
             }

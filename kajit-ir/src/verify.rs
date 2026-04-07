@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::{
-    DebugScopeId, IrFunc, IrOp, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource,
+    DebugScopeId, IrFunc, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource,
     RegionArgRef, RegionId,
 };
 
@@ -15,7 +15,6 @@ enum StateProducer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct StateUsage {
     chain_uses: usize,
-    error_exit_sinks: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,10 +103,6 @@ pub enum VerifyError {
         kind: PortKind,
         producer: PortSource,
         uses: usize,
-    },
-    StateErrorExitSinkViolation {
-        producer: PortSource,
-        sinks: usize,
     },
 }
 
@@ -507,11 +502,7 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                 if input.kind.is_state() {
                     let producer = state_source(input.source, func);
                     let usage = state_uses.entry(producer).or_default();
-                    if matches!(node.kind, NodeKind::Simple(IrOp::ErrorExit { .. })) {
-                        usage.error_exit_sinks += 1;
-                    } else {
-                        usage.chain_uses += 1;
-                    }
+                    usage.chain_uses += 1;
                 }
             }
         }
@@ -546,12 +537,6 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                     uses: usage.chain_uses,
                 });
             }
-            if usage.error_exit_sinks > 1 {
-                return Err(VerifyError::StateErrorExitSinkViolation {
-                    producer,
-                    sinks: usage.error_exit_sinks,
-                });
-            }
         }
 
         for &node_id in &region.nodes {
@@ -573,12 +558,6 @@ pub fn verify(func: &IrFunc) -> Result<(), VerifyError> {
                         kind: output.kind,
                         producer,
                         uses: usage.chain_uses,
-                    });
-                }
-                if usage.error_exit_sinks > 1 {
-                    return Err(VerifyError::StateErrorExitSinkViolation {
-                        producer,
-                        sinks: usage.error_exit_sinks,
                     });
                 }
             }
@@ -660,42 +639,5 @@ mod tests {
             matches!(err, VerifyError::StateChainViolation { uses: 2, .. }),
             "expected StateChainViolation with uses: 2, got: {err:?}"
         );
-    }
-
-    #[test]
-    fn verify_allows_error_exit_branch_passthrough_state() {
-        let mut builder = IrBuilder::new("u8", 0);
-        {
-            let mut rb = builder.root_region();
-            let pred = rb.const_val(1);
-            let _ = rb.gamma(pred, &[], 2, |branch_idx, branch| match branch_idx {
-                0 => branch.set_results(&[]),
-                1 => {
-                    branch.error_exit(crate::ErrorCode::MissingRequiredField);
-                    branch.set_results(&[]);
-                }
-                _ => unreachable!(),
-            });
-            rb.set_results(&[]);
-        }
-        let func = builder.finish();
-        assert!(verify(&func).is_ok());
-    }
-
-    #[test]
-    fn verify_rejects_multiple_error_exit_sinks_from_same_state() {
-        let mut builder = IrBuilder::new("u8", 0);
-        {
-            let mut rb = builder.root_region();
-            rb.error_exit(crate::ErrorCode::MissingRequiredField);
-            rb.error_exit(crate::ErrorCode::MissingRequiredField);
-            rb.set_results(&[]);
-        }
-        let func = builder.finish();
-        let err = verify(&func).expect_err("verifier should reject duplicated ErrorExit sinks");
-        assert!(matches!(
-            err,
-            VerifyError::StateErrorExitSinkViolation { sinks: 2, .. }
-        ));
     }
 }

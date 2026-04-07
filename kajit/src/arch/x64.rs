@@ -1,6 +1,4 @@
-use kajit_emit::x64::{self, Emitter, FinalizedEmission, LabelId, Mem};
-
-use crate::context::CTX_ERROR_CODE;
+use kajit_emit::x64::{Emitter, FinalizedEmission, LabelId};
 
 /// Base frame size (non-leaf).
 ///
@@ -29,9 +27,6 @@ pub struct EmitCtx {
     pub base_frame: u32,
     /// Total frame size (base + extra, 16-byte aligned).
     pub frame_size: u32,
-    /// Register encoding for the context pointer.
-    /// 15 (r15) for legacy, configurable for regalloc3.
-    pub ctx_enc: u8,
 }
 
 impl EmitCtx {
@@ -49,7 +44,6 @@ impl EmitCtx {
             error_exit,
             base_frame,
             frame_size,
-            ctx_enc: 15,
         }
     }
 
@@ -70,26 +64,6 @@ impl EmitCtx {
 
     pub fn current_source_location(&self) -> kajit_emit::SourceLocation {
         self.emit.current_source_location()
-    }
-
-    /// Emit an error with an explicit ctx register encoding.
-    pub fn emit_error_with_ctx(&mut self, code: crate::context::ErrorCode, ctx_enc: u8) {
-        let error_exit = self.error_exit;
-        let error_code = code as i32;
-        self.emit
-            .emit_with(|buf| {
-                x64::encode_mov_r32_imm32(10, error_code as u32, buf)?;
-                x64::encode_mov_m_r32(
-                    Mem {
-                        base: ctx_enc,
-                        disp: CTX_ERROR_CODE as i32,
-                    },
-                    10,
-                    buf,
-                )
-            })
-            .expect("write error code");
-        self.emit.emit_jmp_label(error_exit).expect("jump error");
     }
 
     pub fn finalize(self) -> FinalizedEmission {

@@ -39,8 +39,7 @@ impl LinearOpDst for LinearOp {
             | Self::Branch { .. }
             | Self::BranchIf { .. }
             | Self::BranchIfZero { .. }
-            | Self::JumpTable { .. }
-            | Self::ErrorExit { .. } => None,
+            | Self::JumpTable { .. } => None,
             Self::FuncStart { .. } | Self::FuncEnd => None,
             Self::StoreToAddr { .. } | Self::WriteToSlot { .. } => None,
         }
@@ -57,7 +56,7 @@ impl TerminatorCondition for Terminator {
         match self {
             Self::BranchIf { cond, .. } | Self::BranchIfZero { cond, .. } => Some(*cond),
             Self::JumpTable { predicate, .. } => Some(*predicate),
-            Self::Branch { .. } | Self::Return | Self::ErrorExit { .. } => None,
+            Self::Branch { .. } | Self::Return => None,
         }
     }
 }

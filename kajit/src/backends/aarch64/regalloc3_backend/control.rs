@@ -145,10 +145,6 @@ impl<'a> EmitContext<'a> {
                 }
             }
 
-            Terminator::ErrorExit { code } => {
-                self.ectx.emit_error_with_ctx_reg(*code, self.ctx_reg);
-            }
-
             Terminator::JumpTable { .. } => {
                 panic!("JumpTable not yet supported in regalloc3 backend");
             }

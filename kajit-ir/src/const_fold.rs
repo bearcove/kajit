@@ -435,32 +435,6 @@ fn resolve_slot_value(func: &IrFunc, read_node: NodeId, slot: usize, depth: usiz
     None
 }
 
-/// Check if a region (or any of its sub-regions) contains an ErrorExit node.
-pub fn region_has_error_exit(func: &IrFunc, region: RegionId) -> bool {
-    for &nid in &func.regions[region].nodes {
-        match &func.nodes[nid].kind {
-            NodeKind::Simple(IrOp::ErrorExit { .. }) => return true,
-            NodeKind::Gamma { regions } => {
-                // If ALL gamma branches have ErrorExit, this gamma always errors.
-                // But if only some branches error, the gamma itself doesn't always error.
-                // For our purposes, even a single ErrorExit in the region counts.
-                for &sub in regions {
-                    if region_has_error_exit(func, sub) {
-                        return true;
-                    }
-                }
-            }
-            NodeKind::Theta { body, .. } => {
-                if region_has_error_exit(func, *body) {
-                    return true;
-                }
-            }
-            _ => {}
-        }
-    }
-    false
-}
-
 /// Evaluate a pure arithmetic/comparison operation on constant inputs.
 pub fn evaluate_op(op: &IrOp, inputs: &[u64]) -> Option<u64> {
     match (op, inputs) {

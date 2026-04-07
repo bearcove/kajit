@@ -11,8 +11,6 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::ErrorCode;
-
 // ─── Arena and ID types ─────────────────────────────────────────────────────
 
 /// Typed index into a [`Arena`]. Generic over the element type for type safety.
@@ -718,12 +716,6 @@ pub enum IrOp {
     /// Inputs: [Data * arg_count, StateMemory]. Outputs: [Data, StateMemory].
     CallEffect { func: IntrinsicFn, arg_count: u8 },
 
-    // ── Error ops ───────────────────────────────────────────────────
-    // r[impl ir.ops.error]
-    /// Set error code and abort the containing region.
-    /// Inputs: [StateCursor]. Outputs: [].
-    ErrorExit { code: ErrorCode },
-
     /// No-op placeholder for removed nodes (used during optimization passes).
     /// Inputs: []. Outputs: [].
     Nop,
@@ -794,7 +786,6 @@ impl IrOp {
             IrOp::CallEffect { .. }
             | IrOp::WriteToSlot { .. }
             | IrOp::ReadFromSlot { .. }
-            | IrOp::ErrorExit { .. }
             | IrOp::StoreToAddr { .. }
             | IrOp::LoadFromAddr { .. } => Effect::SideEffect,
 
@@ -1694,23 +1685,6 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
-    // ── Error ───────────────────────────────────────────────────────
-
-    /// Emit an error exit. Consumes cursor state (for byte offset recording).
-    pub fn error_exit(&mut self, code: ErrorCode) {
-        self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: PortKind::State,
-                source: self.state_source,
-            }],
-            outputs: vec![],
-            kind: NodeKind::Simple(IrOp::ErrorExit { code }),
-        });
-    }
-
     // ── Structured control flow ─────────────────────────────────────
 
     /// Add a gamma node (conditional).
@@ -2361,7 +2335,7 @@ impl IrFunc {
                 Self::fmt_intrinsic(f, *func, registry)?;
                 write!(f, ")")
             }
-            IrOp::ErrorExit { code } => write!(f, "ErrorExit({code:?})"),
+
             IrOp::Nop => write!(f, "Nop"),
             IrOp::Identity => write!(f, "Identity"),
         }

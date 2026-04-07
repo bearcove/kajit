@@ -10,8 +10,8 @@ use std::fmt;
 use std::ops::Range;
 
 use kajit_ir::{
-    Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, ErrorCode, IntrinsicFn,
-    IntrinsicRegistry, LambdaId, VReg,
+    Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, IntrinsicFn, IntrinsicRegistry,
+    LambdaId, VReg,
 };
 use kajit_lir::{LabelId, LinearIr, LinearOp};
 
@@ -102,9 +102,6 @@ pub struct Edge {
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Return,
-    ErrorExit {
-        code: ErrorCode,
-    },
     Branch {
         edge: EdgeId,
     },
@@ -128,7 +125,7 @@ pub enum Terminator {
 impl Terminator {
     pub fn successor_edges(&self) -> Vec<EdgeId> {
         match self {
-            Self::Return | Self::ErrorExit { .. } => Vec::new(),
+            Self::Return => Vec::new(),
             Self::Branch { edge } => vec![*edge],
             Self::BranchIf {
                 taken, fallthrough, ..
@@ -328,7 +325,7 @@ impl Function {
                         *default = new;
                     }
                 }
-                Terminator::Return | Terminator::ErrorExit { .. } => {}
+                Terminator::Return => {}
             }
         }
 
@@ -922,7 +919,6 @@ fn fmt_cfg_op_name(
             write!(f, ")")
         }
         LinearOp::CallLambda { target, .. } => write!(f, "call_lambda(@{})", target.index()),
-        LinearOp::ErrorExit { code } => write!(f, "error_exit({code:?})"),
         other => write!(f, "<?op:{other:?}>"),
     }
 }
@@ -1075,7 +1071,6 @@ fn fmt_const(
 fn fmt_terminator(f: &mut fmt::Formatter<'_>, term: &Terminator) -> fmt::Result {
     match term {
         Terminator::Return => write!(f, "return"),
-        Terminator::ErrorExit { code } => write!(f, "error_exit({code:?})"),
         Terminator::Branch { edge } => write!(f, "branch e{}", edge.0),
         Terminator::BranchIf {
             cond,
@@ -1119,7 +1114,6 @@ fn fmt_terminator(f: &mut fmt::Formatter<'_>, term: &Terminator) -> fmt::Result 
 #[derive(Debug, Clone)]
 enum TempTermLabel {
     Return,
-    ErrorExit(ErrorCode),
     Branch {
         target: LabelId,
         phi_args: Vec<(VReg, VReg)>,
@@ -1147,7 +1141,6 @@ enum TempTermLabel {
 #[derive(Debug, Clone)]
 enum TempTermBlock {
     Return,
-    ErrorExit(ErrorCode),
     Branch {
         target: BlockId,
         phi_args: Vec<(VReg, VReg)>,
@@ -1197,7 +1190,7 @@ impl TempTermBlock {
                 out.extend(fallthrough_phi_args.iter().map(|(src, _)| *src));
             }
             Self::JumpTable { predicate, .. } => out.push(*predicate),
-            Self::Return | Self::ErrorExit(_) => {}
+            Self::Return => {}
         }
         out
     }
@@ -1229,7 +1222,7 @@ impl TempTermBlock {
 
     fn successors(&self) -> Vec<BlockId> {
         match self {
-            Self::Return | Self::ErrorExit(_) => Vec::new(),
+            Self::Return => Vec::new(),
             Self::Branch { target, .. } => vec![*target],
             Self::BranchIf {
                 target,
@@ -1259,7 +1252,6 @@ fn is_terminator(op: &LinearOp) -> bool {
             | LinearOp::BranchIf { .. }
             | LinearOp::BranchIfZero { .. }
             | LinearOp::JumpTable { .. }
-            | LinearOp::ErrorExit { .. }
     )
 }
 
@@ -1372,7 +1364,6 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::BranchIf { .. }
         | LinearOp::BranchIfZero { .. }
         | LinearOp::JumpTable { .. }
-        | LinearOp::ErrorExit { .. }
         | LinearOp::FuncStart { .. }
         | LinearOp::FuncEnd => {
             panic!("unexpected non-inst op in cfg_mir::lower_inst: {op:?}");
@@ -1394,7 +1385,6 @@ fn resolve_term_labels(
 ) -> TempTermBlock {
     match term {
         TempTermLabel::Return => TempTermBlock::Return,
-        TempTermLabel::ErrorExit(code) => TempTermBlock::ErrorExit(*code),
         TempTermLabel::Branch {
             target: label,
             phi_args,
@@ -1642,17 +1632,6 @@ fn lower_function(
                     cursor += 1;
                     break;
                 }
-                LinearOp::ErrorExit { code } => {
-                    if let Some(scope) = op_scope {
-                        lowered_scopes.insert(OpId::Term(TermId(bi as u32)), scope);
-                    }
-                    if let Some(debug_value) = op_value {
-                        lowered_values.insert(OpId::Term(TermId(bi as u32)), debug_value);
-                    }
-                    term = Some(TempTermLabel::ErrorExit(code));
-                    cursor += 1;
-                    break;
-                }
                 LinearOp::Label(_) | LinearOp::FuncStart { .. } | LinearOp::FuncEnd => {
                     panic!(
                         "unexpected structural op in function body: {:?}",
@@ -1766,7 +1745,6 @@ fn lower_function(
         let succ_edges = blocks[bi].succs.clone();
         let lowered = match term {
             TempTermBlock::Return => Terminator::Return,
-            TempTermBlock::ErrorExit(code) => Terminator::ErrorExit { code: *code },
             TempTermBlock::Branch { .. } => Terminator::Branch {
                 edge: *succ_edges
                     .first()
@@ -3315,7 +3293,7 @@ fn build_use_def_analysis(func: &Function) -> UseDefAnalysis {
             Terminator::JumpTable { predicate, .. } => {
                 terminator_uses.insert(*predicate);
             }
-            Terminator::Return | Terminator::ErrorExit { .. } | Terminator::Branch { .. } => {}
+            Terminator::Return | Terminator::Branch { .. } => {}
         }
     }
 

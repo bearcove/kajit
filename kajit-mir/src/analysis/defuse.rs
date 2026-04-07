@@ -171,8 +171,7 @@ impl LinearOpDst for LinearOp {
             | Self::Branch { .. }
             | Self::BranchIf { .. }
             | Self::BranchIfZero { .. }
-            | Self::JumpTable { .. }
-            | Self::ErrorExit { .. } => None,
+            | Self::JumpTable { .. } => None,
             // Function structure markers
             Self::FuncStart { .. } | Self::FuncEnd => None,
             // Operations with no destination
@@ -191,7 +190,7 @@ impl TerminatorCondition for crate::cfg_mir::Terminator {
         match self {
             Self::BranchIf { cond, .. } | Self::BranchIfZero { cond, .. } => Some(*cond),
             Self::JumpTable { predicate, .. } => Some(*predicate),
-            Self::Branch { .. } | Self::Return | Self::ErrorExit { .. } => None,
+            Self::Branch { .. } | Self::Return => None,
         }
     }
 }

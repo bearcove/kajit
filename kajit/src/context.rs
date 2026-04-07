@@ -29,12 +29,6 @@ pub struct ErrorSlot {
     pub offset: u32,
 }
 
-// Field offset constants for use from JIT code.
-pub const CTX_INPUT_PTR: u32 = core::mem::offset_of!(DeserContext, input_ptr) as u32;
-pub const CTX_INPUT_END: u32 = core::mem::offset_of!(DeserContext, input_end) as u32;
-pub const CTX_ERROR_CODE: u32 = core::mem::offset_of!(DeserContext, error.code) as u32;
-pub const CTX_ERROR_OFFSET: u32 = core::mem::offset_of!(DeserContext, error.offset) as u32;
-
 impl DeserContext {
     /// Create a new context pointing at the given input slice.
     pub fn new(input: &[u8]) -> Self {

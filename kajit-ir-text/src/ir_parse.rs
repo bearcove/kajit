@@ -7,7 +7,6 @@ use std::collections::HashMap;
 
 use chumsky::prelude::*;
 
-use kajit_ir::ErrorCode;
 use kajit_ir::{
     Arena, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry,
     IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
@@ -173,31 +172,6 @@ fn width<'src>() -> impl Parser<'src, &'src str, Width, Extra<'src>> + Clone {
         just("W2").to(Width::W2),
         just("W4").to(Width::W4),
         just("W8").to(Width::W8),
-    ))
-}
-
-/// Parse an ErrorCode name.
-fn error_code<'src>() -> impl Parser<'src, &'src str, ErrorCode, Extra<'src>> + Clone {
-    choice((
-        just("UnexpectedEof").to(ErrorCode::UnexpectedEof),
-        just("InvalidVarint").to(ErrorCode::InvalidVarint),
-        just("InvalidUtf8").to(ErrorCode::InvalidUtf8),
-        just("UnsupportedShape").to(ErrorCode::UnsupportedShape),
-        just("ExpectedObjectStart").to(ErrorCode::ExpectedObjectStart),
-        just("ExpectedColon").to(ErrorCode::ExpectedColon),
-        just("ExpectedStringKey").to(ErrorCode::ExpectedStringKey),
-        just("UnterminatedString").to(ErrorCode::UnterminatedString),
-        just("InvalidJsonNumber").to(ErrorCode::InvalidJsonNumber),
-        just("MissingRequiredField").to(ErrorCode::MissingRequiredField),
-        just("UnexpectedCharacter").to(ErrorCode::UnexpectedCharacter),
-        just("NumberOutOfRange").to(ErrorCode::NumberOutOfRange),
-        just("InvalidBool").to(ErrorCode::InvalidBool),
-        just("UnknownVariant").to(ErrorCode::UnknownVariant),
-        just("ExpectedTagKey").to(ErrorCode::ExpectedTagKey),
-        just("AmbiguousVariant").to(ErrorCode::AmbiguousVariant),
-        just("AllocError").to(ErrorCode::AllocError),
-        just("InvalidEscapeSequence").to(ErrorCode::InvalidEscapeSequence),
-        just("UnknownField").to(ErrorCode::UnknownField),
     ))
 }
 
@@ -425,10 +399,6 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(intrinsic_ref())
             .then_ignore(just(")"))
             .map(|func| AstOp::CallEffect { func }),
-        just("ErrorExit(")
-            .ignore_then(error_code())
-            .then_ignore(just(")"))
-            .map(|c| AstOp::Resolved(IrOp::ErrorExit { code: c })),
     ));
 
     choice((stack_ops, arith_ops, call_ops))

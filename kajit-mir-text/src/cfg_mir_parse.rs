@@ -4,7 +4,7 @@
 
 use chumsky::prelude::*;
 
-use kajit_ir::{ErrorCode, IntrinsicFn, IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
+use kajit_ir::{IntrinsicFn, IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_mir::cfg_mir::{
     Block, BlockId, Clobbers, Edge, EdgeArg, EdgeId, FixedReg, Function, FunctionId, Inst, InstId,
@@ -83,30 +83,6 @@ fn width<'src>() -> impl Parser<'src, &'src str, Width, Extra<'src>> + Clone {
     ))
 }
 
-fn error_code<'src>() -> impl Parser<'src, &'src str, ErrorCode, Extra<'src>> + Clone {
-    choice((
-        just("UnexpectedEof").to(ErrorCode::UnexpectedEof),
-        just("InvalidVarint").to(ErrorCode::InvalidVarint),
-        just("InvalidUtf8").to(ErrorCode::InvalidUtf8),
-        just("UnsupportedShape").to(ErrorCode::UnsupportedShape),
-        just("ExpectedObjectStart").to(ErrorCode::ExpectedObjectStart),
-        just("ExpectedColon").to(ErrorCode::ExpectedColon),
-        just("ExpectedStringKey").to(ErrorCode::ExpectedStringKey),
-        just("UnterminatedString").to(ErrorCode::UnterminatedString),
-        just("InvalidJsonNumber").to(ErrorCode::InvalidJsonNumber),
-        just("MissingRequiredField").to(ErrorCode::MissingRequiredField),
-        just("UnexpectedCharacter").to(ErrorCode::UnexpectedCharacter),
-        just("NumberOutOfRange").to(ErrorCode::NumberOutOfRange),
-        just("InvalidBool").to(ErrorCode::InvalidBool),
-        just("UnknownVariant").to(ErrorCode::UnknownVariant),
-        just("ExpectedTagKey").to(ErrorCode::ExpectedTagKey),
-        just("AmbiguousVariant").to(ErrorCode::AmbiguousVariant),
-        just("AllocError").to(ErrorCode::AllocError),
-        just("InvalidEscapeSequence").to(ErrorCode::InvalidEscapeSequence),
-        just("UnknownField").to(ErrorCode::UnknownField),
-    ))
-}
-
 fn vreg<'src>() -> impl Parser<'src, &'src str, VReg, Extra<'src>> + Clone {
     just("v").ignore_then(uint32()).map(VReg::new)
 }
@@ -180,7 +156,6 @@ enum AstOp {
     CallPure(IntrinsicRef),
     CallEffect(IntrinsicRef),
     CallLambda(u32),
-    ErrorExit(ErrorCode),
     DataAddr(u32),
 }
 
@@ -234,10 +209,6 @@ fn op_name<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(uint32())
             .then_ignore(just(")"))
             .map(AstOp::CallLambda),
-        just("error_exit(")
-            .ignore_then(error_code())
-            .then_ignore(just(")"))
-            .map(AstOp::ErrorExit),
         just("data_addr(")
             .ignore_then(uint32())
             .then_ignore(just(")"))
@@ -389,10 +360,6 @@ fn edge_arg_list<'src>() -> impl Parser<'src, &'src str, Vec<EdgeArg>, Extra<'sr
 
 fn terminator<'src>() -> impl Parser<'src, &'src str, Terminator, Extra<'src>> + Clone {
     let ret = just("return").to(Terminator::Return);
-    let error = just("error_exit(")
-        .ignore_then(error_code())
-        .then_ignore(just(")"))
-        .map(|code| Terminator::ErrorExit { code });
     let branch = just("branch ")
         .ignore_then(edge_id())
         .map(|edge| Terminator::Branch { edge });
@@ -429,7 +396,7 @@ fn terminator<'src>() -> impl Parser<'src, &'src str, Terminator, Extra<'src>> +
             targets,
             default,
         });
-    choice((branch_if_zero, branch_if, jump_table, error, branch, ret))
+    choice((branch_if_zero, branch_if, jump_table, branch, ret))
 }
 
 #[derive(Debug, Clone)]
@@ -919,7 +886,6 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
             args: ast.body.uses.iter().map(|(v, _, _)| *v).collect(),
             results: ast.body.defs.iter().map(|(v, _, _)| *v).collect(),
         },
-        AstOp::ErrorExit(code) => LinearOp::ErrorExit { code: *code },
         AstOp::DataAddr(blob_id) => LinearOp::DataAddr {
             dst: dst.ok_or_else(|| ParseError {
                 message: format!("inst i{} data_addr missing dst", ast.id.0),

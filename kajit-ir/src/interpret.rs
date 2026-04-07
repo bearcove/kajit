@@ -328,11 +328,6 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
             env.set_output(node_id, 0, value);
         }
 
-        // ─── Error ops ───
-        IrOp::ErrorExit { code } => {
-            state.trap = Some(Trap { code: *code });
-        }
-
         // ─── Call ops (stub) ───
         IrOp::CallIntrinsic { .. } | IrOp::CallPure { .. } | IrOp::CallEffect { .. } => {
             // Intrinsics can't be interpreted without the function pointers.

@@ -1022,8 +1022,7 @@ impl LinearOpDst for LinearOp {
             | Self::Branch { .. }
             | Self::BranchIf { .. }
             | Self::BranchIfZero { .. }
-            | Self::JumpTable { .. }
-            | Self::ErrorExit { .. } => None,
+            | Self::JumpTable { .. } => None,
             Self::FuncStart { .. } | Self::FuncEnd => None,
             Self::StoreToAddr { .. } | Self::WriteToSlot { .. } => None,
         }
