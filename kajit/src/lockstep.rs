@@ -1285,7 +1285,7 @@ fn op_produces_non_comparable_value(
     non_comparable_vregs: &std::collections::HashSet<u32>,
 ) -> bool {
     match op {
-        LinearOp::SlotAddr { .. } => true,
+        LinearOp::SlotAddr { .. } | LinearOp::ExternAddr { .. } => true,
         LinearOp::Copy { src, .. } => non_comparable_vregs.contains(&(src.index() as u32)),
         LinearOp::BinOp {
             op: BinOpKind::Add | BinOpKind::Sub,
