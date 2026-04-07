@@ -11,6 +11,8 @@
 macro_rules! export_option_vtable {
     ($T:ty, $mangled:ident) => {
         paste::paste! {
+            /// # Safety
+            /// `option` must point to uninit memory for `Option<T>`, `value` to a valid `T`.
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn [< kajit_vtable_option_init_some__ $mangled >](
                 option: facet::PtrUninit,
@@ -24,6 +26,8 @@ macro_rules! export_option_vtable {
                 unsafe { (opt_def.vtable.init_some)(option, value) }
             }
 
+            /// # Safety
+            /// `option` must point to uninit memory for `Option<T>`.
             #[unsafe(no_mangle)]
             pub unsafe extern "C" fn [< kajit_vtable_option_init_none__ $mangled >](
                 option: facet::PtrUninit,
