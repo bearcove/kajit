@@ -606,7 +606,14 @@ impl MirHandler {
                 .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
 
             let mut out = format!("**Debug session {}**\n\n", session_id);
-            for _ in 0..count {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+            for i in 0..count {
+                if i > 0 && std::time::Instant::now() > deadline {
+                    out.push_str(&format!(
+                        "TIMEOUT: completed {i}/{count} steps in 30s, stopping early\n"
+                    ));
+                    break;
+                }
                 let step = session.step_forward()?;
                 out.push_str(&step);
                 out.push('\n');
