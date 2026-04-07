@@ -3,32 +3,34 @@
 ## Goal
 
 The backend emits no implicit loads from the context struct. Error checking after
-`CallIntrinsic` is explicit in the IR/CFG-MIR, visible to optimizations and the interpreter.
+calls is explicit in the IR/CFG-MIR, visible to optimizations and the interpreter.
 
 ## What changes
 
-### HIR→IR lowering (`kajit/src/compiler/hir_to_ir.rs`)
-- After each `call_intrinsic()`, emit:
-  1. `LoadFromAddr(ctx_ptr + CTX_ERROR_CODE, W4)` → error_code vreg
-  2. `CmpNe(error_code, 0)` → has_error vreg
-  3. Conditional branch / ErrorExit on has_error
+This is mostly a consequence of 011-2 (general-purpose IR). Once ctx_ptr is a
+real vreg and CallIntrinsic is replaced by a unified Call op, the backend no
+longer has any special-case code for error checking.
 
-### Backends (`kajit/src/backends/{aarch64,x86_64}/regalloc3_backend/calls.rs`)
-- `emit_call_intrinsic` stops emitting the post-call error check
-  (delete the `load [ctx + ERROR_CODE]; test; jnz error_exit` block)
-- The error check is now just regular instructions emitted by the frontend
+### Frontend (`hir_to_ir.rs`)
+- After each call that can fail, emit:
+  1. `Load(Add(ctx_ptr, Const(CTX_ERROR_CODE)), W4)` → error_code vreg
+  2. `CmpNe(error_code, Const(0))` → has_error vreg
+  3. Gamma branch: if has_error → return (the error path)
 
-### Interpreter (`kajit-mir/src/interpreter.rs`)
-- `CallIntrinsic` execution no longer implicitly checks `ctx.error_code`
-- The explicit LoadFromAddr + CmpNe + ErrorExit ops handle it
+### Backends
+- Nothing to do — these are regular Load/CmpNe/Branch instructions
+- Delete the post-call error check code from `emit_call_intrinsic` (if not already gone from 011-2)
 
-### Context (`kajit/src/context.rs`)
-- `CTX_ERROR_CODE` constant stays (used by the frontend to generate the right offset)
-- But the backend no longer imports or uses it directly
+### Interpreter
+- Nothing to do — Load/CmpNe/Branch already work
+
+### ErrorExit op
+- Delete entirely. Frontend emits `Store(ctx + ERROR_OFFSET, code)` + return.
+- The backend's `emit_error_trampolines` / `emit_error_with_ctx` go away.
 
 ## Depends on
 
-011-2 (unified ABI — ctx_ptr is a vreg, so we can compute ctx_ptr + offset in IR).
+011-2 step 2 (ctx_ptr as real vreg, unified Call op).
 
 ## Enables
 
