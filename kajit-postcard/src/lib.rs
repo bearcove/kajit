@@ -1162,7 +1162,11 @@ impl PostcardHirLowerer {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                 target: hir::CallTarget::Callable(validate_utf8),
-                args: vec![hir::Expr::Local(data_local), hir::Expr::Local(len_local)],
+                args: vec![
+                    hir::Expr::Local(self.ctx_local),
+                    hir::Expr::Local(data_local),
+                    hir::Expr::Local(len_local),
+                ],
             })),
         });
 
@@ -1510,7 +1514,11 @@ impl PostcardHirLowerer {
             name: NAME.to_owned(),
             intrinsic: Some(hir::RuntimeIntrinsic::ValidateUtf8Range),
             signature: hir::CallSignature {
-                params: vec![hir::Type::u(64), hir::Type::u(32)],
+                params: vec![
+                    hir::Type::transient_addr(),
+                    hir::Type::u(64),
+                    hir::Type::u(32),
+                ],
                 returns: vec![],
                 effect_class: hir::EffectClass::Reads,
                 domain_effects: vec![hir::DomainEffect {
@@ -1538,7 +1546,11 @@ impl PostcardHirLowerer {
             name: NAME.to_owned(),
             intrinsic: Some(hir::RuntimeIntrinsic::OptionInitNone),
             signature: hir::CallSignature {
-                params: vec![hir::Type::u(64), hir::Type::u(64)],
+                params: vec![
+                    hir::Type::transient_addr(),
+                    hir::Type::u(64),
+                    hir::Type::u(64),
+                ],
                 returns: vec![],
                 effect_class: hir::EffectClass::Barrier,
                 domain_effects: vec![hir::DomainEffect {
@@ -1566,7 +1578,12 @@ impl PostcardHirLowerer {
             name: NAME.to_owned(),
             intrinsic: Some(hir::RuntimeIntrinsic::OptionInitSome),
             signature: hir::CallSignature {
-                params: vec![hir::Type::u(64), hir::Type::u(64), hir::Type::u(64)],
+                params: vec![
+                    hir::Type::transient_addr(),
+                    hir::Type::u(64),
+                    hir::Type::u(64),
+                    hir::Type::u(64),
+                ],
                 returns: vec![],
                 effect_class: hir::EffectClass::Barrier,
                 domain_effects: vec![hir::DomainEffect {
@@ -1596,7 +1613,11 @@ impl PostcardHirLowerer {
             name: NAME.to_owned(),
             intrinsic: Some(hir::RuntimeIntrinsic::AllocPersistent),
             signature: hir::CallSignature {
-                params: vec![hir::Type::u(64), hir::Type::u(64)],
+                params: vec![
+                    hir::Type::transient_addr(),
+                    hir::Type::u(64),
+                    hir::Type::u(64),
+                ],
                 returns: vec![hir::Type::persistent_addr()],
                 effect_class: hir::EffectClass::Mutates,
                 domain_effects: vec![hir::DomainEffect {
@@ -1695,7 +1716,11 @@ impl PostcardHirLowerer {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                 target: hir::CallTarget::Callable(validate_utf8),
-                args: vec![hir::Expr::Local(data_local), hir::Expr::Local(len_local)],
+                args: vec![
+                    hir::Expr::Local(self.ctx_local),
+                    hir::Expr::Local(data_local),
+                    hir::Expr::Local(len_local),
+                ],
             })),
         });
 
@@ -1776,7 +1801,11 @@ impl PostcardHirLowerer {
             id: self.next_stmt_id(),
             kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                 target: hir::CallTarget::Callable(validate_utf8),
-                args: vec![hir::Expr::Local(data_local), hir::Expr::Local(len_local)],
+                args: vec![
+                    hir::Expr::Local(self.ctx_local),
+                    hir::Expr::Local(data_local),
+                    hir::Expr::Local(len_local),
+                ],
             })),
         });
 
@@ -1810,6 +1839,7 @@ impl PostcardHirLowerer {
                                 value: hir::Expr::Call(hir::CallExpr {
                                     target: hir::CallTarget::Callable(alloc_persistent),
                                     args: vec![
+                                        hir::Expr::Local(self.ctx_local),
                                         hir::Expr::Local(len_local),
                                         hir::Expr::Literal(hir::Literal::Integer(1)),
                                     ],
@@ -2122,6 +2152,7 @@ impl PostcardHirLowerer {
             hir::Expr::Call(hir::CallExpr {
                 target: hir::CallTarget::Callable(alloc_persistent),
                 args: vec![
+                    hir::Expr::Local(self.ctx_local),
                     hir::Expr::Local(bytes_local),
                     hir::Expr::Literal(hir::Literal::Integer(elem_layout.align() as u64)),
                 ],
@@ -2787,6 +2818,7 @@ impl PostcardHirLowerer {
                     kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                         target: hir::CallTarget::Callable(option_init_some),
                         args: vec![
+                            hir::Expr::Local(self.ctx_local),
                             hir::Expr::Literal(hir::Literal::ExternAddr {
                                 symbol: self.register_extern(
                                     vtable_symbol_name(shape, VtableEntry::OptionInitSome),
@@ -2816,6 +2848,7 @@ impl PostcardHirLowerer {
                     kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                         target: hir::CallTarget::Callable(option_init_some),
                         args: vec![
+                            hir::Expr::Local(self.ctx_local),
                             hir::Expr::Literal(hir::Literal::ExternAddr {
                                 symbol: self.register_extern(
                                     vtable_symbol_name(shape, VtableEntry::OptionInitSome),
@@ -2838,6 +2871,7 @@ impl PostcardHirLowerer {
                 kind: hir::StmtKind::Expr(hir::Expr::Call(hir::CallExpr {
                     target: hir::CallTarget::Callable(option_init_none),
                     args: vec![
+                        hir::Expr::Local(self.ctx_local),
                         hir::Expr::Literal(hir::Literal::ExternAddr {
                             symbol: self.register_extern(
                                 vtable_symbol_name(shape, VtableEntry::OptionInitNone),

@@ -14,8 +14,6 @@ struct StructuralHirIrLowerer<'a> {
     local_types: std::collections::HashMap<hir::LocalId, &'a hir::Type>,
     /// Output base pointer — first data arg, a real vreg.
     out_ptr: crate::ir::PortSource,
-    /// LocalId of the context parameter (typed `&mut DeserContext`), if present.
-    ctx_local: Option<hir::LocalId>,
     _marker: std::marker::PhantomData<&'a hir::Module>,
 }
 
@@ -77,30 +75,19 @@ impl RuntimeDialectLowerer {
             .iter()
             .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
             .collect::<Vec<_>>();
-        let ctx = lowerer.ctx_ptr(rb);
         match lowerer.callable_intrinsic(call) {
-            Some(hir::RuntimeIntrinsic::AllocPersistent) => {
-                let mut full_args = vec![ctx];
-                full_args.extend_from_slice(&args);
-                rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_alloc_persistent as *const () as usize,
-                    ),
-                    &full_args,
-                    true,
-                )
-            }
-            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => {
-                let mut full_args = vec![ctx];
-                full_args.extend_from_slice(&args);
-                rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
-                    ),
-                    &full_args,
-                    true,
-                )
-            }
+            Some(hir::RuntimeIntrinsic::AllocPersistent) => rb.call_intrinsic(
+                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_persistent as *const () as usize),
+                &args,
+                true,
+            ),
+            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => rb.call_intrinsic(
+                crate::ir::IntrinsicFn(
+                    intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
+                ),
+                &args,
+                true,
+            ),
             _ => None,
         }
     }
@@ -122,15 +109,16 @@ impl RuntimeDialectLowerer {
                 true
             }
             Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
-                let mut full_args = vec![lowerer.ctx_ptr(rb)];
-                for arg in &call.args {
-                    full_args.push(lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty));
-                }
+                let args: Vec<_> = call
+                    .args
+                    .iter()
+                    .map(|arg| lowerer.lower_scalar_expr(rb, arg, dest_local, dest_ty))
+                    .collect();
                 rb.call_intrinsic(
                     crate::ir::IntrinsicFn(
                         intrinsics::kajit_validate_utf8_range as *const () as usize,
                     ),
-                    &full_args,
+                    &args,
                     false,
                 );
                 true
@@ -192,15 +180,15 @@ impl RuntimeDialectLowerer {
     ) {
         assert_eq!(
             call.args.len(),
-            2,
-            "runtime.option_init_none expects init_fn and out addr"
+            3,
+            "runtime.option_init_none expects ctx, init_fn, and out addr"
         );
-        let init_fn = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
-        if let hir::Expr::AddrOf(place) = &call.args[1] {
+        let ctx = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
+        let init_fn = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        if let hir::Expr::AddrOf(place) = &call.args[2] {
             match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
                     let out_addr = lowerer.out_field_addr(rb, offset);
-                    let ctx = lowerer.ctx_ptr(rb);
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
                             intrinsics::kajit_option_init_none_ctx as *const () as usize,
@@ -214,7 +202,7 @@ impl RuntimeDialectLowerer {
                 | ResolvedStructuralPlace::Indirect { .. } => {}
             }
         }
-        let out_addr = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let out_addr = lowerer.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
         let _ = rb.call_effect(
             crate::ir::IntrinsicFn(intrinsics::kajit_option_init_none as *const () as usize),
             &[init_fn, out_addr],
@@ -230,16 +218,16 @@ impl RuntimeDialectLowerer {
     ) {
         assert_eq!(
             call.args.len(),
-            3,
-            "runtime.option_init_some expects init_fn, out addr, and payload addr"
+            4,
+            "runtime.option_init_some expects ctx, init_fn, out addr, and payload addr"
         );
-        let init_fn = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
-        let payload_addr = lowerer.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
-        if let hir::Expr::AddrOf(place) = &call.args[1] {
+        let ctx = lowerer.lower_scalar_expr(rb, &call.args[0], dest_local, dest_ty);
+        let init_fn = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let payload_addr = lowerer.lower_scalar_expr(rb, &call.args[3], dest_local, dest_ty);
+        if let hir::Expr::AddrOf(place) = &call.args[2] {
             match lowerer.resolve_place(rb, place, dest_local, dest_ty) {
                 ResolvedStructuralPlace::Destination { offset, .. } => {
                     let out_addr = lowerer.out_field_addr(rb, offset);
-                    let ctx = lowerer.ctx_ptr(rb);
                     rb.call_intrinsic(
                         crate::ir::IntrinsicFn(
                             intrinsics::kajit_option_init_some_ctx as *const () as usize,
@@ -253,7 +241,7 @@ impl RuntimeDialectLowerer {
                 | ResolvedStructuralPlace::Indirect { .. } => {}
             }
         }
-        let out_addr = lowerer.lower_scalar_expr(rb, &call.args[1], dest_local, dest_ty);
+        let out_addr = lowerer.lower_scalar_expr(rb, &call.args[2], dest_local, dest_ty);
         let _ = rb.call_effect(
             crate::ir::IntrinsicFn(intrinsics::kajit_option_init_some as *const () as usize),
             &[init_fn, out_addr, payload_addr],
@@ -271,21 +259,12 @@ impl<'a> StructuralHirIrLowerer<'a> {
     ) -> Self {
         let mut local_slots = std::collections::HashMap::new();
         let mut local_types = std::collections::HashMap::new();
-        // Find the ctx local by looking for a &mut ref to a struct named "DeserContext"
-        let mut ctx_local = None;
         for param in &function.params {
             if !param.is_destination() {
                 local_slots.insert(
                     param.local,
                     Self::alloc_local_storage(rb, module, &param.ty),
                 );
-                if let hir::Type::Ref { pointee, .. } = &param.ty {
-                    if let hir::Type::Named { def, .. } = pointee.as_ref() {
-                        if module.type_defs[*def].name == "DeserContext" {
-                            ctx_local = Some(param.local);
-                        }
-                    }
-                }
             }
             local_types.insert(param.local, &param.ty);
         }
@@ -301,7 +280,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
             local_slots,
             local_types,
             out_ptr,
-            ctx_local,
             _marker: std::marker::PhantomData,
         };
         lowerer.initialize_params(rb, function, data_arg_sources);
@@ -309,15 +287,6 @@ impl<'a> StructuralHirIrLowerer<'a> {
     }
 
     /// Compute the address `out_ptr + offset` for field access.
-    /// Read the context pointer from the ctx local's slot.
-    fn ctx_ptr(&self, rb: &mut RegionBuilder<'_>) -> crate::ir::PortSource {
-        let local = self
-            .ctx_local
-            .expect("no DeserContext param found in HIR function");
-        let slot = self.local_slots[&local].base_slot;
-        rb.read_from_slot(slot)
-    }
-
     fn out_field_addr(&self, rb: &mut RegionBuilder<'_>, offset: usize) -> crate::ir::PortSource {
         if offset == 0 {
             self.out_ptr
