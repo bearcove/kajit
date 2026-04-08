@@ -1,5 +1,3 @@
-mod hir_parse;
-pub mod lexer;
-mod token_parser;
-
-pub use hir_parse::parse_hir;
+pub use kajit_reprs::hir::lexer;
+pub use kajit_reprs::hir::parse::parse_hir;
+pub use kajit_reprs::hir::token_parser;

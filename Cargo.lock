@@ -1453,19 +1453,14 @@ dependencies = [
 name = "kajit-hir"
 version = "0.1.0"
 dependencies = [
- "kajit-ir",
- "kajit-types",
+ "kajit-reprs",
 ]
 
 [[package]]
 name = "kajit-hir-text"
 version = "0.1.0"
 dependencies = [
- "ariadne 0.5.1",
- "chumsky",
- "kajit-hir",
- "kajit-parse-util",
- "kajit-types",
+ "kajit-reprs",
 ]
 
 [[package]]
@@ -1529,6 +1524,22 @@ version = "0.1.0"
 dependencies = [
  "ariadne 0.5.1",
  "chumsky",
+]
+
+[[package]]
+name = "kajit-reprs"
+version = "0.1.0"
+dependencies = [
+ "ariadne 0.5.1",
+ "chumsky",
+ "kajit-asm",
+ "kajit-asm-text",
+ "kajit-ir",
+ "kajit-ir-text",
+ "kajit-lir",
+ "kajit-mir",
+ "kajit-mir-text",
+ "kajit-types",
 ]
 
 [[package]]
