@@ -370,7 +370,6 @@ fn fmt_local_decl(
             LocalKind::Param => "param",
             LocalKind::Let => "let",
             LocalKind::Temp => "temp",
-            LocalKind::Destination => "destination",
         },
         quoted(name),
         TypeDisplay { module, ty }
@@ -521,7 +520,6 @@ fn fmt_param_decl(
             LocalKind::Param => "param",
             LocalKind::Let => "let",
             LocalKind::Temp => "temp",
-            LocalKind::Destination => "destination",
         },
         quoted(&param.name),
         TypeDisplay {

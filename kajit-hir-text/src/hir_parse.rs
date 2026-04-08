@@ -137,7 +137,7 @@ mod tests {
                     local: LocalId::new(1),
                     name: "out".to_owned(),
                     ty: Type::named(record, vec![GenericArg::Region(r_input)]),
-                    kind: LocalKind::Destination,
+                    kind: LocalKind::Param,
                 },
             ],
             locals: vec![

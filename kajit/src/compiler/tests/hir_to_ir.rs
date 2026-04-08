@@ -26,7 +26,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t0
+        l1 param "out": t0
       ]
       locals [
       ]
@@ -71,7 +71,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t0
+        l1 param "out": t0
       ]
       locals [
         l2 temp "tmp": u32
@@ -119,7 +119,7 @@ hir_module {
       stores []
       params [
         l0 param "value": u64
-        l1 destination "out": u64
+        l1 param "out": u64
       ]
       locals []
       return unit
@@ -164,7 +164,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": &mut t0
-        l1 destination "out": u64
+        l1 param "out": u64
       ]
       locals []
       return unit
@@ -210,7 +210,7 @@ hir_module {
       stores []
       params [
         l0 param "value": u64
-        l1 destination "out": u64
+        l1 param "out": u64
       ]
       locals []
       return unit
@@ -262,7 +262,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t0
+        l1 param "out": t0
       ]
       locals [
         l2 temp "i": u64
@@ -329,7 +329,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t1
+        l1 param "out": t1
       ]
       locals [
         l2 let "flag": bool
@@ -393,7 +393,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t0
+        l1 param "out": t0
       ]
       locals [
         l2 let "mask": u32
@@ -456,7 +456,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t1
+        l1 param "out": t1
       ]
       locals [
         l2 let "scratch": t0
@@ -505,7 +505,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t0
+        l1 param "out": t0
       ]
       locals [
         l2 let "scratch": Array<u32, 4>
@@ -555,7 +555,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t0
+        l1 param "out": t0
       ]
       locals [
         l2 let "idx": u32
@@ -610,7 +610,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t1
+        l1 param "out": t1
       ]
       locals [
         l2 let "pairs": Array<t0, 2>
@@ -666,7 +666,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t1
+        l1 param "out": t1
       ]
       locals [
         l2 let "pairs": Array<t0, 2>
@@ -723,7 +723,7 @@ hir_module {
       stores []
       params [
         l0 param "cursor": u64
-        l1 destination "out": t1
+        l1 param "out": t1
       ]
       locals [
         l2 let "pair": t0

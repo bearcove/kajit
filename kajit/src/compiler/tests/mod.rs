@@ -373,8 +373,10 @@ fn non_semantic_output_byte_mask(module: &hir::Module) -> Vec<bool> {
         .next()
         .map(|(_, function)| function)
         .expect("decoder module should have a root function");
+    // The second parameter (index 1) is the output pointer.
     let dest_ty = function
-        .destination_param()
+        .params
+        .get(1)
         .map(|param| &param.ty)
         .unwrap_or(&function.return_type);
     let output_size = structural_hir_type_size_for_test(module, dest_ty);
@@ -416,8 +418,8 @@ fn postcard_hir_models_borrowed_output_structs() {
     assert_eq!(function.params.len(), 2);
     assert_eq!(function.region_params.len(), 1);
 
-    let destination = function.destination_param().unwrap();
-    let hir::Type::Named { def, args } = &destination.ty else {
+    let out_param = &function.params[1];
+    let hir::Type::Named { def, args } = &out_param.ty else {
         panic!("expected named root output type");
     };
     assert_eq!(

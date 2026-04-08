@@ -1189,10 +1189,11 @@ impl DebugDiffSession {
             .iter()
             .next()
             .ok_or_else(|| "HIR module should contain at least one function".to_owned())?;
-        let destination = function.destination_param().ok_or_else(|| {
-            "debug sessions require a destination-writing HIR function".to_owned()
+        // The second parameter is the output pointer.
+        let out_param = function.params.get(1).ok_or_else(|| {
+            "debug sessions require a function with an output parameter".to_owned()
         })?;
-        type_size(module, &destination.ty)
+        type_size(module, &out_param.ty)
     }
 
     fn new(

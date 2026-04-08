@@ -1354,11 +1354,7 @@ pub struct Function {
     pub body: Block,
 }
 
-impl Function {
-    pub fn destination_param(&self) -> Option<&Parameter> {
-        self.params.iter().find(|param| param.is_destination())
-    }
-}
+impl Function {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scope {
@@ -1375,11 +1371,7 @@ pub struct Parameter {
     pub kind: LocalKind,
 }
 
-impl Parameter {
-    pub fn is_destination(&self) -> bool {
-        self.kind == LocalKind::Destination
-    }
-}
+impl Parameter {}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDecl {
@@ -1394,7 +1386,6 @@ pub enum LocalKind {
     Param,
     Let,
     Temp,
-    Destination,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1863,7 +1854,7 @@ mod tests {
                     local: LocalId::new(1),
                     name: "out".to_owned(),
                     ty: Type::named(header, vec![GenericArg::Region(r_input)]),
-                    kind: LocalKind::Destination,
+                    kind: LocalKind::Param,
                 },
             ],
             locals: vec![],
@@ -1883,8 +1874,8 @@ mod tests {
         };
 
         assert_eq!(function.region_params, vec![r_input]);
-        let destination = function.destination_param().unwrap();
-        assert!(matches!(destination.ty, Type::Named { .. }));
+        let out_param = &function.params[1];
+        assert!(matches!(out_param.ty, Type::Named { .. }));
         assert!(function.locals.is_empty());
     }
 

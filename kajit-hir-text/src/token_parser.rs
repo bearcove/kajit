@@ -812,7 +812,6 @@ where
         just(Token::KwParam).to(LocalKind::Param),
         just(Token::KwLet).to(LocalKind::Let),
         just(Token::KwTemp).to(LocalKind::Temp),
-        just(Token::KwDestination).to(LocalKind::Destination),
     ))
     .labelled("local kind")
 }
