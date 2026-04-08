@@ -1297,7 +1297,7 @@ mod tests {
     #[test]
     fn step_forward_and_back_restores_state() {
         let program = make_simple_program();
-        let mut session = DebuggerSession::new(&program, &[], &kajit_types::Arguments::new())
+        let mut session = DebuggerSession::new(&program, &kajit_types::Arguments::new())
             .expect("debugger should init");
 
         let first = session.step_forward().expect("step should work");
@@ -1313,7 +1313,7 @@ mod tests {
     #[test]
     fn simple_program_executes_and_returns() {
         let program = make_trap_program();
-        let mut session = DebuggerSession::new(&program, &[], &kajit_types::Arguments::new())
+        let mut session = DebuggerSession::new(&program, &kajit_types::Arguments::new())
             .expect("debugger should init");
         // Step through const op
         let event = session.step_forward().expect("step should work");
