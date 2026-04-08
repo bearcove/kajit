@@ -186,10 +186,9 @@ pub struct Program {
     pub data_blobs: Vec<Vec<u8>>,
     /// Stack allocations (variable-size frame regions).
     pub stack_allocs: Vec<kajit_ir::StackAllocInfo>,
-    /// Layout metadata for data_args (debug info for pointer tracking).
-    /// Describes which fields within each data_arg's pointed-to struct
-    /// contain pointers, enabling the debugger to seed shadow memory.
-    pub data_arg_layouts: Vec<kajit_types::DataArgLayout>,
+    /// Type layouts for data_args (debug info for pointer tracking).
+    /// Each entry describes the pointee type of the corresponding data_arg.
+    pub data_arg_layouts: Vec<kajit_types::TypeLayout>,
 }
 
 #[derive(Debug, Clone, Default)]

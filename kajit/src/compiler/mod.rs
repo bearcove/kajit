@@ -214,78 +214,98 @@ pub struct PipelineArtifacts {
 /// Walks the HIR type of each parameter and records which u64-word positions
 /// contain pointers. This lets the debugger seed shadow memory so loads through
 /// data_arg pointers recover provenance.
-fn extract_data_arg_layouts(module: &hir::Module) -> Vec<kajit_types::DataArgLayout> {
+fn extract_data_arg_layouts(module: &hir::Module) -> Vec<kajit_types::TypeLayout> {
     let Some((_, function)) = module.functions.iter().next() else {
         return Vec::new();
     };
 
-    let mut layouts = Vec::new();
-    for param in &function.params {
-        let mut pointer_fields = Vec::new();
-        collect_pointer_words(module, &param.ty, &param.name, 0, &mut pointer_fields);
-        layouts.push(kajit_types::DataArgLayout {
-            name: param.name.clone(),
-            pointer_fields,
-        });
-    }
-    layouts
+    function
+        .params
+        .iter()
+        .map(|param| hir_type_to_layout(module, &param.ty))
+        .collect()
 }
 
-/// Recursively walk an HIR type and collect the byte offsets of pointer-valued
-/// u64 words within it.
-fn collect_pointer_words(
-    module: &hir::Module,
-    ty: &hir::Type,
-    prefix: &str,
-    byte_offset: u64,
-    out: &mut Vec<kajit_types::PointerField>,
-) {
+/// Convert an HIR Type to a TypeLayout for runtime use (debugger, shadow memory, etc.).
+fn hir_type_to_layout(module: &hir::Module, ty: &hir::Type) -> kajit_types::TypeLayout {
+    use kajit_types::TypeLayout;
     match ty {
-        // Single-word pointer types
-        hir::Type::Ref { .. } | hir::Type::Address { .. } | hir::Type::Handle { .. } => {
-            out.push(kajit_types::PointerField {
-                offset: byte_offset,
-                label: prefix.to_owned(),
-            });
+        hir::Type::Unit => TypeLayout::Scalar { size: 0 },
+        hir::Type::Bool => TypeLayout::Scalar { size: 1 },
+        hir::Type::Integer(int_ty) => TypeLayout::Scalar {
+            size: (int_ty.bits / 8) as u8,
+        },
+        hir::Type::Ref { pointee, .. } | hir::Type::Handle { value: pointee, .. } => {
+            TypeLayout::Ptr {
+                pointee: Box::new(hir_type_to_layout(module, pointee)),
+            }
         }
-        // Slice/Str: first word is a data pointer, second word is len (scalar)
-        hir::Type::Slice { .. } | hir::Type::Str { .. } => {
-            out.push(kajit_types::PointerField {
-                offset: byte_offset,
-                label: format!("{prefix}.ptr"),
-            });
-            // byte_offset + 8 is len — scalar, no entry needed
-        }
-        // Named struct: recurse into fields
+        hir::Type::Address { .. } => TypeLayout::Ptr {
+            pointee: Box::new(TypeLayout::Opaque { size: 0 }),
+        },
+        hir::Type::Slice { element, .. } => TypeLayout::Slice {
+            element: Box::new(hir_type_to_layout(module, element)),
+        },
+        hir::Type::Str { .. } => TypeLayout::Str,
+        hir::Type::Array { element, len } => TypeLayout::Array {
+            element: Box::new(hir_type_to_layout(module, element)),
+            len: *len,
+        },
         hir::Type::Named { def, .. } => {
-            if let hir::TypeDefKind::Struct { fields } = &module.type_defs[*def].kind {
-                let mut field_byte_offset = byte_offset;
-                for field in fields {
-                    let field_label = format!("{prefix}.{}", field.name);
-                    collect_pointer_words(module, &field.ty, &field_label, field_byte_offset, out);
-                    let word_count = hir_to_ir::word_count_for_type(module, &field.ty);
-                    field_byte_offset += (word_count * 8) as u64;
+            let type_def = &module.type_defs[*def];
+            match &type_def.kind {
+                hir::TypeDefKind::Struct { fields } => {
+                    let mut field_layouts = Vec::new();
+                    let mut byte_offset: u64 = 0;
+                    for field in fields {
+                        field_layouts.push(kajit_types::FieldLayout {
+                            name: field.name.clone(),
+                            offset: byte_offset,
+                            layout: hir_type_to_layout(module, &field.ty),
+                        });
+                        let word_count = hir_to_ir::word_count_for_type(module, &field.ty);
+                        byte_offset += (word_count * 8) as u64;
+                    }
+                    TypeLayout::Struct {
+                        name: type_def.name.clone(),
+                        fields: field_layouts,
+                    }
+                }
+                hir::TypeDefKind::Enum {
+                    variants,
+                    discriminant_width,
+                } => {
+                    let disc_size = discriminant_width.unwrap_or(1) as u8;
+                    let variant_layouts = variants
+                        .iter()
+                        .enumerate()
+                        .map(|(i, variant)| {
+                            let mut field_layouts = Vec::new();
+                            let mut byte_offset: u64 = 0;
+                            for field in &variant.fields {
+                                field_layouts.push(kajit_types::FieldLayout {
+                                    name: field.name.clone(),
+                                    offset: byte_offset,
+                                    layout: hir_type_to_layout(module, &field.ty),
+                                });
+                                let word_count = hir_to_ir::word_count_for_type(module, &field.ty);
+                                byte_offset += (word_count * 8) as u64;
+                            }
+                            kajit_types::VariantLayout {
+                                name: variant.name.clone(),
+                                discriminant: variant.discriminant.unwrap_or(i as i64),
+                                fields: field_layouts,
+                            }
+                        })
+                        .collect();
+                    TypeLayout::Enum {
+                        name: type_def.name.clone(),
+                        discriminant_size: disc_size,
+                        variants: variant_layouts,
+                    }
                 }
             }
-            // Enums: don't track pointer fields (complex discriminant layout)
         }
-        // Array: recurse for each element
-        hir::Type::Array { element, len } => {
-            let elem_words = hir_to_ir::word_count_for_type(module, element);
-            let elem_bytes = (elem_words * 8) as u64;
-            for i in 0..*len {
-                let elem_label = format!("{prefix}[{i}]");
-                collect_pointer_words(
-                    module,
-                    element,
-                    &elem_label,
-                    byte_offset + i as u64 * elem_bytes,
-                    out,
-                );
-            }
-        }
-        // Scalar types — no pointer fields
-        hir::Type::Unit | hir::Type::Bool | hir::Type::Integer(_) => {}
     }
 }
 

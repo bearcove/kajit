@@ -2,10 +2,13 @@ use std::collections::HashMap;
 use std::fmt;
 
 /// A single function argument value with its type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum ArgValue {
-    /// 64-bit integer/pointer — passed in GPR (x0-x7 on aarch64, rdi/rsi/... on x86_64).
+    /// 64-bit integer — passed in GPR.
     U64(u64),
+    /// Pointer to a typed value — passed in GPR. Carries the pointee's
+    /// type layout for debugger/interpreter use.
+    Ptr { addr: u64, pointee: TypeLayout },
     /// 64-bit float — passed in FPR (d0-d7 on aarch64, xmm0-xmm7 on x86_64).
     F64(f64),
 }
@@ -14,16 +17,108 @@ impl ArgValue {
     pub fn as_u64(&self) -> u64 {
         match self {
             ArgValue::U64(v) => *v,
-            ArgValue::F64(_) => panic!("expected U64, got F64"),
+            ArgValue::Ptr { addr, .. } => *addr,
+            ArgValue::F64(_) => panic!("expected U64/Ptr, got F64"),
         }
     }
 
     pub fn as_f64(&self) -> f64 {
         match self {
             ArgValue::F64(v) => *v,
-            ArgValue::U64(_) => panic!("expected F64, got U64"),
+            _ => panic!("expected F64, got integer/pointer"),
         }
     }
+}
+
+/// Memory layout of a value. Recursive — structs contain field layouts,
+/// pointers describe their pointee layout, etc.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TypeLayout {
+    /// Fixed-width scalar (integer, bool). `size` in bytes (1, 2, 4, 8).
+    Scalar { size: u8 },
+    /// Pointer to another typed value.
+    Ptr { pointee: Box<TypeLayout> },
+    /// Struct with named fields at known byte offsets.
+    Struct {
+        name: String,
+        fields: Vec<FieldLayout>,
+    },
+    /// Enum with a discriminant and variants.
+    Enum {
+        name: String,
+        discriminant_size: u8,
+        variants: Vec<VariantLayout>,
+    },
+    /// Fixed-length array.
+    Array {
+        element: Box<TypeLayout>,
+        len: usize,
+    },
+    /// Slice (ptr + len). The element layout describes what the pointer points to.
+    Slice { element: Box<TypeLayout> },
+    /// String (ptr + len).
+    Str,
+    /// Opaque — layout unknown. Used for types we can't or don't want to describe.
+    Opaque { size: usize },
+}
+
+impl TypeLayout {
+    /// Human-readable name, if this layout has one.
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            TypeLayout::Struct { name, .. } | TypeLayout::Enum { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Size in bytes of this layout.
+    pub fn size(&self) -> u64 {
+        match self {
+            TypeLayout::Scalar { size } => *size as u64,
+            TypeLayout::Ptr { .. } => 8,
+            TypeLayout::Struct { fields, .. } => {
+                // Size is the max (offset + field size) across all fields.
+                fields
+                    .iter()
+                    .map(|f| f.offset + f.layout.size())
+                    .max()
+                    .unwrap_or(0)
+            }
+            TypeLayout::Enum {
+                discriminant_size,
+                variants,
+                ..
+            } => {
+                let variant_max = variants
+                    .iter()
+                    .flat_map(|v| v.fields.iter())
+                    .map(|f| f.offset + f.layout.size())
+                    .max()
+                    .unwrap_or(0);
+                *discriminant_size as u64 + variant_max
+            }
+            TypeLayout::Array { element, len } => element.size() * *len as u64,
+            TypeLayout::Slice { .. } => 16, // ptr + len
+            TypeLayout::Str => 16,          // ptr + len
+            TypeLayout::Opaque { size } => *size as u64,
+        }
+    }
+}
+
+/// A named field within a struct, at a known byte offset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldLayout {
+    pub name: String,
+    pub offset: u64,
+    pub layout: TypeLayout,
+}
+
+/// A variant within an enum.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VariantLayout {
+    pub name: String,
+    pub discriminant: i64,
+    pub fields: Vec<FieldLayout>,
 }
 
 /// Typed function arguments, laid out according to calling convention.
@@ -41,8 +136,23 @@ impl Arguments {
         self.items.push(arg);
     }
 
+    /// Push a pointer argument with opaque pointee layout.
+    /// Use `push_ptr_with_layout` when you have layout information.
     pub fn push_ptr<T>(&mut self, ptr: *mut T) {
-        self.items.push(ArgValue::U64(ptr as u64));
+        self.items.push(ArgValue::Ptr {
+            addr: ptr as u64,
+            pointee: TypeLayout::Opaque {
+                size: std::mem::size_of::<T>(),
+            },
+        });
+    }
+
+    /// Push a pointer argument with known pointee layout.
+    pub fn push_ptr_with_layout<T>(&mut self, ptr: *mut T, pointee: TypeLayout) {
+        self.items.push(ArgValue::Ptr {
+            addr: ptr as u64,
+            pointee,
+        });
     }
 
     pub fn items(&self) -> &[ArgValue] {
@@ -57,6 +167,7 @@ impl Arguments {
         for arg in &self.items {
             match arg {
                 ArgValue::U64(v) => gprs.push(*v),
+                ArgValue::Ptr { addr, .. } => gprs.push(*addr),
                 ArgValue::F64(v) => fprs.push(*v),
             }
         }
@@ -74,10 +185,12 @@ impl Arguments {
 /// The type of an argument, without a value. Used at compile time
 /// (e.g. on CFG-MIR function params) when we need to know the register
 /// class but don't have a runtime value yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArgKind {
-    /// Integer or pointer — GPR.
+    /// Plain integer — GPR.
     U64,
+    /// Pointer to a typed value — GPR. Carries pointee layout.
+    Ptr(TypeLayout),
     /// Float — FPR.
     F64,
 }
@@ -87,8 +200,15 @@ impl ArgKind {
     pub fn of(v: &ArgValue) -> Self {
         match v {
             ArgValue::U64(_) => ArgKind::U64,
+            ArgValue::Ptr { pointee, .. } => ArgKind::Ptr(pointee.clone()),
+
             ArgValue::F64(_) => ArgKind::F64,
         }
+    }
+
+    /// Returns true if this argument goes in a GPR (integer or pointer).
+    pub fn is_gpr(&self) -> bool {
+        matches!(self, ArgKind::U64 | ArgKind::Ptr(_))
     }
 }
 
@@ -101,7 +221,7 @@ pub fn layout_args(kinds: &[ArgKind], cc: &CallingConvention) -> Vec<ArgLocation
     let mut result = Vec::with_capacity(kinds.len());
     for kind in kinds {
         match kind {
-            ArgKind::U64 => {
+            ArgKind::U64 | ArgKind::Ptr(_) => {
                 if (gpr_idx as usize) < cc.gpr_args.len() {
                     result.push(ArgLocation::Gpr(cc.gpr_args[gpr_idx as usize]));
                     gpr_idx += 1;
@@ -243,29 +363,4 @@ impl SymbolTable {
             .get(name)
             .unwrap_or_else(|| panic!("unresolved extern symbol: {name}"))
     }
-}
-
-/// Describes a pointer-valued field within a data_arg struct.
-/// Used by the debugger to seed shadow memory so loads through
-/// data_arg pointers recover provenance correctly.
-#[derive(Clone, Debug)]
-pub struct PointerField {
-    /// Byte offset of this pointer within the struct.
-    pub offset: u64,
-    /// Human-readable label (e.g. "bytes.ptr", "input_ptr").
-    pub label: String,
-}
-
-/// Layout metadata for a single data_arg, describing which fields
-/// within the pointed-to struct contain pointers.
-///
-/// This is format-specific knowledge (e.g. postcard knows its cursor
-/// struct has a `bytes.ptr` pointer at offset 0) that the generic
-/// interpreter needs for shadow memory tracking.
-#[derive(Clone, Debug, Default)]
-pub struct DataArgLayout {
-    /// Human-readable name for this arg (e.g. "cursor", "out", "ctx").
-    pub name: String,
-    /// Pointer-valued fields within this struct.
-    pub pointer_fields: Vec<PointerField>,
 }

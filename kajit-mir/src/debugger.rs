@@ -339,17 +339,14 @@ impl DebuggerSession {
             "DebuggerSession::new seeding data_args"
         );
         for (i, layout) in data_arg_layouts.iter().enumerate() {
-            tracing::info!(i, name = %layout.name, n_fields = layout.pointer_fields.len(), "layout");
-            for f in &layout.pointer_fields {
-                tracing::info!(i, offset = f.offset, label = %f.label, "  pointer_field");
-            }
+            tracing::info!(i, layout = ?layout, "data_arg layout");
         }
         if let Some(&vreg) = data_args.get(0) {
             tracing::info!("seeding data_arg[0]");
             let ptr = &*session.cursor_arg as *const RuntimeCursorArg as u64;
             let name = data_arg_layouts
                 .get(0)
-                .map(|l| l.name.as_str())
+                .and_then(|l| l.name())
                 .unwrap_or(fallback_names[0]);
             let id = session.alloc_ptr_id(ptr, &format!("data_arg[0] ({name})"));
             session.write_vreg_tagged(
@@ -374,7 +371,7 @@ impl DebuggerSession {
             tracing::info!(ptr, "data_arg[1] ptr");
             let name = data_arg_layouts
                 .get(1)
-                .map(|l| l.name.as_str())
+                .and_then(|l| l.name())
                 .unwrap_or(fallback_names[1]);
             tracing::info!("data_arg[1] alloc_ptr_id");
             let id = session.alloc_ptr_id(ptr, &format!("data_arg[1] ({name})"));
@@ -397,7 +394,7 @@ impl DebuggerSession {
             let ptr = &session.ctx as *const RuntimeDeserContext as u64;
             let name = data_arg_layouts
                 .get(2)
-                .map(|l| l.name.as_str())
+                .and_then(|l| l.name())
                 .unwrap_or(fallback_names[2]);
             let id = session.alloc_ptr_id(ptr, &format!("data_arg[2] ({name})"));
             session.write_vreg_tagged(
@@ -635,24 +632,96 @@ impl DebuggerSession {
         &mut self,
         base_id: PtrId,
         base_addr: u64,
-        layout: &kajit_types::DataArgLayout,
+        layout: &kajit_types::TypeLayout,
     ) {
-        for field in &layout.pointer_fields {
-            let field_addr = base_addr + field.offset;
-            // Read the actual pointer value from interpreter memory
-            let ptr_val = unsafe { *(field_addr as *const u64) };
-            let field_ptr_id = self.alloc_ptr_id(ptr_val, &field.label);
-            self.pointer_shadow.insert(
-                (base_id, field.offset),
-                ShadowEntry {
-                    width: 8,
-                    value: TaggedValue::Pointer {
-                        id: field_ptr_id,
-                        concrete: ptr_val,
-                        offset: 0,
+        self.seed_shadow_recursive(base_id, base_addr, 0, layout);
+    }
+
+    /// Recursively walk a TypeLayout, seeding shadow memory entries for
+    /// any pointer fields found at their byte offsets.
+    fn seed_shadow_recursive(
+        &mut self,
+        base_id: PtrId,
+        base_addr: u64,
+        offset: u64,
+        layout: &kajit_types::TypeLayout,
+    ) {
+        use kajit_types::TypeLayout;
+        match layout {
+            TypeLayout::Ptr { .. } => {
+                // This field IS a pointer — read its concrete value and tag it.
+                let field_addr = base_addr + offset;
+                let ptr_val = unsafe { *(field_addr as *const u64) };
+                let field_ptr_id = self.alloc_ptr_id(ptr_val, &format!("shadow@{offset}"));
+                self.pointer_shadow.insert(
+                    (base_id, offset),
+                    ShadowEntry {
+                        width: 8,
+                        value: TaggedValue::Pointer {
+                            id: field_ptr_id,
+                            concrete: ptr_val,
+                            offset: 0,
+                        },
                     },
-                },
-            );
+                );
+            }
+            TypeLayout::Struct { fields, .. } => {
+                for field in fields {
+                    self.seed_shadow_recursive(
+                        base_id,
+                        base_addr,
+                        offset + field.offset,
+                        &field.layout,
+                    );
+                }
+            }
+            TypeLayout::Array { element, len } => {
+                let elem_size = element.size();
+                for i in 0..*len {
+                    self.seed_shadow_recursive(
+                        base_id,
+                        base_addr,
+                        offset + i as u64 * elem_size,
+                        element,
+                    );
+                }
+            }
+            TypeLayout::Slice { .. } => {
+                // First word is a pointer, second is len (scalar).
+                let field_addr = base_addr + offset;
+                let ptr_val = unsafe { *(field_addr as *const u64) };
+                let field_ptr_id = self.alloc_ptr_id(ptr_val, &format!("shadow@{offset}.ptr"));
+                self.pointer_shadow.insert(
+                    (base_id, offset),
+                    ShadowEntry {
+                        width: 8,
+                        value: TaggedValue::Pointer {
+                            id: field_ptr_id,
+                            concrete: ptr_val,
+                            offset: 0,
+                        },
+                    },
+                );
+            }
+            TypeLayout::Str => {
+                // Same as slice: first word is pointer.
+                let field_addr = base_addr + offset;
+                let ptr_val = unsafe { *(field_addr as *const u64) };
+                let field_ptr_id = self.alloc_ptr_id(ptr_val, &format!("shadow@{offset}.ptr"));
+                self.pointer_shadow.insert(
+                    (base_id, offset),
+                    ShadowEntry {
+                        width: 8,
+                        value: TaggedValue::Pointer {
+                            id: field_ptr_id,
+                            concrete: ptr_val,
+                            offset: 0,
+                        },
+                    },
+                );
+            }
+            // Scalars, enums, opaques — no pointer fields to seed.
+            TypeLayout::Scalar { .. } | TypeLayout::Enum { .. } | TypeLayout::Opaque { .. } => {}
         }
     }
 
