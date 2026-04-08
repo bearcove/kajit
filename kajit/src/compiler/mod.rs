@@ -279,6 +279,11 @@ pub fn compile_pipeline_from_hir_module(
 ) -> PipelineArtifacts {
     let hir_text = module.to_string();
 
+    if let Ok(path) = std::env::var("KAJIT_DUMP_HIR_DEBUG") {
+        std::fs::write(&path, format!("{module:#?}")).unwrap();
+        eprintln!("[debug] dumped HIR debug to {path}");
+    }
+
     // Phase 2: IR + passes with timeline
     let mut func = lower_hir_module(module);
     let mut ir_opt_timeline = vec![(
@@ -293,6 +298,11 @@ pub fn compile_pipeline_from_hir_module(
     });
 
     // Phase 3: Linearize
+    if let Ok(path) = std::env::var("KAJIT_DUMP_IR_BEFORE_LINEAR") {
+        let ir_text = format!("{}", func.display_with_registry(registry));
+        std::fs::write(&path, &ir_text).unwrap();
+        eprintln!("[debug] dumped IR to {path} ({} bytes)", ir_text.len());
+    }
     let linear = crate::linearize::linearize(&mut func);
     let linear_text = format!("{linear}");
 

@@ -728,10 +728,18 @@ where
                     else_block,
                 }),
             just(Token::KwLoop)
-                .ignore_then(block_p.clone())
-                .map(|body| StmtKind::Loop {
+                .ignore_then(
+                    just(Token::KwMaxIterations)
+                        .ignore_then(just(Token::Eq))
+                        .ignore_then(uint64())
+                        .map(|v| Some(v as u32))
+                        .or_not()
+                        .map(|opt| opt.flatten()),
+                )
+                .then(block_p.clone())
+                .map(|(max_iterations, body)| StmtKind::Loop {
                     body,
-                    max_iterations: None,
+                    max_iterations,
                 }),
             just(Token::KwMatch)
                 .ignore_then(expr_p.clone())

@@ -76,6 +76,13 @@ enum Command {
         reduce_ir: Option<String>,
     },
 
+    /// Minimize a .vixen-hir file while preserving a compilation failure (e.g. SSA violation)
+    ReduceHir {
+        /// Path to .vixen-hir file
+        #[facet(args::positional)]
+        path: String,
+    },
+
     /// Lockstep differential debugger: step interpreter + LLDB in parallel
     DebugDiff {
         /// Format: postcard
@@ -118,6 +125,9 @@ fn main() {
         }
         Command::Compile { path, stage } => {
             cmd_compile_file(&path, stage.as_deref().unwrap_or("all"));
+        }
+        Command::ReduceHir { path } => {
+            cmd_reduce_hir(&path);
         }
         Command::CompileFormat {
             format,
@@ -310,16 +320,21 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
     let shape = resolve_shape(ty);
     let pipeline_opts = kajit::PipelineOptions::from_env();
 
-    // Single compilation pass — all artifacts share the same vreg numbering
-    let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
-
     let dump_all = stages == "all";
     let dump = |name: &str| dump_all || stages.split(',').any(|s| s.trim() == name);
 
+    // Dump HIR early — before the full pipeline which may panic
     if dump("hir") {
+        let hir_text = kajit::debug_hir_text(shape, kind);
         println!("=== HIR ===");
-        println!("{}", artifacts.hir_text);
+        println!("{hir_text}");
+        if stages == "hir" {
+            return;
+        }
     }
+
+    // Single compilation pass — all artifacts share the same vreg numbering
+    let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
 
     if dump("ir") || dump("opts") {
         for (pass_name, ir_text) in &artifacts.ir_opt_timeline {
@@ -793,6 +808,189 @@ fn cmd_reduce_ir(format: &str, ty: &str, spec: &str) {
     std::fs::write(&output_file, &output_text).unwrap();
     eprintln!("[reduce-ir] wrote {output_file}");
     println!("{output_text}");
+}
+
+// ─── reduce-hir: minimize .vixen-hir reproducer ─────────────────────────────
+
+fn cmd_reduce_hir(path: &str) {
+    let source = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("error: failed to read {path}: {e}");
+        std::process::exit(1);
+    });
+
+    let module = kajit_hir_text::parse_hir(&source).unwrap_or_else(|e| {
+        eprintln!("error: failed to parse HIR: {e}");
+        std::process::exit(1);
+    });
+
+    // Verify the original triggers a panic
+    if !hir_compile_panics(&module) {
+        eprintln!("error: original HIR does not panic during compilation — nothing to reduce");
+        std::process::exit(1);
+    }
+    eprintln!(
+        "[reduce-hir] confirmed: original panics ({} statements)",
+        count_stmts(&module)
+    );
+
+    let mut best = module;
+    let fid = best.functions.iter().next().unwrap().0;
+    let mut changed = true;
+    while changed {
+        changed = false;
+        let func = &best.functions[fid];
+        let paths = stmt_paths(&func.body);
+        // Try removing each statement, last-first so indices stay valid
+        for path_idx in (0..paths.len()).rev() {
+            let mut candidate = best.clone();
+            let func = &mut candidate.functions[fid];
+            remove_stmt_at_path(&mut func.body, &paths[path_idx]);
+            // Re-serialize and re-parse to validate
+            let text = candidate.to_string();
+            let Ok(reparsed) = kajit_hir_text::parse_hir(&text) else {
+                continue;
+            };
+            if hir_compile_panics(&reparsed) {
+                let old_count = count_stmts(&best);
+                best = reparsed;
+                let new_count = count_stmts(&best);
+                eprintln!(
+                    "[reduce-hir] removed stmt at {:?}: {} -> {} stmts",
+                    paths[path_idx], old_count, new_count
+                );
+                changed = true;
+                break; // restart from the beginning with the smaller module
+            }
+        }
+    }
+
+    let result = best.to_string();
+    let output_path = path.replace(".vixen-hir", ".min.vixen-hir");
+    std::fs::write(&output_path, &result).unwrap();
+    eprintln!(
+        "[reduce-hir] done: {} statements, written to {output_path}",
+        count_stmts(&best)
+    );
+    println!("{result}");
+}
+
+fn hir_compile_panics(module: &kajit_hir::Module) -> bool {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let registry = kajit_ir::IntrinsicRegistry::empty();
+        let pipeline_opts = kajit::PipelineOptions::builder()
+            .compile_target(kajit::CompileTarget::Object)
+            .build();
+        let _ = kajit::compile_pipeline_from_hir_module(module, &registry, &pipeline_opts);
+    }))
+    .is_err()
+}
+
+fn count_stmts(module: &kajit_hir::Module) -> usize {
+    module
+        .functions
+        .iter()
+        .map(|(_, f)| count_stmts_in_block(&f.body))
+        .sum()
+}
+
+fn count_stmts_in_block(block: &kajit_hir::Block) -> usize {
+    let mut n = block.statements.len();
+    for stmt in &block.statements {
+        n += count_stmts_in_stmt(stmt);
+    }
+    n
+}
+
+fn count_stmts_in_stmt(stmt: &kajit_hir::Stmt) -> usize {
+    use kajit_hir::StmtKind;
+    match &stmt.kind {
+        StmtKind::If {
+            then_block,
+            else_block,
+            ..
+        } => count_stmts_in_block(then_block) + else_block.as_ref().map_or(0, count_stmts_in_block),
+        StmtKind::Loop { body, .. } => count_stmts_in_block(body),
+        StmtKind::Match { arms, .. } => arms.iter().map(|a| count_stmts_in_block(&a.body)).sum(),
+        _ => 0,
+    }
+}
+
+/// Return paths (indices into nested blocks) for every statement.
+fn stmt_paths(block: &kajit_hir::Block) -> Vec<Vec<usize>> {
+    let mut result = Vec::new();
+    collect_paths(block, &mut vec![], &mut result);
+    result
+}
+
+fn collect_paths(block: &kajit_hir::Block, prefix: &mut Vec<usize>, result: &mut Vec<Vec<usize>>) {
+    for (i, stmt) in block.statements.iter().enumerate() {
+        prefix.push(i);
+        result.push(prefix.clone());
+        // Recurse into sub-blocks
+        use kajit_hir::StmtKind;
+        match &stmt.kind {
+            StmtKind::If {
+                then_block,
+                else_block,
+                ..
+            } => {
+                collect_paths(then_block, prefix, result);
+                if let Some(eb) = else_block {
+                    collect_paths(eb, prefix, result);
+                }
+            }
+            StmtKind::Loop { body, .. } => {
+                collect_paths(body, prefix, result);
+            }
+            StmtKind::Match { arms, .. } => {
+                for arm in arms {
+                    collect_paths(&arm.body, prefix, result);
+                }
+            }
+            _ => {}
+        }
+        prefix.pop();
+    }
+}
+
+fn remove_stmt_at_path(block: &mut kajit_hir::Block, path: &[usize]) {
+    if path.len() == 1 {
+        if path[0] < block.statements.len() {
+            block.statements.remove(path[0]);
+        }
+        return;
+    }
+    let idx = path[0];
+    if idx >= block.statements.len() {
+        return;
+    }
+    use kajit_hir::StmtKind;
+    match &mut block.statements[idx].kind {
+        StmtKind::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            // Try then_block first; path[1] may refer to either sub-block
+            if path[1] < then_block.statements.len() || path.len() > 2 {
+                remove_stmt_at_path(then_block, &path[1..]);
+            } else if let Some(eb) = else_block {
+                remove_stmt_at_path(eb, &path[1..]);
+            }
+        }
+        StmtKind::Loop { body, .. } => {
+            remove_stmt_at_path(body, &path[1..]);
+        }
+        StmtKind::Match { arms, .. } => {
+            for arm in arms {
+                if path[1] < arm.body.statements.len() || path.len() > 2 {
+                    remove_stmt_at_path(&mut arm.body, &path[1..]);
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 // ─── compile --reduce: minimize CFG-MIR reproducer ───────────────────────────

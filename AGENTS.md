@@ -2,6 +2,16 @@
 
 Kajit is a JIT deserializer for Rust that generates native machine code at startup from facet type reflection.
 
+## Installing
+
+After making code changes, install the CLI/MCP binary with:
+
+```bash
+cargo xtask install
+```
+
+This builds `kajit-cli`, installs it to `~/.cargo/bin/kajit`, and validates the binary. Required before using the MCP debugger tools.
+
 ## Pipeline
 
 ```
@@ -13,6 +23,12 @@ Schema (facet Shape)
   → Register Allocation    — regalloc3 (native SSA coloring)
   → Backend                — aarch64 or x86_64 machine code
 ```
+
+**File extensions:**
+- `.vixen-hir` — HIR text
+- `.vixen-ir` — RVSDG IR text
+- `.vixen-mir` — CFG-MIR text
+- `.vixen-asm` — assembly text
 
 **Why HIR exists:** Multiple frontends (deserializers + Vixen rule language) need a shared semantic layer. RVSDG is too low-level to be human-readable. HIR preserves names, scopes, comments, spans. HIR is the debugger source view. See `docs/hir-design.md`.
 
@@ -92,24 +108,29 @@ For example, `scalar_u32/postcard` runs:
 The `kajit` binary (in `kajit-cli`) is the primary tool for inspecting and debugging the compilation pipeline. Use it instead of env-var-driven test dumps.
 
 ```bash
-# Dump all pipeline stages for u32
-cargo run -p kajit-cli -- compile postcard u32
+# Compile a .vixen-hir file through the full pipeline
+cargo run -p kajit-cli -- compile /tmp/test.vixen-hir
+cargo run -p kajit-cli -- compile /tmp/test.vixen-hir -s cfg
+cargo run -p kajit-cli -- compile /tmp/test.vixen-hir -s hir,ir,cfg,asm
+
+# Dump all pipeline stages for u32 (format decoder)
+cargo run -p kajit-cli -- compile-format postcard u32
 
 # Dump specific stages
-cargo run -p kajit-cli -- compile postcard u32 -s cfg
-cargo run -p kajit-cli -- compile postcard u32 -s hir,ir,cfg,asm
+cargo run -p kajit-cli -- compile-format postcard u32 -s cfg
+cargo run -p kajit-cli -- compile-format postcard u32 -s hir,ir,cfg,asm
 
 # Run JIT vs interpreter comparison
-cargo run -p kajit-cli -- compile postcard u32 -s exec -i 2a
+cargo run -p kajit-cli -- compile-format postcard u32 -s exec -i 2a
 
 # Dump assembly only
-cargo run -p kajit-cli -- compile postcard u32 -s asm
+cargo run -p kajit-cli -- compile-format postcard u32 -s asm
 
 # Build standalone debuggable harness
-cargo run -p kajit-cli -- compile postcard u32 -s harness -i 2a
+cargo run -p kajit-cli -- compile-format postcard u32 -s harness -i 2a
 
 # Run CFG-MIR reducer (find minimal diverging program)
-cargo run -p kajit-cli -- compile postcard u32 --reduce differential
+cargo run -p kajit-cli -- compile-format postcard u32 --reduce differential
 
 # Evaluate a CFG-MIR file with the interpreter
 cargo run -p kajit-cli -- eval /tmp/test.cfg-mir 2a

@@ -169,6 +169,7 @@ pub enum Token<'src> {
     KwUnsafeInterop,
 
     // Keywords — sizes
+    KwMaxIterations,
     KwSize,
     KwDiscWidth,
 
@@ -318,6 +319,7 @@ impl fmt::Display for Token<'_> {
             Token::KwSafeCore => write!(f, "safe_core"),
             Token::KwOpaqueHost => write!(f, "opaque_host"),
             Token::KwUnsafeInterop => write!(f, "unsafe_interop"),
+            Token::KwMaxIterations => write!(f, "max_iterations"),
             Token::KwSize => write!(f, "size"),
             Token::KwDiscWidth => write!(f, "disc_width"),
             Token::KwW1 => write!(f, "w1"),
@@ -432,6 +434,7 @@ fn keyword_or_ident<'src>(s: &'src str) -> Token<'src> {
         "safe_core" => Token::KwSafeCore,
         "opaque_host" => Token::KwOpaqueHost,
         "unsafe_interop" => Token::KwUnsafeInterop,
+        "max_iterations" => Token::KwMaxIterations,
         "size" => Token::KwSize,
         "disc_width" => Token::KwDiscWidth,
         "w1" => Token::KwW1,

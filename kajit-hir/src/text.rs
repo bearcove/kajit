@@ -461,8 +461,15 @@ fn fmt_stmt(
             }
             writeln!(f)
         }
-        StmtKind::Loop { body, .. } => {
-            write!(f, "loop ")?;
+        StmtKind::Loop {
+            body,
+            max_iterations,
+        } => {
+            write!(f, "loop")?;
+            if let Some(n) = max_iterations {
+                write!(f, " max_iterations={n}")?;
+            }
+            write!(f, " ")?;
             fmt_block(module, body, f, indent)?;
             writeln!(f)
         }
