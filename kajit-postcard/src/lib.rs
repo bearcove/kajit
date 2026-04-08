@@ -3123,7 +3123,7 @@ pub fn build_postcard_decoder_hir(
     shape: &'static Shape,
 ) -> (hir::Module, kajit_types::SymbolTable) {
     let mut lowerer = PostcardHirLowerer::new();
-    let _root_type = lowerer.lower_type(shape);
+    let root_type = lowerer.lower_type(shape);
     let cursor_local = lowerer.next_local();
     let out_local = lowerer.next_local();
     let ctx_local = lowerer.next_local();
@@ -3133,7 +3133,9 @@ pub fn build_postcard_decoder_hir(
     lowerer.lower_shape_into_place(
         &mut statements,
         cursor_local,
-        hir::Place::Local(out_local),
+        hir::Place::Deref {
+            base: Box::new(hir::Expr::Local(out_local)),
+        },
         shape,
     );
     statements.push(hir::Stmt {
@@ -3160,7 +3162,7 @@ pub fn build_postcard_decoder_hir(
             hir::Parameter {
                 local: out_local,
                 name: "out".to_owned(),
-                ty: hir::Type::u(64),
+                ty: hir::Type::mut_ref(root_type),
                 kind: hir::LocalKind::Param,
             },
             hir::Parameter {
