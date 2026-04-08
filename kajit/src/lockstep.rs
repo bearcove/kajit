@@ -383,12 +383,18 @@ impl<D: JitDebugger> LockstepSession<D> {
                 .join(", ")
         );
 
+        tracing::info!("lockstep: creating interpreter session");
         let interpreter = kajit_mir::DebuggerSession::new(program, input, &args)
             .map_err(|e| DebugError::LldbError(format!("interpreter init: {e}")))?;
+        tracing::info!("lockstep: interpreter session created");
 
         let op_to_line = build_op_to_line_map(program, backend_debug_info);
-
+        tracing::info!("lockstep: reading entry PC");
         let entry_pc = debugger.read_pc()?;
+        tracing::info!(
+            entry_pc = format_args!("0x{:x}", entry_pc),
+            "lockstep: got entry PC"
+        );
         let code_line_ranges = build_code_line_ranges(backend_debug_info, entry_offset);
         let prev_dwarf_line =
             current_line_from_pc(&debugger, entry_pc, &code_line_ranges).unwrap_or(1);

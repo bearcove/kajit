@@ -13,6 +13,7 @@ kajit-ir = { path = "../kajit-ir" }
 kajit-lir = { path = "../kajit-lir" }
 kajit-types = { path = "../kajit-types" }
 indexmap = "2"
+tracing = "0.1"
 
 [dev-dependencies]
 facet = "0.44"

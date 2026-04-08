@@ -34,6 +34,7 @@ kajit-hir = { path = "../kajit-hir" }
 kajit-malum = { path = "../kajit-malum" }
 kajit-postcard = { path = "../kajit-postcard" }
 kajit-types = { path = "../kajit-types" }
+tracing = "0.1"
 
 [dev-dependencies]
 kajit-hir-text = { path = "../kajit-hir-text" }

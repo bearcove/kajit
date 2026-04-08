@@ -268,6 +268,7 @@ impl DebuggerSession {
         input: &[u8],
         _args: &kajit_types::Arguments,
     ) -> Result<Self, DebuggerError> {
+        tracing::info!("DebuggerSession::new start");
         let func = program
             .funcs
             .first()
@@ -275,7 +276,13 @@ impl DebuggerSession {
             .clone();
         let block_indices = build_block_index(&func);
         let input_data = input.to_vec();
-        let output_buf = vec![0u8; infer_output_size(&func)];
+        let output_size = infer_output_size(&func);
+        tracing::info!(
+            output_size,
+            func_output_size = func.output_size,
+            "output_buf size"
+        );
+        let output_buf = vec![0u8; output_size];
         let cursor_arg = Box::new(RuntimeCursorArg {
             bytes: RuntimeSliceU8 {
                 ptr: input_data.as_ptr(),
@@ -313,6 +320,7 @@ impl DebuggerSession {
             pointer_shadow: HashMap::new(),
             ptr_interp_bases: HashMap::new(),
         };
+        tracing::info!("DebuggerSession::new struct created");
         // Initialize ctx with input pointers
         session.ctx.input_ptr = session.input_data.as_ptr();
         session.ctx.input_end =
@@ -324,7 +332,20 @@ impl DebuggerSession {
         let data_args = session.func.data_args.clone();
         let data_arg_layouts = &program.data_arg_layouts;
         let fallback_names = ["cursor", "out", "ctx"];
+        tracing::info!(
+            n_data_args = data_args.len(),
+            data_args = ?data_args.iter().map(|v| v.index()).collect::<Vec<_>>(),
+            n_layouts = data_arg_layouts.len(),
+            "DebuggerSession::new seeding data_args"
+        );
+        for (i, layout) in data_arg_layouts.iter().enumerate() {
+            tracing::info!(i, name = %layout.name, n_fields = layout.pointer_fields.len(), "layout");
+            for f in &layout.pointer_fields {
+                tracing::info!(i, offset = f.offset, label = %f.label, "  pointer_field");
+            }
+        }
         if let Some(&vreg) = data_args.get(0) {
+            tracing::info!("seeding data_arg[0]");
             let ptr = &*session.cursor_arg as *const RuntimeCursorArg as u64;
             let name = data_arg_layouts
                 .get(0)
@@ -339,18 +360,25 @@ impl DebuggerSession {
                     offset: 0,
                 },
             );
+            tracing::info!("seeding data_arg[0] shadow");
             // Seed shadow memory for pointer fields within this struct
             if let Some(layout) = data_arg_layouts.get(0) {
                 session.seed_shadow_for_layout(id, ptr, layout);
             }
+            tracing::info!("data_arg[0] done");
         }
+        tracing::info!("between data_arg[0] and data_arg[1]");
         if let Some(&vreg) = data_args.get(1) {
+            tracing::info!("seeding data_arg[1]");
             let ptr = session.output_buf.as_ptr() as u64;
+            tracing::info!(ptr, "data_arg[1] ptr");
             let name = data_arg_layouts
                 .get(1)
                 .map(|l| l.name.as_str())
                 .unwrap_or(fallback_names[1]);
+            tracing::info!("data_arg[1] alloc_ptr_id");
             let id = session.alloc_ptr_id(ptr, &format!("data_arg[1] ({name})"));
+            tracing::info!("data_arg[1] write_vreg_tagged");
             session.write_vreg_tagged(
                 vreg.index(),
                 TaggedValue::Pointer {
@@ -359,9 +387,11 @@ impl DebuggerSession {
                     offset: 0,
                 },
             );
+            tracing::info!("data_arg[1] seed_shadow");
             if let Some(layout) = data_arg_layouts.get(1) {
                 session.seed_shadow_for_layout(id, ptr, layout);
             }
+            tracing::info!("data_arg[1] done");
         }
         if let Some(&vreg) = data_args.get(2) {
             let ptr = &session.ctx as *const RuntimeDeserContext as u64;
@@ -382,6 +412,7 @@ impl DebuggerSession {
                 session.seed_shadow_for_layout(id, ptr, layout);
             }
         }
+        tracing::info!("DebuggerSession::new done");
         Ok(session)
     }
 
