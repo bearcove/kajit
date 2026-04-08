@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use kajit::ir::{LambdaId, VReg};
+use kajit_foundation::generate_repr_poc;
 use kajit_mir::DebugCfgMirCommand;
 use proc_macro2::TokenStream;
 
@@ -152,13 +153,23 @@ fn main() {
         Some("gen") => {
             generate_synthetic();
         }
+        Some("repr-poc") => {
+            let workspace_root = workspace_root();
+            let files = generate_repr_poc(&workspace_root).unwrap_or_else(|err| {
+                eprintln!("{err}");
+                std::process::exit(1);
+            });
+            for file in files {
+                println!("{}", file.display());
+            }
+        }
         Some("corpus-cfg-mir") => print_corpus_cfg_mir(&command_args),
         Some("corpus-input") => print_corpus_input(&command_args),
         Some("minimize-cfg-mir") => minimize_cfg_mir(&command_args),
         Some("debug-cfg-mir") => debug_cfg_mir(&command_args),
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|corpus-cfg-mir|corpus-input|minimize-cfg-mir|debug-cfg-mir>"
+                "usage: cargo run --manifest-path xtask/Cargo.toml -- <install|gen|repr-poc|corpus-cfg-mir|corpus-input|minimize-cfg-mir|debug-cfg-mir>"
             );
             std::process::exit(2);
         }

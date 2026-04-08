@@ -15,12 +15,78 @@ repr @module{
         provenance required
     }
 
-    derive {
-        rust_ast yes
-        visitor yes
-        parser yes
-        formatter yes
-        roundtrip_tests yes
+    syntax {
+        tokens {
+            ident @regex("[A-Za-z_][A-Za-z0-9_]*")
+            symbol @regex("@[A-Za-z_][A-Za-z0-9_.]*")
+            int @regex("[0-9]+")
+        }
+
+        rules {
+            Module @seq(
+                "module"
+                "{"
+                @field(functions @repeat(@ref(Function)))
+                "}"
+            )
+
+            Function @seq(
+                "fn"
+                @field(name @token(ident))
+                "("
+                @field(params @repeat(@ref(Param) sep=","))
+                ")"
+                "->"
+                @field(return_type @ref(Type))
+                @field(body @ref(Block))
+            )
+
+            Param @seq(
+                @field(name @token(ident))
+                ":"
+                @field(ty @ref(Type))
+            )
+
+            Block @seq(
+                "{"
+                @field(statements @repeat(@ref(Stmt)))
+                "}"
+            )
+
+            Stmt @choice(
+                @variant(Return @seq(
+                    "return"
+                    @field(value @optional(@ref(Expr)))
+                ))
+                @variant(Expr @seq(
+                    @field(value @ref(Expr))
+                ))
+            )
+
+            Expr @choice(
+                @variant(Local @field(name @token(ident)))
+                @variant(Literal @field(value @token(int)))
+                @variant(Call @seq(
+                    "call"
+                    @field(callee @token(symbol))
+                    "("
+                    @field(args @repeat(@ref(Expr) sep=","))
+                    ")"
+                ))
+            )
+        }
+
+        canonical_print {
+            Module "module {\n{functions}\n}"
+            Function "fn {name}({params:, }) -> {return_type} {body}"
+            Param "{name}: {ty}"
+            Block "{\n{statements}\n}"
+            Stmt.Return "return{value? : {value}}"
+            Stmt.Expr "{value}"
+            Expr.Local "{name}"
+            Expr.Literal "{value}"
+            Expr.Call "call {callee}({args:, })"
+        }
     }
 
     common {

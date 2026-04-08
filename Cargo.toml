@@ -8,6 +8,7 @@ members = [
   "crates-kajit/kajit-mir",
   "crates-kajit/kajit-cli",
   "crates-kajit/kajit-reprs",
+  "crates-kajit/kajit-foundation",
   "crates-kajit/kajit-types",
   "crates-kafe/kafe",
   "crates-kafe/kafe-malum",

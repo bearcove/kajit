@@ -1,0 +1,11 @@
+[package]
+name = "kajit-foundation"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+facet = "0.44"
+facet-styx = { path = "../../../styx/crates/facet-styx" }
+prettyplease = "0.2"
+styx-tree = { path = "../../../styx/crates/styx-tree", features = ["facet"] }
+syn = { version = "2", features = ["full"] }
