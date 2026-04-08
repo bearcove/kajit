@@ -176,35 +176,31 @@ pub struct DebuggerSession {
     next_inst: usize,
     steps: usize,
     history: Vec<SessionSnapshot>,
-    /// When set, pointer-valued operations produce dereferenceable pointers
-    /// instead of abstract offsets. Used by the lockstep debugger to match
-    /// the JIT's pointer-based values.
-    pub input_base_addr: Option<u64>,
-    /// When set, input-end operations return this value instead of input.len().
-    pub input_end_addr: Option<u64>,
-    /// When set, output pointer operations return this value instead of an abstract offset.
-    pub output_base_addr: Option<u64>,
-    /// When set, the root decoder cursor-ref argument is modeled as a real
-    /// `RuntimeCursorArg*`, so loads/stores through that pointer are reflected
-    /// in the debugger's abstract cursor state.
-    pub root_cursor_arg_addr: Option<u64>,
     /// Embedded constant data blobs (string literals, etc.).
     data_blobs: Vec<Vec<u8>>,
     /// Runtime deserialization context, passed to intrinsics as ctx_ptr (data_args[1]).
     ctx: RuntimeDeserContext,
     /// External symbol resolution table.
     symbol_table: kajit_types::SymbolTable,
+    /// Stack allocation metadata (size/align per ID).
+    stack_allocs_info: Vec<kajit_ir::StackAllocInfo>,
+    /// Stack allocations (kept alive for the session).
+    stack_allocs: Vec<Vec<u8>>,
 }
 
 impl DebuggerSession {
-    pub fn new(program: &cfg_mir::Program, input: &[u8]) -> Result<Self, DebuggerError> {
+    pub fn new(
+        program: &cfg_mir::Program,
+        input: &[u8],
+        args: &kajit_types::Arguments,
+    ) -> Result<Self, DebuggerError> {
         let func = program
             .funcs
             .first()
             .ok_or(DebuggerError::NoFunctions)?
             .clone();
         let block_indices = build_block_index(&func);
-        Ok(Self {
+        let mut session = Self {
             cursor: 0,
             output: vec![0u8; infer_output_size(&func)],
             slots: Vec::new(),
@@ -218,10 +214,6 @@ impl DebuggerSession {
             func,
             block_indices,
             input: input.to_vec(),
-            input_base_addr: None,
-            input_end_addr: None,
-            output_base_addr: None,
-            root_cursor_arg_addr: None,
             data_blobs: program.data_blobs.clone(),
             ctx: RuntimeDeserContext {
                 input_ptr: std::ptr::null(),
@@ -232,7 +224,17 @@ impl DebuggerSession {
                 trusted_utf8: false,
             },
             symbol_table: kajit_types::SymbolTable::new(),
-        })
+            stack_allocs_info: program.stack_allocs.clone(),
+            stack_allocs: Vec::new(),
+        };
+        // Seed data_args vregs from caller-provided arguments.
+        let (gprs, _) = args.to_register_slots();
+        for (i, &val) in gprs.iter().enumerate() {
+            if let Some(&vreg) = session.func.data_args.get(i) {
+                session.write_vreg(vreg.index(), val);
+            }
+        }
+        Ok(session)
     }
 
     pub fn state(&self) -> DebuggerState {
@@ -258,36 +260,6 @@ impl DebuggerSession {
         }
         let end = start.saturating_add(len).min(self.output.len());
         self.output[start..end].to_vec()
-    }
-
-    /// Set real memory addresses so that pointer-valued operations (LoadFromAddr)
-    /// produce dereferenceable pointers. Required
-    /// when the program contains CallIntrinsic ops that read through those pointers.
-    pub fn set_real_addresses(&mut self) {
-        self.input_base_addr = Some(self.input.as_ptr() as u64);
-        self.input_end_addr = Some(unsafe { self.input.as_ptr().add(self.input.len()) } as u64);
-        self.output_base_addr = Some(self.output.as_ptr() as u64);
-    }
-
-    pub fn set_root_cursor_arg_addr(&mut self, addr: u64) {
-        self.root_cursor_arg_addr = Some(addr);
-        // data_args layout: [out_ptr, ctx_ptr, cursor_ref]
-        // cursor_ref is data_args[2], not data_args[0]
-        if self.func.data_args.len() >= 3 {
-            self.write_vreg(self.func.data_args[2].index(), addr);
-        } else if let Some(&data_arg) = self.func.data_args.first() {
-            // Legacy: single data_arg is the cursor
-            self.write_vreg(data_arg.index(), addr);
-        }
-    }
-
-    /// Seed data_args with caller-provided values.
-    pub fn seed_data_args(&mut self, values: &[u64]) {
-        for (i, &val) in values.iter().enumerate() {
-            if let Some(&vreg) = self.func.data_args.get(i) {
-                self.write_vreg(vreg.index(), val);
-            }
-        }
     }
 
     pub fn step_forward(&mut self) -> Result<StepEvent, DebuggerError> {
@@ -428,66 +400,6 @@ impl DebuggerSession {
         Ok(&self.func.blocks[idx])
     }
 
-    fn load_root_cursor_arg(&self, raw_addr: usize, width: usize) -> Option<u64> {
-        let base = self.root_cursor_arg_addr? as usize;
-        let field_offset = raw_addr.checked_sub(base)?;
-        if width != 8 {
-            return None;
-        }
-        match field_offset {
-            0 => Some(self.input_base_addr.unwrap_or(0)),
-            8 => Some(
-                self.input_end_addr
-                    .map(|end| end.wrapping_sub(self.input_base_addr.unwrap_or(0)))
-                    .unwrap_or(self.input.len() as u64),
-            ),
-            16 => Some(self.cursor as u64),
-            _ => None,
-        }
-    }
-
-    fn translate_debug_address_to_host_ptr(&self, raw: u64) -> u64 {
-        if let (Some(base), Some(end)) = (self.input_base_addr, self.input_end_addr)
-            && raw >= base
-            && raw <= end
-        {
-            let offset = (raw - base) as usize;
-            return unsafe { self.input.as_ptr().add(offset) as u64 };
-        }
-
-        if let Some(base) = self.output_base_addr {
-            let end = base.saturating_add(self.output.len() as u64);
-            if raw >= base && raw <= end {
-                let offset = (raw - base) as usize;
-                return unsafe { self.output.as_ptr().add(offset) as u64 };
-            }
-        }
-
-        // Slot addresses are now real host pointers (into self.slots),
-        // so they pass through here without translation.
-        raw
-    }
-
-    fn store_root_cursor_arg(&mut self, raw_addr: usize, value: u64, width: usize) -> bool {
-        let Some(base) = self.root_cursor_arg_addr else {
-            return false;
-        };
-        let Some(field_offset) = raw_addr.checked_sub(base as usize) else {
-            return false;
-        };
-        if width != 8 {
-            return false;
-        }
-        match field_offset {
-            16 => {
-                self.cursor = value as usize;
-                true
-            }
-            0 | 8 => true,
-            _ => false,
-        }
-    }
-
     fn snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
             cursor: self.cursor,
@@ -567,47 +479,20 @@ impl DebuggerSession {
                 self.write_vreg(dst.index(), exec_binop(*op, lhs, rhs));
             }
             LinearOp::LoadFromAddr { dst, addr, width } => {
-                let raw_addr = self.read_vreg(addr.index()) as usize;
-                if let Some(value) = self.load_root_cursor_arg(raw_addr, width.bytes() as usize) {
-                    self.write_vreg(dst.index(), value);
-                    return Ok(());
-                }
-                // Convert raw pointer to input index if using pointer-mode addresses
-                let addr_val = match self.input_base_addr {
-                    Some(base) => raw_addr.wrapping_sub(base as usize),
-                    None => raw_addr,
-                };
+                let ptr = self.read_vreg(addr.index()) as *const u8;
                 let width = width.bytes() as usize;
-                if addr_val + width <= self.input.len() {
-                    let mut value = 0u64;
-                    for i in 0..width {
-                        value |= (self.input[addr_val + i] as u64) << (i * 8);
-                    }
-                    self.write_vreg(dst.index(), value);
-                } else {
-                    self.write_vreg(dst.index(), 0);
+                let mut value = 0u64;
+                for i in 0..width {
+                    value |= (unsafe { ptr.add(i).read() } as u64) << (i * 8);
                 }
+                self.write_vreg(dst.index(), value);
             }
             LinearOp::StoreToAddr { addr, src, width } => {
-                let raw_addr = self.read_vreg(addr.index()) as usize;
+                let ptr = self.read_vreg(addr.index()) as *mut u8;
                 let value = self.read_vreg(src.index());
                 let width = width.bytes() as usize;
-                if self.store_root_cursor_arg(raw_addr, value, width) {
-                    return Ok(());
-                }
-                if self.output_base_addr.is_some() {
-                    // Real-address mode: write to actual memory (e.g., heap buffer
-                    // from kajit_alloc_persistent). The address is a real pointer.
-                    let ptr = raw_addr as *mut u8;
-                    for i in 0..width {
-                        unsafe { ptr.add(i).write(((value >> (i * 8)) & 0xff) as u8) };
-                    }
-                } else {
-                    // Abstract mode: address is an offset into the output buffer.
-                    self.ensure_output_len(raw_addr + width);
-                    for i in 0..width {
-                        self.output[raw_addr + i] = ((value >> (i * 8)) & 0xff) as u8;
-                    }
+                for i in 0..width {
+                    unsafe { ptr.add(i).write(((value >> (i * 8)) & 0xff) as u8) };
                 }
             }
             LinearOp::UnaryOp { op, dst, src } => {
@@ -635,6 +520,13 @@ impl DebuggerSession {
                 self.ensure_slots_len(base + kajit_ir::SLOT_ADDR_STRIDE_BYTES);
                 let addr = unsafe { self.slots.as_ptr().add(base) as u64 };
                 self.write_vreg(dst.index(), addr);
+            }
+            LinearOp::StackAlloc { dst, id } => {
+                let info = &self.stack_allocs_info[id.index()];
+                let alloc = vec![0u8; info.size as usize];
+                let ptr = alloc.as_ptr() as u64;
+                self.stack_allocs.push(alloc);
+                self.write_vreg(dst.index(), ptr);
             }
             LinearOp::WriteToSlot { src, slot } => {
                 let value = self.read_vreg(src.index());
@@ -683,10 +575,7 @@ impl DebuggerSession {
         dst: Option<kajit_ir::VReg>,
     ) -> Result<(), DebuggerError> {
         // Collect arg values, translating debug addresses to host pointers.
-        let arg_values: Vec<u64> = args
-            .iter()
-            .map(|v| self.translate_debug_address_to_host_ptr(self.read_vreg(v.index())))
-            .collect();
+        let arg_values: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
 
         // Sync cursor into self.ctx before calling the intrinsic.
         self.ctx.input_ptr = unsafe { self.input.as_ptr().add(self.cursor) };
@@ -766,10 +655,7 @@ impl DebuggerSession {
         args: &[kajit_ir::VReg],
         dst: kajit_ir::VReg,
     ) -> Result<(), DebuggerError> {
-        let arg_values: Vec<u64> = args
-            .iter()
-            .map(|v| self.translate_debug_address_to_host_ptr(self.read_vreg(v.index())))
-            .collect();
+        let arg_values: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
         let ret = unsafe {
             match arg_values.len() {
                 0 => {
@@ -1017,7 +903,7 @@ mod tests {
         let b0 = cfg_mir::Block {
             id: cfg_mir::BlockId(0),
             params: Vec::new(),
-            insts: vec![cfg_mir::InstId(0), cfg_mir::InstId(1)],
+            insts: vec![cfg_mir::InstId(0)],
             term: cfg_mir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
@@ -1091,118 +977,15 @@ mod tests {
         }
     }
 
-    fn make_data_arg_program(arg: VReg) -> cfg_mir::Program {
-        let b0 = cfg_mir::Block {
-            id: cfg_mir::BlockId(0),
-            params: Vec::new(),
-            insts: Vec::new(),
-            term: cfg_mir::TermId(0),
-            preds: Vec::new(),
-            succs: Vec::new(),
-            dead: false,
-        };
-        cfg_mir::Program {
-            funcs: vec![cfg_mir::Function {
-                id: cfg_mir::FunctionId(0),
-                lambda_id: LambdaId::new(0),
-                entry: cfg_mir::BlockId(0),
-                data_args: vec![arg],
-                data_results: Vec::new(),
-                output_size: 0,
-                blocks: vec![b0],
-                edges: Vec::new(),
-                insts: Vec::new(),
-                terms: vec![cfg_mir::Terminator::Return],
-            }],
-            vreg_count: arg.index() as u32 + 1,
-            slot_count: 0,
-            param_slot_count: 0,
-            debug: Default::default(),
-            hints: Default::default(),
-            extra_excluded_regs: vec![],
-            data_blobs: vec![],
-        }
-    }
-
-    fn make_utf8_intrinsic_program() -> cfg_mir::Program {
-        cfg_mir::Program {
-            funcs: vec![cfg_mir::Function {
-                id: cfg_mir::FunctionId(0),
-                lambda_id: LambdaId::new(0),
-                entry: cfg_mir::BlockId(0),
-                data_args: Vec::new(),
-                data_results: Vec::new(),
-                output_size: 0,
-                blocks: vec![cfg_mir::Block {
-                    id: cfg_mir::BlockId(0),
-                    params: Vec::new(),
-                    insts: vec![cfg_mir::InstId(0)],
-                    term: cfg_mir::TermId(0),
-                    preds: Vec::new(),
-                    succs: Vec::new(),
-                    dead: false,
-                }],
-                edges: Vec::new(),
-                insts: vec![cfg_mir::Inst {
-                    id: cfg_mir::InstId(0),
-                    op: LinearOp::CallIntrinsic {
-                        func: kajit_ir::IntrinsicFn(test_validate_utf8_range as *const () as usize),
-                        args: vec![v(0), v(1)],
-                        dst: None,
-                    },
-                    operands: vec![
-                        cfg_mir::Operand {
-                            vreg: v(0),
-                            kind: cfg_mir::OperandKind::Use,
-                            class: cfg_mir::RegClass::Gpr,
-                            fixed: None,
-                        },
-                        cfg_mir::Operand {
-                            vreg: v(1),
-                            kind: cfg_mir::OperandKind::Use,
-                            class: cfg_mir::RegClass::Gpr,
-                            fixed: None,
-                        },
-                    ],
-                    clobbers: cfg_mir::Clobbers::default(),
-                }],
-                terms: vec![cfg_mir::Terminator::Return],
-            }],
-            vreg_count: 2,
-            slot_count: 0,
-            param_slot_count: 0,
-            debug: Default::default(),
-            hints: Default::default(),
-            extra_excluded_regs: vec![],
-            data_blobs: vec![],
-        }
-    }
-
-    unsafe extern "C" fn test_validate_utf8_range(
-        _ctx: *mut super::RuntimeDeserContext,
-        data_ptr: u64,
-        data_len: u64,
-    ) -> u64 {
-        let bytes = unsafe { std::slice::from_raw_parts(data_ptr as *const u8, data_len as usize) };
-        assert_eq!(bytes, b"hi");
-        0
-    }
-
     #[test]
     fn step_forward_and_back_restores_state() {
         let program = make_simple_program();
-        let mut session = DebuggerSession::new(&program, &[]).expect("debugger should init");
+        let mut session = DebuggerSession::new(&program, &[], &kajit_types::Arguments::new())
+            .expect("debugger should init");
 
         let first = session.step_forward().expect("step should work");
         assert_eq!(first.kind, crate::StepKind::Instruction);
         assert_eq!(session.inspect_vreg(0), 0x2a);
-
-        let second = session.step_forward().expect("step should work");
-        assert_eq!(second.kind, crate::StepKind::Instruction);
-        assert_eq!(session.inspect_output(0, 1), vec![0x2a]);
-
-        assert!(session.step_back());
-        assert_eq!(session.inspect_output(0, 1), vec![0x00]);
 
         assert!(session.step_back());
         assert_eq!(session.inspect_vreg(0), 0);
@@ -1213,7 +996,8 @@ mod tests {
     #[test]
     fn simple_program_executes_and_returns() {
         let program = make_trap_program();
-        let mut session = DebuggerSession::new(&program, &[]).expect("debugger should init");
+        let mut session = DebuggerSession::new(&program, &[], &kajit_types::Arguments::new())
+            .expect("debugger should init");
         // Step through const op
         let event = session.step_forward().expect("step should work");
         assert!(!event.halted_after, "const op should not halt");
@@ -1221,41 +1005,5 @@ mod tests {
         let event = session.step_forward().expect("step should work");
         assert!(event.halted_after, "return should halt");
         assert!(event.trap.is_none(), "should not trap");
-    }
-
-    #[test]
-    fn root_cursor_arg_helpers_track_runtime_cursor_layout() {
-        let arg = v(7);
-        let program = make_data_arg_program(arg);
-        let mut session =
-            DebuggerSession::new(&program, b"abcdef").expect("session should initialize");
-        session.input_base_addr = Some(0x2000);
-        session.input_end_addr = Some(0x2006);
-        session.set_root_cursor_arg_addr(0x1000);
-
-        assert_eq!(session.inspect_vreg(arg.index()), 0x1000);
-        assert_eq!(session.load_root_cursor_arg(0x1000, 8), Some(0x2000));
-        assert_eq!(session.load_root_cursor_arg(0x1008, 8), Some(6));
-        assert_eq!(session.load_root_cursor_arg(0x1010, 8), Some(0));
-
-        assert!(session.store_root_cursor_arg(0x1010, 4, 8));
-        assert_eq!(session.cursor, 4);
-        assert_eq!(session.load_root_cursor_arg(0x1010, 8), Some(4));
-    }
-
-    #[test]
-    fn intrinsic_calls_translate_debug_input_pointers_back_to_host() {
-        let input = [b'h', b'i'];
-        let program = make_utf8_intrinsic_program();
-        let mut session = DebuggerSession::new(&program, &input).expect("session");
-        session.input_base_addr = Some(0xffff_ffff_ec38);
-        session.input_end_addr = Some(0xffff_ffff_ec3a);
-        session.write_vreg(0, 0xffff_ffff_ec38);
-        session.write_vreg(1, 2);
-
-        session
-            .step_forward()
-            .expect("utf8 intrinsic call should succeed");
-        assert!(session.trap.is_none(), "utf8 helper should not trap");
     }
 }

@@ -292,6 +292,25 @@ impl<'a> EmitContext<'a> {
                 self.ectx.emit.emit_with(x64::encode_nop).expect("nop");
             }
 
+            LinearOp::StackAlloc { dst, id } => {
+                let rd = self.dst_enc_or_temp(*dst, R10);
+                let off = self.stack_alloc_offsets[id.index()] as i32;
+                self.ectx
+                    .emit
+                    .emit_with(|buf| {
+                        x64::encode_lea_r64_m(
+                            rd,
+                            Mem {
+                                base: RSP,
+                                disp: off,
+                            },
+                            buf,
+                        )
+                    })
+                    .unwrap();
+                self.store_to_vreg(*dst, rd);
+            }
+
             LinearOp::FuncStart { .. }
             | LinearOp::FuncEnd
             | LinearOp::Label(_)

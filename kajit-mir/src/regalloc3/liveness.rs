@@ -104,6 +104,7 @@ impl<'a> LivenessAnalyzer<'a> {
                 | LinearOp::UnaryOp { dst, .. }
                 | LinearOp::Copy { dst, .. }
                 | LinearOp::SlotAddr { dst, .. }
+                | LinearOp::StackAlloc { dst, .. }
                 | LinearOp::LoadFromAddr { dst, .. }
                 | LinearOp::ReadFromSlot { dst, .. }
                 | LinearOp::CallPure { dst, .. }

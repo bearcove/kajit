@@ -67,6 +67,8 @@ pub(super) struct EmitContext<'a> {
     pub(super) symbol_table: &'a kajit_types::SymbolTable,
     /// Whether we're emitting for JIT or object file.
     pub(super) compile_target: crate::pipeline_opts::CompileTarget,
+    /// Frame offsets for each StackAllocId.
+    pub(super) stack_alloc_offsets: Vec<u32>,
 }
 
 pub(super) fn emit_parallel_reg_moves(ectx: &mut EmitCtx, moves: &[(Reg, Reg)], temp: Reg) {

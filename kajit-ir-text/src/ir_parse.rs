@@ -681,6 +681,7 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
         debug_values: Arena::new(),
         root_debug_scope: DebugScopeId::new(0),
         data_blobs: Vec::new(),
+        stack_allocs: Vec::new(),
     };
 
     if program.scopes.is_empty() {

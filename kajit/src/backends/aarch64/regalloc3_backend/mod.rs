@@ -106,11 +106,31 @@ pub fn compile_regalloc3(
         .max()
         .unwrap_or(0);
 
-    // Create emission context with stack space for spills + actual slots
-    let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32;
+    // Compute stack allocation layout (variable-size frame regions).
+    let mut stack_alloc_offsets = Vec::new();
+    let mut stack_alloc_total: u32 = 0;
+    for info in &program.stack_allocs {
+        // Align the current offset.
+        let align = info.align.max(1);
+        stack_alloc_total = (stack_alloc_total + align - 1) & !(align - 1);
+        stack_alloc_offsets.push(stack_alloc_total);
+        stack_alloc_total += info.size;
+    }
+    // Round up to 8-byte alignment for the overall frame.
+    stack_alloc_total = (stack_alloc_total + 7) & !7;
+
+    // Create emission context with stack space for spills + actual slots + stack allocs
+    let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32
+        + stack_alloc_total;
     let mut ectx = EmitCtx::new_regalloc(extra_stack, extra_saved_pairs, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
     let edge_tmp_base = slot_base + (actual_slot_count * 8);
+    let stack_alloc_frame_base = edge_tmp_base + (max_edge_args * 8) as u32;
+    // Adjust stack alloc offsets to be relative to SP.
+    let stack_alloc_offsets: Vec<u32> = stack_alloc_offsets
+        .iter()
+        .map(|off| stack_alloc_frame_base + off)
+        .collect();
 
     // Emit function prologue (unified — no decoder vs scalar distinction).
     let entry = ectx.emit.current_offset();
@@ -245,6 +265,7 @@ pub fn compile_regalloc3(
             current_inst: None,
             symbol_table,
             compile_target,
+            stack_alloc_offsets: stack_alloc_offsets.clone(),
         };
 
         ctx.emit_function();

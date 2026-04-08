@@ -203,6 +203,7 @@ pub fn allocate_cfg_program_regalloc3_native(
         hints: program.hints.clone(),
         extra_excluded_regs: program.extra_excluded_regs.clone(),
         data_blobs: program.data_blobs.clone(),
+        stack_allocs: program.stack_allocs.clone(),
     };
 
     Ok(AllocatedCfgProgramRa3 {

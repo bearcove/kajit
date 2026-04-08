@@ -114,6 +114,7 @@ fn rewrite_instructions(
                     | LinearOp::UnaryOp { dst, .. }
                     | LinearOp::Copy { dst, .. }
                     | LinearOp::SlotAddr { dst, .. }
+                    | LinearOp::StackAlloc { dst, .. }
                     | LinearOp::LoadFromAddr { dst, .. } => Some(*dst),
                     LinearOp::CallIntrinsic { dst, .. } => *dst,
                     _ => None,

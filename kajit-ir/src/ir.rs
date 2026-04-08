@@ -168,6 +168,18 @@ pub type LambdaId = Id<LambdaMarker>;
 /// Byte stride between adjacent abstract slot addresses.
 pub const SLOT_ADDR_STRIDE_BYTES: usize = 8;
 
+/// Marker type for stack allocation IDs.
+pub struct StackAllocMarker;
+/// A stack allocation — variable size, assigned a frame offset by the backend.
+pub type StackAllocId = Id<StackAllocMarker>;
+
+/// Metadata for a stack allocation.
+#[derive(Debug, Clone)]
+pub struct StackAllocInfo {
+    pub size: u32,
+    pub align: u32,
+}
+
 /// A debug scope identifier carried through the RVSDG pipeline.
 pub type DebugScopeId = Id<DebugScope>;
 pub type DebugValueId = Id<DebugValue>;
@@ -594,6 +606,12 @@ pub enum IrOp {
     /// Inputs: []. Outputs: [Data].
     SlotAddr { slot: SlotId, num_slots: u32 },
 
+    /// Return the address of a stack allocation.
+    /// The allocation's size and alignment are stored in the function's
+    /// `stack_allocs` table, indexed by `id`.
+    /// Inputs: []. Outputs: [Data].
+    StackAlloc { id: StackAllocId },
+
     /// Store a scalar value to a computed address.
     /// Inputs: [Data (addr), Data (value), State(memory)]. Outputs: [State(memory)].
     StoreToAddr { width: Width },
@@ -778,6 +796,7 @@ impl IrOp {
             | IrOp::ZigzagDecode { .. }
             | IrOp::SignExtend { .. }
             | IrOp::SlotAddr { .. }
+            | IrOp::StackAlloc { .. }
             | IrOp::CallPure { .. }
             | IrOp::Nop
             | IrOp::Identity => Effect::Pure,
@@ -863,6 +882,8 @@ pub struct IrFunc {
     pub debug_values: Arena<DebugValue>,
     /// Root debug scope for the root lambda body.
     pub root_debug_scope: DebugScopeId,
+    /// Stack allocations (variable-size frame regions).
+    pub stack_allocs: Vec<StackAllocInfo>,
 }
 
 impl IrFunc {
@@ -1101,6 +1122,7 @@ impl IrBuilder {
             debug_scopes: Arena::new(),
             debug_values: Arena::new(),
             root_debug_scope: DebugScopeId::new(0), // placeholder, set below
+            stack_allocs: Vec::new(),
         };
 
         let lambda_id = LambdaId::new(0);
@@ -1482,6 +1504,23 @@ impl<'a> RegionBuilder<'a> {
             inputs: vec![],
             outputs: vec![data_out],
             kind: NodeKind::Simple(IrOp::SlotAddr { slot, num_slots }),
+        });
+        PortSource::Node(OutputRef { node, index: 0 })
+    }
+
+    /// Allocate `size` bytes on the stack with `align`-byte alignment.
+    /// Returns a pointer to the allocated region.
+    pub fn stack_alloc(&mut self, size: u32, align: u32) -> PortSource {
+        let id = StackAllocId::new(self.func.stack_allocs.len() as u32);
+        self.func.stack_allocs.push(StackAllocInfo { size, align });
+        let data_out = self.data_output();
+        let node = self.add_node(Node {
+            region: self.region,
+            debug_scope: self.debug_scope,
+            debug_value: self.debug_value,
+            inputs: vec![],
+            outputs: vec![data_out],
+            kind: NodeKind::Simple(IrOp::StackAlloc { id }),
         });
         PortSource::Node(OutputRef { node, index: 0 })
     }
@@ -2286,6 +2325,9 @@ impl IrFunc {
         match op {
             IrOp::SlotAddr { slot, num_slots } => {
                 write!(f, "SlotAddr({}, n={})", slot.index(), num_slots)
+            }
+            IrOp::StackAlloc { id } => {
+                write!(f, "StackAlloc({})", id.index())
             }
             IrOp::StoreToAddr { width } => write!(f, "StoreToAddr({width})"),
             IrOp::LoadFromAddr { width } => write!(f, "LoadFromAddr({width})"),

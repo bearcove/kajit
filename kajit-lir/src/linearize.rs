@@ -100,6 +100,10 @@ pub enum LinearOp {
         dst: VReg,
         slot: SlotId,
     },
+    StackAlloc {
+        dst: VReg,
+        id: kajit_ir::StackAllocId,
+    },
     StoreToAddr {
         addr: VReg,
         src: VReg,
@@ -200,7 +204,7 @@ impl LinearOp {
             UnaryOp { src, .. } | Copy { src, .. } => f(src),
 
             // Stack
-            SlotAddr { .. } => {}
+            SlotAddr { .. } | StackAlloc { .. } => {}
             StoreToAddr { addr, src, .. } => {
                 f(addr);
                 f(src);
@@ -297,6 +301,7 @@ impl LinearOp {
             | UnaryOp { dst, .. }
             | Copy { dst, .. }
             | SlotAddr { dst, .. }
+            | StackAlloc { dst, .. }
             | LoadFromAddr { dst, .. }
             | ReadFromSlot { dst, .. }
             | CallPure { dst, .. }
@@ -364,7 +369,7 @@ impl LinearOp {
                 f(src);
             }
 
-            SlotAddr { dst, .. } => f(dst),
+            SlotAddr { dst, .. } | StackAlloc { dst, .. } => f(dst),
             StoreToAddr { addr, src, .. } => {
                 f(addr);
                 f(src);
@@ -475,6 +480,8 @@ pub struct LinearIr {
     pub debug: LinearDebugProvenance,
     /// Embedded constant data blobs (string literals, etc.).
     pub data_blobs: Vec<Vec<u8>>,
+    /// Stack allocations (variable-size frame regions).
+    pub stack_allocs: Vec<kajit_ir::StackAllocInfo>,
 }
 
 #[derive(Clone, Default)]
@@ -1128,6 +1135,15 @@ impl<'a> Linearizer<'a> {
                     LinearOp::SlotAddr {
                         dst: data_dst(0),
                         slot: *slot,
+                    },
+                );
+            }
+            IrOp::StackAlloc { id } => {
+                self.emit_node(
+                    node,
+                    LinearOp::StackAlloc {
+                        dst: data_dst(0),
+                        id: *id,
                     },
                 );
             }
@@ -4065,6 +4081,7 @@ fn op_uses(op: &LinearOp, func_end_uses: Option<&[VReg]>) -> Vec<VReg> {
         | LinearOp::DataAddr { .. }
         | LinearOp::ExternAddr { .. }
         | LinearOp::SlotAddr { .. }
+        | LinearOp::StackAlloc { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
         | LinearOp::FuncStart { .. } => Vec::new(),
@@ -4079,7 +4096,7 @@ fn op_defs(op: &LinearOp) -> Vec<VReg> {
         LinearOp::BinOp { dst, .. } => vec![*dst],
         LinearOp::UnaryOp { dst, .. } => vec![*dst],
         LinearOp::Copy { dst, .. } => vec![*dst],
-        LinearOp::SlotAddr { dst, .. } => vec![*dst],
+        LinearOp::SlotAddr { dst, .. } | LinearOp::StackAlloc { dst, .. } => vec![*dst],
         LinearOp::LoadFromAddr { dst, .. } => vec![*dst],
         LinearOp::ReadFromSlot { dst, .. } => vec![*dst],
         LinearOp::CallIntrinsic { dst, .. } => dst.iter().copied().collect(),
@@ -4170,6 +4187,7 @@ fn rewrite_op_uses(op: &mut LinearOp, mut resolve: impl FnMut(VReg) -> VReg) {
         | LinearOp::DataAddr { .. }
         | LinearOp::ExternAddr { .. }
         | LinearOp::SlotAddr { .. }
+        | LinearOp::StackAlloc { .. }
         | LinearOp::ReadFromSlot { .. }
         | LinearOp::Label(_)
         | LinearOp::FuncStart { .. }
@@ -4603,6 +4621,7 @@ pub fn linearize(func: &mut IrFunc) -> LinearIr {
         slot_count: func.slot_count(),
         param_slot_count: func.param_slot_count,
         data_blobs: func.data_blobs.clone(),
+        stack_allocs: func.stack_allocs.clone(),
         debug: LinearDebugProvenance {
             scopes: func.debug_scopes.clone(),
             values: func.debug_values.clone(),
@@ -4714,6 +4733,10 @@ fn fmt_op(
         LinearOp::SlotAddr { dst, slot } => {
             fmt_vreg(f, *dst)?;
             write!(f, " = slot_addr {}", slot.index())
+        }
+        LinearOp::StackAlloc { dst, id } => {
+            fmt_vreg(f, *dst)?;
+            write!(f, " = stack_alloc({})", id.index())
         }
         LinearOp::StoreToAddr { addr, src, width } => {
             write!(f, "store_addr [{width}] ")?;

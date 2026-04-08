@@ -22,6 +22,7 @@ pub(super) struct EmitContext<'a> {
     pub slot_base: u32,
     /// Scratch stack area used to snapshot edge arguments before delivering them.
     pub edge_tmp_base: u32,
+    pub stack_alloc_offsets: Vec<u32>,
     /// VReg → constant value (for immediate folding in BinOps)
     pub const_values: HashMap<kajit_ir::VReg, u64>,
     /// OpId → DWARF line number (for source-level debugging)

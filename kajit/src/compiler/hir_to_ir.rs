@@ -148,13 +148,10 @@ fn compute_region_interface(
         .filter(|id| outer_locals.contains(id))
         .collect();
 
-    // Live-out: locals written inside that are defined outside
-    // (their updated value needs to flow back out)
-    let live_out: Vec<hir::LocalId> = writes
-        .iter()
-        .copied()
-        .filter(|id| outer_locals.contains(id))
-        .collect();
+    // Live-out: locals written inside whose updated value needs to flow back out.
+    // This includes both locals already defined outside (updated) and locals
+    // first defined inside (born) — both need gamma/theta outputs.
+    let live_out: Vec<hir::LocalId> = writes.iter().copied().collect();
 
     // Deterministic ordering for stable IR generation
     let mut captures = captures;
@@ -385,8 +382,31 @@ impl<'a> ScalarHirIrLowerer<'a> {
     fn flatten_locals(&self, locals: &[hir::LocalId]) -> Vec<crate::ir::PortSource> {
         let mut flat = Vec::new();
         for id in locals {
+            let values = self.local_values.get(id).unwrap_or_else(|| {
+                panic!("flatten_locals: local {id:?} not defined");
+            });
+            flat.extend_from_slice(values);
+        }
+        flat
+    }
+
+    fn flatten_locals_with_zeros(
+        &self,
+        rb: &mut RegionBuilder<'_>,
+        locals: &[hir::LocalId],
+    ) -> Vec<crate::ir::PortSource> {
+        let mut flat = Vec::new();
+        for id in locals {
             if let Some(values) = self.local_values.get(id) {
                 flat.extend_from_slice(values);
+            } else {
+                // Local not yet defined — provide zero placeholders so the
+                // gamma/theta invariant count stays consistent.
+                let word_count = Self::word_count_for_type(self.module, self.local_types[id]);
+                let zero = rb.const_val(0);
+                for _ in 0..word_count {
+                    flat.push(zero);
+                }
             }
         }
         flat
@@ -802,7 +822,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     all
                 };
 
-                let invariant_sources = self.flatten_locals(&threaded);
+                let invariant_sources = self.flatten_locals_with_zeros(rb, &threaded);
                 let invariant_count = invariant_sources.len();
 
                 let mut branch_ret_count: Option<usize> = None;
@@ -876,7 +896,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     all
                 };
 
-                let invariant_sources = self.flatten_locals(&threaded);
+                let invariant_sources = self.flatten_locals_with_zeros(rb, &threaded);
                 let invariant_count = invariant_sources.len();
 
                 let mut branch_ret_count: Option<usize> = None;
@@ -925,7 +945,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 let iface = compute_region_interface(&body.statements, &outer);
                 let loop_vars = theta_loop_vars(&iface);
 
-                let loop_var_sources = self.flatten_locals(&loop_vars);
+                let loop_var_sources = self.flatten_locals_with_zeros(rb, &loop_vars);
                 let loop_var_word_count = loop_var_sources.len();
 
                 let active_slot = rb.alloc_slot();
@@ -1033,14 +1053,26 @@ impl<'a> ScalarHirIrLowerer<'a> {
     ) -> (crate::ir::PortSource, hir::Type) {
         match place {
             hir::Place::Local(local) => {
-                // A local used as a memory address — it must be a single-word pointer type.
                 let values = self.get_local_values(*local);
-                assert_eq!(
-                    values.len(),
-                    1,
-                    "lower_place_addr: local must be single-word"
-                );
-                (values[0], self.local_types[local].clone())
+                if values.len() == 1 {
+                    // Single-word local — treat the value as a pointer.
+                    (values[0], self.local_types[local].clone())
+                } else {
+                    // Multi-word value local: spill to a stack allocation and
+                    // return its address. Each word is stored at an 8-byte offset.
+                    let num_words = values.len() as u32;
+                    let addr = rb.stack_alloc(num_words * 8, 8);
+                    for (i, &val) in values.iter().enumerate() {
+                        if i == 0 {
+                            rb.store_to_addr(addr, val, crate::ir::Width::W8);
+                        } else {
+                            let off = rb.const_val((i * 8) as u64);
+                            let target = rb.binop(crate::ir::IrOp::Add, addr, off);
+                            rb.store_to_addr(target, val, crate::ir::Width::W8);
+                        }
+                    }
+                    (addr, self.local_types[local].clone())
+                }
             }
             hir::Place::Deref { base } => {
                 let base_ty = self.infer_expr_type(base);
@@ -1295,7 +1327,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     let outer = this.defined_locals();
                     let iface = compute_region_interface(&all_stmts, &outer);
                     let threaded = theta_loop_vars(&iface);
-                    let invariant_sources = this.flatten_locals(&threaded);
+                    let invariant_sources = this.flatten_locals_with_zeros(guard_rb, &threaded);
                     let threaded_word_count = invariant_sources.len();
 
                     let outputs =
@@ -1341,7 +1373,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     let outer = this.defined_locals();
                     let iface = compute_region_interface(&all_stmts, &outer);
                     let threaded = theta_loop_vars(&iface);
-                    let invariant_sources = this.flatten_locals(&threaded);
+                    let invariant_sources = this.flatten_locals_with_zeros(guard_rb, &threaded);
                     let threaded_word_count = invariant_sources.len();
 
                     let outputs = guard_rb.gamma(
@@ -1371,7 +1403,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     let outer = this.defined_locals();
                     let iface = compute_region_interface(&body.statements, &outer);
                     let loop_vars = theta_loop_vars(&iface);
-                    let loop_var_sources = this.flatten_locals(&loop_vars);
+                    let loop_var_sources = this.flatten_locals_with_zeros(guard_rb, &loop_vars);
                     let loop_var_word_count = loop_var_sources.len();
 
                     let nested_active = guard_rb.alloc_slot();
@@ -1418,7 +1450,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
         let outer = self.defined_locals();
         let iface = compute_region_interface(stmts, &outer);
         let threaded = theta_loop_vars(&iface);
-        let invariant_sources = self.flatten_locals(&threaded);
+        let invariant_sources = self.flatten_locals_with_zeros(rb, &threaded);
         let threaded_word_count = invariant_sources.len();
 
         let active = rb.read_from_slot(active_slot);

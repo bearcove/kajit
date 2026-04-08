@@ -370,7 +370,8 @@ impl MirHandler {
         let input_hex = arg_opt_str(args, "input_hex").unwrap_or_default();
         let input = parse_hex_input(&input_hex)?;
         let program = kajit_mir_text::parse_cfg_mir(&mir_text).map_err(|e| e.to_string())?;
-        let session = DebuggerSession::new(&program, &input).map_err(|e| e.to_string())?;
+        let args = kajit_types::Arguments::new();
+        let session = DebuggerSession::new(&program, &input, &args).map_err(|e| e.to_string())?;
 
         let mut state = self.lock_state()?;
         if state.next_session_id == 0 {
@@ -1193,7 +1194,12 @@ impl DebugDiffSession {
         let out_param = function.params.get(1).ok_or_else(|| {
             "debug sessions require a function with an output parameter".to_owned()
         })?;
-        type_size(module, &out_param.ty)
+        // If out is a reference/pointer, use the pointee type size
+        let out_ty = match &out_param.ty {
+            Type::Ref { pointee, .. } => pointee.as_ref(),
+            other => other,
+        };
+        type_size(module, out_ty)
     }
 
     fn new(
@@ -1263,7 +1269,25 @@ impl DebugDiffSession {
         let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)
             .map_err(|e| format!("error generating harness: {e}"))?;
 
+        eprintln!("[debug_session_new] harness: {}", exe_path.display());
+        eprintln!("[debug_session_new] output_size: {output_size}");
+        eprintln!("[debug_session_new] listing: {}", listing_path.display());
+
+        // Verify the binary exists and is executable
+        let metadata = std::fs::metadata(&exe_path)
+            .map_err(|e| format!("harness binary not found at {}: {e}", exe_path.display()))?;
+        eprintln!("[debug_session_new] binary size: {} bytes", metadata.len());
+
+        // Try running file(1) on the binary for diagnostics
+        if let Ok(output) = std::process::Command::new("file").arg(&exe_path).output() {
+            eprintln!(
+                "[debug_session_new] file: {}",
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+        }
+
         let input = parse_hex_input(input_hex)?;
+        eprintln!("[debug_session_new] launching LLDB with input: {input_hex}");
         let debugger = LldbJitDebugger::launch(exe_path.to_str().unwrap(), input_hex)
             .map_err(|e| format!("error launching LLDB: {e}"))?;
         let lockstep = LockstepSession::new(

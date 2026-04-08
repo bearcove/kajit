@@ -36,6 +36,8 @@ struct State {
     max_steps: u64,
     /// External symbol resolution table.
     symbol_table: SymbolTable,
+    /// Stack allocations (each is a pinned Vec<u8>).
+    stack_allocs: Vec<Vec<u8>>,
 }
 
 const SLOT_STRIDE: usize = 8;
@@ -49,7 +51,15 @@ impl State {
             steps: 0,
             max_steps: 1_000_000,
             symbol_table,
+            stack_allocs: Vec::new(),
         }
+    }
+
+    fn alloc_stack(&mut self, size: usize, _align: usize) -> usize {
+        let alloc = vec![0u8; size];
+        let ptr = alloc.as_ptr() as usize;
+        self.stack_allocs.push(alloc);
+        ptr
     }
 
     fn ensure_slot(&mut self, slot: usize) {
@@ -293,6 +303,11 @@ fn eval_simple(func: &IrFunc, node_id: NodeId, op: &IrOp, state: &mut State, env
             state.ensure_slot_mem(s, *num_slots as usize);
             let addr = state.slot_mem.as_ptr() as usize + s * SLOT_STRIDE;
             env.set_output(node_id, 0, addr as u64);
+        }
+        IrOp::StackAlloc { id } => {
+            let info = &func.stack_allocs[id.index()];
+            let alloc = state.alloc_stack(info.size as usize, info.align as usize);
+            env.set_output(node_id, 0, alloc as u64);
         }
         IrOp::StoreToAddr { width } => {
             let addr = data_inputs[0] as *mut u8;

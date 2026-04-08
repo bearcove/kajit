@@ -238,6 +238,16 @@ impl<'a> EmitContext<'a> {
                 self.ectx.emit.emit_nop().expect("nop");
             }
 
+            LinearOp::StackAlloc { dst, id } => {
+                let rd = self.dst_reg_or_temp(*dst, Reg::X16);
+                let off = self.stack_alloc_offsets[id.index()];
+                self.ectx
+                    .emit
+                    .emit_add_imm(Width::X64, rd, Reg::SP, off as u16, false)
+                    .unwrap();
+                self.store_to_vreg(*dst, rd);
+            }
+
             LinearOp::FuncStart { .. }
             | LinearOp::FuncEnd
             | LinearOp::Label(_)

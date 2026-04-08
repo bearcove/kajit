@@ -283,6 +283,10 @@ pub fn compile_pipeline_from_hir_module(
         std::fs::write(&path, format!("{module:#?}")).unwrap();
         eprintln!("[debug] dumped HIR debug to {path}");
     }
+    if let Ok(path) = std::env::var("KAJIT_DUMP_HIR_TEXT") {
+        std::fs::write(&path, &hir_text).unwrap();
+        eprintln!("[debug] dumped HIR text to {path}");
+    }
 
     // Phase 2: IR + passes with timeline
     let mut func = lower_hir_module(module);

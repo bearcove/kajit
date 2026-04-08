@@ -170,7 +170,7 @@ pub struct Function {
     pub terms: Vec<Terminator>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Program {
     pub funcs: Vec<Function>,
     pub vreg_count: u32,
@@ -184,6 +184,8 @@ pub struct Program {
     pub extra_excluded_regs: Vec<crate::regalloc3::machine_inst::PReg>,
     /// Embedded constant data blobs (string literals, etc.).
     pub data_blobs: Vec<Vec<u8>>,
+    /// Stack allocations (variable-size frame regions).
+    pub stack_allocs: Vec<kajit_ir::StackAllocInfo>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -899,6 +901,7 @@ fn fmt_cfg_op_name(
         LinearOp::UnaryOp { op, .. } => write!(f, "{op:?}"),
         LinearOp::Copy { .. } => write!(f, "copy"),
         LinearOp::SlotAddr { slot, .. } => write!(f, "slot_addr({})", slot.index()),
+        LinearOp::StackAlloc { id, .. } => write!(f, "stack_alloc({})", id.index()),
         LinearOp::StoreToAddr { width, .. } => write!(f, "store_addr([{width}])"),
         LinearOp::LoadFromAddr { width, .. } => write!(f, "load_addr([{width}])"),
         LinearOp::WriteToSlot { slot, .. } => write!(f, "write_slot({})", slot.index()),
@@ -933,6 +936,7 @@ fn linearop_dst(op: &LinearOp) -> Option<VReg> {
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
         | LinearOp::SlotAddr { dst, .. }
+        | LinearOp::StackAlloc { dst, .. }
         | LinearOp::LoadFromAddr { dst, .. }
         | LinearOp::ReadFromSlot { dst, .. }
         | LinearOp::CallPure { dst, .. }
@@ -1282,6 +1286,7 @@ fn lower_inst(id: InstId, op: LinearOp) -> Inst {
         | LinearOp::DataAddr { dst, .. }
         | LinearOp::ExternAddr { dst, .. }
         | LinearOp::SlotAddr { dst, .. }
+        | LinearOp::StackAlloc { dst, .. }
         | LinearOp::ReadFromSlot { dst, .. } => {
             push_def(&mut operands, *dst, None);
         }
@@ -1897,6 +1902,7 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
         hints,
         extra_excluded_regs: vec![],
         data_blobs: ir.data_blobs.clone(),
+        stack_allocs: ir.stack_allocs.clone(),
     }
 }
 
@@ -3901,6 +3907,9 @@ fn make_value_key_simple(op: &LinearOp) -> Option<ValueKey> {
 
         LinearOp::SlotAddr { slot, .. } => Some(ValueKey::SlotAddr(*slot)),
 
+        // Each StackAlloc is unique — don't CSE them.
+        LinearOp::StackAlloc { .. } => None,
+
         LinearOp::CallPure { func, args, .. } => Some(ValueKey::CallPure {
             func: *func,
             args: args.clone(),
@@ -3920,6 +3929,7 @@ fn get_def_vreg(op: &LinearOp) -> Option<VReg> {
         | LinearOp::UnaryOp { dst, .. }
         | LinearOp::Copy { dst, .. }
         | LinearOp::SlotAddr { dst, .. }
+        | LinearOp::StackAlloc { dst, .. }
         | LinearOp::CallPure { dst, .. }
         | LinearOp::CallEffect { dst, .. } => Some(*dst),
         _ => None,

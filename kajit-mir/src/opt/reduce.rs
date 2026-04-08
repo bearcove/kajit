@@ -819,15 +819,10 @@ pub enum InterpOutcome {
 
 /// Run a program through the ideal interpreter.
 pub fn interpret(program: &Program, input: &[u8], args: &kajit_types::Arguments) -> InterpOutcome {
-    let mut session = match crate::DebuggerSession::new(program, input) {
+    let mut session = match crate::DebuggerSession::new(program, input, args) {
         Ok(s) => s,
         Err(_) => return InterpOutcome::TimedOut,
     };
-
-    // Seed data_args vregs with caller-provided values.
-    session.set_real_addresses();
-    let (gprs, _fprs) = args.to_register_slots();
-    session.seed_data_args(&gprs);
 
     let max_steps = std::env::var("KAJIT_INTERP_STEPS")
         .ok()
@@ -985,6 +980,7 @@ impl LinearOpDst for LinearOp {
             | Self::UnaryOp { dst, .. }
             | Self::LoadFromAddr { dst, .. }
             | Self::SlotAddr { dst, .. }
+            | Self::StackAlloc { dst, .. }
             | Self::ReadFromSlot { dst, .. }
             | Self::CallPure { dst, .. }
             | Self::CallEffect { dst, .. } => Some(*dst),

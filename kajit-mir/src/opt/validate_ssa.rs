@@ -30,6 +30,7 @@ impl LinearOpDst for LinearOp {
             | Self::UnaryOp { dst, .. }
             | Self::LoadFromAddr { dst, .. }
             | Self::SlotAddr { dst, .. }
+            | Self::StackAlloc { dst, .. }
             | Self::ReadFromSlot { dst, .. }
             | Self::CallPure { dst, .. }
             | Self::CallEffect { dst, .. } => Some(*dst),
@@ -455,6 +456,7 @@ fn linear_op_summary(op: &LinearOp) -> String {
         LinearOp::UnaryOp { op: unop, .. } => format!("UnaryOp({unop:?})"),
         LinearOp::Copy { .. } => "Copy".to_string(),
         LinearOp::SlotAddr { slot, .. } => format!("SlotAddr({slot:?})"),
+        LinearOp::StackAlloc { id, .. } => format!("StackAlloc({})", id.index()),
         LinearOp::StoreToAddr { width, .. } => format!("StoreToAddr({width:?})"),
         LinearOp::LoadFromAddr { width, .. } => format!("LoadFromAddr({width:?})"),
         LinearOp::WriteToSlot { slot, .. } => format!("WriteToSlot({slot:?})"),

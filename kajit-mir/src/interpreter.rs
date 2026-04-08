@@ -278,6 +278,7 @@ struct InterpreterState<'a> {
     trap: Option<InterpreterTrap>,
     trace_out_ptr: TraceValue,
     symbol_table: kajit_types::SymbolTable,
+    stack_allocs: Vec<Vec<u8>>,
 }
 
 impl<'a> InterpreterState<'a> {
@@ -302,6 +303,7 @@ impl<'a> InterpreterState<'a> {
             trap: None,
             trace_out_ptr: TraceValue::OutputPtr { offset: 0 },
             symbol_table: kajit_types::SymbolTable::new(),
+            stack_allocs: Vec::new(),
         }
     }
 
@@ -573,11 +575,7 @@ pub fn execute_function_with_event_trace(
         funcs: vec![func.clone()],
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
-        param_slot_count: 0,
-        debug: Default::default(),
-        hints: Default::default(),
-        extra_excluded_regs: vec![],
-        data_blobs: vec![],
+        ..Default::default()
     };
     execute_program_with_event_trace(&program, input)
 }
@@ -669,11 +667,7 @@ pub fn execute_function_with_trace(
         funcs: vec![func.clone()],
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
-        param_slot_count: 0,
-        debug: Default::default(),
-        hints: Default::default(),
-        extra_excluded_regs: vec![],
-        data_blobs: vec![],
+        ..Default::default()
     };
     execute_program_with_trace(&program, input)
 }
@@ -760,6 +754,13 @@ fn execute_function_inner(
                 LinearOp::SlotAddr { dst, slot } => {
                     let addr = state.slot_addr_value(slot.index());
                     state.write_vreg(dst.index(), addr);
+                }
+                LinearOp::StackAlloc { dst, id } => {
+                    let info = &program.stack_allocs[id.index()];
+                    let alloc = vec![0u8; info.size as usize];
+                    let ptr = alloc.as_ptr() as u64;
+                    state.stack_allocs.push(alloc);
+                    state.write_vreg(dst.index(), ptr);
                 }
                 LinearOp::WriteToSlot { slot, src } => {
                     let slot = slot.index();
@@ -1159,6 +1160,24 @@ fn execute_function_inner_with_event_trace(
                     let addr = state.slot_addr_value(slot.index());
                     let trace_value = TraceValue::SlotAddr { slot: slot.index() };
                     state.write_vreg(dst.index(), addr);
+                    state.write_trace_vreg(dst.index(), trace_value.clone());
+                    push_interpreter_event(
+                        trace,
+                        step_index,
+                        location,
+                        InterpreterEventKind::VregWrite {
+                            vreg: *dst,
+                            value: trace_value,
+                        },
+                    );
+                }
+                LinearOp::StackAlloc { dst, id } => {
+                    let info = &program.stack_allocs[id.index()];
+                    let alloc = vec![0u8; info.size as usize];
+                    let ptr = alloc.as_ptr() as u64;
+                    state.stack_allocs.push(alloc);
+                    state.write_vreg(dst.index(), ptr);
+                    let trace_value = TraceValue::U64(ptr);
                     state.write_trace_vreg(dst.index(), trace_value.clone());
                     push_interpreter_event(
                         trace,

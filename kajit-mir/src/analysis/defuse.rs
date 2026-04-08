@@ -160,6 +160,7 @@ impl LinearOpDst for LinearOp {
             | Self::UnaryOp { dst, .. }
             | Self::LoadFromAddr { dst, .. }
             | Self::SlotAddr { dst, .. }
+            | Self::StackAlloc { dst, .. }
             | Self::ReadFromSlot { dst, .. }
             | Self::CallPure { dst, .. }
             | Self::CallEffect { dst, .. } => Some(*dst),

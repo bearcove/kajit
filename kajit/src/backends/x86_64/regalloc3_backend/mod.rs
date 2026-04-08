@@ -101,10 +101,27 @@ pub fn compile_regalloc3(
         crate::arch::x64::BASE_FRAME
     } + extra_saved_pairs * 16;
 
-    let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32;
+    // Compute stack alloc offsets
+    let mut stack_alloc_offsets = Vec::new();
+    let mut stack_alloc_total: u32 = 0;
+    for info in &program.stack_allocs {
+        let align = info.align.max(1);
+        stack_alloc_total = (stack_alloc_total + align - 1) & !(align - 1);
+        stack_alloc_offsets.push(stack_alloc_total);
+        stack_alloc_total += info.size;
+    }
+    stack_alloc_total = (stack_alloc_total + 7) & !7; // align to 8
+
+    let extra_stack = ((max_spillslots + actual_slot_count as usize + max_edge_args) * 8) as u32
+        + stack_alloc_total;
     let mut ectx = EmitCtx::new_regalloc(extra_stack, base_frame, is_leaf);
     let slot_base = ectx.base_frame + (max_spillslots * 8) as u32;
     let edge_tmp_base = slot_base + (actual_slot_count * 8);
+    let stack_alloc_frame_base = edge_tmp_base + (max_edge_args as u32 * 8);
+    let stack_alloc_offsets: Vec<u32> = stack_alloc_offsets
+        .iter()
+        .map(|off| stack_alloc_frame_base + off)
+        .collect();
 
     // Emit prologue.
     let (entry, error_exit) =
@@ -165,6 +182,7 @@ pub fn compile_regalloc3(
             current_inst: None,
             symbol_table,
             compile_target,
+            stack_alloc_offsets: stack_alloc_offsets.clone(),
         };
 
         ctx.emit_function();

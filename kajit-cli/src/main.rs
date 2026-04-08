@@ -174,10 +174,12 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
     });
 
     let input = parse_hex(input_hex);
-    let mut session = kajit_mir::DebuggerSession::new(&program, &input).unwrap_or_else(|e| {
-        eprintln!("error: failed to create session: {e}");
-        std::process::exit(1);
-    });
+    let args = kajit_types::Arguments::new();
+    let mut session =
+        kajit_mir::DebuggerSession::new(&program, &input, &args).unwrap_or_else(|e| {
+            eprintln!("error: failed to create session: {e}");
+            std::process::exit(1);
+        });
 
     let _events = session
         .run_until(kajit_mir::RunUntilTarget::Return, 100_000)

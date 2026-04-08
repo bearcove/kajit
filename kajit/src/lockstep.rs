@@ -283,37 +283,24 @@ impl<D: JitDebugger> LockstepSession<D> {
         entry_offset: usize,
         debugger: D,
     ) -> Result<Self, DebugError> {
-        let jit_output_ptr = debugger.read_register(21)?;
-        let jit_root_cursor_arg = if !program.funcs[0].data_args.is_empty() {
-            Some(debugger.read_register(2)?)
-        } else {
-            None
-        };
-        let (jit_cursor, jit_input_end) = if let Some(root_cursor_arg) = jit_root_cursor_arg {
-            let input_base = read_u64(&debugger, root_cursor_arg)?;
-            let input_len = read_u64(&debugger, root_cursor_arg + 8)?;
-            (input_base, input_base.wrapping_add(input_len))
-        } else {
-            (debugger.read_register(19)?, debugger.read_register(20)?)
-        };
-
+        // Read function arguments from ABI registers.
+        let num_data_args = program.funcs[0].data_args.len();
+        let mut args = kajit_types::Arguments::new();
+        for i in 0..num_data_args {
+            let val = debugger.read_register(i as u8)?;
+            args.push(kajit_types::ArgValue::U64(val));
+        }
         eprintln!(
-            "[lockstep] JIT base addrs: cursor=0x{:x}, end=0x{:x}, out=0x{:x}",
-            jit_cursor, jit_input_end, jit_output_ptr
+            "[lockstep] data_args ({}): {}",
+            num_data_args,
+            (0..num_data_args)
+                .map(|i| format!("x{}=0x{:x}", i, args.to_register_slots().0[i]))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
 
-        let mut interpreter = kajit_mir::DebuggerSession::new(program, input)
+        let mut interpreter = kajit_mir::DebuggerSession::new(program, input, &args)
             .map_err(|e| DebugError::LldbError(format!("interpreter init: {e}")))?;
-        interpreter.input_base_addr = Some(jit_cursor);
-        interpreter.input_end_addr = Some(jit_input_end);
-        interpreter.output_base_addr = Some(jit_output_ptr);
-        // Seed data_args from the JIT's register values.
-        // data_args[0]=cursor_ptr, data_args[1]=out_ptr, data_args[2]=ctx_ptr
-        let lockstep_data_args = [jit_cursor, jit_output_ptr, 0u64]; // ctx handled by set_real_addresses
-        interpreter.seed_data_args(&lockstep_data_args);
-        if let Some(root_cursor_arg) = jit_root_cursor_arg {
-            interpreter.set_root_cursor_arg_addr(root_cursor_arg);
-        }
 
         let op_to_line = build_op_to_line_map(program, backend_debug_info);
 
@@ -1288,7 +1275,9 @@ fn op_produces_non_comparable_value(
     non_comparable_vregs: &std::collections::HashSet<u32>,
 ) -> bool {
     match op {
-        LinearOp::SlotAddr { .. } | LinearOp::ExternAddr { .. } => true,
+        LinearOp::SlotAddr { .. } | LinearOp::ExternAddr { .. } | LinearOp::StackAlloc { .. } => {
+            true
+        }
         LinearOp::Copy { src, .. } => non_comparable_vregs.contains(&(src.index() as u32)),
         LinearOp::BinOp {
             op: BinOpKind::Add | BinOpKind::Sub,
@@ -1510,7 +1499,7 @@ pub fn op_def_uses_and_kind(
     // Ops that produce pointer values (interpreter uses different base addresses)
     let is_pointer = matches!(
         inst.op,
-        LinearOp::SlotAddr { .. } | LinearOp::LoadFromAddr { .. }
+        LinearOp::SlotAddr { .. } | LinearOp::StackAlloc { .. } | LinearOp::LoadFromAddr { .. }
     );
 
     (def, uses, is_pointer)
