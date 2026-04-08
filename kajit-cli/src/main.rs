@@ -649,31 +649,38 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
 /// Resolve a type name to a facet Shape.
 ///
 /// Supports built-in types: u8, u16, u32, u64, i8, i16, i32, i64, bool, String
-fn resolve_shape(ty: &str) -> &'static facet::Shape {
+fn try_resolve_shape(ty: &str) -> Result<&'static facet::Shape, String> {
     use facet::Facet;
     match ty {
-        "u8" => u8::SHAPE,
-        "u16" => u16::SHAPE,
-        "u32" => u32::SHAPE,
-        "u64" => u64::SHAPE,
-        "i8" => i8::SHAPE,
-        "i16" => i16::SHAPE,
-        "i32" => i32::SHAPE,
-        "i64" => i64::SHAPE,
-        "bool" => bool::SHAPE,
-        "String" | "string" => String::SHAPE,
-        "Vec<u8>" => Vec::<u8>::SHAPE,
-        "Vec<u32>" => Vec::<u32>::SHAPE,
-        "Vec<u64>" => Vec::<u64>::SHAPE,
-        "Vec<String>" => Vec::<String>::SHAPE,
-        "Option<u32>" => Option::<u32>::SHAPE,
-        "Option<String>" => Option::<String>::SHAPE,
-        "(u32, u32)" => <(u32, u32)>::SHAPE,
-        other => {
-            eprintln!("error: unknown type '{other}'");
-            eprintln!("supported: u8 u16 u32 u64 i8 i16 i32 i64 bool String");
-            eprintln!("          Vec<u8> Vec<u32> Vec<u64> Vec<String>");
-            eprintln!("          Option<u32> Option<String> (u32, u32)");
+        "u8" => Ok(u8::SHAPE),
+        "u16" => Ok(u16::SHAPE),
+        "u32" => Ok(u32::SHAPE),
+        "u64" => Ok(u64::SHAPE),
+        "i8" => Ok(i8::SHAPE),
+        "i16" => Ok(i16::SHAPE),
+        "i32" => Ok(i32::SHAPE),
+        "i64" => Ok(i64::SHAPE),
+        "bool" => Ok(bool::SHAPE),
+        "String" | "string" => Ok(String::SHAPE),
+        "Vec<u8>" => Ok(Vec::<u8>::SHAPE),
+        "Vec<u32>" => Ok(Vec::<u32>::SHAPE),
+        "Vec<u64>" => Ok(Vec::<u64>::SHAPE),
+        "Vec<String>" => Ok(Vec::<String>::SHAPE),
+        "Option<u32>" => Ok(Option::<u32>::SHAPE),
+        "Option<String>" => Ok(Option::<String>::SHAPE),
+        "(u32, u32)" => Ok(<(u32, u32)>::SHAPE),
+        other => Err(format!(
+            "unknown type '{other}'. Supported: u8 u16 u32 u64 i8 i16 i32 i64 bool String \
+             Vec<u8> Vec<u32> Vec<u64> Vec<String> Option<u32> Option<String> (u32, u32)"
+        )),
+    }
+}
+
+fn resolve_shape(ty: &str) -> &'static facet::Shape {
+    match try_resolve_shape(ty) {
+        Ok(shape) => shape,
+        Err(e) => {
+            eprintln!("error: {e}");
             std::process::exit(1);
         }
     }

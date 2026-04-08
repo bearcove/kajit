@@ -375,6 +375,16 @@ lldb_command: run
 
 The binary hash changes on recompilation. Always re-discover it with `cargo test --no-run`.
 
+### MCP server logging
+
+The MCP server (`kajit mcp --real`) logs to `/tmp/kajit-mcp.log` via `tracing`. Useful for diagnosing hangs, crashes, or unexpected behavior in debug/lockstep sessions.
+
+- Default log level: `info`
+- Override with `RUST_LOG` env var (e.g. `RUST_LOG=debug`)
+- Monitor live: `tail -f /tmp/kajit-mcp.log`
+
+The proxy layer (`kajit mcp`, without `--real`) handles backend crashes by sending JSON-RPC error responses for all in-flight requests, then restarting the backend.
+
 ## Multi-agent workflow (bud)
 
 Large tasks are delegated to a buddy agent via `bud assign`. The captain (lead agent) stays in conversation with the user, reviews work, commits, and steers.

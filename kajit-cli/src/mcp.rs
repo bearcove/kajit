@@ -338,6 +338,20 @@ impl MirHandler {
         name: &str,
         args: &JsonMap<String, JsonValue>,
     ) -> Result<JsonValue, String> {
+        tracing::info!(tool = name, "call_tool");
+        let result = self.call_tool_inner(name, args);
+        match &result {
+            Ok(_) => tracing::info!(tool = name, "call_tool OK"),
+            Err(e) => tracing::error!(tool = name, error = %e, "call_tool ERR"),
+        }
+        result
+    }
+
+    fn call_tool_inner(
+        &self,
+        name: &str,
+        args: &JsonMap<String, JsonValue>,
+    ) -> Result<JsonValue, String> {
         match name {
             "session_new" => self.session_new(args),
             "session_close" => self.session_close(args),
@@ -364,6 +378,7 @@ impl MirHandler {
     }
 
     fn session_new(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
+        tracing::info!("session_new: creating interpreter session");
         let mir_path = arg_str(args, "cfg_mir_path")?;
         let mir_text = std::fs::read_to_string(&mir_path)
             .map_err(|e| format!("failed to read {mir_path}: {e}"))?;
@@ -1208,6 +1223,7 @@ impl DebugDiffSession {
         input_hex: &str,
         hir_path: Option<&str>,
     ) -> Result<Self, String> {
+        tracing::info!(format, ty, input_hex, ?hir_path, "debug_session_new: start");
         let pipeline_opts = kajit::PipelineOptions::from_env();
         let (artifacts, output_size) = if let Some(hir_path) = hir_path {
             let hir_text = std::fs::read_to_string(hir_path)
@@ -1225,8 +1241,10 @@ impl DebugDiffSession {
                 other => return Err(format!("unknown format '{other}', expected 'postcard'")),
             };
 
-            let shape = super::resolve_shape(ty);
+            let shape = super::try_resolve_shape(ty)?;
+            tracing::info!(ty, "debug_session_new: compiling pipeline");
             let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
+            tracing::info!("debug_session_new: pipeline compiled");
             let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
             (artifacts, output_size)
         };
@@ -1268,27 +1286,21 @@ impl DebugDiffSession {
         let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)
             .map_err(|e| format!("error generating harness: {e}"))?;
 
-        eprintln!("[debug_session_new] harness: {}", exe_path.display());
-        eprintln!("[debug_session_new] output_size: {output_size}");
-        eprintln!("[debug_session_new] listing: {}", listing_path.display());
+        tracing::info!(harness = %exe_path.display(), output_size, listing = %listing_path.display(), "debug_session_new: harness generated");
 
         // Verify the binary exists and is executable
         let metadata = std::fs::metadata(&exe_path)
             .map_err(|e| format!("harness binary not found at {}: {e}", exe_path.display()))?;
-        eprintln!("[debug_session_new] binary size: {} bytes", metadata.len());
-
-        // Try running file(1) on the binary for diagnostics
-        if let Ok(output) = std::process::Command::new("file").arg(&exe_path).output() {
-            eprintln!(
-                "[debug_session_new] file: {}",
-                String::from_utf8_lossy(&output.stdout).trim()
-            );
-        }
+        tracing::info!(
+            binary_size = metadata.len(),
+            "debug_session_new: binary verified"
+        );
 
         let input = parse_hex_input(input_hex)?;
-        eprintln!("[debug_session_new] launching LLDB with input: {input_hex}");
+        tracing::info!(input_hex, "debug_session_new: launching LLDB");
         let debugger = LldbJitDebugger::launch(exe_path.to_str().unwrap(), input_hex)
             .map_err(|e| format!("error launching LLDB: {e}"))?;
+        tracing::info!("debug_session_new: LLDB launched, creating lockstep session");
         let lockstep = LockstepSession::new(
             &artifacts.cfg_program,
             &input,
@@ -1299,6 +1311,7 @@ impl DebugDiffSession {
             debugger,
         )
         .map_err(|e| e.to_string())?;
+        tracing::info!("debug_session_new: session ready");
 
         Ok(Self {
             format: format.to_owned(),
@@ -1901,7 +1914,7 @@ async fn run() -> Result<(), String> {
         },
         protocol_version: LATEST_PROTOCOL_VERSION.into(),
         instructions: Some(
-            "Kajit MCP server. Use `session_*` tools for reversible CFG-MIR interpreter debugging and `debug_session_*` tools for persistent LLDB-backed lockstep sessions."
+            "Kajit MCP server. Use `session_*` tools for reversible CFG-MIR interpreter debugging and `debug_session_*` tools for persistent LLDB-backed lockstep sessions. The server logs to `/tmp/kajit-mcp.log` (set `RUST_LOG` for verbosity, default: info)."
                 .into(),
         ),
         meta: None,
@@ -1927,6 +1940,19 @@ async fn run() -> Result<(), String> {
 
 /// Run the MCP server (real mode — handles MCP protocol directly).
 pub async fn run_real() -> Result<(), String> {
+    // Set up file-based tracing (stdout/stderr are used by MCP protocol)
+    let log_file = std::fs::File::create("/tmp/kajit-mcp.log")
+        .map_err(|e| format!("failed to create /tmp/kajit-mcp.log: {e}"))?;
+    use tracing_subscriber::EnvFilter;
+    tracing_subscriber::fmt()
+        .with_writer(log_file)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_ansi(false)
+        .init();
+
+    tracing::info!("kajit MCP server starting (real mode)");
     run().await
 }
 
@@ -2015,17 +2041,20 @@ fn patch_tools_list_response(response: &mut JsonValue) {
 /// stdin/stdout bidirectionally. This lets the MCP connection survive
 /// rebuilds — just call the `reload` tool to restart the subprocess.
 async fn run_proxy() -> Result<(), String> {
-    use std::collections::HashSet;
+    use std::collections::{HashMap, HashSet};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::process::Command;
 
     let exe = std::env::current_exe().map_err(|e| format!("can't find self: {e}"))?;
     let mut pending_tool_list_ids = HashSet::<String>::new();
     let mut pending_initialize_ids = HashSet::<String>::new();
+    // Track all in-flight request IDs so we can send errors if the child dies
+    let mut inflight_requests = HashMap::<String, JsonValue>::new();
 
     loop {
         pending_tool_list_ids.clear();
         pending_initialize_ids.clear();
+        inflight_requests.clear();
 
         let mut child = Command::new(&exe)
             .args(["mcp", "--real"])
@@ -2056,8 +2085,15 @@ async fn run_proxy() -> Result<(), String> {
                     match result {
                         Ok(0) => return Ok(()), // EOF from client
                         Ok(_) => {
-                            if let Ok(parsed) = serde_json::from_str::<JsonValue>(&from_client)
-                                && let Some(method) = parsed.get("method").and_then(|v| v.as_str())
+                            if let Ok(parsed) = serde_json::from_str::<JsonValue>(&from_client) {
+                                // Track in-flight requests so we can send errors if child dies
+                                if let Some(id) = parsed.get("id") {
+                                    if let Some(key) = request_id_key(id) {
+                                        inflight_requests.insert(key.clone(), id.clone());
+                                    }
+                                }
+
+                                if let Some(method) = parsed.get("method").and_then(|v| v.as_str())
                                     && let Some(id_key) = parsed.get("id").and_then(request_id_key) {
                                         match method {
                                             "initialize" => {
@@ -2086,6 +2122,7 @@ async fn run_proxy() -> Result<(), String> {
                                             _ => {}
                                         }
                                     }
+                            }
                             // Forward to child
                             child_stdin.write_all(from_client.as_bytes()).await.ok();
                             child_stdin.flush().await.ok();
@@ -2096,7 +2133,21 @@ async fn run_proxy() -> Result<(), String> {
                 result = child_stdout_reader.read_line(&mut from_child) => {
                     match result {
                         Ok(0) => {
-                            // Child died — restart
+                            // Child died — send error responses for all in-flight requests
+                            for (_key, id) in inflight_requests.drain() {
+                                let err_resp = json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "error": {
+                                        "code": -32603,
+                                        "message": "MCP backend process crashed"
+                                    }
+                                });
+                                let s = serde_json::to_string(&err_resp).unwrap();
+                                proxy_stdout.write_all(s.as_bytes()).await.ok();
+                                proxy_stdout.write_all(b"\n").await.ok();
+                            }
+                            proxy_stdout.flush().await.ok();
                             should_reload = true;
                             break;
                         }
@@ -2104,6 +2155,8 @@ async fn run_proxy() -> Result<(), String> {
                             let mut outbound = from_child.clone();
                             if let Ok(mut parsed) = serde_json::from_str::<JsonValue>(&from_child)
                                 && let Some(id_key) = parsed.get("id").and_then(request_id_key) {
+                                    // Response received — no longer in-flight
+                                    inflight_requests.remove(&id_key);
                                     if pending_initialize_ids.remove(&id_key) {
                                         patch_initialize_response(&mut parsed);
                                         outbound = serde_json::to_string(&parsed)
