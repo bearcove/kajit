@@ -343,6 +343,9 @@ pub struct LockstepSession<D: JitDebugger> {
     pub location_tracker: LocationTracker,
     pub listing_lines: Vec<String>,
     pub interpreter: kajit_mir::DebuggerSession,
+    /// Owns the interpreter's memory allocations (cursor, output, ctx).
+    /// Must outlive `interpreter`.
+    _interp_allocs: crate::context::InterpreterAllocations,
     pub debugger: D,
     pub op_to_line: std::collections::HashMap<(u32, bool, usize), u32>,
     pub prev_dwarf_line: u32,
@@ -367,24 +370,25 @@ impl<D: JitDebugger> LockstepSession<D> {
         entry_offset: usize,
         debugger: D,
     ) -> Result<Self, DebugError> {
-        // Read function arguments from ABI registers.
+        // Build interpreter-side allocations and Arguments.
+        // The interpreter gets its own memory, independent from the JIT process.
+        let mut interp_allocs =
+            crate::context::InterpreterAllocations::new(input, program.funcs[0].output_size);
+        let interp_args = interp_allocs.to_arguments(&program.data_arg_layouts);
+
+        // Read JIT register values (for comparison only, NOT passed to interpreter).
         let num_data_args = program.funcs[0].data_args.len();
-        let mut args = kajit_types::Arguments::new();
+        let mut jit_register_values = Vec::new();
         for i in 0..num_data_args {
-            let val = debugger.read_register(i as u8)?;
-            args.push(kajit_types::ArgValue::U64(val));
+            jit_register_values.push(debugger.read_register(i as u8)?);
         }
-        eprintln!(
-            "[lockstep] data_args ({}): {}",
-            num_data_args,
-            (0..num_data_args)
-                .map(|i| format!("x{}=0x{:x}", i, args.to_register_slots().0[i]))
-                .collect::<Vec<_>>()
-                .join(", ")
+        tracing::info!(
+            ?jit_register_values,
+            "lockstep: JIT register values (for comparison)"
         );
 
         tracing::info!("lockstep: creating interpreter session");
-        let interpreter = kajit_mir::DebuggerSession::new(program, input, &args)
+        let interpreter = kajit_mir::DebuggerSession::new(program, &interp_args)
             .map_err(|e| DebugError::LldbError(format!("interpreter init: {e}")))?;
         tracing::info!("lockstep: interpreter session created");
 
@@ -409,14 +413,15 @@ impl<D: JitDebugger> LockstepSession<D> {
                 ..
             } = interp_tagged
             {
-                let jit_base = args.to_register_slots().0[i];
-                ptr_pairs.insert(
-                    id,
-                    PtrPair {
-                        interp_base,
-                        jit_base,
-                    },
-                );
+                if let Some(&jit_base) = jit_register_values.get(i) {
+                    ptr_pairs.insert(
+                        id,
+                        PtrPair {
+                            interp_base,
+                            jit_base,
+                        },
+                    );
+                }
             }
         }
 
@@ -426,6 +431,7 @@ impl<D: JitDebugger> LockstepSession<D> {
             location_tracker: LocationTracker::new(location_map, program),
             listing_lines,
             interpreter,
+            _interp_allocs: interp_allocs,
             debugger,
             op_to_line,
             prev_dwarf_line,

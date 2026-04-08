@@ -1,51 +1,9 @@
 use std::collections::HashMap;
 
-use kajit_ir::ErrorCode;
 use kajit_lir::{BinOpKind, LinearOp};
 
 use crate::InterpreterTrap;
 use crate::cfg_mir;
-
-/// Minimal runtime context matching the JIT's DeserContext layout.
-/// Used to call real intrinsic functions from the interpreter.
-#[repr(C)]
-struct RuntimeDeserContext {
-    input_ptr: *const u8,
-    input_end: *const u8,
-    error: RuntimeErrorSlot,
-    key_scratch_ptr: *mut u8,
-    key_scratch_cap: usize,
-    trusted_utf8: bool,
-}
-
-#[repr(C)]
-struct RuntimeSliceU8 {
-    ptr: *const u8,
-    len: usize,
-}
-
-#[repr(C)]
-struct RuntimeCursorArg {
-    bytes: RuntimeSliceU8,
-    pos: u64,
-}
-
-// Safety: RuntimeDeserContext and RuntimeCursorArg contain raw pointers that
-// point into DebuggerSession-owned data (input_data, etc.). They are only
-// dereferenced while the session holds &mut self.
-unsafe impl Send for RuntimeDeserContext {}
-unsafe impl Send for RuntimeCursorArg {}
-
-#[repr(C)]
-struct RuntimeErrorSlot {
-    code: u32,
-    offset: u32,
-}
-
-fn error_code_from_u32(code: u32) -> ErrorCode {
-    // Safety: ErrorCode is repr(u32) and all valid codes are contiguous
-    unsafe { core::mem::transmute(code) }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebuggerError {
@@ -181,7 +139,6 @@ pub struct DebuggerState {
     pub vregs: Vec<u64>,
     /// Tagged vreg values with pointer provenance info.
     pub tagged_vregs: Vec<TaggedValue>,
-    pub output: Vec<u8>,
     pub trap: Option<InterpreterTrap>,
     pub returned: bool,
     pub halted: bool,
@@ -228,12 +185,6 @@ struct SessionSnapshot {
 pub struct DebuggerSession {
     func: cfg_mir::Function,
     block_indices: HashMap<cfg_mir::BlockId, usize>,
-    /// Input data (kept alive so cursor_arg.bytes.ptr stays valid).
-    input_data: Vec<u8>,
-    /// Interpreter-owned output buffer, pointed to by data_args[1].
-    output_buf: Vec<u8>,
-    /// Interpreter-owned RuntimeCursorArg, pointed to by data_args[0].
-    cursor_arg: Box<RuntimeCursorArg>,
     /// Separate storage for slot values (not part of the output).
     slots: Vec<u8>,
     vregs: Vec<TaggedValue>,
@@ -245,8 +196,6 @@ pub struct DebuggerSession {
     history: Vec<SessionSnapshot>,
     /// Embedded constant data blobs (string literals, etc.).
     data_blobs: Vec<Vec<u8>>,
-    /// Runtime deserialization context, passed to intrinsics as ctx_ptr.
-    ctx: RuntimeDeserContext,
     /// External symbol resolution table.
     symbol_table: kajit_types::SymbolTable,
     /// Stack allocation metadata (size/align per ID).
@@ -265,8 +214,7 @@ pub struct DebuggerSession {
 impl DebuggerSession {
     pub fn new(
         program: &cfg_mir::Program,
-        input: &[u8],
-        _args: &kajit_types::Arguments,
+        args: &kajit_types::Arguments,
     ) -> Result<Self, DebuggerError> {
         tracing::info!("DebuggerSession::new start");
         let func = program
@@ -275,24 +223,7 @@ impl DebuggerSession {
             .ok_or(DebuggerError::NoFunctions)?
             .clone();
         let block_indices = build_block_index(&func);
-        let input_data = input.to_vec();
-        let output_size = infer_output_size(&func);
-        tracing::info!(
-            output_size,
-            func_output_size = func.output_size,
-            "output_buf size"
-        );
-        let output_buf = vec![0u8; output_size];
-        let cursor_arg = Box::new(RuntimeCursorArg {
-            bytes: RuntimeSliceU8 {
-                ptr: input_data.as_ptr(),
-                len: input_data.len(),
-            },
-            pos: 0,
-        });
         let mut session = Self {
-            output_buf,
-            cursor_arg,
             slots: Vec::new(),
             vregs: vec![TaggedValue::Scalar(0); program.vreg_count as usize],
             trap: None,
@@ -303,16 +234,7 @@ impl DebuggerSession {
             history: Vec::new(),
             func,
             block_indices,
-            input_data,
             data_blobs: program.data_blobs.clone(),
-            ctx: RuntimeDeserContext {
-                input_ptr: std::ptr::null(),
-                input_end: std::ptr::null(),
-                error: RuntimeErrorSlot { code: 0, offset: 0 },
-                key_scratch_ptr: std::ptr::null_mut(),
-                key_scratch_cap: 0,
-                trusted_utf8: false,
-            },
             symbol_table: kajit_types::SymbolTable::new(),
             stack_allocs_info: program.stack_allocs.clone(),
             stack_allocs: Vec::new(),
@@ -320,95 +242,45 @@ impl DebuggerSession {
             pointer_shadow: HashMap::new(),
             ptr_interp_bases: HashMap::new(),
         };
-        tracing::info!("DebuggerSession::new struct created");
-        // Initialize ctx with input pointers
-        session.ctx.input_ptr = session.input_data.as_ptr();
-        session.ctx.input_end =
-            unsafe { session.input_data.as_ptr().add(session.input_data.len()) };
 
-        // Set data_arg vregs to point to interpreter-owned allocations.
-        // HIR param order: [cursor, out, ctx]
-        // Each gets a stable PtrId.
+        // Seed data_arg vregs from the provided Arguments.
         let data_args = session.func.data_args.clone();
-        let data_arg_layouts = &program.data_arg_layouts;
-        let fallback_names = ["cursor", "out", "ctx"];
+        let arg_items = args.items();
         tracing::info!(
             n_data_args = data_args.len(),
-            data_args = ?data_args.iter().map(|v| v.index()).collect::<Vec<_>>(),
-            n_layouts = data_arg_layouts.len(),
+            n_arg_items = arg_items.len(),
             "DebuggerSession::new seeding data_args"
         );
-        for (i, layout) in data_arg_layouts.iter().enumerate() {
-            tracing::info!(i, layout = ?layout, "data_arg layout");
-        }
-        if let Some(&vreg) = data_args.get(0) {
-            tracing::info!("seeding data_arg[0]");
-            let ptr = &*session.cursor_arg as *const RuntimeCursorArg as u64;
-            let name = data_arg_layouts
-                .get(0)
-                .and_then(|l| l.name())
-                .unwrap_or(fallback_names[0]);
-            let id = session.alloc_ptr_id(ptr, &format!("data_arg[0] ({name})"));
-            session.write_vreg_tagged(
-                vreg.index(),
-                TaggedValue::Pointer {
-                    id,
-                    concrete: ptr,
-                    offset: 0,
-                },
-            );
-            tracing::info!("seeding data_arg[0] shadow");
-            // Seed shadow memory for pointer fields within this struct
-            if let Some(layout) = data_arg_layouts.get(0) {
-                session.seed_shadow_for_layout(id, ptr, layout);
-            }
-            tracing::info!("data_arg[0] done");
-        }
-        tracing::info!("between data_arg[0] and data_arg[1]");
-        if let Some(&vreg) = data_args.get(1) {
-            tracing::info!("seeding data_arg[1]");
-            let ptr = session.output_buf.as_ptr() as u64;
-            tracing::info!(ptr, "data_arg[1] ptr");
-            let name = data_arg_layouts
-                .get(1)
-                .and_then(|l| l.name())
-                .unwrap_or(fallback_names[1]);
-            tracing::info!("data_arg[1] alloc_ptr_id");
-            let id = session.alloc_ptr_id(ptr, &format!("data_arg[1] ({name})"));
-            tracing::info!("data_arg[1] write_vreg_tagged");
-            session.write_vreg_tagged(
-                vreg.index(),
-                TaggedValue::Pointer {
-                    id,
-                    concrete: ptr,
-                    offset: 0,
-                },
-            );
-            tracing::info!("data_arg[1] seed_shadow");
-            if let Some(layout) = data_arg_layouts.get(1) {
-                session.seed_shadow_for_layout(id, ptr, layout);
-            }
-            tracing::info!("data_arg[1] done");
-        }
-        if let Some(&vreg) = data_args.get(2) {
-            let ptr = &session.ctx as *const RuntimeDeserContext as u64;
-            let name = data_arg_layouts
-                .get(2)
-                .and_then(|l| l.name())
-                .unwrap_or(fallback_names[2]);
-            let id = session.alloc_ptr_id(ptr, &format!("data_arg[2] ({name})"));
-            session.write_vreg_tagged(
-                vreg.index(),
-                TaggedValue::Pointer {
-                    id,
-                    concrete: ptr,
-                    offset: 0,
-                },
-            );
-            if let Some(layout) = data_arg_layouts.get(2) {
-                session.seed_shadow_for_layout(id, ptr, layout);
+        for (i, &vreg) in data_args.iter().enumerate() {
+            if let Some(arg_val) = arg_items.get(i) {
+                match arg_val {
+                    kajit_types::ArgValue::Ptr { addr, pointee } => {
+                        let id = session.alloc_ptr_id(*addr, &format!("data_arg[{i}]"));
+                        session.write_vreg_tagged(
+                            vreg.index(),
+                            TaggedValue::Pointer {
+                                id,
+                                concrete: *addr,
+                                offset: 0,
+                            },
+                        );
+                        // Seed shadow memory for pointer fields within the pointee.
+                        session.seed_shadow_for_layout(id, *addr, pointee);
+                        tracing::info!(i, addr, "data_arg: ptr");
+                    }
+                    kajit_types::ArgValue::U64(val) => {
+                        session.write_vreg(vreg.index(), *val);
+                        tracing::info!(i, val, "data_arg: u64");
+                    }
+                    kajit_types::ArgValue::F64(val) => {
+                        // Store the bits as u64 for now — no float vreg support yet.
+                        session.write_vreg(vreg.index(), val.to_bits());
+                        tracing::info!(i, val, "data_arg: f64");
+                    }
+                }
             }
         }
+
         tracing::info!("DebuggerSession::new done");
         Ok(session)
     }
@@ -419,7 +291,6 @@ impl DebuggerSession {
             location: self.location(),
             vregs: self.vregs.iter().map(|v| v.concrete()).collect(),
             tagged_vregs: self.vregs.clone(),
-            output: self.output_buf.clone(),
             trap: self.trap,
             returned: self.returned,
             halted: self.is_halted(),
@@ -432,14 +303,6 @@ impl DebuggerSession {
 
     pub fn inspect_vreg_tagged(&self, vreg_index: usize) -> TaggedValue {
         self.read_vreg_tagged(vreg_index)
-    }
-
-    pub fn inspect_output(&self, start: usize, len: usize) -> Vec<u8> {
-        if start >= self.output_buf.len() {
-            return Vec::new();
-        }
-        let end = start.saturating_add(len).min(self.output_buf.len());
-        self.output_buf[start..end].to_vec()
     }
 
     pub fn step_forward(&mut self) -> Result<StepEvent, DebuggerError> {
@@ -736,15 +599,6 @@ impl DebuggerSession {
     fn ensure_slots_len(&mut self, len: usize) {
         if self.slots.len() < len {
             self.slots.resize(len, 0);
-        }
-    }
-
-    fn trap(&mut self, code: ErrorCode) {
-        if self.trap.is_none() {
-            self.trap = Some(InterpreterTrap {
-                code,
-                offset: self.cursor_arg.pos as u32,
-            });
         }
     }
 
@@ -1105,11 +959,6 @@ impl DebuggerSession {
             }
         };
 
-        // Check for errors from ctx.
-        if self.ctx.error.code != 0 {
-            self.trap(error_code_from_u32(self.ctx.error.code));
-        }
-
         // Store return value.
         if let Some(dst) = dst {
             self.write_vreg(dst.index(), ret);
@@ -1302,17 +1151,6 @@ fn build_block_index(func: &cfg_mir::Function) -> HashMap<cfg_mir::BlockId, usiz
         out.insert(block.id, idx);
     }
     out
-}
-
-fn infer_output_size(func: &cfg_mir::Function) -> usize {
-    let from_fields = func
-        .blocks
-        .iter()
-        .flat_map(|block| block.insts.iter())
-        .filter_map(|_inst_id| -> Option<usize> { None })
-        .max()
-        .unwrap_or(0);
-    from_fields.max(func.output_size)
 }
 
 fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {

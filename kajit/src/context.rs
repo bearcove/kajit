@@ -382,3 +382,80 @@ mod tests {
         assert_eq!(&vec[..2], &[0xAA, 0xBB]);
     }
 }
+
+// =============================================================================
+// InterpreterAllocations — owns memory for an interpreter session
+// =============================================================================
+
+/// Owns the memory allocations that an interpreter session needs.
+/// The caller creates this, builds `Arguments` pointing into it,
+/// and keeps it alive for the duration of the session.
+pub struct InterpreterAllocations {
+    pub cursor: Box<RuntimeCursor>,
+    pub output: Vec<u8>,
+    pub ctx: Box<DeserContext>,
+    /// Keeps input alive so cursor.bytes_ptr stays valid.
+    _input: Vec<u8>,
+}
+
+impl InterpreterAllocations {
+    /// Create interpreter-side allocations for a deserialization session.
+    pub fn new(input: &[u8], output_size: usize) -> Self {
+        let input_owned = input.to_vec();
+        let output = vec![0u8; output_size];
+        // Cursor and ctx use raw pointers into input_owned.
+        // input_owned is heap-allocated (Vec) and boxed cursor/ctx are heap-allocated,
+        // so moving the InterpreterAllocations struct doesn't invalidate pointers.
+        let cursor = Box::new(RuntimeCursor {
+            bytes_ptr: input_owned.as_ptr(),
+            bytes_len: input_owned.len() as u64,
+            pos: 0,
+        });
+        let ctx = Box::new(DeserContext {
+            input_ptr: input_owned.as_ptr(),
+            input_end: unsafe { input_owned.as_ptr().add(input_owned.len()) },
+            error: ErrorSlot { code: 0, offset: 0 },
+            key_scratch_ptr: core::ptr::null_mut(),
+            key_scratch_cap: 0,
+            trusted_utf8: false,
+        });
+        Self {
+            cursor,
+            output,
+            ctx,
+            _input: input_owned,
+        }
+    }
+
+    /// Build typed `Arguments` pointing into these allocations.
+    /// Uses data_arg_layouts to determine pointee types.
+    pub fn to_arguments(
+        &mut self,
+        data_arg_layouts: &[kajit_types::TypeLayout],
+    ) -> kajit_types::Arguments {
+        use kajit_types::{ArgValue, TypeLayout};
+
+        // Pointers to our allocations, in the standard arg order: [cursor, out, ctx]
+        let ptrs: [*mut u8; 3] = [
+            &mut *self.cursor as *mut RuntimeCursor as *mut u8,
+            self.output.as_mut_ptr(),
+            &mut *self.ctx as *mut DeserContext as *mut u8,
+        ];
+
+        let mut args = kajit_types::Arguments::new();
+        for (i, ptr) in ptrs.iter().enumerate() {
+            let pointee = data_arg_layouts
+                .get(i)
+                .map(|layout| match layout {
+                    TypeLayout::Ptr { pointee } => (**pointee).clone(),
+                    other => other.clone(),
+                })
+                .unwrap_or(TypeLayout::Opaque { size: 0 });
+            args.push(ArgValue::Ptr {
+                addr: *ptr as u64,
+                pointee,
+            });
+        }
+        args
+    }
+}

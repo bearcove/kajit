@@ -189,12 +189,15 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
     });
 
     let input = parse_hex(input_hex);
-    let args = kajit_types::Arguments::new();
-    let mut session =
-        kajit_mir::DebuggerSession::new(&program, &input, &args).unwrap_or_else(|e| {
-            eprintln!("error: failed to create session: {e}");
-            std::process::exit(1);
-        });
+    let mut interp_allocs = kajit::context::InterpreterAllocations::new(
+        &input,
+        program.funcs.first().map(|f| f.output_size).unwrap_or(0),
+    );
+    let args = interp_allocs.to_arguments(&program.data_arg_layouts);
+    let mut session = kajit_mir::DebuggerSession::new(&program, &args).unwrap_or_else(|e| {
+        eprintln!("error: failed to create session: {e}");
+        std::process::exit(1);
+    });
 
     let _events = session
         .run_until(kajit_mir::RunUntilTarget::Return, 100_000)
@@ -215,7 +218,8 @@ fn print_interpreter_state(state: &kajit_mir::DebuggerState) {
     if state.returned {
         println!("returned: yes");
     }
-    println!("output: {}", encode_hex(&state.output));
+    // Output buffer is now owned by the caller, not the session.
+    // TODO: read output from InterpreterAllocations if needed.
 
     let nonzero: Vec<_> = state
         .vregs

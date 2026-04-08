@@ -818,8 +818,8 @@ pub enum InterpOutcome {
 }
 
 /// Run a program through the ideal interpreter.
-pub fn interpret(program: &Program, input: &[u8], args: &kajit_types::Arguments) -> InterpOutcome {
-    let mut session = match crate::DebuggerSession::new(program, input, args) {
+pub fn interpret(program: &Program, _input: &[u8], args: &kajit_types::Arguments) -> InterpOutcome {
+    let mut session = match crate::DebuggerSession::new(program, args) {
         Ok(s) => s,
         Err(_) => return InterpOutcome::TimedOut,
     };

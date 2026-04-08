@@ -439,7 +439,7 @@ impl MirHandler {
         let input = parse_hex_input(&input_hex)?;
         let program = kajit_mir_text::parse_cfg_mir(&mir_text).map_err(|e| e.to_string())?;
         let args = kajit_types::Arguments::new();
-        let session = DebuggerSession::new(&program, &input, &args).map_err(|e| e.to_string())?;
+        let session = DebuggerSession::new(&program, &args).map_err(|e| e.to_string())?;
 
         let mut state = self.lock_state()?;
         let session_id = state.next_session_id;
@@ -597,9 +597,12 @@ impl MirHandler {
             .sessions
             .get(&session_id)
             .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-        let bytes = session.inspect_output(start, len);
+        // Output buffer is now owned by the caller, not the session.
+        // For MCP sessions without caller-provided allocations, output inspection
+        // is not available.
+        let _ = (start, len, session);
         Ok(
-            json!({ "text": format!("output[{}..{}]: `{}`", start, start + bytes.len(), encode_hex(&bytes)) }),
+            json!({ "text": "output inspection not available (session has no owned output buffer)" }),
         )
     }
 
@@ -1942,7 +1945,6 @@ fn format_state_markdown(state: &DebuggerState) -> String {
     if state.halted {
         s.push_str("**HALTED**\n");
     }
-    s.push_str(&format!("output: `{}`\n", encode_hex(&state.output)));
 
     // Only show non-zero vregs
     let nonzero: Vec<_> = state
