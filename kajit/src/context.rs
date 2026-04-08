@@ -1,5 +1,27 @@
 pub use kajit_ir::ErrorCode;
 
+/// Runtime cursor matching the HIR `Cursor` struct layout.
+///
+/// Layout: `{ bytes_ptr: *const u8, bytes_len: u64, pos: u64 }`
+/// - `bytes_ptr` + `bytes_len` = the `bytes: &[u8]` slice field
+/// - `pos` = the `pos: u64` field (current read offset within the slice)
+#[repr(C)]
+pub struct RuntimeCursor {
+    pub bytes_ptr: *const u8,
+    pub bytes_len: u64,
+    pub pos: u64,
+}
+
+impl RuntimeCursor {
+    pub fn new(input: &[u8]) -> Self {
+        Self {
+            bytes_ptr: input.as_ptr(),
+            bytes_len: input.len() as u64,
+            pos: 0,
+        }
+    }
+}
+
 // r[impl callconv.deser-context]
 /// The runtime context passed to every emitted deserializer function.
 /// Layout is `#[repr(C)]` so field offsets are stable and can be used from JIT code.

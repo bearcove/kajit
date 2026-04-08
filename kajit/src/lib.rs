@@ -29,7 +29,7 @@ pub use compiler::{
     CompiledDecoder, CompiledFunction, PipelineArtifacts, compile_hir_module, compile_pipeline,
     compile_pipeline_from_hir_module, compile_pre_opt_cfg, lower_hir_module,
 };
-use context::{DeserContext, ErrorCode};
+use context::{DeserContext, ErrorCode, RuntimeCursor};
 pub use format::DecoderKind;
 pub use pipeline_opts::{CompileTarget, PipelineOptions};
 
@@ -344,10 +344,11 @@ pub fn deserialize_raw(
     input: &[u8],
     output_size: usize,
 ) -> Result<Vec<u8>, DeserError> {
+    let mut cursor = RuntimeCursor::new(input);
     let mut ctx = DeserContext::from_bytes(input);
     let mut output = vec![0u8; output_size];
 
-    invoke_decoder(deser, output.as_mut_ptr(), &mut ctx);
+    invoke_decoder(deser, &mut cursor, output.as_mut_ptr(), &mut ctx);
 
     if ctx.error.code != 0 {
         let code: ErrorCode = unsafe { core::mem::transmute(ctx.error.code) };
@@ -364,10 +365,14 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
     deser: &CompiledDecoder,
     ctx: &mut DeserContext,
 ) -> Result<T, DeserError> {
-    // Allocate output on the stack as MaybeUninit
+    let mut cursor = RuntimeCursor {
+        bytes_ptr: ctx.input_ptr,
+        bytes_len: ctx.remaining() as u64,
+        pos: 0,
+    };
     let mut output = core::mem::MaybeUninit::<T>::uninit();
 
-    invoke_decoder(deser, output.as_mut_ptr() as *mut u8, ctx);
+    invoke_decoder(deser, &mut cursor, output.as_mut_ptr() as *mut u8, ctx);
 
     if ctx.error.code != 0 {
         let code: ErrorCode = unsafe { core::mem::transmute(ctx.error.code) };
@@ -380,11 +385,16 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
     Ok(unsafe { output.assume_init() })
 }
 
-fn invoke_decoder(deser: &CompiledDecoder, output: *mut u8, ctx: &mut DeserContext) {
-    let func: unsafe extern "C" fn(*mut u8, *mut DeserContext) =
+fn invoke_decoder(
+    deser: &CompiledDecoder,
+    cursor: &mut RuntimeCursor,
+    output: *mut u8,
+    ctx: &mut DeserContext,
+) {
+    let func: unsafe extern "C" fn(*mut RuntimeCursor, *mut u8, *mut DeserContext) =
         unsafe { core::mem::transmute(deser.func_ptr()) };
     unsafe {
-        func(output, ctx);
+        func(cursor, output, ctx);
     }
 }
 

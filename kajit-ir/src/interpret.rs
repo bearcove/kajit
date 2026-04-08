@@ -13,10 +13,6 @@ use crate::{ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, Region
 /// Interpreter outcome.
 #[derive(Debug)]
 pub struct Outcome {
-    /// Output buffer (deserialized data).
-    pub output: Vec<u8>,
-    /// Final cursor position.
-    pub cursor: usize,
     /// Error trap, if any.
     pub trap: Option<Trap>,
 }
@@ -27,12 +23,7 @@ pub struct Trap {
 }
 
 /// Interpreter state.
-struct State<'a> {
-    /// Input bytes.
-    #[allow(dead_code)]
-    input: &'a [u8],
-    /// Output buffer.
-    output: Vec<u8>,
+struct State {
     /// Abstract stack slots.
     slots: Vec<u64>,
     /// Address-based slot memory (8-byte stride).
@@ -49,11 +40,9 @@ struct State<'a> {
 
 const SLOT_STRIDE: usize = 8;
 
-impl<'a> State<'a> {
-    fn new(input: &'a [u8], output_size: usize, symbol_table: SymbolTable) -> Self {
+impl State {
+    fn new(symbol_table: SymbolTable) -> Self {
         Self {
-            input,
-            output: vec![0u8; output_size],
             slots: Vec::new(),
             slot_mem: Vec::new(),
             trap: None,
@@ -134,13 +123,8 @@ impl Env {
 /// Execute an IrFunc on the given input bytes.
 ///
 /// `output_size` is the expected size of the output buffer (from the shape).
-pub fn interpret(
-    func: &IrFunc,
-    input: &[u8],
-    output_size: usize,
-    symbol_table: SymbolTable,
-) -> Outcome {
-    let mut state = State::new(input, output_size, symbol_table);
+pub fn interpret(func: &IrFunc, symbol_table: SymbolTable, data_args: &[u64]) -> Outcome {
+    let mut state = State::new(symbol_table);
     let mut env = Env::new();
 
     // Find the root lambda and execute its body.
@@ -149,20 +133,20 @@ pub fn interpret(
         panic!("root node is not a Lambda");
     };
 
-    // Lambda body region args correspond to state domains.
-    // Set up initial state domain "values" (they're just tokens, use 0).
+    // Lambda body region args: data args first, then state domains.
     let body_region = &func.regions[*body];
-    for &arg_id in &body_region.args {
-        env.args.insert(arg_id, 0);
+    for (i, &arg_id) in body_region.args.iter().enumerate() {
+        let value = if i < data_args.len() {
+            data_args[i]
+        } else {
+            0 // state domain token
+        };
+        env.args.insert(arg_id, value);
     }
 
     eval_region(func, *body, &mut state, &mut env);
 
-    Outcome {
-        output: state.output,
-        cursor: 0, // cursor ops removed; position not tracked by IR interpreter
-        trap: state.trap,
-    }
+    Outcome { trap: state.trap }
 }
 
 /// Evaluate all nodes in a region in order.

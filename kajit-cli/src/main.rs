@@ -451,25 +451,33 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
             Ok(ir_func) => {
                 let input_clone = input.clone();
                 let handle = std::thread::spawn(move || {
-                    kajit_ir::interpret::interpret(
+                    let mut cursor = kajit::context::RuntimeCursor::new(&input_clone);
+                    let mut out_buf = vec![0u8; output_size];
+                    let mut ctx = kajit::context::DeserContext::from_bytes(&input_clone);
+                    let data_args = [
+                        &mut cursor as *mut _ as u64,
+                        out_buf.as_mut_ptr() as u64,
+                        &mut ctx as *mut _ as u64,
+                    ];
+                    let outcome = kajit_ir::interpret::interpret(
                         &ir_func,
-                        &input_clone,
-                        output_size,
                         kajit_types::SymbolTable::new(),
-                    )
+                        &data_args,
+                    );
+                    (outcome, out_buf)
                 });
                 let timeout = std::time::Duration::from_secs(5);
                 let start = std::time::Instant::now();
                 loop {
                     if handle.is_finished() {
                         match handle.join() {
-                            Ok(ir_result) => match &ir_result.trap {
+                            Ok((outcome, out_buf)) => match &outcome.trap {
                                 None => {
                                     eprintln!("ok");
                                     println!(
                                         "  rvsdg out:   {} ({})",
-                                        encode_hex(&ir_result.output),
-                                        ir_result.output.len()
+                                        encode_hex(&out_buf),
+                                        out_buf.len()
                                     );
                                 }
                                 Some(t) => {
