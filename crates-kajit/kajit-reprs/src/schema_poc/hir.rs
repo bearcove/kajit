@@ -28,6 +28,92 @@ pub const REPR_FILE_EXT: &str = ".vixen-hir";
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
 pub const REPR_ROUND_TRIP: &str = "canonical-print";
 pub const REPR_PROVENANCE: &str = "required";
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BinaryOp;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocBlock;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenericParam;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Literal;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalKind;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Prov;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Symbol;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Type;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeDefKind;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Block {
+    pub prov: Prov,
+    pub statements: Vec<Stmt>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Expr {
+    Binary { lhs: Box<Expr>, op: BinaryOp, prov: Prov, rhs: Box<Expr> },
+    Call { args: Vec<Expr>, callee: Symbol, prov: Prov },
+    Field { base: Box<Expr>, field: Symbol, prov: Prov },
+    Literal { prov: Prov, value: Literal },
+    Local { name: Symbol, prov: Prov },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Function {
+    pub body: Box<Block>,
+    pub docs: Option<DocBlock>,
+    pub locals: Vec<Local>,
+    pub name: Symbol,
+    pub params: Vec<Param>,
+    pub prov: Prov,
+    pub return_type: Type,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Local {
+    pub kind: LocalKind,
+    pub name: Symbol,
+    pub prov: Prov,
+    pub ty: Type,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Module {
+    pub docs: Option<DocBlock>,
+    pub functions: Vec<Function>,
+    pub type_defs: Vec<TypeDef>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Param {
+    pub name: Symbol,
+    pub prov: Prov,
+    pub ty: Type,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Place {
+    Field { base: Box<Place>, field: Symbol, prov: Prov },
+    Local { name: Symbol, prov: Prov },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stmt {
+    Assign { place: Box<Place>, prov: Prov, value: Box<Expr> },
+    Expr { prov: Prov, value: Box<Expr> },
+    If {
+        condition: Box<Expr>,
+        r#else: Option<Box<Block>>,
+        prov: Prov,
+        then: Box<Block>,
+    },
+    Init { place: Box<Place>, prov: Prov, value: Box<Expr> },
+    Return { prov: Prov, value: Option<Box<Expr>> },
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeDef {
+    pub docs: Option<DocBlock>,
+    pub kind: TypeDefKind,
+    pub name: Symbol,
+    pub params: Vec<GenericParam>,
+    pub prov: Prov,
+}
 pub static TOKENS: &[TokenSpec] = &[
     TokenSpec {
         name: "ident",
