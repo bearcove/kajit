@@ -23,6 +23,9 @@ pub struct PrintSpec {
     pub name: &'static str,
     pub template: &'static str,
 }
+pub trait HasProvenance {
+    fn provenance(&self) -> Option<&Prov>;
+}
 pub const REPR_NAME: &str = "HIR";
 pub const REPR_FILE_EXT: &str = ".vixen-hir";
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
@@ -30,18 +33,26 @@ pub const REPR_ROUND_TRIP: &str = "canonical-print";
 pub const REPR_PROVENANCE: &str = "required";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinaryOp;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocBlock;
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DocBlock(pub Vec<String>);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenericParam;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Literal;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalKind;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Prov;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Symbol;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Span {
+    pub start: u32,
+    pub end: u32,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Prov {
+    pub file_id: Option<u32>,
+    pub span: Option<Span>,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Symbol(pub String);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Type;
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +69,17 @@ pub enum Expr {
     Field { base: Box<Expr>, field: Symbol, prov: Prov },
     Literal { prov: Prov, value: Literal },
     Local { name: Symbol, prov: Prov },
+}
+impl HasProvenance for Expr {
+    fn provenance(&self) -> Option<&Prov> {
+        match self {
+            Self::Binary { prov, .. } => Some(prov),
+            Self::Call { prov, .. } => Some(prov),
+            Self::Field { prov, .. } => Some(prov),
+            Self::Literal { prov, .. } => Some(prov),
+            Self::Local { prov, .. } => Some(prov),
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
@@ -93,6 +115,14 @@ pub enum Place {
     Field { base: Box<Place>, field: Symbol, prov: Prov },
     Local { name: Symbol, prov: Prov },
 }
+impl HasProvenance for Place {
+    fn provenance(&self) -> Option<&Prov> {
+        match self {
+            Self::Field { prov, .. } => Some(prov),
+            Self::Local { prov, .. } => Some(prov),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Assign { place: Box<Place>, prov: Prov, value: Box<Expr> },
@@ -106,6 +136,17 @@ pub enum Stmt {
     Init { place: Box<Place>, prov: Prov, value: Box<Expr> },
     Return { prov: Prov, value: Option<Box<Expr>> },
 }
+impl HasProvenance for Stmt {
+    fn provenance(&self) -> Option<&Prov> {
+        match self {
+            Self::Assign { prov, .. } => Some(prov),
+            Self::Expr { prov, .. } => Some(prov),
+            Self::If { prov, .. } => Some(prov),
+            Self::Init { prov, .. } => Some(prov),
+            Self::Return { prov, .. } => Some(prov),
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypeDef {
     pub docs: Option<DocBlock>,
@@ -113,6 +154,31 @@ pub struct TypeDef {
     pub name: Symbol,
     pub params: Vec<GenericParam>,
     pub prov: Prov,
+}
+impl HasProvenance for Block {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+impl HasProvenance for Function {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+impl HasProvenance for Local {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+impl HasProvenance for Param {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
+}
+impl HasProvenance for TypeDef {
+    fn provenance(&self) -> Option<&Prov> {
+        Some(&self.prov)
+    }
 }
 pub static TOKENS: &[TokenSpec] = &[
     TokenSpec {

@@ -394,10 +394,79 @@ fn render_type_use(ty: &TypeUse, node_names: &[String], box_node_refs: bool) -> 
     }
 }
 
+fn type_use_tag(ty: &TypeUse) -> Option<&str> {
+    let TypeUse::Form { tag, .. } = ty;
+    tag.as_deref()
+}
+
+fn node_fields_have_prov(fields: &NodeFields, provenance_tag: &str) -> bool {
+    fields
+        .fields
+        .get("prov")
+        .is_some_and(|ty| type_use_tag(ty) == Some(provenance_tag))
+}
+
+fn render_common_placeholder(tag: &str, common_names: &[String], repr: &ReprBody) -> String {
+    let common_name = common_names.iter().find(|name| {
+        repr.common
+            .as_ref()
+            .and_then(|common| common.get(*name))
+            .and_then(type_use_tag)
+            == Some(tag)
+    });
+
+    match tag {
+        "Prov" => {
+            let alias = common_name
+                .filter(|name| name.as_str() != "provenance")
+                .map(|name| format!("pub type {} = Prov;\n", pascal_case(name)))
+                .unwrap_or_default();
+            format!(
+                "#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]\npub struct Span {{\n    pub start: u32,\n    pub end: u32,\n}}\n\n#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct Prov {{\n    pub file_id: Option<u32>,\n    pub span: Option<Span>,\n}}\n{alias}"
+            )
+        }
+        "Symbol" => {
+            let alias = common_name
+                .filter(|name| name.as_str() != "symbol")
+                .map(|name| format!("pub type {} = Symbol;\n", pascal_case(name)))
+                .unwrap_or_default();
+            format!(
+                "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct Symbol(pub String);\n{alias}"
+            )
+        }
+        "DocBlock" => {
+            let alias = common_name
+                .filter(|name| name.as_str() != "docs")
+                .map(|name| format!("pub type {} = DocBlock;\n", pascal_case(name)))
+                .unwrap_or_default();
+            format!(
+                "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct DocBlock(pub Vec<String>);\n{alias}"
+            )
+        }
+        _ => format!("#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {tag};"),
+    }
+}
+
+fn pascal_case(name: &str) -> String {
+    let mut out = String::new();
+    for part in name.split(['-', '_']) {
+        if part.is_empty() {
+            continue;
+        }
+        let mut chars = part.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+    if out.is_empty() { "Unnamed".to_owned() } else { out }
+}
+
 fn render_node_decl(
     name: &str,
     decl: &NodeDecl,
     node_names: &[String],
+    provenance_tag: &str,
 ) -> Option<String> {
     match decl {
         NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
@@ -440,8 +509,24 @@ fn render_node_decl(
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+            let prov_impl = if variants
+                .variants
+                .values()
+                .all(|variant| matches!(variant, NodeDecl::Node(fields) | NodeDecl::Struct(fields) if node_fields_have_prov(fields, provenance_tag)))
+            {
+                let match_rows = variant_names
+                    .iter()
+                    .map(|variant_name| format!("            Self::{variant_name} {{ prov, .. }} => Some(prov),"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!(
+                    "\nimpl HasProvenance for {name} {{\n    fn provenance(&self) -> Option<&{provenance_tag}> {{\n        match self {{\n{match_rows}\n        }}\n    }}\n}}"
+                )
+            } else {
+                String::new()
+            };
             Some(format!(
-                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n{variant_rows}\n}}"
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n{variant_rows}\n}}{prov_impl}"
             ))
         }
         NodeDecl::Other { .. } => None,
@@ -471,6 +556,14 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
         .map(|nodes| nodes.keys().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     node_names.sort();
+
+    let provenance_tag = repr
+        .common
+        .as_ref()
+        .and_then(|common| common.get("provenance"))
+        .and_then(type_use_tag)
+        .unwrap_or("Prov")
+        .to_owned();
 
     let token_rows = token_names
         .iter()
@@ -557,7 +650,7 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
 
     let placeholder_rows = placeholder_names
         .iter()
-        .map(|name| format!("#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name};"))
+        .map(|name| render_common_placeholder(name, &common_names, repr))
         .collect::<Vec<_>>()
         .join("\n\n");
 
@@ -567,7 +660,25 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
             repr.nodes
                 .as_ref()
                 .and_then(|nodes| nodes.get(name))
-                .and_then(|decl| render_node_decl(name, decl, &node_names))
+                .and_then(|decl| render_node_decl(name, decl, &node_names, &provenance_tag))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let prov_impl_rows = node_names
+        .iter()
+        .filter_map(|name| {
+            let decl = repr.nodes.as_ref().and_then(|nodes| nodes.get(name))?;
+            match decl {
+                NodeDecl::Node(fields) | NodeDecl::Struct(fields)
+                    if node_fields_have_prov(fields, &provenance_tag) =>
+                {
+                    Some(format!(
+                        "impl HasProvenance for {name} {{\n    fn provenance(&self) -> Option<&{provenance_tag}> {{\n        Some(&self.prov)\n    }}\n}}"
+                    ))
+                }
+                _ => None,
+            }
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -619,6 +730,10 @@ pub struct PrintSpec {{
     pub template: &'static str,
 }}
 
+pub trait HasProvenance {{
+    fn provenance(&self) -> Option<&{provenance_tag}>;
+}}
+
 pub const REPR_NAME: &str = {name:?};
 pub const REPR_FILE_EXT: &str = {file_ext:?};
 pub const REPR_PURPOSE: &str = {purpose:?};
@@ -628,6 +743,8 @@ pub const REPR_PROVENANCE: &str = {provenance:?};
 {placeholder_rows}
 
 {ast_rows}
+
+{prov_impl_rows}
 
 pub static TOKENS: &[TokenSpec] = &[
 {token_rows}
@@ -656,6 +773,8 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         provenance = repr.contract.provenance,
         placeholder_rows = placeholder_rows,
         ast_rows = ast_rows,
+        prov_impl_rows = prov_impl_rows,
+        provenance_tag = provenance_tag,
         token_rows = token_rows,
         rule_rows = rule_rows,
         common_rows = common_rows,
