@@ -167,6 +167,32 @@ struct NodeVariants {
     variants: HashMap<String, NodeDecl>,
 }
 
+#[derive(Debug, Clone)]
+struct SyntaxRuleNamed {
+    name: String,
+    inner: Box<SyntaxRule>,
+}
+
+#[derive(Debug, Clone)]
+enum SyntaxRule {
+    Seq(Vec<SyntaxRule>),
+    Choice(Vec<SyntaxRule>),
+    Field(SyntaxRuleNamed),
+    Variant(SyntaxRuleNamed),
+    Ref { name: String },
+    Token { name: String },
+    Optional { inner: Box<SyntaxRule> },
+    Repeat { item: Box<SyntaxRule>, sep: Option<String> },
+    Literal(String),
+}
+
+#[derive(Debug, Clone)]
+enum SyntaxTypeUse {
+    Optional(Box<SyntaxTypeUse>),
+    Seq(Box<SyntaxTypeUse>),
+    Ref { name: String },
+}
+
 fn validate_hir_pilot_schema<'a>(schema: &'a PilotSchemaDocument, path: &Path) -> Result<&'a ReprBody, String> {
     if schema.meta.id != "kajit:repr-schema/hir-pilot" {
         return Err(format!(
@@ -348,6 +374,80 @@ fn rule_expr_kind(rule: &RuleExpr) -> &'static str {
     }
 }
 
+fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> {
+    match ty {
+        TypeUse::Optional(items) if items.len() == 1 => {
+            Ok(SyntaxTypeUse::Optional(Box::new(normalize_type_use(&items[0])?)))
+        }
+        TypeUse::Seq(items) if items.len() == 1 => {
+            Ok(SyntaxTypeUse::Seq(Box::new(normalize_type_use(&items[0])?)))
+        }
+        TypeUse::Ref { name: Some(name) } => Ok(SyntaxTypeUse::Ref { name: name.clone() }),
+        TypeUse::Ref { name: None } => Err("type reference missing tag name".to_owned()),
+        TypeUse::Optional(_) => Err("optional type must have exactly one item".to_owned()),
+        TypeUse::Seq(_) => Err("seq type must have exactly one item".to_owned()),
+    }
+}
+
+fn normalize_rule(rule: &RuleExpr) -> Result<SyntaxRule, String> {
+    match rule {
+        RuleExpr::Seq(items) => Ok(SyntaxRule::Seq(
+            items.iter().map(normalize_rule).collect::<Result<Vec<_>, _>>()?,
+        )),
+        RuleExpr::Choice(items) => Ok(SyntaxRule::Choice(
+            items.iter().map(normalize_rule).collect::<Result<Vec<_>, _>>()?,
+        )),
+        RuleExpr::Field(named) => {
+            let (name, inner) = rule_named_parts(named);
+            Ok(SyntaxRule::Field(SyntaxRuleNamed {
+                name: name.to_owned(),
+                inner: Box::new(normalize_rule(inner)?),
+            }))
+        }
+        RuleExpr::Variant(named) => {
+            let (name, inner) = rule_named_parts(named);
+            Ok(SyntaxRule::Variant(SyntaxRuleNamed {
+                name: name.to_owned(),
+                inner: Box::new(normalize_rule(inner)?),
+            }))
+        }
+        RuleExpr::Ref(names) if names.len() == 1 => Ok(SyntaxRule::Ref {
+            name: names[0].clone(),
+        }),
+        RuleExpr::Token(names) if names.len() == 1 => Ok(SyntaxRule::Token {
+            name: names[0].clone(),
+        }),
+        RuleExpr::Optional(items) if items.len() == 1 => Ok(SyntaxRule::Optional {
+            inner: Box::new(normalize_rule(&items[0])?),
+        }),
+        RuleExpr::Repeat(items) if !items.is_empty() => {
+            let sep = if items.len() >= 2 {
+                rule_literal_text(&items[1]).map(str::to_owned)
+            } else {
+                None
+            };
+            Ok(SyntaxRule::Repeat {
+                item: Box::new(normalize_rule(&items[0])?),
+                sep,
+            })
+        }
+        RuleExpr::Literal(Some(text)) => Ok(SyntaxRule::Literal(text.clone())),
+        RuleExpr::Ref(_) => Err("ref rule must have exactly one target".to_owned()),
+        RuleExpr::Token(_) => Err("token rule must have exactly one token name".to_owned()),
+        RuleExpr::Optional(_) => Err("optional rule must have exactly one item".to_owned()),
+        RuleExpr::Repeat(_) => Err("repeat rule must have at least one item".to_owned()),
+        RuleExpr::Literal(None) => Err("literal rule missing text".to_owned()),
+    }
+}
+
+fn normalize_node_fields(fields: &NodeFields) -> Result<HashMap<String, SyntaxTypeUse>, String> {
+    fields
+        .fields
+        .iter()
+        .map(|(name, ty)| Ok((name.clone(), normalize_type_use(ty)?)))
+        .collect()
+}
+
 fn rust_ident(name: &str) -> String {
     match name {
         "else" | "type" | "struct" | "enum" | "fn" | "mod" | "move" | "ref" | "self"
@@ -415,55 +515,26 @@ fn rule_literal_text(rule: &RuleExpr) -> Option<&str> {
     }
 }
 
-fn rule_ref_name(rule: &RuleExpr) -> Option<&str> {
-    match rule {
-        RuleExpr::Ref(names) if names.len() == 1 => Some(names[0].as_str()),
-        _ => None,
-    }
-}
-
-fn rule_token_name(rule: &RuleExpr) -> Option<&str> {
-    match rule {
-        RuleExpr::Token(names) if names.len() == 1 => Some(names[0].as_str()),
-        _ => None,
-    }
-}
-
-fn rule_repeat_parts(rule: &RuleExpr) -> Option<(&RuleExpr, Option<&str>)> {
-    match rule {
-        RuleExpr::Repeat(items) if !items.is_empty() => {
-            let sep = if items.len() >= 3 && rule_literal_text(&items[1]) == Some("sep=") {
-                rule_literal_text(&items[2])
-            } else {
-                None
-            };
-            Some((&items[0], sep))
-        }
-        _ => None,
-    }
-}
-
-fn inner_type_use(ty: &TypeUse) -> Option<&TypeUse> {
+fn render_default_value(ty: &SyntaxTypeUse, provenance_tag: &str) -> String {
     match ty {
-        TypeUse::Optional(items) | TypeUse::Seq(items) if items.len() == 1 => Some(&items[0]),
-        _ => None,
-    }
-}
-
-fn render_default_value(ty: &TypeUse, provenance_tag: &str) -> String {
-    match ty {
-        TypeUse::Optional(_) => "None".to_owned(),
-        TypeUse::Seq(_) => "Vec::new()".to_owned(),
-        TypeUse::Ref { name: Some(tag) } if tag == provenance_tag => {
+        SyntaxTypeUse::Optional(_) => "None".to_owned(),
+        SyntaxTypeUse::Seq(_) => "Vec::new()".to_owned(),
+        SyntaxTypeUse::Ref { name: tag } if tag == provenance_tag => {
             format!("{provenance_tag}::default()")
         }
-        TypeUse::Ref { name: Some(tag) } => format!("{tag}::default()"),
-        TypeUse::Ref { name: None } => "String::new()".to_owned(),
+        SyntaxTypeUse::Ref { name: tag } => format!("{tag}::default()"),
     }
 }
 
-fn render_token_value_parser(token_name: &str, ty: &TypeUse) -> Result<String, String> {
-    let parser = match (token_name, type_use_tag(ty)) {
+fn syntax_type_name(ty: &SyntaxTypeUse) -> Option<&str> {
+    match ty {
+        SyntaxTypeUse::Ref { name } => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+fn render_token_value_parser(token_name: &str, ty: &SyntaxTypeUse) -> Result<String, String> {
+    let parser = match (token_name, syntax_type_name(ty)) {
         ("ident", Some("Symbol")) => "ident_token().map(Symbol)".to_owned(),
         ("ident", Some("Type")) => "ident_token().map(Type)".to_owned(),
         ("ident", None) => "ident_token()".to_owned(),
@@ -474,7 +545,7 @@ fn render_token_value_parser(token_name: &str, ty: &TypeUse) -> Result<String, S
         _ => {
             return Err(format!(
                 "unsupported token parser mapping for token {token_name:?} and type {:?}",
-                type_use_tag(ty)
+                syntax_type_name(ty)
             ));
         }
     };
@@ -483,7 +554,7 @@ fn render_token_value_parser(token_name: &str, ty: &TypeUse) -> Result<String, S
 
 fn render_ref_value_parser(
     ref_name: &str,
-    ty: &TypeUse,
+    ty: &SyntaxTypeUse,
     rule_names: &[String],
     node_names: &[String],
     box_node_refs: bool,
@@ -498,50 +569,47 @@ fn render_ref_value_parser(
     };
 
     let parser = match ty {
-        TypeUse::Ref { name: Some(tag) }
+        SyntaxTypeUse::Ref { name: tag }
             if box_node_refs && node_names.iter().any(|name| name == tag) =>
         {
             format!("({base}).map(Box::new)")
         }
-        TypeUse::Ref { .. } => base,
+        SyntaxTypeUse::Ref { .. } => base,
         _ => base,
     };
     Ok(parser)
 }
 
 fn render_value_parser(
-    rule: &RuleExpr,
-    ty: &TypeUse,
+    rule: &SyntaxRule,
+    ty: &SyntaxTypeUse,
     rule_names: &[String],
     node_names: &[String],
     box_node_refs: bool,
 ) -> Result<String, String> {
     match rule {
-        RuleExpr::Token(_) => render_token_value_parser(
-            rule_token_name(rule).ok_or_else(|| "malformed token rule".to_owned())?,
-            ty,
-        ),
-        RuleExpr::Ref(_) => render_ref_value_parser(
-            rule_ref_name(rule).ok_or_else(|| "malformed ref rule".to_owned())?,
+        SyntaxRule::Token { name } => render_token_value_parser(name, ty),
+        SyntaxRule::Ref { name } => render_ref_value_parser(
+            name,
             ty,
             rule_names,
             node_names,
             box_node_refs,
         ),
-        RuleExpr::Optional(items) if items.len() == 1 => {
-            let inner_ty =
-                inner_type_use(ty).ok_or_else(|| "optional rule without optional type".to_owned())?;
-            let inner = render_value_parser(&items[0], inner_ty, rule_names, node_names, true)?;
+        SyntaxRule::Optional { inner } => {
+            let SyntaxTypeUse::Optional(inner_ty) = ty else {
+                return Err("optional rule without optional type".to_owned());
+            };
+            let inner = render_value_parser(inner, inner_ty, rule_names, node_names, true)?;
             Ok(format!("({inner}).or_not()"))
         }
-        RuleExpr::Repeat(_) => {
-            let (inner_rule, sep) =
-                rule_repeat_parts(rule).ok_or_else(|| "malformed repeat rule".to_owned())?;
-            let inner_ty =
-                inner_type_use(ty).ok_or_else(|| "repeat rule without seq type".to_owned())?;
+        SyntaxRule::Repeat { item, sep } => {
+            let SyntaxTypeUse::Seq(inner_ty) = ty else {
+                return Err("repeat rule without seq type".to_owned());
+            };
             let inner =
-                render_value_parser(inner_rule, inner_ty, rule_names, node_names, false)?;
-            Ok(if let Some(sep) = sep {
+                render_value_parser(item, inner_ty, rule_names, node_names, false)?;
+            Ok(if let Some(sep) = sep.as_deref() {
                 format!(
                     "({inner}).separated_by(just({sep:?}).padded()).allow_trailing().collect::<Vec<_>>()"
                 )
@@ -551,7 +619,7 @@ fn render_value_parser(
         }
         _ => Err(format!(
             "unsupported value rule kind for field type {:?}: {:?}",
-            type_use_tag(ty),
+            syntax_type_name(ty),
             rule
         )),
     }
@@ -563,23 +631,23 @@ enum SeqItem {
 }
 
 fn flatten_struct_rule_items(
-    rule: &RuleExpr,
-    fields: &NodeFields,
+    rule: &SyntaxRule,
+    fields: &HashMap<String, SyntaxTypeUse>,
     rule_names: &[String],
     node_names: &[String],
 ) -> Result<Vec<SeqItem>, String> {
     match rule {
-        RuleExpr::Seq(items) => {
+        SyntaxRule::Seq(items) => {
             let mut out = Vec::new();
             for item in items {
                 out.extend(flatten_struct_rule_items(item, fields, rule_names, node_names)?);
             }
             Ok(out)
         }
-        RuleExpr::Field(named) => {
-            let (field_name, inner) = rule_named_parts(named);
+        SyntaxRule::Field(named) => {
+            let field_name = named.name.as_str();
+            let inner = named.inner.as_ref();
             let ty = fields
-                .fields
                 .get(field_name)
                 .ok_or_else(|| format!("schema node field {field_name:?} not found"))?;
             let parser = render_value_parser(inner, ty, rule_names, node_names, true)?;
@@ -588,7 +656,7 @@ fn flatten_struct_rule_items(
                 parser,
             }])
         }
-        RuleExpr::Literal(Some(text)) => Ok(vec![SeqItem::Ignore(format!(
+        SyntaxRule::Literal(text) => Ok(vec![SeqItem::Ignore(format!(
             "just({text:?}).padded()"
         ))]),
         _ => Err(format!("unsupported struct rule shape: {rule:?}")),
@@ -652,8 +720,8 @@ fn render_binding_chain(items: &[SeqItem]) -> Result<(String, Vec<String>), Stri
 
 fn render_struct_parser_expr(
     type_name: &str,
-    fields: &NodeFields,
-    rule: &RuleExpr,
+    fields: &HashMap<String, SyntaxTypeUse>,
+    rule: &SyntaxRule,
     rule_names: &[String],
     node_names: &[String],
     provenance_tag: &str,
@@ -662,7 +730,7 @@ fn render_struct_parser_expr(
     let (chain, bound_names) = render_binding_chain(&items)?;
     let bound_set = bound_names.iter().cloned().collect::<std::collections::BTreeSet<_>>();
 
-    let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
     field_names.sort();
     let field_rows = field_names
         .iter()
@@ -671,7 +739,7 @@ fn render_struct_parser_expr(
             let value = if bound_set.contains(&ident) {
                 ident.clone()
             } else {
-                render_default_value(fields.fields.get(field_name).unwrap(), provenance_tag)
+                render_default_value(fields.get(field_name).unwrap(), provenance_tag)
             };
             format!("{ident}: {value}")
         })
@@ -695,30 +763,32 @@ fn render_struct_parser_expr(
 fn render_enum_parser_expr(
     enum_name: &str,
     variants: &NodeVariants,
-    rule: &RuleExpr,
+    rule: &SyntaxRule,
     rule_names: &[String],
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
-    let RuleExpr::Choice(items) = rule else {
+    let SyntaxRule::Choice(items) = rule else {
         return Err(format!("enum rule for {enum_name} must be choice"));
     };
 
     let mut variant_parsers = Vec::new();
     for item in items {
-        let RuleExpr::Variant(named) = item else {
+        let SyntaxRule::Variant(named) = item else {
             return Err(format!("enum rule for {enum_name} contains non-variant item"));
         };
-        let (variant_name, inner_rule) = rule_named_parts(named);
+        let variant_name = named.name.as_str();
+        let inner_rule = named.inner.as_ref();
         let Some(NodeDecl::Struct(fields) | NodeDecl::Node(fields)) = variants.variants.get(variant_name) else {
             return Err(format!(
                 "schema enum {enum_name} is missing variant declaration {variant_name:?}"
             ));
         };
-        let items = flatten_struct_rule_items(inner_rule, fields, rule_names, node_names)?;
+        let fields = normalize_node_fields(fields)?;
+        let items = flatten_struct_rule_items(inner_rule, &fields, rule_names, node_names)?;
         let (chain, bound_names) = render_binding_chain(&items)?;
         let bound_set = bound_names.iter().cloned().collect::<std::collections::BTreeSet<_>>();
-        let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+        let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
         field_names.sort();
         let field_rows = field_names
             .iter()
@@ -727,7 +797,7 @@ fn render_enum_parser_expr(
                 let value = if bound_set.contains(&ident) {
                     ident.clone()
                 } else {
-                    render_default_value(fields.fields.get(field_name).unwrap(), provenance_tag)
+                    render_default_value(fields.get(field_name).unwrap(), provenance_tag)
                 };
                 format!("{ident}: {value}")
             })
@@ -754,16 +824,21 @@ fn render_enum_parser_expr(
 
 fn render_rule_parser_expr(
     rule_name: &str,
-    rule: &RuleExpr,
+    rule: &SyntaxRule,
     decl: &NodeDecl,
     rule_names: &[String],
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
     match decl {
-        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
-            render_struct_parser_expr(rule_name, fields, rule, rule_names, node_names, provenance_tag)
-        }
+        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => render_struct_parser_expr(
+            rule_name,
+            &normalize_node_fields(fields)?,
+            rule,
+            rule_names,
+            node_names,
+            provenance_tag,
+        ),
         NodeDecl::Enum(variants) => {
             render_enum_parser_expr(rule_name, variants, rule, rule_names, node_names, provenance_tag)
         }
@@ -782,11 +857,11 @@ fn render_parser_block(
     let parser_defs = parser_order
         .iter()
         .filter_map(|name| {
-            let rule = repr.syntax.rules.get(*name)?;
+            let rule = repr.syntax.rules.get(*name).and_then(|rule| normalize_rule(rule).ok())?;
             let decl = repr.nodes.as_ref()?.get(*name)?;
             Some(render_rule_parser_expr(
                 name,
-                rule,
+                &rule,
                 decl,
                 &rule_names,
                 node_names,

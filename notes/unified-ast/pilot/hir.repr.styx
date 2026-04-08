@@ -34,7 +34,7 @@ repr @module{
                 "fn"
                 @field(name @token(ident))
                 "("
-                @field(params @repeat(@ref(Param) sep=","))
+                @field(params @repeat(@ref(Param) {sep ","}))
                 ")"
                 "->"
                 @field(return_type @ref(Type))
@@ -70,7 +70,7 @@ repr @module{
                     "call"
                     @field(callee @token(symbol))
                     "("
-                    @field(args @repeat(@ref(Expr) sep=","))
+                    @field(args @repeat(@ref(Expr) {sep ","}))
                     ")"
                 ))
             )
