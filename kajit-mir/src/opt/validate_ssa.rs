@@ -253,6 +253,288 @@ impl std::fmt::Display for SsaError {
     }
 }
 
+impl SsaError {
+    /// Collect all block IDs and vreg IDs referenced by this error.
+    fn relevant_blocks_and_vregs(&self) -> (Vec<BlockId>, Vec<VReg>) {
+        match self {
+            SsaError::UseWithoutDef { vreg, block, .. } => (vec![*block], vec![*vreg]),
+            SsaError::UseNotDominated {
+                vreg,
+                def_block,
+                use_block,
+                ..
+            } => (vec![*def_block, *use_block], vec![*vreg]),
+            SsaError::MultipleDefs {
+                vreg,
+                first_def_block,
+                second_def_block,
+            } => (vec![*first_def_block, *second_def_block], vec![*vreg]),
+            SsaError::PhiArgCountMismatch { from, to, .. } => (vec![*from, *to], vec![]),
+            SsaError::PhiArgMissing {
+                from,
+                to,
+                expected_param,
+                ..
+            } => (vec![*from, *to], vec![*expected_param]),
+            SsaError::EntryLivein { vreg, .. } => (vec![], vec![*vreg]),
+            SsaError::EdgeArgSourceUndefined {
+                from,
+                to,
+                source_vreg,
+                ..
+            } => (vec![*from, *to], vec![*source_vreg]),
+            SsaError::EdgeArgSourceNotDominated {
+                from,
+                to,
+                source_vreg,
+                def_block,
+                ..
+            } => (vec![*from, *to, *def_block], vec![*source_vreg]),
+        }
+    }
+}
+
+/// Print focused diagnostic context for SSA errors.
+///
+/// Instead of dumping the entire CFG (which can be 500+ lines for a u32 decoder),
+/// this prints only the blocks and edges relevant to each violation, with
+/// provenance info (debug scope/value names) for traced vregs.
+pub fn print_ssa_diagnostics(
+    func: &Function,
+    errors: &[SsaError],
+    provenance: Option<&crate::cfg_mir::ProgramDebugProvenance>,
+) {
+    use std::collections::BTreeSet;
+
+    // Collect all relevant blocks
+    let mut blocks_to_show = BTreeSet::new();
+    let mut vregs_to_trace = BTreeSet::new();
+
+    for error in errors {
+        let (blocks, vregs) = error.relevant_blocks_and_vregs();
+        blocks_to_show.extend(blocks);
+        vregs_to_trace.extend(vregs.iter().map(|v| v.index()));
+    }
+
+    // Build def map for tracing
+    let (def_map, _) = build_def_map(func);
+
+    // For each traced vreg, show where it's defined + provenance
+    for &vreg_idx in &vregs_to_trace {
+        let vreg = VReg::new(vreg_idx as u32);
+        let def_info = if let Some(&def_block) = def_map.get(&vreg) {
+            blocks_to_show.insert(def_block);
+            format!("defined in b{}", def_block.index())
+        } else {
+            "NO definition".to_string()
+        };
+
+        let prov_info = vreg_provenance_string(vreg_idx, provenance);
+        eprintln!("  v{}: {}{}", vreg_idx, def_info, prov_info);
+    }
+
+    eprintln!();
+
+    // Show relevant blocks with their instructions and edges
+    for &block_id in &blocks_to_show {
+        let block = &func.blocks[block_id.index()];
+        if block.dead {
+            eprintln!("  block b{} (DEAD)", block_id.index());
+            continue;
+        }
+
+        let params: Vec<String> = block
+            .params
+            .iter()
+            .map(|v| {
+                let prov = vreg_provenance_string(v.index(), provenance);
+                format!("v{}{}", v.index(), prov)
+            })
+            .collect();
+        eprintln!(
+            "  block b{} params=[{}]",
+            block_id.index(),
+            params.join(", ")
+        );
+
+        // Show instructions
+        for &inst_id in &block.insts {
+            let inst = &func.insts[inst_id.index()];
+            let operands: Vec<String> = inst
+                .operands
+                .iter()
+                .map(|op| {
+                    let marker = if vregs_to_trace.contains(&op.vreg.index()) {
+                        " <<<"
+                    } else {
+                        ""
+                    };
+                    format!("{:?} v{}{}", op.kind, op.vreg.index(), marker)
+                })
+                .collect();
+            eprintln!(
+                "    i{}: {} [{}]",
+                inst_id.index(),
+                linear_op_summary(&inst.op),
+                operands.join(", ")
+            );
+        }
+
+        // Show terminator
+        let term = &func.terms[block.term.index()];
+        eprintln!("    term: {}", terminator_summary(term));
+
+        // Show outgoing edges
+        for &edge_id in &block.succs {
+            print_edge(func, edge_id, "->", &vregs_to_trace, provenance);
+        }
+
+        // Show incoming edges
+        for &edge_id in &block.preds {
+            print_edge(func, edge_id, "<-", &vregs_to_trace, provenance);
+        }
+
+        eprintln!();
+    }
+}
+
+fn vreg_provenance_string(
+    vreg_idx: usize,
+    provenance: Option<&crate::cfg_mir::ProgramDebugProvenance>,
+) -> String {
+    let Some(prov) = provenance else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+
+    if let Some(Some(val_id)) = prov.vreg_values.get(vreg_idx) {
+        let val = &prov.values[*val_id];
+        parts.push(format!("\"{}\"", val.name));
+    }
+    if let Some(Some(scope_id)) = prov.vreg_scopes.get(vreg_idx) {
+        let scope = &prov.scopes[*scope_id];
+        let scope_desc = match &scope.kind {
+            kajit_ir::DebugScopeKind::LambdaBody { lambda_id } => {
+                format!("lambda:{}", lambda_id.index())
+            }
+            kajit_ir::DebugScopeKind::GammaBranch { branch_index } => {
+                format!("gamma_branch:{branch_index}")
+            }
+            kajit_ir::DebugScopeKind::ThetaBody => "theta_body".to_string(),
+            kajit_ir::DebugScopeKind::Synthetic => "synthetic".to_string(),
+        };
+        parts.push(scope_desc);
+    }
+
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", parts.join(", "))
+    }
+}
+
+fn linear_op_summary(op: &LinearOp) -> String {
+    match op {
+        LinearOp::Const { value, .. } => format!("Const(0x{value:x})"),
+        LinearOp::DataAddr { blob_id, .. } => format!("DataAddr({blob_id})"),
+        LinearOp::ExternAddr { symbol, .. } => format!("ExternAddr({symbol})"),
+        LinearOp::BinOp { op: binop, .. } => format!("BinOp({binop:?})"),
+        LinearOp::UnaryOp { op: unop, .. } => format!("UnaryOp({unop:?})"),
+        LinearOp::Copy { .. } => "Copy".to_string(),
+        LinearOp::SlotAddr { slot, .. } => format!("SlotAddr({slot:?})"),
+        LinearOp::StoreToAddr { width, .. } => format!("StoreToAddr({width:?})"),
+        LinearOp::LoadFromAddr { width, .. } => format!("LoadFromAddr({width:?})"),
+        LinearOp::WriteToSlot { slot, .. } => format!("WriteToSlot({slot:?})"),
+        LinearOp::ReadFromSlot { slot, .. } => format!("ReadFromSlot({slot:?})"),
+        LinearOp::CallIntrinsic { .. } => "CallIntrinsic".to_string(),
+        LinearOp::CallPure { .. } => "CallPure".to_string(),
+        LinearOp::CallEffect { .. } => "CallEffect".to_string(),
+        LinearOp::CallLambda { .. } => "CallLambda".to_string(),
+        LinearOp::Label(id) => format!("Label({id:?})"),
+        LinearOp::Branch { .. } => "Branch".to_string(),
+        LinearOp::BranchIf { .. } => "BranchIf".to_string(),
+        LinearOp::BranchIfZero { .. } => "BranchIfZero".to_string(),
+        LinearOp::JumpTable { .. } => "JumpTable".to_string(),
+        LinearOp::FuncStart { .. } => "FuncStart".to_string(),
+        LinearOp::FuncEnd => "FuncEnd".to_string(),
+    }
+}
+
+fn terminator_summary(term: &Terminator) -> String {
+    match term {
+        Terminator::Return => "Return".to_string(),
+        Terminator::Branch { edge } => format!("Branch(e{})", edge.index()),
+        Terminator::BranchIf {
+            cond,
+            taken,
+            fallthrough,
+        } => format!(
+            "BranchIf(v{}, taken=e{}, fallthrough=e{})",
+            cond.index(),
+            taken.index(),
+            fallthrough.index()
+        ),
+        Terminator::BranchIfZero {
+            cond,
+            taken,
+            fallthrough,
+        } => format!(
+            "BranchIfZero(v{}, taken=e{}, fallthrough=e{})",
+            cond.index(),
+            taken.index(),
+            fallthrough.index()
+        ),
+        Terminator::JumpTable {
+            predicate, targets, ..
+        } => format!(
+            "JumpTable(v{}, {} targets)",
+            predicate.index(),
+            targets.len()
+        ),
+    }
+}
+
+fn print_edge(
+    func: &Function,
+    edge_id: EdgeId,
+    direction: &str,
+    vregs_to_trace: &std::collections::BTreeSet<usize>,
+    provenance: Option<&crate::cfg_mir::ProgramDebugProvenance>,
+) {
+    let edge = &func.edges[edge_id.index()];
+    let args: Vec<String> = edge
+        .args
+        .iter()
+        .map(|a| {
+            let marker = if vregs_to_trace.contains(&a.source.index()) {
+                " <<<"
+            } else {
+                ""
+            };
+            let prov = if vregs_to_trace.contains(&a.source.index()) {
+                vreg_provenance_string(a.source.index(), provenance)
+            } else {
+                String::new()
+            };
+            format!(
+                "v{}=>v{}{}{}",
+                a.target.index(),
+                a.source.index(),
+                prov,
+                marker
+            )
+        })
+        .collect();
+    eprintln!(
+        "    {} e{}: b{} -> b{} [{}]",
+        direction,
+        edge_id.index(),
+        edge.from.index(),
+        edge.to.index(),
+        args.join(", ")
+    );
+}
+
 /// Validate SSA properties for a function.
 ///
 /// Checks:

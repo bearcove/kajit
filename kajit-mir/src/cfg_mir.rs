@@ -1927,7 +1927,9 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
                 for (i, error) in errors.iter().enumerate() {
                     eprintln!("  {}. {}", i + 1, error);
                 }
-                eprintln!("\nCFG-MIR at point of failure:\n{cfg}");
+                eprintln!("\nRelevant blocks:");
+                crate::opt::validate_ssa::print_ssa_diagnostics(func, &errors, Some(&cfg.debug));
+                eprintln!("\nFull CFG-MIR ({} blocks):\n{cfg}", func.blocks.len());
                 panic!("SSA validation failed before optimization passes");
             }
         }
@@ -1950,15 +1952,8 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
                 for (i, error) in errors.iter().enumerate() {
                     eprintln!("  {}. {}", i + 1, error);
                 }
-                eprintln!("\nTo debug:");
-                eprintln!(
-                    "  1. Run with KAJIT_CFG_OPTS=-all,+{} to isolate this pass",
-                    pass_name
-                );
-                eprintln!("  2. Add KAJIT_DUMP_STAGES=cfg to see CFG before/after");
-                eprintln!(
-                    "  3. Check if other passes compensate (try adding +cse, +local_cse, etc.)"
-                );
+                eprintln!("\nRelevant blocks:");
+                crate::opt::validate_ssa::print_ssa_diagnostics(func, &errors, Some(&cfg.debug));
                 panic!("SSA validation failed after {}", pass_name);
             } else {
                 eprintln!("[SSA] ✓ Passed validation after {}", pass_name);
