@@ -41,9 +41,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{BlockId, EdgeArg, EdgeId, Function, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
+use kajit_reprs::mir::{BlockId, EdgeArg, EdgeId, Function, Terminator};
 
 /// Run control threading. Returns true if any changes were made.
 pub fn control_thread(func: &mut Function, vreg_count: &mut u32) -> bool {

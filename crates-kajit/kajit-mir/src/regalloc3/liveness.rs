@@ -46,7 +46,7 @@ use indexmap::IndexMap;
 use kajit_ir::VReg;
 use std::collections::{BTreeSet, HashMap};
 
-use crate::ir::{BlockId, Function, InstId};
+use kajit_reprs::mir::{BlockId, Function, InstId};
 
 use super::progpoint::{LiveInterval, ProgPoint, ProgPointMap};
 
@@ -189,11 +189,11 @@ impl<'a> LivenessAnalyzer<'a> {
                 // Add terminator uses (condition vregs in branches)
                 let term = &self.func.terms[block.term.0 as usize];
                 match term {
-                    crate::ir::Terminator::BranchIf { cond, .. }
-                    | crate::ir::Terminator::BranchIfZero { cond, .. } => {
+                    kajit_reprs::mir::Terminator::BranchIf { cond, .. }
+                    | kajit_reprs::mir::Terminator::BranchIfZero { cond, .. } => {
                         live_out.insert(*cond);
                     }
-                    crate::ir::Terminator::Return => {
+                    kajit_reprs::mir::Terminator::Return => {
                         // data_results are live at the function return.
                         for &result in &self.func.data_results {
                             live_out.insert(result);
@@ -336,18 +336,18 @@ impl<'a> LivenessAnalyzer<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{
+    use kajit_lir::LinearOp;
+    use kajit_reprs::mir::{
         Block, Clobbers, Edge, EdgeArg, EdgeId, Function, Inst, Operand, OperandKind, RegClass,
         Terminator,
     };
-    use kajit_lir::LinearOp;
 
     #[test]
     fn test_simple_liveness() {
         // Block with one instruction: v1 = const 42
         // v1 should not be live-in (defined in block)
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -357,7 +357,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![InstId(0)],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,
@@ -389,7 +389,7 @@ mod tests {
     fn test_use_liveness() {
         // v0 is used by instruction, should be live-in
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -399,7 +399,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![InstId(0)],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,
@@ -436,7 +436,7 @@ mod tests {
         // v0 should be live-out of b0 (edge arg)
         // v1 should be defined in b1 (block param)
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -447,7 +447,7 @@ mod tests {
                     id: BlockId(0),
                     params: vec![],
                     insts: vec![],
-                    term: crate::ir::TermId(0),
+                    term: kajit_reprs::mir::TermId(0),
                     preds: vec![],
                     succs: vec![EdgeId(0)],
                     dead: false,
@@ -456,7 +456,7 @@ mod tests {
                     id: BlockId(1),
                     params: vec![VReg::new(1)],
                     insts: vec![],
-                    term: crate::ir::TermId(1),
+                    term: kajit_reprs::mir::TermId(1),
                     preds: vec![EdgeId(0)],
                     succs: vec![],
                     dead: false,

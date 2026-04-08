@@ -11,9 +11,9 @@
 
 use std::collections::HashMap;
 
-use crate::ir::{EdgeId, Function, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
+use kajit_reprs::mir::{EdgeId, Function, Terminator};
 
 /// Fold constant conditional branches into unconditional branches.
 /// Returns the number of branches folded.

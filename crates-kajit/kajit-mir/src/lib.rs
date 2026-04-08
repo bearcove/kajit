@@ -1,8 +1,6 @@
 mod analysis;
 pub use analysis::*;
 
-mod ir;
-
 mod opt;
 pub use opt::*;
 

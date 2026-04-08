@@ -5,7 +5,7 @@ use kajit_ir::SLOT_ADDR_STRIDE_BYTES;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_types::SymbolTable;
 
-use crate::ir;
+use kajit_reprs::mir as ir;
 
 const MAX_EXEC_STEPS: usize = 1_000_000;
 

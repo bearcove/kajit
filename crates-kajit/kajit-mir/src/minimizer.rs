@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ir;
+use kajit_reprs::mir as ir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramSize {

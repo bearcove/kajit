@@ -13,8 +13,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::analysis::dominance::DominanceInfo;
 use crate::analysis::loops::LoopInfo;
-use crate::ir::{self, BlockId, FixedReg, Function, OperandKind};
 use kajit_ir::VReg;
+use kajit_reprs::mir::{BlockId, FixedReg, Function, OperandKind};
 
 use super::hints::{HintMap, SpillCost};
 use super::linear_scan::{Allocation, AllocationResult, CopyHints, OperandEdit};

@@ -5,8 +5,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::ir::Function;
 use kajit_ir::VReg;
+use kajit_reprs::mir::Function;
 
 /// Eliminate dead block params and their corresponding edge args.
 ///
@@ -31,11 +31,11 @@ pub fn eliminate_dead_block_params(func: &mut Function) {
         // Terminator uses
         let term = &func.terms[block.term.0 as usize];
         match term {
-            crate::ir::Terminator::BranchIf { cond, .. }
-            | crate::ir::Terminator::BranchIfZero { cond, .. } => {
+            kajit_reprs::mir::Terminator::BranchIf { cond, .. }
+            | kajit_reprs::mir::Terminator::BranchIfZero { cond, .. } => {
                 used.insert(*cond);
             }
-            crate::ir::Terminator::JumpTable { predicate, .. } => {
+            kajit_reprs::mir::Terminator::JumpTable { predicate, .. } => {
                 used.insert(*predicate);
             }
             _ => {}
@@ -126,11 +126,11 @@ pub fn eliminate_dead_block_params(func: &mut Function) {
                 }
                 let term = &func.terms[block.term.0 as usize];
                 match term {
-                    crate::ir::Terminator::BranchIf { cond, .. }
-                    | crate::ir::Terminator::BranchIfZero { cond, .. } => {
+                    kajit_reprs::mir::Terminator::BranchIf { cond, .. }
+                    | kajit_reprs::mir::Terminator::BranchIfZero { cond, .. } => {
                         used.insert(*cond);
                     }
-                    crate::ir::Terminator::JumpTable { predicate, .. } => {
+                    kajit_reprs::mir::Terminator::JumpTable { predicate, .. } => {
                         used.insert(*predicate);
                     }
                     _ => {}

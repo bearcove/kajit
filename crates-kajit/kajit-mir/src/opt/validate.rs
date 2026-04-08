@@ -1,6 +1,6 @@
 //! CFG validation - check that the CFG is well-formed and consistent.
 
-use crate::ir::{BlockId, EdgeId, Function};
+use kajit_reprs::mir::{BlockId, EdgeId, Function};
 
 #[derive(Debug)]
 pub enum ValidationError {

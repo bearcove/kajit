@@ -1,8 +1,8 @@
 //! Regalloc3 allocation results.
 
-use crate::ir::{self};
 use crate::regalloc3::{linear_scan, machine_inst::PReg};
 use kajit_ir::{LambdaId, VReg};
+use kajit_reprs::mir as ir;
 use std::collections::HashMap;
 
 /// Allocation result for a single CFG function (regalloc3 native format).

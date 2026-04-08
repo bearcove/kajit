@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use kajit_lir::{BinOpKind, LinearOp};
 
 use crate::InterpreterTrap;
-use crate::ir;
+use kajit_reprs::mir as ir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebuggerError {

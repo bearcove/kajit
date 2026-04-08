@@ -34,7 +34,7 @@ use super::{
     progpoint::{LiveInterval, ProgPoint},
 };
 
-use crate::ir::Function;
+use kajit_reprs::mir::Function;
 
 /// Copy-preference hints for register coalescing.
 ///
@@ -95,7 +95,7 @@ pub enum Allocation {
 #[derive(Debug, Clone)]
 pub struct OperandEdit {
     /// The instruction before which the move must be emitted.
-    pub before_inst: crate::ir::InstId,
+    pub before_inst: kajit_reprs::mir::InstId,
     /// Move from this register...
     pub from: PReg,
     /// ...to this register.
@@ -384,10 +384,10 @@ mod tests {
     #[test]
     fn test_simple_allocation() {
         // One vreg, plenty of registers
-        use crate::ir::{BlockId, InstId};
+        use kajit_reprs::mir::{BlockId, InstId};
 
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -397,7 +397,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![InstId(0)],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,
@@ -432,10 +432,10 @@ mod tests {
     #[test]
     fn test_register_pressure() {
         // More vregs than registers -> must spill
-        use crate::ir::{BlockId, InstId};
+        use kajit_reprs::mir::{BlockId, InstId};
 
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -452,7 +452,7 @@ mod tests {
                     InstId(4),
                     InstId(5),
                 ],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,
@@ -533,10 +533,10 @@ mod tests {
     #[test]
     fn test_interval_expiry() {
         // Non-overlapping intervals should reuse registers
-        use crate::ir::{BlockId, InstId};
+        use kajit_reprs::mir::{BlockId, InstId};
 
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -546,7 +546,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![InstId(0), InstId(1)],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,
@@ -599,7 +599,7 @@ mod tests {
     fn test_spill_cost_hints() {
         // Test that spill cost hints affect victim selection
         // Create two vregs with same next-use, different spill costs
-        use crate::ir::{BlockId, InstId};
+        use kajit_reprs::mir::{BlockId, InstId};
 
         // Function with 6 vregs (more than 5 available registers)
         // v1 has High spill cost (loop-carried)
@@ -608,7 +608,7 @@ mod tests {
         // With hints, v2 should be spilled (lower cost)
 
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -625,7 +625,7 @@ mod tests {
                     InstId(4),
                     InstId(5),
                 ],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,

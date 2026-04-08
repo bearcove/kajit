@@ -15,12 +15,12 @@
 //! - Non-overlapping intervals (register reuse)
 
 use super::*;
-use crate::ir::{
+use kajit_ir::VReg;
+use kajit_lir::LinearOp;
+use kajit_reprs::mir::{
     Block, BlockId, Clobbers, Edge, EdgeArg, EdgeId, Function, Inst, InstId, Operand, OperandKind,
     RegClass, Terminator,
 };
-use kajit_ir::VReg;
-use kajit_lir::LinearOp;
 
 // Test ABI/scratch policy
 const TEST_ABI: machine_inst::AbiInfo = machine_inst::AbiInfo {
@@ -44,7 +44,7 @@ const TEST_SCRATCH: machine_inst::ScratchPolicy = machine_inst::ScratchPolicy {
 fn test_end_to_end_simple() {
     // Simple function: v1 = const 42
     let func = Function {
-        id: crate::ir::FunctionId(0),
+        id: kajit_reprs::mir::FunctionId(0),
         lambda_id: kajit_ir::LambdaId::new(0),
         entry: BlockId(0),
         data_args: vec![],
@@ -54,7 +54,7 @@ fn test_end_to_end_simple() {
             id: BlockId(0),
             params: vec![],
             insts: vec![InstId(0)],
-            term: crate::ir::TermId(0),
+            term: kajit_reprs::mir::TermId(0),
             preds: vec![],
             succs: vec![],
             dead: false,
@@ -95,7 +95,7 @@ fn test_end_to_end_simple() {
 fn test_end_to_end_with_use() {
     // Function: v1 = const 42; v2 = copy v1
     let func = Function {
-        id: crate::ir::FunctionId(0),
+        id: kajit_reprs::mir::FunctionId(0),
         lambda_id: kajit_ir::LambdaId::new(0),
         entry: BlockId(0),
         data_args: vec![],
@@ -105,7 +105,7 @@ fn test_end_to_end_with_use() {
             id: BlockId(0),
             params: vec![],
             insts: vec![InstId(0), InstId(1)],
-            term: crate::ir::TermId(0),
+            term: kajit_reprs::mir::TermId(0),
             preds: vec![],
             succs: vec![],
             dead: false,
@@ -162,7 +162,7 @@ fn test_end_to_end_block_params() {
     // b0: br b1(v1)
     // b1(v2): ...
     let func = Function {
-        id: crate::ir::FunctionId(0),
+        id: kajit_reprs::mir::FunctionId(0),
         lambda_id: kajit_ir::LambdaId::new(0),
         entry: BlockId(0),
         data_args: vec![],
@@ -173,7 +173,7 @@ fn test_end_to_end_block_params() {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![EdgeId(0)],
                 dead: false,
@@ -182,7 +182,7 @@ fn test_end_to_end_block_params() {
                 id: BlockId(1),
                 params: vec![VReg::new(2)],
                 insts: vec![],
-                term: crate::ir::TermId(1),
+                term: kajit_reprs::mir::TermId(1),
                 preds: vec![EdgeId(0)],
                 succs: vec![],
                 dead: false,
@@ -222,7 +222,7 @@ fn test_end_to_end_block_params() {
 fn test_end_to_end_register_pressure() {
     // Function with many vregs (more than available registers)
     let func = Function {
-        id: crate::ir::FunctionId(0),
+        id: kajit_reprs::mir::FunctionId(0),
         lambda_id: kajit_ir::LambdaId::new(0),
         entry: BlockId(0),
         data_args: vec![],
@@ -240,7 +240,7 @@ fn test_end_to_end_register_pressure() {
                 InstId(5),
                 InstId(6),
             ],
-            term: crate::ir::TermId(0),
+            term: kajit_reprs::mir::TermId(0),
             preds: vec![],
             succs: vec![],
             dead: false,
@@ -337,7 +337,7 @@ fn test_end_to_end_register_pressure() {
 fn test_end_to_end_with_spill_rewrite() {
     // Test the full pipeline including spill rewrite
     let mut func = Function {
-        id: crate::ir::FunctionId(0),
+        id: kajit_reprs::mir::FunctionId(0),
         lambda_id: kajit_ir::LambdaId::new(0),
         entry: BlockId(0),
         data_args: vec![],
@@ -347,7 +347,7 @@ fn test_end_to_end_with_spill_rewrite() {
             id: BlockId(0),
             params: vec![],
             insts: vec![InstId(0), InstId(1)],
-            term: crate::ir::TermId(0),
+            term: kajit_reprs::mir::TermId(0),
             preds: vec![],
             succs: vec![],
             dead: false,

@@ -34,7 +34,7 @@
 use kajit_ir::VReg;
 use std::collections::HashMap;
 
-use crate::ir::{Function, InstId};
+use kajit_reprs::mir::{Function, InstId};
 
 use super::{
     linear_scan::{Allocation, AllocationResult},
@@ -174,7 +174,7 @@ mod tests {
         };
 
         let mut func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -184,7 +184,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,
@@ -218,7 +218,7 @@ mod tests {
         };
 
         let mut func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -228,7 +228,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,

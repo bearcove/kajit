@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ir::{BlockId, Function};
+use kajit_reprs::mir::{BlockId, Function};
 
 /// Dominance information for a function.
 #[derive(Debug, Clone)]

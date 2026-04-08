@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use kajit_ir::VReg;
 
-use crate::ir::{BlockId, Function, InstId};
+use kajit_reprs::mir::{BlockId, Function, InstId};
 
 /// Program point (derived fresh per function, NOT InstId)
 ///
@@ -219,7 +219,7 @@ fn compute_rpo(func: &Function) -> Vec<BlockId> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::{Block, Function, Inst, Terminator};
+    use kajit_reprs::mir::{Block, Function, Inst, Terminator};
 
     #[test]
     fn test_progpoint_ordering() {
@@ -280,7 +280,7 @@ mod tests {
         use kajit_lir::LinearOp;
 
         let func = Function {
-            id: crate::ir::FunctionId(0),
+            id: kajit_reprs::mir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -290,7 +290,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![InstId(0), InstId(1)],
-                term: crate::ir::TermId(0),
+                term: kajit_reprs::mir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,
@@ -304,7 +304,7 @@ mod tests {
                         value: 42,
                     },
                     operands: vec![],
-                    clobbers: crate::ir::Clobbers::default(),
+                    clobbers: kajit_reprs::mir::Clobbers::default(),
                 },
                 Inst {
                     id: InstId(1),
@@ -313,7 +313,7 @@ mod tests {
                         value: 99,
                     },
                     operands: vec![],
-                    clobbers: crate::ir::Clobbers::default(),
+                    clobbers: kajit_reprs::mir::Clobbers::default(),
                 },
             ],
             terms: vec![Terminator::Return],

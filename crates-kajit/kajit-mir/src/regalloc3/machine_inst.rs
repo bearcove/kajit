@@ -6,7 +6,7 @@
 
 use kajit_ir::VReg;
 
-use crate::ir::{BlockId, InstId};
+use kajit_reprs::mir::{BlockId, InstId};
 
 /// Physical register (target-specific)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

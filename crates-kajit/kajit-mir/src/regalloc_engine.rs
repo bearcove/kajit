@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::ir;
 use crate::regalloc3::*;
 use crate::regalloc3_result::*;
+use kajit_reprs::mir as ir;
 
 /// Errors from register allocation.
 #[derive(Debug, Clone)]

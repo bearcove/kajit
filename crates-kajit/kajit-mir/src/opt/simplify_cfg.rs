@@ -12,9 +12,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::analysis::dominance::DominanceInfo;
-use crate::ir::{BlockId, EdgeArg, EdgeId, Function, OperandKind, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
+use kajit_reprs::mir::{BlockId, EdgeArg, EdgeId, Function, OperandKind, Terminator};
 
 /// Run CFG simplification: trampoline forwarding + jump-threading.
 /// Returns true if any changes were made.

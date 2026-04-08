@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
-use crate::ir::{
+use kajit_reprs::mir::{
     BlockId, EdgeId, Function, Inst, InstId, Operand, OperandKind, Program, RegClass, TermId,
     Terminator,
 };
@@ -588,7 +588,7 @@ fn find_or_create_const_zero(func: &mut Function) -> VReg {
             class: RegClass::Gpr,
             fixed: None,
         }],
-        clobbers: crate::ir::Clobbers::default(),
+        clobbers: kajit_reprs::mir::Clobbers::default(),
     });
 
     // Insert at the beginning of entry block
@@ -637,31 +637,31 @@ pub fn run_named_pass(prog: &mut Program, pass_name: &str) -> bool {
             changed
         }
         "remat" => {
-            crate::ir::rematerialize_constants(prog);
+            kajit_reprs::mir::rematerialize_constants(prog);
             true
         }
         "cse" => {
-            crate::ir::local_cse(prog);
+            kajit_reprs::mir::local_cse(prog);
             true
         }
         "local_cse" => {
-            crate::ir::local_common_subexpr_elim(prog);
+            kajit_reprs::mir::local_common_subexpr_elim(prog);
             true
         }
         "copyprop" => {
-            crate::ir::copy_propagation(prog);
+            kajit_reprs::mir::copy_propagation(prog);
             true
         }
         "fuse_cmpz" => {
-            crate::ir::fuse_compare_zero_branch(prog);
+            kajit_reprs::mir::fuse_compare_zero_branch(prog);
             true
         }
         "elim_imm" => {
-            crate::ir::eliminate_immediate_only_const_defs(prog);
+            kajit_reprs::mir::eliminate_immediate_only_const_defs(prog);
             true
         }
         "dce" => {
-            crate::ir::dead_code_elimination(prog);
+            kajit_reprs::mir::dead_code_elimination(prog);
             true
         }
         "simplify_cfg" => {
