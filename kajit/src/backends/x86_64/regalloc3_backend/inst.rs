@@ -70,6 +70,9 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ExternAddr { dst, symbol } => {
+                // Always emit into R10 (temp), then store to dst. The linker
+                // may rewrite the movabs sequence, so we must not assume the
+                // target register survives relocation patching.
                 let value = match self.compile_target {
                     crate::pipeline_opts::CompileTarget::Jit => {
                         self.symbol_table.resolve(symbol).as_u64()
@@ -77,16 +80,13 @@ impl<'a> EmitContext<'a> {
                     crate::pipeline_opts::CompileTarget::Object => 0,
                 };
                 let code_offset = self.ectx.emit.code_len();
-                let dest_enc = self.dst_enc_or_temp(*dst, R10);
-                self.emit_load_u64_fixed(dest_enc, value);
+                self.emit_load_u64_fixed(R10, value);
                 self.extern_addr_relocs
                     .push(crate::ir_backend::ExternAddrRelocInfo {
                         code_offset,
                         symbol: symbol.clone(),
                     });
-                if self.preg_for_vreg(*dst).is_none() {
-                    self.store_to_vreg(*dst, R10);
-                }
+                self.store_to_vreg(*dst, R10);
             }
 
             LinearOp::BinOp { op, dst, lhs, rhs } => {

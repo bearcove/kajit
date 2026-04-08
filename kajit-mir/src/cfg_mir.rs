@@ -4530,6 +4530,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         // Mark v1 as used by adding it to data_results
@@ -4572,6 +4573,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         local_cse(&mut program);
@@ -4610,6 +4612,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         // Mark v2 as used (result)
@@ -4720,6 +4723,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         // Verify initial state
@@ -4779,6 +4783,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         let insts_before: usize = program.funcs.iter().map(|f| f.insts.len()).sum();
@@ -5314,6 +5319,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         // v3 needs to be defined somewhere (as data_arg)

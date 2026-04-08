@@ -12,3 +12,4 @@ bench_report/
 *.v3*
 scripts/__pycache__/
 .ship/
+*.o

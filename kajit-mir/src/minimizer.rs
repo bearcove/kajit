@@ -607,6 +607,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         }
     }
 
@@ -676,6 +677,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         }
     }
 
@@ -792,6 +794,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         }
     }
 

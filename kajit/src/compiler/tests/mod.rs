@@ -1084,7 +1084,6 @@ fn debug_postcard_borrowed_header_harness() {
         dwarf,
         cfg_mir_lines: decoder.cfg_mir_lines(),
         function_name: "kajit_decode",
-        uses_root_cursor_arg: false,
         alloc_map: Some(&alloc_map),
         intrinsic_calls,
         extern_addr_relocs,
@@ -2039,6 +2038,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         hints: Default::default(),
         extra_excluded_regs: vec![],
         data_blobs: vec![],
+        stack_allocs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
@@ -2236,6 +2236,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         hints: Default::default(),
         extra_excluded_regs: vec![],
         data_blobs: vec![],
+        stack_allocs: vec![],
     };
     let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
     #[cfg(target_arch = "aarch64")]
@@ -2419,6 +2420,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         hints: Default::default(),
         extra_excluded_regs: vec![],
         data_blobs: vec![],
+        stack_allocs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
@@ -2605,6 +2607,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         hints: Default::default(),
         extra_excluded_regs: vec![],
         data_blobs: vec![],
+        stack_allocs: vec![],
     };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
@@ -2781,6 +2784,7 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
         hints: Default::default(),
         extra_excluded_regs: vec![],
         data_blobs: vec![],
+        stack_allocs: vec![],
     };
 
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
@@ -2914,6 +2918,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         hints: Default::default(),
         extra_excluded_regs: vec![],
         data_blobs: vec![],
+        stack_allocs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
@@ -3071,6 +3076,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         hints: Default::default(),
         extra_excluded_regs: vec![],
         data_blobs: vec![],
+        stack_allocs: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);

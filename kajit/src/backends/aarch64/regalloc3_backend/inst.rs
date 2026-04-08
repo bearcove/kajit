@@ -75,9 +75,11 @@ impl<'a> EmitContext<'a> {
             }
 
             LinearOp::ExternAddr { dst, symbol } => {
-                // Emit a fixed 4-instruction sequence. In JIT mode, emit the
-                // resolved value directly. In Object mode, emit 0 as a
-                // placeholder — the relocation info is used to patch later.
+                // Emit a fixed 4-instruction sequence into X16. In JIT mode,
+                // emit the resolved value directly. In Object mode, emit 0 as
+                // a placeholder — the relocation info patches the movz/movk
+                // sequence (or the linker rewrites it to adrp+add+nop+nop).
+                // Always target X16 so the linker rewrite is safe.
                 let value = match self.compile_target {
                     crate::pipeline_opts::CompileTarget::Jit => {
                         self.symbol_table.resolve(symbol).as_u64()
@@ -85,19 +87,12 @@ impl<'a> EmitContext<'a> {
                     crate::pipeline_opts::CompileTarget::Object => 0,
                 };
                 let code_offset = self.ectx.emit.code_len();
-                let dest_reg = if let Some(preg) = self.preg_for_vreg(*dst) {
-                    self.preg_to_reg(preg)
-                } else {
-                    Reg::X16
-                };
-                self.emit_load_u64_fixed(dest_reg, value);
+                self.emit_load_u64_fixed(Reg::X16, value);
                 self.extern_addr_relocs.push(ExternAddrRelocInfo {
                     code_offset,
                     symbol: symbol.clone(),
                 });
-                if self.preg_for_vreg(*dst).is_none() {
-                    self.store_to_vreg(*dst, Reg::X16);
-                }
+                self.store_to_vreg(*dst, Reg::X16);
             }
 
             LinearOp::BinOp { op, dst, lhs, rhs } => {

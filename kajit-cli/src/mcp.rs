@@ -1260,7 +1260,6 @@ impl DebugDiffSession {
             dwarf,
             cfg_mir_lines: artifacts.decoder.cfg_mir_lines(),
             function_name: "kajit_decode",
-            uses_root_cursor_arg: false,
             alloc_map: Some(&artifacts.alloc_map),
             intrinsic_calls,
             extern_addr_relocs: artifacts.extern_addr_relocs.clone(),

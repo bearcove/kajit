@@ -1054,13 +1054,14 @@ impl<'a> ScalarHirIrLowerer<'a> {
         match place {
             hir::Place::Local(local) => {
                 let values = self.get_local_values(*local);
-                if values.len() == 1 {
-                    // Single-word local — treat the value as a pointer.
-                    (values[0], self.local_types[local].clone())
+                let ty = self.local_types[local].clone();
+                if matches!(ty, hir::Type::Ref { .. }) && values.len() == 1 {
+                    // Ref-typed local: the value IS a pointer already.
+                    (values[0], ty.clone())
                 } else {
-                    // Multi-word value local: spill to a stack allocation and
+                    // Value-typed local: spill to a stack allocation and
                     // return its address. Each word is stored at an 8-byte offset.
-                    let num_words = values.len() as u32;
+                    let num_words = values.len().max(1) as u32;
                     let addr = rb.stack_alloc(num_words * 8, 8);
                     for (i, &val) in values.iter().enumerate() {
                         if i == 0 {
@@ -1071,7 +1072,7 @@ impl<'a> ScalarHirIrLowerer<'a> {
                             rb.store_to_addr(target, val, crate::ir::Width::W8);
                         }
                     }
-                    (addr, self.local_types[local].clone())
+                    (addr, ty.clone())
                 }
             }
             hir::Place::Deref { base } => {

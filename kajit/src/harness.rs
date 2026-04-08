@@ -864,6 +864,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         }
     }
 
@@ -963,6 +964,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         let mut map = LocationMap::default();
@@ -1072,6 +1074,7 @@ mod tests {
             hints: Default::default(),
             extra_excluded_regs: vec![],
             data_blobs: vec![],
+            stack_allocs: vec![],
         };
 
         let mut map = LocationMap::default();
@@ -1150,8 +1153,6 @@ pub struct HarnessInput<'a> {
     pub cfg_mir_lines: &'a [String],
     /// Name for the generated function symbol.
     pub function_name: &'a str,
-    /// Whether the decoder takes an explicit root cursor argument.
-    pub uses_root_cursor_arg: bool,
     /// Allocation map (vreg → physical location).
     pub alloc_map: Option<&'a AllocationMap>,
     /// Intrinsic call sites that need address patching.
@@ -1565,9 +1566,8 @@ fn dwarf_text_relocation(
 fn write_c_harness(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {
     let output_size = input.output_size;
     let func_name = input.function_name;
-    let call_decl = if input.uses_root_cursor_arg {
-        format!(
-            r#"
+    let call_decl = format!(
+        r#"
 typedef struct {{
     const uint8_t *ptr;
     size_t len;
@@ -1578,26 +1578,19 @@ typedef struct {{
     uint64_t pos;
 }} RuntimeCursorArg;
 
-extern void {func_name}(uint8_t *output, DeserContext *ctx, RuntimeCursorArg *cursor);
+extern void {func_name}(RuntimeCursorArg *cursor, uint8_t *output, DeserContext *ctx);
 "#
-        )
-    } else {
-        format!("extern void {func_name}(uint8_t *output, DeserContext *ctx);\n")
-    };
-    let call_site = if input.uses_root_cursor_arg {
-        format!(
-            r#"
+    );
+    let call_site = format!(
+        r#"
     RuntimeCursorArg cursor;
     memset(&cursor, 0, sizeof(cursor));
     cursor.bytes.ptr = input;
     cursor.bytes.len = input_len;
-    {func_name}(output, &ctx, &cursor);
+    {func_name}(&cursor, output, &ctx);
     ctx.cursor = cursor.bytes.ptr + cursor.pos;
 "#
-        )
-    } else {
-        format!("\n    {func_name}(output, &ctx);\n")
-    };
+    );
 
     let c_code = format!(
         r#"// Auto-generated test harness for kajit JIT code.
