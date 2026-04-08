@@ -281,10 +281,6 @@ pub fn compile_pipeline_from_hir_module(
 
     // Phase 2: IR + passes with timeline
     let mut func = lower_hir_module(module);
-    eprintln!(
-        "=== RVSDG IR (initial) ===\n{}\n=== END IR ===",
-        func.display_with_registry(registry)
-    );
     let mut ir_opt_timeline = vec![(
         "initial".to_string(),
         format!("{}", func.display_with_registry(registry)),

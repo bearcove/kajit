@@ -1239,17 +1239,15 @@ impl<'a> Linearizer<'a> {
 
         // Try passthrough-exit lowering: if one branch is data-passthrough,
         // emit conditional exit to shared landing block + inline the other.
-        if std::env::var("KAJIT_NO_CHAIN").is_err() {
-            if self.try_linearize_passthrough_exit(node_id, regions, None) {
-                return;
-            }
+        if self.try_linearize_passthrough_exit(node_id, regions, None) {
+            return;
+        }
 
-            // Control-only chain exit: if ALL data outputs are control-only booleans
-            // (is_more flags), the "done" branch exits directly to the chain landing
-            // and the "more" (passthrough) branch falls through.
-            if self.try_linearize_control_only_chain_exit(node_id, regions) {
-                return;
-            }
+        // Control-only chain exit: if ALL data outputs are control-only booleans
+        // (is_more flags), the "done" branch exits directly to the chain landing
+        // and the "more" (passthrough) branch falls through.
+        if self.try_linearize_control_only_chain_exit(node_id, regions) {
+            return;
         }
 
         let node = &self.func.nodes[node_id];
@@ -1582,6 +1580,10 @@ impl<'a> Linearizer<'a> {
             return false;
         }
         if b0_pt && b1_pt {
+            tracing::debug!(
+                node = node_id.index(),
+                "both branches passthrough, skipping"
+            );
             return false;
         }
         let (cont_branch, exit_on_zero) = if b0_pt {
@@ -1592,6 +1594,15 @@ impl<'a> Linearizer<'a> {
         if self.region_is_error_only(cont_branch) {
             return false;
         }
+
+        tracing::debug!(
+            node = node_id.index(),
+            has_exit_ctx = exit_ctx.is_some(),
+            cont_branch = cont_branch.index(),
+            b0_pt,
+            b1_pt,
+            "passthrough_exit enter"
+        );
 
         // Only apply at top level if there's a chain to exploit.
         // A single passthrough-exit gamma without chaining just creates a
@@ -1679,6 +1690,15 @@ impl<'a> Linearizer<'a> {
             .filter(|(s, d)| s != d)
             .map(|(s, d)| (*s, *d))
             .collect();
+
+        tracing::debug!(
+            node = node_id.index(),
+            ?landing_vregs,
+            ?state_env,
+            ?exit_phis,
+            predicate = predicate.index(),
+            "passthrough_exit phis"
+        );
 
         // Entry phis for continue branch
         let cont_region = &self.func.regions[cont_branch];
@@ -1828,36 +1848,82 @@ impl<'a> Linearizer<'a> {
             }
             self.chain_exit_ctx = prev_ctx;
 
-            if std::env::var("KAJIT_DEBUG_CHAIN_EXIT").is_ok() {
-                eprintln!(
-                    "[passthrough-exit] chain: tail gamma #{}, tail_output_to_landing={:?}, state_env={:?}",
-                    tail_id.index(),
-                    tail_output_to_landing,
-                    state_env
-                        .iter()
-                        .enumerate()
-                        .map(|(i, v)| format!("{}→v{}", i, v.index()))
-                        .collect::<Vec<_>>()
-                );
-            }
-
             // Recurse with updated state and tail mapping
+            tracing::debug!(
+                node = node_id.index(),
+                tail = tail_id.index(),
+                ?tail_output_to_landing,
+                ?state_env,
+                "chaining to tail gamma"
+            );
             let NodeKind::Gamma { regions: tr } = &self.func.nodes[tail_id].kind else {
                 unreachable!()
             };
             let tr = tr.clone();
-            self.try_linearize_passthrough_exit(
+            let chained = self.try_linearize_passthrough_exit(
                 tail_id,
                 &tr,
                 Some(ChainInheritedState {
                     landing_label,
                     landing_vregs: landing_vregs.clone(),
-                    state_env,
+                    state_env: state_env.clone(),
                     output_to_landing: tail_output_to_landing,
                     output_classes: output_classes.clone(),
                     control_done_value,
                 }),
             );
+            if !chained {
+                // Tail gamma rejected chaining (e.g. both branches passthrough).
+                // Linearize it normally and emit a branch to the landing.
+                tracing::debug!(
+                    node = node_id.index(),
+                    tail = tail_id.index(),
+                    "tail gamma rejected chaining, falling back to normal linearize + branch"
+                );
+                self.linearize_node(tail_id);
+                // Build final phis from the tail gamma's outputs to landing vregs
+                let tail_node = &self.func.nodes[tail_id];
+                let tail_data_outputs: Vec<VReg> = tail_node
+                    .outputs
+                    .iter()
+                    .filter(|o| o.kind == PortKind::Data)
+                    .map(|o| o.vreg.expect("gamma output vreg"))
+                    .collect();
+                let cont_results = self.func.regions[cont_branch].results.clone();
+                let cont_data_results: Vec<usize> = cont_results
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &rid)| self.func.region_results[rid].kind == PortKind::Data)
+                    .map(|(i, _)| i)
+                    .collect();
+                let mut final_phis = Vec::new();
+                for (j, &result_idx) in cont_data_results.iter().enumerate() {
+                    if j >= output_to_landing.len() {
+                        break;
+                    }
+                    let landing_idx = output_to_landing[j];
+                    if landing_idx == usize::MAX {
+                        continue;
+                    }
+                    let result = &self.func.region_results[cont_results[result_idx]];
+                    if result.kind == PortKind::Data {
+                        let src = self.resolve_vreg(result.source);
+                        final_phis.push((src, landing_vregs[landing_idx]));
+                    }
+                }
+                for (i, &lv) in landing_vregs.iter().enumerate() {
+                    if !final_phis.iter().any(|(_, d)| *d == lv) {
+                        final_phis.push((state_env[i], lv));
+                    }
+                }
+                self.emit(
+                    Some(self.func.regions[cont_branch].debug_scope),
+                    LinearOp::Branch {
+                        target: landing_label,
+                        phi_args: final_phis,
+                    },
+                );
+            }
         } else {
             // No chain — linearize full continue region with chain exit context.
             // Pre-compute state_env from continue region results so inner
@@ -1945,6 +2011,12 @@ impl<'a> Linearizer<'a> {
                     final_phis.push((state_env[i], lv));
                 }
             }
+            tracing::debug!(
+                node = node_id.index(),
+                ?final_phis,
+                ?state_env,
+                "no-tail branch to landing"
+            );
             self.emit(
                 Some(self.func.regions[cont_branch].debug_scope),
                 LinearOp::Branch {
