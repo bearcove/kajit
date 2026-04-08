@@ -15,7 +15,7 @@
 //!
 //! `IrFunc` implements `Clone`, so each candidate is a cheap clone + mutate.
 
-use crate::{IrFunc, IrOp, NodeId, NodeKind, RegionId};
+use kajit_reprs::ir::{IrFunc, IrOp, NodeId, NodeKind, RegionId};
 
 /// Simple xorshift64 PRNG (no external dependency needed).
 fn shuffle<T>(items: &mut [T], seed: u64) {

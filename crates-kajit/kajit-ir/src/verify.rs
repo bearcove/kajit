@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::{
+use kajit_reprs::ir::{
     DebugScopeId, IrFunc, LambdaId, NodeId, NodeKind, OutputRef, PortKind, PortSource,
     RegionArgRef, RegionId,
 };

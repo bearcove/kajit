@@ -6,7 +6,7 @@
 
 use std::fmt;
 
-use crate::{IrFunc, IrOp, NodeId, NodeKind, PortSource, RegionArgRef, RegionId};
+use kajit_reprs::ir::{IrFunc, IrOp, NodeId, NodeKind, PortSource, RegionArgRef, RegionId};
 
 /// One step in a provenance chain.
 #[derive(Debug)]

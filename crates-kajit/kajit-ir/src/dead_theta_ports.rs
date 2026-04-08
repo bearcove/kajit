@@ -19,7 +19,7 @@
 //!   `Const(C)` source
 //! - Removes the port from the theta (input, body arg, body result, output)
 
-use crate::{
+use kajit_reprs::ir::{
     ArgId, IrFunc, IrOp, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
     RegionArgRef, RegionId, ResultId,
 };

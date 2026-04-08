@@ -26,7 +26,9 @@
 //! ```
 
 use crate::ir_passes::{CloneCtx, clone_region_into, remap_source};
-use crate::{IrFunc, NodeId, NodeKind, OutputRef, PortSource, Region, RegionArg};
+use kajit_reprs::ir::{
+    IrFunc, NodeId, NodeKind, OutputRef, PortSource, Region, RegionArg, RegionId,
+};
 
 /// Maximum iterations we're willing to unroll.
 const MAX_UNROLL: u32 = 10;
@@ -106,7 +108,7 @@ fn analyze_theta(func: &IrFunc, node_id: NodeId) -> Option<UnrollCandidate> {
     })
 }
 
-fn count_subtree_nodes(func: &IrFunc, region_id: crate::RegionId) -> usize {
+fn count_subtree_nodes(func: &IrFunc, region_id: RegionId) -> usize {
     let region = &func.regions[region_id];
     let mut count = region.nodes.len();
     for &nid in &region.nodes {
@@ -125,7 +127,7 @@ fn count_subtree_nodes(func: &IrFunc, region_id: crate::RegionId) -> usize {
     count
 }
 
-fn count_subtree_gammas(func: &IrFunc, region_id: crate::RegionId) -> usize {
+fn count_subtree_gammas(func: &IrFunc, region_id: RegionId) -> usize {
     let region = &func.regions[region_id];
     let mut count = 0;
     for &nid in &region.nodes {
@@ -145,7 +147,7 @@ fn count_subtree_gammas(func: &IrFunc, region_id: crate::RegionId) -> usize {
     count
 }
 
-fn subtree_has_calls(func: &IrFunc, region_id: crate::RegionId) -> bool {
+fn subtree_has_calls(func: &IrFunc, region_id: RegionId) -> bool {
     let region = &func.regions[region_id];
     for &nid in &region.nodes {
         match &func.nodes[nid].kind {
@@ -168,7 +170,7 @@ fn subtree_has_calls(func: &IrFunc, region_id: crate::RegionId) -> bool {
     false
 }
 
-fn subtree_has_bounded_theta(func: &IrFunc, region_id: crate::RegionId) -> bool {
+fn subtree_has_bounded_theta(func: &IrFunc, region_id: RegionId) -> bool {
     let region = &func.regions[region_id];
     for &nid in &region.nodes {
         match &func.nodes[nid].kind {
@@ -461,7 +463,7 @@ fn unroll_one_theta(func: &mut IrFunc, theta_node_id: NodeId, max_iter: u32) {
 }
 
 /// Sort a region's nodes in topological order (dependencies before dependents).
-fn topological_sort_region(func: &mut IrFunc, region_id: crate::RegionId) {
+fn topological_sort_region(func: &mut IrFunc, region_id: RegionId) {
     use std::collections::HashSet;
 
     let nodes = func.regions[region_id].nodes.clone();
@@ -541,8 +543,8 @@ fn topological_sort_region(func: &mut IrFunc, region_id: crate::RegionId) {
 /// iteration.
 fn build_unrolled_cascade(
     func: &mut IrFunc,
-    body_region: crate::RegionId,
-    target_region: crate::RegionId,
+    body_region: RegionId,
+    target_region: RegionId,
     input_sources: &[PortSource],
     remaining_iterations: u32,
     known_env: &mut Vec<Option<u64>>,
@@ -776,8 +778,8 @@ fn build_unrolled_cascade(
 /// Returns the remapped body result sources.
 fn clone_body_into_region(
     func: &mut IrFunc,
-    body_region: crate::RegionId,
-    target_region: crate::RegionId,
+    body_region: RegionId,
+    target_region: RegionId,
     input_sources: &[PortSource],
 ) -> Vec<PortSource> {
     let mut ctx = CloneCtx {
@@ -820,7 +822,7 @@ fn clone_body_into_region(
 /// - Otherwise → None (unknown)
 fn eval_source_with_env(
     func: &IrFunc,
-    body_region: crate::RegionId,
+    body_region: RegionId,
     body_args: &[crate::ArgId],
     known_env: &[Option<u64>],
     source: &PortSource,
@@ -830,7 +832,7 @@ fn eval_source_with_env(
 
 fn eval_with_env_inner(
     func: &IrFunc,
-    body_region: crate::RegionId,
+    body_region: RegionId,
     body_args: &[crate::ArgId],
     known_env: &[Option<u64>],
     source: &PortSource,

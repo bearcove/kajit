@@ -28,7 +28,9 @@
 
 use std::collections::HashMap;
 
-use crate::{ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortKind, PortSource, RegionId};
+use kajit_reprs::ir::{
+    ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortKind, PortSource, RegionId,
+};
 
 // ---------------------------------------------------------------------------
 // Data structures

@@ -8,7 +8,9 @@ use std::collections::HashMap;
 
 use kajit_types::{Arguments, SymbolTable};
 
-use crate::{ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, RegionArgRef, RegionId};
+use kajit_reprs::ir::{
+    ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, RegionArgRef, RegionId,
+};
 
 /// Value environment: maps output ports and region args to u64 values.
 struct Env {

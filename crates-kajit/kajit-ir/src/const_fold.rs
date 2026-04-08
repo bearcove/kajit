@@ -12,7 +12,7 @@
 //! constants at the gamma-input level are visible when processing inner
 //! branches via `resolve_to_constant`.
 
-use crate::{
+use kajit_reprs::ir::{
     DebugScopeId, IrFunc, IrOp, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind,
     PortSource, RegionArgRef, RegionId,
 };

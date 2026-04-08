@@ -13,7 +13,7 @@
 //! produces wrong code for vec types. The output rewriting alone creates a
 //! cleaner IR for potential future optimization.
 
-use crate::{IrFunc, NodeId, NodeKind, OutputRef, PortSource, RegionId};
+use kajit_reprs::ir::{IrFunc, NodeId, NodeKind, OutputRef, PortSource, RegionId};
 
 /// Run gamma output partitioning (single round).
 pub fn gamma_output_partition(func: &mut IrFunc) -> bool {

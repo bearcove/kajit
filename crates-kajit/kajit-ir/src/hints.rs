@@ -19,8 +19,9 @@
 //! RVSDG output ports → LIR vregs → CFG-MIR vregs
 //! Each lowering stage must preserve hint metadata.
 
-use crate::ir::{IrFunc, NodeKind, RegionId};
 use std::collections::HashMap;
+
+use kajit_reprs::ir::{IrFunc, NodeId, NodeKind, RegionId};
 
 /// Spill cost hint (matches kajit-mir::regalloc3::hints::SpillCost)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -72,7 +73,7 @@ impl<'a> SpillCostAnalyzer<'a> {
     }
 
     /// Analyze a node
-    fn analyze_node(&mut self, node_id: crate::NodeId) {
+    fn analyze_node(&mut self, node_id: NodeId) {
         let node = &self.func.nodes[node_id];
 
         match &node.kind {

@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::{
+use kajit_reprs::ir::{
     ArgId, IrFunc, IrOp, NodeId, NodeKind, OutputRef, PortSource, RegionArgRef, RegionId, ResultId,
 };
 

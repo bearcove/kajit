@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{
+use crate::verify;
+use kajit_reprs::ir::{
     InputPort, IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind,
-    PortSource, Region, RegionArg, RegionArgRef, RegionId, RegionResult, ResultId, verify,
+    PortSource, Region, RegionArg, RegionArgRef, RegionId, RegionResult, ResultId,
 };
 
 const MAX_INLINE_NODES_SINGLE_USE: usize = 256;
@@ -1262,7 +1263,7 @@ fn inline_one_apply(func: &mut IrFunc, use_lists: &mut UseLists, apply: NodeId) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{IrBuilder, IrOp, NodeKind, Width};
+    use kajit_reprs::ir::{IrBuilder, IrOp, NodeKind, Width};
 
     #[test]
     fn inlines_simple_apply() {
