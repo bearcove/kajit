@@ -462,6 +462,189 @@ fn pascal_case(name: &str) -> String {
     if out.is_empty() { "Unnamed".to_owned() } else { out }
 }
 
+fn snake_case(name: &str) -> String {
+    let mut out = String::new();
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_ascii_uppercase() {
+            if i != 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn render_visit_calls(
+    ty: &TypeUse,
+    expr: &str,
+    node_names: &[String],
+    mutable: bool,
+    borrowed: bool,
+) -> Vec<String> {
+    let TypeUse::Form { tag, content } = ty;
+    match (tag.as_deref(), content) {
+        (Some("optional"), Some(TypeUsePayload::Seq(items))) if items.len() == 1 => {
+            let binding = if mutable {
+                if borrowed {
+                    format!("if let Some(value) = {expr} {{")
+                } else {
+                    format!("if let Some(value) = &mut {expr} {{")
+                }
+            } else if borrowed {
+                format!("if let Some(value) = {expr} {{")
+            } else {
+                format!("if let Some(value) = &{expr} {{")
+            };
+            let inner = render_visit_calls(&items[0], "value", node_names, mutable, true);
+            if inner.is_empty() {
+                Vec::new()
+            } else {
+                vec![format!(
+                    "{binding}\n{}\n}}",
+                    inner.into_iter().map(|line| format!("    {line}")).collect::<Vec<_>>().join("\n")
+                )]
+            }
+        }
+        (Some("seq"), Some(TypeUsePayload::Seq(items))) if items.len() == 1 => {
+            let inner = render_visit_calls(&items[0], "value", node_names, mutable, true);
+            if inner.is_empty() {
+                Vec::new()
+            } else {
+                let iter = if mutable { "iter_mut()" } else { "iter()" };
+                vec![format!(
+                    "for value in {expr}.{iter} {{\n{}\n}}",
+                    inner.into_iter().map(|line| format!("    {line}")).collect::<Vec<_>>().join("\n")
+                )]
+            }
+        }
+        (Some(tag), _) if node_names.iter().any(|name| name == tag) => {
+            let method = snake_case(tag);
+            if mutable && borrowed {
+                vec![format!("v.visit_{method}_mut({expr});")]
+            } else if mutable {
+                vec![format!("v.visit_{method}_mut(&mut {expr});")]
+            } else if borrowed {
+                vec![format!("v.visit_{method}({expr});")]
+            } else {
+                vec![format!("v.visit_{method}(&{expr});")]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn render_walk_fn(
+    name: &str,
+    decl: &NodeDecl,
+    node_names: &[String],
+    mutable: bool,
+) -> Option<String> {
+    let walk_name = if mutable {
+        format!("walk_{}_mut", snake_case(name))
+    } else {
+        format!("walk_{}", snake_case(name))
+    };
+    let trait_name = if mutable { "VisitMut" } else { "Visit" };
+    let node_ty = if mutable {
+        format!("&mut {name}")
+    } else {
+        format!("&{name}")
+    };
+    match decl {
+        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
+            let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+            field_names.sort();
+            let body_lines = field_names
+                .iter()
+                .flat_map(|field_name| {
+                    let field_expr = format!("node.{}", rust_ident(field_name));
+                    render_visit_calls(
+                        fields.fields.get(field_name).unwrap(),
+                        &field_expr,
+                        node_names,
+                        mutable,
+                        false,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let (v_name, node_name) = if body_lines.is_empty() {
+                ("_v", "_node")
+            } else {
+                ("v", "node")
+            };
+            let body = body_lines.join("\n").replace("node.", &format!("{node_name}."));
+            Some(format!(
+                "pub fn {walk_name}<V: ?Sized + {trait_name}>({v_name}: &mut V, {node_name}: {node_ty}) {{\n{body}\n}}"
+            ))
+        }
+        NodeDecl::Enum(variants) => {
+            let mut variant_names = variants.variants.keys().cloned().collect::<Vec<_>>();
+            variant_names.sort();
+            let arms = variant_names
+                .iter()
+                .filter_map(|variant_name| match variants.variants.get(variant_name).unwrap() {
+                    NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
+                        let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+                        field_names.sort();
+                        let traversed = field_names
+                            .iter()
+                            .filter_map(|field_name| {
+                                let expr = rust_ident(field_name);
+                                let calls = render_visit_calls(
+                                    fields.fields.get(field_name).unwrap(),
+                                    &expr,
+                                    node_names,
+                                    mutable,
+                                    true,
+                                );
+                                if calls.is_empty() {
+                                    None
+                                } else {
+                                    Some((field_name.clone(), calls))
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let pattern_fields = if traversed.len() == field_names.len() {
+                            traversed
+                                .iter()
+                                .map(|(field_name, _)| rust_ident(field_name))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        } else if traversed.is_empty() {
+                            "..".to_owned()
+                        } else {
+                            let mut parts = traversed
+                                .iter()
+                                .map(|(field_name, _)| rust_ident(field_name))
+                                .collect::<Vec<_>>();
+                            parts.push("..".to_owned());
+                            parts.join(", ")
+                        };
+                        let body = traversed
+                            .into_iter()
+                            .flat_map(|(_, calls)| calls)
+                            .map(|line| format!("            {line}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        Some(format!(
+                            "        {name}::{variant_name} {{ {pattern_fields} }} => {{\n{body}\n        }}"
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(",\n");
+            Some(format!(
+                "pub fn {walk_name}<V: ?Sized + {trait_name}>(v: &mut V, node: {node_ty}) {{\n    match node {{\n{arms}\n    }}\n}}"
+            ))
+        }
+        NodeDecl::Other { .. } => None,
+    }
+}
+
 fn render_node_decl(
     name: &str,
     decl: &NodeDecl,
@@ -683,6 +866,50 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
         .collect::<Vec<_>>()
         .join("\n\n");
 
+    let visit_trait_rows = node_names
+        .iter()
+        .map(|name| {
+            let method = snake_case(name);
+            format!(
+                "    fn visit_{method}(&mut self, node: &{name}) {{\n        walk_{method}(self, node);\n    }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let visit_mut_trait_rows = node_names
+        .iter()
+        .map(|name| {
+            let method = snake_case(name);
+            format!(
+                "    fn visit_{method}_mut(&mut self, node: &mut {name}) {{\n        walk_{method}_mut(self, node);\n    }}"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let walk_rows = node_names
+        .iter()
+        .filter_map(|name| {
+            repr.nodes
+                .as_ref()
+                .and_then(|nodes| nodes.get(name))
+                .and_then(|decl| render_walk_fn(name, decl, &node_names, false))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    let walk_mut_rows = node_names
+        .iter()
+        .filter_map(|name| {
+            repr.nodes
+                .as_ref()
+                .and_then(|nodes| nodes.get(name))
+                .and_then(|decl| render_walk_fn(name, decl, &node_names, true))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
     let print_rows = print_keys
         .iter()
         .map(|name| {
@@ -734,6 +961,14 @@ pub trait HasProvenance {{
     fn provenance(&self) -> Option<&{provenance_tag}>;
 }}
 
+pub trait Visit {{
+{visit_trait_rows}
+}}
+
+pub trait VisitMut {{
+{visit_mut_trait_rows}
+}}
+
 pub const REPR_NAME: &str = {name:?};
 pub const REPR_FILE_EXT: &str = {file_ext:?};
 pub const REPR_PURPOSE: &str = {purpose:?};
@@ -745,6 +980,10 @@ pub const REPR_PROVENANCE: &str = {provenance:?};
 {ast_rows}
 
 {prov_impl_rows}
+
+{walk_rows}
+
+{walk_mut_rows}
 
 pub static TOKENS: &[TokenSpec] = &[
 {token_rows}
@@ -774,6 +1013,10 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         placeholder_rows = placeholder_rows,
         ast_rows = ast_rows,
         prov_impl_rows = prov_impl_rows,
+        visit_trait_rows = visit_trait_rows,
+        visit_mut_trait_rows = visit_mut_trait_rows,
+        walk_rows = walk_rows,
+        walk_mut_rows = walk_mut_rows,
         provenance_tag = provenance_tag,
         token_rows = token_rows,
         rule_rows = rule_rows,
