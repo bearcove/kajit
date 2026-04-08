@@ -1,10 +1,8 @@
 pub type FileId = u16;
 
-pub mod aarch64;
 pub mod aarch64_asm;
 pub mod display;
 pub mod parse;
-pub mod x64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SourceLocation {
