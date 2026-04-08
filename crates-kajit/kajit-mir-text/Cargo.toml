@@ -9,11 +9,7 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
-kajit-ir = { path = "../kajit-ir" }
-kajit-lir = { path = "../kajit-lir" }
-kajit-mir = { path = "../kajit-mir" }
-kajit-parse-util = { path = "../kajit-parse-util" }
-chumsky = "1.0.0-alpha.8"
+kajit-reprs = { path = "../kajit-reprs" }
 
 [dev-dependencies]
 datatest-stable = "0.3"

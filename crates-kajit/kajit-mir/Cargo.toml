@@ -11,6 +11,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 [dependencies]
 kajit-ir = { path = "../kajit-ir" }
 kajit-lir = { path = "../kajit-lir" }
+kajit-reprs = { path = "../kajit-reprs" }
 kajit-types = { path = "../kajit-types" }
 indexmap = "2"
 tracing = "0.1"

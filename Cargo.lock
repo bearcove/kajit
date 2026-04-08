@@ -1501,6 +1501,7 @@ dependencies = [
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
+ "kajit-reprs",
  "kajit-types",
  "tracing",
 ]
@@ -1509,12 +1510,8 @@ dependencies = [
 name = "kajit-mir-text"
 version = "0.1.0"
 dependencies = [
- "chumsky",
  "datatest-stable",
- "kajit-ir",
- "kajit-lir",
- "kajit-mir",
- "kajit-parse-util",
+ "kajit-reprs",
 ]
 
 [[package]]
@@ -1534,8 +1531,6 @@ dependencies = [
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
- "kajit-mir",
- "kajit-mir-text",
  "kajit-types",
 ]
 
