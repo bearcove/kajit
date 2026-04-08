@@ -1,9 +1,9 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use facet::Facet;
 use facet_styx::RenderError;
-use styx_tree::{Document, Value};
 
 pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
     let schema_path = workspace_root.join("notes/unified-ast/pilot/hir.repr.styx");
@@ -17,9 +17,7 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
                 e.render(&schema_path.display().to_string(), &schema_source)
             )
         })?;
-    let document = Document::parse(&schema_source)
-        .map_err(|e| format!("failed to build Styx tree for {}: {e}", schema_path.display()))?;
-    let repr = validate_hir_pilot_schema(&schema, &document, &schema_path)?;
+    let repr = validate_hir_pilot_schema(&schema, &schema_path)?;
 
     let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src/schema_poc");
     fs::create_dir_all(&out_dir)
@@ -37,12 +35,14 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
 }
 
 #[derive(Facet, Debug)]
+#[allow(dead_code)]
 struct PilotSchemaDocument {
     meta: PilotMeta,
     repr: ReprDecl,
 }
 
 #[derive(Facet, Debug)]
+#[allow(dead_code)]
 struct PilotMeta {
     id: String,
     version: u64,
@@ -50,6 +50,7 @@ struct PilotMeta {
 }
 
 #[derive(Facet, Debug)]
+#[allow(dead_code)]
 #[facet(rename_all = "snake_case")]
 #[repr(u8)]
 enum ReprDecl {
@@ -57,16 +58,18 @@ enum ReprDecl {
 }
 
 #[derive(Facet, Debug)]
+#[allow(dead_code)]
 struct ReprBody {
     name: String,
     file_ext: String,
     contract: ReprContract,
     syntax: ReprSyntax,
-    common: Option<Value>,
-    nodes: Option<Value>,
+    common: Option<HashMap<String, TypeUse>>,
+    nodes: Option<HashMap<String, NodeDecl>>,
 }
 
 #[derive(Facet, Debug)]
+#[allow(dead_code)]
 struct ReprContract {
     purpose: String,
     canonical_identities: Vec<String>,
@@ -75,17 +78,111 @@ struct ReprContract {
 }
 
 #[derive(Facet, Debug)]
+#[allow(dead_code)]
 struct ReprSyntax {
-    tokens: Value,
-    rules: Value,
-    canonical_print: Value,
+    tokens: HashMap<String, TokenExpr>,
+    rules: HashMap<String, RuleExpr>,
+    canonical_print: HashMap<String, String>,
 }
 
-fn validate_hir_pilot_schema<'a>(
-    schema: &'a PilotSchemaDocument,
-    document: &Document,
-    path: &Path,
-) -> Result<&'a ReprBody, String> {
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+#[facet(rename_all = "lowercase")]
+#[repr(u8)]
+enum TokenExpr {
+    Regex(Vec<String>),
+    #[facet(other)]
+    Other {
+        #[facet(tag)]
+        name: Option<String>,
+        #[facet(content)]
+        content: Option<ExprPayload>,
+    },
+}
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+#[repr(u8)]
+enum RuleExpr {
+    #[facet(other)]
+    Form {
+        #[facet(tag)]
+        tag: Option<String>,
+        #[facet(content)]
+        content: Option<ExprPayload>,
+    },
+}
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+#[facet(untagged)]
+#[repr(u8)]
+enum ExprPayload {
+    Scalar(String),
+    Seq(Vec<RuleExpr>),
+    #[facet(other)]
+    Other {
+        #[facet(tag)]
+        name: Option<String>,
+        #[facet(content)]
+        content: Option<Box<ExprPayload>>,
+    },
+}
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+#[repr(u8)]
+enum TypeUse {
+    #[facet(other)]
+    Form {
+        #[facet(tag)]
+        tag: Option<String>,
+        #[facet(content)]
+        content: Option<TypeUsePayload>,
+    },
+}
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+#[facet(untagged)]
+#[repr(u8)]
+enum TypeUsePayload {
+    Scalar(String),
+    Seq(Vec<TypeUse>),
+}
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+#[facet(rename_all = "lowercase")]
+#[repr(u8)]
+enum NodeDecl {
+    Node(NodeFields),
+    Enum(NodeVariants),
+    Struct(NodeFields),
+    #[facet(other)]
+    Other {
+        #[facet(tag)]
+        tag: Option<String>,
+        #[facet(content)]
+        content: Option<TypeUsePayload>,
+    },
+}
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+struct NodeFields {
+    #[facet(flatten)]
+    fields: HashMap<String, TypeUse>,
+}
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+struct NodeVariants {
+    #[facet(flatten)]
+    variants: HashMap<String, NodeDecl>,
+}
+
+fn validate_hir_pilot_schema<'a>(schema: &'a PilotSchemaDocument, path: &Path) -> Result<&'a ReprBody, String> {
     if schema.meta.id != "kajit:repr-schema/hir-pilot" {
         return Err(format!(
             "expected {} meta.id to be kajit:repr-schema/hir-pilot, got {:?}",
@@ -126,6 +223,13 @@ fn validate_hir_pilot_schema<'a>(
         ));
     }
 
+    if repr.contract.purpose.trim().is_empty() {
+        return Err(format!(
+            "expected {} contract.purpose to be non-empty",
+            path.display()
+        ));
+    }
+
     if repr.contract.round_trip != "canonical-print" {
         return Err(format!(
             "expected {} round_trip to be canonical-print, got {:?}",
@@ -134,44 +238,23 @@ fn validate_hir_pilot_schema<'a>(
         ));
     }
 
-    let repr_object = document
-        .root
-        .get("repr")
-        .ok_or_else(|| format!("expected {} to contain repr entry", path.display()))?;
-    if repr_object.tag_name() != Some("module") {
+    if repr.contract.provenance != "required" {
         return Err(format!(
-            "expected {} repr entry to be tagged @module, got {:?}",
+            "expected {} provenance to be required, got {:?}",
             path.display(),
-            repr_object.tag_name()
+            repr.contract.provenance
         ));
     }
-    let repr_object = repr_object
-        .as_object()
-        .ok_or_else(|| format!("expected {} repr payload to be an object", path.display()))?;
-    let syntax = repr_object
-        .get("syntax")
-        .and_then(Value::as_object)
-        .ok_or_else(|| format!("expected {} repr.syntax to be an object", path.display()))?;
-    let rules = syntax
-        .get("rules")
-        .and_then(Value::as_object)
-        .ok_or_else(|| format!("expected {} syntax.rules to be an object", path.display()))?;
-    let canonical_print = syntax
-        .get("canonical_print")
-        .and_then(Value::as_object)
-        .ok_or_else(|| {
-            format!(
-                "expected {} syntax.canonical_print to be an object",
-                path.display()
-            )
-        })?;
-    let tokens = syntax
-        .get("tokens")
-        .and_then(Value::as_object)
-        .ok_or_else(|| format!("expected {} syntax.tokens to be an object", path.display()))?;
+
+    if repr.contract.canonical_identities.is_empty() {
+        return Err(format!(
+            "expected {} canonical_identities to be non-empty",
+            path.display()
+        ));
+    }
 
     for rule_name in ["Module", "Function", "Param", "Block", "Stmt", "Expr"] {
-        if rules.get(rule_name).is_none() {
+        if !repr.syntax.rules.contains_key(rule_name) {
             return Err(format!(
                 "expected {} syntax.rules to contain {:?}",
                 path.display(),
@@ -181,9 +264,14 @@ fn validate_hir_pilot_schema<'a>(
     }
 
     for print_name in ["Module", "Function", "Stmt.Return", "Expr.Call"] {
-        if canonical_print.get(print_name).is_none() {
+        if repr
+            .syntax
+            .canonical_print
+            .get(print_name)
+            .is_none_or(|s| s.trim().is_empty())
+        {
             return Err(format!(
-                "expected {} canonical_print to contain {:?}",
+                "expected {} canonical_print to contain non-empty {:?}",
                 path.display(),
                 print_name
             ));
@@ -191,7 +279,7 @@ fn validate_hir_pilot_schema<'a>(
     }
 
     for token_name in ["ident", "symbol", "int"] {
-        let Some(token_spec) = tokens.get(token_name) else {
+        let Some(token_spec) = repr.syntax.tokens.get(token_name) else {
             return Err(format!(
                 "expected {} syntax.tokens to contain {:?}",
                 path.display(),
@@ -199,30 +287,68 @@ fn validate_hir_pilot_schema<'a>(
             ));
         };
 
-        if token_spec.tag_name() != Some("regex") {
-            return Err(format!(
-                "expected {} syntax.tokens.{token_name} to be @regex(...), got tag {:?}",
-                path.display(),
-                token_spec.tag_name()
-            ));
-        }
-
-        let Some(patterns) = token_spec.as_sequence() else {
-            return Err(format!(
-                "expected {} syntax.tokens.{token_name} to have sequence payload",
-                path.display()
-            ));
-        };
-
-        if patterns.is_empty() || patterns.get(0).and_then(Value::scalar_text).unwrap_or("").is_empty() {
-            return Err(format!(
-                "expected {} syntax.tokens.{token_name} regex payload to be non-empty",
-                path.display()
-            ));
+        match token_spec {
+            TokenExpr::Regex(patterns) if !patterns.is_empty() && !patterns[0].is_empty() => {}
+            TokenExpr::Regex(_) => {
+                return Err(format!(
+                    "expected {} syntax.tokens.{token_name} regex payload to be non-empty",
+                    path.display()
+                ));
+            }
+            TokenExpr::Other { name, .. } => {
+                return Err(format!(
+                    "expected {} syntax.tokens.{token_name} to be @regex(...), got {:?}",
+                    path.display(),
+                    name
+                ));
+            }
         }
     }
 
+    expect_tagged_rule(path, &repr.syntax.rules, "Module", "seq")?;
+    expect_tagged_rule(path, &repr.syntax.rules, "Function", "seq")?;
+    expect_tagged_rule(path, &repr.syntax.rules, "Param", "seq")?;
+    expect_tagged_rule(path, &repr.syntax.rules, "Block", "seq")?;
+    expect_tagged_rule(path, &repr.syntax.rules, "Stmt", "choice")?;
+    expect_tagged_rule(path, &repr.syntax.rules, "Expr", "choice")?;
+
+    if repr.common.is_none() {
+        return Err(format!("expected {} repr.common to be present", path.display()));
+    }
+
+    if repr.nodes.is_none() {
+        return Err(format!("expected {} repr.nodes to be present", path.display()));
+    }
+
     Ok(repr)
+}
+
+fn expect_tagged_rule(
+    path: &Path,
+    rules: &HashMap<String, RuleExpr>,
+    rule_name: &str,
+    expected_tag: &str,
+) -> Result<(), String> {
+    let Some(rule) = rules.get(rule_name) else {
+        return Err(format!(
+            "expected {} syntax.rules to contain {:?}",
+            path.display(),
+            rule_name
+        ));
+    };
+
+    let actual_tag = match rule {
+        RuleExpr::Form { tag, .. } => tag.as_deref().unwrap_or("literal"),
+    };
+
+    if actual_tag != expected_tag {
+        return Err(format!(
+            "expected {} syntax.rules.{rule_name} to be @{expected_tag}(...), got {actual_tag:?}",
+            path.display()
+        ));
+    }
+
+    Ok(())
 }
 
 fn render_hir_poc_module(repr: &ReprBody) -> String {

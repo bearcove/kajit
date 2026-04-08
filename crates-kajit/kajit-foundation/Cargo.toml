@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 facet = "0.44"
-facet-styx = { path = "../../../styx/crates/facet-styx" }
+facet-styx = "3.0.0"
 prettyplease = "0.2"
-styx-tree = { path = "../../../styx/crates/styx-tree", features = ["facet"] }
+styx-tree = { version = "3.0.0", features = ["facet"] }
 syn = { version = "2", features = ["full"] }
