@@ -496,6 +496,8 @@ pub struct LinearDebugProvenance {
 enum SafeExitVal {
     Vreg(VReg),
     Const(u64),
+    /// Value is computed inside a gamma branch and not available at the exit point.
+    Unavailable,
 }
 
 /// A group of control-only outputs that carry the same logical boolean.
@@ -1799,6 +1801,9 @@ impl<'a> Linearizer<'a> {
             // into available vregs or constants. Only resolve through gammas that
             // contain child gammas (those are the ones that may have inner exits
             // fire while the gamma's merge block hasn't been emitted yet).
+            // Collect ALL non-tail gammas in the continue branch. Any gamma's
+            // output vreg may not be defined when an inner chain exit fires
+            // (because the gamma hasn't been linearized yet at that point).
             let non_tail_gammas: HashSet<NodeId> = self.func.regions[cont_branch]
                 .nodes
                 .iter()
@@ -1806,21 +1811,12 @@ impl<'a> Linearizer<'a> {
                     if nid == tail_id {
                         return false;
                     }
-                    let NodeKind::Gamma { regions: gr } = &self.func.nodes[nid].kind else {
-                        return false;
-                    };
-                    // Only include gammas that have child gammas in their branches
-                    gr.iter().any(|&rid| {
-                        self.func.regions[rid].nodes.iter().any(|&child| {
-                            matches!(self.func.nodes[child].kind, NodeKind::Gamma { .. })
-                        })
-                    })
+                    matches!(self.func.nodes[nid].kind, NodeKind::Gamma { .. })
                 })
                 .copied()
                 .collect();
 
             let safe_exit_env: Vec<SafeExitVal> = if non_tail_gammas.is_empty() {
-                // No gammas with child gammas → all state_env vregs are safe
                 state_env.iter().map(|&v| SafeExitVal::Vreg(v)).collect()
             } else {
                 state_env
@@ -1828,6 +1824,13 @@ impl<'a> Linearizer<'a> {
                     .map(|&v| self.resolve_safe_exit_val_from_vreg(v, &non_tail_gammas))
                     .collect()
             };
+
+            if std::env::var("KAJIT_CHAIN_EXIT_DEBUG").is_ok() {
+                eprintln!("[chain-exit:path-A] non_tail_gammas: {non_tail_gammas:?}");
+                for (i, (se, sv)) in state_env.iter().zip(safe_exit_env.iter()).enumerate() {
+                    eprintln!("[chain-exit:path-A]   landing[{i}]: state_env={se:?}, safe={sv:?}");
+                }
+            }
 
             // Set chain exit context and linearize non-tail nodes
             let prev_ctx = self.chain_exit_ctx.take();
@@ -1977,6 +1980,12 @@ impl<'a> Linearizer<'a> {
                     .collect()
             };
 
+            if std::env::var("KAJIT_CHAIN_EXIT_DEBUG").is_ok() {
+                eprintln!("[chain-exit:path-B] non_tail_gammas: {non_tail_gammas:?}");
+                for (i, (se, sv)) in state_env.iter().zip(safe_env.iter()).enumerate() {
+                    eprintln!("[chain-exit:path-B]   landing[{i}]: state_env={se:?}, safe={sv:?}");
+                }
+            }
             let prev_ctx = self.chain_exit_ctx.take();
             self.chain_exit_ctx = Some(ChainExitCtx {
                 landing_label,
@@ -2040,12 +2049,62 @@ impl<'a> Linearizer<'a> {
         vreg: VReg,
         non_tail_gammas: &HashSet<NodeId>,
     ) -> SafeExitVal {
-        // Find which node produces this vreg by scanning non-tail gammas
+        let debug = std::env::var("KAJIT_CHAIN_EXIT_DEBUG").is_ok();
+        // Find which node produces this vreg by scanning non-tail gamma outputs
         for &gid in non_tail_gammas {
             let gnode = &self.func.nodes[gid];
             for (out_idx, out) in gnode.outputs.iter().enumerate() {
                 if out.kind == PortKind::Data && out.vreg == Some(vreg) {
-                    return self.resolve_gamma_exit_val(gid, out_idx, non_tail_gammas);
+                    let result = self.resolve_gamma_exit_val(gid, out_idx, non_tail_gammas);
+                    if debug {
+                        eprintln!(
+                            "[chain-exit:resolve] {vreg:?} -> gamma {gid:?} out[{out_idx}] -> {result:?}"
+                        );
+                    }
+                    return result;
+                }
+            }
+        }
+        // Check if vreg is a region arg of a non-tail gamma branch.
+        // If so, trace back to the gamma's input.
+        for &gid in non_tail_gammas {
+            let gnode = &self.func.nodes[gid];
+            let NodeKind::Gamma { regions } = &gnode.kind else {
+                continue;
+            };
+            for &rid in regions {
+                let region = &self.func.regions[rid];
+                for (arg_pos, &aid) in region.args.iter().enumerate() {
+                    let arg = &self.func.region_args[aid];
+                    if arg.vreg == Some(vreg) && arg.kind == PortKind::Data {
+                        // This vreg is a branch arg of this gamma. Resolve to the
+                        // gamma's corresponding input.
+                        let data_args: Vec<_> = region
+                            .args
+                            .iter()
+                            .enumerate()
+                            .filter(|&(_, &a)| self.func.region_args[a].kind == PortKind::Data)
+                            .collect();
+                        if let Some(data_idx) = data_args.iter().position(|&(i, _)| i == arg_pos) {
+                            let data_inputs: Vec<_> = gnode
+                                .inputs
+                                .iter()
+                                .enumerate()
+                                .skip(1) // skip predicate
+                                .filter(|(_, inp)| inp.kind == PortKind::Data)
+                                .collect();
+                            if data_idx < data_inputs.len() {
+                                let (input_idx, _) = data_inputs[data_idx];
+                                let v = self.resolve_vreg(gnode.inputs[input_idx].source);
+                                if debug {
+                                    eprintln!(
+                                        "[chain-exit:resolve] {vreg:?} -> gamma {gid:?} branch arg -> input {v:?}"
+                                    );
+                                }
+                                return self.resolve_safe_exit_val_from_vreg(v, non_tail_gammas);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2063,7 +2122,7 @@ impl<'a> Linearizer<'a> {
     ) -> SafeExitVal {
         let node = &self.func.nodes[gamma_id];
         let NodeKind::Gamma { regions } = &node.kind else {
-            return SafeExitVal::Vreg(node.outputs[output_idx].vreg.unwrap());
+            return SafeExitVal::Unavailable;
         };
 
         // Find the non-passthrough (active) branch
@@ -2072,7 +2131,7 @@ impl<'a> Linearizer<'a> {
         } else if self.is_data_passthrough_region(regions[1]) {
             0
         } else {
-            return SafeExitVal::Vreg(node.outputs[output_idx].vreg.unwrap());
+            return SafeExitVal::Unavailable;
         };
 
         let active_region = &self.func.regions[regions[active_branch]];
@@ -2084,7 +2143,7 @@ impl<'a> Linearizer<'a> {
             .collect();
 
         if output_idx >= data_results.len() {
-            return SafeExitVal::Vreg(node.outputs[output_idx].vreg.unwrap());
+            return SafeExitVal::Unavailable;
         }
 
         let (_, &result_id) = data_results[output_idx];
@@ -2109,9 +2168,7 @@ impl<'a> Linearizer<'a> {
                         } else if self.is_data_passthrough_region(inner_regions[1]) {
                             0
                         } else {
-                            return SafeExitVal::Vreg(
-                                inner_node.outputs[inner_ref.index as usize].vreg.unwrap(),
-                            );
+                            return SafeExitVal::Unavailable;
                         };
 
                         let done_region = &self.func.regions[inner_regions[inner_done]];
@@ -2126,7 +2183,7 @@ impl<'a> Linearizer<'a> {
 
                         let idx = inner_ref.index as usize;
                         if idx >= done_data_results.len() {
-                            return SafeExitVal::Vreg(inner_node.outputs[idx].vreg.unwrap());
+                            return SafeExitVal::Unavailable;
                         }
 
                         let (_, &done_rid) = done_data_results[idx];
@@ -2137,7 +2194,7 @@ impl<'a> Linearizer<'a> {
                                 {
                                     SafeExitVal::Const(*value)
                                 } else {
-                                    SafeExitVal::Vreg(inner_node.outputs[idx].vreg.unwrap())
+                                    SafeExitVal::Unavailable
                                 }
                             }
                             PortSource::RegionArg(arg_ref) => {
@@ -2151,9 +2208,7 @@ impl<'a> Linearizer<'a> {
                             }
                         }
                     }
-                    _ => SafeExitVal::Vreg(
-                        inner_node.outputs[inner_ref.index as usize].vreg.unwrap(),
-                    ),
+                    _ => SafeExitVal::Unavailable,
                 }
             }
         }
@@ -2190,7 +2245,7 @@ impl<'a> Linearizer<'a> {
                 }
             }
         }
-        SafeExitVal::Vreg(VReg::new(0)) // shouldn't reach here
+        SafeExitVal::Unavailable
     }
 
     /// Lower a control-only gamma as a chain exit. When a gamma inside a
@@ -2333,6 +2388,10 @@ impl<'a> Linearizer<'a> {
                         LinearOp::Const { dst: v, value: val },
                     );
                     v
+                }
+                SafeExitVal::Unavailable => {
+                    // Can't resolve this value at the exit point — bail out
+                    return false;
                 }
             };
             if src != lv {
@@ -3502,6 +3561,12 @@ impl<'a> Linearizer<'a> {
             };
 
             // Set chain exit context
+            if std::env::var("KAJIT_CHAIN_EXIT_DEBUG").is_ok() {
+                eprintln!("[chain-exit:path-C] non_tail_gammas: {non_tail_gammas:?}");
+                for (i, (se, sv)) in ds_state_env.iter().zip(safe_exit_env.iter()).enumerate() {
+                    eprintln!("[chain-exit:path-C]   landing[{i}]: state_env={se:?}, safe={sv:?}");
+                }
+            }
             let prev_ctx = self.chain_exit_ctx.take();
             self.chain_exit_ctx = Some(ChainExitCtx {
                 landing_label: ds_landing_label,
