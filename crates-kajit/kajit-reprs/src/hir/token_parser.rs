@@ -29,12 +29,6 @@ pub struct ParsedTypeDef {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedCallable {
-    pub id: kajit_hir::CallableId,
-    pub callable: kajit_hir::CallableSpec,
-}
-
-#[derive(Debug, Clone)]
 pub struct ParsedFunction {
     pub id: kajit_hir::FunctionId,
     pub function: kajit_hir::Function,
@@ -45,7 +39,6 @@ pub struct ParsedModule {
     pub regions: Vec<ParsedRegion>,
     pub stores: Vec<ParsedStore>,
     pub types: Vec<ParsedTypeDef>,
-    pub callables: Vec<ParsedCallable>,
     pub functions: Vec<ParsedFunction>,
 }
 
@@ -144,15 +137,6 @@ where
 {
     select! { Token::TypeDefId(n) => kajit_hir::TypeDefId::new(n) }
         .labelled("type id (t0, t1, ...)")
-}
-
-pub fn callable_id<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, kajit_hir::CallableId, ParserExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    select! { Token::CallableId(n) => kajit_hir::CallableId::new(n) }
-        .labelled("callable id (c0, c1, ...)")
 }
 
 pub fn function_id<'tokens, 'src: 'tokens, I>()
@@ -415,7 +399,7 @@ pub fn expr<'tokens, 'src: 'tokens, I>()
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
 {
-    use kajit_hir::{BinaryOp, CallExpr, CallTarget, Expr, Literal, Place, UnaryOp};
+    use kajit_hir::{BinaryOp, CallExpr, Expr, Literal, Place, UnaryOp};
 
     recursive(|expr| {
         // Place parser defined inside expr's recursive scope to avoid mutual recursion
@@ -488,19 +472,16 @@ where
         ));
 
         let call = just(Token::KwCall)
-            .ignore_then(callable_id())
+            .ignore_then(select! {
+                Token::ExternSymbol(name) => kajit_types::SymbolName::new(name.to_string()),
+            })
             .then(
                 expr.clone()
                     .separated_by(just(Token::Comma))
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LParen), just(Token::RParen)),
             )
-            .map(|(callable, args)| {
-                Expr::Call(CallExpr {
-                    target: CallTarget::Callable(callable),
-                    args,
-                })
-            });
+            .map(|(callee, args)| Expr::Call(CallExpr { callee, args }));
 
         let load_expr = just(Token::KwLoad)
             .ignore_then(memory_width())
@@ -863,136 +844,6 @@ where
 
 // === Effect / Domain parsers ===
 
-pub fn effect_class<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, kajit_hir::EffectClass, ParserExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    use kajit_hir::EffectClass;
-    choice((
-        just(Token::KwPure).to(EffectClass::Pure),
-        just(Token::KwReads).to(EffectClass::Reads),
-        just(Token::KwMutates).to(EffectClass::Mutates),
-        just(Token::KwBarrier).to(EffectClass::Barrier),
-    ))
-}
-
-pub fn domain_access<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, kajit_hir::DomainAccess, ParserExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    use kajit_hir::DomainAccess;
-    choice((
-        just(Token::KwRead).to(DomainAccess::Read),
-        just(Token::KwMutate).to(DomainAccess::Mutate),
-    ))
-}
-
-// === Callable parser ===
-
-pub fn callable<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, ParsedCallable, ParserExtra<'tokens, 'src>> + Clone
-where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = Span>,
-{
-    use kajit_hir::{
-        CallSafety, CallSignature, CallableKind, CallableSpec, ControlTransfer, DomainEffect,
-    };
-
-    let runtime_intrinsic = ident().try_map(|name, span| {
-        use kajit_hir::RuntimeIntrinsic;
-        match name {
-            "option_init_none" => Ok(RuntimeIntrinsic::OptionInitNone),
-            "option_init_some" => Ok(RuntimeIntrinsic::OptionInitSome),
-            "alloc_transient" => Ok(RuntimeIntrinsic::AllocTransient),
-            "alloc_persistent" => Ok(RuntimeIntrinsic::AllocPersistent),
-            "vec_from_raw_parts" => Ok(RuntimeIntrinsic::VecFromRawParts),
-            "validate_utf8_range" => Ok(RuntimeIntrinsic::ValidateUtf8Range),
-            "string_validate_alloc_copy" => Ok(RuntimeIntrinsic::StringValidateAllocCopy),
-            "memcpy" => Ok(RuntimeIntrinsic::Memcpy),
-            "free_transient" => Ok(RuntimeIntrinsic::FreeTransient),
-            _ => Err(Rich::custom(span, format!("unknown intrinsic '{name}'"))),
-        }
-    });
-
-    just(Token::KwCallable)
-        .ignore_then(callable_id())
-        .then(choice((
-            just(Token::KwBuiltin).to(CallableKind::Builtin),
-            just(Token::KwHost).to(CallableKind::Host),
-        )))
-        .then(quoted_string())
-        .then_ignore(just(Token::LBrace))
-        .then(just(Token::KwParams).ignore_then(bracketed_list(ty())))
-        .then(
-            just(Token::KwIntrinsic)
-                .ignore_then(runtime_intrinsic)
-                .map(Some)
-                .or_not()
-                .map(|v| v.flatten()),
-        )
-        .then(just(Token::KwReturns).ignore_then(bracketed_list(ty())))
-        .then(just(Token::KwEffect).ignore_then(effect_class()))
-        .then(
-            just(Token::KwDomains).ignore_then(
-                quoted_string()
-                    .then_ignore(just(Token::Colon))
-                    .then(domain_access())
-                    .map(|(domain, access)| DomainEffect { domain, access })
-                    .separated_by(just(Token::Comma))
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LBracket), just(Token::RBracket)),
-            ),
-        )
-        .then(just(Token::KwControl).ignore_then(choice((
-            just(Token::KwReturns).to(ControlTransfer::Returns),
-            just(Token::KwMayFail).to(ControlTransfer::MayFail),
-            just(Token::KwNeverReturns).to(ControlTransfer::NeverReturns),
-        ))))
-        .then(just(Token::KwCapabilities).ignore_then(bracketed_list(quoted_string())))
-        .then(just(Token::KwSafety).ignore_then(choice((
-            just(Token::KwSafeCore).to(CallSafety::SafeCore),
-            just(Token::KwOpaqueHost).to(CallSafety::OpaqueHost),
-            just(Token::KwUnsafeInterop).to(CallSafety::UnsafeInterop),
-        ))))
-        .then(just(Token::KwDocs).ignore_then(choice((
-            just(Token::KwNone).to(None),
-            quoted_string().map(Some),
-        ))))
-        .then_ignore(just(Token::RBrace))
-        .map(|data| {
-            let (data, docs) = data;
-            let (data, safety) = data;
-            let (data, capabilities) = data;
-            let (data, control) = data;
-            let (data, domain_effects) = data;
-            let (data, effect_class) = data;
-            let (data, returns) = data;
-            let (data, intrinsic) = data;
-            let (data, params) = data;
-            let ((id, kind), name) = data;
-            ParsedCallable {
-                id,
-                callable: CallableSpec {
-                    kind,
-                    name,
-                    intrinsic,
-                    signature: CallSignature {
-                        params,
-                        returns,
-                        effect_class,
-                        domain_effects,
-                        control,
-                        capabilities,
-                        safety,
-                    },
-                    docs,
-                },
-            }
-        })
-}
-
 // === Generic params ===
 
 pub fn generic_params<'tokens, 'src: 'tokens, I>()
@@ -1265,14 +1116,6 @@ where
             ),
         )
         .then(
-            just(Token::KwCallables).ignore_then(
-                callable()
-                    .repeated()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LBracket), just(Token::RBracket)),
-            ),
-        )
-        .then(
             just(Token::KwFunctions).ignore_then(
                 function()
                     .repeated()
@@ -1281,15 +1124,12 @@ where
             ),
         )
         .then_ignore(just(Token::RBrace))
-        .map(
-            |((((regions, stores), types), callables), functions)| ParsedModule {
-                regions,
-                stores,
-                types,
-                callables,
-                functions,
-            },
-        )
+        .map(|(((regions, stores), types), functions)| ParsedModule {
+            regions,
+            stores,
+            types,
+            functions,
+        })
 }
 
 // === Two-pass parse entry point ===
@@ -1331,18 +1171,6 @@ fn build_module(parsed: ParsedModule) -> Result<kajit_hir::Module, String> {
         }
         let inserted = module.add_type_def(type_def.def);
         debug_assert_eq!(inserted, type_def.id);
-    }
-
-    for (index, callable) in parsed.callables.into_iter().enumerate() {
-        if callable.id.index() != index {
-            return Err(format!(
-                "callable IDs must be sequential from c0, got c{} at index {}",
-                callable.id.index(),
-                index
-            ));
-        }
-        let inserted = module.add_callable(callable.callable);
-        debug_assert_eq!(inserted, callable.id);
     }
 
     for (index, function) in parsed.functions.into_iter().enumerate() {

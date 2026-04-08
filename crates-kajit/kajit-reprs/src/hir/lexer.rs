@@ -39,7 +39,6 @@ pub enum Token<'src> {
     ScopeId(u32),
     StmtId(u32),
     TypeDefId(u32),
-    CallableId(u32),
     FunctionId(u32),
 
     // Keywords — structure
@@ -47,12 +46,10 @@ pub enum Token<'src> {
     KwType,
     KwStruct,
     KwEnum,
-    KwCallable,
     KwFunction,
     KwRegions,
     KwStores,
     KwTypes,
-    KwCallables,
     KwFunctions,
 
     // Keywords — local kinds
@@ -216,19 +213,16 @@ impl fmt::Display for Token<'_> {
             Token::ScopeId(n) => write!(f, "sc{n}"),
             Token::StmtId(n) => write!(f, "stmt{n}"),
             Token::TypeDefId(n) => write!(f, "t{n}"),
-            Token::CallableId(n) => write!(f, "c{n}"),
             Token::FunctionId(n) => write!(f, "f{n}"),
 
             Token::KwHirModule => write!(f, "hir_module"),
             Token::KwType => write!(f, "type"),
             Token::KwStruct => write!(f, "struct"),
             Token::KwEnum => write!(f, "enum"),
-            Token::KwCallable => write!(f, "callable"),
             Token::KwFunction => write!(f, "function"),
             Token::KwRegions => write!(f, "regions"),
             Token::KwStores => write!(f, "stores"),
             Token::KwTypes => write!(f, "types"),
-            Token::KwCallables => write!(f, "callables"),
             Token::KwFunctions => write!(f, "functions"),
             Token::KwParam => write!(f, "param"),
             Token::KwLet => write!(f, "let"),
@@ -338,12 +332,10 @@ fn keyword_or_ident<'src>(s: &'src str) -> Token<'src> {
         "type" => Token::KwType,
         "struct" => Token::KwStruct,
         "enum" => Token::KwEnum,
-        "callable" => Token::KwCallable,
         "function" => Token::KwFunction,
         "regions" => Token::KwRegions,
         "stores" => Token::KwStores,
         "types" => Token::KwTypes,
-        "callables" => Token::KwCallables,
         "functions" => Token::KwFunctions,
         "param" => Token::KwParam,
         "let" => Token::KwLet,
@@ -468,9 +460,6 @@ fn try_prefixed_id(s: &str) -> Option<Token<'_>> {
     if s.starts_with('t') && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
         return s[1..].parse::<u32>().ok().map(Token::TypeDefId);
     }
-    if s.starts_with('c') && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
-        return s[1..].parse::<u32>().ok().map(Token::CallableId);
-    }
     if s.starts_with('f') && s.len() > 1 && s[1..].chars().all(|c| c.is_ascii_digit()) {
         return s[1..].parse::<u32>().ok().map(Token::FunctionId);
     }
@@ -583,7 +572,7 @@ mod tests {
 
     #[test]
     fn lex_prefixed_ids() {
-        let src = "l0 l42 r1 sc5 stmt99 t0 c1 f3 store2";
+        let src = "l0 l42 r1 sc5 stmt99 t0 f3 store2";
         let (tokens, errs) = lexer().parse(src).into_output_errors();
         assert!(errs.is_empty(), "lex errors: {errs:?}");
         let tokens = tokens.unwrap();
@@ -597,7 +586,6 @@ mod tests {
                 Token::ScopeId(5),
                 Token::StmtId(99),
                 Token::TypeDefId(0),
-                Token::CallableId(1),
                 Token::FunctionId(3),
                 Token::StoreId(2),
             ]
@@ -652,7 +640,6 @@ hir_module {
   regions []
   stores []
   types []
-  callables []
   functions [
     function f0 "add" {
       regions []

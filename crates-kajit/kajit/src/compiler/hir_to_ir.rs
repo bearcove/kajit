@@ -186,32 +186,28 @@ fn theta_loop_vars(iface: &RegionInterface) -> Vec<hir::LocalId> {
 struct RuntimeDialectLowerer;
 
 impl RuntimeDialectLowerer {
-    fn requires_memory_state(intrinsic: Option<hir::RuntimeIntrinsic>) -> bool {
+    fn requires_memory_state(callee: &kajit_types::SymbolName) -> bool {
         matches!(
-            intrinsic,
-            Some(
-                hir::RuntimeIntrinsic::AllocTransient
-                    | hir::RuntimeIntrinsic::Memcpy
-                    | hir::RuntimeIntrinsic::FreeTransient
-            )
+            callee.as_str(),
+            "runtime.alloc_transient" | "runtime.memcpy" | "runtime.free_transient"
         )
     }
 
     fn lower_scalar_value_call(
         rb: &mut RegionBuilder<'_>,
-        callable: &hir::CallableSpec,
+        callee: &kajit_types::SymbolName,
         args: &[crate::ir::PortSource],
     ) -> Option<crate::ir::PortSource> {
-        match callable.intrinsic {
-            Some(hir::RuntimeIntrinsic::AllocTransient) => Some(rb.call_effect(
+        match callee.as_str() {
+            "runtime.alloc_transient" => Some(rb.call_effect(
                 crate::ir::FnPtr(intrinsics::kajit_alloc_transient as *const () as usize),
                 args,
             )),
-            Some(hir::RuntimeIntrinsic::Memcpy) => Some(rb.call_effect(
+            "runtime.memcpy" => Some(rb.call_effect(
                 crate::ir::FnPtr(intrinsics::kajit_memcpy as *const () as usize),
                 args,
             )),
-            Some(hir::RuntimeIntrinsic::AllocPersistent) => Some(
+            "runtime.alloc_persistent" => Some(
                 rb.call_intrinsic(
                     crate::ir::FnPtr(intrinsics::kajit_alloc_persistent as *const () as usize),
                     args,
@@ -219,7 +215,7 @@ impl RuntimeDialectLowerer {
                 )
                 .expect("alloc_persistent returns a value"),
             ),
-            Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => Some(
+            "runtime.string_validate_alloc_copy" => Some(
                 rb.call_intrinsic(
                     crate::ir::FnPtr(
                         intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
@@ -235,18 +231,18 @@ impl RuntimeDialectLowerer {
 
     fn lower_scalar_effect_call(
         rb: &mut RegionBuilder<'_>,
-        callable: &hir::CallableSpec,
+        callee: &kajit_types::SymbolName,
         args: &[crate::ir::PortSource],
     ) -> bool {
-        match callable.intrinsic {
-            Some(hir::RuntimeIntrinsic::FreeTransient) => {
+        match callee.as_str() {
+            "runtime.free_transient" => {
                 let _ = rb.call_effect(
                     crate::ir::FnPtr(intrinsics::kajit_free_transient as *const () as usize),
                     args,
                 );
                 true
             }
-            Some(hir::RuntimeIntrinsic::OptionInitNone) => {
+            "runtime.option_init_none" => {
                 // args: [ctx, init_fn, out_addr]
                 rb.call_intrinsic(
                     crate::ir::FnPtr(intrinsics::kajit_option_init_none_ctx as *const () as usize),
@@ -255,7 +251,7 @@ impl RuntimeDialectLowerer {
                 );
                 true
             }
-            Some(hir::RuntimeIntrinsic::OptionInitSome) => {
+            "runtime.option_init_some" => {
                 // args: [ctx, init_fn, out_addr, payload_addr]
                 rb.call_intrinsic(
                     crate::ir::FnPtr(intrinsics::kajit_option_init_some_ctx as *const () as usize),
@@ -264,7 +260,7 @@ impl RuntimeDialectLowerer {
                 );
                 true
             }
-            Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
+            "runtime.validate_utf8_range" => {
                 rb.call_intrinsic(
                     crate::ir::FnPtr(intrinsics::kajit_validate_utf8_range as *const () as usize),
                     args,
@@ -272,7 +268,7 @@ impl RuntimeDialectLowerer {
                 );
                 true
             }
-            Some(hir::RuntimeIntrinsic::Memcpy) => {
+            "runtime.memcpy" => {
                 let _ = rb.call_effect(
                     crate::ir::FnPtr(intrinsics::kajit_memcpy as *const () as usize),
                     args,
@@ -565,17 +561,18 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 }
             }
             hir::Expr::Unary { .. } => hir::Type::u(64),
-            hir::Expr::Call(call) => {
-                let callable = &self.module.callables[match call.target {
-                    hir::CallTarget::Callable(id) => id,
-                }];
-                callable
-                    .signature
-                    .returns
-                    .first()
-                    .cloned()
-                    .unwrap_or(hir::Type::Unit)
-            }
+            hir::Expr::Call(call) => match call.callee.as_str() {
+                "runtime.alloc_transient" => hir::Type::transient_addr(),
+                "runtime.alloc_persistent" | "runtime.string_validate_alloc_copy" => {
+                    hir::Type::persistent_addr()
+                }
+                "runtime.validate_utf8_range"
+                | "runtime.option_init_none"
+                | "runtime.option_init_some"
+                | "runtime.free_transient"
+                | "runtime.memcpy" => hir::Type::Unit,
+                _ => hir::Type::u(64),
+            },
             hir::Expr::SliceData { .. } | hir::Expr::SliceLen { .. } => hir::Type::u(64),
             hir::Expr::Load { .. } => hir::Type::u(64),
             other => panic!("infer_expr_type: cannot infer type of expression: {other:?}"),
@@ -779,14 +776,8 @@ impl<'a> ScalarHirIrLowerer<'a> {
                     .iter()
                     .map(|arg| self.lower_expr(rb, arg))
                     .collect();
-                let callable = &self.module.callables[match call.target {
-                    hir::CallTarget::Callable(id) => id,
-                }];
-                if !RuntimeDialectLowerer::lower_scalar_effect_call(rb, callable, &args) {
-                    panic!(
-                        "unsupported scalar HIR effect call: {} ({:?})",
-                        callable.name, callable.intrinsic
-                    );
+                if !RuntimeDialectLowerer::lower_scalar_effect_call(rb, &call.callee, &args) {
+                    panic!("unsupported scalar HIR effect call: {}", call.callee);
                 }
                 None
             }
@@ -1465,15 +1456,8 @@ impl<'a> ScalarHirIrLowerer<'a> {
             .iter()
             .map(|arg| self.lower_expr(rb, arg))
             .collect();
-        let callable = &self.module.callables[match call.target {
-            hir::CallTarget::Callable(id) => id,
-        }];
-        RuntimeDialectLowerer::lower_scalar_value_call(rb, callable, &args).unwrap_or_else(|| {
-            panic!(
-                "unsupported scalar HIR call target: {} ({:?})",
-                callable.name, callable.intrinsic
-            )
-        })
+        RuntimeDialectLowerer::lower_scalar_value_call(rb, &call.callee, &args)
+            .unwrap_or_else(|| panic!("unsupported scalar HIR call target: {}", call.callee))
     }
 
     fn lower_expr(&self, rb: &mut RegionBuilder<'_>, expr: &hir::Expr) -> crate::ir::PortSource {

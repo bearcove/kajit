@@ -1,10 +1,9 @@
 use std::fmt;
 
 use crate::hir::{
-    AllocationDomain, BinaryOp, Block, CallExpr, CallSafety, CallTarget, CallableKind,
-    ControlTransfer, DomainAccess, EffectClass, Expr, Function, GenericArg, GenericParam, Literal,
-    LocalId, LocalKind, MatchArm, Module, Parameter, Pattern, PatternField, Place,
-    RuntimeIntrinsic, Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
+    AllocationDomain, BinaryOp, Block, CallExpr, Expr, Function, GenericArg, GenericParam,
+    Literal, LocalId, LocalKind, MatchArm, Module, Parameter, Pattern, PatternField, Place,
+    Scope, Stmt, StmtKind, Type, TypeDef, TypeDefKind, UnaryOp, VariantDef,
 };
 
 impl fmt::Display for Module {
@@ -13,7 +12,6 @@ impl fmt::Display for Module {
         fmt_regions(self, f, 1)?;
         fmt_stores(self, f, 1)?;
         fmt_types(self, f, 1)?;
-        fmt_callables(self, f, 1)?;
         fmt_functions(self, f, 1)?;
         writeln!(f, "}}")
     }
@@ -164,120 +162,6 @@ fn fmt_generic_params(params: &[GenericParam], f: &mut fmt::Formatter<'_>) -> fm
         }
     }
     write!(f, ">")
-}
-
-fn fmt_callables(module: &Module, f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Result {
-    let pad = pad(indent);
-    writeln!(f, "{pad}callables [")?;
-    for (id, callable) in module.callables.iter() {
-        let kind = match callable.kind {
-            CallableKind::Builtin => "builtin",
-            CallableKind::Host => "host",
-        };
-        writeln!(
-            f,
-            "{}  callable c{} {} {} {{",
-            pad,
-            id.index(),
-            kind,
-            quoted(&callable.name)
-        )?;
-        writeln!(
-            f,
-            "{}    params {}",
-            pad,
-            fmt_type_list(module, &callable.signature.params)
-        )?;
-        if let Some(intrinsic) = callable.intrinsic {
-            writeln!(
-                f,
-                "{}    intrinsic {}",
-                pad,
-                fmt_runtime_intrinsic(intrinsic)
-            )?;
-        }
-        writeln!(
-            f,
-            "{}    returns {}",
-            pad,
-            fmt_type_list(module, &callable.signature.returns)
-        )?;
-        writeln!(
-            f,
-            "{}    effect {}",
-            pad,
-            match callable.signature.effect_class {
-                EffectClass::Pure => "pure",
-                EffectClass::Reads => "reads",
-                EffectClass::Mutates => "mutates",
-                EffectClass::Barrier => "barrier",
-            }
-        )?;
-        write!(f, "{}    domains [", pad)?;
-        for (i, domain) in callable.signature.domain_effects.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(
-                f,
-                "{}:{}",
-                quoted(&domain.domain),
-                match domain.access {
-                    DomainAccess::Read => "read",
-                    DomainAccess::Mutate => "mutate",
-                }
-            )?;
-        }
-        writeln!(f, "]")?;
-        writeln!(
-            f,
-            "{}    control {}",
-            pad,
-            match callable.signature.control {
-                ControlTransfer::Returns => "returns",
-                ControlTransfer::MayFail => "may_fail",
-                ControlTransfer::NeverReturns => "never_returns",
-            }
-        )?;
-        write!(f, "{}    capabilities [", pad)?;
-        for (i, capability) in callable.signature.capabilities.iter().enumerate() {
-            if i > 0 {
-                write!(f, ", ")?;
-            }
-            write!(f, "{}", quoted(capability))?;
-        }
-        writeln!(f, "]")?;
-        writeln!(
-            f,
-            "{}    safety {}",
-            pad,
-            match callable.signature.safety {
-                CallSafety::SafeCore => "safe_core",
-                CallSafety::OpaqueHost => "opaque_host",
-                CallSafety::UnsafeInterop => "unsafe_interop",
-            }
-        )?;
-        match &callable.docs {
-            Some(docs) => writeln!(f, "{}    docs {}", pad, quoted(docs))?,
-            None => writeln!(f, "{}    docs none", pad)?,
-        }
-        writeln!(f, "{}  }}", pad)?;
-    }
-    writeln!(f, "{pad}]")
-}
-
-fn fmt_runtime_intrinsic(intrinsic: RuntimeIntrinsic) -> &'static str {
-    match intrinsic {
-        RuntimeIntrinsic::OptionInitNone => "option_init_none",
-        RuntimeIntrinsic::OptionInitSome => "option_init_some",
-        RuntimeIntrinsic::AllocTransient => "alloc_transient",
-        RuntimeIntrinsic::AllocPersistent => "alloc_persistent",
-        RuntimeIntrinsic::VecFromRawParts => "vec_from_raw_parts",
-        RuntimeIntrinsic::ValidateUtf8Range => "validate_utf8_range",
-        RuntimeIntrinsic::StringValidateAllocCopy => "string_validate_alloc_copy",
-        RuntimeIntrinsic::Memcpy => "memcpy",
-        RuntimeIntrinsic::FreeTransient => "free_transient",
-    }
 }
 
 fn fmt_functions(module: &Module, f: &mut fmt::Formatter<'_>, indent: usize) -> fmt::Result {
@@ -866,9 +750,7 @@ impl fmt::Display for ExprDisplay<'_> {
 }
 
 fn fmt_call(module: &Module, call: &CallExpr, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match call.target {
-        CallTarget::Callable(callable) => write!(f, "call c{}(", callable.index())?,
-    }
+    write!(f, "call {}(", call.callee)?;
     for (index, arg) in call.args.iter().enumerate() {
         if index > 0 {
             write!(f, ", ")?;
