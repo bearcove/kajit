@@ -10,7 +10,7 @@ use chumsky::prelude::*;
 use kajit_ir::{
     Arena, DebugScope, DebugScopeId, DebugScopeKind, FnPtr, InputPort, IntrinsicRegistry, IrFunc,
     IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource, Region,
-    RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, VReg, Width,
+    RegionArg, RegionArgRef, RegionId, RegionResult, VReg, Width,
 };
 
 // ─── AST types (first pass) ────────────────────────────────────────────────
@@ -315,17 +315,6 @@ enum ConstRef {
 /// Parse an IrOp (the operation name with parameters).
 fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
     let stack_ops = choice((
-        just("SlotAddr(")
-            .ignore_then(uint32())
-            .then_ignore(just(", n="))
-            .then(uint32())
-            .then_ignore(just(")"))
-            .map(|(s, n)| {
-                AstOp::Resolved(IrOp::SlotAddr {
-                    slot: SlotId::new(s),
-                    num_slots: n,
-                })
-            }),
         just("StoreToAddr(")
             .ignore_then(width())
             .then_ignore(just(")"))
@@ -334,22 +323,6 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
             .ignore_then(width())
             .then_ignore(just(")"))
             .map(|width| AstOp::Resolved(IrOp::LoadFromAddr { width })),
-        just("WriteToSlot(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(|s| {
-                AstOp::Resolved(IrOp::WriteToSlot {
-                    slot: SlotId::new(s),
-                })
-            }),
-        just("ReadFromSlot(")
-            .ignore_then(uint32())
-            .then_ignore(just(")"))
-            .map(|s| {
-                AstOp::Resolved(IrOp::ReadFromSlot {
-                    slot: SlotId::new(s),
-                })
-            }),
     ));
 
     let arith_ops = choice((
@@ -668,10 +641,6 @@ fn resolve(program: AstProgram, registry: &IntrinsicRegistry) -> Result<IrFunc, 
         vreg_count: 0,
         slot_count: 0,
         lambdas: Vec::new(),
-        multi_slot_group: std::collections::BTreeSet::new(),
-        scalar_temp_slots: std::collections::BTreeSet::new(),
-        theta_port_slots: std::collections::HashMap::new(),
-        theta_reinit_slots: std::collections::HashMap::new(),
         param_slot_count: 0,
         debug_scopes: Arena::new(),
         debug_values: Arena::new(),
@@ -953,16 +922,6 @@ fn resolve_node(
             };
             let resolved_op = resolve_op(op, registry)?;
 
-            // Track slots.
-            match &resolved_op {
-                IrOp::SlotAddr { slot, .. }
-                | IrOp::WriteToSlot { slot }
-                | IrOp::ReadFromSlot { slot } => {
-                    *max_slot = (*max_slot).max(slot.index() as u32);
-                }
-                _ => {}
-            }
-
             let resolved_inputs: Vec<InputPort> = inputs
                 .iter()
                 .map(|s| {
@@ -978,34 +937,8 @@ fn resolve_node(
 
             // Patch CallIntrinsic/CallPure arg_count and has_result from actual ports.
             let resolved_op = match resolved_op {
-                IrOp::CallIntrinsic { func: f, .. } => {
-                    let data_inputs = resolved_inputs
-                        .iter()
-                        .filter(|i| i.kind == PortKind::Data)
-                        .count();
-                    let has_result = resolved_outputs.iter().any(|o| o.kind == PortKind::Data);
-                    IrOp::CallIntrinsic {
-                        func: f,
-                        arg_count: data_inputs as u8,
-                        has_result,
-                    }
-                }
-                IrOp::CallPure { func: f, .. } => {
-                    let arg_count = resolved_inputs.len();
-                    IrOp::CallPure {
-                        func: f,
-                        arg_count: arg_count as u8,
-                    }
-                }
-                IrOp::CallEffect { func: f, .. } => {
-                    let data_inputs = resolved_inputs
-                        .iter()
-                        .filter(|i| i.kind == PortKind::Data)
-                        .count();
-                    IrOp::CallEffect {
-                        func: f,
-                        arg_count: data_inputs as u8,
-                    }
+                IrOp::Call { func: f } => {
+                    todo!("deal with call somehow");
                 }
                 other => other,
             };

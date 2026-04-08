@@ -150,11 +150,11 @@ impl State {
 
         match &node.kind {
             NodeKind::Simple(op) => self.eval_simple(func, node_id, op, env)?,
-            NodeKind::Gamma { regions } => self.eval_gamma(func, node_id, regions, env),
+            NodeKind::Gamma { regions } => self.eval_gamma(func, node_id, regions, env)?,
             NodeKind::Theta {
                 body,
                 max_iterations,
-            } => self.eval_theta(func, node_id, *body, *max_iterations, env),
+            } => self.eval_theta(func, node_id, *body, *max_iterations, env)?,
             NodeKind::Lambda { .. } => {
                 todo!("nested lambdas are not supported r/n")
             }

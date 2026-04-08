@@ -2,8 +2,6 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::marker::PhantomData;
 
-pub use kajit_ir::ErrorCode;
-
 mod text;
 
 pub struct Id<T> {
