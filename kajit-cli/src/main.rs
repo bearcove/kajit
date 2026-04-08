@@ -824,7 +824,7 @@ fn cmd_reduce_hir(path: &str) {
     });
 
     // Verify the original triggers a panic
-    if !hir_compile_panics(&module) {
+    if !hir_compile_panics_with_ssa(&module) {
         eprintln!("error: original HIR does not panic during compilation — nothing to reduce");
         std::process::exit(1);
     }
@@ -850,7 +850,7 @@ fn cmd_reduce_hir(path: &str) {
             let Ok(reparsed) = kajit_hir_text::parse_hir(&text) else {
                 continue;
             };
-            if hir_compile_panics(&reparsed) {
+            if hir_compile_panics_with_ssa(&reparsed) {
                 let old_count = count_stmts(&best);
                 best = reparsed;
                 let new_count = count_stmts(&best);
@@ -874,15 +874,25 @@ fn cmd_reduce_hir(path: &str) {
     println!("{result}");
 }
 
-fn hir_compile_panics(module: &kajit_hir::Module) -> bool {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+fn hir_compile_panics_with_ssa(module: &kajit_hir::Module) -> bool {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let registry = kajit_ir::IntrinsicRegistry::empty();
         let pipeline_opts = kajit::PipelineOptions::builder()
             .compile_target(kajit::CompileTarget::Object)
             .build();
         let _ = kajit::compile_pipeline_from_hir_module(module, &registry, &pipeline_opts);
-    }))
-    .is_err()
+    }));
+    match result {
+        Ok(()) => false,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("");
+            msg.contains("SSA validation failed")
+        }
+    }
 }
 
 fn count_stmts(module: &kajit_hir::Module) -> usize {
