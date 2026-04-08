@@ -87,6 +87,88 @@ pub struct VRegDiff {
     pub matches: bool,
 }
 
+/// Tri-state result of comparing a vreg between interpreter and JIT.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareResult {
+    /// Values match (scalar equality or pointer offset equality).
+    Match,
+    /// Values diverge.
+    Diverged,
+    /// Cannot compare (provenance lost, missing pair, etc.).
+    Unverified { reason: &'static str },
+}
+
+/// Tracks comparison coverage statistics.
+#[derive(Debug, Clone, Default)]
+pub struct CompareStats {
+    pub scalar_matches: u64,
+    pub pointer_matches: u64,
+    pub unverified_provenance_lost: u64,
+    pub unverified_missing_pair: u64,
+    pub legacy_skipped: u64,
+    pub divergences: u64,
+}
+
+impl std::fmt::Display for CompareStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "scalar_match={} ptr_match={} unverified_provenance={} unverified_pair={} legacy_skip={} diverged={}",
+            self.scalar_matches,
+            self.pointer_matches,
+            self.unverified_provenance_lost,
+            self.unverified_missing_pair,
+            self.legacy_skipped,
+            self.divergences
+        )
+    }
+}
+
+/// Paired base addresses for a symbolic pointer: interpreter and JIT sides.
+#[derive(Debug, Clone, Copy)]
+pub struct PtrPair {
+    pub interp_base: u64,
+    pub jit_base: u64,
+}
+
+/// Compare interpreter tagged value against JIT concrete value using pointer pairs.
+fn compare_tagged(
+    interp_tagged: kajit_mir::TaggedValue,
+    jit_value: Option<u64>,
+    ptr_pairs: &std::collections::HashMap<kajit_mir::PtrId, PtrPair>,
+) -> CompareResult {
+    match interp_tagged {
+        kajit_mir::TaggedValue::Scalar(v) => {
+            if jit_value == Some(v) {
+                CompareResult::Match
+            } else {
+                CompareResult::Diverged
+            }
+        }
+        kajit_mir::TaggedValue::Pointer {
+            id,
+            offset: interp_offset,
+            ..
+        } => {
+            if let (Some(jit_val), Some(pair)) = (jit_value, ptr_pairs.get(&id)) {
+                let jit_offset = jit_val.wrapping_sub(pair.jit_base);
+                if interp_offset == jit_offset {
+                    CompareResult::Match
+                } else {
+                    CompareResult::Diverged
+                }
+            } else {
+                CompareResult::Unverified {
+                    reason: "missing JIT value or PtrPair",
+                }
+            }
+        }
+        kajit_mir::TaggedValue::UnknownPointer(_) => CompareResult::Unverified {
+            reason: "provenance lost",
+        },
+    }
+}
+
 /// Trait for reading JIT process state. Implemented by LLDB backend.
 pub trait JitDebugger {
     /// Step until the DWARF source line changes. Returns the new line number.
@@ -267,6 +349,8 @@ pub struct LockstepSession<D: JitDebugger> {
     pub jit_steps: usize,
     pub verified: std::collections::HashMap<u32, (u64, u32, usize)>,
     pub non_comparable_vregs: std::collections::HashSet<u32>,
+    pub ptr_pairs: std::collections::HashMap<kajit_mir::PtrId, PtrPair>,
+    pub compare_stats: CompareStats,
     pub status: LockstepSessionStatus,
     pub divergence: Option<Divergence>,
     entry_pc: u64,
@@ -309,6 +393,27 @@ impl<D: JitDebugger> LockstepSession<D> {
         let prev_dwarf_line =
             current_line_from_pc(&debugger, entry_pc, &code_line_ranges).unwrap_or(1);
 
+        // Seed PtrPairs for data_args: pair interpreter PtrIds with JIT register values.
+        let mut ptr_pairs = std::collections::HashMap::new();
+        for (i, &vreg) in program.funcs[0].data_args.iter().enumerate() {
+            let interp_tagged = interpreter.inspect_vreg_tagged(vreg.index());
+            if let kajit_mir::TaggedValue::Pointer {
+                id,
+                concrete: interp_base,
+                ..
+            } = interp_tagged
+            {
+                let jit_base = args.to_register_slots().0[i];
+                ptr_pairs.insert(
+                    id,
+                    PtrPair {
+                        interp_base,
+                        jit_base,
+                    },
+                );
+            }
+        }
+
         Ok(Self {
             cfg_program: program.clone(),
             location_map: location_map.clone(),
@@ -321,6 +426,8 @@ impl<D: JitDebugger> LockstepSession<D> {
             jit_steps: 0,
             verified: std::collections::HashMap::new(),
             non_comparable_vregs: std::collections::HashSet::new(),
+            ptr_pairs,
+            compare_stats: CompareStats::default(),
             status: LockstepSessionStatus::Running,
             divergence: None,
             entry_pc,
@@ -722,6 +829,7 @@ CONTROL FLOW DIVERGENCE at step {}
             || should_skip_process_local_intrinsic_return_check(func, loc)
             || should_skip_non_comparable_value_check(def_vreg, &use_vregs, compare_non_comparable)
         {
+            self.compare_stats.legacy_skipped += 1;
             return Ok(format!(
                 "step {}: line {} skipped (non-comparable backend artifact)",
                 self.jit_steps, executed_line
@@ -740,11 +848,12 @@ CONTROL FLOW DIVERGENCE at step {}
             let dst_idx = dst.index() as u32;
             let location = compare_tracker.location_for(&self.location_map, dst_idx);
             if let Some(location) = location {
-                let interp_value = if dst.index() < state.vregs.len() {
-                    state.vregs[dst.index()]
+                let interp_tagged = if dst.index() < state.tagged_vregs.len() {
+                    state.tagged_vregs[dst.index()]
                 } else {
-                    0
+                    kajit_mir::TaggedValue::Scalar(0)
                 };
+                let interp_value = interp_tagged.concrete();
 
                 // Def vreg: read AFTER step (the instruction just wrote it)
                 // Use vreg (no def): read from pre-step snapshot (may be clobbered by next op's ABI setup)
@@ -755,7 +864,57 @@ CONTROL FLOW DIVERGENCE at step {}
                     pre_step_snapshot.read_vreg(&self.debugger, &location)?
                 };
 
-                if jit_value != Some(interp_value) {
+                // Record PtrPair for pointer birth ops
+                if let kajit_mir::TaggedValue::Pointer {
+                    id,
+                    concrete: interp_base,
+                    offset: 0,
+                    ..
+                } = interp_tagged
+                {
+                    if let Some(jit_val) = jit_value {
+                        if !self.ptr_pairs.contains_key(&id) {
+                            self.ptr_pairs.insert(
+                                id,
+                                PtrPair {
+                                    interp_base,
+                                    jit_base: jit_val,
+                                },
+                            );
+                        }
+                    }
+                }
+
+                let cmp = compare_tagged(interp_tagged, jit_value, &self.ptr_pairs);
+                match cmp {
+                    CompareResult::Match => {
+                        if interp_tagged.is_pointer() {
+                            self.compare_stats.pointer_matches += 1;
+                        } else {
+                            self.compare_stats.scalar_matches += 1;
+                        }
+                    }
+                    CompareResult::Unverified { reason } => {
+                        if matches!(interp_tagged, kajit_mir::TaggedValue::UnknownPointer(_)) {
+                            self.compare_stats.unverified_provenance_lost += 1;
+                        } else {
+                            self.compare_stats.unverified_missing_pair += 1;
+                        }
+                        let reg_name = match &location {
+                            VRegLocation::Register(p) => LocationMap::reg_name(*p),
+                            _ => "stk",
+                        };
+                        return Ok(format!(
+                            "step {}: line {} UNVERIFIED v{}({}) — {}",
+                            self.jit_steps, executed_line, dst_idx, reg_name, reason
+                        ));
+                    }
+                    CompareResult::Diverged => {
+                        self.compare_stats.divergences += 1;
+                    }
+                }
+
+                if cmp == CompareResult::Diverged {
                     let mut vreg_diffs = vec![VRegDiff {
                         vreg_index: dst_idx,
                         interpreter_value: interp_value,

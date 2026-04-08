@@ -114,6 +114,58 @@ impl std::fmt::Display for DebuggerError {
 
 impl std::error::Error for DebuggerError {}
 
+// --- Symbolic pointer tracking ---
+
+/// Symbolic pointer identity. Two pointers with the same PtrId refer to the
+/// same logical allocation, even if concrete addresses differ (interpreter vs JIT).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PtrId(pub u32);
+
+/// A vreg value with optional pointer provenance.
+#[derive(Debug, Clone, Copy)]
+pub enum TaggedValue {
+    /// A plain scalar value, compared by concrete value.
+    Scalar(u64),
+    /// A pointer with known provenance: compared by (id, offset).
+    Pointer {
+        id: PtrId,
+        concrete: u64,
+        offset: u64,
+    },
+    /// A pointer whose provenance was destroyed (bitwise ops, unknown casts, etc.).
+    /// Not comparable — neither match nor divergence.
+    UnknownPointer(u64),
+}
+
+impl TaggedValue {
+    /// Get the concrete u64 value for execution purposes.
+    pub fn concrete(&self) -> u64 {
+        match *self {
+            TaggedValue::Scalar(v) => v,
+            TaggedValue::Pointer { concrete, .. } => concrete,
+            TaggedValue::UnknownPointer(v) => v,
+        }
+    }
+
+    /// Is this a pointer (known or unknown provenance)?
+    pub fn is_pointer(&self) -> bool {
+        !matches!(self, TaggedValue::Scalar(_))
+    }
+}
+
+impl Default for TaggedValue {
+    fn default() -> Self {
+        TaggedValue::Scalar(0)
+    }
+}
+
+/// Shadow memory entry: tracks pointer provenance stored through memory.
+#[derive(Debug, Clone, Copy)]
+struct ShadowEntry {
+    width: u8,
+    value: TaggedValue,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramLocation {
     pub block: cfg_mir::BlockId,
@@ -121,11 +173,14 @@ pub struct ProgramLocation {
     pub at_terminator: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct DebuggerState {
     pub step_count: usize,
     pub location: ProgramLocation,
+    /// Concrete vreg values (for backwards compatibility).
     pub vregs: Vec<u64>,
+    /// Tagged vreg values with pointer provenance info.
+    pub tagged_vregs: Vec<TaggedValue>,
     pub output: Vec<u8>,
     pub trap: Option<InterpreterTrap>,
     pub returned: bool,
@@ -161,12 +216,13 @@ pub enum RunUntilTarget {
 #[derive(Debug, Clone)]
 struct SessionSnapshot {
     slots: Vec<u8>,
-    vregs: Vec<u64>,
+    vregs: Vec<TaggedValue>,
     trap: Option<InterpreterTrap>,
     returned: bool,
     current: cfg_mir::BlockId,
     next_inst: usize,
     steps: usize,
+    pointer_shadow: HashMap<(PtrId, u64), ShadowEntry>,
 }
 
 pub struct DebuggerSession {
@@ -180,7 +236,7 @@ pub struct DebuggerSession {
     cursor_arg: Box<RuntimeCursorArg>,
     /// Separate storage for slot values (not part of the output).
     slots: Vec<u8>,
-    vregs: Vec<u64>,
+    vregs: Vec<TaggedValue>,
     trap: Option<InterpreterTrap>,
     returned: bool,
     current: cfg_mir::BlockId,
@@ -197,6 +253,13 @@ pub struct DebuggerSession {
     stack_allocs_info: Vec<kajit_ir::StackAllocInfo>,
     /// Stack allocations (kept alive for the session).
     stack_allocs: Vec<Vec<u8>>,
+    /// Next PtrId to allocate.
+    next_ptr_id: u32,
+    /// Shadow memory: tracks pointer provenance stored through memory.
+    /// Key is (PtrId of base allocation, offset within allocation).
+    pointer_shadow: HashMap<(PtrId, u64), ShadowEntry>,
+    /// Maps PtrId → base concrete address (interpreter side, for offset computation in shadow memory).
+    ptr_interp_bases: HashMap<PtrId, u64>,
 }
 
 impl DebuggerSession {
@@ -224,7 +287,7 @@ impl DebuggerSession {
             output_buf,
             cursor_arg,
             slots: Vec::new(),
-            vregs: vec![0u64; program.vreg_count as usize],
+            vregs: vec![TaggedValue::Scalar(0); program.vreg_count as usize],
             trap: None,
             returned: false,
             current: func.entry,
@@ -246,6 +309,9 @@ impl DebuggerSession {
             symbol_table: kajit_types::SymbolTable::new(),
             stack_allocs_info: program.stack_allocs.clone(),
             stack_allocs: Vec::new(),
+            next_ptr_id: 0,
+            pointer_shadow: HashMap::new(),
+            ptr_interp_bases: HashMap::new(),
         };
         // Initialize ctx with input pointers
         session.ctx.input_ptr = session.input_data.as_ptr();
@@ -254,18 +320,44 @@ impl DebuggerSession {
 
         // Set data_arg vregs to point to interpreter-owned allocations.
         // HIR param order: [cursor, out, ctx]
+        // Each gets a stable PtrId.
         let data_args = session.func.data_args.clone();
+        let arg_names = ["cursor", "out", "ctx"];
         if let Some(&vreg) = data_args.get(0) {
             let ptr = &*session.cursor_arg as *const RuntimeCursorArg as u64;
-            session.write_vreg(vreg.index(), ptr);
+            let id = session.alloc_ptr_id(ptr, &format!("data_arg[0] ({})", arg_names[0]));
+            session.write_vreg_tagged(
+                vreg.index(),
+                TaggedValue::Pointer {
+                    id,
+                    concrete: ptr,
+                    offset: 0,
+                },
+            );
         }
         if let Some(&vreg) = data_args.get(1) {
             let ptr = session.output_buf.as_ptr() as u64;
-            session.write_vreg(vreg.index(), ptr);
+            let id = session.alloc_ptr_id(ptr, &format!("data_arg[1] ({})", arg_names[1]));
+            session.write_vreg_tagged(
+                vreg.index(),
+                TaggedValue::Pointer {
+                    id,
+                    concrete: ptr,
+                    offset: 0,
+                },
+            );
         }
         if let Some(&vreg) = data_args.get(2) {
             let ptr = &session.ctx as *const RuntimeDeserContext as u64;
-            session.write_vreg(vreg.index(), ptr);
+            let id = session.alloc_ptr_id(ptr, &format!("data_arg[2] ({})", arg_names[2]));
+            session.write_vreg_tagged(
+                vreg.index(),
+                TaggedValue::Pointer {
+                    id,
+                    concrete: ptr,
+                    offset: 0,
+                },
+            );
         }
         Ok(session)
     }
@@ -274,7 +366,8 @@ impl DebuggerSession {
         DebuggerState {
             step_count: self.steps,
             location: self.location(),
-            vregs: self.vregs.clone(),
+            vregs: self.vregs.iter().map(|v| v.concrete()).collect(),
+            tagged_vregs: self.vregs.clone(),
             output: self.output_buf.clone(),
             trap: self.trap,
             returned: self.returned,
@@ -284,6 +377,10 @@ impl DebuggerSession {
 
     pub fn inspect_vreg(&self, vreg_index: usize) -> u64 {
         self.read_vreg(vreg_index)
+    }
+
+    pub fn inspect_vreg_tagged(&self, vreg_index: usize) -> TaggedValue {
+        self.read_vreg_tagged(vreg_index)
     }
 
     pub fn inspect_output(&self, start: usize, len: usize) -> Vec<u8> {
@@ -436,6 +533,7 @@ impl DebuggerSession {
             current: self.current,
             next_inst: self.next_inst,
             steps: self.steps,
+            pointer_shadow: self.pointer_shadow.clone(),
         }
     }
 
@@ -447,17 +545,41 @@ impl DebuggerSession {
         self.current = snapshot.current;
         self.next_inst = snapshot.next_inst;
         self.steps = snapshot.steps;
+        self.pointer_shadow = snapshot.pointer_shadow;
     }
 
+    /// Read the concrete u64 value of a vreg (for execution).
     fn read_vreg(&self, idx: usize) -> u64 {
-        self.vregs.get(idx).copied().unwrap_or(0)
+        self.vregs.get(idx).map(|v| v.concrete()).unwrap_or(0)
     }
 
+    /// Read the tagged value of a vreg (for comparison/provenance tracking).
+    fn read_vreg_tagged(&self, idx: usize) -> TaggedValue {
+        self.vregs
+            .get(idx)
+            .copied()
+            .unwrap_or(TaggedValue::Scalar(0))
+    }
+
+    /// Write a plain scalar value to a vreg.
     fn write_vreg(&mut self, idx: usize, value: u64) {
+        self.write_vreg_tagged(idx, TaggedValue::Scalar(value));
+    }
+
+    /// Write a tagged value to a vreg.
+    fn write_vreg_tagged(&mut self, idx: usize, value: TaggedValue) {
         if idx >= self.vregs.len() {
-            self.vregs.resize(idx + 1, 0);
+            self.vregs.resize(idx + 1, TaggedValue::Scalar(0));
         }
         self.vregs[idx] = value;
+    }
+
+    /// Allocate a new PtrId and register its base address.
+    fn alloc_ptr_id(&mut self, base_concrete: u64, _origin: &str) -> PtrId {
+        let id = PtrId(self.next_ptr_id);
+        self.next_ptr_id += 1;
+        self.ptr_interp_bases.insert(id, base_concrete);
+        id
     }
 
     fn ensure_slots_len(&mut self, len: usize) {
@@ -475,41 +597,202 @@ impl DebuggerSession {
         }
     }
 
+    /// Invalidate shadow memory entries that overlap with a store at `[offset, offset+width)`.
+    fn shadow_invalidate_range(&mut self, base_id: PtrId, offset: u64, width: u64) {
+        self.pointer_shadow.retain(|&(pid, entry_offset), entry| {
+            if pid != base_id {
+                return true;
+            }
+            let entry_end = entry_offset + entry.width as u64;
+            let store_end = offset + width;
+            // Keep if no overlap
+            entry_end <= offset || store_end <= entry_offset
+        });
+    }
+
+    /// Invalidate all shadow memory (conservative, for opaque effectful calls).
+    fn shadow_invalidate_all(&mut self) {
+        self.pointer_shadow.clear();
+    }
+
+    /// Invalidate shadow entries for specific PtrIds (for calls that take pointer args).
+    fn shadow_invalidate_for_ptrs(&mut self, ptr_ids: &[PtrId]) {
+        self.pointer_shadow
+            .retain(|&(pid, _), _| !ptr_ids.contains(&pid));
+    }
+
+    /// Compute the tagged result of a binary operation, preserving pointer provenance
+    /// for Add/Sub with one pointer operand, destroying it for everything else.
+    fn tagged_binop(
+        &self,
+        op: BinOpKind,
+        lhs_tag: TaggedValue,
+        rhs_tag: TaggedValue,
+    ) -> TaggedValue {
+        let lhs_val = lhs_tag.concrete();
+        let rhs_val = rhs_tag.concrete();
+        let result = exec_binop(op, lhs_val, rhs_val);
+
+        match op {
+            BinOpKind::Add => match (lhs_tag, rhs_tag) {
+                (TaggedValue::Pointer { id, offset, .. }, TaggedValue::Scalar(s)) => {
+                    TaggedValue::Pointer {
+                        id,
+                        concrete: result,
+                        offset: offset.wrapping_add(s),
+                    }
+                }
+                (TaggedValue::Scalar(s), TaggedValue::Pointer { id, offset, .. }) => {
+                    TaggedValue::Pointer {
+                        id,
+                        concrete: result,
+                        offset: offset.wrapping_add(s),
+                    }
+                }
+                (TaggedValue::Pointer { .. }, TaggedValue::Pointer { .. }) => {
+                    TaggedValue::UnknownPointer(result)
+                }
+                (_, TaggedValue::UnknownPointer(_)) | (TaggedValue::UnknownPointer(_), _) => {
+                    TaggedValue::UnknownPointer(result)
+                }
+                _ => TaggedValue::Scalar(result),
+            },
+            BinOpKind::Sub => match (lhs_tag, rhs_tag) {
+                (TaggedValue::Pointer { id, offset, .. }, TaggedValue::Scalar(s)) => {
+                    TaggedValue::Pointer {
+                        id,
+                        concrete: result,
+                        offset: offset.wrapping_sub(s),
+                    }
+                }
+                (TaggedValue::Pointer { .. }, TaggedValue::Pointer { .. }) => {
+                    // ptr - ptr = scalar difference
+                    TaggedValue::Scalar(result)
+                }
+                (_, TaggedValue::UnknownPointer(_)) | (TaggedValue::UnknownPointer(_), _) => {
+                    TaggedValue::UnknownPointer(result)
+                }
+                _ => TaggedValue::Scalar(result),
+            },
+            // Comparison ops always produce scalar results
+            BinOpKind::CmpEq
+            | BinOpKind::CmpNe
+            | BinOpKind::CmpLt
+            | BinOpKind::CmpLe
+            | BinOpKind::CmpGt
+            | BinOpKind::CmpGe => TaggedValue::Scalar(result),
+            // All bitwise/mul/shift ops destroy provenance
+            _ => {
+                if lhs_tag.is_pointer() || rhs_tag.is_pointer() {
+                    TaggedValue::UnknownPointer(result)
+                } else {
+                    TaggedValue::Scalar(result)
+                }
+            }
+        }
+    }
+
     fn execute_op(&mut self, block: cfg_mir::BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
         match op {
             LinearOp::Const { dst, value } => self.write_vreg(dst.index(), *value),
             LinearOp::ExternAddr { dst, symbol } => {
                 let addr = self.symbol_table.resolve(symbol).as_u64();
-                self.write_vreg(dst.index(), addr)
+                let id = self.alloc_ptr_id(addr, &format!("extern {symbol:?}"));
+                self.write_vreg_tagged(
+                    dst.index(),
+                    TaggedValue::Pointer {
+                        id,
+                        concrete: addr,
+                        offset: 0,
+                    },
+                );
             }
             LinearOp::DataAddr { dst, blob_id } => {
                 let blob = &self.data_blobs[*blob_id as usize];
-                self.write_vreg(dst.index(), blob.as_ptr() as u64);
+                let addr = blob.as_ptr() as u64;
+                let id = self.alloc_ptr_id(addr, &format!("data_blob[{blob_id}]"));
+                self.write_vreg_tagged(
+                    dst.index(),
+                    TaggedValue::Pointer {
+                        id,
+                        concrete: addr,
+                        offset: 0,
+                    },
+                );
             }
             LinearOp::Copy { dst, src } => {
-                let value = self.read_vreg(src.index());
-                self.write_vreg(dst.index(), value);
+                let tagged = self.read_vreg_tagged(src.index());
+                self.write_vreg_tagged(dst.index(), tagged);
             }
             LinearOp::BinOp { op, dst, lhs, rhs } => {
-                let lhs = self.read_vreg(lhs.index());
-                let rhs = self.read_vreg(rhs.index());
-                self.write_vreg(dst.index(), exec_binop(*op, lhs, rhs));
+                let lhs_tag = self.read_vreg_tagged(lhs.index());
+                let rhs_tag = self.read_vreg_tagged(rhs.index());
+                let result = self.tagged_binop(*op, lhs_tag, rhs_tag);
+                self.write_vreg_tagged(dst.index(), result);
             }
             LinearOp::LoadFromAddr { dst, addr, width } => {
-                let ptr = self.read_vreg(addr.index()) as *const u8;
-                let width = width.bytes() as usize;
+                let addr_tag = self.read_vreg_tagged(addr.index());
+                let ptr = addr_tag.concrete() as *const u8;
+                let width_bytes = width.bytes() as usize;
                 let mut value = 0u64;
-                for i in 0..width {
+                for i in 0..width_bytes {
                     value |= (unsafe { ptr.add(i).read() } as u64) << (i * 8);
                 }
-                self.write_vreg(dst.index(), value);
+                // Check shadow memory for pointer provenance
+                let result_tag = if let TaggedValue::Pointer { id, offset, .. } = addr_tag {
+                    if let Some(entry) = self.pointer_shadow.get(&(id, offset)) {
+                        if entry.width as usize == width_bytes {
+                            // Recover provenance, but update concrete from actual load
+                            match entry.value {
+                                TaggedValue::Pointer {
+                                    id: stored_id,
+                                    offset: stored_offset,
+                                    ..
+                                } => TaggedValue::Pointer {
+                                    id: stored_id,
+                                    concrete: value,
+                                    offset: stored_offset,
+                                },
+                                TaggedValue::UnknownPointer(_) => {
+                                    TaggedValue::UnknownPointer(value)
+                                }
+                                TaggedValue::Scalar(_) => TaggedValue::Scalar(value),
+                            }
+                        } else {
+                            TaggedValue::Scalar(value)
+                        }
+                    } else {
+                        TaggedValue::Scalar(value)
+                    }
+                } else {
+                    TaggedValue::Scalar(value)
+                };
+                self.write_vreg_tagged(dst.index(), result_tag);
             }
             LinearOp::StoreToAddr { addr, src, width } => {
-                let ptr = self.read_vreg(addr.index()) as *mut u8;
-                let value = self.read_vreg(src.index());
-                let width = width.bytes() as usize;
-                for i in 0..width {
+                let addr_tag = self.read_vreg_tagged(addr.index());
+                let src_tag = self.read_vreg_tagged(src.index());
+                let ptr = addr_tag.concrete() as *mut u8;
+                let value = src_tag.concrete();
+                let width_bytes = width.bytes() as usize;
+                // Perform the actual store
+                for i in 0..width_bytes {
                     unsafe { ptr.add(i).write(((value >> (i * 8)) & 0xff) as u8) };
+                }
+                // Update shadow memory
+                if let TaggedValue::Pointer { id, offset, .. } = addr_tag {
+                    // Invalidate overlapping entries
+                    self.shadow_invalidate_range(id, offset, width_bytes as u64);
+                    // Only shadow non-scalar provenance
+                    if src_tag.is_pointer() {
+                        self.pointer_shadow.insert(
+                            (id, offset),
+                            ShadowEntry {
+                                width: width_bytes as u8,
+                                value: src_tag,
+                            },
+                        );
+                    }
                 }
             }
             LinearOp::UnaryOp { op, dst, src } => {
@@ -530,20 +813,39 @@ impl DebuggerSession {
                         (src_val ^ mask).wrapping_sub(mask)
                     }
                 };
+                // UnaryOps destroy pointer provenance
                 self.write_vreg(dst.index(), result);
             }
             LinearOp::SlotAddr { dst, slot } => {
                 let base = slot.index() * kajit_ir::SLOT_ADDR_STRIDE_BYTES;
                 self.ensure_slots_len(base + kajit_ir::SLOT_ADDR_STRIDE_BYTES);
                 let addr = unsafe { self.slots.as_ptr().add(base) as u64 };
-                self.write_vreg(dst.index(), addr);
+                // Stable PtrId per slot index
+                let id = self.alloc_ptr_id(addr, &format!("slot[{}]", slot.index()));
+                self.write_vreg_tagged(
+                    dst.index(),
+                    TaggedValue::Pointer {
+                        id,
+                        concrete: addr,
+                        offset: 0,
+                    },
+                );
             }
             LinearOp::StackAlloc { dst, id } => {
                 let info = &self.stack_allocs_info[id.index()];
                 let alloc = vec![0u8; info.size as usize];
                 let ptr = alloc.as_ptr() as u64;
                 self.stack_allocs.push(alloc);
-                self.write_vreg(dst.index(), ptr);
+                // Fresh PtrId per dynamic allocation
+                let pid = self.alloc_ptr_id(ptr, &format!("stack_alloc[{}]", id.index()));
+                self.write_vreg_tagged(
+                    dst.index(),
+                    TaggedValue::Pointer {
+                        id: pid,
+                        concrete: ptr,
+                        offset: 0,
+                    },
+                );
             }
             LinearOp::WriteToSlot { src, slot } => {
                 let value = self.read_vreg(src.index());
@@ -565,10 +867,26 @@ impl DebuggerSession {
                 self.write_vreg(dst.index(), value);
             }
             LinearOp::CallIntrinsic { func, args, dst } => {
+                // Collect PtrIds of pointer arguments for shadow invalidation
+                let ptr_ids: Vec<PtrId> = args
+                    .iter()
+                    .filter_map(|v| match self.read_vreg_tagged(v.index()) {
+                        TaggedValue::Pointer { id, .. } => Some(id),
+                        _ => None,
+                    })
+                    .collect();
                 self.execute_call_intrinsic(func.0, args, *dst)?;
+                // Invalidate shadow for pointer args (effectful call)
+                self.shadow_invalidate_for_ptrs(&ptr_ids);
             }
-            LinearOp::CallPure { func, args, dst } | LinearOp::CallEffect { func, args, dst } => {
+            LinearOp::CallPure { func, args, dst } => {
+                // Pure calls have no side effects — no shadow invalidation needed
                 self.execute_call_pure(func.0, args, *dst)?;
+            }
+            LinearOp::CallEffect { func, args, dst } => {
+                // Effectful calls may write through pointers — invalidate conservatively
+                self.execute_call_pure(func.0, args, *dst)?;
+                self.shadow_invalidate_all();
             }
             op => {
                 return Err(DebuggerError::UnsupportedOp {
@@ -809,13 +1127,18 @@ impl DebuggerSession {
             });
         }
 
-        let transfers: Vec<(usize, u64)> = edge
+        let transfers: Vec<(usize, TaggedValue)> = edge
             .args
             .iter()
-            .map(|arg| (arg.target.index(), self.read_vreg(arg.source.index())))
+            .map(|arg| {
+                (
+                    arg.target.index(),
+                    self.read_vreg_tagged(arg.source.index()),
+                )
+            })
             .collect();
         for (target, value) in transfers {
-            self.write_vreg(target, value);
+            self.write_vreg_tagged(target, value);
         }
         self.current = to;
         Ok(())
