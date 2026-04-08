@@ -311,14 +311,67 @@ tool_box!(
     ]
 );
 
-#[derive(Default)]
 struct ServerState {
     sessions: HashMap<u64, DebuggerSession>,
     next_session_id: u64,
     #[cfg(feature = "lldb")]
-    debug_sessions: HashMap<u64, DebugDiffSession>,
+    debug_sessions: HashMap<u64, DebugSessionHandle>,
     #[cfg(feature = "lldb")]
     next_debug_session_id: u64,
+}
+
+impl Default for ServerState {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            next_session_id: 1,
+            #[cfg(feature = "lldb")]
+            debug_sessions: HashMap::new(),
+            #[cfg(feature = "lldb")]
+            next_debug_session_id: 1,
+        }
+    }
+}
+
+/// Command sent from MCP handler to the debug session worker thread.
+#[cfg(feature = "lldb")]
+enum DebugCommand {
+    Step { count: usize },
+    State,
+    Disassemble { context: usize },
+    Registers { names: Vec<String> },
+    Memory { address: u64, len: usize },
+    Backtrace,
+    SourceInfo,
+    CfgContext { block_id: Option<u64> },
+    Vregs { vregs: Vec<u32> },
+    Lldb { command: String },
+    Close,
+}
+
+/// Handle to a debug session running on a dedicated worker thread.
+/// The LLDB types are !Send, so they live entirely on the worker thread.
+/// Communication is via channels.
+#[cfg(feature = "lldb")]
+struct DebugSessionHandle {
+    cmd_tx: std::sync::mpsc::Sender<DebugCommand>,
+    resp_rx: std::sync::mpsc::Receiver<Result<JsonValue, String>>,
+}
+
+#[cfg(feature = "lldb")]
+impl DebugSessionHandle {
+    /// Send a command and wait for the response with a timeout.
+    fn call(&self, cmd: DebugCommand, timeout: std::time::Duration) -> Result<JsonValue, String> {
+        self.cmd_tx
+            .send(cmd)
+            .map_err(|_| "debug session worker thread has exited".to_owned())?;
+        self.resp_rx.recv_timeout(timeout).map_err(|e| match e {
+            std::sync::mpsc::RecvTimeoutError::Timeout => "debug session timed out".to_owned(),
+            std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                "debug session worker thread has exited".to_owned()
+            }
+        })?
+    }
 }
 
 #[derive(Clone, Default)]
@@ -389,9 +442,6 @@ impl MirHandler {
         let session = DebuggerSession::new(&program, &input, &args).map_err(|e| e.to_string())?;
 
         let mut state = self.lock_state()?;
-        if state.next_session_id == 0 {
-            state.next_session_id = 1;
-        }
         let session_id = state.next_session_id;
         state.next_session_id += 1;
         state.sessions.insert(session_id, session);
@@ -566,21 +616,54 @@ impl MirHandler {
             let ty = arg_str(args, "ty")?;
             let input_hex = arg_str(args, "input_hex")?;
             let hir_path = arg_opt_str(args, "hir_path");
-            let session = DebugDiffSession::new(&format, &ty, &input_hex, hir_path.as_deref())?;
 
-            let mut state = self.lock_state()?;
-            if state.next_debug_session_id == 0 {
-                state.next_debug_session_id = 1;
-            }
-            let session_id = state.next_debug_session_id;
-            state.next_debug_session_id += 1;
-            state.debug_sessions.insert(session_id, session);
+            // Allocate session ID first
+            let session_id = {
+                let mut state = self.lock_state()?;
+                let id = state.next_debug_session_id;
+                state.next_debug_session_id += 1;
+                id
+            };
 
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .expect("inserted debug session should exist");
-            Ok(json!({ "text": session.snapshot_markdown(session_id) }))
+            // Do compilation + harness generation on this thread (pure Rust, no LLDB)
+            let prepared =
+                DebugDiffSession::prepare(&format, &ty, &input_hex, hir_path.as_deref())?;
+
+            // Spawn worker thread that owns the LLDB session
+            let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+            let (resp_tx, resp_rx) = std::sync::mpsc::channel();
+
+            let init_resp_tx = resp_tx.clone();
+            std::thread::spawn(move || {
+                // Launch LLDB on the worker thread (LLDB types are !Send)
+                match DebugDiffSession::launch(prepared) {
+                    Ok(session) => {
+                        let snapshot = session.snapshot_markdown(session_id);
+                        let _ = init_resp_tx.send(Ok(json!({ "text": snapshot })));
+                        debug_session_worker(session_id, session, cmd_rx, resp_tx);
+                    }
+                    Err(e) => {
+                        let _ = init_resp_tx.send(Err(e));
+                    }
+                }
+            });
+
+            // Wait for the worker to finish initialization (with timeout)
+            let init_result = resp_rx
+                .recv_timeout(std::time::Duration::from_secs(60))
+                .map_err(|e| match e {
+                    std::sync::mpsc::RecvTimeoutError::Timeout => {
+                        "debug session creation timed out after 60s".to_owned()
+                    }
+                    std::sync::mpsc::RecvTimeoutError::Disconnected => {
+                        "debug session worker thread exited during init".to_owned()
+                    }
+                })??;
+
+            let handle = DebugSessionHandle { cmd_tx, resp_rx };
+            self.lock_state()?.debug_sessions.insert(session_id, handle);
+
+            Ok(init_result)
         }
     }
 
@@ -595,11 +678,13 @@ impl MirHandler {
         {
             let session_id = arg_u64(args, "session_id")?;
             let mut state = self.lock_state()?;
-            let removed = state.debug_sessions.remove(&session_id).is_some();
-            Ok(json!({
-                "session_id": session_id,
-                "closed": removed,
-            }))
+            if let Some(handle) = state.debug_sessions.remove(&session_id) {
+                // Tell the worker to shut down; ignore errors (it may have already exited)
+                let _ = handle.cmd_tx.send(DebugCommand::Close);
+                Ok(json!({ "session_id": session_id, "closed": true }))
+            } else {
+                Ok(json!({ "session_id": session_id, "closed": false }))
+            }
         }
     }
 
@@ -614,84 +699,28 @@ impl MirHandler {
         {
             let session_id = arg_u64(args, "session_id")?;
             let count = arg_opt_u64(args, "count").unwrap_or(1) as usize;
-
-            let mut state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get_mut(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-
-            let log_path = format!("/tmp/kajit-lockstep-{session_id}.log");
-            // Truncate log file at start of each step batch
-            let _ = std::fs::write(&log_path, "");
-
-            let (tx, rx) = std::sync::mpsc::channel();
-            let session_ptr = session as *mut DebugDiffSession as usize;
-            let log_path_clone = log_path.clone();
-
-            // Run stepping in a background thread so we can timeout the whole call
-            let worker = std::thread::spawn(move || {
-                // SAFETY: the main thread blocks on rx.recv_timeout below,
-                // so `session` stays alive for the duration of this thread.
-                let session = unsafe { &mut *(session_ptr as *mut DebugDiffSession) };
-
-                let mut out = format!("**Debug session {}**\n\n", session_id);
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                for i in 0..count {
-                    if i > 0 && std::time::Instant::now() > deadline {
-                        let msg =
-                            format!("TIMEOUT: completed {i}/{count} steps in 5s, stopping early\n");
-                        let _ = append_log(&log_path_clone, &msg);
-                        out.push_str(&msg);
-                        break;
-                    }
-                    let cur_line = session.lockstep.current_mapped_line();
-                    let cur_text = session.current_line_text(cur_line);
-                    let mut step_log = format!(
-                        ">>> step {} | about to execute line {}: {}",
-                        i + 1,
-                        cur_line,
-                        cur_text.trim()
-                    );
-                    if let Some(vreg_info) = session.dump_current_op_vregs() {
-                        step_log.push_str(&format!("\n    {}", vreg_info));
-                    }
-                    let _ = append_log(&log_path_clone, &step_log);
-                    match session.step_forward() {
-                        Ok(step) => {
-                            let _ = append_log(&log_path_clone, &step);
-                            out.push_str(&step);
-                            out.push('\n');
-                            if !session.is_running() {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            out.push_str(&format!("ERROR: {e}\n"));
-                            break;
-                        }
-                    }
-                }
-                let _ = tx.send(out);
-            });
-
-            // Hard 10s timeout on the entire tool call
-            match rx.recv_timeout(std::time::Duration::from_secs(10)) {
-                Ok(mut out) => {
-                    let _ = worker.join();
-                    out.push('\n');
-                    out.push_str(&session.snapshot_markdown(session_id));
-                    Ok(json!({ "text": out }))
-                }
-                Err(_) => {
-                    let _ =
-                        append_log(&log_path, "HARD TIMEOUT: MCP tool call timed out after 10s");
-                    // Worker thread is leaked — session is toast
-                    let _ = state.debug_sessions.remove(&session_id);
-                    Err("debug_session_step timed out after 10s (session destroyed)".to_string())
-                }
-            }
+            self.debug_session_call(
+                session_id,
+                DebugCommand::Step { count },
+                std::time::Duration::from_secs(30),
+            )
         }
+    }
+
+    /// Helper: look up a debug session handle and send a command with timeout.
+    #[cfg(feature = "lldb")]
+    fn debug_session_call(
+        &self,
+        session_id: u64,
+        cmd: DebugCommand,
+        timeout: std::time::Duration,
+    ) -> Result<JsonValue, String> {
+        let state = self.lock_state()?;
+        let handle = state
+            .debug_sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
+        handle.call(cmd, timeout)
     }
 
     fn debug_session_state(&self, args: &JsonMap<String, JsonValue>) -> Result<JsonValue, String> {
@@ -704,12 +733,11 @@ impl MirHandler {
         #[cfg(feature = "lldb")]
         {
             let session_id = arg_u64(args, "session_id")?;
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-            Ok(json!({ "text": session.snapshot_markdown(session_id) }))
+            self.debug_session_call(
+                session_id,
+                DebugCommand::State,
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -727,17 +755,11 @@ impl MirHandler {
         {
             let session_id = arg_u64(args, "session_id")?;
             let context = arg_opt_u64(args, "context").unwrap_or(4) as usize;
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-            let text = session
-                .lockstep
-                .debugger
-                .disassemble_around_pc(context)
-                .map_err(|e| e.to_string())?;
-            Ok(json!({ "text": text }))
+            self.debug_session_call(
+                session_id,
+                DebugCommand::Disassemble { context },
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -755,28 +777,11 @@ impl MirHandler {
         {
             let session_id = arg_u64(args, "session_id")?;
             let names = parse_debug_register_names(arg_opt_str(args, "names").as_deref());
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-
-            let mut values = serde_json::Map::new();
-            let mut text = String::new();
-            for name in names {
-                let value = session
-                    .lockstep
-                    .debugger
-                    .read_register_by_name(&name)
-                    .map_err(|e| e.to_string())?;
-                values.insert(name.clone(), json!(value));
-                text.push_str(&format!("{name}=0x{value:x} ({value})\n"));
-            }
-
-            Ok(json!({
-                "text": text,
-                "registers": values,
-            }))
+            self.debug_session_call(
+                session_id,
+                DebugCommand::Registers { names },
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -792,22 +797,11 @@ impl MirHandler {
             let session_id = arg_u64(args, "session_id")?;
             let address = arg_u64(args, "address")?;
             let len = arg_opt_u64(args, "len").unwrap_or(64) as usize;
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-            let bytes = session
-                .lockstep
-                .debugger
-                .read_memory(address, len)
-                .map_err(|e| e.to_string())?;
-            Ok(json!({
-                "text": format!("mem[0x{address:x}..0x{:x}] = `{}`", address + bytes.len() as u64, encode_hex(&bytes)),
-                "address": address,
-                "len": bytes.len(),
-                "hex": encode_hex(&bytes),
-            }))
+            self.debug_session_call(
+                session_id,
+                DebugCommand::Memory { address, len },
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -824,17 +818,11 @@ impl MirHandler {
         #[cfg(feature = "lldb")]
         {
             let session_id = arg_u64(args, "session_id")?;
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-            let text = session
-                .lockstep
-                .debugger
-                .backtrace()
-                .map_err(|e| e.to_string())?;
-            Ok(json!({ "text": text }))
+            self.debug_session_call(
+                session_id,
+                DebugCommand::Backtrace,
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -851,29 +839,11 @@ impl MirHandler {
         #[cfg(feature = "lldb")]
         {
             let session_id = arg_u64(args, "session_id")?;
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-            let pc = session
-                .lockstep
-                .debugger
-                .read_pc()
-                .map_err(|e| e.to_string())?;
-            let dwarf_line = session.lockstep.current_mapped_line();
-            let cfg_line = session.current_line_text(dwarf_line);
-            let lldb = session
-                .lockstep
-                .debugger
-                .source_info()
-                .map_err(|e| e.to_string())?;
-            Ok(json!({
-                "text": format!("pc=0x{pc:x}\ndwarf_line={dwarf_line}\ncfg=`{cfg_line}`\n\n{lldb}"),
-                "pc": pc,
-                "dwarf_line": dwarf_line,
-                "cfg_line": cfg_line,
-            }))
+            self.debug_session_call(
+                session_id,
+                DebugCommand::SourceInfo,
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -890,132 +860,12 @@ impl MirHandler {
         #[cfg(feature = "lldb")]
         {
             let session_id = arg_u64(args, "session_id")?;
-            let requested_block_id = arg_opt_u64(args, "block_id");
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-
-            let func = session
-                .lockstep
-                .cfg_program
-                .funcs
-                .first()
-                .ok_or_else(|| "debug session has no function".to_owned())?;
-            let current_loc = session.lockstep.interpreter.state().location;
-            let block_id = requested_block_id.unwrap_or(current_loc.block.index() as u64) as usize;
-            let block = func
-                .blocks
-                .get(block_id)
-                .ok_or_else(|| format!("unknown block_id: b{block_id}"))?;
-
-            let mut text = String::new();
-            text.push_str(&format!(
-                "block b{}{}\n",
-                block.id.index(),
-                if block.id == current_loc.block {
-                    " (current)"
-                } else {
-                    ""
-                }
-            ));
-            text.push_str(&format!(
-                "params: {}\n",
-                format_cfg_vregs(
-                    &block.params,
-                    &session.lockstep.interpreter.state(),
-                    Some(&session.lockstep),
-                )
-            ));
-            text.push_str(&format!("dead: {}\n", block.dead));
-
-            if block.id == current_loc.block {
-                let (def_vreg, use_vregs, _) =
-                    kajit::lockstep::op_def_uses_and_kind(func, &current_loc);
-                if def_vreg.is_some() || !use_vregs.is_empty() {
-                    text.push_str("current_op_locations:\n");
-                    if let Some(vreg) = def_vreg {
-                        text.push_str(&format!(
-                            "  def v{} -> {}\n",
-                            vreg.index(),
-                            format_live_location(&session.lockstep, vreg.index() as u32)
-                        ));
-                    }
-                    for vreg in use_vregs {
-                        text.push_str(&format!(
-                            "  use v{} -> {}\n",
-                            vreg.index(),
-                            format_live_location(&session.lockstep, vreg.index() as u32)
-                        ));
-                    }
-                }
-            }
-
-            text.push_str("insts:\n");
-            for &inst_id in &block.insts {
-                let inst = &func.insts[inst_id.index()];
-                let loc = kajit_mir::ProgramLocation {
-                    block: block.id,
-                    next_inst_index: block
-                        .insts
-                        .iter()
-                        .position(|&candidate| candidate == inst_id)
-                        .unwrap_or(0),
-                    at_terminator: false,
-                };
-                let line = kajit::lockstep::loc_to_line(&session.lockstep.op_to_line, &loc);
-                text.push_str(&format!("  line {line}: {:?}\n", inst.op));
-            }
-
-            let term_loc = kajit_mir::ProgramLocation {
-                block: block.id,
-                next_inst_index: 0,
-                at_terminator: true,
-            };
-            let term_line = kajit::lockstep::loc_to_line(&session.lockstep.op_to_line, &term_loc);
-            text.push_str(&format!(
-                "term: line {}: {:?}\n",
-                term_line,
-                func.terms[block.term.index()]
-            ));
-
-            text.push_str("preds:\n");
-            for &edge_id in &block.preds {
-                let edge = &func.edges[edge_id.index()];
-                text.push_str(&format!(
-                    "  e{}: b{} -> b{}{}\n",
-                    edge.id.index(),
-                    edge.from.index(),
-                    edge.to.index(),
-                    format_edge_args(
-                        edge,
-                        &session.lockstep.interpreter.state(),
-                        Some(&session.lockstep),
-                    )
-                ));
-            }
-
-            text.push_str("succs:\n");
-            for &edge_id in &block.succs {
-                let edge = &func.edges[edge_id.index()];
-                text.push_str(&format!(
-                    "  e{}: b{} -> b{}{}\n",
-                    edge.id.index(),
-                    edge.from.index(),
-                    edge.to.index(),
-                    format_edge_args(
-                        edge,
-                        &session.lockstep.interpreter.state(),
-                        Some(&session.lockstep),
-                    )
-                ));
-            }
-
-            Ok(json!({
-                "text": text,
-                "block_id": block.id.index(),
-            }))
+            let block_id = arg_opt_u64(args, "block_id");
+            self.debug_session_call(
+                session_id,
+                DebugCommand::CfgContext { block_id },
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -1029,85 +879,12 @@ impl MirHandler {
         #[cfg(feature = "lldb")]
         {
             let session_id = arg_u64(args, "session_id")?;
-            let requested = parse_vreg_list(arg_opt_str(args, "vregs").as_deref())?;
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-
-            let func = session
-                .lockstep
-                .cfg_program
-                .funcs
-                .first()
-                .ok_or_else(|| "debug session has no function".to_owned())?;
-            let current_loc = session.lockstep.interpreter.state().location;
-            let current_state = session.lockstep.interpreter.state();
-            let mut vregs = if requested.is_empty() {
-                let (def_vreg, use_vregs, _) =
-                    kajit::lockstep::op_def_uses_and_kind(func, &current_loc);
-                let mut derived = Vec::new();
-                if let Some(def_vreg) = def_vreg {
-                    derived.push(def_vreg.index() as u32);
-                }
-                for vreg in use_vregs {
-                    let idx = vreg.index() as u32;
-                    if !derived.contains(&idx) {
-                        derived.push(idx);
-                    }
-                }
-                derived
-            } else {
-                requested
-            };
-            if vregs.is_empty() {
-                return Err("no vregs specified and current op has no def/use vregs".to_owned());
-            }
-            vregs.sort_unstable();
-
-            let mut text = String::new();
-            let mut rows = Vec::new();
-            for vreg_idx in vregs {
-                let value = current_state
-                    .vregs
-                    .get(vreg_idx as usize)
-                    .copied()
-                    .unwrap_or(0);
-                let static_loc = format_static_location(&session.lockstep, vreg_idx);
-                let live_loc = format_live_location(&session.lockstep, vreg_idx);
-                let owner = session
-                    .lockstep
-                    .location_tracker
-                    .owner_of_vreg_location(&session.lockstep.location_map, vreg_idx);
-                let owner_text = match owner {
-                    Some(owner_idx) if owner_idx == vreg_idx => "self".to_owned(),
-                    Some(owner_idx) => {
-                        let owner_val = current_state
-                            .vregs
-                            .get(owner_idx as usize)
-                            .copied()
-                            .unwrap_or(0);
-                        format!("v{owner_idx}={owner_val}")
-                    }
-                    None => "none".to_owned(),
-                };
-                text.push_str(&format!(
-                    "v{vreg_idx}={value}\n  static: {static_loc}\n  live: {live_loc}\n  owner: {owner_text}\n"
-                ));
-                rows.push(json!({
-                    "vreg": vreg_idx,
-                    "value": value,
-                    "static": static_loc,
-                    "live": live_loc,
-                    "owner": owner,
-                }));
-            }
-
-            Ok(json!({
-                "text": text,
-                "vregs": rows,
-            }))
+            let vregs = parse_vreg_list(arg_opt_str(args, "vregs").as_deref())?;
+            self.debug_session_call(
+                session_id,
+                DebugCommand::Vregs { vregs },
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 
@@ -1122,17 +899,11 @@ impl MirHandler {
         {
             let session_id = arg_u64(args, "session_id")?;
             let command = arg_str(args, "command")?;
-            let state = self.lock_state()?;
-            let session = state
-                .debug_sessions
-                .get(&session_id)
-                .ok_or_else(|| format!("unknown session_id: {session_id}"))?;
-            let text = session
-                .lockstep
-                .debugger
-                .execute_command(&command)
-                .map_err(|e| e.to_string())?;
-            Ok(json!({ "text": text }))
+            self.debug_session_call(
+                session_id,
+                DebugCommand::Lldb { command },
+                std::time::Duration::from_secs(10),
+            )
         }
     }
 }
@@ -1163,6 +934,19 @@ impl ServerHandler for MirHandler {
         };
         Ok(result)
     }
+}
+
+/// Intermediate data from compilation + harness generation (pure Rust, no LLDB).
+/// This is `Send` and gets moved to the worker thread for LLDB launch.
+#[cfg(feature = "lldb")]
+struct PreparedSession {
+    format: String,
+    ty: String,
+    input_hex: String,
+    input: Vec<u8>,
+    exe_path: PathBuf,
+    listing_path: PathBuf,
+    artifacts: kajit::PipelineArtifacts,
 }
 
 #[cfg(feature = "lldb")]
@@ -1217,13 +1001,21 @@ impl DebugDiffSession {
         type_size(module, out_ty)
     }
 
-    fn new(
+    /// Compile the pipeline and generate the harness binary. This is pure Rust
+    /// (no LLDB), so the result is `Send` and can be moved to a worker thread.
+    fn prepare(
         format: &str,
         ty: &str,
         input_hex: &str,
         hir_path: Option<&str>,
-    ) -> Result<Self, String> {
-        tracing::info!(format, ty, input_hex, ?hir_path, "debug_session_new: start");
+    ) -> Result<PreparedSession, String> {
+        tracing::info!(
+            format,
+            ty,
+            input_hex,
+            ?hir_path,
+            "debug_session: prepare start"
+        );
         let pipeline_opts = kajit::PipelineOptions::from_env();
         let (artifacts, output_size) = if let Some(hir_path) = hir_path {
             let hir_text = std::fs::read_to_string(hir_path)
@@ -1242,9 +1034,9 @@ impl DebugDiffSession {
             };
 
             let shape = super::try_resolve_shape(ty)?;
-            tracing::info!(ty, "debug_session_new: compiling pipeline");
+            tracing::info!(ty, "debug_session: compiling pipeline");
             let artifacts = kajit::compile_pipeline(shape, kind, &pipeline_opts);
-            tracing::info!("debug_session_new: pipeline compiled");
+            tracing::info!("debug_session: pipeline compiled");
             let output_size = shape.layout.sized_layout().map(|l| l.size()).unwrap_or(0);
             (artifacts, output_size)
         };
@@ -1286,39 +1078,54 @@ impl DebugDiffSession {
         let exe_path = kajit::harness::generate_harness(&harness_input, &output_dir, &base_name)
             .map_err(|e| format!("error generating harness: {e}"))?;
 
-        tracing::info!(harness = %exe_path.display(), output_size, listing = %listing_path.display(), "debug_session_new: harness generated");
+        tracing::info!(harness = %exe_path.display(), output_size, listing = %listing_path.display(), "debug_session: harness generated");
 
-        // Verify the binary exists and is executable
         let metadata = std::fs::metadata(&exe_path)
             .map_err(|e| format!("harness binary not found at {}: {e}", exe_path.display()))?;
         tracing::info!(
             binary_size = metadata.len(),
-            "debug_session_new: binary verified"
+            "debug_session: binary verified"
         );
 
         let input = parse_hex_input(input_hex)?;
-        tracing::info!(input_hex, "debug_session_new: launching LLDB");
-        let debugger = LldbJitDebugger::launch(exe_path.to_str().unwrap(), input_hex)
-            .map_err(|e| format!("error launching LLDB: {e}"))?;
-        tracing::info!("debug_session_new: LLDB launched, creating lockstep session");
-        let lockstep = LockstepSession::new(
-            &artifacts.cfg_program,
-            &input,
-            &artifacts.location_map,
-            artifacts.decoder.cfg_mir_lines().to_vec(),
-            artifacts.backend_debug_info.as_ref(),
-            artifacts.decoder.entry_offset(),
-            debugger,
-        )
-        .map_err(|e| e.to_string())?;
-        tracing::info!("debug_session_new: session ready");
 
-        Ok(Self {
+        Ok(PreparedSession {
             format: format.to_owned(),
             ty: ty.to_owned(),
+            input_hex: input_hex.to_owned(),
             input,
             exe_path,
             listing_path,
+            artifacts,
+        })
+    }
+
+    /// Launch LLDB and create the lockstep session. Must be called on the
+    /// thread that will own the session (LLDB types are !Send).
+    fn launch(prepared: PreparedSession) -> Result<Self, String> {
+        tracing::info!(input_hex = %prepared.input_hex, "debug_session: launching LLDB");
+        let debugger =
+            LldbJitDebugger::launch(prepared.exe_path.to_str().unwrap(), &prepared.input_hex)
+                .map_err(|e| format!("error launching LLDB: {e}"))?;
+        tracing::info!("debug_session: LLDB launched, creating lockstep session");
+        let lockstep = LockstepSession::new(
+            &prepared.artifacts.cfg_program,
+            &prepared.input,
+            &prepared.artifacts.location_map,
+            prepared.artifacts.decoder.cfg_mir_lines().to_vec(),
+            prepared.artifacts.backend_debug_info.as_ref(),
+            prepared.artifacts.decoder.entry_offset(),
+            debugger,
+        )
+        .map_err(|e| e.to_string())?;
+        tracing::info!("debug_session: session ready");
+
+        Ok(Self {
+            format: prepared.format,
+            ty: prepared.ty,
+            input: prepared.input,
+            exe_path: prepared.exe_path,
+            listing_path: prepared.listing_path,
             lockstep,
         })
     }
@@ -1519,6 +1326,373 @@ impl DebugDiffSession {
             kajit_ir::DebugValueKind::Named => format!("{} [named]", value.name),
         }
     }
+}
+
+/// Worker thread main loop: owns a DebugDiffSession and processes commands.
+#[cfg(feature = "lldb")]
+fn debug_session_worker(
+    session_id: u64,
+    mut session: DebugDiffSession,
+    cmd_rx: std::sync::mpsc::Receiver<DebugCommand>,
+    resp_tx: std::sync::mpsc::Sender<Result<JsonValue, String>>,
+) {
+    tracing::info!(session_id, "debug worker: started");
+    while let Ok(cmd) = cmd_rx.recv() {
+        let result = match cmd {
+            DebugCommand::Close => {
+                tracing::info!(session_id, "debug worker: closing");
+                break;
+            }
+            DebugCommand::Step { count } => {
+                worker_handle_step(&mut session, session_id, count)
+            }
+            DebugCommand::State => {
+                Ok(json!({ "text": session.snapshot_markdown(session_id) }))
+            }
+            DebugCommand::Disassemble { context } => session
+                .lockstep
+                .debugger
+                .disassemble_around_pc(context)
+                .map(|text| json!({ "text": text }))
+                .map_err(|e| e.to_string()),
+            DebugCommand::Registers { names } => {
+                worker_handle_registers(&session, &names)
+            }
+            DebugCommand::Memory { address, len } => session
+                .lockstep
+                .debugger
+                .read_memory(address, len)
+                .map(|bytes| {
+                    json!({
+                        "text": format!("mem[0x{address:x}..0x{:x}] = `{}`", address + bytes.len() as u64, encode_hex(&bytes)),
+                        "address": address,
+                        "len": bytes.len(),
+                        "hex": encode_hex(&bytes),
+                    })
+                })
+                .map_err(|e| e.to_string()),
+            DebugCommand::Backtrace => session
+                .lockstep
+                .debugger
+                .backtrace()
+                .map(|text| json!({ "text": text }))
+                .map_err(|e| e.to_string()),
+            DebugCommand::SourceInfo => {
+                worker_handle_source_info(&session)
+            }
+            DebugCommand::CfgContext { block_id } => {
+                worker_handle_cfg_context(&session, session_id, block_id)
+            }
+            DebugCommand::Vregs { vregs } => {
+                worker_handle_vregs(&session, session_id, &vregs)
+            }
+            DebugCommand::Lldb { command } => session
+                .lockstep
+                .debugger
+                .execute_command(&command)
+                .map(|text| json!({ "text": text }))
+                .map_err(|e| e.to_string()),
+        };
+        if resp_tx.send(result).is_err() {
+            // MCP handler disconnected (e.g. timeout)
+            tracing::warn!(session_id, "debug worker: response channel closed, exiting");
+            break;
+        }
+    }
+    tracing::info!(session_id, "debug worker: exited");
+}
+
+#[cfg(feature = "lldb")]
+fn worker_handle_step(
+    session: &mut DebugDiffSession,
+    session_id: u64,
+    count: usize,
+) -> Result<JsonValue, String> {
+    let log_path = format!("/tmp/kajit-lockstep-{session_id}.log");
+    let _ = std::fs::write(&log_path, "");
+
+    let mut out = format!("**Debug session {}**\n\n", session_id);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    for i in 0..count {
+        if i > 0 && std::time::Instant::now() > deadline {
+            let msg = format!("TIMEOUT: completed {i}/{count} steps in 5s, stopping early\n");
+            let _ = append_log(&log_path, &msg);
+            out.push_str(&msg);
+            break;
+        }
+        let cur_line = session.lockstep.current_mapped_line();
+        let cur_text = session.current_line_text(cur_line);
+        let mut step_log = format!(
+            ">>> step {} | about to execute line {}: {}",
+            i + 1,
+            cur_line,
+            cur_text.trim()
+        );
+        if let Some(vreg_info) = session.dump_current_op_vregs() {
+            step_log.push_str(&format!("\n    {}", vreg_info));
+        }
+        let _ = append_log(&log_path, &step_log);
+        match session.step_forward() {
+            Ok(step) => {
+                let _ = append_log(&log_path, &step);
+                out.push_str(&step);
+                out.push('\n');
+                if !session.is_running() {
+                    break;
+                }
+            }
+            Err(e) => {
+                out.push_str(&format!("ERROR: {e}\n"));
+                break;
+            }
+        }
+    }
+    out.push('\n');
+    out.push_str(&session.snapshot_markdown(session_id));
+    Ok(json!({ "text": out }))
+}
+
+#[cfg(feature = "lldb")]
+fn worker_handle_registers(
+    session: &DebugDiffSession,
+    names: &[String],
+) -> Result<JsonValue, String> {
+    let mut values = serde_json::Map::new();
+    let mut text = String::new();
+    for name in names {
+        let value = session
+            .lockstep
+            .debugger
+            .read_register_by_name(name)
+            .map_err(|e| e.to_string())?;
+        values.insert(name.clone(), json!(value));
+        text.push_str(&format!("{name}=0x{value:x} ({value})\n"));
+    }
+    Ok(json!({ "text": text, "registers": values }))
+}
+
+#[cfg(feature = "lldb")]
+fn worker_handle_source_info(session: &DebugDiffSession) -> Result<JsonValue, String> {
+    let pc = session
+        .lockstep
+        .debugger
+        .read_pc()
+        .map_err(|e| e.to_string())?;
+    let dwarf_line = session.lockstep.current_mapped_line();
+    let cfg_line = session.current_line_text(dwarf_line);
+    let lldb = session
+        .lockstep
+        .debugger
+        .source_info()
+        .map_err(|e| e.to_string())?;
+    Ok(json!({
+        "text": format!("pc=0x{pc:x}\ndwarf_line={dwarf_line}\ncfg=`{cfg_line}`\n\n{lldb}"),
+        "pc": pc,
+        "dwarf_line": dwarf_line,
+        "cfg_line": cfg_line,
+    }))
+}
+
+#[cfg(feature = "lldb")]
+fn worker_handle_cfg_context(
+    session: &DebugDiffSession,
+    _session_id: u64,
+    requested_block_id: Option<u64>,
+) -> Result<JsonValue, String> {
+    let func = session
+        .lockstep
+        .cfg_program
+        .funcs
+        .first()
+        .ok_or_else(|| "debug session has no function".to_owned())?;
+    let current_loc = session.lockstep.interpreter.state().location;
+    let block_id = requested_block_id.unwrap_or(current_loc.block.index() as u64) as usize;
+    let block = func
+        .blocks
+        .get(block_id)
+        .ok_or_else(|| format!("unknown block_id: b{block_id}"))?;
+
+    let mut text = String::new();
+    text.push_str(&format!(
+        "block b{}{}\n",
+        block.id.index(),
+        if block.id == current_loc.block {
+            " (current)"
+        } else {
+            ""
+        }
+    ));
+    text.push_str(&format!(
+        "params: {}\n",
+        format_cfg_vregs(
+            &block.params,
+            &session.lockstep.interpreter.state(),
+            Some(&session.lockstep),
+        )
+    ));
+    text.push_str(&format!("dead: {}\n", block.dead));
+
+    if block.id == current_loc.block {
+        let (def_vreg, use_vregs, _) = kajit::lockstep::op_def_uses_and_kind(func, &current_loc);
+        if def_vreg.is_some() || !use_vregs.is_empty() {
+            text.push_str("current_op_locations:\n");
+            if let Some(vreg) = def_vreg {
+                text.push_str(&format!(
+                    "  def v{} -> {}\n",
+                    vreg.index(),
+                    format_live_location(&session.lockstep, vreg.index() as u32)
+                ));
+            }
+            for vreg in use_vregs {
+                text.push_str(&format!(
+                    "  use v{} -> {}\n",
+                    vreg.index(),
+                    format_live_location(&session.lockstep, vreg.index() as u32)
+                ));
+            }
+        }
+    }
+
+    text.push_str("insts:\n");
+    for &inst_id in &block.insts {
+        let inst = &func.insts[inst_id.index()];
+        let loc = kajit_mir::ProgramLocation {
+            block: block.id,
+            next_inst_index: block
+                .insts
+                .iter()
+                .position(|&candidate| candidate == inst_id)
+                .unwrap_or(0),
+            at_terminator: false,
+        };
+        let line = kajit::lockstep::loc_to_line(&session.lockstep.op_to_line, &loc);
+        text.push_str(&format!("  line {line}: {:?}\n", inst.op));
+    }
+
+    let term_loc = kajit_mir::ProgramLocation {
+        block: block.id,
+        next_inst_index: 0,
+        at_terminator: true,
+    };
+    let term_line = kajit::lockstep::loc_to_line(&session.lockstep.op_to_line, &term_loc);
+    text.push_str(&format!(
+        "term: line {}: {:?}\n",
+        term_line,
+        func.terms[block.term.index()]
+    ));
+
+    text.push_str("preds:\n");
+    for &edge_id in &block.preds {
+        let edge = &func.edges[edge_id.index()];
+        text.push_str(&format!(
+            "  e{}: b{} -> b{}{}\n",
+            edge.id.index(),
+            edge.from.index(),
+            edge.to.index(),
+            format_edge_args(
+                edge,
+                &session.lockstep.interpreter.state(),
+                Some(&session.lockstep),
+            )
+        ));
+    }
+
+    text.push_str("succs:\n");
+    for &edge_id in &block.succs {
+        let edge = &func.edges[edge_id.index()];
+        text.push_str(&format!(
+            "  e{}: b{} -> b{}{}\n",
+            edge.id.index(),
+            edge.from.index(),
+            edge.to.index(),
+            format_edge_args(
+                edge,
+                &session.lockstep.interpreter.state(),
+                Some(&session.lockstep),
+            )
+        ));
+    }
+
+    Ok(json!({
+        "text": text,
+        "block_id": block.id.index(),
+    }))
+}
+
+#[cfg(feature = "lldb")]
+fn worker_handle_vregs(
+    session: &DebugDiffSession,
+    _session_id: u64,
+    requested: &[u32],
+) -> Result<JsonValue, String> {
+    let func = session
+        .lockstep
+        .cfg_program
+        .funcs
+        .first()
+        .ok_or_else(|| "debug session has no function".to_owned())?;
+    let current_loc = session.lockstep.interpreter.state().location;
+    let current_state = session.lockstep.interpreter.state();
+    let mut vregs = if requested.is_empty() {
+        let (def_vreg, use_vregs, _) = kajit::lockstep::op_def_uses_and_kind(func, &current_loc);
+        let mut derived = Vec::new();
+        if let Some(def_vreg) = def_vreg {
+            derived.push(def_vreg.index() as u32);
+        }
+        for vreg in use_vregs {
+            let idx = vreg.index() as u32;
+            if !derived.contains(&idx) {
+                derived.push(idx);
+            }
+        }
+        derived
+    } else {
+        requested.to_vec()
+    };
+    if vregs.is_empty() {
+        return Err("no vregs specified and current op has no def/use vregs".to_owned());
+    }
+    vregs.sort_unstable();
+
+    let mut text = String::new();
+    let mut rows = Vec::new();
+    for vreg_idx in vregs {
+        let value = current_state
+            .vregs
+            .get(vreg_idx as usize)
+            .copied()
+            .unwrap_or(0);
+        let static_loc = format_static_location(&session.lockstep, vreg_idx);
+        let live_loc = format_live_location(&session.lockstep, vreg_idx);
+        let owner = session
+            .lockstep
+            .location_tracker
+            .owner_of_vreg_location(&session.lockstep.location_map, vreg_idx);
+        let owner_text = match owner {
+            Some(owner_idx) if owner_idx == vreg_idx => "self".to_owned(),
+            Some(owner_idx) => {
+                let owner_val = current_state
+                    .vregs
+                    .get(owner_idx as usize)
+                    .copied()
+                    .unwrap_or(0);
+                format!("v{owner_idx}={owner_val}")
+            }
+            None => "none".to_owned(),
+        };
+        text.push_str(&format!(
+            "v{vreg_idx}={value}\n  static: {static_loc}\n  live: {live_loc}\n  owner: {owner_text}\n"
+        ));
+        rows.push(json!({
+            "vreg": vreg_idx,
+            "value": value,
+            "static": static_loc,
+            "live": live_loc,
+            "owner": owner,
+        }));
+    }
+
+    Ok(json!({ "text": text, "vregs": rows }))
 }
 
 #[cfg(feature = "lldb")]
@@ -1852,7 +2026,9 @@ fn call_tool_ok(payload: JsonValue) -> CallToolResult {
 }
 
 fn call_tool_err(message: &str) -> CallToolResult {
-    CallToolResult::text_content(vec![format!("Error: {message}").into()])
+    let mut result = CallToolResult::text_content(vec![format!("Error: {message}").into()]);
+    result.is_error = Some(true);
+    result
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
