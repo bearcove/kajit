@@ -186,6 +186,10 @@ pub struct Program {
     pub data_blobs: Vec<Vec<u8>>,
     /// Stack allocations (variable-size frame regions).
     pub stack_allocs: Vec<kajit_ir::StackAllocInfo>,
+    /// Layout metadata for data_args (debug info for pointer tracking).
+    /// Describes which fields within each data_arg's pointed-to struct
+    /// contain pointers, enabling the debugger to seed shadow memory.
+    pub data_arg_layouts: Vec<kajit_types::DataArgLayout>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1903,6 +1907,7 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
         extra_excluded_regs: vec![],
         data_blobs: ir.data_blobs.clone(),
         stack_allocs: ir.stack_allocs.clone(),
+        data_arg_layouts: Vec::new(), // populated by caller with HIR type info
     }
 }
 
@@ -4531,6 +4536,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         };
 
         // Mark v1 as used by adding it to data_results
@@ -4574,6 +4580,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         };
 
         local_cse(&mut program);
@@ -4613,6 +4620,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         };
 
         // Mark v2 as used (result)
@@ -4724,6 +4732,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         };
 
         // Verify initial state
@@ -4784,6 +4793,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         };
 
         let insts_before: usize = program.funcs.iter().map(|f| f.insts.len()).sum();
@@ -5320,6 +5330,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         };
 
         // v3 needs to be defined somewhere (as data_arg)

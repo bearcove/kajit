@@ -209,6 +209,86 @@ pub struct PipelineArtifacts {
     pub decoder: CompiledDecoder,
 }
 
+/// Extract data_arg layout metadata from HIR function parameters.
+///
+/// Walks the HIR type of each parameter and records which u64-word positions
+/// contain pointers. This lets the debugger seed shadow memory so loads through
+/// data_arg pointers recover provenance.
+fn extract_data_arg_layouts(module: &hir::Module) -> Vec<kajit_types::DataArgLayout> {
+    let Some((_, function)) = module.functions.iter().next() else {
+        return Vec::new();
+    };
+
+    let mut layouts = Vec::new();
+    for param in &function.params {
+        let mut pointer_fields = Vec::new();
+        collect_pointer_words(module, &param.ty, &param.name, 0, &mut pointer_fields);
+        layouts.push(kajit_types::DataArgLayout {
+            name: param.name.clone(),
+            pointer_fields,
+        });
+    }
+    layouts
+}
+
+/// Recursively walk an HIR type and collect the byte offsets of pointer-valued
+/// u64 words within it.
+fn collect_pointer_words(
+    module: &hir::Module,
+    ty: &hir::Type,
+    prefix: &str,
+    byte_offset: u64,
+    out: &mut Vec<kajit_types::PointerField>,
+) {
+    match ty {
+        // Single-word pointer types
+        hir::Type::Ref { .. } | hir::Type::Address { .. } | hir::Type::Handle { .. } => {
+            out.push(kajit_types::PointerField {
+                offset: byte_offset,
+                label: prefix.to_owned(),
+            });
+        }
+        // Slice/Str: first word is a data pointer, second word is len (scalar)
+        hir::Type::Slice { .. } | hir::Type::Str { .. } => {
+            out.push(kajit_types::PointerField {
+                offset: byte_offset,
+                label: format!("{prefix}.ptr"),
+            });
+            // byte_offset + 8 is len — scalar, no entry needed
+        }
+        // Named struct: recurse into fields
+        hir::Type::Named { def, .. } => {
+            if let hir::TypeDefKind::Struct { fields } = &module.type_defs[*def].kind {
+                let mut field_byte_offset = byte_offset;
+                for field in fields {
+                    let field_label = format!("{prefix}.{}", field.name);
+                    collect_pointer_words(module, &field.ty, &field_label, field_byte_offset, out);
+                    let word_count = hir_to_ir::word_count_for_type(module, &field.ty);
+                    field_byte_offset += (word_count * 8) as u64;
+                }
+            }
+            // Enums: don't track pointer fields (complex discriminant layout)
+        }
+        // Array: recurse for each element
+        hir::Type::Array { element, len } => {
+            let elem_words = hir_to_ir::word_count_for_type(module, element);
+            let elem_bytes = (elem_words * 8) as u64;
+            for i in 0..*len {
+                let elem_label = format!("{prefix}[{i}]");
+                collect_pointer_words(
+                    module,
+                    element,
+                    &elem_label,
+                    byte_offset + i as u64 * elem_bytes,
+                    out,
+                );
+            }
+        }
+        // Scalar types — no pointer fields
+        hir::Type::Unit | hir::Type::Bool | hir::Type::Integer(_) => {}
+    }
+}
+
 /// Compile an HIR module into a callable scalar function.
 ///
 /// This is the entry point for Vixen: takes an HIR `Module` containing a
@@ -315,7 +395,10 @@ pub fn compile_pipeline_from_hir_module(
 
     // Phase 5: CFG-MIR lowering + optimization (ONCE — used for everything)
     let hints = Default::default();
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+
+    // Attach data_arg layout metadata from HIR types (debug info for pointer tracking)
+    cfg_program.data_arg_layouts = extract_data_arg_layouts(module);
 
     // Phase 6: Register allocation + backend compilation from the ONE cfg_program
     let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)

@@ -322,10 +322,15 @@ impl DebuggerSession {
         // HIR param order: [cursor, out, ctx]
         // Each gets a stable PtrId.
         let data_args = session.func.data_args.clone();
-        let arg_names = ["cursor", "out", "ctx"];
+        let data_arg_layouts = &program.data_arg_layouts;
+        let fallback_names = ["cursor", "out", "ctx"];
         if let Some(&vreg) = data_args.get(0) {
             let ptr = &*session.cursor_arg as *const RuntimeCursorArg as u64;
-            let id = session.alloc_ptr_id(ptr, &format!("data_arg[0] ({})", arg_names[0]));
+            let name = data_arg_layouts
+                .get(0)
+                .map(|l| l.name.as_str())
+                .unwrap_or(fallback_names[0]);
+            let id = session.alloc_ptr_id(ptr, &format!("data_arg[0] ({name})"));
             session.write_vreg_tagged(
                 vreg.index(),
                 TaggedValue::Pointer {
@@ -334,10 +339,18 @@ impl DebuggerSession {
                     offset: 0,
                 },
             );
+            // Seed shadow memory for pointer fields within this struct
+            if let Some(layout) = data_arg_layouts.get(0) {
+                session.seed_shadow_for_layout(id, ptr, layout);
+            }
         }
         if let Some(&vreg) = data_args.get(1) {
             let ptr = session.output_buf.as_ptr() as u64;
-            let id = session.alloc_ptr_id(ptr, &format!("data_arg[1] ({})", arg_names[1]));
+            let name = data_arg_layouts
+                .get(1)
+                .map(|l| l.name.as_str())
+                .unwrap_or(fallback_names[1]);
+            let id = session.alloc_ptr_id(ptr, &format!("data_arg[1] ({name})"));
             session.write_vreg_tagged(
                 vreg.index(),
                 TaggedValue::Pointer {
@@ -346,10 +359,17 @@ impl DebuggerSession {
                     offset: 0,
                 },
             );
+            if let Some(layout) = data_arg_layouts.get(1) {
+                session.seed_shadow_for_layout(id, ptr, layout);
+            }
         }
         if let Some(&vreg) = data_args.get(2) {
             let ptr = &session.ctx as *const RuntimeDeserContext as u64;
-            let id = session.alloc_ptr_id(ptr, &format!("data_arg[2] ({})", arg_names[2]));
+            let name = data_arg_layouts
+                .get(2)
+                .map(|l| l.name.as_str())
+                .unwrap_or(fallback_names[2]);
+            let id = session.alloc_ptr_id(ptr, &format!("data_arg[2] ({name})"));
             session.write_vreg_tagged(
                 vreg.index(),
                 TaggedValue::Pointer {
@@ -358,6 +378,9 @@ impl DebuggerSession {
                     offset: 0,
                 },
             );
+            if let Some(layout) = data_arg_layouts.get(2) {
+                session.seed_shadow_for_layout(id, ptr, layout);
+            }
         }
         Ok(session)
     }
@@ -572,6 +595,34 @@ impl DebuggerSession {
             self.vregs.resize(idx + 1, TaggedValue::Scalar(0));
         }
         self.vregs[idx] = value;
+    }
+
+    /// Seed shadow memory for pointer fields within a data_arg struct.
+    /// Reads the actual pointer values from interpreter memory and records
+    /// them with fresh PtrIds.
+    fn seed_shadow_for_layout(
+        &mut self,
+        base_id: PtrId,
+        base_addr: u64,
+        layout: &kajit_types::DataArgLayout,
+    ) {
+        for field in &layout.pointer_fields {
+            let field_addr = base_addr + field.offset;
+            // Read the actual pointer value from interpreter memory
+            let ptr_val = unsafe { *(field_addr as *const u64) };
+            let field_ptr_id = self.alloc_ptr_id(ptr_val, &field.label);
+            self.pointer_shadow.insert(
+                (base_id, field.offset),
+                ShadowEntry {
+                    width: 8,
+                    value: TaggedValue::Pointer {
+                        id: field_ptr_id,
+                        concrete: ptr_val,
+                        offset: 0,
+                    },
+                },
+            );
+        }
     }
 
     /// Allocate a new PtrId and register its base address.
@@ -1260,6 +1311,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         }
     }
 
@@ -1300,6 +1352,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         }
     }
 

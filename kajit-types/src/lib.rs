@@ -128,3 +128,28 @@ impl SymbolTable {
             .unwrap_or_else(|| panic!("unresolved extern symbol: {name}"))
     }
 }
+
+/// Describes a pointer-valued field within a data_arg struct.
+/// Used by the debugger to seed shadow memory so loads through
+/// data_arg pointers recover provenance correctly.
+#[derive(Clone, Debug)]
+pub struct PointerField {
+    /// Byte offset of this pointer within the struct.
+    pub offset: u64,
+    /// Human-readable label (e.g. "bytes.ptr", "input_ptr").
+    pub label: String,
+}
+
+/// Layout metadata for a single data_arg, describing which fields
+/// within the pointed-to struct contain pointers.
+///
+/// This is format-specific knowledge (e.g. postcard knows its cursor
+/// struct has a `bytes.ptr` pointer at offset 0) that the generic
+/// interpreter needs for shadow memory tracking.
+#[derive(Clone, Debug, Default)]
+pub struct DataArgLayout {
+    /// Human-readable name for this arg (e.g. "cursor", "out", "ctx").
+    pub name: String,
+    /// Pointer-valued fields within this struct.
+    pub pointer_fields: Vec<PointerField>,
+}

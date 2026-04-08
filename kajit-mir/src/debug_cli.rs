@@ -320,6 +320,7 @@ mod tests {
             extra_excluded_regs: vec![],
             data_blobs: vec![],
             stack_allocs: vec![],
+            data_arg_layouts: vec![],
         }
     }
 

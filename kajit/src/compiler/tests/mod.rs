@@ -2039,6 +2039,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         extra_excluded_regs: vec![],
         data_blobs: vec![],
         stack_allocs: vec![],
+        data_arg_layouts: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
@@ -2237,6 +2238,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         extra_excluded_regs: vec![],
         data_blobs: vec![],
         stack_allocs: vec![],
+        data_arg_layouts: vec![],
     };
     let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
     #[cfg(target_arch = "aarch64")]
@@ -2421,6 +2423,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         extra_excluded_regs: vec![],
         data_blobs: vec![],
         stack_allocs: vec![],
+        data_arg_layouts: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
@@ -2608,6 +2611,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         extra_excluded_regs: vec![],
         data_blobs: vec![],
         stack_allocs: vec![],
+        data_arg_layouts: vec![],
     };
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
         op_infos: vec![
@@ -2785,6 +2789,7 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
         extra_excluded_regs: vec![],
         data_blobs: vec![],
         stack_allocs: vec![],
+        data_arg_layouts: vec![],
     };
 
     let backend_debug_info = crate::ir_backend::BackendDebugInfo {
@@ -2919,6 +2924,7 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         extra_excluded_regs: vec![],
         data_blobs: vec![],
         stack_allocs: vec![],
+        data_arg_layouts: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
@@ -3077,6 +3083,7 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         extra_excluded_regs: vec![],
         data_blobs: vec![],
         stack_allocs: vec![],
+        data_arg_layouts: vec![],
     };
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);

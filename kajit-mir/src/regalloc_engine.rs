@@ -204,6 +204,7 @@ pub fn allocate_cfg_program_regalloc3_native(
         extra_excluded_regs: program.extra_excluded_regs.clone(),
         data_blobs: program.data_blobs.clone(),
         stack_allocs: program.stack_allocs.clone(),
+        data_arg_layouts: program.data_arg_layouts.clone(),
     };
 
     Ok(AllocatedCfgProgramRa3 {

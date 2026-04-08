@@ -3,6 +3,11 @@
 
 use super::*;
 
+/// Public wrapper for word_count_for_type — used by extract_data_arg_layouts.
+pub(super) fn word_count_for_type(module: &hir::Module, ty: &hir::Type) -> usize {
+    ScalarHirIrLowerer::word_count_for_type(module, ty)
+}
+
 // ─── Region interface analysis ─────────────────────────────────────────────
 //
 // Before lowering a theta/gamma, we analyze the HIR block to determine which
