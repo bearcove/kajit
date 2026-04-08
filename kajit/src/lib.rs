@@ -348,7 +348,11 @@ pub fn deserialize_raw(
     let mut ctx = DeserContext::from_bytes(input);
     let mut output = vec![0u8; output_size];
 
-    invoke_decoder(deser, &mut cursor, output.as_mut_ptr(), &mut ctx);
+    let mut args = kajit_types::Arguments::new();
+    args.push_ptr(&mut cursor);
+    args.push_ptr(output.as_mut_ptr());
+    args.push_ptr(&mut ctx);
+    invoke_decoder(deser, &args);
 
     if ctx.error.code != 0 {
         let code: ErrorCode = unsafe { core::mem::transmute(ctx.error.code) };
@@ -372,7 +376,11 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
     };
     let mut output = core::mem::MaybeUninit::<T>::uninit();
 
-    invoke_decoder(deser, &mut cursor, output.as_mut_ptr() as *mut u8, ctx);
+    let mut args = kajit_types::Arguments::new();
+    args.push_ptr(&mut cursor);
+    args.push_ptr(output.as_mut_ptr() as *mut u8);
+    args.push_ptr(ctx);
+    invoke_decoder(deser, &args);
 
     if ctx.error.code != 0 {
         let code: ErrorCode = unsafe { core::mem::transmute(ctx.error.code) };
@@ -385,16 +393,21 @@ fn deserialize_with_ctx<'input, T: facet::Facet<'input>>(
     Ok(unsafe { output.assume_init() })
 }
 
-fn invoke_decoder(
-    deser: &CompiledDecoder,
-    cursor: &mut RuntimeCursor,
-    output: *mut u8,
-    ctx: &mut DeserContext,
-) {
-    let func: unsafe extern "C" fn(*mut RuntimeCursor, *mut u8, *mut DeserContext) =
-        unsafe { core::mem::transmute(deser.func_ptr()) };
-    unsafe {
-        func(cursor, output, ctx);
+fn invoke_decoder(deser: &CompiledDecoder, args: &kajit_types::Arguments) {
+    let (gprs, _fprs) = args.to_register_slots();
+    // SysV ABI: first args in x0, x1, x2 (aarch64) or rdi, rsi, rdx (x86_64)
+    match gprs.len() {
+        3 => {
+            let func: unsafe extern "C" fn(u64, u64, u64) =
+                unsafe { core::mem::transmute(deser.func_ptr()) };
+            unsafe { func(gprs[0], gprs[1], gprs[2]) };
+        }
+        2 => {
+            let func: unsafe extern "C" fn(u64, u64) =
+                unsafe { core::mem::transmute(deser.func_ptr()) };
+            unsafe { func(gprs[0], gprs[1]) };
+        }
+        n => panic!("invoke_decoder: unsupported arg count {n}"),
     }
 }
 
@@ -477,18 +490,11 @@ impl std::error::Error for DifferentialHarnessError {}
 
 fn normalize_interp_outcome(
     outcome: kajit_mir::opt::reduce::InterpOutcome,
-    output_size: usize,
+    output: Vec<u8>,
 ) -> Result<DifferentialOutcome, DifferentialHarnessError> {
     use kajit_mir::opt::reduce::InterpOutcome;
     match outcome {
-        InterpOutcome::Returned(mut output) => {
-            if output.len() < output_size {
-                output.resize(output_size, 0);
-            } else if output.len() > output_size {
-                output.truncate(output_size);
-            }
-            Ok(DifferentialOutcome::Success { output })
-        }
+        InterpOutcome::Ok => Ok(DifferentialOutcome::Success { output }),
         InterpOutcome::Trapped(trap) => Ok(DifferentialOutcome::Failure(DifferentialFailure {
             code: trap.code,
             offset: trap.offset,
@@ -619,8 +625,15 @@ pub fn differential_check_linear_ir_vs_jit_with_output_size(
 ) -> Result<DifferentialReport, DifferentialHarnessError> {
     let hints = Default::default();
     let cfg_program = regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
-    let interp_outcome = kajit_mir::opt::reduce::interpret(&cfg_program, input);
-    let interpreter = normalize_interp_outcome(interp_outcome, output_size)?;
+    let mut interp_cursor = RuntimeCursor::new(input);
+    let mut interp_out = vec![0u8; output_size];
+    let mut interp_ctx = DeserContext::from_bytes(input);
+    let mut interp_args = kajit_types::Arguments::new();
+    interp_args.push_ptr(&mut interp_cursor);
+    interp_args.push_ptr(interp_out.as_mut_ptr());
+    interp_args.push_ptr(&mut interp_ctx);
+    let interp_outcome = kajit_mir::opt::reduce::interpret(&cfg_program, input, &interp_args);
+    let interpreter = normalize_interp_outcome(interp_outcome, interp_out)?;
     let decoder = compile_decoder_linear_ir(ir, false);
     let jit = normalize_jit_outcome(deserialize_raw(&decoder, input, output_size), output_size);
     let mismatch = compare_differential_outcomes(&interpreter, &jit);

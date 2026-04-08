@@ -307,7 +307,10 @@ impl<D: JitDebugger> LockstepSession<D> {
         interpreter.input_base_addr = Some(jit_cursor);
         interpreter.input_end_addr = Some(jit_input_end);
         interpreter.output_base_addr = Some(jit_output_ptr);
-        interpreter.seed_root_data_args();
+        // Seed data_args from the JIT's register values.
+        // data_args[0]=cursor_ptr, data_args[1]=out_ptr, data_args[2]=ctx_ptr
+        let lockstep_data_args = [jit_cursor, jit_output_ptr, 0u64]; // ctx handled by set_real_addresses
+        interpreter.seed_data_args(&lockstep_data_args);
         if let Some(root_cursor_arg) = jit_root_cursor_arg {
             interpreter.set_root_cursor_arg_addr(root_cursor_arg);
         }

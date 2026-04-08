@@ -123,7 +123,11 @@ impl Env {
 /// Execute an IrFunc on the given input bytes.
 ///
 /// `output_size` is the expected size of the output buffer (from the shape).
-pub fn interpret(func: &IrFunc, symbol_table: SymbolTable, data_args: &[u64]) -> Outcome {
+pub fn interpret(
+    func: &IrFunc,
+    symbol_table: SymbolTable,
+    args: &kajit_types::Arguments,
+) -> Outcome {
     let mut state = State::new(symbol_table);
     let mut env = Env::new();
 
@@ -134,10 +138,12 @@ pub fn interpret(func: &IrFunc, symbol_table: SymbolTable, data_args: &[u64]) ->
     };
 
     // Lambda body region args: data args first, then state domains.
+    // For now, all args are GPR (U64). FPR support will come later.
+    let (gprs, _fprs) = args.to_register_slots();
     let body_region = &func.regions[*body];
     for (i, &arg_id) in body_region.args.iter().enumerate() {
-        let value = if i < data_args.len() {
-            data_args[i]
+        let value = if i < gprs.len() {
+            gprs[i]
         } else {
             0 // state domain token
         };

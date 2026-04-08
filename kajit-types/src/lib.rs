@@ -1,6 +1,69 @@
 use std::collections::HashMap;
 use std::fmt;
 
+/// A single function argument value with its type.
+#[derive(Clone, Copy, Debug)]
+pub enum ArgValue {
+    /// 64-bit integer/pointer — passed in GPR (x0-x7 on aarch64, rdi/rsi/... on x86_64).
+    U64(u64),
+    /// 64-bit float — passed in FPR (d0-d7 on aarch64, xmm0-xmm7 on x86_64).
+    F64(f64),
+}
+
+impl ArgValue {
+    pub fn as_u64(&self) -> u64 {
+        match self {
+            ArgValue::U64(v) => *v,
+            ArgValue::F64(_) => panic!("expected U64, got F64"),
+        }
+    }
+
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            ArgValue::F64(v) => *v,
+            ArgValue::U64(_) => panic!("expected F64, got U64"),
+        }
+    }
+}
+
+/// Typed function arguments, laid out according to calling convention.
+#[derive(Clone, Debug, Default)]
+pub struct Arguments {
+    items: Vec<ArgValue>,
+}
+
+impl Arguments {
+    pub fn new() -> Self {
+        Self { items: Vec::new() }
+    }
+
+    pub fn push(&mut self, arg: ArgValue) {
+        self.items.push(arg);
+    }
+
+    pub fn push_ptr<T>(&mut self, ptr: *mut T) {
+        self.items.push(ArgValue::U64(ptr as u64));
+    }
+
+    pub fn items(&self) -> &[ArgValue] {
+        &self.items
+    }
+
+    /// Assign arguments to GPR and FPR slots according to SysV ABI.
+    /// Returns (gpr_args, fpr_args) — each ordered by register index.
+    pub fn to_register_slots(&self) -> (Vec<u64>, Vec<f64>) {
+        let mut gprs = Vec::new();
+        let mut fprs = Vec::new();
+        for arg in &self.items {
+            match arg {
+                ArgValue::U64(v) => gprs.push(*v),
+                ArgValue::F64(v) => fprs.push(*v),
+            }
+        }
+        (gprs, fprs)
+    }
+}
+
 /// A named external symbol (e.g. a vtable function pointer).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct SymbolName(String);

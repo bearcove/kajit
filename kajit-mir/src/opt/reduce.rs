@@ -809,47 +809,25 @@ pub fn get_sequence_ssa_errors(
 /// Outcome of running the ideal interpreter.
 #[derive(Debug, Clone)]
 pub enum InterpOutcome {
-    /// Program returned normally.
-    Returned(Vec<u8>),
+    /// Program returned normally. Output is in the caller's buffer.
+    Ok,
     /// Program hit a trap (bounds check, unexpected EOF, etc.)
     Trapped(crate::InterpreterTrap),
     /// Interpreter did not finish within the step budget.
     TimedOut,
 }
 
-impl InterpOutcome {
-    /// Returns the output bytes if the program returned normally.
-    pub fn returned(&self) -> Option<&Vec<u8>> {
-        match self {
-            Self::Returned(out) => Some(out),
-            _ => None,
-        }
-    }
-}
-
 /// Run a program through the ideal interpreter.
-pub fn interpret(program: &Program, input: &[u8]) -> InterpOutcome {
+pub fn interpret(program: &Program, input: &[u8], args: &kajit_types::Arguments) -> InterpOutcome {
     let mut session = match crate::DebuggerSession::new(program, input) {
         Ok(s) => s,
         Err(_) => return InterpOutcome::TimedOut,
     };
 
-    // If the program has intrinsic calls, set real base addresses so pointer
-    // values passed to intrinsics are dereferenceable.
-    let has_intrinsics = program.funcs.iter().any(|f| {
-        f.insts.iter().any(|inst| {
-            matches!(
-                inst.op,
-                kajit_lir::LinearOp::CallIntrinsic { .. }
-                    | kajit_lir::LinearOp::CallPure { .. }
-                    | kajit_lir::LinearOp::CallEffect { .. }
-            )
-        })
-    });
-    if has_intrinsics {
-        session.set_real_addresses();
-        session.seed_root_data_args();
-    }
+    // Seed data_args vregs with caller-provided values.
+    session.set_real_addresses();
+    let (gprs, _fprs) = args.to_register_slots();
+    session.seed_data_args(&gprs);
 
     let max_steps = std::env::var("KAJIT_INTERP_STEPS")
         .ok()
@@ -878,7 +856,7 @@ pub fn interpret(program: &Program, input: &[u8]) -> InterpOutcome {
         eprintln!("[interp] did NOT return after {max_steps} steps");
     }
     if state.returned {
-        InterpOutcome::Returned(state.output.clone())
+        InterpOutcome::Ok
     } else if let Some(trap) = &state.trap {
         InterpOutcome::Trapped(*trap)
     } else {
@@ -886,76 +864,67 @@ pub fn interpret(program: &Program, input: &[u8]) -> InterpOutcome {
     }
 }
 
-/// Run a program through the ideal interpreter after applying a pass sequence.
-pub fn interpret_after_passes(program: &Program, passes: &[&str], input: &[u8]) -> InterpOutcome {
+/// Run a program through passes, then test with the provided closure.
+pub fn interpret_after_passes(
+    program: &Program,
+    passes: &[&str],
+    test: &dyn Fn(&Program) -> InterpOutcome,
+) -> InterpOutcome {
     let mut prog = program.clone();
     for &pass in passes {
         run_named_pass(&mut prog, pass);
     }
-    interpret(&prog, input)
+    test(&prog)
 }
 
-/// Create a predicate: "does applying these passes change the interpreter output?"
+/// Create a predicate: "does applying these passes change the output?"
 ///
-/// The predicate captures the "correct" output by interpreting the unoptimized
-/// program, then checks if the optimized program produces different output.
+/// `test` runs the program and returns true if it produced the expected output.
+/// The predicate returns true (= interesting) when the base program is correct
+/// but the optimized program diverges.
 pub fn predicate_wrong_output(
     passes: Vec<String>,
-    input: Vec<u8>,
-    expected_output: Vec<u8>,
+    test: Box<dyn Fn(&Program) -> bool + Send>,
 ) -> Box<dyn Fn(&Program) -> bool> {
     Box::new(move |program: &Program| {
-        // First: the unoptimized program must produce the expected output
-        // (otherwise the reduction made the base program wrong, not interesting)
-        let base_output = interpret(program, &input);
-        if base_output.returned() != Some(&expected_output) {
-            return false; // base program is itself broken, skip
+        // Base program must produce expected output
+        if !test(program) {
+            return false;
         }
-
-        // Then: apply passes and check if output changes
+        // Apply passes and check if output changes
         let pass_refs: Vec<&str> = passes.iter().map(|s| s.as_str()).collect();
-        let opt_output = interpret_after_passes(program, &pass_refs, &input);
-        opt_output.returned() != Some(&expected_output)
+        let mut prog = program.clone();
+        for &pass in &pass_refs {
+            run_named_pass(&mut prog, pass);
+        }
+        !test(&prog)
     })
 }
 
 /// Bisect which passes cause wrong output (not just SSA breakage).
+///
+/// `test` returns true if the program produces the expected output.
 pub fn bisect_wrong_output(
     program: &Program,
     all_passes: &[&str],
-    input: &[u8],
-    expected_output: &[u8],
+    test: &dyn Fn(&Program) -> bool,
 ) -> Vec<String> {
     // Verify the full sequence produces wrong output
-    let opt_output = interpret_after_passes(program, all_passes, input);
-    if opt_output.returned() == Some(&expected_output.to_vec()) {
-        return Vec::new(); // all passes produce correct output
+    {
+        let mut prog = program.clone();
+        for &pass in all_passes {
+            run_named_pass(&mut prog, pass);
+        }
+        if test(&prog) {
+            return Vec::new(); // all passes produce correct output
+        }
     }
 
     eprintln!(
         "[bisect] full sequence ({} passes) produces wrong output, bisecting...",
         all_passes.len()
     );
-    match &opt_output {
-        InterpOutcome::Returned(out) => {
-            eprintln!(
-                "[bisect] expected {} bytes, got {} bytes",
-                expected_output.len(),
-                out.len()
-            );
-        }
-        InterpOutcome::Trapped(trap) => {
-            eprintln!(
-                "[bisect] optimized program trapped: {:?} at offset {}",
-                trap.code, trap.offset
-            );
-        }
-        InterpOutcome::TimedOut => {
-            eprintln!("[bisect] optimized program timed out");
-        }
-    }
 
-    // Delta debugging on the pass list
     let mut required: Vec<&str> = all_passes.to_vec();
     let mut granularity = required.len() / 2;
 
@@ -970,8 +939,11 @@ pub fn bisect_wrong_output(
             candidate.extend_from_slice(&required[end..]);
 
             if !candidate.is_empty() {
-                let out = interpret_after_passes(program, &candidate, input);
-                if out.returned() != Some(&expected_output.to_vec()) {
+                let mut prog = program.clone();
+                for &pass in &candidate {
+                    run_named_pass(&mut prog, pass);
+                }
+                if !test(&prog) {
                     eprintln!(
                         "[bisect] removed passes [{}..{}]: {:?}",
                         i,

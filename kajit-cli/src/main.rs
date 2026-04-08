@@ -454,15 +454,14 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
                     let mut cursor = kajit::context::RuntimeCursor::new(&input_clone);
                     let mut out_buf = vec![0u8; output_size];
                     let mut ctx = kajit::context::DeserContext::from_bytes(&input_clone);
-                    let data_args = [
-                        &mut cursor as *mut _ as u64,
-                        out_buf.as_mut_ptr() as u64,
-                        &mut ctx as *mut _ as u64,
-                    ];
+                    let mut args = kajit_types::Arguments::new();
+                    args.push_ptr(&mut cursor);
+                    args.push_ptr(out_buf.as_mut_ptr());
+                    args.push_ptr(&mut ctx);
                     let outcome = kajit_ir::interpret::interpret(
                         &ir_func,
                         kajit_types::SymbolTable::new(),
-                        &data_args,
+                        &args,
                     );
                     (outcome, out_buf)
                 });
@@ -510,11 +509,23 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
 
         // Run CFG-MIR interpreter (post-linearization)
         eprint!("  [2/3] cfg-mir interpreter... ");
-        let interp_result = kajit_mir::opt::reduce::interpret(&artifacts.cfg_program, &input);
+        let mut interp_cursor = kajit::context::RuntimeCursor::new(&input);
+        let mut interp_out = vec![0u8; output_size];
+        let mut interp_ctx = kajit::context::DeserContext::from_bytes(&input);
+        let mut interp_args = kajit_types::Arguments::new();
+        interp_args.push_ptr(&mut interp_cursor);
+        interp_args.push(kajit_types::ArgValue::U64(interp_out.as_mut_ptr() as u64));
+        interp_args.push_ptr(&mut interp_ctx);
+        let interp_result =
+            kajit_mir::opt::reduce::interpret(&artifacts.cfg_program, &input, &interp_args);
         match &interp_result {
-            kajit_mir::opt::reduce::InterpOutcome::Returned(bytes) => {
+            kajit_mir::opt::reduce::InterpOutcome::Ok => {
                 eprintln!("ok");
-                println!("  interp out:  {} ({})", encode_hex(bytes), bytes.len());
+                println!(
+                    "  interp out:  {} ({})",
+                    encode_hex(&interp_out),
+                    interp_out.len()
+                );
             }
             kajit_mir::opt::reduce::InterpOutcome::Trapped(trap) => {
                 eprintln!("trap");
@@ -570,16 +581,15 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         // Compare
         use kajit_mir::opt::reduce::InterpOutcome;
         match (&jit_result, &interp_result) {
-            (Some(Ok(jit)), InterpOutcome::Returned(interp)) if jit == interp => {
+            (Some(Ok(jit)), InterpOutcome::Ok) if *jit == interp_out => {
                 println!("  match:       YES");
             }
-            (Some(Ok(jit)), InterpOutcome::Returned(interp)) => {
+            (Some(Ok(jit)), InterpOutcome::Ok) => {
                 println!("  match:       NO — DIVERGENCE");
-                // Show byte-by-byte diff
-                let max_len = jit.len().max(interp.len());
+                let max_len = jit.len().max(interp_out.len());
                 for i in 0..max_len {
                     let j = jit.get(i).copied();
-                    let r = interp.get(i).copied();
+                    let r = interp_out.get(i).copied();
                     if j != r {
                         println!(
                             "    byte[{i}]: jit={} interp={}",

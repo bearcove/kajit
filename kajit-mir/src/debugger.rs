@@ -281,17 +281,12 @@ impl DebuggerSession {
         }
     }
 
-    /// Seed data_args[0] (out_ptr) and data_args[1] (ctx_ptr) with real addresses.
-    pub fn seed_root_data_args(&mut self) {
-        // data_args[0] = out_ptr
-        if let Some(&out_arg) = self.func.data_args.first() {
-            let out_ptr = self.output.as_ptr() as u64;
-            self.write_vreg(out_arg.index(), out_ptr);
-        }
-        // data_args[1] = ctx_ptr
-        if self.func.data_args.len() >= 2 {
-            let ctx_ptr = &mut self.ctx as *mut _ as u64;
-            self.write_vreg(self.func.data_args[1].index(), ctx_ptr);
+    /// Seed data_args with caller-provided values.
+    pub fn seed_data_args(&mut self, values: &[u64]) {
+        for (i, &val) in values.iter().enumerate() {
+            if let Some(&vreg) = self.func.data_args.get(i) {
+                self.write_vreg(vreg.index(), val);
+            }
         }
     }
 
