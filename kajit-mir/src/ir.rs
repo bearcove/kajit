@@ -43,18 +43,21 @@ pub enum OpId {
     Term(TermId),
 }
 
+/// Whether an operand reads an existing value or defines a new one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperandKind {
     Use,
     Def,
 }
 
+/// Register bank required by an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegClass {
     Gpr,
     Simd,
 }
 
+/// Fixed-register constraint attached to an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixedReg {
     AbiArg(u8),
@@ -62,20 +65,27 @@ pub enum FixedReg {
     HwReg(u8),
 }
 
+/// Register-allocation operand metadata for an instruction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Operand {
+    /// Virtual register referenced by the operand.
     pub vreg: VReg,
+    /// Use/def role of the operand.
     pub kind: OperandKind,
+    /// Required register class.
     pub class: RegClass,
+    /// Optional fixed physical register.
     pub fixed: Option<FixedReg>,
 }
 
+/// Implicit register clobbers not represented as explicit defs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Clobbers {
     pub caller_saved_gpr: bool,
     pub caller_saved_simd: bool,
 }
 
+/// A single non-terminator instruction in CFG-MIR.
 #[derive(Debug, Clone)]
 pub struct Inst {
     pub id: InstId,
@@ -84,12 +94,16 @@ pub struct Inst {
     pub clobbers: Clobbers,
 }
 
+/// Phi-like block-parameter binding carried on a CFG edge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EdgeArg {
+    /// Destination block parameter.
     pub target: VReg,
+    /// Source value provided by the predecessor.
     pub source: VReg,
 }
 
+/// A control-flow edge between two blocks.
 #[derive(Debug, Clone)]
 pub struct Edge {
     pub id: EdgeId,
@@ -98,6 +112,7 @@ pub struct Edge {
     pub args: Vec<EdgeArg>,
 }
 
+/// Terminator for a CFG-MIR block.
 #[derive(Debug, Clone)]
 pub enum Terminator {
     Return,
@@ -122,6 +137,7 @@ pub enum Terminator {
 }
 
 impl Terminator {
+    /// Return the edge IDs that this terminator may transfer control to.
     pub fn successor_edges(&self) -> Vec<EdgeId> {
         match self {
             Self::Return => Vec::new(),
@@ -143,17 +159,25 @@ impl Terminator {
     }
 }
 
+/// A basic block in CFG-MIR.
 #[derive(Debug, Clone)]
 pub struct Block {
+    /// Stable block ID.
     pub id: BlockId,
+    /// SSA block parameters filled from incoming `EdgeArg`s.
     pub params: Vec<VReg>,
+    /// Instructions executed before the terminator.
     pub insts: Vec<InstId>,
+    /// Block terminator.
     pub term: TermId,
+    /// Incoming edges, rebuildable from the edge list.
     pub preds: Vec<EdgeId>,
+    /// Outgoing edges, rebuildable from the edge list.
     pub succs: Vec<EdgeId>,
     pub dead: bool, // Tombstone for merged blocks - backend should skip when computing offsets
 }
 
+/// A single lowered lambda/function in canonical CFG-MIR form.
 #[derive(Debug, Clone)]
 pub struct Function {
     pub id: FunctionId,
@@ -169,6 +193,7 @@ pub struct Function {
     pub terms: Vec<Terminator>,
 }
 
+/// Whole-program CFG-MIR container shared by optimization, regalloc, and backends.
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub funcs: Vec<Function>,
@@ -190,17 +215,26 @@ pub struct Program {
     pub data_arg_layouts: Vec<kajit_types::TypeLayout>,
 }
 
+/// Debug provenance copied onto CFG-MIR operations and vregs.
 #[derive(Debug, Clone, Default)]
 pub struct ProgramDebugProvenance {
+    /// Scope arena inherited from upstream IR.
     pub scopes: Arena<DebugScope>,
+    /// Semantic value labels inherited from upstream IR.
     pub values: Arena<DebugValue>,
+    /// Root scope of the program, if known.
     pub root_scope: Option<DebugScopeId>,
+    /// Per-op scope provenance keyed by `(lambda_id, op_id)`.
     pub op_scopes: HashMap<(LambdaId, OpId), DebugScopeId>,
+    /// Per-op semantic value provenance keyed by `(lambda_id, op_id)`.
     pub op_values: HashMap<(LambdaId, OpId), DebugValueId>,
+    /// Scope provenance by raw vreg index.
     pub vreg_scopes: Vec<Option<DebugScopeId>>,
+    /// Semantic value provenance by raw vreg index.
     pub vreg_values: Vec<Option<DebugValueId>>,
 }
 
+/// Program point used by liveness and scheduling analyses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ProgPoint {
     Before(OpId),
@@ -208,13 +242,18 @@ pub enum ProgPoint {
     Edge(EdgeId),
 }
 
+/// Linear execution schedule derived from the current block/instruction order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Schedule {
+    /// Instructions/terminators in block-local order.
     pub op_order: Vec<OpId>,
+    /// Reverse index into `op_order`.
     pub op_to_index: HashMap<OpId, u32>,
+    /// Half-open op ranges for each block in `op_order`.
     pub block_ranges: HashMap<BlockId, Range<u32>>,
 }
 
+/// Structural validation error for CFG-MIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CfgMirError {
     message: String,
@@ -341,18 +380,22 @@ impl Function {
         self.blocks.get(id.index())
     }
 
+    /// Look up an edge by ID.
     pub fn edge(&self, id: EdgeId) -> Option<&Edge> {
         self.edges.get(id.index())
     }
 
+    /// Look up an instruction by ID.
     pub fn inst(&self, id: InstId) -> Option<&Inst> {
         self.insts.get(id.index())
     }
 
+    /// Look up a terminator by ID.
     pub fn term(&self, id: TermId) -> Option<&Terminator> {
         self.terms.get(id.index())
     }
 
+    /// Derive a stable operation schedule from the function's current block order.
     pub fn derive_schedule(&self) -> Result<Schedule, CfgMirError> {
         self.validate()?;
 
@@ -381,6 +424,7 @@ impl Function {
         })
     }
 
+    /// Validate CFG-MIR structural invariants for this function.
     pub fn validate(&self) -> Result<(), CfgMirError> {
         if self.blocks.is_empty() {
             return Err(CfgMirError::new(format!(
@@ -633,22 +677,27 @@ impl Function {
 }
 
 impl Program {
+    /// Return the debug scope attached to a specific op, if any.
     pub fn op_debug_scope(&self, lambda_id: LambdaId, op_id: OpId) -> Option<DebugScopeId> {
         self.debug.op_scopes.get(&(lambda_id, op_id)).copied()
     }
 
+    /// Return the semantic debug value attached to a specific op, if any.
     pub fn op_debug_value(&self, lambda_id: LambdaId, op_id: OpId) -> Option<DebugValueId> {
         self.debug.op_values.get(&(lambda_id, op_id)).copied()
     }
 
+    /// Return the debug scope attached to a vreg, if any.
     pub fn vreg_debug_scope(&self, vreg: VReg) -> Option<DebugScopeId> {
         self.debug.vreg_scopes.get(vreg.index()).copied().flatten()
     }
 
+    /// Return the semantic debug value attached to a vreg, if any.
     pub fn vreg_debug_value(&self, vreg: VReg) -> Option<DebugValueId> {
         self.debug.vreg_values.get(vreg.index()).copied().flatten()
     }
 
+    /// Validate every function in the program.
     pub fn validate(&self) -> Result<(), CfgMirError> {
         for (idx, func) in self.funcs.iter().enumerate() {
             if func.id.index() != idx {
@@ -663,6 +712,8 @@ impl Program {
     }
 }
 
+/// Display wrapper that optionally resolves function pointers and constants
+/// through an [`IntrinsicRegistry`].
 pub struct ProgramDisplay<'a> {
     program: &'a Program,
     registry: Option<&'a IntrinsicRegistry>,
@@ -693,6 +744,7 @@ impl<'a> fmt::Display for ProgramDisplay<'a> {
 }
 
 impl Program {
+    /// Render this program using names from `registry` where available.
     pub fn display_with_registry<'a>(
         &'a self,
         registry: &'a IntrinsicRegistry,
@@ -703,6 +755,7 @@ impl Program {
         }
     }
 
+    /// Build a debug-friendly textual listing for all functions in the program.
     pub fn debug_line_listing_with_registry(
         &self,
         registry: Option<&IntrinsicRegistry>,
@@ -1818,7 +1871,7 @@ fn lower_function(
     )
 }
 
-/// Lower linearized IR into the canonical CFG MIR model.
+/// Lower linearized IR into the canonical CFG-MIR model.
 pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -> Program {
     let mut funcs = Vec::<Function>::new();
     let mut op_scopes = HashMap::<(LambdaId, OpId), DebugScopeId>::new();
@@ -1909,12 +1962,7 @@ pub fn lower_linear_ir(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap) -
     }
 }
 
-/// Rematerialize constants that are passed as block parameters.
-///
-/// When constants are defined in one block and passed through edges to other
-/// blocks as parameters, they become regular vregs that consume registers.
-/// This pass identifies such constants and re-emits them locally in each block
-/// Lower linear IR to CFG-MIR and run all optimization passes.
+/// Lower linear IR to CFG-MIR and run the standard optimization pipeline.
 ///
 /// This is the single entry point for producing optimized CFG-MIR from linear IR,
 /// ensuring consistent behavior between compilation and debug/test paths.
@@ -2283,6 +2331,7 @@ fn fuse_compare_zero_branch_in_function(func: &mut Function) {
 /// - Reduces register pressure (constants don't need to be kept live)
 /// - Enables immediate encoding in backends (AND reg, #imm instead of AND reg, reg)
 /// - Removes unnecessary edge argument traffic
+/// - Keeps constants near their use sites for later lowering stages
 pub fn rematerialize_constants(program: &mut Program) {
     // Build a map of VReg -> constant value for all constants in the program
     // Start with values from Const instructions
@@ -2552,7 +2601,7 @@ fn rematerialize_constants_in_function(
 ///
 /// Replaces uses of a vreg that's just a copy of another vreg with the
 /// original vreg. This enables later dead code elimination to remove
-/// the now-unused Copy instructions.
+/// Propagate copies through uses across the CFG, leaving dead copies for later DCE.
 ///
 /// Example:
 ///   v1 = Const(42)
@@ -2938,6 +2987,7 @@ fn is_encodable_logical_imm(value: u64) -> bool {
 /// can be encoded as an immediate, we don't need regalloc to track it. By removing
 /// the Def operand, regalloc won't allocate a register or generate moves for it.
 /// The backend will use the immediate form directly via `const_of()`.
+/// Remove constant-def operands that are only needed as backend immediates.
 pub fn eliminate_immediate_only_const_defs(program: &mut Program) {
     for func in &mut program.funcs {
         eliminate_immediate_only_const_defs_in_function(func);
@@ -3156,6 +3206,7 @@ fn eliminate_immediate_only_const_defs_in_function(func: &mut Function) {
 /// Removes instructions whose outputs are never used. This is particularly
 /// useful after rematerialization, which can leave the original constant
 /// definitions unused.
+/// Remove instructions whose results are unused and which have no side effects.
 pub fn dead_code_elimination(program: &mut Program) {
     for func in &mut program.funcs {
         dead_code_elimination_in_function(func);
@@ -3817,6 +3868,7 @@ impl ScopedValueTable {
 ///
 /// Uses dominator tree to ensure that when we reference a canonical value,
 /// it is guaranteed to dominate (be available at) the current block.
+/// Eliminate redundant expressions within blocks by converting them to copies.
 pub fn local_common_subexpr_elim(program: &mut Program) {
     for func in &mut program.funcs {
         local_common_subexpr_elim_in_function(func);
@@ -3953,6 +4005,7 @@ fn get_def_vreg(op: &LinearOp) -> Option<VReg> {
 /// ```
 /// Both v10 and v11 are trivial - v10 is always v5, v11 is always v3.
 /// We rewrite all uses of v10 to v5 and v11 to v3, then DCE removes them.
+/// Remove block parameters whose incoming edge arguments are identical.
 pub fn simplify_trivial_phis(program: &mut Program) {
     for func in &mut program.funcs {
         simplify_trivial_phis_in_function(func);
@@ -4109,6 +4162,7 @@ fn simplify_trivial_phis_in_function(func: &mut Function) {
 /// 1. Moving the successor's instructions into this block
 /// 2. Updating this block's terminator to the successor's terminator
 /// 3. Rewiring all references to the successor to point to this block
+/// Merge empty forwarding blocks into their successors when legal.
 pub fn merge_empty_blocks(program: &mut Program) {
     for func in &mut program.funcs {
         merge_empty_blocks_in_function(func);
