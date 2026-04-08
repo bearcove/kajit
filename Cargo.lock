@@ -1412,6 +1412,7 @@ dependencies = [
 name = "kajit-asm"
 version = "0.1.0"
 dependencies = [
+ "kajit-reprs",
  "proptest",
 ]
 
@@ -1419,9 +1420,7 @@ dependencies = [
 name = "kajit-asm-text"
 version = "0.1.0"
 dependencies = [
- "chumsky",
- "kajit-asm",
- "kajit-parse-util",
+ "kajit-reprs",
 ]
 
 [[package]]
@@ -1532,8 +1531,6 @@ version = "0.1.0"
 dependencies = [
  "ariadne 0.5.1",
  "chumsky",
- "kajit-asm",
- "kajit-asm-text",
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
