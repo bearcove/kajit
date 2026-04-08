@@ -1,0 +1,150 @@
+meta {
+    id kajit:repr-schema/hir-pilot
+    version 1
+    description "Pilot representation schema for Kajit HIR"
+}
+
+repr @module{
+    name HIR
+    file_ext .vixen-hir
+
+    contract {
+        purpose "Human-semantic structured IR"
+        canonical_identities (symbol local-name type-name function-name)
+        round_trip canonical-print
+        provenance required
+    }
+
+    derive {
+        rust_ast yes
+        visitor yes
+        parser yes
+        formatter yes
+        roundtrip_tests yes
+    }
+
+    common {
+        provenance @Prov
+        symbol @Symbol
+        docs @DocBlock
+    }
+
+    nodes {
+        Module @node{
+            docs @optional(@DocBlock)
+            type_defs @seq(@TypeDef)
+            functions @seq(@Function)
+        }
+
+        TypeDef @node{
+            prov @Prov
+            docs @optional(@DocBlock)
+            name @Symbol
+            params @seq(@GenericParam)
+            kind @TypeDefKind
+        }
+
+        Function @node{
+            prov @Prov
+            docs @optional(@DocBlock)
+            name @Symbol
+            params @seq(@Param)
+            return_type @Type
+            locals @seq(@Local)
+            body @Block
+        }
+
+        Param @node{
+            prov @Prov
+            name @Symbol
+            ty @Type
+        }
+
+        Local @node{
+            prov @Prov
+            name @Symbol
+            ty @Type
+            kind @LocalKind
+        }
+
+        Block @node{
+            prov @Prov
+            statements @seq(@Stmt)
+        }
+
+        Stmt @enum{
+            Init @struct{
+                prov @Prov
+                place @Place
+                value @Expr
+            }
+
+            Assign @struct{
+                prov @Prov
+                place @Place
+                value @Expr
+            }
+
+            Expr @struct{
+                prov @Prov
+                value @Expr
+            }
+
+            If @struct{
+                prov @Prov
+                condition @Expr
+                then @Block
+                else @optional(@Block)
+            }
+
+            Return @struct{
+                prov @Prov
+                value @optional(@Expr)
+            }
+        }
+
+        Expr @enum{
+            Local @struct{
+                prov @Prov
+                name @Symbol
+            }
+
+            Literal @struct{
+                prov @Prov
+                value @Literal
+            }
+
+            Call @struct{
+                prov @Prov
+                callee @Symbol
+                args @seq(@Expr)
+            }
+
+            Field @struct{
+                prov @Prov
+                base @Expr
+                field @Symbol
+            }
+
+            Binary @struct{
+                prov @Prov
+                op @BinaryOp
+                lhs @Expr
+                rhs @Expr
+            }
+        }
+
+        Place @enum{
+            Local @struct{
+                prov @Prov
+                name @Symbol
+            }
+
+            Field @struct{
+                prov @Prov
+                base @Place
+                field @Symbol
+            }
+        }
+    }
+}

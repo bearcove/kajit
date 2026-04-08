@@ -1,0 +1,96 @@
+meta {
+    id kajit:repr-schema/mir-pilot
+    version 1
+    description "Pilot representation schema for Kajit CFG-MIR"
+}
+
+repr @module{
+    name MIR
+    file_ext .vixen-mir
+
+    contract {
+        purpose "Canonical executable CFG IR"
+        canonical_identities (function-name block-id vreg-id)
+        round_trip canonical-print
+        provenance required
+    }
+
+    derive {
+        rust_ast yes
+        visitor yes
+        parser yes
+        formatter yes
+        roundtrip_tests yes
+    }
+
+    common {
+        provenance @Prov
+        symbol @Symbol
+    }
+
+    nodes {
+        Program @node{
+            functions @seq(@Function)
+        }
+
+        Function @node{
+            prov @Prov
+            name @Symbol
+            params @seq(@VReg)
+            blocks @seq(@Block)
+        }
+
+        Block @node{
+            prov @Prov
+            id @BlockId
+            params @seq(@VReg)
+            insts @seq(@Inst)
+            term @Terminator
+        }
+
+        Inst @enum{
+            Const @struct{
+                prov @Prov
+                dst @VReg
+                value @Literal
+            }
+
+            Call @struct{
+                prov @Prov
+                dsts @seq(@VReg)
+                callee @Symbol
+                args @seq(@Operand)
+            }
+
+            Binary @struct{
+                prov @Prov
+                dst @VReg
+                op @BinaryOp
+                lhs @Operand
+                rhs @Operand
+            }
+        }
+
+        Terminator @enum{
+            Jump @struct{
+                prov @Prov
+                target @BlockRef
+                args @seq(@Operand)
+            }
+
+            Branch @struct{
+                prov @Prov
+                cond @Operand
+                then @BlockRef
+                then_args @seq(@Operand)
+                else @BlockRef
+                else_args @seq(@Operand)
+            }
+
+            Return @struct{
+                prov @Prov
+                values @seq(@Operand)
+            }
+        }
+    }
+}

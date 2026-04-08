@@ -25,7 +25,9 @@ All of them need the same broad class of infrastructure:
 
 Right now, we mostly hand-roll all of this. That was tolerable when the project was smaller and the representations were in flux. It is no longer a reasonable strategy.
 
-This note captures the case for building custom representation infrastructure: a schema language, code generators, and rewrite tooling, instead of continuing to hand-author six overlapping little compiler frontends.
+This note captures the long-term case for building custom representation infrastructure: a schema language, code generators, provenance support, validation support, and eventually rewrite tooling, instead of continuing to hand-author six overlapping little compiler frontends.
+
+This is a vision note, not an implementation plan.
 
 ## The Current Situation
 
@@ -121,7 +123,7 @@ That is a scaling failure.
 
 Build custom infrastructure for representations.
 
-Not just "a parser generator". Not just "a derive macro for visitors". The real need is a full repr toolchain.
+Not just "a parser generator". Not just "a derive macro for visitors". The real need is a representation toolchain.
 
 At minimum:
 
@@ -132,6 +134,53 @@ At minimum:
 5. Derived parse/display/round-trip infrastructure
 6. Derived visitors / walkers / folders
 7. Eventually, editor/tooling artifacts downstream of the same schema
+
+## Vision Versus First Implementation
+
+The long-term description really is "a language for languages".
+
+That is the right destination because the point is to separate representation design from representation implementation.
+
+But it is the wrong near-term planning label.
+
+The first implementation should be much smaller:
+
+- a representation schema system for stable Kajit layers
+- initially piloted on HIR and MIR
+- generating only boring structural infrastructure
+
+Specifically, the first implementation should focus on:
+
+- node definitions
+- visitor / walker / folder scaffolding
+- parse / display glue
+- round-trip harnesses
+- provenance shells
+
+And should explicitly defer:
+
+- rewrite DSLs
+- lint DSLs
+- tree-sitter generation
+- LSP generation
+- ambitious validation DSLs
+
+Those may still be the right direction later. They are not version 1.
+
+## Stage Contracts Come First
+
+Before building the generator, Kajit needs sharper per-stage contracts.
+
+For each repr, we need explicit answers to:
+
+- what information belongs here
+- what information must not survive from earlier stages
+- what identities are canonical here
+- what round-trip guarantee the text format actually promises
+- what provenance is required here
+- what invariants are guaranteed after parsing or normalization
+
+Without those contracts, a schema system will just generate cleaner confusion.
 
 ## The Schema Should Describe
 
@@ -161,7 +210,7 @@ This would become the real source of truth.
 
 ## The Generated Artifacts
 
-From that schema, we should generate a ton of code.
+From that schema, we should eventually generate a ton of code.
 
 That is not a side effect. That is the point.
 
@@ -177,8 +226,8 @@ Expected outputs:
 - provenance plumbing
 - validation skeletons
 - formatting helpers
-- maybe tree-sitter grammars
-- maybe semantic tokens / LSP scaffolding
+- later: tree-sitter grammars
+- later: semantic tokens / LSP scaffolding
 
 The line should be:
 
@@ -234,6 +283,8 @@ Instead of hand-writing endless pattern matches over bespoke enums, we can gener
 
 This does not replace all hand-written optimization work. It does remove a huge class of mechanical pass boilerplate.
 
+This should be treated as a later payoff, not the first milestone.
+
 ## Desired End State
 
 For every repr in Kajit:
@@ -255,9 +306,10 @@ Not ad hoc bags of types and whatever helper logic happened to accrete nearby.
 
 ## Immediate Next Questions
 
-1. What is the smallest viable schema for one repr, probably HIR?
-2. What provenance model should every node share?
-3. Which invariants belong in the schema and which remain handwritten?
+1. What are the per-stage contracts for HIR, IR, MIR, ASM, and does LIR survive?
+2. What is the smallest viable schema for one repr, probably HIR?
+3. What provenance model should every node share?
+4. Which invariants belong in the schema and which remain handwritten?
 4. How much parse/display should be fully generated vs generated skeleton + handwritten details?
 5. What is the first useful codegen target:
    - visitors
