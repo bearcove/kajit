@@ -637,31 +637,31 @@ pub fn run_named_pass(prog: &mut Program, pass_name: &str) -> bool {
             changed
         }
         "remat" => {
-            kajit_reprs::mir::rematerialize_constants(prog);
+            crate::opt::pipeline::rematerialize_constants(prog);
             true
         }
         "cse" => {
-            kajit_reprs::mir::local_cse(prog);
+            crate::opt::pipeline::local_cse(prog);
             true
         }
         "local_cse" => {
-            kajit_reprs::mir::local_common_subexpr_elim(prog);
+            crate::opt::pipeline::local_common_subexpr_elim(prog);
             true
         }
         "copyprop" => {
-            kajit_reprs::mir::copy_propagation(prog);
+            crate::opt::pipeline::copy_propagation(prog);
             true
         }
         "fuse_cmpz" => {
-            kajit_reprs::mir::fuse_compare_zero_branch(prog);
+            crate::opt::pipeline::fuse_compare_zero_branch(prog);
             true
         }
         "elim_imm" => {
-            kajit_reprs::mir::eliminate_immediate_only_const_defs(prog);
+            crate::opt::pipeline::eliminate_immediate_only_const_defs(prog);
             true
         }
         "dce" => {
-            kajit_reprs::mir::dead_code_elimination(prog);
+            crate::opt::pipeline::dead_code_elimination(prog);
             true
         }
         "simplify_cfg" => {

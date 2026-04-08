@@ -11,6 +11,7 @@ pub mod const_branch_fold;
 pub mod constant_phi_elim;
 pub mod control_thread;
 pub mod dce;
+pub mod pipeline;
 pub mod reduce;
 pub mod simplify_cfg;
 pub mod validate;
