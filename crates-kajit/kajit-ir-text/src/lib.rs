@@ -1,3 +1,1 @@
-mod ir_parse;
-
-pub use ir_parse::*;
+pub use kajit_reprs::ir::parse::*;

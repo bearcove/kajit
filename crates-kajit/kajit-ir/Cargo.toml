@@ -9,6 +9,7 @@ edition = "2024"
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
+kajit-reprs = { path = "../kajit-reprs" }
 kajit-types = { path = "../kajit-types" }
 thiserror = "2.0.18"
 

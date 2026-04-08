@@ -11,7 +11,4 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 [dependencies]
 ariadne = "0.5"
 chumsky = "1.0.0-alpha.8"
-kajit-ir = { path = "../kajit-ir" }
-kajit-ir-text = { path = "../kajit-ir-text" }
-kajit-lir = { path = "../kajit-lir" }
 kajit-types = { path = "../kajit-types" }

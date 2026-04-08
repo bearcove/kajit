@@ -11,6 +11,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::ops::Range;
 
+pub(crate) use crate::ir as kajit_ir;
+pub(crate) use crate::lir as kajit_lir;
 use kajit_ir::{
     Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, FnPtr, IntrinsicRegistry, LambdaId,
     VReg,

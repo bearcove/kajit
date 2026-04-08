@@ -1,3 +1,5 @@
+pub(crate) use crate::ir as kajit_ir;
+
 pub fn to_text(program: &super::Program) -> String {
     program.to_string()
 }

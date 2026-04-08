@@ -1467,6 +1467,7 @@ name = "kajit-ir"
 version = "0.1.0"
 dependencies = [
  "kajit-ir-text",
+ "kajit-reprs",
  "kajit-types",
  "thiserror 2.0.18",
 ]
@@ -1475,11 +1476,9 @@ dependencies = [
 name = "kajit-ir-text"
 version = "0.1.0"
 dependencies = [
- "chumsky",
  "datatest-stable",
  "facet",
- "kajit-ir",
- "kajit-parse-util",
+ "kajit-reprs",
 ]
 
 [[package]]
@@ -1488,6 +1487,7 @@ version = "0.1.0"
 dependencies = [
  "kajit-ir",
  "kajit-ir-text",
+ "kajit-reprs",
  "kajit-types",
  "tracing",
 ]
@@ -1528,9 +1528,6 @@ version = "0.1.0"
 dependencies = [
  "ariadne 0.5.1",
  "chumsky",
- "kajit-ir",
- "kajit-ir-text",
- "kajit-lir",
  "kajit-types",
 ]
 

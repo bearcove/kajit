@@ -4,6 +4,8 @@
 
 use chumsky::prelude::*;
 
+pub(crate) use crate::ir as kajit_ir;
+pub(crate) use crate::lir as kajit_lir;
 use crate::mir as kajit_mir;
 use kajit_ir::{FnPtr, IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
