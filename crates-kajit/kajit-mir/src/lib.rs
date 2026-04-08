@@ -2,7 +2,6 @@ mod analysis;
 pub use analysis::*;
 
 mod ir;
-pub use ir::*;
 
 mod opt;
 pub use opt::*;

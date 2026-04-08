@@ -625,7 +625,7 @@ pub fn parse_ir(input: &str, registry: &IntrinsicRegistry) -> Result<IrFunc, Par
     let result = program().parse(input);
 
     let lambdas = result.into_result().map_err(|errs| ParseError {
-        message: kajit_parse_util::format_rich_errors(input, errs),
+        message: crate::format_rich_errors(input, errs),
     })?;
 
     resolve(lambdas, registry)

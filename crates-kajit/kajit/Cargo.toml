@@ -23,12 +23,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zmij = "1"
 kajit-ir = { path = "../kajit-ir" }
-kajit-ir-text = { path = "../kajit-ir-text" }
 kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
-kajit-mir-text = { path = "../kajit-mir-text" }
 kajit-asm = { path = "../kajit-asm" }
-kajit-asm-text = { path = "../kajit-asm-text" }
+kajit-reprs = { path = "../kajit-reprs" }
 kafe = { path = "../../crates-kafe/kafe" }
 kajit-hir = { path = "../kajit-hir" }
 kafe-malum = { path = "../../crates-kafe/kafe-malum" }
@@ -37,8 +35,6 @@ kajit-types = { path = "../kajit-types" }
 tracing = "0.1"
 
 [dev-dependencies]
-kajit-hir-text = { path = "../kajit-hir-text" }
-kajit-asm-text = { path = "../kajit-asm-text" }
 libc = "0.2"
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }

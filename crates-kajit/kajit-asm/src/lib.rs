@@ -1,1 +1,2 @@
-pub use kajit_reprs::asm::*;
+pub mod aarch64;
+pub mod x64;

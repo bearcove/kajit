@@ -18,4 +18,4 @@ tracing = "0.1"
 
 [dev-dependencies]
 facet = "0.44"
-kajit-ir-text = { path = "../kajit-ir-text" }
+kajit-reprs = { path = "../kajit-reprs" }

@@ -11,7 +11,7 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 [dependencies]
 kajit = { path = "../crates-kajit/kajit" }
 kajit-mir = { path = "../crates-kajit/kajit-mir" }
-kajit-mir-text = { path = "../crates-kajit/kajit-mir-text" }
+kajit-reprs = { path = "../crates-kajit/kajit-reprs" }
 prettyplease = "0.2"
 proc-macro2 = "1"
 quote = "1"

@@ -5,7 +5,6 @@
 //! with explicit labels and branches for control flow (gamma/theta).
 
 mod ir;
-pub use ir::*;
 
 mod fmt;
 pub use fmt::*;

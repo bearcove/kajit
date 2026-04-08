@@ -14,4 +14,4 @@ kajit-types = { path = "../kajit-types" }
 thiserror = "2.0.18"
 
 [dev-dependencies]
-kajit-ir-text = { path = "../kajit-ir-text" }
+kajit-reprs = { path = "../kajit-reprs" }

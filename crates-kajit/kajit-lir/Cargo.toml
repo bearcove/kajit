@@ -15,4 +15,4 @@ kajit-types = { path = "../kajit-types" }
 tracing = { workspace = true }
 
 [dev-dependencies]
-kajit-ir-text = { path = "../kajit-ir-text" }
+kajit-reprs = { path = "../kajit-reprs" }

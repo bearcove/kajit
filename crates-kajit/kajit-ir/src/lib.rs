@@ -12,6 +12,5 @@ pub mod simplify_gamma;
 pub mod unroll_theta;
 mod verify;
 
-pub use ir::*;
 pub use ir_passes::*;
 pub use verify::*;

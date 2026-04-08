@@ -591,7 +591,7 @@ pub fn parse_cfg_mir_with_registry(
     let stripped = strip_comments(input);
     let parsed = cfg_program().padded_by(ws()).parse(stripped.as_str());
     let ast = parsed.into_result().map_err(|errs| ParseError {
-        message: kajit_parse_util::format_rich_errors(&stripped, errs),
+        message: crate::format_rich_errors(&stripped, errs),
     })?;
     resolve_program(ast, registry)
 }

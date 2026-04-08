@@ -57,80 +57,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anstream"
-version = "0.6.21"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43d5b281e737544384e969a5ccad3f1cdd24b48086a0fc1b2a5262a26b8f4f4a"
-dependencies = [
- "anstyle",
- "anstyle-parse 0.2.7",
- "anstyle-query",
- "anstyle-wincon",
- "colorchoice",
- "is_terminal_polyfill",
- "utf8parse",
-]
-
-[[package]]
-name = "anstream"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "824a212faf96e9acacdbd09febd34438f8f711fb84e09a8916013cd7815ca28d"
-dependencies = [
- "anstyle",
- "anstyle-parse 1.0.0",
- "anstyle-query",
- "anstyle-wincon",
- "colorchoice",
- "is_terminal_polyfill",
- "utf8parse",
-]
-
-[[package]]
-name = "anstyle"
-version = "1.0.14"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
-
-[[package]]
-name = "anstyle-parse"
-version = "0.2.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4e7644824f0aa2c7b9384579234ef10eb7efb6a0deb83f9630a49594dd9c15c2"
-dependencies = [
- "utf8parse",
-]
-
-[[package]]
-name = "anstyle-parse"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ce7f38b242319f7cabaa6813055467063ecdc9d355bbb4ce0c68908cd8130e"
-dependencies = [
- "utf8parse",
-]
-
-[[package]]
-name = "anstyle-query"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
-dependencies = [
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "anstyle-wincon"
-version = "3.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
-dependencies = [
- "anstyle",
- "once_cell_polyfill",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -369,46 +295,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "clap"
-version = "4.5.60"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2797f34da339ce31042b27d23607e051786132987f595b02ba4f6a6dffb7030a"
-dependencies = [
- "clap_builder",
- "clap_derive",
-]
-
-[[package]]
-name = "clap_builder"
-version = "4.5.60"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24a241312cea5059b13574bb9b3861cabf758b879c15190b37b6d6fd63ab6876"
-dependencies = [
- "anstream 0.6.21",
- "anstyle",
- "clap_lex",
- "strsim",
-]
-
-[[package]]
-name = "clap_derive"
-version = "4.5.55"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a92793da1a46a5f2a02a6f4c46c6496b28c43638adea8306fcb0caa1634f24e5"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "clap_lex"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
-
-[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -427,12 +313,6 @@ dependencies = [
  "btparse",
  "termcolor",
 ]
-
-[[package]]
-name = "colorchoice"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
 name = "combine"
@@ -485,18 +365,6 @@ name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
-
-[[package]]
-name = "datatest-stable"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a867d7322eb69cf3a68a5426387a25b45cb3b9c5ee41023ee6cea92e2afadd82"
-dependencies = [
- "camino",
- "fancy-regex",
- "libtest-mimic",
- "walkdir",
-]
 
 [[package]]
 name = "deranged"
@@ -568,12 +436,6 @@ dependencies = [
  "libc",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "escape8259"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5692dd7b5a1978a5aeb0ce83b7655c58ca8efdcb79d21036ea249da95afec2c6"
 
 [[package]]
 name = "facet"
@@ -755,17 +617,6 @@ checksum = "8d6e17dfa5fc4da066dbf46244a72e4e3233c901914b8d979f12a3967649b859"
 dependencies = [
  "quote",
  "unsynn",
-]
-
-[[package]]
-name = "fancy-regex"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e24cb5a94bcae1e5408b0effca5cd7172ea3c5755049c5f3af4cd283a165298"
-dependencies = [
- "bit-set",
- "regex-automata 0.4.14",
- "regex-syntax 0.8.10",
 ]
 
 [[package]]
@@ -1282,12 +1133,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7655c9839580ee829dfacba1d1278c2b7883e50a277ff7541299489d6bdfdc45"
 
 [[package]]
-name = "is_terminal_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
 name = "itoa"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1385,14 +1230,11 @@ dependencies = [
  "kafe-malum",
  "kafe-postcard",
  "kajit-asm",
- "kajit-asm-text",
  "kajit-hir",
- "kajit-hir-text",
  "kajit-ir",
- "kajit-ir-text",
  "kajit-lir",
  "kajit-mir",
- "kajit-mir-text",
+ "kajit-reprs",
  "kajit-types",
  "libc",
  "object 0.36.7",
@@ -1417,13 +1259,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kajit-asm-text"
-version = "0.1.0"
-dependencies = [
- "kajit-reprs",
-]
-
-[[package]]
 name = "kajit-cli"
 version = "0.1.0"
 dependencies = [
@@ -1432,12 +1267,10 @@ dependencies = [
  "figue",
  "kajit",
  "kajit-hir",
- "kajit-hir-text",
  "kajit-ir",
- "kajit-ir-text",
  "kajit-lir",
  "kajit-mir",
- "kajit-mir-text",
+ "kajit-reprs",
  "kajit-types",
  "lldb",
  "rust-mcp-sdk",
@@ -1456,29 +1289,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "kajit-hir-text"
-version = "0.1.0"
-dependencies = [
- "kajit-reprs",
-]
-
-[[package]]
 name = "kajit-ir"
 version = "0.1.0"
 dependencies = [
- "kajit-ir-text",
  "kajit-reprs",
  "kajit-types",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "kajit-ir-text"
-version = "0.1.0"
-dependencies = [
- "datatest-stable",
- "facet",
- "kajit-reprs",
 ]
 
 [[package]]
@@ -1486,7 +1302,6 @@ name = "kajit-lir"
 version = "0.1.0"
 dependencies = [
  "kajit-ir",
- "kajit-ir-text",
  "kajit-reprs",
  "kajit-types",
  "tracing",
@@ -1499,27 +1314,10 @@ dependencies = [
  "facet",
  "indexmap 2.13.0",
  "kajit-ir",
- "kajit-ir-text",
  "kajit-lir",
  "kajit-reprs",
  "kajit-types",
  "tracing",
-]
-
-[[package]]
-name = "kajit-mir-text"
-version = "0.1.0"
-dependencies = [
- "datatest-stable",
- "kajit-reprs",
-]
-
-[[package]]
-name = "kajit-parse-util"
-version = "0.1.0"
-dependencies = [
- "ariadne 0.5.1",
- "chumsky",
 ]
 
 [[package]]
@@ -1552,18 +1350,6 @@ name = "libc"
 version = "0.2.182"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
-
-[[package]]
-name = "libtest-mimic"
-version = "0.8.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14e6ba06f0ade6e504aff834d7c34298e5155c6baca353cc6a4aaff2f9fd7f33"
-dependencies = [
- "anstream 1.0.0",
- "anstyle",
- "clap",
- "escape8259",
-]
 
 [[package]]
 name = "linked-hash-map"
@@ -1719,12 +1505,6 @@ name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
-
-[[package]]
-name = "once_cell_polyfill"
-version = "1.70.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "owo-colors"
@@ -2180,15 +1960,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
 dependencies = [
  "twox-hash",
-]
-
-[[package]]
-name = "same-file"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
-dependencies = [
- "winapi-util",
 ]
 
 [[package]]
@@ -2729,12 +2500,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
-name = "utf8parse"
-version = "0.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
-
-[[package]]
 name = "uuid"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2785,16 +2550,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "walkdir"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
-dependencies = [
- "same-file",
- "winapi-util",
 ]
 
 [[package]]
@@ -3239,7 +2994,7 @@ version = "0.1.0"
 dependencies = [
  "kajit",
  "kajit-mir",
- "kajit-mir-text",
+ "kajit-reprs",
  "prettyplease",
  "proc-macro2",
  "quote",
