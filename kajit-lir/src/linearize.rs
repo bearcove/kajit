@@ -1902,7 +1902,7 @@ impl<'a> Linearizer<'a> {
                 self.linearize_node(tail_id);
                 // Build final phis from the tail gamma's outputs to landing vregs
                 let tail_node = &self.func.nodes[tail_id];
-                let tail_data_outputs: Vec<VReg> = tail_node
+                let _tail_data_outputs: Vec<VReg> = tail_node
                     .outputs
                     .iter()
                     .filter(|o| o.kind == PortKind::Data)

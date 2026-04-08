@@ -545,7 +545,7 @@ fn remap_terminator(
 #[cfg(test)]
 mod tests {
 
-    use kajit_ir::{ErrorCode, LambdaId, VReg};
+    use kajit_ir::{LambdaId, VReg};
     use kajit_lir::LinearOp;
 
     use super::*;

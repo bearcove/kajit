@@ -13,7 +13,7 @@ use kajit_hir as hir;
 
 use crate::format::{DecoderKind, FieldEmitInfo, SkippedFieldInfo};
 use crate::intrinsics;
-use crate::ir::{RegionBuilder, Width as IrWidth};
+use crate::ir::RegionBuilder;
 use crate::pipeline_opts::PipelineOptions;
 
 pub use hir_to_ir::lower_hir_module;

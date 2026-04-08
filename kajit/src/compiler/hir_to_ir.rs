@@ -856,14 +856,9 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 let threaded_output_count = invariant_count;
                 self.remap_locals(&threaded, &gamma_outputs[..threaded_output_count]);
 
-                if let Some(ret_count) = branch_ret_count {
-                    Some(
-                        gamma_outputs[threaded_output_count..threaded_output_count + ret_count]
-                            .to_vec(),
-                    )
-                } else {
-                    None
-                }
+                branch_ret_count.map(|ret_count| {
+                    gamma_outputs[threaded_output_count..threaded_output_count + ret_count].to_vec()
+                })
             }
             hir::StmtKind::Match { scrutinee, arms } => {
                 let predicate = self.lower_expr(rb, scrutinee);
@@ -926,14 +921,9 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 let threaded_output_count = invariant_count;
                 self.remap_locals(&threaded, &gamma_outputs[..threaded_output_count]);
 
-                if let Some(ret_count) = branch_ret_count {
-                    Some(
-                        gamma_outputs[threaded_output_count..threaded_output_count + ret_count]
-                            .to_vec(),
-                    )
-                } else {
-                    None
-                }
+                branch_ret_count.map(|ret_count| {
+                    gamma_outputs[threaded_output_count..threaded_output_count + ret_count].to_vec()
+                })
             }
             hir::StmtKind::Loop {
                 body,
@@ -1169,10 +1159,10 @@ impl<'a> ScalarHirIrLowerer<'a> {
                 };
                 // Check for explicit offset annotation first.
                 for f in fields {
-                    if f.name == field_name {
-                        if let Some(offset) = f.offset {
-                            return offset as usize;
-                        }
+                    if f.name == field_name
+                        && let Some(offset) = f.offset
+                    {
+                        return offset as usize;
                     }
                 }
                 // Fallback: sum sizes of preceding fields.

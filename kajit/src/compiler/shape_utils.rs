@@ -121,14 +121,3 @@ fn collect_shape_symbols(
         _ => {}
     }
 }
-
-/// Width of a discriminant field in IR representation.
-pub(super) fn ir_width_from_disc_size(size: u32) -> IrWidth {
-    match size {
-        1 => IrWidth::W1,
-        2 => IrWidth::W2,
-        4 => IrWidth::W4,
-        8 => IrWidth::W8,
-        _ => panic!("unsupported discriminant size: {size}"),
-    }
-}

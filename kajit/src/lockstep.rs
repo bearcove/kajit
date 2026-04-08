@@ -299,7 +299,7 @@ impl<D: JitDebugger> LockstepSession<D> {
                 .join(", ")
         );
 
-        let mut interpreter = kajit_mir::DebuggerSession::new(program, input, &args)
+        let interpreter = kajit_mir::DebuggerSession::new(program, input, &args)
             .map_err(|e| DebugError::LldbError(format!("interpreter init: {e}")))?;
 
         let op_to_line = build_op_to_line_map(program, backend_debug_info);
@@ -1097,19 +1097,6 @@ fn step_to_next_mapped_line(
     Err(DebugError::LldbError(format!(
         "instruction stepping did not leave mapped line {start_line}"
     )))
-}
-
-fn read_u64(debugger: &dyn JitDebugger, addr: u64) -> Result<u64, DebugError> {
-    let bytes = debugger.read_memory(addr, 8)?;
-    if bytes.len() != 8 {
-        return Err(DebugError::LldbError(format!(
-            "short read at 0x{addr:x}: expected 8 bytes, got {}",
-            bytes.len()
-        )));
-    }
-    let mut raw = [0u8; 8];
-    raw.copy_from_slice(&bytes);
-    Ok(u64::from_le_bytes(raw))
 }
 
 fn should_skip_fused_compare_value_check(

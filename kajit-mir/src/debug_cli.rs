@@ -266,7 +266,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::{DebugCfgMirCommand, run_debug_cfg_mir_command};
     use crate::cfg_mir;
-    use kajit_ir::{LambdaId, VReg, Width};
+    use kajit_ir::{LambdaId, VReg};
     use kajit_lir::LinearOp;
 
     fn v(index: u32) -> VReg {

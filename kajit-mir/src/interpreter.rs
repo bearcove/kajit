@@ -1908,7 +1908,7 @@ fn apply_edge_with_event_trace(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{LambdaId, VReg, Width};
+    use kajit_ir::{LambdaId, VReg};
 
     fn v(index: u32) -> VReg {
         VReg::new(index)
