@@ -1,1 +1,1 @@
-pub use kajit_mir_text::*;
+pub use kajit_reprs::mir::parse::*;

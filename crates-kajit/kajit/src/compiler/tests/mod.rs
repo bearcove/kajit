@@ -3,7 +3,7 @@ use facet::Shape;
 use facet_testhelpers::test;
 use kafe::instantiated_shape_symbol_key;
 use kajit_hir as hir;
-use kajit_hir_text::parse_hir;
+use kajit_reprs::hir::parse::parse_hir;
 use serde::Serialize;
 
 use super::{

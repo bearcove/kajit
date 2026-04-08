@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 #[cfg(feature = "lldb")]
 use kajit::lockstep::{JitDebugger, LockstepSession, LockstepSessionStatus};
-#[cfg(feature = "lldb")]
-use kajit_hir_text::parse_hir;
 use kajit_mir::ir::BlockId;
 use kajit_mir::{DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
+#[cfg(feature = "lldb")]
+use kajit_reprs::hir::parse::parse_hir;
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::mcp_server::{McpServerOptions, ServerHandler, server_runtime};
 use rust_mcp_sdk::schema::{
@@ -437,7 +437,8 @@ impl MirHandler {
             .map_err(|e| format!("failed to read {mir_path}: {e}"))?;
         let input_hex = arg_opt_str(args, "input_hex").unwrap_or_default();
         let input = parse_hex_input(&input_hex)?;
-        let program = kajit_mir_text::parse_cfg_mir(&mir_text).map_err(|e| e.to_string())?;
+        let program =
+            kajit_reprs::mir::parse::parse_cfg_mir(&mir_text).map_err(|e| e.to_string())?;
         let args = kajit_types::Arguments::new();
         let session = DebuggerSession::new(&program, &args).map_err(|e| e.to_string())?;
 

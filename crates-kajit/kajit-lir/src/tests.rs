@@ -357,7 +357,7 @@ lambda @0 (shape: "test") {
 }
 "#;
     let registry = kajit_ir::IntrinsicRegistry::empty();
-    let mut func = kajit_ir_text::parse_ir(input, &registry).unwrap();
+    let mut func = kajit_reprs::ir::parse::parse_ir(input, &registry).unwrap();
     kajit_ir::slot2reg::slot_to_reg(&mut func);
     let _ir = linearize(&mut func);
 }
@@ -406,6 +406,6 @@ lambda @0 (shape: "test") {
 }
 "#;
     let registry = kajit_ir::IntrinsicRegistry::empty();
-    let mut func = kajit_ir_text::parse_ir(input, &registry).unwrap();
+    let mut func = kajit_reprs::ir::parse::parse_ir(input, &registry).unwrap();
     let _ir = linearize(&mut func);
 }

@@ -1,1 +1,1 @@
-pub use kajit_ir_text::*;
+pub use kajit_reprs::ir::parse::*;

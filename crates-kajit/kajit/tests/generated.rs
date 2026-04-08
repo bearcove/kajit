@@ -453,7 +453,7 @@ where
         std::process::exit(1);
     });
     let registry = kajit::symbol_registry_for_shape(T::SHAPE);
-    let program = kajit_mir_text::parse_cfg_mir_with_registry(&cfg_mir_text, &registry)
+    let program = kajit_reprs::mir::parse::parse_cfg_mir_with_registry(&cfg_mir_text, &registry)
         .unwrap_or_else(|err| {
             eprintln!("failed to parse CFG-MIR from {}: {err}", path.display());
             std::process::exit(1);

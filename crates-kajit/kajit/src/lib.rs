@@ -104,7 +104,7 @@ pub fn compile_decoder_from_cfg_mir_text(
     registry: &ir::IntrinsicRegistry,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
-    let cfg_program = kajit_mir_text::parse_cfg_mir_with_registry(cfg_mir_text, registry)
+    let cfg_program = kajit_reprs::mir::parse::parse_cfg_mir_with_registry(cfg_mir_text, registry)
         .expect("CFG-MIR text should parse");
     compiler::compile_cfg_mir_decoder_with_registry(
         &cfg_program,

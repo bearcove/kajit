@@ -183,7 +183,7 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
         std::process::exit(1);
     });
 
-    let program = kajit_mir_text::parse_cfg_mir(&mir_text).unwrap_or_else(|e| {
+    let program = kajit_reprs::mir::parse::parse_cfg_mir(&mir_text).unwrap_or_else(|e| {
         eprintln!("error: failed to parse CFG-MIR: {e}");
         std::process::exit(1);
     });
@@ -251,7 +251,7 @@ fn cmd_compile_file(path: &str, stages: &str) {
 
     match ext {
         "vixen-hir" => {
-            let module = kajit_hir_text::parse_hir(&source).unwrap_or_else(|e| {
+            let module = kajit_reprs::hir::parse::parse_hir(&source).unwrap_or_else(|e| {
                 eprintln!("error: failed to parse HIR: {e}");
                 std::process::exit(1);
             });
@@ -480,7 +480,7 @@ fn cmd_compile(format: &str, ty: &str, stages: &str, input_hex: Option<&str>) {
         eprint!("  [1/3] rvsdg interpreter... ");
         let ir_text = &artifacts.ir_opt_timeline[0].1;
         let ir_registry = kajit::symbol_registry_for_shape(shape);
-        match kajit_ir_text::parse_ir(ir_text, &ir_registry) {
+        match kajit_reprs::ir::parse::parse_ir(ir_text, &ir_registry) {
             Ok(ir_func) => {
                 let input_clone = input.clone();
                 let handle = std::thread::spawn(move || {
@@ -735,7 +735,7 @@ fn cmd_reduce_ir(format: &str, ty: &str, spec: &str) {
 
     // Parse the initial (pre-optimization) IR from the timeline.
     let initial_ir_text = &artifacts.ir_opt_timeline[0].1;
-    let func = kajit_ir_text::parse_ir(initial_ir_text, &registry).unwrap_or_else(|e| {
+    let func = kajit_reprs::ir::parse::parse_ir(initial_ir_text, &registry).unwrap_or_else(|e| {
         eprintln!("error: failed to parse initial IR: {e}");
         std::process::exit(1);
     });
@@ -780,7 +780,7 @@ fn cmd_reduce_ir(format: &str, ty: &str, spec: &str) {
     let is_interesting = move |func: &kajit_ir::IrFunc| -> bool {
         // Clone via text round-trip for the pass run (don't mutate the candidate).
         let text = format!("{}", func.display_with_registry(&reg1));
-        let mut test_func = match kajit_ir_text::parse_ir(&text, &reg1) {
+        let mut test_func = match kajit_reprs::ir::parse::parse_ir(&text, &reg1) {
             Ok(f) => f,
             Err(_) => return false,
         };
@@ -813,7 +813,7 @@ fn cmd_reduce_ir(format: &str, ty: &str, spec: &str) {
     let reg3 = registry.clone();
     let compact_fn = move |func: &kajit_ir::IrFunc| -> kajit_ir::IrFunc {
         let text = format!("{}", func.display_with_registry(&reg3));
-        kajit_ir_text::parse_ir(&text, &reg3).expect("compact round-trip failed")
+        kajit_reprs::ir::parse::parse_ir(&text, &reg3).expect("compact round-trip failed")
     };
 
     let (reduced, stats) = kajit_ir::reduce::reduce_ir(&func, &is_interesting, Some(&compact_fn));
@@ -843,7 +843,7 @@ fn cmd_reduce_hir(path: &str) {
         std::process::exit(1);
     });
 
-    let module = kajit_hir_text::parse_hir(&source).unwrap_or_else(|e| {
+    let module = kajit_reprs::hir::parse::parse_hir(&source).unwrap_or_else(|e| {
         eprintln!("error: failed to parse HIR: {e}");
         std::process::exit(1);
     });
@@ -872,7 +872,7 @@ fn cmd_reduce_hir(path: &str) {
             remove_stmt_at_path(&mut func.body, &paths[path_idx]);
             // Re-serialize and re-parse to validate
             let text = candidate.to_string();
-            let Ok(reparsed) = kajit_hir_text::parse_hir(&text) else {
+            let Ok(reparsed) = kajit_reprs::hir::parse::parse_hir(&text) else {
                 continue;
             };
             if hir_compile_panics_with_ssa(&reparsed) {

@@ -60,15 +60,15 @@ pub fn load_alt_decoder(
 ) -> Option<AltDecoder> {
     let path = alt_asm_path(group, format);
     let text = std::fs::read_to_string(&path).ok()?;
-    let program = kajit_emit_text::parse_asm(&text).ok()?;
+    let program = kajit_reprs::asm::parse::parse_asm(&text).ok()?;
 
     // Expand pseudo-instructions (like load_extern)
-    let expanded = kajit_emit_text::expand_pseudo_instructions(program, |symbol| {
+    let expanded = kajit_reprs::asm::parse::expand_pseudo_instructions(program, |symbol| {
         intrinsic_registry.address_of_name(symbol)
     });
 
     // Assemble to executable code
-    let buf = kajit_emit_text::assemble(&expanded).ok()?;
+    let buf = kajit_asm::assemble(&expanded).ok()?;
 
     let func = buf.code_ptr();
 

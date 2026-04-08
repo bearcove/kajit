@@ -278,7 +278,7 @@ fn debug_cfg_mir_locally(parsed: &DebugCfgMirArgs) -> Result<String, String> {
     let text = fs::read_to_string(&parsed.path)
         .map_err(|err| format!("failed to read {}: {err}", parsed.path))?;
     let registry = kajit::known_intrinsic_registry();
-    let program = kajit_mir_text::parse_cfg_mir_with_registry(&text, &registry).map_err(|err| {
+    let program = kajit_reprs::mir::parse::parse_cfg_mir_with_registry(&text, &registry).map_err(|err| {
         format!(
             "failed to parse CFG-MIR from {}: {err}\nIf this file contains shape-derived symbols, rerun with --corpus-test <exact-corpus-test-name>.",
             parsed.path
