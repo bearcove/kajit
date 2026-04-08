@@ -1,3 +1,4 @@
+use chumsky::prelude::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenSpec {
     pub name: &'static str,
@@ -89,15 +90,15 @@ pub const REPR_FILE_EXT: &str = ".vixen-hir";
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
 pub const REPR_ROUND_TRIP: &str = "canonical-print";
 pub const REPR_PROVENANCE: &str = "required";
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BinaryOp;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DocBlock(pub Vec<String>);
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GenericParam;
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Literal;
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Literal(pub String);
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LocalKind;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Span {
@@ -111,9 +112,9 @@ pub struct Prov {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Symbol(pub String);
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Type;
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Type(pub String);
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TypeDefKind;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
@@ -394,6 +395,162 @@ pub fn walk_stmt_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Stmt) {
     }
 }
 pub fn walk_type_def_mut<V: ?Sized + VisitMut>(_v: &mut V, _node: &mut TypeDef) {}
+type ParseExtra<'src> = extra::Err<Rich<'src, char>>;
+fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {
+    any().filter(|c: &char| c.is_whitespace()).repeated().ignored()
+}
+fn ident_token<'src>() -> impl Parser<
+    'src,
+    &'src str,
+    String,
+    ParseExtra<'src>,
+> + Clone {
+    text::ident::<_, ParseExtra<'src>>().map(str::to_owned).padded_by(ws())
+}
+fn symbol_token<'src>() -> impl Parser<
+    'src,
+    &'src str,
+    String,
+    ParseExtra<'src>,
+> + Clone {
+    just('@')
+        .then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))
+        .then(
+            just('.')
+                .ignore_then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .map(|((_, head), tail)| {
+            let mut out = format!("@{head}");
+            for part in tail {
+                out.push('.');
+                out.push_str(&part);
+            }
+            out
+        })
+        .padded_by(ws())
+}
+fn int_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {
+    text::int::<_, ParseExtra<'src>>(10).map(str::to_owned).padded_by(ws())
+}
+pub fn parse_module_text(source: &str) -> Result<Module, String> {
+    let param_parser = (((ident_token().map(Symbol)).then_ignore(just(":").padded()))
+        .then(ident_token().map(Type)))
+        .map(|(name, ty)| Param {
+            name: name,
+            prov: Prov::default(),
+            ty: ty,
+        })
+        .boxed();
+    let expr_parser = recursive(|expr_parser| {
+        choice((
+                (ident_token().map(Symbol))
+                    .map(|name| Expr::Local {
+                        name: name,
+                        prov: Prov::default(),
+                    }),
+                (int_token().map(Literal))
+                    .map(|value| Expr::Literal {
+                        prov: Prov::default(),
+                        value: value,
+                    }),
+                (((((just("call").padded()).ignore_then(symbol_token().map(Symbol)))
+                    .then_ignore(just("(").padded()))
+                    .then(
+                        (expr_parser.clone())
+                            .separated_by(just(",").padded())
+                            .allow_trailing()
+                            .collect::<Vec<_>>(),
+                    ))
+                    .then_ignore(just(")").padded()))
+                    .map(|(callee, args)| Expr::Call {
+                        args: args,
+                        callee: callee,
+                        prov: Prov::default(),
+                    }),
+            ))
+            .boxed()
+    });
+    let stmt_parser = choice((
+            ((just("return").padded())
+                .ignore_then(((expr_parser.clone()).map(Box::new)).or_not()))
+                .map(|value| Stmt::Return {
+                    prov: Prov::default(),
+                    value: value,
+                }),
+            ((expr_parser.clone()).map(Box::new))
+                .map(|value| Stmt::Expr {
+                    prov: Prov::default(),
+                    value: value,
+                }),
+        ))
+        .boxed();
+    let block_parser = (((just("{").padded())
+        .ignore_then((stmt_parser.clone()).repeated().collect::<Vec<_>>()))
+        .then_ignore(just("}").padded()))
+        .map(|statements| Block {
+            prov: Prov::default(),
+            statements: statements,
+        })
+        .boxed();
+    let function_parser = ((((((((just("fn").padded())
+        .ignore_then(ident_token().map(Symbol)))
+        .then_ignore(just("(").padded()))
+        .then(
+            (param_parser.clone())
+                .separated_by(just(",").padded())
+                .allow_trailing()
+                .collect::<Vec<_>>(),
+        ))
+        .then_ignore(just(")").padded()))
+        .then_ignore(just("->").padded()))
+        .then(ident_token().map(Type)))
+        .then((block_parser.clone()).map(Box::new)))
+        .map(|(((name, params), return_type), body)| Function {
+            body: body,
+            docs: None,
+            locals: Vec::new(),
+            name: name,
+            params: params,
+            prov: Prov::default(),
+            return_type: return_type,
+        })
+        .boxed();
+    let module_parser = (((just("module").padded())
+        .ignore_then(
+            (just("{").padded())
+                .ignore_then((function_parser.clone()).repeated().collect::<Vec<_>>()),
+        ))
+        .then_ignore(just("}").padded()))
+        .map(|functions| Module {
+            docs: None,
+            functions: functions,
+            type_defs: Vec::new(),
+        })
+        .boxed();
+    module_parser
+        .then_ignore(end())
+        .parse(source)
+        .into_result()
+        .map_err(|errs| crate::format_rich_errors(source, errs))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parse_module_smoke() {
+        let module = parse_module_text("module { fn main() -> Value { return } }")
+            .unwrap();
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].name, Symbol("main".to_owned()));
+        assert_eq!(module.functions[0].return_type, Type("Value".to_owned()));
+        assert!(
+            matches!(module.functions[0].body.statements.as_slice(), [Stmt::Return {
+            value : None, .. }])
+        );
+    }
+}
 pub static TOKENS: &[TokenSpec] = &[
     TokenSpec {
         name: "ident",

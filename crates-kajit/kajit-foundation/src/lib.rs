@@ -96,59 +96,44 @@ enum TokenExpr {
         #[facet(tag)]
         name: Option<String>,
         #[facet(content)]
-        content: Option<ExprPayload>,
+        content: Option<Vec<String>>,
     },
 }
 
 #[derive(Facet, Debug)]
 #[allow(dead_code)]
+#[facet(rename_all = "lowercase")]
 #[repr(u8)]
 enum RuleExpr {
-    #[facet(other)]
-    Form {
-        #[facet(tag)]
-        tag: Option<String>,
-        #[facet(content)]
-        content: Option<ExprPayload>,
-    },
-}
-
-#[derive(Facet, Debug)]
-#[allow(dead_code)]
-#[facet(untagged)]
-#[repr(u8)]
-enum ExprPayload {
-    Scalar(String),
     Seq(Vec<RuleExpr>),
+    Choice(Vec<RuleExpr>),
+    Field(RuleNamed),
+    Variant(RuleNamed),
+    Ref(Vec<String>),
+    Token(Vec<String>),
+    Optional(Vec<RuleExpr>),
+    Repeat(Vec<RuleExpr>),
     #[facet(other)]
-    Other {
-        #[facet(tag)]
-        name: Option<String>,
-        #[facet(content)]
-        content: Option<Box<ExprPayload>>,
-    },
+    Literal(Option<String>),
 }
 
 #[derive(Facet, Debug)]
 #[allow(dead_code)]
+#[repr(transparent)]
+struct RuleNamed((String, Box<RuleExpr>));
+
+#[derive(Facet, Debug)]
+#[allow(dead_code)]
+#[facet(rename_all = "lowercase")]
 #[repr(u8)]
 enum TypeUse {
-    #[facet(other)]
-    Form {
-        #[facet(tag)]
-        tag: Option<String>,
-        #[facet(content)]
-        content: Option<TypeUsePayload>,
-    },
-}
-
-#[derive(Facet, Debug)]
-#[allow(dead_code)]
-#[facet(untagged)]
-#[repr(u8)]
-enum TypeUsePayload {
-    Scalar(String),
+    Optional(Vec<TypeUse>),
     Seq(Vec<TypeUse>),
+    #[facet(other)]
+    Ref {
+        #[facet(tag)]
+        name: Option<String>,
+    },
 }
 
 #[derive(Facet, Debug)]
@@ -164,7 +149,7 @@ enum NodeDecl {
         #[facet(tag)]
         tag: Option<String>,
         #[facet(content)]
-        content: Option<TypeUsePayload>,
+        content: Option<Vec<TypeUse>>,
     },
 }
 
@@ -337,9 +322,7 @@ fn expect_tagged_rule(
         ));
     };
 
-    let actual_tag = match rule {
-        RuleExpr::Form { tag, .. } => tag.as_deref().unwrap_or("literal"),
-    };
+    let actual_tag = rule_expr_kind(rule);
 
     if actual_tag != expected_tag {
         return Err(format!(
@@ -349,6 +332,20 @@ fn expect_tagged_rule(
     }
 
     Ok(())
+}
+
+fn rule_expr_kind(rule: &RuleExpr) -> &'static str {
+    match rule {
+        RuleExpr::Seq(_) => "seq",
+        RuleExpr::Choice(_) => "choice",
+        RuleExpr::Field(_) => "field",
+        RuleExpr::Variant(_) => "variant",
+        RuleExpr::Ref(_) => "ref",
+        RuleExpr::Token(_) => "token",
+        RuleExpr::Optional(_) => "optional",
+        RuleExpr::Repeat(_) => "repeat",
+        RuleExpr::Literal(_) => "literal",
+    }
 }
 
 fn rust_ident(name: &str) -> String {
@@ -362,41 +359,42 @@ fn rust_ident(name: &str) -> String {
 }
 
 fn collect_type_tags(ty: &TypeUse, out: &mut Vec<String>) {
-    let TypeUse::Form { tag, content } = ty;
-    if let Some(tag) = tag {
-        out.push(tag.clone());
-    }
-    if let Some(TypeUsePayload::Seq(items)) = content {
-        for item in items {
-            collect_type_tags(item, out);
+    match ty {
+        TypeUse::Ref { name: Some(tag) } => out.push(tag.clone()),
+        TypeUse::Ref { name: None } => {}
+        TypeUse::Optional(items) | TypeUse::Seq(items) => {
+            for item in items {
+                collect_type_tags(item, out);
+            }
         }
     }
 }
 
 fn render_type_use(ty: &TypeUse, node_names: &[String], box_node_refs: bool) -> String {
-    let TypeUse::Form { tag, content } = ty;
-    match (tag.as_deref(), content) {
-        (Some("optional"), Some(TypeUsePayload::Seq(items))) if items.len() == 1 => {
+    match ty {
+        TypeUse::Optional(items) if items.len() == 1 => {
             format!("Option<{}>", render_type_use(&items[0], node_names, true))
         }
-        (Some("seq"), Some(TypeUsePayload::Seq(items))) if items.len() == 1 => {
+        TypeUse::Seq(items) if items.len() == 1 => {
             format!("Vec<{}>", render_type_use(&items[0], node_names, false))
         }
-        (Some(tag), _) => {
+        TypeUse::Ref { name: Some(tag) } => {
             if box_node_refs && node_names.iter().any(|name| name == tag) {
                 format!("Box<{tag}>")
             } else {
                 tag.to_owned()
             }
         }
-        (None, Some(TypeUsePayload::Scalar(_))) => "String".to_owned(),
+        TypeUse::Ref { name: None } => "String".to_owned(),
         _ => "UnsupportedTypeUse".to_owned(),
     }
 }
 
 fn type_use_tag(ty: &TypeUse) -> Option<&str> {
-    let TypeUse::Form { tag, .. } = ty;
-    tag.as_deref()
+    match ty {
+        TypeUse::Ref { name: Some(tag) } => Some(tag.as_str()),
+        _ => None,
+    }
 }
 
 fn node_fields_have_prov(fields: &NodeFields, provenance_tag: &str) -> bool {
@@ -404,6 +402,468 @@ fn node_fields_have_prov(fields: &NodeFields, provenance_tag: &str) -> bool {
         .fields
         .get("prov")
         .is_some_and(|ty| type_use_tag(ty) == Some(provenance_tag))
+}
+
+fn rule_named_parts(named: &RuleNamed) -> (&str, &RuleExpr) {
+    (named.0.0.as_str(), &named.0.1)
+}
+
+fn rule_literal_text(rule: &RuleExpr) -> Option<&str> {
+    match rule {
+        RuleExpr::Literal(Some(text)) => Some(text.as_str()),
+        _ => None,
+    }
+}
+
+fn rule_ref_name(rule: &RuleExpr) -> Option<&str> {
+    match rule {
+        RuleExpr::Ref(names) if names.len() == 1 => Some(names[0].as_str()),
+        _ => None,
+    }
+}
+
+fn rule_token_name(rule: &RuleExpr) -> Option<&str> {
+    match rule {
+        RuleExpr::Token(names) if names.len() == 1 => Some(names[0].as_str()),
+        _ => None,
+    }
+}
+
+fn rule_repeat_parts(rule: &RuleExpr) -> Option<(&RuleExpr, Option<&str>)> {
+    match rule {
+        RuleExpr::Repeat(items) if !items.is_empty() => {
+            let sep = if items.len() >= 3 && rule_literal_text(&items[1]) == Some("sep=") {
+                rule_literal_text(&items[2])
+            } else {
+                None
+            };
+            Some((&items[0], sep))
+        }
+        _ => None,
+    }
+}
+
+fn inner_type_use(ty: &TypeUse) -> Option<&TypeUse> {
+    match ty {
+        TypeUse::Optional(items) | TypeUse::Seq(items) if items.len() == 1 => Some(&items[0]),
+        _ => None,
+    }
+}
+
+fn render_default_value(ty: &TypeUse, provenance_tag: &str) -> String {
+    match ty {
+        TypeUse::Optional(_) => "None".to_owned(),
+        TypeUse::Seq(_) => "Vec::new()".to_owned(),
+        TypeUse::Ref { name: Some(tag) } if tag == provenance_tag => {
+            format!("{provenance_tag}::default()")
+        }
+        TypeUse::Ref { name: Some(tag) } => format!("{tag}::default()"),
+        TypeUse::Ref { name: None } => "String::new()".to_owned(),
+    }
+}
+
+fn render_token_value_parser(token_name: &str, ty: &TypeUse) -> Result<String, String> {
+    let parser = match (token_name, type_use_tag(ty)) {
+        ("ident", Some("Symbol")) => "ident_token().map(Symbol)".to_owned(),
+        ("ident", Some("Type")) => "ident_token().map(Type)".to_owned(),
+        ("ident", None) => "ident_token()".to_owned(),
+        ("symbol", Some("Symbol")) => "symbol_token().map(Symbol)".to_owned(),
+        ("symbol", None) => "symbol_token()".to_owned(),
+        ("int", Some("Literal")) => "int_token().map(Literal)".to_owned(),
+        ("int", None) => "int_token()".to_owned(),
+        _ => {
+            return Err(format!(
+                "unsupported token parser mapping for token {token_name:?} and type {:?}",
+                type_use_tag(ty)
+            ));
+        }
+    };
+    Ok(parser)
+}
+
+fn render_ref_value_parser(
+    ref_name: &str,
+    ty: &TypeUse,
+    rule_names: &[String],
+    node_names: &[String],
+    box_node_refs: bool,
+) -> Result<String, String> {
+    let base = if rule_names.iter().any(|name| name == ref_name) {
+        format!("{}_parser.clone()", snake_case(ref_name))
+    } else {
+        match ref_name {
+            "Type" => "ident_token().map(Type)".to_owned(),
+            _ => return Err(format!("unsupported reference parser for {ref_name:?}")),
+        }
+    };
+
+    let parser = match ty {
+        TypeUse::Ref { name: Some(tag) }
+            if box_node_refs && node_names.iter().any(|name| name == tag) =>
+        {
+            format!("({base}).map(Box::new)")
+        }
+        TypeUse::Ref { .. } => base,
+        _ => base,
+    };
+    Ok(parser)
+}
+
+fn render_value_parser(
+    rule: &RuleExpr,
+    ty: &TypeUse,
+    rule_names: &[String],
+    node_names: &[String],
+    box_node_refs: bool,
+) -> Result<String, String> {
+    match rule {
+        RuleExpr::Token(_) => render_token_value_parser(
+            rule_token_name(rule).ok_or_else(|| "malformed token rule".to_owned())?,
+            ty,
+        ),
+        RuleExpr::Ref(_) => render_ref_value_parser(
+            rule_ref_name(rule).ok_or_else(|| "malformed ref rule".to_owned())?,
+            ty,
+            rule_names,
+            node_names,
+            box_node_refs,
+        ),
+        RuleExpr::Optional(items) if items.len() == 1 => {
+            let inner_ty =
+                inner_type_use(ty).ok_or_else(|| "optional rule without optional type".to_owned())?;
+            let inner = render_value_parser(&items[0], inner_ty, rule_names, node_names, true)?;
+            Ok(format!("({inner}).or_not()"))
+        }
+        RuleExpr::Repeat(_) => {
+            let (inner_rule, sep) =
+                rule_repeat_parts(rule).ok_or_else(|| "malformed repeat rule".to_owned())?;
+            let inner_ty =
+                inner_type_use(ty).ok_or_else(|| "repeat rule without seq type".to_owned())?;
+            let inner =
+                render_value_parser(inner_rule, inner_ty, rule_names, node_names, false)?;
+            Ok(if let Some(sep) = sep {
+                format!(
+                    "({inner}).separated_by(just({sep:?}).padded()).allow_trailing().collect::<Vec<_>>()"
+                )
+            } else {
+                format!("({inner}).repeated().collect::<Vec<_>>()")
+            })
+        }
+        _ => Err(format!(
+            "unsupported value rule kind for field type {:?}: {:?}",
+            type_use_tag(ty),
+            rule
+        )),
+    }
+}
+
+enum SeqItem {
+    Ignore(String),
+    Bind { name: String, parser: String },
+}
+
+fn flatten_struct_rule_items(
+    rule: &RuleExpr,
+    fields: &NodeFields,
+    rule_names: &[String],
+    node_names: &[String],
+) -> Result<Vec<SeqItem>, String> {
+    match rule {
+        RuleExpr::Seq(items) => {
+            let mut out = Vec::new();
+            for item in items {
+                out.extend(flatten_struct_rule_items(item, fields, rule_names, node_names)?);
+            }
+            Ok(out)
+        }
+        RuleExpr::Field(named) => {
+            let (field_name, inner) = rule_named_parts(named);
+            let ty = fields
+                .fields
+                .get(field_name)
+                .ok_or_else(|| format!("schema node field {field_name:?} not found"))?;
+            let parser = render_value_parser(inner, ty, rule_names, node_names, true)?;
+            Ok(vec![SeqItem::Bind {
+                name: field_name.to_owned(),
+                parser,
+            }])
+        }
+        RuleExpr::Literal(Some(text)) => Ok(vec![SeqItem::Ignore(format!(
+            "just({text:?}).padded()"
+        ))]),
+        _ => Err(format!("unsupported struct rule shape: {rule:?}")),
+    }
+}
+
+fn nested_tuple_pattern(names: &[String]) -> String {
+    let mut iter = names.iter();
+    let Some(first) = iter.next() else {
+        return "()".to_owned();
+    };
+    let mut out = first.clone();
+    for name in iter {
+        out = format!("({out}, {name})");
+    }
+    out
+}
+
+fn render_binding_chain(items: &[SeqItem]) -> Result<(String, Vec<String>), String> {
+    let mut expr: Option<String> = None;
+    let mut pending_ignores = Vec::new();
+    let mut names = Vec::new();
+
+    for item in items {
+        match item {
+            SeqItem::Ignore(ignore) => {
+                if let Some(current) = expr.take() {
+                    expr = Some(format!("({current}).then_ignore({ignore})"));
+                } else {
+                    pending_ignores.push(ignore.clone());
+                }
+            }
+            SeqItem::Bind { name, parser } => {
+                let mut field_expr = parser.clone();
+                for ignore in pending_ignores.drain(..).rev() {
+                    field_expr = format!("({ignore}).ignore_then({field_expr})");
+                }
+                expr = Some(match expr {
+                    Some(current) => format!("({current}).then({field_expr})"),
+                    None => field_expr,
+                });
+                names.push(rust_ident(name));
+            }
+        }
+    }
+
+    if !pending_ignores.is_empty() {
+        let mut ignored = pending_ignores[0].clone();
+        for ignore in pending_ignores.iter().skip(1) {
+            ignored = format!("({ignored}).ignore_then({ignore})");
+        }
+        expr = Some(match expr {
+            Some(current) => format!("({current}).then_ignore({ignored})"),
+            None => format!("({ignored}).to(())"),
+        });
+    }
+
+    let expr = expr.ok_or_else(|| "cannot build empty binding chain".to_owned())?;
+    Ok((expr, names))
+}
+
+fn render_struct_parser_expr(
+    type_name: &str,
+    fields: &NodeFields,
+    rule: &RuleExpr,
+    rule_names: &[String],
+    node_names: &[String],
+    provenance_tag: &str,
+) -> Result<String, String> {
+    let items = flatten_struct_rule_items(rule, fields, rule_names, node_names)?;
+    let (chain, bound_names) = render_binding_chain(&items)?;
+    let bound_set = bound_names.iter().cloned().collect::<std::collections::BTreeSet<_>>();
+
+    let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+    field_names.sort();
+    let field_rows = field_names
+        .iter()
+        .map(|field_name| {
+            let ident = rust_ident(field_name);
+            let value = if bound_set.contains(&ident) {
+                ident.clone()
+            } else {
+                render_default_value(fields.fields.get(field_name).unwrap(), provenance_tag)
+            };
+            format!("{ident}: {value}")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let map = if bound_names.is_empty() {
+        format!(".map(|()| {type_name} {{ {field_rows} }})")
+    } else if bound_names.len() == 1 {
+        format!(".map(|{}| {type_name} {{ {field_rows} }})", bound_names[0])
+    } else {
+        format!(
+            ".map(|{}| {type_name} {{ {field_rows} }})",
+            nested_tuple_pattern(&bound_names)
+        )
+    };
+
+    Ok(format!("({chain}){map}.boxed()"))
+}
+
+fn render_enum_parser_expr(
+    enum_name: &str,
+    variants: &NodeVariants,
+    rule: &RuleExpr,
+    rule_names: &[String],
+    node_names: &[String],
+    provenance_tag: &str,
+) -> Result<String, String> {
+    let RuleExpr::Choice(items) = rule else {
+        return Err(format!("enum rule for {enum_name} must be choice"));
+    };
+
+    let mut variant_parsers = Vec::new();
+    for item in items {
+        let RuleExpr::Variant(named) = item else {
+            return Err(format!("enum rule for {enum_name} contains non-variant item"));
+        };
+        let (variant_name, inner_rule) = rule_named_parts(named);
+        let Some(NodeDecl::Struct(fields) | NodeDecl::Node(fields)) = variants.variants.get(variant_name) else {
+            return Err(format!(
+                "schema enum {enum_name} is missing variant declaration {variant_name:?}"
+            ));
+        };
+        let items = flatten_struct_rule_items(inner_rule, fields, rule_names, node_names)?;
+        let (chain, bound_names) = render_binding_chain(&items)?;
+        let bound_set = bound_names.iter().cloned().collect::<std::collections::BTreeSet<_>>();
+        let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+        field_names.sort();
+        let field_rows = field_names
+            .iter()
+            .map(|field_name| {
+                let ident = rust_ident(field_name);
+                let value = if bound_set.contains(&ident) {
+                    ident.clone()
+                } else {
+                    render_default_value(fields.fields.get(field_name).unwrap(), provenance_tag)
+                };
+                format!("{ident}: {value}")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let parser = if bound_names.is_empty() {
+            format!("({chain}).map(|()| {enum_name}::{variant_name} {{ {field_rows} }})")
+        } else if bound_names.len() == 1 {
+            format!(
+                "({chain}).map(|{}| {enum_name}::{variant_name} {{ {field_rows} }})",
+                bound_names[0]
+            )
+        } else {
+            format!(
+                "({chain}).map(|{}| {enum_name}::{variant_name} {{ {field_rows} }})",
+                nested_tuple_pattern(&bound_names)
+            )
+        };
+        variant_parsers.push(parser);
+    }
+
+    Ok(format!("choice(({})).boxed()", variant_parsers.join(", ")))
+}
+
+fn render_rule_parser_expr(
+    rule_name: &str,
+    rule: &RuleExpr,
+    decl: &NodeDecl,
+    rule_names: &[String],
+    node_names: &[String],
+    provenance_tag: &str,
+) -> Result<String, String> {
+    match decl {
+        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
+            render_struct_parser_expr(rule_name, fields, rule, rule_names, node_names, provenance_tag)
+        }
+        NodeDecl::Enum(variants) => {
+            render_enum_parser_expr(rule_name, variants, rule, rule_names, node_names, provenance_tag)
+        }
+        NodeDecl::Other { .. } => Err(format!("unsupported node declaration for parser: {rule_name}")),
+    }
+}
+
+fn render_parser_block(
+    repr: &ReprBody,
+    node_names: &[String],
+    provenance_tag: &str,
+) -> Result<String, String> {
+    let rule_names = repr.syntax.rules.keys().cloned().collect::<Vec<_>>();
+    let parser_order = ["Param", "Expr", "Stmt", "Block", "Function", "Module"];
+
+    let parser_defs = parser_order
+        .iter()
+        .filter_map(|name| {
+            let rule = repr.syntax.rules.get(*name)?;
+            let decl = repr.nodes.as_ref()?.get(*name)?;
+            Some(render_rule_parser_expr(
+                name,
+                rule,
+                decl,
+                &rule_names,
+                node_names,
+                provenance_tag,
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if parser_defs.len() != parser_order.len() {
+        return Err("missing pilot parser rules or nodes".to_owned());
+    }
+
+    Ok(format!(
+        r#"
+type ParseExtra<'src> = extra::Err<Rich<'src, char>>;
+
+fn ws<'src>() -> impl Parser<'src, &'src str, (), ParseExtra<'src>> + Clone {{
+    any()
+        .filter(|c: &char| c.is_whitespace())
+        .repeated()
+        .ignored()
+}}
+
+fn ident_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {{
+    text::ident::<_, ParseExtra<'src>>()
+        .map(str::to_owned)
+        .padded_by(ws())
+}}
+
+fn symbol_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {{
+    just('@')
+        .then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))
+        .then(
+            just('.')
+                .ignore_then(text::ident::<_, ParseExtra<'src>>().map(str::to_owned))
+                .repeated()
+                .collect::<Vec<_>>()
+        )
+        .map(|((_, head), tail)| {{
+            let mut out = format!("@{{head}}");
+            for part in tail {{
+                out.push('.');
+                out.push_str(&part);
+            }}
+            out
+        }})
+        .padded_by(ws())
+}}
+
+fn int_token<'src>() -> impl Parser<'src, &'src str, String, ParseExtra<'src>> + Clone {{
+    text::int::<_, ParseExtra<'src>>(10)
+        .map(str::to_owned)
+        .padded_by(ws())
+}}
+
+pub fn parse_module_text(source: &str) -> Result<Module, String> {{
+    let param_parser = {param_parser};
+    let expr_parser = recursive(|expr_parser| {expr_parser_body});
+    let stmt_parser = {stmt_parser};
+    let block_parser = {block_parser};
+    let function_parser = {function_parser};
+    let module_parser = {module_parser};
+
+    module_parser
+        .then_ignore(end())
+        .parse(source)
+        .into_result()
+        .map_err(|errs| crate::format_rich_errors(source, errs))
+}}
+"#,
+        param_parser = parser_defs[0],
+        expr_parser_body = parser_defs[1],
+        stmt_parser = parser_defs[2],
+        block_parser = parser_defs[3],
+        function_parser = parser_defs[4],
+        module_parser = parser_defs[5],
+    ))
 }
 
 fn render_common_placeholder(tag: &str, common_names: &[String], repr: &ReprBody) -> String {
@@ -443,7 +903,10 @@ fn render_common_placeholder(tag: &str, common_names: &[String], repr: &ReprBody
                 "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct DocBlock(pub Vec<String>);\n{alias}"
             )
         }
-        _ => format!("#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {tag};"),
+        "Type" | "Literal" => {
+            format!("#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {tag}(pub String);")
+        }
+        _ => format!("#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {tag};"),
     }
 }
 
@@ -484,9 +947,8 @@ fn render_visit_calls(
     mutable: bool,
     borrowed: bool,
 ) -> Vec<String> {
-    let TypeUse::Form { tag, content } = ty;
-    match (tag.as_deref(), content) {
-        (Some("optional"), Some(TypeUsePayload::Seq(items))) if items.len() == 1 => {
+    match ty {
+        TypeUse::Optional(items) if items.len() == 1 => {
             let binding = if mutable {
                 if borrowed {
                     format!("if let Some(value) = {expr} {{")
@@ -508,7 +970,7 @@ fn render_visit_calls(
                 )]
             }
         }
-        (Some("seq"), Some(TypeUsePayload::Seq(items))) if items.len() == 1 => {
+        TypeUse::Seq(items) if items.len() == 1 => {
             let inner = render_visit_calls(&items[0], "value", node_names, mutable, true);
             if inner.is_empty() {
                 Vec::new()
@@ -520,7 +982,7 @@ fn render_visit_calls(
                 )]
             }
         }
-        (Some(tag), _) if node_names.iter().any(|name| name == tag) => {
+        TypeUse::Ref { name: Some(tag) } if node_names.iter().any(|name| name == tag) => {
             let method = snake_case(tag);
             if mutable && borrowed {
                 vec![format!("v.visit_{method}_mut({expr});")]
@@ -763,9 +1225,7 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
     let rule_rows = rule_names
         .iter()
         .map(|name| {
-            let kind = match repr.syntax.rules.get(name).unwrap() {
-                RuleExpr::Form { tag, .. } => tag.as_deref().unwrap_or("literal"),
-            };
+            let kind = rule_expr_kind(repr.syntax.rules.get(name).unwrap());
             format!("    RuleSpec {{ name: {name:?}, kind: {kind:?} }},")
         })
         .collect::<Vec<_>>()
@@ -775,7 +1235,7 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
         .iter()
         .map(|name| {
             let kind = match repr.common.as_ref().and_then(|common| common.get(name)) {
-                Some(TypeUse::Form { tag, .. }) => tag.as_deref().unwrap_or("scalar"),
+                Some(ty) => type_use_tag(ty).unwrap_or("scalar"),
                 None => "<missing>",
             };
             format!("    TypeUseSpec {{ name: {name:?}, kind: {kind:?} }},")
@@ -919,6 +1379,9 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
         .collect::<Vec<_>>()
         .join("\n");
 
+    let parser_rows =
+        render_parser_block(repr, &node_names, &provenance_tag).expect("parser block should render");
+
     let raw = format!(
         r###"
 // @generated by kajit-foundation::generate_repr_poc from {file_ext} schema {name}.
@@ -926,6 +1389,8 @@ fn render_hir_poc_module(repr: &ReprBody) -> String {
 //
 // This module is intentionally narrow: it exposes only data that is actually
 // derived from the pilot schema.
+
+use chumsky::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TokenSpec {{
@@ -985,6 +1450,22 @@ pub const REPR_PROVENANCE: &str = {provenance:?};
 
 {walk_mut_rows}
 
+{parser_rows}
+
+#[cfg(test)]
+mod tests {{
+    use super::*;
+
+    #[test]
+    fn parse_module_smoke() {{
+        let module = parse_module_text("module {{ fn main() -> Value {{ return }} }}").unwrap();
+        assert_eq!(module.functions.len(), 1);
+        assert_eq!(module.functions[0].name, Symbol("main".to_owned()));
+        assert_eq!(module.functions[0].return_type, Type("Value".to_owned()));
+        assert!(matches!(module.functions[0].body.statements.as_slice(), [Stmt::Return {{ value: None, .. }}]));
+    }}
+}}
+
 pub static TOKENS: &[TokenSpec] = &[
 {token_rows}
 ];
@@ -1017,6 +1498,7 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         visit_mut_trait_rows = visit_mut_trait_rows,
         walk_rows = walk_rows,
         walk_mut_rows = walk_mut_rows,
+        parser_rows = parser_rows,
         provenance_tag = provenance_tag,
         token_rows = token_rows,
         rule_rows = rule_rows,
