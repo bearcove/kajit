@@ -20,11 +20,21 @@ impl LldbJitDebugger {
     /// The dSYM bundle must be next to the executable (auto-discovered by LLDB).
     pub fn launch(harness_path: &str, input_hex: &str) -> Result<Self, DebugError> {
         configure_lldb_debugserver_path();
-        let init = SBDebugger::initialize_with_error_handling();
-        if !init.is_success() {
-            return Err(DebugError::LldbError(format!(
-                "failed to initialize LLDB: {init}"
-            )));
+
+        // Initialize LLDB exactly once. Multiple SBDebugger instances are fine,
+        // but initialize/terminate must be balanced. We initialize once and
+        // never terminate (process exit cleans up).
+        use std::sync::Once;
+        static LLDB_INIT: Once = Once::new();
+        let mut init_error = None;
+        LLDB_INIT.call_once(|| {
+            let init = SBDebugger::initialize_with_error_handling();
+            if !init.is_success() {
+                init_error = Some(format!("failed to initialize LLDB: {init}"));
+            }
+        });
+        if let Some(e) = init_error {
+            return Err(DebugError::LldbError(e));
         }
 
         let debugger = SBDebugger::create(false);
@@ -343,6 +353,8 @@ impl Drop for LldbJitDebugger {
         if self.process.is_alive() {
             let _ = self.process.kill();
         }
-        SBDebugger::terminate();
+        // Don't call SBDebugger::terminate() — we initialize once and let
+        // process exit handle cleanup. Calling terminate while other sessions
+        // are alive would tear down shared LLDB state.
     }
 }
