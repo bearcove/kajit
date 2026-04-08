@@ -1920,7 +1920,7 @@ fn state_json(state: &DebuggerState) -> JsonValue {
 fn format_state_markdown(state: &DebuggerState) -> String {
     let mut s = String::new();
     s.push_str(&format!(
-        "**b{}** inst={} {} | cursor={} | steps={}\n",
+        "**b{}** inst={} {} | steps={}\n",
         state.location.block.0,
         state.location.next_inst_index,
         if state.location.at_terminator {
@@ -1928,7 +1928,6 @@ fn format_state_markdown(state: &DebuggerState) -> String {
         } else {
             ""
         },
-        state.cursor,
         state.step_count,
     ));
     if let Some(trap) = &state.trap {
@@ -1976,8 +1975,8 @@ fn format_event_markdown(event: &StepEvent) -> String {
         format!("b{}", event.location_before.block.0)
     };
     s.push_str(&format!(
-        "#{} [{}] `{}` cursor={}",
-        event.step_index, arrow, event.detail, event.cursor_after,
+        "#{} [{}] `{}`",
+        event.step_index, arrow, event.detail,
     ));
     if let Some(trap) = &event.trap {
         s.push_str(&format!(" **TRAP {:?}**", trap.code));
@@ -2006,8 +2005,6 @@ fn event_json(event: &StepEvent) -> JsonValue {
             "next_inst_index": event.location_after.next_inst_index,
             "at_terminator": event.location_after.at_terminator,
         },
-        "cursor_before": event.cursor_before,
-        "cursor_after": event.cursor_after,
         "trap": trap,
         "returned": event.returned,
         "halted_after": event.halted_after,

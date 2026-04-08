@@ -209,7 +209,6 @@ fn cmd_eval(cfg_mir_path: &str, input_hex: &str) {
 
 fn print_interpreter_state(state: &kajit_mir::DebuggerState) {
     println!("steps: {}", state.step_count);
-    println!("cursor: {}", state.cursor);
     if let Some(trap) = &state.trap {
         println!("TRAP: {:?} at offset {}", trap.code, trap.offset);
     }

@@ -18,10 +18,23 @@ struct RuntimeDeserContext {
     trusted_utf8: bool,
 }
 
-// Safety: RuntimeDeserContext contains raw pointers that are only dereferenced
-// transiently during execute_call_intrinsic, while the DebuggerSession holds
-// &mut self. The pointers are re-synced from owned data before each use.
+#[repr(C)]
+struct RuntimeSliceU8 {
+    ptr: *const u8,
+    len: usize,
+}
+
+#[repr(C)]
+struct RuntimeCursorArg {
+    bytes: RuntimeSliceU8,
+    pos: u64,
+}
+
+// Safety: RuntimeDeserContext and RuntimeCursorArg contain raw pointers that
+// point into DebuggerSession-owned data (input_data, etc.). They are only
+// dereferenced while the session holds &mut self.
 unsafe impl Send for RuntimeDeserContext {}
+unsafe impl Send for RuntimeCursorArg {}
 
 #[repr(C)]
 struct RuntimeErrorSlot {
@@ -112,7 +125,6 @@ pub struct ProgramLocation {
 pub struct DebuggerState {
     pub step_count: usize,
     pub location: ProgramLocation,
-    pub cursor: usize,
     pub vregs: Vec<u64>,
     pub output: Vec<u8>,
     pub trap: Option<InterpreterTrap>,
@@ -133,8 +145,6 @@ pub struct StepEvent {
     pub kind: StepKind,
     pub location_before: ProgramLocation,
     pub location_after: ProgramLocation,
-    pub cursor_before: usize,
-    pub cursor_after: usize,
     pub trap: Option<InterpreterTrap>,
     pub returned: bool,
     pub halted_after: bool,
@@ -150,8 +160,6 @@ pub enum RunUntilTarget {
 
 #[derive(Debug, Clone)]
 struct SessionSnapshot {
-    cursor: usize,
-    output: Vec<u8>,
     slots: Vec<u8>,
     vregs: Vec<u64>,
     trap: Option<InterpreterTrap>,
@@ -164,9 +172,12 @@ struct SessionSnapshot {
 pub struct DebuggerSession {
     func: cfg_mir::Function,
     block_indices: HashMap<cfg_mir::BlockId, usize>,
-    input: Vec<u8>,
-    cursor: usize,
-    output: Vec<u8>,
+    /// Input data (kept alive so cursor_arg.bytes.ptr stays valid).
+    input_data: Vec<u8>,
+    /// Interpreter-owned output buffer, pointed to by data_args[1].
+    output_buf: Vec<u8>,
+    /// Interpreter-owned RuntimeCursorArg, pointed to by data_args[0].
+    cursor_arg: Box<RuntimeCursorArg>,
     /// Separate storage for slot values (not part of the output).
     slots: Vec<u8>,
     vregs: Vec<u64>,
@@ -178,7 +189,7 @@ pub struct DebuggerSession {
     history: Vec<SessionSnapshot>,
     /// Embedded constant data blobs (string literals, etc.).
     data_blobs: Vec<Vec<u8>>,
-    /// Runtime deserialization context, passed to intrinsics as ctx_ptr (data_args[1]).
+    /// Runtime deserialization context, passed to intrinsics as ctx_ptr.
     ctx: RuntimeDeserContext,
     /// External symbol resolution table.
     symbol_table: kajit_types::SymbolTable,
@@ -192,7 +203,7 @@ impl DebuggerSession {
     pub fn new(
         program: &cfg_mir::Program,
         input: &[u8],
-        args: &kajit_types::Arguments,
+        _args: &kajit_types::Arguments,
     ) -> Result<Self, DebuggerError> {
         let func = program
             .funcs
@@ -200,9 +211,18 @@ impl DebuggerSession {
             .ok_or(DebuggerError::NoFunctions)?
             .clone();
         let block_indices = build_block_index(&func);
+        let input_data = input.to_vec();
+        let output_buf = vec![0u8; infer_output_size(&func)];
+        let cursor_arg = Box::new(RuntimeCursorArg {
+            bytes: RuntimeSliceU8 {
+                ptr: input_data.as_ptr(),
+                len: input_data.len(),
+            },
+            pos: 0,
+        });
         let mut session = Self {
-            cursor: 0,
-            output: vec![0u8; infer_output_size(&func)],
+            output_buf,
+            cursor_arg,
             slots: Vec::new(),
             vregs: vec![0u64; program.vreg_count as usize],
             trap: None,
@@ -213,7 +233,7 @@ impl DebuggerSession {
             history: Vec::new(),
             func,
             block_indices,
-            input: input.to_vec(),
+            input_data,
             data_blobs: program.data_blobs.clone(),
             ctx: RuntimeDeserContext {
                 input_ptr: std::ptr::null(),
@@ -227,12 +247,25 @@ impl DebuggerSession {
             stack_allocs_info: program.stack_allocs.clone(),
             stack_allocs: Vec::new(),
         };
-        // Seed data_args vregs from caller-provided arguments.
-        let (gprs, _) = args.to_register_slots();
-        for (i, &val) in gprs.iter().enumerate() {
-            if let Some(&vreg) = session.func.data_args.get(i) {
-                session.write_vreg(vreg.index(), val);
-            }
+        // Initialize ctx with input pointers
+        session.ctx.input_ptr = session.input_data.as_ptr();
+        session.ctx.input_end =
+            unsafe { session.input_data.as_ptr().add(session.input_data.len()) };
+
+        // Set data_arg vregs to point to interpreter-owned allocations.
+        // HIR param order: [cursor, out, ctx]
+        let data_args = session.func.data_args.clone();
+        if let Some(&vreg) = data_args.get(0) {
+            let ptr = &*session.cursor_arg as *const RuntimeCursorArg as u64;
+            session.write_vreg(vreg.index(), ptr);
+        }
+        if let Some(&vreg) = data_args.get(1) {
+            let ptr = session.output_buf.as_ptr() as u64;
+            session.write_vreg(vreg.index(), ptr);
+        }
+        if let Some(&vreg) = data_args.get(2) {
+            let ptr = &session.ctx as *const RuntimeDeserContext as u64;
+            session.write_vreg(vreg.index(), ptr);
         }
         Ok(session)
     }
@@ -241,9 +274,8 @@ impl DebuggerSession {
         DebuggerState {
             step_count: self.steps,
             location: self.location(),
-            cursor: self.cursor,
             vregs: self.vregs.clone(),
-            output: self.output.clone(),
+            output: self.output_buf.clone(),
             trap: self.trap,
             returned: self.returned,
             halted: self.is_halted(),
@@ -255,24 +287,21 @@ impl DebuggerSession {
     }
 
     pub fn inspect_output(&self, start: usize, len: usize) -> Vec<u8> {
-        if start >= self.output.len() {
+        if start >= self.output_buf.len() {
             return Vec::new();
         }
-        let end = start.saturating_add(len).min(self.output.len());
-        self.output[start..end].to_vec()
+        let end = start.saturating_add(len).min(self.output_buf.len());
+        self.output_buf[start..end].to_vec()
     }
 
     pub fn step_forward(&mut self) -> Result<StepEvent, DebuggerError> {
         let location_before = self.location();
-        let cursor_before = self.cursor;
         if self.is_halted() {
             return Ok(StepEvent {
                 step_index: self.steps,
                 kind: StepKind::HaltedNoop,
                 location_before,
                 location_after: location_before,
-                cursor_before,
-                cursor_after: self.cursor,
                 trap: self.trap,
                 returned: self.returned,
                 halted_after: true,
@@ -326,8 +355,6 @@ impl DebuggerSession {
             kind: step_kind,
             location_before,
             location_after,
-            cursor_before,
-            cursor_after: self.cursor,
             trap: self.trap,
             returned: self.returned,
             halted_after: self.is_halted(),
@@ -402,8 +429,6 @@ impl DebuggerSession {
 
     fn snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
-            cursor: self.cursor,
-            output: self.output.clone(),
             slots: self.slots.clone(),
             vregs: self.vregs.clone(),
             trap: self.trap,
@@ -415,8 +440,6 @@ impl DebuggerSession {
     }
 
     fn restore(&mut self, snapshot: SessionSnapshot) {
-        self.cursor = snapshot.cursor;
-        self.output = snapshot.output;
         self.slots = snapshot.slots;
         self.vregs = snapshot.vregs;
         self.trap = snapshot.trap;
@@ -437,12 +460,6 @@ impl DebuggerSession {
         self.vregs[idx] = value;
     }
 
-    fn ensure_output_len(&mut self, len: usize) {
-        if self.output.len() < len {
-            self.output.resize(len, 0);
-        }
-    }
-
     fn ensure_slots_len(&mut self, len: usize) {
         if self.slots.len() < len {
             self.slots.resize(len, 0);
@@ -453,7 +470,7 @@ impl DebuggerSession {
         if self.trap.is_none() {
             self.trap = Some(InterpreterTrap {
                 code,
-                offset: self.cursor as u32,
+                offset: self.cursor_arg.pos as u32,
             });
         }
     }
@@ -566,28 +583,15 @@ impl DebuggerSession {
 
     /// Execute a call to an intrinsic function.
     ///
-    /// This creates a temporary DeserContext, calls the real C function, and
-    /// updates the interpreter's state from the context afterwards.
+    /// Calls the real C function with the vreg values as arguments.
+    /// The vregs already point to interpreter-owned memory (cursor, output, ctx).
     fn execute_call_intrinsic(
         &mut self,
         func_addr: usize,
         args: &[kajit_ir::VReg],
         dst: Option<kajit_ir::VReg>,
     ) -> Result<(), DebuggerError> {
-        // Collect arg values, translating debug addresses to host pointers.
-        let arg_values: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
-
-        // Sync cursor into self.ctx before calling the intrinsic.
-        self.ctx.input_ptr = unsafe { self.input.as_ptr().add(self.cursor) };
-        self.ctx.input_end = unsafe { self.input.as_ptr().add(self.input.len()) };
-        self.ctx.error.code = 0;
-        self.ctx.error.offset = 0;
-
-        // Replace args[0] (ctx_ptr vreg) with a pointer to self.ctx.
-        let mut call_args = arg_values;
-        if !call_args.is_empty() {
-            call_args[0] = &mut self.ctx as *mut RuntimeDeserContext as u64;
-        }
+        let call_args: Vec<u64> = args.iter().map(|v| self.read_vreg(v.index())).collect();
 
         let ret = unsafe {
             match call_args.len() {
@@ -632,10 +636,7 @@ impl DebuggerSession {
             }
         };
 
-        // Sync cursor back from self.ctx.
-        self.cursor = unsafe { self.ctx.input_ptr.offset_from(self.input.as_ptr()) as usize };
-
-        // Check for errors.
+        // Check for errors from ctx.
         if self.ctx.error.code != 0 {
             self.trap(error_code_from_u32(self.ctx.error.code));
         }
@@ -881,7 +882,7 @@ fn exec_binop(op: BinOpKind, lhs: u64, rhs: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use kajit_ir::{ErrorCode, LambdaId, VReg, Width};
+    use kajit_ir::{LambdaId, VReg};
     use kajit_lir::LinearOp;
 
     use crate::{DebuggerSession, cfg_mir};
