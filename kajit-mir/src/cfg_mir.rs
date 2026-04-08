@@ -10,8 +10,8 @@ use std::fmt;
 use std::ops::Range;
 
 use kajit_ir::{
-    Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, IntrinsicFn, IntrinsicRegistry,
-    LambdaId, VReg,
+    Arena, DebugScope, DebugScopeId, DebugValue, DebugValueId, FnPtr, IntrinsicRegistry, LambdaId,
+    VReg,
 };
 use kajit_lir::{LabelId, LinearIr, LinearOp};
 
@@ -1051,7 +1051,7 @@ impl fmt::Display for TerminatorDisplay<'_> {
 
 fn fmt_intrinsic(
     f: &mut fmt::Formatter<'_>,
-    func: IntrinsicFn,
+    func: FnPtr,
     registry: Option<&IntrinsicRegistry>,
 ) -> fmt::Result {
     if let Some(registry) = registry
@@ -3777,7 +3777,7 @@ enum ValueKey {
     },
     SlotAddr(kajit_ir::SlotId),
     CallPure {
-        func: IntrinsicFn,
+        func: FnPtr,
         args: Vec<VReg>,
     },
 }

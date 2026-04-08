@@ -148,49 +148,6 @@ fn eliminate_dead_ports_for_theta(func: &mut IrFunc, theta_id: NodeId) -> usize 
             continue;
         }
 
-        // Exclude slots that are NOT verified as pure zero-init temps by
-        // slot_to_reg's pre-promotion scan. This catches:
-        // - Multi-slot struct sub-fields (mixed WriteToSlot + StoreToAddr access)
-        // - Scalar locals with non-zero writes (e.g., l12 = varint result)
-        // - Slots with reads before first write in the gamma branch
-        // Check 1: promotion-time truth — if the body arg has zero
-        // references after slot2reg, the slot is trivially dead.
-        let promotion_dead = func
-            .theta_reinit_slots
-            .get(&theta_id)
-            .and_then(|dead_args| {
-                func.theta_port_slots
-                    .get(&theta_id)
-                    .and_then(|port_slots| port_slots.get(p))
-                    .map(|slot| dead_args.contains(slot))
-            })
-            .unwrap_or(false);
-        // Check 2: scalar temp + not multi-slot (structural safety).
-        let _structurally_eligible = func
-            .theta_port_slots
-            .get(&theta_id)
-            .and_then(|port_slots| port_slots.get(p))
-            .map(|slot| {
-                func.scalar_temp_slots.contains(slot) && !func.multi_slot_group.contains(slot)
-            })
-            .unwrap_or(false);
-
-        // Require BOTH: promotion-time truth for control-flow slots,
-        // OR structural eligibility (scalar temp + not multi-slot) for
-        // slots that pass the gamma-interior check later.
-        // For now, use promotion-dead as the ONLY gate — it's the ground truth.
-        if !promotion_dead {
-            if debug {
-                eprintln!("  port {}: body arg not dead at promotion time → SKIP", p);
-            }
-            continue;
-        }
-
-        // The output is unused. Verify the body arg is only used as a gamma
-        // input (for break-path pass-through). If it's used in non-gamma
-        // computation, the value matters and we can't safely remove the port.
-        let _body_arg_id = func.regions[body].args[p];
-
         if debug {
             eprintln!(
                 "  port {}: Const({}) no consumers AND backedge const → DEAD",

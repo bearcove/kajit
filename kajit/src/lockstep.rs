@@ -1365,7 +1365,7 @@ fn should_skip_non_comparable_value_check(
             .any(|vreg| non_comparable_vregs.contains(&(vreg.index() as u32)))
 }
 
-fn is_process_local_pointer_intrinsic(func: kajit_ir::IntrinsicFn) -> bool {
+fn is_process_local_pointer_intrinsic(func: kajit_ir::FnPtr) -> bool {
     let f = func.0;
     let alloc_persistent = crate::intrinsics::kajit_alloc_persistent as *const () as usize;
     let alloc_transient = crate::intrinsics::kajit_alloc_transient as *const () as usize;

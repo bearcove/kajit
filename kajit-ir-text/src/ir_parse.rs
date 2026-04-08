@@ -8,9 +8,9 @@ use std::collections::HashMap;
 use chumsky::prelude::*;
 
 use kajit_ir::{
-    Arena, DebugScope, DebugScopeId, DebugScopeKind, InputPort, IntrinsicFn, IntrinsicRegistry,
-    IrFunc, IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource,
-    Region, RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, VReg, Width,
+    Arena, DebugScope, DebugScopeId, DebugScopeKind, FnPtr, InputPort, IntrinsicRegistry, IrFunc,
+    IrOp, LambdaId, Node, NodeId, NodeKind, OutputPort, OutputRef, PortKind, PortSource, Region,
+    RegionArg, RegionArgRef, RegionId, RegionResult, SlotId, VReg, Width,
 };
 
 // ─── AST types (first pass) ────────────────────────────────────────────────
@@ -376,10 +376,6 @@ fn ir_op<'src>() -> impl Parser<'src, &'src str, AstOp, Extra<'src>> + Clone {
         just("Shr").to(AstOp::Resolved(IrOp::Shr)),
         just("Shl").to(AstOp::Resolved(IrOp::Shl)),
         just("Xor").to(AstOp::Resolved(IrOp::Xor)),
-        just("ZigzagDecode(wide=")
-            .ignore_then(choice((just("true").to(true), just("false").to(false))))
-            .then_ignore(just(")"))
-            .map(|w| AstOp::Resolved(IrOp::ZigzagDecode { wide: w })),
         just("SignExtend(from=")
             .ignore_then(width())
             .then_ignore(just(")"))
@@ -1442,15 +1438,12 @@ fn resolve_op(op: &AstOp, registry: &IntrinsicRegistry) -> Result<IrOp, ParseErr
     }
 }
 
-fn resolve_intrinsic(
-    r: &IntrinsicRef,
-    registry: &IntrinsicRegistry,
-) -> Result<IntrinsicFn, ParseError> {
+fn resolve_intrinsic(r: &IntrinsicRef, registry: &IntrinsicRegistry) -> Result<FnPtr, ParseError> {
     match r {
         IntrinsicRef::Named(name) => registry.func_by_name(name).ok_or_else(|| ParseError {
             message: format!("unknown intrinsic: @{name}"),
         }),
-        IntrinsicRef::Address(addr) => Ok(IntrinsicFn(*addr)),
+        IntrinsicRef::Address(addr) => Ok(FnPtr(*addr)),
     }
 }
 
@@ -1749,7 +1742,7 @@ lambda @0 (shape: "u8") {
         let mut registry = IntrinsicRegistry::new();
         registry.register(
             "kajit_read_bool",
-            IntrinsicFn(test_intrinsic as *const () as usize),
+            FnPtr(test_intrinsic as *const () as usize),
         );
 
         let mut builder = IrBuilder::new("u8", 0);

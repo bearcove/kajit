@@ -204,18 +204,16 @@ impl RuntimeDialectLowerer {
     ) -> Option<crate::ir::PortSource> {
         match callable.intrinsic {
             Some(hir::RuntimeIntrinsic::AllocTransient) => Some(rb.call_effect(
-                crate::ir::IntrinsicFn(intrinsics::kajit_alloc_transient as *const () as usize),
+                crate::ir::FnPtr(intrinsics::kajit_alloc_transient as *const () as usize),
                 args,
             )),
             Some(hir::RuntimeIntrinsic::Memcpy) => Some(rb.call_effect(
-                crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize),
+                crate::ir::FnPtr(intrinsics::kajit_memcpy as *const () as usize),
                 args,
             )),
             Some(hir::RuntimeIntrinsic::AllocPersistent) => Some(
                 rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_alloc_persistent as *const () as usize,
-                    ),
+                    crate::ir::FnPtr(intrinsics::kajit_alloc_persistent as *const () as usize),
                     args,
                     true,
                 )
@@ -223,7 +221,7 @@ impl RuntimeDialectLowerer {
             ),
             Some(hir::RuntimeIntrinsic::StringValidateAllocCopy) => Some(
                 rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
+                    crate::ir::FnPtr(
                         intrinsics::kajit_string_validate_alloc_copy as *const () as usize,
                     ),
                     args,
@@ -243,7 +241,7 @@ impl RuntimeDialectLowerer {
         match callable.intrinsic {
             Some(hir::RuntimeIntrinsic::FreeTransient) => {
                 let _ = rb.call_effect(
-                    crate::ir::IntrinsicFn(intrinsics::kajit_free_transient as *const () as usize),
+                    crate::ir::FnPtr(intrinsics::kajit_free_transient as *const () as usize),
                     args,
                 );
                 true
@@ -251,9 +249,7 @@ impl RuntimeDialectLowerer {
             Some(hir::RuntimeIntrinsic::OptionInitNone) => {
                 // args: [ctx, init_fn, out_addr]
                 rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_option_init_none_ctx as *const () as usize,
-                    ),
+                    crate::ir::FnPtr(intrinsics::kajit_option_init_none_ctx as *const () as usize),
                     args,
                     false,
                 );
@@ -262,9 +258,7 @@ impl RuntimeDialectLowerer {
             Some(hir::RuntimeIntrinsic::OptionInitSome) => {
                 // args: [ctx, init_fn, out_addr, payload_addr]
                 rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_option_init_some_ctx as *const () as usize,
-                    ),
+                    crate::ir::FnPtr(intrinsics::kajit_option_init_some_ctx as *const () as usize),
                     args,
                     false,
                 );
@@ -272,9 +266,7 @@ impl RuntimeDialectLowerer {
             }
             Some(hir::RuntimeIntrinsic::ValidateUtf8Range) => {
                 rb.call_intrinsic(
-                    crate::ir::IntrinsicFn(
-                        intrinsics::kajit_validate_utf8_range as *const () as usize,
-                    ),
+                    crate::ir::FnPtr(intrinsics::kajit_validate_utf8_range as *const () as usize),
                     args,
                     false,
                 );
@@ -282,7 +274,7 @@ impl RuntimeDialectLowerer {
             }
             Some(hir::RuntimeIntrinsic::Memcpy) => {
                 let _ = rb.call_effect(
-                    crate::ir::IntrinsicFn(intrinsics::kajit_memcpy as *const () as usize),
+                    crate::ir::FnPtr(intrinsics::kajit_memcpy as *const () as usize),
                     args,
                 );
                 true

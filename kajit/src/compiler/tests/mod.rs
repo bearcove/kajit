@@ -2549,7 +2549,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
             crate::regalloc_engine::cfg_mir::Inst {
                 id: inst_a,
                 op: crate::linearize::LinearOp::CallIntrinsic {
-                    func: crate::ir::IntrinsicFn(
+                    func: crate::ir::FnPtr(
                         crate::intrinsics::kajit_read_bool as *const () as usize,
                     ),
                     args: Vec::new(),
@@ -2561,7 +2561,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
             crate::regalloc_engine::cfg_mir::Inst {
                 id: inst_b,
                 op: crate::linearize::LinearOp::CallIntrinsic {
-                    func: crate::ir::IntrinsicFn(
+                    func: crate::ir::FnPtr(
                         crate::intrinsics::kajit_read_bool as *const () as usize,
                     ),
                     args: Vec::new(),
@@ -2743,9 +2743,7 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
         insts: vec![crate::regalloc_engine::cfg_mir::Inst {
             id: inst_a,
             op: crate::linearize::LinearOp::CallIntrinsic {
-                func: crate::ir::IntrinsicFn(
-                    crate::intrinsics::kajit_read_bool as *const () as usize,
-                ),
+                func: crate::ir::FnPtr(crate::intrinsics::kajit_read_bool as *const () as usize),
                 args: Vec::new(),
                 dst: None,
             },

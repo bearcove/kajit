@@ -3,30 +3,23 @@ use std::collections::HashMap;
 use kajit_ir::ErrorCode;
 use kajit_ir::SLOT_ADDR_STRIDE_BYTES;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
+use kajit_types::SymbolTable;
 
 use crate::cfg_mir;
 
 const MAX_EXEC_STEPS: usize = 1_000_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct InterpreterTrap {
-    pub code: ErrorCode,
-    pub offset: u32,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpreterOutcome {
+    // FIXME: *sigh* that's not a calling convention..
     pub vregs: Vec<u64>,
-    pub output: Vec<u8>,
-    pub cursor: usize,
-    pub trap: Option<InterpreterTrap>,
 }
 
+// FIXME: replace with ArgValue or something, we don't need a
+// million of those.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TraceValue {
     U64(u64),
-    OutputPtr { offset: usize },
-    SlotAddr { slot: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,23 +47,6 @@ pub enum InterpreterEventKind {
         vreg: kajit_ir::VReg,
         value: TraceValue,
     },
-    SlotWrite {
-        slot: kajit_ir::SlotId,
-        value: TraceValue,
-    },
-    OutputWrite {
-        base: TraceValue,
-        offset: usize,
-        bytes: Vec<u8>,
-    },
-    CursorSet {
-        before: usize,
-        after: usize,
-    },
-    OutPtrSet {
-        before: TraceValue,
-        after: TraceValue,
-    },
     BlockEnter {
         via_edge: Option<cfg_mir::EdgeId>,
         target: cfg_mir::BlockId,
@@ -84,9 +60,6 @@ pub enum InterpreterEventKind {
     CallReturn {
         target: kajit_ir::LambdaId,
         results: Vec<TraceValue>,
-    },
-    Trap {
-        trap: InterpreterTrap,
     },
     Return {
         results: Vec<TraceValue>,
@@ -164,10 +137,7 @@ pub struct InterpreterTraceEntry {
     pub block: cfg_mir::BlockId,
     pub next_inst_index: usize,
     pub at_terminator: bool,
-    pub cursor: usize,
     pub vregs: Vec<u64>,
-    pub output: Vec<u8>,
-    pub trap: Option<InterpreterTrap>,
     pub returned: bool,
 }
 
@@ -263,21 +233,11 @@ impl std::fmt::Display for InterpreterError {
 impl std::error::Error for InterpreterError {}
 
 struct InterpreterState<'a> {
-    input: &'a [u8],
-    input_base: *const u8,
-    cursor: usize,
-    output: Vec<u8>,
-    out_ptr: *mut u8,
     vregs: Vec<u64>,
     trace_vregs: Vec<TraceValue>,
-    slots: Vec<u64>,
-    trace_slots: Vec<TraceValue>,
-    slot_mem: Vec<u8>,
-    ctx: RuntimeDeserContext,
-    root_cursor_arg: Option<Box<RuntimeCursorArg>>,
     trap: Option<InterpreterTrap>,
-    trace_out_ptr: TraceValue,
-    symbol_table: kajit_types::SymbolTable,
+    symbol_table: SymbolTable,
+    // FIXME: newtypes plz
     stack_allocs: Vec<Vec<u8>>,
 }
 
@@ -288,36 +248,12 @@ impl<'a> InterpreterState<'a> {
         let out_ptr = output.as_mut_ptr();
         let slot_mem = vec![0u8; slot_count.saturating_mul(SLOT_ADDR_STRIDE)];
         Self {
-            input,
-            input_base,
-            cursor: 0,
-            output,
-            out_ptr,
             vregs: vec![0u64; vreg_count],
             trace_vregs: vec![TraceValue::U64(0); vreg_count],
-            slots: vec![0u64; slot_count],
-            trace_slots: vec![TraceValue::U64(0); slot_count],
-            slot_mem,
-            ctx: RuntimeDeserContext::new(input),
-            root_cursor_arg: None,
             trap: None,
-            trace_out_ptr: TraceValue::OutputPtr { offset: 0 },
-            symbol_table: kajit_types::SymbolTable::new(),
+            symbol_table: SymbolTable::new(),
             stack_allocs: Vec::new(),
         }
-    }
-
-    fn init_root_cursor_arg(&mut self) -> u64 {
-        let cursor = self.root_cursor_arg.get_or_insert_with(|| {
-            Box::new(RuntimeCursorArg {
-                bytes: RuntimeSliceU8 {
-                    ptr: self.input_base,
-                    len: self.input.len(),
-                },
-                pos: 0,
-            })
-        });
-        cursor.as_mut() as *mut RuntimeCursorArg as u64
     }
 
     fn read_vreg(&self, idx: usize) -> u64 {
@@ -1590,87 +1526,6 @@ fn execute_function_inner_with_event_trace(
                 });
             }
         }
-    }
-}
-
-const SLOT_ADDR_STRIDE: usize = SLOT_ADDR_STRIDE_BYTES;
-
-#[repr(C)]
-struct RuntimeErrorSlot {
-    code: u32,
-    offset: u32,
-}
-
-#[repr(C)]
-struct RuntimeDeserContext {
-    input_ptr: *const u8,
-    input_end: *const u8,
-    error: RuntimeErrorSlot,
-    key_scratch_ptr: *mut u8,
-    key_scratch_cap: usize,
-    trusted_utf8: bool,
-}
-
-#[repr(C)]
-struct RuntimeSliceU8 {
-    ptr: *const u8,
-    len: usize,
-}
-
-#[repr(C)]
-struct RuntimeCursorArg {
-    bytes: RuntimeSliceU8,
-    pos: u64,
-}
-
-impl RuntimeDeserContext {
-    fn new(input: &[u8]) -> Self {
-        let ptr = input.as_ptr();
-        Self {
-            input_ptr: ptr,
-            input_end: unsafe { ptr.add(input.len()) },
-            error: RuntimeErrorSlot { code: 0, offset: 0 },
-            key_scratch_ptr: core::ptr::null_mut(),
-            key_scratch_cap: 0,
-            trusted_utf8: false,
-        }
-    }
-}
-
-impl Drop for RuntimeDeserContext {
-    fn drop(&mut self) {
-        if self.key_scratch_cap > 0 {
-            unsafe {
-                let layout = std::alloc::Layout::from_size_align_unchecked(self.key_scratch_cap, 1);
-                std::alloc::dealloc(self.key_scratch_ptr, layout);
-            }
-        }
-    }
-}
-
-fn error_code_from_u32(code: u32) -> ErrorCode {
-    match code {
-        0 => ErrorCode::Ok,
-        1 => ErrorCode::UnexpectedEof,
-        2 => ErrorCode::InvalidVarint,
-        3 => ErrorCode::InvalidUtf8,
-        4 => ErrorCode::UnsupportedShape,
-        5 => ErrorCode::ExpectedObjectStart,
-        6 => ErrorCode::ExpectedColon,
-        7 => ErrorCode::ExpectedStringKey,
-        8 => ErrorCode::UnterminatedString,
-        9 => ErrorCode::InvalidJsonNumber,
-        10 => ErrorCode::MissingRequiredField,
-        11 => ErrorCode::UnexpectedCharacter,
-        12 => ErrorCode::NumberOutOfRange,
-        13 => ErrorCode::InvalidBool,
-        14 => ErrorCode::UnknownVariant,
-        15 => ErrorCode::ExpectedTagKey,
-        16 => ErrorCode::AmbiguousVariant,
-        17 => ErrorCode::AllocError,
-        18 => ErrorCode::InvalidEscapeSequence,
-        19 => ErrorCode::UnknownField,
-        _ => ErrorCode::UnexpectedCharacter,
     }
 }
 

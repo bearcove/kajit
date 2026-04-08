@@ -821,21 +821,6 @@ impl DebuggerSession {
                 // UnaryOps destroy pointer provenance
                 self.write_vreg(dst.index(), result);
             }
-            LinearOp::SlotAddr { dst, slot } => {
-                let base = slot.index() * kajit_ir::SLOT_ADDR_STRIDE_BYTES;
-                self.ensure_slots_len(base + kajit_ir::SLOT_ADDR_STRIDE_BYTES);
-                let addr = unsafe { self.slots.as_ptr().add(base) as u64 };
-                // Stable PtrId per slot index
-                let id = self.alloc_ptr_id(addr, &format!("slot[{}]", slot.index()));
-                self.write_vreg_tagged(
-                    dst.index(),
-                    TaggedValue::Pointer {
-                        id,
-                        concrete: addr,
-                        offset: 0,
-                    },
-                );
-            }
             LinearOp::StackAlloc { dst, id } => {
                 let info = &self.stack_allocs_info[id.index()];
                 let alloc = vec![0u8; info.size as usize];

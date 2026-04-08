@@ -45,13 +45,12 @@ pub enum BinOpKind {
 /// Unary operation kind for linear IR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOpKind {
-    ZigzagDecode { wide: bool },
     SignExtend { from_width: Width },
 }
 
 // ─── IntrinsicFn re-export ───────────────────────────────────────────────────
 
-use kajit_ir::IntrinsicFn;
+use kajit_ir::FnPtr;
 
 // ─── LinearOp ────────────────────────────────────────────────────────────────
 
@@ -125,19 +124,19 @@ pub enum LinearOp {
 
     // ── Calls ──
     CallIntrinsic {
-        func: IntrinsicFn,
+        func: FnPtr,
         args: Vec<VReg>,
         dst: Option<VReg>,
     },
     CallPure {
-        func: IntrinsicFn,
+        func: FnPtr,
         args: Vec<VReg>,
         dst: VReg,
     },
     /// Effectful call with direct ABI (no runtime context). Same calling
     /// convention as CallPure but must not be CSE'd or DCE'd.
     CallEffect {
-        func: IntrinsicFn,
+        func: FnPtr,
         args: Vec<VReg>,
         dst: VReg,
     },
@@ -1105,16 +1104,6 @@ impl<'a> Linearizer<'a> {
             IrOp::CmpGe => self.emit_binop(BinOpKind::CmpGe, node),
 
             // ── Unary ──
-            IrOp::ZigzagDecode { wide } => {
-                self.emit_node(
-                    node,
-                    LinearOp::UnaryOp {
-                        op: UnaryOpKind::ZigzagDecode { wide: *wide },
-                        dst: data_dst(0),
-                        src: data_in(0),
-                    },
-                );
-            }
             IrOp::SignExtend { from_width } => {
                 self.emit_node(
                     node,
@@ -4933,7 +4922,7 @@ fn fmt_op(
 
 fn fmt_intrinsic(
     f: &mut fmt::Formatter<'_>,
-    func: IntrinsicFn,
+    func: FnPtr,
     registry: Option<&IntrinsicRegistry>,
 ) -> fmt::Result {
     if let Some(registry) = registry
@@ -5132,18 +5121,14 @@ mod tests {
 
     #[test]
     fn linearize_call_intrinsic() {
-        use kajit_ir::IntrinsicFn;
+        use kajit_ir::FnPtr;
 
         unsafe extern "C" fn dummy_intrinsic(_ctx: *mut core::ffi::c_void) {}
 
         let mut builder = IrBuilder::new("bool", 0);
         {
             let mut rb = builder.root_region();
-            rb.call_intrinsic(
-                IntrinsicFn(dummy_intrinsic as *const () as usize),
-                &[],
-                false,
-            );
+            rb.call_intrinsic(FnPtr(dummy_intrinsic as *const () as usize), &[], false);
             rb.set_results(&[]);
         }
         let mut func = builder.finish();

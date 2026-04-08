@@ -23,7 +23,7 @@ pub struct BackendDebugInfo {
 #[derive(Debug, Clone)]
 pub struct IntrinsicCallSiteInfo {
     pub code_offset: usize,
-    pub func: kajit_ir::IntrinsicFn,
+    pub func: kajit_ir::FnPtr,
 }
 
 /// Recorded data blob address site for relocation.

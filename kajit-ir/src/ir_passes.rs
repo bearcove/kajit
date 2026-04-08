@@ -200,31 +200,7 @@ fn run_dead_theta_ports_pass(func: &mut IrFunc) {
     debug_verify(func, "dead_theta_ports");
 }
 
-fn run_slot_to_reg_pass(func: &mut IrFunc) {
-    if std::env::var("DUMP_SLOT2REG").is_ok() {
-        let registry = crate::IntrinsicRegistry::empty();
-        eprintln!(
-            "=== BEFORE slot2reg ===\n{}\n=== END BEFORE ===",
-            func.display_with_registry(&registry)
-        );
-    }
-    crate::slot2reg::slot_to_reg(func);
-    if std::env::var("DUMP_SLOT2REG").is_ok() {
-        let registry = crate::IntrinsicRegistry::empty();
-        eprintln!(
-            "=== AFTER slot2reg ===\n{}\n=== END AFTER ===",
-            func.display_with_registry(&registry)
-        );
-    }
-    debug_verify(func, "slot_to_reg");
-}
-
-const DEFAULT_PASS_REGISTRY: [DefaultPassSpec; 11] = [
-    DefaultPassSpec {
-        name: "slot_to_reg",
-        description: "Promote stack slots to RVSDG data flow (passthrough/loop-vars).",
-        run: run_slot_to_reg_pass,
-    },
+const DEFAULT_PASS_REGISTRY: &[DefaultPassSpec] = &[
     DefaultPassSpec {
         name: "dead_theta_ports",
         description: "Eliminate loop-carried theta ports that are always re-initialized to a constant.",
@@ -723,7 +699,6 @@ fn is_hoistable_theta_setup_op(op: &IrOp) -> bool {
             | IrOp::Shl
             | IrOp::Shr
             | IrOp::CmpNe
-            | IrOp::ZigzagDecode { .. }
             | IrOp::SignExtend { .. }
     )
 }

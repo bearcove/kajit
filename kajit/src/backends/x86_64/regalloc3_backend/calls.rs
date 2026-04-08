@@ -13,7 +13,7 @@ impl<'a> EmitContext<'a> {
     /// Args (including ctx_ptr as first arg) are placed into ABI registers by RA.
     pub fn emit_call_intrinsic(
         &mut self,
-        func: kajit_ir::IntrinsicFn,
+        func: kajit_ir::FnPtr,
         args: &[kajit_ir::VReg],
         dst: Option<kajit_ir::VReg>,
     ) {
@@ -70,7 +70,7 @@ impl<'a> EmitContext<'a> {
     /// Emit a call to a pure/effect function (no ctx, no cursor flush).
     pub fn emit_call_pure(
         &mut self,
-        func: kajit_ir::IntrinsicFn,
+        func: kajit_ir::FnPtr,
         args: &[kajit_ir::VReg],
         dst: kajit_ir::VReg,
     ) {

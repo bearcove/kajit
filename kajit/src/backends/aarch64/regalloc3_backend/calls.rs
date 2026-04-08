@@ -11,7 +11,7 @@ impl<'a> EmitContext<'a> {
     /// Args (including ctx_ptr) are already in ABI registers via RA coloring.
     pub(super) fn emit_call_intrinsic(
         &mut self,
-        func: kajit_ir::IntrinsicFn,
+        func: kajit_ir::FnPtr,
         args: &[kajit_ir::VReg],
         dst: Option<kajit_ir::VReg>,
     ) {
@@ -42,7 +42,7 @@ impl<'a> EmitContext<'a> {
     /// The RA has colored args, and edits move them to ABI registers.
     pub(super) fn emit_call_pure(
         &mut self,
-        func: kajit_ir::IntrinsicFn,
+        func: kajit_ir::FnPtr,
         args: &[kajit_ir::VReg],
         dst: kajit_ir::VReg,
     ) {

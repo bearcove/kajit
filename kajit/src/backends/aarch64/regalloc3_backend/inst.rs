@@ -517,34 +517,6 @@ impl<'a> EmitContext<'a> {
     ) {
         let src_reg = self.reg_for_vreg_with_temp(src, Reg::X16);
         match kind {
-            UnaryOpKind::ZigzagDecode { wide } => {
-                // zigzag_decode(n) = (n >> 1) ^ -(n & 1)
-                // x9 = src
-                // x10 = src >> 1
-                // x11 = -(src & 1) = neg(src & 1)
-                // result = x10 ^ x11
-                let w = if wide { Width::X64 } else { Width::W32 };
-                self.ectx
-                    .emit
-                    .emit_lsr_imm(w, Reg::X10, src_reg, 1)
-                    .expect("lsr");
-                // src & 1
-                self.ectx
-                    .emit
-                    .emit_and_imm(w, Reg::X11, src_reg, 1)
-                    .expect("and");
-                // neg
-                self.ectx
-                    .emit
-                    .emit_neg_reg(w, Reg::X11, Reg::X11)
-                    .expect("neg");
-                // xor
-                self.ectx
-                    .emit
-                    .emit_eor_reg(w, Reg::X16, Reg::X10, Reg::X11)
-                    .expect("eor");
-                self.store_to_vreg(dst, Reg::X16);
-            }
             UnaryOpKind::SignExtend { from_width } => {
                 match from_width {
                     kajit_ir::Width::W1 => {

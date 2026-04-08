@@ -154,19 +154,10 @@ pub struct VRegMarker;
 // r[impl ir.vregs]
 pub type VReg = Id<VRegMarker>;
 
-/// Marker type for stack slot IDs.
-pub struct SlotMarker;
-/// An abstract stack slot — the backend assigns frame offsets.
-// r[impl ir.slots]
-pub type SlotId = Id<SlotMarker>;
-
 /// Marker type for lambda IDs.
 pub struct LambdaMarker;
 /// A lambda identifier for cross-referencing between IrFuncs.
 pub type LambdaId = Id<LambdaMarker>;
-
-/// Byte stride between adjacent abstract slot addresses.
-pub const SLOT_ADDR_STRIDE_BYTES: usize = 8;
 
 /// Marker type for stack allocation IDs.
 pub struct StackAllocMarker;
@@ -248,17 +239,17 @@ impl fmt::Display for Width {
     }
 }
 
-/// An intrinsic function pointer, wrapped for type safety.
+/// An function pointer, wrapped for type safety.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct IntrinsicFn(pub usize);
+pub struct FnPtr(pub usize);
 
-impl fmt::Debug for IntrinsicFn {
+impl fmt::Debug for FnPtr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "IntrinsicFn({:#x})", self.0)
     }
 }
 
-impl fmt::Display for IntrinsicFn {
+impl fmt::Display for FnPtr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:#x}", self.0)
     }
@@ -269,7 +260,7 @@ impl fmt::Display for IntrinsicFn {
 /// Used by the text-format display and parser to print/resolve intrinsic names
 /// and named constants instead of raw hex addresses.
 pub struct IntrinsicRegistry {
-    entries: Vec<(String, IntrinsicFn)>,
+    entries: Vec<(String, FnPtr)>,
     const_entries: Vec<(String, u64)>,
 }
 
@@ -294,7 +285,7 @@ impl IntrinsicRegistry {
     }
 
     /// Register a custom intrinsic (e.g. test-only functions).
-    pub fn register(&mut self, name: impl Into<String>, func: IntrinsicFn) {
+    pub fn register(&mut self, name: impl Into<String>, func: FnPtr) {
         let name = name.into();
         if self
             .entries
@@ -322,7 +313,7 @@ impl IntrinsicRegistry {
     }
 
     /// Look up the name for an intrinsic function pointer.
-    pub fn name_of(&self, func: IntrinsicFn) -> Option<&str> {
+    pub fn name_of(&self, func: FnPtr) -> Option<&str> {
         self.entries
             .iter()
             .find(|(_, f)| *f == func)
@@ -330,7 +321,7 @@ impl IntrinsicRegistry {
     }
 
     /// Look up the function pointer for a name.
-    pub fn func_by_name(&self, name: &str) -> Option<IntrinsicFn> {
+    pub fn func_by_name(&self, name: &str) -> Option<FnPtr> {
         self.entries
             .iter()
             .find(|(n, _)| n == name)
@@ -462,12 +453,15 @@ pub struct RegionResult {
 pub struct Region {
     /// Debug-scope provenance for this structured region body.
     pub debug_scope: DebugScopeId,
+
     /// Arguments entering this region (correspond to outer input ports).
     /// Stored as stable IDs; the data lives in `IrFunc.region_args`.
     pub args: Vec<ArgId>,
+
     /// Results leaving this region (correspond to outer output ports).
     /// Stored as stable IDs; the data lives in `IrFunc.region_results`.
     pub results: Vec<ResultId>,
+
     /// Nodes contained in this region, in insertion order.
     pub nodes: Vec<NodeId>,
 }
@@ -598,14 +592,6 @@ pub enum NodeKind {
 #[derive(Debug, Clone)]
 pub enum IrOp {
     // ── Stack ops ───────────────────────────────────────────────────
-    // r[impl ir.ops.stack]
-    /// Compute the address of a stack slot (`sp + slot_offset`).
-    /// `num_slots` is the number of consecutive 8-byte slots starting at `slot`
-    /// that the pointer may access. Used by slot_to_reg to prevent promotion
-    /// of address-taken struct fields.
-    /// Inputs: []. Outputs: [Data].
-    SlotAddr { slot: SlotId, num_slots: u32 },
-
     /// Return the address of a stack allocation.
     /// The allocation's size and alignment are stored in the function's
     /// `stack_allocs` table, indexed by `id`.
@@ -619,14 +605,6 @@ pub enum IrOp {
     /// Load a scalar value from a computed address.
     /// Inputs: [Data (addr), State(memory)]. Outputs: [Data, State(memory)].
     LoadFromAddr { width: Width },
-
-    /// Write to an abstract stack slot.
-    /// Inputs: [Data]. Outputs: [].
-    WriteToSlot { slot: SlotId },
-
-    /// Read from an abstract stack slot.
-    /// Inputs: []. Outputs: [Data].
-    ReadFromSlot { slot: SlotId },
 
     // ── Arithmetic (pure) ───────────────────────────────────────────
     // r[impl ir.ops.arithmetic]
@@ -704,35 +682,16 @@ pub enum IrOp {
     /// Inputs: [Data, Data]. Outputs: [Data].
     CmpGe,
 
-    /// Zigzag decode for postcard signed integers.
-    /// Inputs: [Data]. Outputs: [Data].
-    ZigzagDecode { wide: bool },
-
     /// Sign-extend a narrow value.
     /// Inputs: [Data]. Outputs: [Data].
     SignExtend { from_width: Width },
 
     // ── Call ops ─────────────────────────────────────────────────────
-    // r[impl ir.ops.call]
-    /// Call an `extern "C"` intrinsic. Full barrier.
-    /// Inputs: [Data * arg_count, StateCursor, StateOutput].
-    /// Outputs: [Data (if has_result), StateCursor, StateOutput].
-    // r[impl ir.edges.state.barrier]
-    CallIntrinsic {
-        func: IntrinsicFn,
-        arg_count: u8,
-        has_result: bool,
-    },
-
-    /// Call a pure function (no side effects).
-    /// Inputs: [Data * arg_count]. Outputs: [Data].
-    CallPure { func: IntrinsicFn, arg_count: u8 },
-
-    /// Call an extern "C" function with side effects but no runtime context.
-    /// Same ABI as CallPure (direct args in registers, no DeserContext).
-    /// Threaded on MEMORY state domain to prevent reordering/DCE/CSE.
-    /// Inputs: [Data * arg_count, StateMemory]. Outputs: [Data, StateMemory].
-    CallEffect { func: IntrinsicFn, arg_count: u8 },
+    /// Call a function
+    /// Inputs: [TBD: depends on function], Outputs: [TBD: depends on function]
+    /// Pure: no? we can't really prove anything? it depends on the function,
+    /// not which op we use?
+    Call { func: FnPtr },
 
     /// No-op placeholder for removed nodes (used during optimization passes).
     /// Inputs: []. Outputs: [].
@@ -793,23 +752,15 @@ impl IrOp {
             | IrOp::CmpLe
             | IrOp::CmpGt
             | IrOp::CmpGe
-            | IrOp::ZigzagDecode { .. }
             | IrOp::SignExtend { .. }
-            | IrOp::SlotAddr { .. }
             | IrOp::StackAlloc { .. }
-            | IrOp::CallPure { .. }
             | IrOp::Nop
             | IrOp::Identity => Effect::Pure,
 
             // Memory ops (slots, computed addresses, calls with effects)
-            IrOp::CallEffect { .. }
-            | IrOp::WriteToSlot { .. }
-            | IrOp::ReadFromSlot { .. }
-            | IrOp::StoreToAddr { .. }
-            | IrOp::LoadFromAddr { .. } => Effect::SideEffect,
+            IrOp::StoreToAddr { .. } | IrOp::LoadFromAddr { .. } => Effect::SideEffect,
 
-            // Barrier ops
-            IrOp::CallIntrinsic { .. } => Effect::Barrier,
+            IrOp::Call { .. } => todo!("idk"),
         };
 
         IrOpMetadata {
@@ -858,19 +809,6 @@ pub struct IrFunc {
     pub slot_count: u32,
     /// Number of data args passed in calling-convention registers.
     pub param_slot_count: u32,
-    /// Slots that are part of a multi-slot group (struct sub-fields).
-    pub multi_slot_group: std::collections::BTreeSet<SlotId>,
-    /// Slots that are scalar temporaries from HIR locals (not struct sub-fields,
-    /// not control-flow slots, not cursor shadow slots). Safe for dead-port
-    /// elimination when other conditions are met.
-    pub scalar_temp_slots: std::collections::BTreeSet<SlotId>,
-    /// For each theta: maps theta port index to the slot it was promoted from.
-    /// Populated by slot_to_reg, consumed by dead_theta_ports.
-    pub theta_port_slots: std::collections::HashMap<NodeId, Vec<SlotId>>,
-    /// For each theta: set of slots that are pure zero-init temps (written
-    /// with Const(0) first, never written with non-zero, not read at gamma
-    /// level). Populated by slot_to_reg, consumed by dead_theta_ports.
-    pub theta_reinit_slots: std::collections::HashMap<NodeId, std::collections::BTreeSet<SlotId>>,
     /// Lambda registry: maps LambdaId to the NodeId of the lambda node.
     pub lambdas: Vec<NodeId>,
     /// Embedded constant data blobs (string literals, etc.).
@@ -891,13 +829,6 @@ impl IrFunc {
     pub fn fresh_vreg(&mut self) -> VReg {
         let id = VReg::new(self.vreg_count);
         self.vreg_count += 1;
-        id
-    }
-
-    /// Allocate a fresh stack slot.
-    pub fn fresh_slot(&mut self) -> SlotId {
-        let id = SlotId::new(self.slot_count);
-        self.slot_count += 1;
         id
     }
 
@@ -1115,10 +1046,6 @@ impl IrBuilder {
             param_slot_count: 0,
             lambdas: Vec::new(),
             data_blobs: Vec::new(),
-            multi_slot_group: std::collections::BTreeSet::new(),
-            scalar_temp_slots: std::collections::BTreeSet::new(),
-            theta_port_slots: std::collections::HashMap::new(),
-            theta_reinit_slots: std::collections::HashMap::new(),
             debug_scopes: Arena::new(),
             debug_values: Arena::new(),
             root_debug_scope: DebugScopeId::new(0), // placeholder, set below
@@ -1202,11 +1129,6 @@ impl IrBuilder {
     /// Get a [`RegionBuilder`] for the root lambda's body.
     pub fn root_region(&mut self) -> RegionBuilder<'_> {
         self.lambda_region(LambdaId::new(0))
-    }
-
-    /// Allocate a fresh abstract stack slot.
-    pub fn alloc_slot(&mut self) -> SlotId {
-        self.func.fresh_slot()
     }
 
     /// Add a new named state domain before any lambda bodies are populated.
@@ -1492,22 +1414,6 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
-    /// Compute the address of a stack slot (`sp + slot_offset`).
-    /// `num_slots` is the number of consecutive 8-byte slots that may be accessed
-    /// through the returned pointer (used to prevent slot_to_reg promotion).
-    pub fn slot_addr(&mut self, slot: SlotId, num_slots: u32) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![],
-            outputs: vec![data_out],
-            kind: NodeKind::Simple(IrOp::SlotAddr { slot, num_slots }),
-        });
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
     /// Allocate `size` bytes on the stack with `align`-byte alignment.
     /// Returns a pointer to the allocated region.
     pub fn stack_alloc(&mut self, size: u32, align: u32) -> PortSource {
@@ -1522,46 +1428,6 @@ impl<'a> RegionBuilder<'a> {
             outputs: vec![data_out],
             kind: NodeKind::Simple(IrOp::StackAlloc { id }),
         });
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Write a value to an abstract stack slot.
-    pub fn write_to_slot(&mut self, slot: SlotId, src: PortSource) {
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![
-                InputPort {
-                    kind: PortKind::Data,
-                    source: src,
-                },
-                InputPort {
-                    kind: PortKind::State,
-                    source: self.state_source,
-                },
-            ],
-            outputs: vec![Self::state_output(self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::WriteToSlot { slot }),
-        });
-        self.set_state_source(PortSource::Node(OutputRef { node, index: 0 }));
-    }
-
-    /// Read a value from an abstract stack slot.
-    pub fn read_from_slot(&mut self, slot: SlotId) -> PortSource {
-        let data_out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs: vec![InputPort {
-                kind: PortKind::State,
-                source: self.state_source,
-            }],
-            outputs: vec![data_out, Self::state_output(self.debug_scope)],
-            kind: NodeKind::Simple(IrOp::ReadFromSlot { slot }),
-        });
-        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
@@ -1615,113 +1481,9 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
-    // ── Barrier operations (auto-threaded, all states) ──────────────
-
-    /// Call an intrinsic. Full barrier: consumes and produces all state tokens.
-    /// Returns the data result if `has_result` is true.
-    pub fn call_intrinsic(
-        &mut self,
-        func: IntrinsicFn,
-        args: &[PortSource],
-        has_result: bool,
-    ) -> Option<PortSource> {
-        let mut inputs: Vec<InputPort> = args
-            .iter()
-            .map(|&src| InputPort {
-                kind: PortKind::Data,
-                source: src,
-            })
-            .collect();
-        inputs.push(self.state_input());
-
-        let mut outputs = Vec::new();
-        if has_result {
-            outputs.push(self.data_output());
-        }
-        let state_output_index = outputs.len() as u16;
-        outputs.push(Self::state_output(self.debug_scope));
-
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs,
-            outputs,
-            kind: NodeKind::Simple(IrOp::CallIntrinsic {
-                func,
-                arg_count: args.len() as u8,
-                has_result,
-            }),
-        });
-
-        self.set_state_source(PortSource::Node(OutputRef {
-            node,
-            index: state_output_index,
-        }));
-
-        if has_result {
-            Some(PortSource::Node(OutputRef { node, index: 0 }))
-        } else {
-            None
-        }
-    }
-
-    /// Call a pure function. No state tokens are consumed or produced.
-    /// Returns the data result.
-    pub fn call_pure(&mut self, func: IntrinsicFn, args: &[PortSource]) -> PortSource {
-        let inputs: Vec<InputPort> = args
-            .iter()
-            .map(|&src| InputPort {
-                kind: PortKind::Data,
-                source: src,
-            })
-            .collect();
-        let out = self.data_output();
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs,
-            outputs: vec![out],
-            kind: NodeKind::Simple(IrOp::CallPure {
-                func,
-                arg_count: args.len() as u8,
-            }),
-        });
-        PortSource::Node(OutputRef { node, index: 0 })
-    }
-
-    /// Call an effectful function with no runtime context. Same ABI as
-    /// `call_pure` (direct args in registers), but threaded on the MEMORY
-    /// state domain so calls cannot be reordered, DCE'd, or CSE'd.
-    /// Returns the data result.
-    pub fn call_effect(&mut self, func: IntrinsicFn, args: &[PortSource]) -> PortSource {
-        let mut inputs: Vec<InputPort> = args
-            .iter()
-            .map(|&src| InputPort {
-                kind: PortKind::Data,
-                source: src,
-            })
-            .collect();
-        inputs.push(InputPort {
-            kind: PortKind::State,
-            source: self.state_source,
-        });
-        let data_out = self.data_output();
-        let state_out = Self::state_output(self.debug_scope);
-        let node = self.add_node(Node {
-            region: self.region,
-            debug_scope: self.debug_scope,
-            debug_value: self.debug_value,
-            inputs,
-            outputs: vec![data_out, state_out],
-            kind: NodeKind::Simple(IrOp::CallEffect {
-                func,
-                arg_count: args.len() as u8,
-            }),
-        });
-        self.set_state_source(PortSource::Node(OutputRef { node, index: 1 }));
-        PortSource::Node(OutputRef { node, index: 0 })
+    /// Call a function
+    pub fn call(&mut self, _func: FnPtr) -> PortSource {
+        todo!("idk")
     }
 
     // ── Structured control flow ─────────────────────────────────────
@@ -2068,11 +1830,6 @@ impl<'a> RegionBuilder<'a> {
         self.func.regions[self.region].results.push(state_result_id);
     }
 
-    /// Allocate a fresh stack slot.
-    pub fn alloc_slot(&mut self) -> SlotId {
-        self.func.fresh_slot()
-    }
-
     /// Provide region argument sources for passthrough data values
     /// inside a gamma/theta body. Returns sources for indices 0..count.
     pub fn region_args(&self, count: usize) -> Vec<PortSource> {
@@ -2323,16 +2080,11 @@ impl IrFunc {
         registry: Option<&IntrinsicRegistry>,
     ) -> fmt::Result {
         match op {
-            IrOp::SlotAddr { slot, num_slots } => {
-                write!(f, "SlotAddr({}, n={})", slot.index(), num_slots)
-            }
             IrOp::StackAlloc { id } => {
                 write!(f, "StackAlloc({})", id.index())
             }
             IrOp::StoreToAddr { width } => write!(f, "StoreToAddr({width})"),
             IrOp::LoadFromAddr { width } => write!(f, "LoadFromAddr({width})"),
-            IrOp::WriteToSlot { slot } => write!(f, "WriteToSlot({})", slot.index()),
-            IrOp::ReadFromSlot { slot } => write!(f, "ReadFromSlot({})", slot.index()),
             IrOp::DataAddr { blob_id } => {
                 write!(f, "DataAddr(blob_id={blob_id})")?;
                 Ok(())
@@ -2360,21 +2112,10 @@ impl IrFunc {
             IrOp::CmpLe => write!(f, "CmpLe"),
             IrOp::CmpGt => write!(f, "CmpGt"),
             IrOp::CmpGe => write!(f, "CmpGe"),
-            IrOp::ZigzagDecode { wide } => write!(f, "ZigzagDecode(wide={wide})"),
             IrOp::SignExtend { from_width } => write!(f, "SignExtend(from={from_width})"),
-            IrOp::CallIntrinsic { func, .. } => {
-                write!(f, "CallIntrinsic(")?;
-                Self::fmt_intrinsic(f, *func, registry)?;
-                write!(f, ")")
-            }
-            IrOp::CallPure { func, .. } => {
-                write!(f, "CallPure(")?;
-                Self::fmt_intrinsic(f, *func, registry)?;
-                write!(f, ")")
-            }
-            IrOp::CallEffect { func, .. } => {
-                write!(f, "CallEffect(")?;
-                Self::fmt_intrinsic(f, *func, registry)?;
+            IrOp::Call { func } => {
+                write!(f, "Call(")?;
+                Self::fmt_call(f, *func, registry)?;
                 write!(f, ")")
             }
 
@@ -2383,9 +2124,9 @@ impl IrFunc {
         }
     }
 
-    fn fmt_intrinsic(
+    fn fmt_call(
         f: &mut fmt::Formatter<'_>,
-        func: IntrinsicFn,
+        func: FnPtr,
         registry: Option<&IntrinsicRegistry>,
     ) -> fmt::Result {
         if let Some(reg) = registry
@@ -2617,41 +2358,7 @@ mod tests {
     fn effect_classification() {
         assert_eq!(IrOp::Const { value: 0 }.effect(), Effect::Pure);
         assert_eq!(IrOp::Add.effect(), Effect::Pure);
-        assert_eq!(IrOp::ZigzagDecode { wide: false }.effect(), Effect::Pure);
-        assert_eq!(
-            IrOp::CallPure {
-                func: IntrinsicFn(0),
-                arg_count: 0
-            }
-            .effect(),
-            Effect::Pure
-        );
-
-        assert_eq!(
-            IrOp::CallIntrinsic {
-                func: IntrinsicFn(0),
-                arg_count: 0,
-                has_result: false,
-            }
-            .effect(),
-            Effect::Barrier
-        );
-
-        assert_eq!(
-            IrOp::CallEffect {
-                func: IntrinsicFn(0),
-                arg_count: 0,
-            }
-            .effect(),
-            Effect::SideEffect
-        );
-        assert!(
-            IrOp::CallEffect {
-                func: IntrinsicFn(0),
-                arg_count: 0,
-            }
-            .has_side_effects()
-        );
+        todo!("IrOp::Call");
     }
 
     #[test]
@@ -2659,14 +2366,14 @@ mod tests {
         assert!(!IrOp::Const { value: 1 }.has_side_effects());
         assert!(
             !IrOp::CallPure {
-                func: IntrinsicFn(0),
+                func: FnPtr(0),
                 arg_count: 0
             }
             .has_side_effects()
         );
         assert!(
             IrOp::CallIntrinsic {
-                func: IntrinsicFn(0),
+                func: FnPtr(0),
                 arg_count: 0,
                 has_result: false,
             }

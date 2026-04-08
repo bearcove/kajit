@@ -1447,6 +1447,7 @@ version = "0.1.0"
 dependencies = [
  "kajit-ir-text",
  "kajit-types",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

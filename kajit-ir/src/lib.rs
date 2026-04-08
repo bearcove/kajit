@@ -1,6 +1,5 @@
 pub mod const_fold;
 pub mod dead_theta_ports;
-mod error;
 pub mod gamma_output_partition;
 pub mod hints;
 pub mod interpret;
@@ -10,11 +9,9 @@ pub mod post_unroll_canonicalize;
 pub mod provenance;
 pub mod reduce;
 pub mod simplify_gamma;
-pub mod slot2reg;
 pub mod unroll_theta;
 mod verify;
 
-pub use error::ErrorCode;
 pub use ir::*;
 pub use ir_passes::*;
 pub use verify::*;

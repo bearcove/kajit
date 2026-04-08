@@ -563,57 +563,6 @@ impl<'a> EmitContext<'a> {
     pub fn emit_unary(&mut self, kind: UnaryOpKind, dst: kajit_ir::VReg, src: kajit_ir::VReg) {
         let src_enc = self.reg_for_vreg_with_temp(src, R10);
         match kind {
-            UnaryOpKind::ZigzagDecode { wide: true } => {
-                // zigzag_decode(n) = (n >> 1) ^ -(n & 1)
-                if src_enc != R10 {
-                    self.ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(R10, src_enc, buf))
-                        .expect("mov");
-                }
-                self.ectx
-                    .emit
-                    .emit_with(|buf| {
-                        // r11 = n >> 1
-                        x64::encode_mov_r64_r64(R11, R10, buf)?;
-                        x64::encode_shr_r64_imm8(R11, 1, buf)?;
-                        // r10 = n & 1 (use mov_r64_imm32_sext into r10 won't work since r10 has n)
-                        // Instead: and r10 with immediate 1 via test+set? No.
-                        // Simplest: mov scratch2 to hold 1, but we only have r10/r11.
-                        // Use: and r10, r10 keeping only bit 0 by shifting.
-                        // Actually simplest: shl r10, 63; sar r10, 63 gives sign-extend of bit 0
-                        // which is exactly -(n & 1)!
-                        x64::encode_shl_r64_imm8(R10, 63, buf)?;
-                        x64::encode_sar_r64_imm8(R10, 63, buf)?;
-                        // r10 = -(n & 1), r11 = n >> 1
-                        x64::encode_xor_r64_r64(R10, R11, buf)
-                    })
-                    .expect("zigzag wide");
-                self.store_to_vreg(dst, R10);
-            }
-            UnaryOpKind::ZigzagDecode { wide: false } => {
-                if src_enc != R10 {
-                    self.ectx
-                        .emit
-                        .emit_with(|buf| x64::encode_mov_r64_r64(R10, src_enc, buf))
-                        .expect("mov");
-                }
-                self.ectx
-                    .emit
-                    .emit_with(|buf| {
-                        x64::encode_mov_r32_r32(R10, R10, buf)?; // zero-extend to 32
-                        // r11 = n >> 1
-                        x64::encode_mov_r64_r64(R11, R10, buf)?;
-                        x64::encode_shr_r64_imm8(R11, 1, buf)?;
-                        // r10 = -(n & 1) via shl 63; sar 63
-                        x64::encode_shl_r64_imm8(R10, 63, buf)?;
-                        x64::encode_sar_r64_imm8(R10, 63, buf)?;
-                        x64::encode_xor_r64_r64(R10, R11, buf)?;
-                        x64::encode_mov_r32_r32(R10, R10, buf) // truncate to 32
-                    })
-                    .expect("zigzag narrow");
-                self.store_to_vreg(dst, R10);
-            }
             UnaryOpKind::SignExtend { from_width } => {
                 if src_enc != R10 {
                     self.ectx

@@ -305,7 +305,6 @@ fn is_foldable_pure(op: &IrOp) -> bool {
             | IrOp::CmpLe
             | IrOp::CmpGt
             | IrOp::CmpGe
-            | IrOp::ZigzagDecode { .. }
             | IrOp::SignExtend { .. }
     )
 }

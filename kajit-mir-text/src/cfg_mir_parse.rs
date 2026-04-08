@@ -4,7 +4,7 @@
 
 use chumsky::prelude::*;
 
-use kajit_ir::{IntrinsicFn, IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
+use kajit_ir::{FnPtr, IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_mir::cfg_mir::{
     Block, BlockId, Clobbers, Edge, EdgeArg, EdgeId, FixedReg, Function, FunctionId, Inst, InstId,
@@ -901,12 +901,12 @@ fn resolve_inst(ast: AstInst, registry: &IntrinsicRegistry) -> Result<Inst, Pars
 fn resolve_intrinsic(
     reference: &IntrinsicRef,
     registry: &IntrinsicRegistry,
-) -> Result<IntrinsicFn, ParseError> {
+) -> Result<FnPtr, ParseError> {
     match reference {
         IntrinsicRef::Named(name) => registry.func_by_name(name).ok_or_else(|| ParseError {
             message: format!("unknown intrinsic: @{name}"),
         }),
-        IntrinsicRef::Address(addr) => Ok(IntrinsicFn(*addr)),
+        IntrinsicRef::Address(addr) => Ok(FnPtr(*addr)),
     }
 }
 
@@ -922,7 +922,7 @@ fn resolve_const(value: &ConstRef, registry: &IntrinsicRegistry) -> Result<u64, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kajit_ir::{IntrinsicFn, IntrinsicRegistry, IrBuilder, Width};
+    use kajit_ir::{FnPtr, IntrinsicRegistry, IrBuilder, Width};
     use kajit_lir::linearize;
 
     #[test]
@@ -1000,7 +1000,7 @@ cfg_program vregs=1 slots=0 {
         let mut registry = IntrinsicRegistry::empty();
         registry.register(
             "test_intrinsic",
-            IntrinsicFn(test_intrinsic as *const () as usize),
+            FnPtr(test_intrinsic as *const () as usize),
         );
 
         let mut builder = IrBuilder::new("u8", 0);
