@@ -1366,6 +1366,7 @@ dependencies = [
  "proptest-derive",
  "serde",
  "serde_json",
+ "tracing",
  "yaxpeax-arch",
  "yaxpeax-arm",
  "yaxpeax-x86",
@@ -1486,6 +1487,7 @@ dependencies = [
  "kajit-ir-text",
  "kajit-lir",
  "kajit-types",
+ "tracing",
 ]
 
 [[package]]

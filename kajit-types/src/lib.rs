@@ -62,6 +62,122 @@ impl Arguments {
         }
         (gprs, fprs)
     }
+
+    /// Lay out arguments according to a calling convention.
+    /// Returns one `ArgLocation` per argument in the same order as `items()`.
+    pub fn layout(&self, cc: &CallingConvention) -> Vec<ArgLocation> {
+        let kinds: Vec<ArgKind> = self.items.iter().map(ArgKind::of).collect();
+        layout_args(&kinds, cc)
+    }
+}
+
+/// The type of an argument, without a value. Used at compile time
+/// (e.g. on CFG-MIR function params) when we need to know the register
+/// class but don't have a runtime value yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgKind {
+    /// Integer or pointer — GPR.
+    U64,
+    /// Float — FPR.
+    F64,
+}
+
+impl ArgKind {
+    /// Get the kind of an ArgValue.
+    pub fn of(v: &ArgValue) -> Self {
+        match v {
+            ArgValue::U64(_) => ArgKind::U64,
+            ArgValue::F64(_) => ArgKind::F64,
+        }
+    }
+}
+
+/// Lay out a sequence of argument kinds according to a calling convention.
+/// Same logic as `Arguments::layout` but without needing runtime values.
+pub fn layout_args(kinds: &[ArgKind], cc: &CallingConvention) -> Vec<ArgLocation> {
+    let mut gpr_idx: u8 = 0;
+    let mut fpr_idx: u8 = 0;
+    let mut stack_offset: u32 = 0;
+    let mut result = Vec::with_capacity(kinds.len());
+    for kind in kinds {
+        match kind {
+            ArgKind::U64 => {
+                if (gpr_idx as usize) < cc.gpr_args.len() {
+                    result.push(ArgLocation::Gpr(cc.gpr_args[gpr_idx as usize]));
+                    gpr_idx += 1;
+                } else {
+                    result.push(ArgLocation::Stack {
+                        offset: stack_offset,
+                    });
+                    stack_offset += 8;
+                }
+            }
+            ArgKind::F64 => {
+                if (fpr_idx as usize) < cc.fpr_args.len() {
+                    result.push(ArgLocation::Fpr(cc.fpr_args[fpr_idx as usize]));
+                    fpr_idx += 1;
+                } else {
+                    result.push(ArgLocation::Stack {
+                        offset: stack_offset,
+                    });
+                    stack_offset += 8;
+                }
+            }
+        }
+    }
+    result
+}
+
+/// Where an argument ends up after calling convention layout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArgLocation {
+    /// General-purpose register (index into the platform's GPR arg list).
+    Gpr(u8),
+    /// Floating-point register (index into the platform's FPR arg list).
+    Fpr(u8),
+    /// Stack slot at the given byte offset from the stack args base.
+    Stack { offset: u32 },
+}
+
+/// Calling convention descriptor. Lists the registers available for
+/// passing arguments, in order. Once registers are exhausted, arguments
+/// spill to the stack.
+#[derive(Clone, Debug)]
+pub struct CallingConvention {
+    /// GPR argument registers, in assignment order.
+    /// On aarch64 SysV: [0, 1, 2, 3, 4, 5, 6, 7] (x0-x7)
+    /// On x86_64 SysV: [7, 6, 2, 1, 8, 9] (rdi, rsi, rdx, rcx, r8, r9)
+    pub gpr_args: &'static [u8],
+    /// FPR argument registers, in assignment order.
+    /// On aarch64 SysV: [0, 1, 2, 3, 4, 5, 6, 7] (d0-d7)
+    /// On x86_64 SysV: [0, 1, 2, 3, 4, 5, 6, 7] (xmm0-xmm7)
+    pub fpr_args: &'static [u8],
+}
+
+/// SysV ABI calling convention for aarch64.
+pub const SYSV_AARCH64: CallingConvention = CallingConvention {
+    gpr_args: &[0, 1, 2, 3, 4, 5, 6, 7],
+    fpr_args: &[0, 1, 2, 3, 4, 5, 6, 7],
+};
+
+/// SysV ABI calling convention for x86_64.
+/// GPR order: rdi(7), rsi(6), rdx(2), rcx(1), r8(8), r9(9)
+/// using hardware register encoding.
+pub const SYSV_X86_64: CallingConvention = CallingConvention {
+    gpr_args: &[7, 6, 2, 1, 8, 9],
+    fpr_args: &[0, 1, 2, 3, 4, 5, 6, 7],
+};
+
+/// Returns the calling convention for the current compilation target.
+pub fn target_calling_convention() -> &'static CallingConvention {
+    #[cfg(target_arch = "aarch64")]
+    {
+        &SYSV_AARCH64
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        &SYSV_X86_64
+    }
 }
 
 /// A named external symbol (e.g. a vtable function pointer).
