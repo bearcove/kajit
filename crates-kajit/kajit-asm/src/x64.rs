@@ -1,4 +1,4 @@
-use crate::{SourceLocation, SourceMap, SourceMapEntry};
+use kajit_reprs::asm::{SourceLocation, SourceMap, SourceMapEntry};
 
 use std::ptr;
 
@@ -180,16 +180,18 @@ impl FinalizedEmission {
         self.exec.is_empty()
     }
 
-    pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
-        crate::build_trace(self.exec.as_ref(), &self.source_map)
+    pub fn trace_entries(
+        &self,
+    ) -> Result<Vec<kajit_reprs::asm::TraceEntry>, kajit_reprs::asm::TraceError> {
+        kajit_reprs::asm::build_trace(self.exec.as_ref(), &self.source_map)
     }
 
-    pub fn trace_text(&self) -> Result<String, crate::TraceError> {
-        crate::format_trace(self.exec.as_ref(), &self.source_map)
+    pub fn trace_text(&self) -> Result<String, kajit_reprs::asm::TraceError> {
+        kajit_reprs::asm::format_trace(self.exec.as_ref(), &self.source_map)
     }
 
-    pub fn source_map_le(&self) -> Result<Vec<u8>, crate::SourceMapError> {
-        crate::encode_source_map_le(&self.source_map)
+    pub fn source_map_le(&self) -> Result<Vec<u8>, kajit_reprs::asm::SourceMapError> {
+        kajit_reprs::asm::encode_source_map_le(&self.source_map)
     }
 }
 
@@ -1543,20 +1545,20 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 3,
             line: 10,
             column: 1,
         });
         emitter.emit_je_label(done).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 3,
             line: 11,
             column: 1,
         });
         emitter.emit_call_label(start).unwrap();
         emitter.bind_label(done).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 3,
             line: 12,
             column: 1,
@@ -1567,25 +1569,25 @@ mod tests {
         assert_eq!(
             finalized.source_map,
             vec![
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 0,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 3,
                         line: 10,
                         column: 1,
                     },
                 },
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 6,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 3,
                         line: 11,
                         column: 1,
                     },
                 },
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 11,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 3,
                         line: 12,
                         column: 1,
@@ -1610,7 +1612,7 @@ mod tests {
 
         let source_map_encoded = finalized.source_map_le().unwrap();
         assert_eq!(
-            crate::decode_source_map_le(&source_map_encoded).unwrap(),
+            kajit_reprs::asm::decode_source_map_le(&source_map_encoded).unwrap(),
             finalized.source_map
         );
     }
@@ -1673,20 +1675,20 @@ mod tests {
         let start = emitter.new_label();
         let target = emitter.new_label();
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 4,
             line: 1,
             column: 1,
         });
         emitter.emit_jmp_label(target).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 4,
             line: 2,
             column: 1,
         });
         emitter.emit_bytes(&[0x90, 0x90]); // 2 nops
         emitter.bind_label(target).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 4,
             line: 3,
             column: 1,

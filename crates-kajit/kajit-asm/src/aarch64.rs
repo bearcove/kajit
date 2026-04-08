@@ -1,4 +1,4 @@
-use crate::{SourceLocation, SourceMap, SourceMapEntry};
+use kajit_reprs::asm::{SourceLocation, SourceMap, SourceMapEntry};
 
 use std::ptr;
 
@@ -336,16 +336,18 @@ impl FinalizedEmission {
         self.exec.is_empty()
     }
 
-    pub fn trace_entries(&self) -> Result<Vec<crate::TraceEntry>, crate::TraceError> {
-        crate::build_trace(&self.code, &self.source_map)
+    pub fn trace_entries(
+        &self,
+    ) -> Result<Vec<kajit_reprs::asm::TraceEntry>, kajit_reprs::asm::TraceError> {
+        kajit_reprs::asm::build_trace(&self.code, &self.source_map)
     }
 
-    pub fn trace_text(&self) -> Result<String, crate::TraceError> {
-        crate::format_trace(&self.code, &self.source_map)
+    pub fn trace_text(&self) -> Result<String, kajit_reprs::asm::TraceError> {
+        kajit_reprs::asm::format_trace(&self.code, &self.source_map)
     }
 
-    pub fn source_map_le(&self) -> Result<Vec<u8>, crate::SourceMapError> {
-        crate::encode_source_map_le(&self.source_map)
+    pub fn source_map_le(&self) -> Result<Vec<u8>, kajit_reprs::asm::SourceMapError> {
+        kajit_reprs::asm::encode_source_map_le(&self.source_map)
     }
 }
 
@@ -419,7 +421,7 @@ pub struct Emitter {
     /// Label aliases: (from, to) — `from` resolves to whatever `to` resolves to.
     label_aliases: Vec<(LabelId, LabelId)>,
     /// Optional instruction capture for assembly dump/parse
-    captured_instructions: Option<Vec<crate::aarch64_asm::Item>>,
+    captured_instructions: Option<Vec<kajit_reprs::asm::aarch64_asm::Item>>,
 }
 
 impl Emitter {
@@ -443,25 +445,25 @@ impl Emitter {
     }
 
     /// Get captured instructions and labels
-    pub fn take_captured_program(&mut self) -> Option<crate::aarch64_asm::Program> {
+    pub fn take_captured_program(&mut self) -> Option<kajit_reprs::asm::aarch64_asm::Program> {
         self.captured_instructions
             .take()
-            .map(|items| crate::aarch64_asm::Program { items })
+            .map(|items| kajit_reprs::asm::aarch64_asm::Program { items })
     }
 
     /// Capture an instruction (if capture is enabled)
-    fn capture(&mut self, inst: crate::aarch64_asm::Instruction) {
+    fn capture(&mut self, inst: kajit_reprs::asm::aarch64_asm::Instruction) {
         if let Some(ref mut captured) = self.captured_instructions {
-            captured.push(crate::aarch64_asm::Item::Instruction(inst));
+            captured.push(kajit_reprs::asm::aarch64_asm::Item::Instruction(inst));
         }
     }
 
     /// Capture a label (if capture is enabled)
     fn capture_label(&mut self, label: LabelId) {
         if let Some(ref mut captured) = self.captured_instructions {
-            captured.push(crate::aarch64_asm::Item::Label(crate::aarch64_asm::Label(
-                label.0,
-            )));
+            captured.push(kajit_reprs::asm::aarch64_asm::Item::Label(
+                kajit_reprs::asm::aarch64_asm::Label(label.0),
+            ));
         }
     }
 
@@ -531,8 +533,8 @@ impl Emitter {
     }
 
     pub fn emit_b_label(&mut self, label: LabelId) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::B {
-            target: crate::aarch64_asm::Label(label.0),
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::B {
+            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
         });
         self.emit_word(encode_b(0)?);
         self.fixups.push(Fixup {
@@ -544,8 +546,8 @@ impl Emitter {
     }
 
     pub fn emit_bl_label(&mut self, label: LabelId) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Bl {
-            target: crate::aarch64_asm::Label(label.0),
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Bl {
+            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
         });
         self.emit_word(encode_bl(0)?);
         self.fixups.push(Fixup {
@@ -562,10 +564,10 @@ impl Emitter {
         rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Cbz {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Cbz {
             width,
             rt,
-            target: crate::aarch64_asm::Label(label.0),
+            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
         });
         self.emit_word(encode_cbz(width, rt, 0)?);
         self.fixups.push(Fixup {
@@ -582,10 +584,10 @@ impl Emitter {
         rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Cbnz {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Cbnz {
             width,
             rt,
-            target: crate::aarch64_asm::Label(label.0),
+            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
         });
         self.emit_word(encode_cbnz(width, rt, 0)?);
         self.fixups.push(Fixup {
@@ -597,10 +599,10 @@ impl Emitter {
     }
 
     pub fn emit_tbz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Tbz {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Tbz {
             rt,
             bit,
-            target: crate::aarch64_asm::Label(label.0),
+            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
         });
         self.emit_word(encode_tbz(rt, bit, 0)?);
         self.fixups.push(Fixup {
@@ -612,10 +614,10 @@ impl Emitter {
     }
 
     pub fn emit_tbnz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Tbnz {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Tbnz {
             rt,
             bit,
-            target: crate::aarch64_asm::Label(label.0),
+            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
         });
         self.emit_word(encode_tbnz(rt, bit, 0)?);
         self.fixups.push(Fixup {
@@ -627,9 +629,9 @@ impl Emitter {
     }
 
     pub fn emit_b_cond_label(&mut self, cond: Condition, label: LabelId) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::BCond {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::BCond {
             cond,
-            target: crate::aarch64_asm::Label(label.0),
+            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
         });
         self.emit_word(encode_b_cond(cond, 0)?);
         self.fixups.push(Fixup {
@@ -643,7 +645,7 @@ impl Emitter {
     // Non-branch instruction wrappers that capture + emit
 
     pub fn emit_mov_reg(&mut self, width: Width, rd: Reg, rm: Reg) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::MovReg { width, rd, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MovReg { width, rd, rm });
         self.emit_word(encode_mov_reg(width, rd, rm)?);
         Ok(())
     }
@@ -655,7 +657,7 @@ impl Emitter {
         imm: u16,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::MovzImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MovzImm {
             width,
             rd,
             imm,
@@ -672,7 +674,7 @@ impl Emitter {
         imm: u16,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::MovkImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MovkImm {
             width,
             rd,
             imm,
@@ -689,7 +691,7 @@ impl Emitter {
         rn: Reg,
         offset: u32,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::LdrImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LdrImm {
             width,
             rt,
             rn,
@@ -700,13 +702,13 @@ impl Emitter {
     }
 
     pub fn emit_ldrb_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::LdrbImm { rt, rn, offset });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LdrbImm { rt, rn, offset });
         self.emit_word(encode_ldrb_imm(rt, rn, offset)?);
         Ok(())
     }
 
     pub fn emit_ldrh_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::LdrhImm { rt, rn, offset });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LdrhImm { rt, rn, offset });
         self.emit_word(encode_ldrh_imm(rt, rn, offset)?);
         Ok(())
     }
@@ -718,7 +720,7 @@ impl Emitter {
         rn: Reg,
         offset: u32,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::StrImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::StrImm {
             width,
             rt,
             rn,
@@ -729,13 +731,13 @@ impl Emitter {
     }
 
     pub fn emit_strb_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::StrbImm { rt, rn, offset });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::StrbImm { rt, rn, offset });
         self.emit_word(encode_strb_imm(rt, rn, offset)?);
         Ok(())
     }
 
     pub fn emit_strh_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::StrhImm { rt, rn, offset });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::StrhImm { rt, rn, offset });
         self.emit_word(encode_strh_imm(rt, rn, offset)?);
         Ok(())
     }
@@ -748,7 +750,7 @@ impl Emitter {
         imm: u16,
         shift: bool,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::AddImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AddImm {
             width,
             rd,
             rn,
@@ -766,7 +768,7 @@ impl Emitter {
         imm: u16,
         shift: bool,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::SubImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::SubImm {
             width,
             rd,
             rn,
@@ -783,7 +785,7 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::AddReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AddReg { width, rd, rn, rm });
         self.emit_word(encode_add_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -795,7 +797,7 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::SubReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::SubReg { width, rd, rn, rm });
         self.emit_word(encode_sub_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -807,7 +809,7 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::AndReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AndReg { width, rd, rn, rm });
         self.emit_word(encode_and_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
         Ok(())
     }
@@ -819,19 +821,19 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::OrrReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::OrrReg { width, rd, rn, rm });
         self.emit_word(encode_orr_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
         Ok(())
     }
 
     pub fn emit_ret(&mut self) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Ret);
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Ret);
         self.emit_word(encode_ret(Reg::X30)?); // X30 is the link register
         Ok(())
     }
 
     pub fn emit_nop(&mut self) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Nop);
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Nop);
         self.emit_word(encode_nop()?);
         Ok(())
     }
@@ -843,7 +845,7 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::EorReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::EorReg { width, rd, rn, rm });
         self.emit_word(encode_eor_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
         Ok(())
     }
@@ -857,7 +859,7 @@ impl Emitter {
         lsb: u8,
         bit_width: u8,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Bfi {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Bfi {
             width,
             rd,
             rn,
@@ -875,7 +877,7 @@ impl Emitter {
         rn: Reg,
         imm: u64,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::AndImm { width, rd, rn, imm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AndImm { width, rd, rn, imm });
         self.emit_word(encode_and_imm(width, rd, rn, imm)?);
         Ok(())
     }
@@ -887,7 +889,7 @@ impl Emitter {
         rn: Reg,
         imm: u64,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::OrrImm { width, rd, rn, imm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::OrrImm { width, rd, rn, imm });
         self.emit_word(encode_orr_imm(width, rd, rn, imm)?);
         Ok(())
     }
@@ -899,7 +901,7 @@ impl Emitter {
         rn: Reg,
         imm: u64,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::EorImm { width, rd, rn, imm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::EorImm { width, rd, rn, imm });
         self.emit_word(encode_eor_imm(width, rd, rn, imm)?);
         Ok(())
     }
@@ -911,7 +913,7 @@ impl Emitter {
         rn: Reg,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::LslImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LslImm {
             width,
             rd,
             rn,
@@ -928,7 +930,7 @@ impl Emitter {
         rn: Reg,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::LsrImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LsrImm {
             width,
             rd,
             rn,
@@ -945,7 +947,7 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::LslReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LslReg { width, rd, rn, rm });
         self.emit_word(encode_lsl_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -957,7 +959,7 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::LsrReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LsrReg { width, rd, rn, rm });
         self.emit_word(encode_lsr_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -969,7 +971,7 @@ impl Emitter {
         rn: Reg,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::AsrImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AsrImm {
             width,
             rd,
             rn,
@@ -986,25 +988,25 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::AsrReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AsrReg { width, rd, rn, rm });
         self.emit_word(encode_asr_reg(width, rd, rn, rm)?);
         Ok(())
     }
 
     pub fn emit_neg_reg(&mut self, width: Width, rd: Reg, rm: Reg) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::NegReg { width, rd, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::NegReg { width, rd, rm });
         self.emit_word(encode_neg(width, rd, rm)?);
         Ok(())
     }
 
     pub fn emit_cmp_reg(&mut self, width: Width, rn: Reg, rm: Reg) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::CmpReg { width, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::CmpReg { width, rn, rm });
         self.emit_word(encode_cmp_reg(width, rn, rm)?);
         Ok(())
     }
 
     pub fn emit_cmp_imm(&mut self, width: Width, rn: Reg, imm: u16) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::CmpImm {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::CmpImm {
             width,
             rn,
             imm: imm as u32,
@@ -1020,31 +1022,31 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::MulReg { width, rd, rn, rm });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MulReg { width, rd, rn, rm });
         self.emit_word(encode_mul(width, rd, rn, rm)?);
         Ok(())
     }
 
     pub fn emit_cset(&mut self, width: Width, rd: Reg, cond: Condition) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Cset { width, rd, cond });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Cset { width, rd, cond });
         self.emit_word(encode_cset(width, rd, cond)?);
         Ok(())
     }
 
     pub fn emit_sxtb(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Sxtb { width, rd, rn });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Sxtb { width, rd, rn });
         self.emit_word(encode_sxtb(rd, rn)?);
         Ok(())
     }
 
     pub fn emit_sxth(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Sxth { width, rd, rn });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Sxth { width, rd, rn });
         self.emit_word(encode_sxth(rd, rn)?);
         Ok(())
     }
 
     pub fn emit_sxtw(&mut self, rd: Reg, rn: Reg) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Sxtw { rd, rn });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Sxtw { rd, rn });
         self.emit_word(encode_sxtw(rd, rn)?);
         Ok(())
     }
@@ -1057,7 +1059,7 @@ impl Emitter {
         rn: Reg,
         offset: i16,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Stp {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Stp {
             width,
             rt1,
             rt2,
@@ -1076,7 +1078,7 @@ impl Emitter {
         rn: Reg,
         offset: i16,
     ) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Ldp {
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Ldp {
             width,
             rt1,
             rt2,
@@ -1094,7 +1096,7 @@ impl Emitter {
         addr: u64,
     ) -> Result<(), EmitError> {
         // Capture the symbolic LoadExtern instruction
-        self.capture(crate::aarch64_asm::Instruction::LoadExtern { rd, symbol });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LoadExtern { rd, symbol });
 
         // Emit the actual movz/movk sequence
         let p0 = (addr & 0xFFFF) as u16;
@@ -1117,7 +1119,7 @@ impl Emitter {
     }
 
     pub fn emit_blr(&mut self, rn: Reg) -> Result<(), EmitError> {
-        self.capture(crate::aarch64_asm::Instruction::Blr { rn });
+        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Blr { rn });
         self.emit_word(encode_blr(rn)?);
         Ok(())
     }
@@ -2832,13 +2834,13 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 1,
             line: 10,
             column: 1,
         });
         emitter.emit_b_label(done).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 1,
             line: 11,
             column: 1,
@@ -2847,7 +2849,7 @@ mod tests {
             .emit_cbz_label(Width::X64, Reg::from_raw(16), start)
             .unwrap();
         emitter.bind_label(done).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 1,
             line: 12,
             column: 1,
@@ -2859,25 +2861,25 @@ mod tests {
         assert_eq!(
             finalized.source_map,
             vec![
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 0,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 1,
                         line: 10,
                         column: 1,
                     },
                 },
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 4,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 1,
                         line: 11,
                         column: 1,
                     },
                 },
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 8,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 1,
                         line: 12,
                         column: 1,
@@ -2898,7 +2900,7 @@ mod tests {
 
         let source_map_encoded = finalized.source_map_le().unwrap();
         assert_eq!(
-            crate::decode_source_map_le(&source_map_encoded).unwrap(),
+            kajit_reprs::asm::decode_source_map_le(&source_map_encoded).unwrap(),
             finalized.source_map
         );
     }
@@ -2939,19 +2941,19 @@ mod tests {
         let done = emitter.new_label();
 
         emitter.bind_label(start).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 2,
             line: 1,
             column: 1,
         });
         emitter.emit_tbz_label(Reg::X0, 7, done).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 2,
             line: 2,
             column: 1,
         });
         emitter.emit_tbnz_label(Reg::from_raw(1), 5, start).unwrap();
-        emitter.set_source_location(crate::SourceLocation {
+        emitter.set_source_location(kajit_reprs::asm::SourceLocation {
             file: 2,
             line: 3,
             column: 1,
@@ -2964,25 +2966,25 @@ mod tests {
         assert_eq!(
             finalized.source_map,
             vec![
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 0,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 2,
                         line: 1,
                         column: 1,
                     },
                 },
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 4,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 2,
                         line: 2,
                         column: 1,
                     },
                 },
-                crate::SourceMapEntry {
+                kajit_reprs::asm::SourceMapEntry {
                     offset: 8,
-                    location: crate::SourceLocation {
+                    location: kajit_reprs::asm::SourceLocation {
                         file: 2,
                         line: 3,
                         column: 1,
