@@ -90,6 +90,12 @@ pub const REPR_FILE_EXT: &str = ".vixen-hir";
 pub const REPR_PURPOSE: &str = "Human-semantic structured IR";
 pub const REPR_ROUND_TRIP: &str = "canonical-print";
 pub const REPR_PROVENANCE: &str = "required";
+pub static REPR_CANONICAL_IDENTITIES: &[&str] = &[
+    "symbol",
+    "local-name",
+    "type-name",
+    "function-name",
+];
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BinaryOp;
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

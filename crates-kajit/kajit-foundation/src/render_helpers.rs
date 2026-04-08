@@ -1,4 +1,6 @@
-use crate::schema::{NodeDecl, NodeFields, ReprBody, TypeUse, type_use_tag};
+use std::collections::HashMap;
+
+use crate::normalize::{NormalizedNodeDecl, SyntaxTypeUse};
 
 pub(crate) fn rust_ident(name: &str) -> String {
     match name {
@@ -45,57 +47,57 @@ pub(crate) fn snake_case(name: &str) -> String {
     out
 }
 
-pub(crate) fn collect_type_tags(ty: &TypeUse, out: &mut Vec<String>) {
+pub(crate) fn collect_syntax_type_tags(ty: &SyntaxTypeUse, out: &mut Vec<String>) {
     match ty {
-        TypeUse::Ref { name: Some(tag) } => out.push(tag.clone()),
-        TypeUse::Ref { name: None } => {}
-        TypeUse::Optional(items) | TypeUse::Seq(items) => {
-            for item in items {
-                collect_type_tags(item, out);
-            }
+        SyntaxTypeUse::Ref { name } => out.push(name.clone()),
+        SyntaxTypeUse::Optional(inner) | SyntaxTypeUse::Seq(inner) => {
+            collect_syntax_type_tags(inner, out);
         }
     }
 }
 
-pub(crate) fn render_type_use(ty: &TypeUse, node_names: &[String], box_node_refs: bool) -> String {
+pub(crate) fn render_syntax_type_use(
+    ty: &SyntaxTypeUse,
+    node_names: &[String],
+    box_node_refs: bool,
+) -> String {
     match ty {
-        TypeUse::Optional(items) if items.len() == 1 => {
-            format!("Option<{}>", render_type_use(&items[0], node_names, true))
+        SyntaxTypeUse::Optional(inner) => {
+            format!(
+                "Option<{}>",
+                render_syntax_type_use(inner, node_names, true)
+            )
         }
-        TypeUse::Seq(items) if items.len() == 1 => {
-            format!("Vec<{}>", render_type_use(&items[0], node_names, false))
+        SyntaxTypeUse::Seq(inner) => {
+            format!("Vec<{}>", render_syntax_type_use(inner, node_names, false))
         }
-        TypeUse::Ref { name: Some(tag) } => {
-            if box_node_refs && node_names.iter().any(|name| name == tag) {
-                format!("Box<{tag}>")
+        SyntaxTypeUse::Ref { name } => {
+            if box_node_refs && node_names.iter().any(|node| node == name) {
+                format!("Box<{name}>")
             } else {
-                tag.to_owned()
+                name.clone()
             }
         }
-        TypeUse::Ref { name: None } => "String".to_owned(),
-        _ => "UnsupportedTypeUse".to_owned(),
     }
 }
 
-pub(crate) fn node_fields_have_prov(fields: &NodeFields, provenance_tag: &str) -> bool {
+pub(crate) fn node_fields_have_prov(
+    fields: &HashMap<String, SyntaxTypeUse>,
+    provenance_tag: &str,
+) -> bool {
     fields
-        .fields
         .get("prov")
-        .is_some_and(|ty| type_use_tag(ty) == Some(provenance_tag))
+        .is_some_and(|ty| matches!(ty, SyntaxTypeUse::Ref { name } if name == provenance_tag))
 }
 
 pub(crate) fn render_common_placeholder(
     tag: &str,
     common_names: &[String],
-    repr: &ReprBody,
+    common: &HashMap<String, SyntaxTypeUse>,
 ) -> String {
-    let common_name = common_names.iter().find(|name| {
-        repr.common
-            .as_ref()
-            .and_then(|common| common.get(*name))
-            .and_then(type_use_tag)
-            == Some(tag)
-    });
+    let common_name = common_names
+        .iter()
+        .find(|name| matches!(common.get(*name), Some(SyntaxTypeUse::Ref { name }) if name == tag));
 
     match tag {
         "Prov" => {
@@ -135,14 +137,14 @@ pub(crate) fn render_common_placeholder(
 }
 
 pub(crate) fn render_visit_calls(
-    ty: &TypeUse,
+    ty: &SyntaxTypeUse,
     expr: &str,
     node_names: &[String],
     mutable: bool,
     borrowed: bool,
 ) -> Vec<String> {
     match ty {
-        TypeUse::Optional(items) if items.len() == 1 => {
+        SyntaxTypeUse::Optional(inner) => {
             let binding = if mutable {
                 if borrowed {
                     format!("if let Some(value) = {expr} {{")
@@ -154,7 +156,7 @@ pub(crate) fn render_visit_calls(
             } else {
                 format!("if let Some(value) = &{expr} {{")
             };
-            let inner = render_visit_calls(&items[0], "value", node_names, mutable, true);
+            let inner = render_visit_calls(inner, "value", node_names, mutable, true);
             if inner.is_empty() {
                 Vec::new()
             } else {
@@ -168,8 +170,8 @@ pub(crate) fn render_visit_calls(
                 )]
             }
         }
-        TypeUse::Seq(items) if items.len() == 1 => {
-            let inner = render_visit_calls(&items[0], "value", node_names, mutable, true);
+        SyntaxTypeUse::Seq(inner) => {
+            let inner = render_visit_calls(inner, "value", node_names, mutable, true);
             if inner.is_empty() {
                 Vec::new()
             } else {
@@ -184,8 +186,8 @@ pub(crate) fn render_visit_calls(
                 )]
             }
         }
-        TypeUse::Ref { name: Some(tag) } if node_names.iter().any(|name| name == tag) => {
-            let method = snake_case(tag);
+        SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => {
+            let method = snake_case(name);
             if mutable && borrowed {
                 vec![format!("v.visit_{method}_mut({expr});")]
             } else if mutable {
@@ -202,10 +204,10 @@ pub(crate) fn render_visit_calls(
 
 pub(crate) fn render_walk_fn(
     name: &str,
-    decl: &NodeDecl,
+    decl: &NormalizedNodeDecl,
     node_names: &[String],
     mutable: bool,
-) -> Option<String> {
+) -> String {
     let walk_name = if mutable {
         format!("walk_{}_mut", snake_case(name))
     } else {
@@ -218,15 +220,15 @@ pub(crate) fn render_walk_fn(
         format!("&{name}")
     };
     match decl {
-        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
-            let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+            let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
             field_names.sort();
             let body_lines = field_names
                 .iter()
                 .flat_map(|field_name| {
                     let field_expr = format!("node.{}", rust_ident(field_name));
                     render_visit_calls(
-                        fields.fields.get(field_name).unwrap(),
+                        fields.get(field_name).unwrap(),
                         &field_expr,
                         node_names,
                         mutable,
@@ -242,25 +244,25 @@ pub(crate) fn render_walk_fn(
             let body = body_lines
                 .join("\n")
                 .replace("node.", &format!("{node_name}."));
-            Some(format!(
+            format!(
                 "pub fn {walk_name}<V: ?Sized + {trait_name}>({v_name}: &mut V, {node_name}: {node_ty}) {{\n{body}\n}}"
-            ))
+            )
         }
-        NodeDecl::Enum(variants) => {
-            let mut variant_names = variants.variants.keys().cloned().collect::<Vec<_>>();
+        NormalizedNodeDecl::Enum(variants) => {
+            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
             variant_names.sort();
             let arms = variant_names
                 .iter()
-                .filter_map(|variant_name| match variants.variants.get(variant_name).unwrap() {
-                    NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
-                        let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+                .filter_map(|variant_name| match variants.get(variant_name).unwrap() {
+                    NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                        let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
                         field_names.sort();
                         let traversed = field_names
                             .iter()
                             .filter_map(|field_name| {
                                 let expr = rust_ident(field_name);
                                 let calls = render_visit_calls(
-                                    fields.fields.get(field_name).unwrap(),
+                                    fields.get(field_name).unwrap(),
                                     &expr,
                                     node_names,
                                     mutable,
@@ -299,77 +301,71 @@ pub(crate) fn render_walk_fn(
                             "        {name}::{variant_name} {{ {pattern_fields} }} => {{\n{body}\n        }}"
                         ))
                     }
-                    _ => None,
+                    NormalizedNodeDecl::Enum(_) => None,
                 })
                 .collect::<Vec<_>>()
                 .join(",\n");
-            Some(format!(
+            format!(
                 "pub fn {walk_name}<V: ?Sized + {trait_name}>(v: &mut V, node: {node_ty}) {{\n    match node {{\n{arms}\n    }}\n}}"
-            ))
+            )
         }
-        NodeDecl::Other { .. } => None,
     }
 }
 
 pub(crate) fn render_node_decl(
     name: &str,
-    decl: &NodeDecl,
+    decl: &NormalizedNodeDecl,
     node_names: &[String],
     provenance_tag: &str,
-) -> Option<String> {
+) -> String {
     match decl {
-        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
-            let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
+        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+            let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
             field_names.sort();
             let field_rows = field_names
                 .iter()
                 .map(|field_name| {
                     let ty =
-                        render_type_use(fields.fields.get(field_name).unwrap(), node_names, true);
+                        render_syntax_type_use(fields.get(field_name).unwrap(), node_names, true);
                     format!("    pub {}: {},", rust_ident(field_name), ty)
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            Some(format!(
+            format!(
                 "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name} {{\n{field_rows}\n}}"
-            ))
+            )
         }
-        NodeDecl::Enum(variants) => {
-            let mut variant_names = variants.variants.keys().cloned().collect::<Vec<_>>();
+        NormalizedNodeDecl::Enum(variants) => {
+            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
             variant_names.sort();
             let variant_rows = variant_names
                 .iter()
-                .map(
-                    |variant_name| match variants.variants.get(variant_name).unwrap() {
-                        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
-                            let mut field_names = fields.fields.keys().cloned().collect::<Vec<_>>();
-                            field_names.sort();
-                            let rows = field_names
-                                .iter()
-                                .map(|field_name| {
-                                    let ty = render_type_use(
-                                        fields.fields.get(field_name).unwrap(),
-                                        node_names,
-                                        true,
-                                    );
-                                    format!("        {}: {},", rust_ident(field_name), ty)
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n");
-                            format!("    {variant_name} {{\n{rows}\n    }},")
-                        }
-                        other => {
-                            format!("    {variant_name}, // unsupported variant shape: {other:?}")
-                        }
-                    },
-                )
+                .map(|variant_name| match variants.get(variant_name).unwrap() {
+                    NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                        let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+                        field_names.sort();
+                        let rows = field_names
+                            .iter()
+                            .map(|field_name| {
+                                let ty = render_syntax_type_use(
+                                    fields.get(field_name).unwrap(),
+                                    node_names,
+                                    true,
+                                );
+                                format!("        {}: {},", rust_ident(field_name), ty)
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        format!("    {variant_name} {{\n{rows}\n    }},")
+                    }
+                    other => format!("    {variant_name}, // unsupported variant shape: {other:?}"),
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             let prov_impl = if variants
-                .variants
                 .values()
-                .all(|variant| matches!(variant, NodeDecl::Node(fields) | NodeDecl::Struct(fields) if node_fields_have_prov(fields, provenance_tag)))
+                .all(|variant| matches!(variant, NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) if node_fields_have_prov(fields, provenance_tag)))
             {
                 let match_rows = variant_names
                     .iter()
@@ -382,10 +378,9 @@ pub(crate) fn render_node_decl(
             } else {
                 String::new()
             };
-            Some(format!(
+            format!(
                 "#[derive(Debug, Clone, PartialEq, Eq)]\npub enum {name} {{\n{variant_rows}\n}}{prov_impl}"
-            ))
+            )
         }
-        NodeDecl::Other { .. } => None,
     }
 }

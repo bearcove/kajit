@@ -1,11 +1,12 @@
+use crate::normalize::{NormalizedNodeDecl, NormalizedRepr};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
-    collect_type_tags, render_common_placeholder, render_node_decl, render_walk_fn, snake_case,
+    collect_syntax_type_tags, render_common_placeholder, render_node_decl, render_walk_fn,
+    snake_case,
 };
-use crate::schema::{NodeDecl, ReprBody, rule_expr_kind, type_use_tag};
 
-pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
-    let mut token_names = repr.syntax.tokens.keys().cloned().collect::<Vec<_>>();
+pub(crate) fn render_hir_poc_module(repr: &NormalizedRepr) -> String {
+    let mut token_names = repr.syntax.token_kinds.keys().cloned().collect::<Vec<_>>();
     token_names.sort();
 
     let mut rule_names = repr.syntax.rules.keys().cloned().collect::<Vec<_>>();
@@ -19,37 +20,26 @@ pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
         .collect::<Vec<_>>();
     print_keys.sort();
 
-    let mut common_names = repr
-        .common
-        .as_ref()
-        .map(|common| common.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
+    let mut common_names = repr.common.keys().cloned().collect::<Vec<_>>();
     common_names.sort();
 
-    let mut node_names = repr
-        .nodes
-        .as_ref()
-        .map(|nodes| nodes.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
+    let mut node_names = repr.nodes.keys().cloned().collect::<Vec<_>>();
     node_names.sort();
 
     let provenance_tag = repr
         .common
-        .as_ref()
-        .and_then(|common| common.get("provenance"))
-        .and_then(type_use_tag)
+        .get("provenance")
+        .and_then(|ty| match ty {
+            crate::normalize::SyntaxTypeUse::Ref { name } => Some(name.as_str()),
+            _ => None,
+        })
         .unwrap_or("Prov")
         .to_owned();
 
     let token_rows = token_names
         .iter()
         .map(|name| {
-            let kind = match repr.syntax.tokens.get(name).unwrap() {
-                crate::schema::TokenExpr::Regex(_) => "regex",
-                crate::schema::TokenExpr::Other { name, .. } => {
-                    name.as_deref().unwrap_or("<unknown>")
-                }
-            };
+            let kind = repr.syntax.token_kinds.get(name).unwrap().as_str();
             format!("    TokenSpec {{ name: {name:?}, kind: {kind:?} }},")
         })
         .collect::<Vec<_>>()
@@ -58,17 +48,36 @@ pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
     let rule_rows = rule_names
         .iter()
         .map(|name| {
-            let kind = rule_expr_kind(repr.syntax.rules.get(name).unwrap());
+            let kind = match repr.syntax.rules.get(name).unwrap() {
+                crate::normalize::SyntaxRule::Seq(_) => "seq",
+                crate::normalize::SyntaxRule::Choice(_) => "choice",
+                crate::normalize::SyntaxRule::Field(_) => "field",
+                crate::normalize::SyntaxRule::Variant(_) => "variant",
+                crate::normalize::SyntaxRule::Ref { .. } => "ref",
+                crate::normalize::SyntaxRule::Token { .. } => "token",
+                crate::normalize::SyntaxRule::Optional { .. } => "optional",
+                crate::normalize::SyntaxRule::Repeat { .. } => "repeat",
+                crate::normalize::SyntaxRule::Literal(_) => "literal",
+            };
             format!("    RuleSpec {{ name: {name:?}, kind: {kind:?} }},")
         })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let canonical_identity_rows = repr
+        .contract
+        .canonical_identities
+        .iter()
+        .map(|name| format!("    {name:?},"))
         .collect::<Vec<_>>()
         .join("\n");
 
     let common_rows = common_names
         .iter()
         .map(|name| {
-            let kind = match repr.common.as_ref().and_then(|common| common.get(name)) {
-                Some(ty) => type_use_tag(ty).unwrap_or("scalar"),
+            let kind = match repr.common.get(name) {
+                Some(crate::normalize::SyntaxTypeUse::Ref { name }) => name.as_str(),
+                Some(_) => "scalar",
                 None => "<missing>",
             };
             format!("    TypeUseSpec {{ name: {name:?}, kind: {kind:?} }},")
@@ -79,11 +88,10 @@ pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
     let node_rows = node_names
         .iter()
         .map(|name| {
-            let kind = match repr.nodes.as_ref().and_then(|nodes| nodes.get(name)) {
-                Some(NodeDecl::Node(_)) => "node",
-                Some(NodeDecl::Enum(_)) => "enum",
-                Some(NodeDecl::Struct(_)) => "struct",
-                Some(NodeDecl::Other { tag, .. }) => tag.as_deref().unwrap_or("<unknown>"),
+            let kind = match repr.nodes.get(name) {
+                Some(NormalizedNodeDecl::Node(_)) => "node",
+                Some(NormalizedNodeDecl::Enum(_)) => "enum",
+                Some(NormalizedNodeDecl::Struct(_)) => "struct",
                 None => "<missing>",
             };
             format!("    NodeSpec {{ name: {name:?}, kind: {kind:?} }},")
@@ -92,29 +100,26 @@ pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
         .join("\n");
 
     let mut placeholder_names = Vec::new();
-    if let Some(common) = &repr.common {
-        for ty in common.values() {
-            collect_type_tags(ty, &mut placeholder_names);
-        }
+    for ty in repr.common.values() {
+        collect_syntax_type_tags(ty, &mut placeholder_names);
     }
-    if let Some(nodes) = &repr.nodes {
-        for decl in nodes.values() {
-            match decl {
-                NodeDecl::Node(fields) | NodeDecl::Struct(fields) => {
-                    for ty in fields.fields.values() {
-                        collect_type_tags(ty, &mut placeholder_names);
-                    }
+    for decl in repr.nodes.values() {
+        match decl {
+            NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                for ty in fields.values() {
+                    collect_syntax_type_tags(ty, &mut placeholder_names);
                 }
-                NodeDecl::Enum(variants) => {
-                    for variant in variants.variants.values() {
-                        if let NodeDecl::Node(fields) | NodeDecl::Struct(fields) = variant {
-                            for ty in fields.fields.values() {
-                                collect_type_tags(ty, &mut placeholder_names);
-                            }
+            }
+            NormalizedNodeDecl::Enum(variants) => {
+                for variant in variants.values() {
+                    if let NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) =
+                        variant
+                    {
+                        for ty in fields.values() {
+                            collect_syntax_type_tags(ty, &mut placeholder_names);
                         }
                     }
                 }
-                NodeDecl::Other { .. } => {}
             }
         }
     }
@@ -125,17 +130,19 @@ pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
 
     let placeholder_rows = placeholder_names
         .iter()
-        .map(|name| render_common_placeholder(name, &common_names, repr))
+        .map(|name| render_common_placeholder(name, &common_names, &repr.common))
         .collect::<Vec<_>>()
         .join("\n\n");
 
     let ast_rows = node_names
         .iter()
-        .filter_map(|name| {
-            repr.nodes
-                .as_ref()
-                .and_then(|nodes| nodes.get(name))
-                .and_then(|decl| render_node_decl(name, decl, &node_names, &provenance_tag))
+        .map(|name| {
+            render_node_decl(
+                name,
+                repr.nodes.get(name).unwrap(),
+                &node_names,
+                &provenance_tag,
+            )
         })
         .collect::<Vec<_>>()
         .join("\n\n");
@@ -143,11 +150,10 @@ pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
     let prov_impl_rows = node_names
         .iter()
         .filter_map(|name| {
-            let decl = repr.nodes.as_ref().and_then(|nodes| nodes.get(name))?;
+            let decl = repr.nodes.get(name)?;
             match decl {
-                NodeDecl::Node(fields) | NodeDecl::Struct(fields)
-                    if crate::render_helpers::node_fields_have_prov(fields, &provenance_tag) =>
-                {
+                NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+                    if crate::render_helpers::node_fields_have_prov(fields, &provenance_tag) => {
                     Some(format!(
                         "impl HasProvenance for {name} {{\n    fn provenance(&self) -> Option<&{provenance_tag}> {{\n        Some(&self.prov)\n    }}\n}}"
                     ))
@@ -182,23 +188,13 @@ pub(crate) fn render_hir_poc_module(repr: &ReprBody) -> String {
 
     let walk_rows = node_names
         .iter()
-        .filter_map(|name| {
-            repr.nodes
-                .as_ref()
-                .and_then(|nodes| nodes.get(name))
-                .and_then(|decl| render_walk_fn(name, decl, &node_names, false))
-        })
+        .map(|name| render_walk_fn(name, repr.nodes.get(name).unwrap(), &node_names, false))
         .collect::<Vec<_>>()
         .join("\n\n");
 
     let walk_mut_rows = node_names
         .iter()
-        .filter_map(|name| {
-            repr.nodes
-                .as_ref()
-                .and_then(|nodes| nodes.get(name))
-                .and_then(|decl| render_walk_fn(name, decl, &node_names, true))
-        })
+        .map(|name| render_walk_fn(name, repr.nodes.get(name).unwrap(), &node_names, true))
         .collect::<Vec<_>>()
         .join("\n\n");
 
@@ -271,6 +267,9 @@ pub const REPR_FILE_EXT: &str = {file_ext:?};
 pub const REPR_PURPOSE: &str = {purpose:?};
 pub const REPR_ROUND_TRIP: &str = {round_trip:?};
 pub const REPR_PROVENANCE: &str = {provenance:?};
+pub static REPR_CANONICAL_IDENTITIES: &[&str] = &[
+{canonical_identity_rows}
+];
 
 {placeholder_rows}
 
@@ -321,6 +320,7 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
         file_ext = repr.file_ext,
         name = repr.name,
         purpose = repr.contract.purpose,
+        canonical_identity_rows = canonical_identity_rows,
         round_trip = repr.contract.round_trip,
         provenance = repr.contract.provenance,
         placeholder_rows = placeholder_rows,

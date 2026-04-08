@@ -367,10 +367,3 @@ pub(crate) fn rule_literal_text(rule: &RuleExpr) -> Option<&str> {
         _ => None,
     }
 }
-
-pub(crate) fn type_use_tag(ty: &TypeUse) -> Option<&str> {
-    match ty {
-        TypeUse::Ref { name: Some(tag) } => Some(tag.as_str()),
-        _ => None,
-    }
-}

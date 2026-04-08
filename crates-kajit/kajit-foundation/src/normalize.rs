@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::schema::{NodeFields, RuleExpr, TypeUse, rule_literal_text, rule_named_parts};
+use crate::schema::{
+    NodeDecl, NodeFields, ReprBody, RuleExpr, TypeUse, rule_literal_text, rule_named_parts,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SyntaxRuleNamed {
@@ -35,6 +37,38 @@ pub(crate) enum SyntaxTypeUse {
     Optional(Box<SyntaxTypeUse>),
     Seq(Box<SyntaxTypeUse>),
     Ref { name: String },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedContract {
+    pub(crate) purpose: String,
+    pub(crate) canonical_identities: Vec<String>,
+    pub(crate) round_trip: String,
+    pub(crate) provenance: String,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedSyntax {
+    pub(crate) token_kinds: HashMap<String, String>,
+    pub(crate) rules: HashMap<String, SyntaxRule>,
+    pub(crate) canonical_print: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum NormalizedNodeDecl {
+    Node(HashMap<String, SyntaxTypeUse>),
+    Enum(HashMap<String, NormalizedNodeDecl>),
+    Struct(HashMap<String, SyntaxTypeUse>),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NormalizedRepr {
+    pub(crate) name: String,
+    pub(crate) file_ext: String,
+    pub(crate) contract: NormalizedContract,
+    pub(crate) syntax: NormalizedSyntax,
+    pub(crate) common: HashMap<String, SyntaxTypeUse>,
+    pub(crate) nodes: HashMap<String, NormalizedNodeDecl>,
 }
 
 pub(crate) fn normalize_type_use(ty: &TypeUse) -> Result<SyntaxTypeUse, String> {
@@ -117,6 +151,82 @@ pub(crate) fn normalize_node_fields(
         .iter()
         .map(|(name, ty)| Ok((name.clone(), normalize_type_use(ty)?)))
         .collect()
+}
+
+fn normalize_node_decl(decl: &NodeDecl) -> Result<NormalizedNodeDecl, String> {
+    match decl {
+        NodeDecl::Node(fields) => Ok(NormalizedNodeDecl::Node(normalize_node_fields(fields)?)),
+        NodeDecl::Struct(fields) => Ok(NormalizedNodeDecl::Struct(normalize_node_fields(fields)?)),
+        NodeDecl::Enum(variants) => {
+            let mut out = HashMap::new();
+            for (name, variant) in &variants.variants {
+                out.insert(name.clone(), normalize_node_decl(variant)?);
+            }
+            Ok(NormalizedNodeDecl::Enum(out))
+        }
+        NodeDecl::Other { tag, .. } => Err(format!(
+            "unsupported node declaration tag {:?}",
+            tag.as_deref().unwrap_or("<unknown>")
+        )),
+    }
+}
+
+pub(crate) fn normalize_repr(repr: &ReprBody) -> Result<NormalizedRepr, String> {
+    let common = repr
+        .common
+        .as_ref()
+        .ok_or_else(|| "repr.common missing after validation".to_owned())?
+        .iter()
+        .map(|(name, ty)| Ok((name.clone(), normalize_type_use(ty)?)))
+        .collect::<Result<HashMap<_, _>, String>>()?;
+
+    let nodes = repr
+        .nodes
+        .as_ref()
+        .ok_or_else(|| "repr.nodes missing after validation".to_owned())?
+        .iter()
+        .map(|(name, decl)| Ok((name.clone(), normalize_node_decl(decl)?)))
+        .collect::<Result<HashMap<_, _>, String>>()?;
+
+    let rules = repr
+        .syntax
+        .rules
+        .iter()
+        .map(|(name, rule)| Ok((name.clone(), normalize_rule(rule)?)))
+        .collect::<Result<HashMap<_, _>, String>>()?;
+
+    let token_kinds = repr
+        .syntax
+        .tokens
+        .iter()
+        .map(|(name, token)| {
+            let kind = match token {
+                crate::schema::TokenExpr::Regex(_) => "regex".to_owned(),
+                crate::schema::TokenExpr::Other { name, .. } => {
+                    name.clone().unwrap_or_else(|| "<unknown>".to_owned())
+                }
+            };
+            Ok((name.clone(), kind))
+        })
+        .collect::<Result<HashMap<_, _>, String>>()?;
+
+    Ok(NormalizedRepr {
+        name: repr.name.clone(),
+        file_ext: repr.file_ext.clone(),
+        contract: NormalizedContract {
+            purpose: repr.contract.purpose.clone(),
+            canonical_identities: repr.contract.canonical_identities.clone(),
+            round_trip: repr.contract.round_trip.clone(),
+            provenance: repr.contract.provenance.clone(),
+        },
+        syntax: NormalizedSyntax {
+            token_kinds,
+            rules,
+            canonical_print: repr.syntax.canonical_print.clone(),
+        },
+        common,
+        nodes,
+    })
 }
 
 pub(crate) fn syntax_type_name(ty: &SyntaxTypeUse) -> Option<&str> {

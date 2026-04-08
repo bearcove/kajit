@@ -1,11 +1,10 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::normalize::{
-    SyntaxRule, SyntaxTypeUse, normalize_node_fields, normalize_rule, render_default_value,
+    NormalizedNodeDecl, NormalizedRepr, SyntaxRule, SyntaxTypeUse, render_default_value,
     syntax_type_name,
 };
 use crate::render_helpers::rust_ident;
-use crate::schema::{NodeDecl, NodeVariants, ReprBody};
 
 enum SeqItem {
     Ignore(String),
@@ -234,7 +233,7 @@ fn render_struct_parser_expr(
 
 fn render_enum_parser_expr(
     enum_name: &str,
-    variants: &NodeVariants,
+    variants: &HashMap<String, NormalizedNodeDecl>,
     rule: &SyntaxRule,
     rule_names: &[String],
     node_names: &[String],
@@ -252,16 +251,15 @@ fn render_enum_parser_expr(
             ));
         };
         let variant_name = named.name.as_str();
-        let Some(NodeDecl::Struct(fields) | NodeDecl::Node(fields)) =
-            variants.variants.get(variant_name)
+        let Some(NormalizedNodeDecl::Struct(fields) | NormalizedNodeDecl::Node(fields)) =
+            variants.get(variant_name)
         else {
             return Err(format!(
                 "schema enum {enum_name} is missing variant declaration {variant_name:?}"
             ));
         };
-        let fields = normalize_node_fields(fields)?;
         let items =
-            flatten_struct_rule_items(named.inner.as_ref(), &fields, rule_names, node_names)?;
+            flatten_struct_rule_items(named.inner.as_ref(), fields, rule_names, node_names)?;
         let (chain, bound_names) = render_binding_chain(&items)?;
         let bound_set = bound_names.iter().cloned().collect::<BTreeSet<_>>();
         let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
@@ -301,21 +299,23 @@ fn render_enum_parser_expr(
 fn render_rule_parser_expr(
     rule_name: &str,
     rule: &SyntaxRule,
-    decl: &NodeDecl,
+    decl: &NormalizedNodeDecl,
     rule_names: &[String],
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
     match decl {
-        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => render_struct_parser_expr(
-            rule_name,
-            &normalize_node_fields(fields)?,
-            rule,
-            rule_names,
-            node_names,
-            provenance_tag,
-        ),
-        NodeDecl::Enum(variants) => render_enum_parser_expr(
+        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+            render_struct_parser_expr(
+                rule_name,
+                fields,
+                rule,
+                rule_names,
+                node_names,
+                provenance_tag,
+            )
+        }
+        NormalizedNodeDecl::Enum(variants) => render_enum_parser_expr(
             rule_name,
             variants,
             rule,
@@ -323,14 +323,11 @@ fn render_rule_parser_expr(
             node_names,
             provenance_tag,
         ),
-        NodeDecl::Other { .. } => Err(format!(
-            "unsupported node declaration for parser: {rule_name}"
-        )),
     }
 }
 
 pub(crate) fn render_parser_block(
-    repr: &ReprBody,
+    repr: &NormalizedRepr,
     node_names: &[String],
     provenance_tag: &str,
 ) -> Result<String, String> {
@@ -340,15 +337,11 @@ pub(crate) fn render_parser_block(
     let parser_defs = parser_order
         .iter()
         .filter_map(|name| {
-            let rule = repr
-                .syntax
-                .rules
-                .get(*name)
-                .and_then(|rule| normalize_rule(rule).ok())?;
-            let decl = repr.nodes.as_ref()?.get(*name)?;
+            let rule = repr.syntax.rules.get(*name)?;
+            let decl = repr.nodes.get(*name)?;
             Some(render_rule_parser_expr(
                 name,
-                &rule,
+                rule,
                 decl,
                 &rule_names,
                 node_names,
