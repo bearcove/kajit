@@ -52,5 +52,5 @@ proptest = "1"
 proptest-derive = "0.5"
 
 [[bench]]
-name = "synthetic"
+name = "generated"
 harness = false

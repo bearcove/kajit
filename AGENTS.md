@@ -72,13 +72,13 @@ Benchmarks use a custom harness (not criterion/divan). Output is NDJSON to stdou
 
 ```bash
 # List all available benchmarks
-cargo bench -p kajit --bench synthetic -- --list
+cargo bench -p kajit --bench generated -- --list
 
 # Run all synthetic benchmarks
-cargo bench -p kajit --bench synthetic
+cargo bench -p kajit --bench generated
 
 # Filter by substring match on bench name
-cargo bench -p kajit --bench synthetic -- scalar_u32/postcard
+cargo bench -p kajit --bench generated -- scalar_u32/postcard
 
 # Real-world JSON datasets
 cargo bench -p kajit --bench canada
@@ -154,7 +154,7 @@ Full reference: `docs/pipeline-debugging.md`
 **Compare assembly for different types (e.g., u32 vs i32):**
 ```bash
 # Dump emit stage for both types
-KAJIT_DUMP_STAGES=emit,cfg KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3) or test(=postcard::scalar_i32_v3)'
+KAJIT_DUMP_STAGES=emit,cfg KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test generated -E 'test(=postcard::scalar_u32_v3) or test(=postcard::scalar_i32_v3)'
 
 # Compare the assembly
 diff /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__emit.txt /tmp/kajit-dump/postcard__scalar_i32_v3__aarch64__emit.txt
@@ -166,7 +166,7 @@ diff /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__cfg.txt /tmp/kajit-dump/p
 **Investigate performance regression:**
 ```bash
 # Dump all stages for a specific case
-KAJIT_DUMP_STAGES=all KAJIT_DUMP_FILTER=postcard::scalar_u32 KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+KAJIT_DUMP_STAGES=all KAJIT_DUMP_FILTER=postcard::scalar_u32 KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test generated -E 'test(=postcard::scalar_u32_v3)'
 
 # Files created: postcard__scalar_u32_v3__aarch64__{hir,ir,linear,cfg,emit}.txt
 ```
@@ -174,20 +174,20 @@ KAJIT_DUMP_STAGES=all KAJIT_DUMP_FILTER=postcard::scalar_u32 KAJIT_DUMP_DIR=/tmp
 **Try a manual optimization (edit assembly by hand):**
 ```bash
 # 1. Dump the emit stage
-KAJIT_DUMP_STAGES=emit KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+KAJIT_DUMP_STAGES=emit KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test generated -E 'test(=postcard::scalar_u32_v3)'
 
 # 2. Copy to .alt.vixen-asm and edit by hand
 cp /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__emit.txt postcard__scalar_u32_v3__aarch64__emit.alt.vixen-asm
 # Edit the file: remove redundant moves, reorder instructions, etc.
 
 # 3. Run test again - it will use your edited assembly
-cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+cargo nextest run -p kajit --test generated -E 'test(=postcard::scalar_u32_v3)'
 ```
 
 **Compare serde vs kajit optimized assembly:**
 ```bash
 # Run in release mode with LTO (shows fully optimized serde code)
-cargo bench -p kajit --bench synthetic -- --dump-asm scalar_u32/postcard
+cargo bench -p kajit --bench generated -- --dump-asm scalar_u32/postcard
 ```
 
 ### Differential Harness (first step)
@@ -225,14 +225,14 @@ Disable parts of the pipeline at runtime to isolate bugs. Syntax: comma-separate
 **Bisect workflow** — when a test fails, narrow the cause:
 ```bash
 # Does it pass with ALL opts disabled? → bug is in an optimization pass
-KAJIT_OPTS='-all_opts' cargo nextest run -p kajit --test corpus -E 'test(=the::test)'
+KAJIT_OPTS='-all_opts' cargo nextest run -p kajit --test generated -E 'test(=the::test)'
 
 # Disable one pass at a time to find the culprit
 KAJIT_OPTS='-pass.theta_loop_invariant_hoist' cargo nextest run ...
 KAJIT_OPTS='-pass.inline_apply' cargo nextest run ...
 ```
 
-Print all available options: `KAJIT_OPTS=help cargo nextest run -p kajit --test corpus -E 'test(=any::test)'`
+Print all available options: `KAJIT_OPTS=help cargo nextest run -p kajit --test generated -E 'test(=any::test)'`
 
 ### Stage dumps
 
@@ -265,7 +265,7 @@ before the pass call in `kajit-mir/src/cfg_mir.rs` (search for the pass name).
 Compare optimized disassembly of serde vs kajit for any benchmark case:
 
 ```bash
-cargo bench -p kajit --bench synthetic -- --dump-asm scalar_u32
+cargo bench -p kajit --bench generated -- --dump-asm scalar_u32
 ```
 
 This runs in release mode with LTO, so serde code is fully inlined. Output shows both:
@@ -274,7 +274,7 @@ This runs in release mode with LTO, so serde code is fully inlined. Output shows
 
 For corpus tests (debug mode, less useful):
 ```bash
-KAJIT_SHOW_ASM=1 cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v0)'
+KAJIT_SHOW_ASM=1 cargo nextest run -p kajit --test generated -E 'test(=postcard::scalar_u32_v0)'
 ```
 
 Use `opts` stage to see RVSDG snapshots between each optimization pass.
@@ -286,7 +286,7 @@ Test assembly optimizations by hand-editing dumps and having them reassembled:
 **Workflow:**
 1. **Dump the emit stage** to get the current assembly:
    ```bash
-   KAJIT_DUMP_STAGES=emit KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+   KAJIT_DUMP_STAGES=emit KAJIT_DUMP_DIR=/tmp/kajit-dump cargo nextest run -p kajit --test generated -E 'test(=postcard::scalar_u32_v3)'
    # Creates: /tmp/kajit-dump/postcard__scalar_u32_v3__aarch64__emit.txt
    ```
 
@@ -305,7 +305,7 @@ Test assembly optimizations by hand-editing dumps and having them reassembled:
 
 4. **Run the test again** — it will automatically use your edited assembly:
    ```bash
-   cargo nextest run -p kajit --test corpus -E 'test(=postcard::scalar_u32_v3)'
+   cargo nextest run -p kajit --test generated -E 'test(=postcard::scalar_u32_v3)'
    ```
 
    The test harness detects `.alt.vixen-asm` files, reassembles them, and uses the modified code instead of JIT-generated code.
@@ -351,7 +351,7 @@ To debug corpus tests with the LLDB MCP tool:
 
 ```
 # 1. Build the test binary
-cargo test -p kajit --test corpus --no-run 2>&1 | grep Executable
+cargo test -p kajit --test generated --no-run 2>&1 | grep Executable
 # Output: Executable tests/corpus.rs (target/debug/deps/corpus-HASH)
 
 # 2. Start LLDB session via MCP
