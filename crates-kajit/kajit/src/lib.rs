@@ -12,7 +12,6 @@ pub mod ir;
 pub mod ir_backend;
 
 pub mod harness;
-pub mod ir_parse;
 pub mod ir_passes;
 pub mod jit_debug;
 pub mod jit_dwarf;
@@ -87,7 +86,8 @@ pub fn compile_decoder_from_ir_text(
     registry: &ir::IntrinsicRegistry,
     with_passes: bool,
 ) -> CompiledDecoder {
-    let mut func = ir_parse::parse_ir(ir_text, registry).expect("IR text should parse");
+    let mut func =
+        kajit_reprs::ir::parse::parse_ir(ir_text, registry).expect("IR text should parse");
     if with_passes {
         compiler::run_default_passes_from_env(&mut func);
     }
