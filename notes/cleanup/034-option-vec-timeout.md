@@ -21,10 +21,19 @@ instead of manual arg shuffling. Something in the post-call error check or
 arg placement may be wrong, causing an infinite retry loop or corrupted
 control flow.
 
+## Likely root cause (updated)
+
+The `out` parameter is typed as `u64` in HIR but is actually a pointer.
+The frontend generates `addr_of(Place::Local(out_local))` to pass to vtable
+init functions, but RVSDG value locals don't have addresses. The lowerer
+treats `addr_of(Local)` as identity (returns the port source), which happens
+to pass the pointer value — but the rest of the codegen may be confused by
+the type mismatch.
+
+See 031-type-out-as-pointer.md and 032-explicit-stores-through-out.md.
+
 ## Diagnosis approach
 
-- Run `cargo run -p kajit-cli -- compile postcard 'Option<u32>' -s asm` and
-  inspect the generated assembly around CallIntrinsic sites
-- Use the differential harness to compare interpreter vs JIT
+- Fix 031+032 first — the option/vec failures may resolve automatically
+- If not: inspect generated assembly around CallIntrinsic sites
 - Check if the post-call error check reads ctx from the right location
-  (ctx vreg may be spilled and the reload after the call may read stale data)
