@@ -47,7 +47,7 @@ pub struct LinearBackendResult {
     pub entry: u32,
     pub source_map: Option<kajit_asm::SourceMap>,
     pub backend_debug_info: Option<BackendDebugInfo>,
-    pub asm_program: Option<kajit_asm::aarch64_asm::Program>,
+    pub asm_program: Option<kajit_reprs::asm::aarch64_asm::Program>,
     pub intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
     pub data_relocs: Vec<DataRelocInfo>,
     pub extern_addr_relocs: Vec<ExternAddrRelocInfo>,

@@ -129,7 +129,7 @@ impl EmitCtx {
         mut self,
     ) -> (
         aarch64::FinalizedEmission,
-        Option<kajit_asm::aarch64_asm::Program>,
+        Option<kajit_reprs::asm::aarch64_asm::Program>,
     ) {
         let asm_program = self.emit.take_captured_program();
         let buf = self.emit.finalize().expect("failed to finalize assembly");

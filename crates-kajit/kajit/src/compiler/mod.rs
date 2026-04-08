@@ -27,7 +27,7 @@ pub struct CompiledDecoder {
     func: *const u8,
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
-    asm_program: Option<kajit_asm::aarch64_asm::Program>,
+    asm_program: Option<kajit_reprs::asm::aarch64_asm::Program>,
 }
 
 /// A compiled scalar function. Owns the executable buffer containing JIT'd machine code.
@@ -154,7 +154,7 @@ pub(crate) fn materialize_backend_result(
     usize,
     Option<kajit_asm::SourceMap>,
     Option<crate::ir_backend::BackendDebugInfo>,
-    Option<kajit_asm::aarch64_asm::Program>,
+    Option<kajit_reprs::asm::aarch64_asm::Program>,
 ) {
     let crate::ir_backend::LinearBackendResult {
         buf,

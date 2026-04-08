@@ -3,8 +3,8 @@
 use chumsky::prelude::*;
 
 use crate::asm as kajit_asm;
+use crate::asm::aarch64_asm::{Instruction, Item, Label, Program};
 use kajit_asm::aarch64::{Condition, Reg, Width};
-use kajit_asm::aarch64_asm::{Instruction, Item, Label, Program};
 
 type Extra<'src> = extra::Err<Rich<'src, char>>;
 
