@@ -1244,6 +1244,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+ "vx-jit-types",
  "yaxpeax-arch",
  "yaxpeax-arm",
  "yaxpeax-x86",
@@ -1286,6 +1287,7 @@ name = "kajit-hir"
 version = "0.1.0"
 dependencies = [
  "kajit-reprs",
+ "vx-jit-types",
 ]
 
 [[package]]
@@ -2541,6 +2543,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "vx-jit-types"
+version = "0.1.0"
+dependencies = [
+ "kajit-reprs",
 ]
 
 [[package]]
