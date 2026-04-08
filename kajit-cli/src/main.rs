@@ -100,12 +100,27 @@ enum Command {
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(std::io::stderr)
-        .init();
-
     let args: Args = figue::from_std_args().unwrap();
+
+    // MCP --real mode logs to a file (stdout/stderr are used by MCP protocol).
+    // All other commands log to stderr.
+    if matches!(args.command, Command::Mcp { real: true }) {
+        if let Ok(log_file) = std::fs::File::create("/tmp/kajit-mcp.log") {
+            tracing_subscriber::fmt()
+                .with_env_filter(
+                    tracing_subscriber::EnvFilter::try_from_default_env()
+                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                )
+                .with_writer(log_file)
+                .with_ansi(false)
+                .init();
+        }
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+            .with_writer(std::io::stderr)
+            .init();
+    }
 
     match args.command {
         Command::Mcp { real } => {

@@ -1940,18 +1940,6 @@ async fn run() -> Result<(), String> {
 
 /// Run the MCP server (real mode — handles MCP protocol directly).
 pub async fn run_real() -> Result<(), String> {
-    // Set up file-based tracing (stdout/stderr are used by MCP protocol)
-    let log_file = std::fs::File::create("/tmp/kajit-mcp.log")
-        .map_err(|e| format!("failed to create /tmp/kajit-mcp.log: {e}"))?;
-    use tracing_subscriber::EnvFilter;
-    tracing_subscriber::fmt()
-        .with_writer(log_file)
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_ansi(false)
-        .init();
-
     tracing::info!("kajit MCP server starting (real mode)");
     run().await
 }
