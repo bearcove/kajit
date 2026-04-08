@@ -1,5 +1,6 @@
 use super::*;
 use kajit_ir::{DebugScope, DebugScopeKind, IrBuilder, IrOp, LambdaId, PortSource, VReg, Width};
+use kajit_reprs::lir::LinearOp;
 
 #[test]
 fn linearize_simple_chain() {

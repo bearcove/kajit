@@ -4,11 +4,6 @@
 //! topologically sorts each region's nodes, and emits a flat `Vec<LinearOp>`
 //! with explicit labels and branches for control flow (gamma/theta).
 
-mod ir;
-
-mod fmt;
-pub use fmt::*;
-
 mod linearizer;
 pub use linearizer::*;
 

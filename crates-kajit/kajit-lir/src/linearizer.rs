@@ -1,6 +1,8 @@
 //! Linearizer: converts the RVSDG into a flat instruction sequence.
 
-use crate::{BinOpKind, LabelId, LinearDebugProvenance, LinearIr, LinearOp, UnaryOpKind};
+use kajit_reprs::lir::{
+    BinOpKind, LabelId, LinearDebugProvenance, LinearIr, LinearOp, UnaryOpKind,
+};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
