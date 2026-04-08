@@ -1,6 +1,33 @@
 use std::collections::BTreeMap;
 
 use kajit_reprs::hir::*;
+use vx_jit_types::{
+    VixenBuiltin, VixenCallableRef, VixenCoreTypes, VixenLoweringError, VixenTypedExpr,
+    VixenTypedFunction, VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VixenCoreCallables {
+    pub emit_node: CallableId,
+    pub emit_edge: CallableId,
+    pub emit_fact: CallableId,
+    pub rust_crate_graph: CallableId,
+    pub rust_root: CallableId,
+    pub graph_lookup_crate: CallableId,
+    pub cargo_registry_package_exists: CallableId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeMemoryCallables {
+    pub alloc_transient: CallableId,
+    pub alloc_persistent: CallableId,
+    pub validate_utf8_range: CallableId,
+    pub string_validate_alloc_copy: CallableId,
+    pub vec_from_raw_parts: CallableId,
+    pub vec_from_chunks: CallableId,
+    pub memcpy: CallableId,
+    pub free_transient: CallableId,
+}
 
 pub trait VixenExt {
     fn install_runtime_memory_callables(&mut self) -> RuntimeMemoryCallables;

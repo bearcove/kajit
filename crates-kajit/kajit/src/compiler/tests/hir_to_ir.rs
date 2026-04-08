@@ -1,5 +1,10 @@
 use facet_testhelpers::test;
 use kajit_hir as hir;
+use kajit_hir::VixenExt;
+use vx_jit_types::{
+    VixenCallableRef, VixenTypedExpr, VixenTypedFunction, VixenTypedLocal, VixenTypedParam,
+    VixenTypedStmt,
+};
 use kajit_reprs::hir::parse::parse_hir;
 
 use super::lower_hir_module;
@@ -1076,8 +1081,7 @@ hir_module {
 #[test]
 fn vixen_typed_function_add_lowers_to_ir() {
     use hir::{
-        BinaryOp, LocalId, Module, Type, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        BinaryOp, LocalId, Module, Type,
     };
 
     let func = VixenTypedFunction {
@@ -1120,8 +1124,7 @@ fn vixen_typed_function_add_lowers_to_ir() {
 #[test]
 fn vixen_typed_function_add_compiles_and_runs() {
     use hir::{
-        BinaryOp, LocalId, Module, Type, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        BinaryOp, LocalId, Module, Type,
     };
 
     let func = VixenTypedFunction {
@@ -1199,7 +1202,7 @@ fn define_str_struct(module: &mut hir::Module) -> (hir::TypeDefId, hir::Type) {
 #[test]
 fn vixen_typed_function_str_len_compiles_and_runs() {
     use hir::{
-        LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam, VixenTypedStmt,
+        LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1248,8 +1251,7 @@ fn vixen_typed_function_str_len_compiles_and_runs() {
 #[test]
 fn vixen_typed_function_str_slice_compiles_and_runs() {
     use hir::{
-        BinaryOp, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedLocal,
-        VixenTypedParam, VixenTypedStmt,
+        BinaryOp, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1342,8 +1344,7 @@ fn vixen_typed_function_str_slice_compiles_and_runs() {
 #[test]
 fn vixen_typed_function_str_conditional_return() {
     use hir::{
-        BinaryOp, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        BinaryOp, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1433,8 +1434,7 @@ fn vixen_typed_function_str_conditional_return() {
 #[test]
 fn vixen_typed_function_string_literal_return() {
     use hir::{
-        Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        Literal, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1477,8 +1477,7 @@ fn vixen_typed_function_string_literal_return() {
 #[test]
 fn vixen_typed_function_string_literal_conditional() {
     use hir::{
-        BinaryOp, Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        BinaryOp, Literal, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1538,8 +1537,7 @@ fn vixen_typed_function_string_literal_conditional() {
 #[test]
 fn vixen_typed_function_if_expr_scalar() {
     use hir::{
-        BinaryOp, Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        BinaryOp, Literal, LocalId, Module,
     };
 
     let module = Module::new();
@@ -1583,8 +1581,7 @@ fn vixen_typed_function_if_expr_scalar() {
 #[test]
 fn vixen_typed_function_if_expr_typed_string_literal() {
     use hir::{
-        BinaryOp, Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        BinaryOp, Literal, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1644,8 +1641,7 @@ fn vixen_typed_function_if_expr_typed_string_literal() {
 #[test]
 fn vixen_typed_function_typed_literal_string_return() {
     use hir::{
-        Literal, LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam,
-        VixenTypedStmt,
+        Literal, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1688,8 +1684,7 @@ fn vixen_typed_function_typed_literal_string_return() {
 #[test]
 fn vixen_typed_function_str_concat_compiles_and_runs() {
     use hir::{
-        BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
-        VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+        BinaryOp, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1807,8 +1802,8 @@ fn vixen_typed_function_str_concat_compiles_and_runs() {
             VixenTypedStmt::Return(Some(VixenTypedExpr::Struct {
                 def: str_def,
                 fields: vec![
-                    ("ptr".to_string(), VixenTypedExpr::Local(LocalId::new(3))),
-                    ("len".to_string(), VixenTypedExpr::Local(LocalId::new(2))),
+                    ("ptr".to_string()::Local(LocalId::new(3))),
+                    ("len".to_string()::Local(LocalId::new(2))),
                 ],
             })),
         ],
@@ -1868,7 +1863,7 @@ fn vixen_typed_function_str_concat_compiles_and_runs() {
 /// `fn get_lit_len() -> u64 { return TypedLiteral("hello", Str).len }`
 #[test]
 fn field_projection_from_typed_literal() {
-    use hir::{Module, VixenTypedExpr, VixenTypedFunction, VixenTypedStmt};
+    use hir::{Module};
 
     let mut module = Module::new();
     let (_str_def, str_ty) = define_str_struct(&mut module);
@@ -1904,7 +1899,7 @@ fn field_projection_from_typed_literal() {
 #[test]
 fn field_projection_from_if_expr() {
     use hir::{
-        LocalId, Module, VixenTypedExpr, VixenTypedFunction, VixenTypedParam, VixenTypedStmt,
+        LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -1985,8 +1980,7 @@ fn field_projection_from_if_expr() {
 #[test]
 fn field_projection_from_call_returning_str() {
     use hir::{
-        LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction, VixenTypedLocal,
-        VixenTypedStmt,
+        LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -2042,7 +2036,7 @@ fn field_projection_from_call_returning_str() {
                 base: Box::new(VixenTypedExpr::Struct {
                     def: _str_def,
                     fields: vec![
-                        ("ptr".to_string(), VixenTypedExpr::Local(LocalId::new(0))),
+                        ("ptr".to_string()::Local(LocalId::new(0))),
                         (
                             "len".to_string(),
                             VixenTypedExpr::Literal(hir::Literal::Integer(16)),
@@ -2101,8 +2095,7 @@ fn field_projection_from_call_returning_str() {
 #[test]
 fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
     use hir::{
-        BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
-        VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+        BinaryOp, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -2360,8 +2353,7 @@ fn vixen_typed_function_sparse_prefix_compiles_and_runs() {
 #[test]
 fn vixen_typed_function_tail_concat_compiles_and_runs() {
     use hir::{
-        BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
-        VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+        BinaryOp, LocalId, Module,
     };
 
     let mut module = Module::new();
@@ -2497,8 +2489,7 @@ fn vixen_typed_function_tail_concat_compiles_and_runs() {
 #[test]
 fn vixen_typed_function_four_part_concat_compiles_and_runs() {
     use hir::{
-        BinaryOp, LocalId, Module, VixenCallableRef, VixenTypedExpr, VixenTypedFunction,
-        VixenTypedLocal, VixenTypedParam, VixenTypedStmt,
+        BinaryOp, LocalId, Module,
     };
 
     let mut module = Module::new();

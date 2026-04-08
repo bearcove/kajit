@@ -10,3 +10,4 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 kajit-reprs = { path = "../kajit-reprs" }
+vx-jit-types = { path = "../../../vixen/crates/vx-jit-types" }
