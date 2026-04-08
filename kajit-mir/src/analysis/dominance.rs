@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::cfg_mir::{BlockId, Function};
+use crate::ir::{BlockId, Function};
 
 /// Dominance information for a function.
 #[derive(Debug, Clone)]

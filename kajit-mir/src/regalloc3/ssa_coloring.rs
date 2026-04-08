@@ -13,7 +13,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::analysis::dominance::DominanceInfo;
 use crate::analysis::loops::LoopInfo;
-use crate::cfg_mir::{self, BlockId, FixedReg, Function, OperandKind};
+use crate::ir::{self, BlockId, FixedReg, Function, OperandKind};
 use kajit_ir::VReg;
 
 use super::hints::{HintMap, SpillCost};
@@ -419,12 +419,7 @@ fn next_use_distance(
 }
 
 /// Check if `vreg` has its last use in `block` at instruction index `inst_idx`.
-fn is_last_use_in_block(
-    func: &Function,
-    block: &cfg_mir::Block,
-    vreg: VReg,
-    inst_idx: usize,
-) -> bool {
+fn is_last_use_in_block(func: &Function, block: &ir::Block, vreg: VReg, inst_idx: usize) -> bool {
     // Check remaining instructions after inst_idx
     for &later_inst_id in &block.insts[inst_idx + 1..] {
         let later_inst = &func.insts[later_inst_id.0 as usize];
@@ -441,8 +436,7 @@ fn is_last_use_in_block(
     // Check terminator uses
     let term = &func.terms[block.term.0 as usize];
     match term {
-        cfg_mir::Terminator::BranchIf { cond, .. }
-        | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+        ir::Terminator::BranchIf { cond, .. } | ir::Terminator::BranchIfZero { cond, .. } => {
             if *cond == vreg {
                 return false;
             }
@@ -467,8 +461,7 @@ fn compute_last_use_map(func: &Function) -> HashMap<(BlockId, VReg), u32> {
         // Terminator condition uses
         let term = &func.terms[block.term.0 as usize];
         match term {
-            cfg_mir::Terminator::BranchIf { cond, .. }
-            | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+            ir::Terminator::BranchIf { cond, .. } | ir::Terminator::BranchIfZero { cond, .. } => {
                 map.insert((block.id, *cond), u32::MAX);
             }
             _ => {}
@@ -629,8 +622,7 @@ fn color_phase(
         // Terminator condition uses
         let term = &func.terms[block.term.0 as usize];
         match term {
-            cfg_mir::Terminator::BranchIf { cond, .. }
-            | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+            ir::Terminator::BranchIf { cond, .. } | ir::Terminator::BranchIfZero { cond, .. } => {
                 last_use_in_block.insert((block.id, *cond), u32::MAX);
             }
             _ => {}
@@ -1043,12 +1035,7 @@ fn resolve_fixed_use_constraints(
 }
 
 /// Check if a vreg has any use strictly after `inst_idx` in the given block.
-fn has_use_after_inst(
-    func: &Function,
-    block: &cfg_mir::Block,
-    vreg: VReg,
-    inst_idx: usize,
-) -> bool {
+fn has_use_after_inst(func: &Function, block: &ir::Block, vreg: VReg, inst_idx: usize) -> bool {
     // Check instructions after inst_idx
     for &later_inst_id in &block.insts[inst_idx + 1..] {
         let later_inst = &func.insts[later_inst_id.0 as usize];
@@ -1065,13 +1052,12 @@ fn has_use_after_inst(
     // Check terminator
     let term = &func.terms[block.term.0 as usize];
     match term {
-        cfg_mir::Terminator::BranchIf { cond, .. }
-        | cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+        ir::Terminator::BranchIf { cond, .. } | ir::Terminator::BranchIfZero { cond, .. } => {
             if *cond == vreg {
                 return true;
             }
         }
-        cfg_mir::Terminator::JumpTable { predicate, .. } => {
+        ir::Terminator::JumpTable { predicate, .. } => {
             if *predicate == vreg {
                 return true;
             }

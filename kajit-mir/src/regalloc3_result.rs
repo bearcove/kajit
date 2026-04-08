@@ -1,6 +1,6 @@
 //! Regalloc3 allocation results.
 
-use crate::cfg_mir::{self};
+use crate::ir::{self};
 use crate::regalloc3::{linear_scan, machine_inst::PReg};
 use kajit_ir::{LambdaId, VReg};
 use std::collections::HashMap;
@@ -31,7 +31,7 @@ pub struct AllocatedCfgFunctionRa3 {
 #[derive(Debug, Clone)]
 pub struct AllocatedCfgProgramRa3 {
     /// The CFG program (potentially modified with phi copies)
-    pub cfg_program: cfg_mir::Program,
+    pub cfg_program: ir::Program,
 
     /// Per-function allocation results
     pub functions: Vec<AllocatedCfgFunctionRa3>,

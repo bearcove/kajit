@@ -15,7 +15,7 @@ const RCX: u8 = 1;
 
 impl<'a> EmitContext<'a> {
     /// Emit a single instruction.
-    pub fn emit_inst(&mut self, inst: &kajit_mir::cfg_mir::Inst) {
+    pub fn emit_inst(&mut self, inst: &kajit_mir::ir::Inst) {
         self.current_inst = Some(inst.id);
         // Skip instructions whose outputs were fused.
         match &inst.op {

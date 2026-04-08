@@ -5,7 +5,7 @@ use kajit_ir::SLOT_ADDR_STRIDE_BYTES;
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 use kajit_types::SymbolTable;
 
-use crate::cfg_mir;
+use crate::ir;
 
 const MAX_EXEC_STEPS: usize = 1_000_000;
 
@@ -25,19 +25,14 @@ pub enum TraceValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterpreterTraceOp {
     Entry,
-    Inst {
-        inst: cfg_mir::InstId,
-        inst_index: usize,
-    },
-    Term {
-        term: cfg_mir::TermId,
-    },
+    Inst { inst: ir::InstId, inst_index: usize },
+    Term { term: ir::TermId },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InterpreterTraceLocation {
     pub lambda: kajit_ir::LambdaId,
-    pub block: cfg_mir::BlockId,
+    pub block: ir::BlockId,
     pub op: InterpreterTraceOp,
 }
 
@@ -48,8 +43,8 @@ pub enum InterpreterEventKind {
         value: TraceValue,
     },
     BlockEnter {
-        via_edge: Option<cfg_mir::EdgeId>,
-        target: cfg_mir::BlockId,
+        via_edge: Option<ir::EdgeId>,
+        target: ir::BlockId,
     },
     TerminatorDecision {
         detail: String,
@@ -104,7 +99,7 @@ impl InterpreterExecutionTrace {
     pub fn entries_to_block(
         &self,
         lambda: kajit_ir::LambdaId,
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
     ) -> Vec<&InterpreterEvent> {
         self.events
             .iter()
@@ -134,7 +129,7 @@ impl InterpreterExecutionTrace {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterpreterTraceEntry {
     pub step_index: usize,
-    pub block: cfg_mir::BlockId,
+    pub block: ir::BlockId,
     pub next_inst_index: usize,
     pub at_terminator: bool,
     pub vregs: Vec<u64>,
@@ -148,33 +143,33 @@ pub enum InterpreterError {
         lambda: usize,
     },
     UnknownBlock {
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
     },
     UnknownEdge {
-        edge: cfg_mir::EdgeId,
+        edge: ir::EdgeId,
     },
     UnknownInst {
-        inst: cfg_mir::InstId,
+        inst: ir::InstId,
     },
     UnknownTerm {
-        term: cfg_mir::TermId,
+        term: ir::TermId,
     },
     MissingEdge {
-        from: cfg_mir::BlockId,
-        to: cfg_mir::BlockId,
+        from: ir::BlockId,
+        to: ir::BlockId,
     },
     EdgeArgArityMismatch {
-        from: cfg_mir::BlockId,
-        to: cfg_mir::BlockId,
+        from: ir::BlockId,
+        to: ir::BlockId,
         expected: usize,
         got: usize,
     },
     UnsupportedOp {
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
         op: String,
     },
     UnsupportedTerminator {
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
         term: String,
     },
     StepLimitExceeded {
@@ -433,7 +428,7 @@ fn diff_output_regions(before: &[u8], after: &[u8]) -> Vec<(usize, Vec<u8>)> {
 
 /// Execute the first function in a CFG-MIR program.
 pub fn execute_program(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     input: &[u8],
 ) -> Result<InterpreterOutcome, InterpreterError> {
     execute_program_with_trace(program, input).map(|(outcome, _)| outcome)
@@ -441,7 +436,7 @@ pub fn execute_program(
 
 /// Execute a single CFG-MIR function.
 pub fn execute_function(
-    func: &cfg_mir::Function,
+    func: &ir::Function,
     vreg_count: usize,
     slot_count: usize,
     input: &[u8],
@@ -450,7 +445,7 @@ pub fn execute_function(
 }
 
 pub fn execute_program_with_event_trace(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     input: &[u8],
 ) -> Result<(InterpreterOutcome, InterpreterExecutionTrace), InterpreterError> {
     if program.funcs.is_empty() {
@@ -502,12 +497,12 @@ pub fn execute_program_with_event_trace(
 }
 
 pub fn execute_function_with_event_trace(
-    func: &cfg_mir::Function,
+    func: &ir::Function,
     vreg_count: usize,
     slot_count: usize,
     input: &[u8],
 ) -> Result<(InterpreterOutcome, InterpreterExecutionTrace), InterpreterError> {
-    let program = cfg_mir::Program {
+    let program = ir::Program {
         funcs: vec![func.clone()],
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
@@ -517,7 +512,7 @@ pub fn execute_function_with_event_trace(
 }
 
 pub fn execute_program_with_trace(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     input: &[u8],
 ) -> Result<(InterpreterOutcome, Vec<InterpreterTraceEntry>), InterpreterError> {
     if program.funcs.is_empty() {
@@ -555,7 +550,7 @@ pub fn execute_program_with_trace(
 }
 
 fn seed_root_data_args(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     state: &mut InterpreterState<'_>,
 ) -> Result<(), InterpreterError> {
     let Some(root) = program.funcs.first() else {
@@ -594,12 +589,12 @@ fn seed_root_data_args(
 }
 
 pub fn execute_function_with_trace(
-    func: &cfg_mir::Function,
+    func: &ir::Function,
     vreg_count: usize,
     slot_count: usize,
     input: &[u8],
 ) -> Result<(InterpreterOutcome, Vec<InterpreterTraceEntry>), InterpreterError> {
-    let program = cfg_mir::Program {
+    let program = ir::Program {
         funcs: vec![func.clone()],
         vreg_count: vreg_count as u32,
         slot_count: slot_count as u32,
@@ -609,7 +604,7 @@ pub fn execute_function_with_trace(
 }
 
 fn execute_function_inner(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     lambda_indices: &HashMap<usize, usize>,
     func_index: usize,
     state: &mut InterpreterState<'_>,
@@ -822,7 +817,7 @@ fn execute_function_inner(
             .term(block.term)
             .ok_or(InterpreterError::UnknownTerm { term: block.term })?;
         match term {
-            cfg_mir::Terminator::Return => {
+            ir::Terminator::Return => {
                 trace.push(InterpreterTraceEntry {
                     step_index,
                     block: block.id,
@@ -841,7 +836,7 @@ fn execute_function_inner(
                     .collect::<Vec<_>>();
                 return Ok(data_results);
             }
-            cfg_mir::Terminator::Branch { edge } => {
+            ir::Terminator::Branch { edge } => {
                 let target = apply_edge(func, &block_indices, state, *edge)?;
                 let target_block_idx = *block_indices
                     .get(&target)
@@ -860,7 +855,7 @@ fn execute_function_inner(
                 });
                 current = target;
             }
-            cfg_mir::Terminator::BranchIf {
+            ir::Terminator::BranchIf {
                 cond,
                 taken,
                 fallthrough,
@@ -885,7 +880,7 @@ fn execute_function_inner(
                 });
                 current = next;
             }
-            cfg_mir::Terminator::BranchIfZero {
+            ir::Terminator::BranchIfZero {
                 cond,
                 taken,
                 fallthrough,
@@ -921,7 +916,7 @@ fn execute_function_inner(
 }
 
 fn execute_function_inner_with_event_trace(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     lambda_indices: &HashMap<usize, usize>,
     func_index: usize,
     state: &mut InterpreterState<'_>,
@@ -1379,7 +1374,7 @@ fn execute_function_inner_with_event_trace(
             .term(block.term)
             .ok_or(InterpreterError::UnknownTerm { term: block.term })?;
         match term {
-            cfg_mir::Terminator::Return => {
+            ir::Terminator::Return => {
                 let results = func
                     .data_results
                     .iter()
@@ -1400,7 +1395,7 @@ fn execute_function_inner_with_event_trace(
                     .collect::<Vec<_>>();
                 return Ok(data_results);
             }
-            cfg_mir::Terminator::Branch { edge } => {
+            ir::Terminator::Branch { edge } => {
                 let next = apply_edge_with_event_trace(
                     func,
                     &block_indices,
@@ -1429,7 +1424,7 @@ fn execute_function_inner_with_event_trace(
                 );
                 current = next;
             }
-            cfg_mir::Terminator::BranchIf {
+            ir::Terminator::BranchIf {
                 cond,
                 taken,
                 fallthrough,
@@ -1474,7 +1469,7 @@ fn execute_function_inner_with_event_trace(
                 );
                 current = next;
             }
-            cfg_mir::Terminator::BranchIfZero {
+            ir::Terminator::BranchIfZero {
                 cond,
                 taken,
                 fallthrough,
@@ -1590,7 +1585,7 @@ fn run_call_pure(func: usize, args: &[u64]) -> u64 {
     }
 }
 
-fn build_block_index(func: &cfg_mir::Function) -> HashMap<cfg_mir::BlockId, usize> {
+fn build_block_index(func: &ir::Function) -> HashMap<ir::BlockId, usize> {
     let mut out = HashMap::with_capacity(func.blocks.len());
     for (idx, block) in func.blocks.iter().enumerate() {
         out.insert(block.id, idx);
@@ -1598,7 +1593,7 @@ fn build_block_index(func: &cfg_mir::Function) -> HashMap<cfg_mir::BlockId, usiz
     out
 }
 
-fn infer_program_output_size(program: &cfg_mir::Program) -> usize {
+fn infer_program_output_size(program: &ir::Program) -> usize {
     program
         .funcs
         .iter()
@@ -1607,7 +1602,7 @@ fn infer_program_output_size(program: &cfg_mir::Program) -> usize {
         .unwrap_or(0)
 }
 
-fn infer_output_size(func: &cfg_mir::Function) -> usize {
+fn infer_output_size(func: &ir::Function) -> usize {
     let from_fields = func
         .blocks
         .iter()
@@ -1681,11 +1676,11 @@ fn exec_unaryop(op: UnaryOpKind, src: u64) -> u64 {
 }
 
 fn apply_edge(
-    func: &cfg_mir::Function,
-    block_indices: &HashMap<cfg_mir::BlockId, usize>,
+    func: &ir::Function,
+    block_indices: &HashMap<ir::BlockId, usize>,
     state: &mut InterpreterState<'_>,
-    edge_id: cfg_mir::EdgeId,
-) -> Result<cfg_mir::BlockId, InterpreterError> {
+    edge_id: ir::EdgeId,
+) -> Result<ir::BlockId, InterpreterError> {
     let edge = func
         .edge(edge_id)
         .ok_or(InterpreterError::UnknownEdge { edge: edge_id })?;
@@ -1714,14 +1709,14 @@ fn apply_edge(
 }
 
 fn apply_edge_with_event_trace(
-    func: &cfg_mir::Function,
-    block_indices: &HashMap<cfg_mir::BlockId, usize>,
+    func: &ir::Function,
+    block_indices: &HashMap<ir::BlockId, usize>,
     state: &mut InterpreterState<'_>,
-    edge_id: cfg_mir::EdgeId,
+    edge_id: ir::EdgeId,
     trace: &mut InterpreterExecutionTrace,
     step_index: usize,
     location: InterpreterTraceLocation,
-) -> Result<cfg_mir::BlockId, InterpreterError> {
+) -> Result<ir::BlockId, InterpreterError> {
     let edge = func
         .edge(edge_id)
         .ok_or(InterpreterError::UnknownEdge { edge: edge_id })?;
@@ -1769,30 +1764,30 @@ mod tests {
         VReg::new(index)
     }
 
-    fn test_inst(id: u32, op: LinearOp) -> cfg_mir::Inst {
-        cfg_mir::Inst {
-            id: cfg_mir::InstId(id),
+    fn test_inst(id: u32, op: LinearOp) -> ir::Inst {
+        ir::Inst {
+            id: ir::InstId(id),
             op,
             operands: Vec::new(),
-            clobbers: cfg_mir::Clobbers::default(),
+            clobbers: ir::Clobbers::default(),
         }
     }
 
-    fn linear_program() -> cfg_mir::Program {
-        let b0 = cfg_mir::Block {
-            id: cfg_mir::BlockId(0),
+    fn linear_program() -> ir::Program {
+        let b0 = ir::Block {
+            id: ir::BlockId(0),
             params: Vec::new(),
-            insts: vec![cfg_mir::InstId(0), cfg_mir::InstId(1)],
-            term: cfg_mir::TermId(0),
+            insts: vec![ir::InstId(0), ir::InstId(1)],
+            term: ir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
             dead: false,
         };
-        cfg_mir::Program {
-            funcs: vec![cfg_mir::Function {
-                id: cfg_mir::FunctionId(0),
+        ir::Program {
+            funcs: vec![ir::Function {
+                id: ir::FunctionId(0),
                 lambda_id: LambdaId::new(0),
-                entry: cfg_mir::BlockId(0),
+                entry: ir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: vec![v(0)],
                 output_size: 0,
@@ -1805,7 +1800,7 @@ mod tests {
                         value: 42,
                     },
                 )],
-                terms: vec![cfg_mir::Terminator::Return],
+                terms: vec![ir::Terminator::Return],
             }],
             vreg_count: 1,
             slot_count: 0,
@@ -1819,58 +1814,58 @@ mod tests {
         }
     }
 
-    fn branching_program() -> cfg_mir::Program {
-        let b0 = cfg_mir::Block {
-            id: cfg_mir::BlockId(0),
+    fn branching_program() -> ir::Program {
+        let b0 = ir::Block {
+            id: ir::BlockId(0),
             params: Vec::new(),
-            insts: vec![cfg_mir::InstId(0)],
-            term: cfg_mir::TermId(0),
+            insts: vec![ir::InstId(0)],
+            term: ir::TermId(0),
             preds: Vec::new(),
-            succs: vec![cfg_mir::EdgeId(0), cfg_mir::EdgeId(1)],
+            succs: vec![ir::EdgeId(0), ir::EdgeId(1)],
             dead: false,
         };
-        let b1 = cfg_mir::Block {
-            id: cfg_mir::BlockId(1),
+        let b1 = ir::Block {
+            id: ir::BlockId(1),
             params: vec![v(1)],
-            insts: vec![cfg_mir::InstId(1)],
-            term: cfg_mir::TermId(1),
-            preds: vec![cfg_mir::EdgeId(0)],
+            insts: vec![ir::InstId(1)],
+            term: ir::TermId(1),
+            preds: vec![ir::EdgeId(0)],
             succs: Vec::new(),
             dead: false,
         };
-        let b2 = cfg_mir::Block {
-            id: cfg_mir::BlockId(2),
+        let b2 = ir::Block {
+            id: ir::BlockId(2),
             params: vec![v(1)],
-            insts: vec![cfg_mir::InstId(2)],
-            term: cfg_mir::TermId(2),
-            preds: vec![cfg_mir::EdgeId(1)],
+            insts: vec![ir::InstId(2)],
+            term: ir::TermId(2),
+            preds: vec![ir::EdgeId(1)],
             succs: Vec::new(),
             dead: false,
         };
-        cfg_mir::Program {
-            funcs: vec![cfg_mir::Function {
-                id: cfg_mir::FunctionId(0),
+        ir::Program {
+            funcs: vec![ir::Function {
+                id: ir::FunctionId(0),
                 lambda_id: LambdaId::new(0),
-                entry: cfg_mir::BlockId(0),
+                entry: ir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: vec![v(1)],
                 output_size: 0,
                 blocks: vec![b0, b1, b2],
                 edges: vec![
-                    cfg_mir::Edge {
-                        id: cfg_mir::EdgeId(0),
-                        from: cfg_mir::BlockId(0),
-                        to: cfg_mir::BlockId(1),
-                        args: vec![cfg_mir::EdgeArg {
+                    ir::Edge {
+                        id: ir::EdgeId(0),
+                        from: ir::BlockId(0),
+                        to: ir::BlockId(1),
+                        args: vec![ir::EdgeArg {
                             target: v(1),
                             source: v(0),
                         }],
                     },
-                    cfg_mir::Edge {
-                        id: cfg_mir::EdgeId(1),
-                        from: cfg_mir::BlockId(0),
-                        to: cfg_mir::BlockId(2),
-                        args: vec![cfg_mir::EdgeArg {
+                    ir::Edge {
+                        id: ir::EdgeId(1),
+                        from: ir::BlockId(0),
+                        to: ir::BlockId(2),
+                        args: vec![ir::EdgeArg {
                             target: v(1),
                             source: v(0),
                         }],
@@ -1900,13 +1895,13 @@ mod tests {
                     ),
                 ],
                 terms: vec![
-                    cfg_mir::Terminator::BranchIfZero {
+                    ir::Terminator::BranchIfZero {
                         cond: v(0),
-                        taken: cfg_mir::EdgeId(0),
-                        fallthrough: cfg_mir::EdgeId(1),
+                        taken: ir::EdgeId(0),
+                        fallthrough: ir::EdgeId(1),
                     },
-                    cfg_mir::Terminator::Return,
-                    cfg_mir::Terminator::Return,
+                    ir::Terminator::Return,
+                    ir::Terminator::Return,
                 ],
             }],
             vreg_count: 2,
@@ -1947,13 +1942,13 @@ mod tests {
         let (_, trace) =
             execute_program_with_event_trace(&program, &[]).expect("trace should execute");
 
-        let entries = trace.entries_to_block(LambdaId::new(0), cfg_mir::BlockId(1));
+        let entries = trace.entries_to_block(LambdaId::new(0), ir::BlockId(1));
         assert_eq!(entries.len(), 1);
 
         let last = trace
             .last_write_to_vreg(v(1))
             .expect("v1 should be written on the taken branch");
-        assert_eq!(last.location.block, cfg_mir::BlockId(1));
+        assert_eq!(last.location.block, ir::BlockId(1));
         assert!(matches!(
             &last.kind,
             InterpreterEventKind::VregWrite {

@@ -41,7 +41,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::cfg_mir::{BlockId, EdgeArg, EdgeId, Function, Terminator};
+use crate::ir::{BlockId, EdgeArg, EdgeId, Function, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 

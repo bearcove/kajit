@@ -1,7 +1,7 @@
 //! EmitContext struct and helper methods for aarch64 regalloc3 backend.
 
 use kajit_emit::aarch64::{Reg, Width};
-use kajit_mir::cfg_mir;
+use kajit_mir::ir;
 use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
 
@@ -23,9 +23,9 @@ pub(super) enum EdgeLoc {
 /// Context for emitting a single function.
 pub(super) struct EmitContext<'a> {
     pub(super) ectx: &'a mut EmitCtx,
-    pub(super) func: &'a cfg_mir::Function,
+    pub(super) func: &'a ir::Function,
     pub(super) alloc_func: &'a AllocatedCfgFunctionRa3,
-    pub(super) block_labels: HashMap<cfg_mir::BlockId, LabelId>,
+    pub(super) block_labels: HashMap<ir::BlockId, LabelId>,
     pub(super) success_exit: LabelId,
     /// Slot offset base: base_frame + spill_slots * 8 gives the start of user slots.
     pub(super) slot_base: u32,
@@ -34,7 +34,7 @@ pub(super) struct EmitContext<'a> {
     /// VReg → constant value (for immediate folding in BinOps)
     pub(super) const_values: HashMap<kajit_ir::VReg, u64>,
     /// OpId → DWARF line number (for source-level debugging)
-    pub(super) line_map: HashMap<cfg_mir::OpId, u32>,
+    pub(super) line_map: HashMap<ir::OpId, u32>,
     /// Recorded intrinsic call sites for harness relocation.
     pub(super) intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
     /// Recorded data blob address sites for relocation.
@@ -56,13 +56,12 @@ pub(super) struct EmitContext<'a> {
     /// Allows Return terminator to fall through instead of branching.
     pub(super) is_last_emitted_block: bool,
     /// Per-edge trampoline labels for edges that need value delivery before control transfer.
-    pub(super) edge_trampoline_labels:
-        HashMap<cfg_mir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
+    pub(super) edge_trampoline_labels: HashMap<ir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
     /// Actual source homes for edge arguments at predecessor exit.
-    pub(super) edge_source_locations: HashMap<(cfg_mir::EdgeId, u32), VRegLocation>,
+    pub(super) edge_source_locations: HashMap<(ir::EdgeId, u32), VRegLocation>,
     /// Actual source homes for instruction use operands at instruction entry.
-    pub(super) inst_source_locations: HashMap<(cfg_mir::InstId, u32), VRegLocation>,
-    pub(super) current_inst: Option<cfg_mir::InstId>,
+    pub(super) inst_source_locations: HashMap<(ir::InstId, u32), VRegLocation>,
+    pub(super) current_inst: Option<ir::InstId>,
     /// External symbol resolution table.
     pub(super) symbol_table: &'a kajit_types::SymbolTable,
     /// Whether we're emitting for JIT or object file.
@@ -271,14 +270,14 @@ impl<'a> EmitContext<'a> {
         self.edge_tmp_base + (index as u32) * 8
     }
 
-    pub(super) fn edge_has_moves(&self, edge_id: cfg_mir::EdgeId) -> bool {
+    pub(super) fn edge_has_moves(&self, edge_id: ir::EdgeId) -> bool {
         let edge = &self.func.edges[edge_id.index()];
         edge.args.iter().any(|arg| arg.source != arg.target)
     }
 
     pub(super) fn edge_target_label(
         &mut self,
-        edge_id: cfg_mir::EdgeId,
+        edge_id: ir::EdgeId,
         target_label: LabelId,
     ) -> LabelId {
         if !self.edge_has_moves(edge_id) {
@@ -307,7 +306,7 @@ impl<'a> EmitContext<'a> {
         }
     }
 
-    pub(super) fn emit_edge_moves(&mut self, edge_id: cfg_mir::EdgeId) {
+    pub(super) fn emit_edge_moves(&mut self, edge_id: ir::EdgeId) {
         let edge = &self.func.edges[edge_id.index()];
         if edge.args.is_empty() {
             return;
@@ -477,7 +476,7 @@ impl<'a> EmitContext<'a> {
     }
 
     pub(super) fn emit_edge_trampolines(&mut self) {
-        let trampolines: Vec<(cfg_mir::EdgeId, LabelId, kajit_emit::SourceLocation)> = self
+        let trampolines: Vec<(ir::EdgeId, LabelId, kajit_emit::SourceLocation)> = self
             .edge_trampoline_labels
             .iter()
             .map(|(&edge_id, &(label, source_location))| (edge_id, label, source_location))

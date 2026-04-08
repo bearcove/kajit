@@ -1,7 +1,7 @@
 //! EmitContext — core helpers for the x86_64 regalloc3 backend.
 
 use kajit_emit::x64::{self, LabelId, Mem};
-use kajit_mir::cfg_mir::{self, Function};
+use kajit_mir::ir::{self, Function};
 use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ pub(super) struct EmitContext<'a> {
     pub ectx: &'a mut EmitCtx,
     pub func: &'a Function,
     pub alloc_func: &'a AllocatedCfgFunctionRa3,
-    pub block_labels: HashMap<cfg_mir::BlockId, LabelId>,
+    pub block_labels: HashMap<ir::BlockId, LabelId>,
     pub success_exit: LabelId,
     /// Slot offset base: base_frame + spill_slots * 8 gives the start of user slots.
     pub slot_base: u32,
@@ -26,7 +26,7 @@ pub(super) struct EmitContext<'a> {
     /// VReg → constant value (for immediate folding in BinOps)
     pub const_values: HashMap<kajit_ir::VReg, u64>,
     /// OpId → DWARF line number (for source-level debugging)
-    pub line_map: HashMap<cfg_mir::OpId, u32>,
+    pub line_map: HashMap<ir::OpId, u32>,
     /// Recorded intrinsic call sites for harness relocation.
     pub intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
     /// Recorded data blob address sites for relocation.
@@ -42,12 +42,12 @@ pub(super) struct EmitContext<'a> {
     /// Set to true when emitting the last block before the success epilogue.
     pub is_last_emitted_block: bool,
     /// Per-edge trampoline labels for edges that need value delivery before control transfer.
-    pub edge_trampoline_labels: HashMap<cfg_mir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
+    pub edge_trampoline_labels: HashMap<ir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
     /// Actual source homes for edge arguments at predecessor exit.
-    pub edge_source_locations: HashMap<(cfg_mir::EdgeId, u32), VRegLocation>,
+    pub edge_source_locations: HashMap<(ir::EdgeId, u32), VRegLocation>,
     /// Actual source homes for instruction use operands at instruction entry.
-    pub inst_source_locations: HashMap<(cfg_mir::InstId, u32), VRegLocation>,
-    pub current_inst: Option<cfg_mir::InstId>,
+    pub inst_source_locations: HashMap<(ir::InstId, u32), VRegLocation>,
+    pub current_inst: Option<ir::InstId>,
     /// External symbol resolution table.
     pub symbol_table: &'a kajit_types::SymbolTable,
     /// Whether we're emitting for JIT or object file.
@@ -257,16 +257,12 @@ impl<'a> EmitContext<'a> {
         self.edge_tmp_base + (index as u32) * 8
     }
 
-    pub fn edge_has_moves(&self, edge_id: cfg_mir::EdgeId) -> bool {
+    pub fn edge_has_moves(&self, edge_id: ir::EdgeId) -> bool {
         let edge = &self.func.edges[edge_id.index()];
         edge.args.iter().any(|arg| arg.source != arg.target)
     }
 
-    pub fn edge_target_label(
-        &mut self,
-        edge_id: cfg_mir::EdgeId,
-        target_label: LabelId,
-    ) -> LabelId {
+    pub fn edge_target_label(&mut self, edge_id: ir::EdgeId, target_label: LabelId) -> LabelId {
         if !self.edge_has_moves(edge_id) {
             return target_label;
         }
@@ -302,7 +298,7 @@ impl<'a> EmitContext<'a> {
         }
     }
 
-    pub fn emit_edge_moves(&mut self, edge_id: cfg_mir::EdgeId) {
+    pub fn emit_edge_moves(&mut self, edge_id: ir::EdgeId) {
         let edge = &self.func.edges[edge_id.index()];
         if edge.args.is_empty() {
             return;
@@ -353,7 +349,7 @@ impl<'a> EmitContext<'a> {
     }
 
     pub fn emit_edge_trampolines(&mut self) {
-        let trampolines: Vec<(cfg_mir::EdgeId, LabelId, kajit_emit::SourceLocation)> = self
+        let trampolines: Vec<(ir::EdgeId, LabelId, kajit_emit::SourceLocation)> = self
             .edge_trampoline_labels
             .iter()
             .map(|(&edge_id, &(label, source_location))| (edge_id, label, source_location))
@@ -372,14 +368,14 @@ impl<'a> EmitContext<'a> {
     }
 
     /// Resolve a block ID through trampoline aliases.
-    pub fn resolve_trampoline(&self, mut block_id: cfg_mir::BlockId) -> cfg_mir::BlockId {
+    pub fn resolve_trampoline(&self, mut block_id: ir::BlockId) -> ir::BlockId {
         for _ in 0..16 {
             let block = &self.func.blocks[block_id.index()];
             if !block.insts.is_empty() {
                 break;
             }
             let term = &self.func.terms[block.term.0 as usize];
-            if let cfg_mir::Terminator::Branch { edge } = term {
+            if let ir::Terminator::Branch { edge } = term {
                 if self.edge_has_moves(*edge) {
                     break;
                 }

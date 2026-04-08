@@ -24,7 +24,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::cfg_mir::{BlockId, EdgeId, Function};
+use crate::ir::{BlockId, EdgeId, Function};
 use kajit_ir::VReg;
 
 /// Merge empty forwarding blocks into their predecessors.
@@ -347,15 +347,15 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
     // Update edge IDs in terminators
     for term in &mut func.terms {
         match term {
-            crate::cfg_mir::Terminator::Branch { edge } => {
+            crate::ir::Terminator::Branch { edge } => {
                 if let Some(&new_edge) = old_edge_to_new.get(edge) {
                     *edge = new_edge;
                 }
             }
-            crate::cfg_mir::Terminator::BranchIf {
+            crate::ir::Terminator::BranchIf {
                 taken, fallthrough, ..
             }
-            | crate::cfg_mir::Terminator::BranchIfZero {
+            | crate::ir::Terminator::BranchIfZero {
                 taken, fallthrough, ..
             } => {
                 if let Some(&new_edge) = old_edge_to_new.get(taken) {
@@ -365,7 +365,7 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
                     *fallthrough = new_edge;
                 }
             }
-            crate::cfg_mir::Terminator::JumpTable {
+            crate::ir::Terminator::JumpTable {
                 targets, default, ..
             } => {
                 for edge in targets {
@@ -377,7 +377,7 @@ pub fn remove_unreachable_blocks(func: &mut Function) -> bool {
                     *default = new_edge;
                 }
             }
-            crate::cfg_mir::Terminator::Return => {}
+            crate::ir::Terminator::Return => {}
         }
     }
 

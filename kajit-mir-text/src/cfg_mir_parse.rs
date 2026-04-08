@@ -6,7 +6,7 @@ use chumsky::prelude::*;
 
 use kajit_ir::{FnPtr, IntrinsicRegistry, LambdaId, SlotId, VReg, Width};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
-use kajit_mir::cfg_mir::{
+use kajit_mir::ir::{
     Block, BlockId, Clobbers, Edge, EdgeArg, EdgeId, FixedReg, Function, FunctionId, Inst, InstId,
     Operand, OperandKind, Program, RegClass, TermId, Terminator,
 };
@@ -982,7 +982,7 @@ cfg_program vregs=1 slots=0 {
         let mut func = builder.finish();
         let linear = linearize(&mut func);
         let hints = Default::default();
-        let cfg = kajit_mir::cfg_mir::lower_linear_ir(&linear, hints);
+        let cfg = kajit_mir::ir::lower_linear_ir(&linear, hints);
 
         let text1 = format!("{cfg}");
         let cfg2 = parse_cfg_mir(&text1).expect("round-trip parse should succeed");
@@ -1015,7 +1015,7 @@ cfg_program vregs=1 slots=0 {
         let mut func = builder.finish();
         let linear = linearize(&mut func);
         let hints = Default::default();
-        let cfg = kajit_mir::cfg_mir::lower_linear_ir(&linear, hints);
+        let cfg = kajit_mir::ir::lower_linear_ir(&linear, hints);
 
         let text1 = format!("{}", cfg.display_with_registry(&registry));
         assert!(

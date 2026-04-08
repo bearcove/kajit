@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use crate::cfg_mir::{EdgeId, Function, Terminator};
+use crate::ir::{EdgeId, Function, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 

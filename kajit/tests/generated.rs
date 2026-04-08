@@ -2,7 +2,7 @@
 #![allow(clippy::approx_constant)]
 use facet::Facet;
 use proptest::arbitrary::Arbitrary;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Friend {
@@ -218,8 +218,7 @@ struct Wrapper(u32);
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
 struct StringWrapper(
-    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")]
-    String,
+    #[proptest(strategy = "proptest::string::string_regex(\"(?s).{0,64}\").unwrap()")] String,
 );
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 #[facet(transparent)]
@@ -310,16 +309,12 @@ struct UnitField {
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct ScalarVec {
-    #[proptest(
-        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
-    )]
+    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
     values: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
 struct Nums {
-    #[proptest(
-        strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)"
-    )]
+    #[proptest(strategy = "proptest::collection::vec(proptest::arbitrary::any::<u32>(), 0..256)")]
     vals: Vec<u32>,
 }
 #[derive(Debug, PartialEq, Serialize, Deserialize, Facet, proptest_derive::Arbitrary)]
@@ -381,7 +376,7 @@ fn maybe_print_case_input(input: &[u8]) {
     let mut hex = String::with_capacity(input.len() * 2);
     for byte in input {
         use core::fmt::Write as _;
-        write!(& mut hex, "{byte:02x}").expect("writing to String should not fail");
+        write!(&mut hex, "{byte:02x}").expect("writing to String should not fail");
     }
     println!("KAJIT_CASE_INPUT_HEX={hex}");
 }
@@ -415,9 +410,7 @@ fn debug_cfg_mir_command_from_env() -> Result<kajit_mir::DebugCfgMirCommand, Str
                 .map_err(|_| format!("missing {DEBUG_CFG_MIR_VREG_ENV}"))?;
             let vreg = raw
                 .parse::<u32>()
-                .map_err(|err| {
-                    format!("invalid {DEBUG_CFG_MIR_VREG_ENV}={raw:?}: {err}")
-                })?;
+                .map_err(|err| format!("invalid {DEBUG_CFG_MIR_VREG_ENV}={raw:?}: {err}"))?;
             Ok(kajit_mir::DebugCfgMirCommand::WhyVreg {
                 vreg: kajit_ir::VReg::new(vreg),
             })
@@ -427,28 +420,20 @@ fn debug_cfg_mir_command_from_env() -> Result<kajit_mir::DebugCfgMirCommand, Str
                 .map_err(|_| format!("missing {DEBUG_CFG_MIR_BLOCK_ENV}"))?;
             let block = raw_block
                 .parse::<u32>()
-                .map_err(|err| {
-                    format!("invalid {DEBUG_CFG_MIR_BLOCK_ENV}={raw_block:?}: {err}")
-                })?;
+                .map_err(|err| format!("invalid {DEBUG_CFG_MIR_BLOCK_ENV}={raw_block:?}: {err}"))?;
             let raw_lambda = std::env::var(DEBUG_CFG_MIR_LAMBDA_ENV)
                 .map_err(|_| format!("missing {DEBUG_CFG_MIR_LAMBDA_ENV}"))?;
-            let lambda = raw_lambda
-                .parse::<u32>()
-                .map_err(|err| {
-                    format!("invalid {DEBUG_CFG_MIR_LAMBDA_ENV}={raw_lambda:?}: {err}")
-                })?;
+            let lambda = raw_lambda.parse::<u32>().map_err(|err| {
+                format!("invalid {DEBUG_CFG_MIR_LAMBDA_ENV}={raw_lambda:?}: {err}")
+            })?;
             Ok(kajit_mir::DebugCfgMirCommand::Block {
                 lambda: kajit_ir::LambdaId::new(lambda),
-                block: kajit_mir::cfg_mir::BlockId(block),
+                block: kajit_mir::ir::BlockId(block),
             })
         }
-        other => {
-            Err(
-                format!(
-                    "unsupported {DEBUG_CFG_MIR_COMMAND_ENV}={other:?}; expected run, trace, why-vreg, or block"
-                ),
-            )
-        }
+        other => Err(format!(
+            "unsupported {DEBUG_CFG_MIR_COMMAND_ENV}={other:?}; expected run, trace, why-vreg, or block"
+        )),
     }
 }
 fn maybe_debug_case_cfg_mir<T>(input: &[u8]) -> bool
@@ -459,16 +444,14 @@ where
         return false;
     };
     let path = std::path::PathBuf::from(path);
-    let command = debug_cfg_mir_command_from_env()
-        .unwrap_or_else(|err| {
-            eprintln!("failed to build debug CFG-MIR command: {err}");
-            std::process::exit(1);
-        });
-    let cfg_mir_text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| {
-            eprintln!("failed to read {}: {err}", path.display());
-            std::process::exit(1);
-        });
+    let command = debug_cfg_mir_command_from_env().unwrap_or_else(|err| {
+        eprintln!("failed to build debug CFG-MIR command: {err}");
+        std::process::exit(1);
+    });
+    let cfg_mir_text = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+        eprintln!("failed to read {}: {err}", path.display());
+        std::process::exit(1);
+    });
     let registry = kajit::symbol_registry_for_shape(T::SHAPE);
     let program = kajit_mir_text::parse_cfg_mir_with_registry(&cfg_mir_text, &registry)
         .unwrap_or_else(|err| {
@@ -476,15 +459,15 @@ where
             std::process::exit(1);
         });
     let output = kajit_mir::run_debug_cfg_mir_command_with_registry(
-            &program,
-            input,
-            &command,
-            Some(&registry),
-        )
-        .unwrap_or_else(|err| {
-            eprintln!("debug CFG-MIR command failed: {err}");
-            std::process::exit(1);
-        });
+        &program,
+        input,
+        &command,
+        Some(&registry),
+    )
+    .unwrap_or_else(|err| {
+        eprintln!("debug CFG-MIR command failed: {err}");
+        std::process::exit(1);
+    });
     println!("KAJIT_CASE_DEBUG_CFG_MIR_BEGIN");
     print!("{output}");
     if !output.ends_with('\n') {
@@ -537,7 +520,7 @@ fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
 }
 #[cfg(target_arch = "x86_64")]
 fn disassemble_code(code: &[u8], base_addr: usize) -> Vec<String> {
-    use yaxpeax_arch::{Decoder, U8Reader, LengthedInstruction};
+    use yaxpeax_arch::{Decoder, LengthedInstruction, U8Reader};
     use yaxpeax_x86::amd64::InstDecoder;
     let decoder = InstDecoder::default();
     let mut reader = U8Reader::new(code);
@@ -574,7 +557,10 @@ where
     let code = decoder.code();
     let entry = decoder.entry_offset();
     let base_addr = code.as_ptr() as usize;
-    println!("=== KAJIT JIT CODE ({} bytes, entry at +{entry:#x}) ===", code.len());
+    println!(
+        "=== KAJIT JIT CODE ({} bytes, entry at +{entry:#x}) ===",
+        code.len()
+    );
     for line in disassemble_code(&code[entry..], base_addr + entry) {
         println!("{line}");
     }
@@ -585,7 +571,10 @@ where
     let serde_fn_ptr = serde_postcard_deser::<T> as *const u8;
     let serde_code = unsafe { std::slice::from_raw_parts(serde_fn_ptr, 4096) };
     println!();
-    println!("=== SERDE POSTCARD CODE (showing first ~4KB from {:p}) ===", serde_fn_ptr);
+    println!(
+        "=== SERDE POSTCARD CODE (showing first ~4KB from {:p}) ===",
+        serde_fn_ptr
+    );
     let mut lines = disassemble_code(serde_code, serde_fn_ptr as usize);
     if let Some(ret_idx) = lines.iter().position(|l| l.contains("ret")) {
         lines.truncate(ret_idx + 1);
@@ -597,8 +586,11 @@ where
 }
 fn assert_postcard_case<T>(value: T)
 where
-    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
-        + PartialEq + std::fmt::Debug,
+    for<'input> T: Facet<'input>
+        + serde::Serialize
+        + serde::de::DeserializeOwned
+        + PartialEq
+        + std::fmt::Debug,
 {
     let encoded = ::postcard::to_allocvec(&value).unwrap();
     maybe_print_case_input(&encoded);
@@ -637,8 +629,8 @@ where
     }
     maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
-    let input = core::str::from_utf8(input)
-        .expect("postcard input must be valid utf-8 for from_str path");
+    let input =
+        core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
     let got: T = kajit::from_str(&decoder, input).unwrap();
     assert_eq!(got, expected);
 }
@@ -657,15 +649,12 @@ where
     }
     maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
-    let input = core::str::from_utf8(input)
-        .expect("postcard input must be valid utf-8 for from_str path");
+    let input =
+        core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
     let out = kajit::from_str::<T>(&decoder, input);
     assert!(out.is_err(), "expected postcard decode failure");
 }
-fn assert_postcard_input_err_code<T>(
-    input: &[u8],
-    expected_code: kajit::context::ErrorCode,
-)
+fn assert_postcard_input_err_code<T>(input: &[u8], expected_code: kajit::context::ErrorCode)
 where
     for<'input> T: Facet<'input>,
 {
@@ -679,8 +668,8 @@ where
     }
     maybe_wait_for_debugger();
     let decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
-    let input = core::str::from_utf8(input)
-        .expect("postcard input must be valid utf-8 for from_str path");
+    let input =
+        core::str::from_utf8(input).expect("postcard input must be valid utf-8 for from_str path");
     let out = kajit::from_str::<T>(&decoder, input);
     let err = match out {
         Ok(_) => panic!("expected postcard decode failure"),
@@ -690,35 +679,29 @@ where
 }
 fn assert_prop_case<T>(_marker: &T)
 where
-    for<'input> T: Facet<'input> + serde::Serialize + serde::de::DeserializeOwned
-        + PartialEq + std::fmt::Debug + Arbitrary + 'static,
+    for<'input> T: Facet<'input>
+        + serde::Serialize
+        + serde::de::DeserializeOwned
+        + PartialEq
+        + std::fmt::Debug
+        + Arbitrary
+        + 'static,
 {
     maybe_wait_for_debugger();
-    let postcard_decoder = kajit::compile_decoder(
-        T::SHAPE,
-        kajit::DecoderKind::Postcard,
-    );
+    let postcard_decoder = kajit::compile_decoder(T::SHAPE, kajit::DecoderKind::Postcard);
     let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {
         cases: 64,
         ..proptest::test_runner::Config::default()
     });
     let strategy = proptest::arbitrary::any::<T>();
     runner
-        .run(
-            &strategy,
-            |value| {
-                let postcard_encoded = ::postcard::to_allocvec(&value).unwrap();
-                let postcard_expected: T = ::postcard::from_bytes(&postcard_encoded)
-                    .unwrap();
-                let postcard_got: T = kajit::deserialize(
-                        &postcard_decoder,
-                        &postcard_encoded,
-                    )
-                    .unwrap();
-                assert_eq!(postcard_got, postcard_expected);
-                Ok(())
-            },
-        )
+        .run(&strategy, |value| {
+            let postcard_encoded = ::postcard::to_allocvec(&value).unwrap();
+            let postcard_expected: T = ::postcard::from_bytes(&postcard_encoded).unwrap();
+            let postcard_got: T = kajit::deserialize(&postcard_decoder, &postcard_encoded).unwrap();
+            assert_eq!(postcard_got, postcard_expected);
+            Ok(())
+        })
         .unwrap();
 }
 const DUMP_STAGES_ENV: &str = "KAJIT_DUMP_STAGES";
@@ -770,7 +753,11 @@ fn dump_stages() -> Option<Vec<String>> {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_ascii_lowercase())
         .collect();
-    if stages.is_empty() { None } else { Some(stages) }
+    if stages.is_empty() {
+        None
+    } else {
+        Some(stages)
+    }
 }
 fn should_dump_stage(stage: &str) -> bool {
     let Some(stages) = dump_stages() else {
@@ -815,20 +802,15 @@ fn dump_dir() -> std::path::PathBuf {
 fn dump_stage(format_label: &str, case: &str, stage: &str, content: &str) {
     let dir = dump_dir();
     std::fs::create_dir_all(&dir).expect("failed to create dump directory");
-    let path = dir
-        .join(
-            format!("{format_label}__{case}__{}__{stage}.txt", std::env::consts::ARCH),
-        );
-    std::fs::write(&path, content)
-        .unwrap_or_else(|error| {
-            panic!("failed writing dump to {}: {error}", path.display());
-        });
+    let path = dir.join(format!(
+        "{format_label}__{case}__{}__{stage}.txt",
+        std::env::consts::ARCH
+    ));
+    std::fs::write(&path, content).unwrap_or_else(|error| {
+        panic!("failed writing dump to {}: {error}", path.display());
+    });
 }
-fn maybe_dump_codegen_artifacts(
-    format_label: &str,
-    case: &str,
-    artifacts: &CodegenArtifacts,
-) {
+fn maybe_dump_codegen_artifacts(format_label: &str, case: &str, artifacts: &CodegenArtifacts) {
     if !dumps_enabled_for_case(format_label, case) {
         return;
     }
@@ -1335,7 +1317,9 @@ mod postcard {
     #[test]
     #[ignore = "pointer lowering is not implemented in IR path yet; case=box_scalar, type=BoxedScalar"]
     fn box_scalar() {
-        let value = BoxedScalar { value: Box::new(42) };
+        let value = BoxedScalar {
+            value: Box::new(42),
+        };
         assert_postcard_case(value);
     }
     #[test]
@@ -1453,7 +1437,9 @@ mod postcard {
     }
     #[test]
     fn vec_u32_v0() {
-        let value = Nums { vals: vec![1, 2, 3] };
+        let value = Nums {
+            vals: vec![1, 2, 3],
+        };
         assert_postcard_case(value);
     }
     #[test]
@@ -1477,8 +1463,14 @@ mod postcard {
     fn vec_nested_struct() {
         let value = AddressList {
             addrs: vec![
-                Address { city : "Portland".into(), zip : 97201 }, Address { city :
-                "Seattle".into(), zip : 98101 },
+                Address {
+                    city: "Portland".into(),
+                    zip: 97201,
+                },
+                Address {
+                    city: "Seattle".into(),
+                    zip: 98101,
+                },
             ],
         };
         assert_postcard_case(value);
@@ -1734,7 +1726,9 @@ mod prop {
     #[test]
     #[ignore = "postcard: pointer lowering is not implemented in IR path yet; case=box_scalar, type=BoxedScalar"]
     fn box_scalar() {
-        let marker = BoxedScalar { value: Box::new(42) };
+        let marker = BoxedScalar {
+            value: Box::new(42),
+        };
         assert_prop_case(&marker);
     }
     #[test]
@@ -1831,7 +1825,9 @@ mod prop {
     }
     #[test]
     fn vec_u32() {
-        let marker = Nums { vals: vec![1, 2, 3] };
+        let marker = Nums {
+            vals: vec![1, 2, 3],
+        };
         assert_prop_case(&marker);
     }
     #[test]
@@ -1845,8 +1841,14 @@ mod prop {
     fn vec_nested_struct() {
         let marker = AddressList {
             addrs: vec![
-                Address { city : "Portland".into(), zip : 97201 }, Address { city :
-                "Seattle".into(), zip : 98101 },
+                Address {
+                    city: "Portland".into(),
+                    zip: 97201,
+                },
+                Address {
+                    city: "Seattle".into(),
+                    zip: 98101,
+                },
             ],
         };
         assert_prop_case(&marker);
@@ -1909,9 +1911,7 @@ mod postcard_input {
     use super::*;
     #[test]
     fn from_str_entrypoint() {
-        assert_postcard_input_case::<
-            Friend,
-        >(
+        assert_postcard_input_case::<Friend>(
             b"*\x05Alice",
             Friend {
                 age: 42,
@@ -1922,8 +1922,6 @@ mod postcard_input {
     #[test]
     #[ignore = "pre-existing: returns UnexpectedEof instead of UnknownVariant"]
     fn enum_unknown_discriminant() {
-        assert_postcard_input_err_code::<
-            Animal,
-        >(b"c", kajit::context::ErrorCode::UnknownVariant);
+        assert_postcard_input_err_code::<Animal>(b"c", kajit::context::ErrorCode::UnknownVariant);
     }
 }

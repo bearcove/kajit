@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Canonical post-linearization CFG MIR.
 //!
 //! This module defines an explicit control-flow representation with typed IDs

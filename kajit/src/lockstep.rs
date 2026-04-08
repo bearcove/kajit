@@ -338,7 +338,7 @@ pub enum LockstepSessionStatus {
 }
 
 pub struct LockstepSession<D: JitDebugger> {
-    pub cfg_program: kajit_mir::cfg_mir::Program,
+    pub cfg_program: kajit_mir::ir::Program,
     pub location_map: LocationMap,
     pub location_tracker: LocationTracker,
     pub listing_lines: Vec<String>,
@@ -362,7 +362,7 @@ pub struct LockstepSession<D: JitDebugger> {
 
 impl<D: JitDebugger> LockstepSession<D> {
     pub fn new(
-        program: &kajit_mir::cfg_mir::Program,
+        program: &kajit_mir::ir::Program,
         input: &[u8],
         location_map: &LocationMap,
         listing_lines: Vec<String>,
@@ -1098,7 +1098,7 @@ CONTROL FLOW DIVERGENCE at step {}
 /// Steps both the interpreter and JIT debugger, comparing vreg values at each
 /// CFG-MIR operation. Stops at the first divergence or when both complete.
 pub fn run_lockstep(
-    program: &kajit_mir::cfg_mir::Program,
+    program: &kajit_mir::ir::Program,
     input: &[u8],
     location_map: &LocationMap,
     listing_lines: &[String],
@@ -1175,25 +1175,25 @@ fn build_code_line_ranges(
 }
 
 fn build_op_to_line_map(
-    program: &kajit_mir::cfg_mir::Program,
+    program: &kajit_mir::ir::Program,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
 ) -> std::collections::HashMap<(u32, bool, usize), u32> {
     let func = &program.funcs[0];
     let lambda_id = func.lambda_id.index() as u32;
 
     let mut op_locations =
-        std::collections::HashMap::<kajit_mir::cfg_mir::OpId, (u32, bool, usize)>::new();
+        std::collections::HashMap::<kajit_mir::ir::OpId, (u32, bool, usize)>::new();
     let mut fallback = std::collections::HashMap::<(u32, bool, usize), u32>::new();
     let mut next_line = 1u32;
     for block in func.live_blocks() {
         for (inst_idx, inst_id) in block.insts.iter().enumerate() {
             let key = (block.id.0, false, inst_idx);
-            op_locations.insert(kajit_mir::cfg_mir::OpId::Inst(*inst_id), key);
+            op_locations.insert(kajit_mir::ir::OpId::Inst(*inst_id), key);
             fallback.insert(key, next_line);
             next_line += 1;
         }
         let term_key = (block.id.0, true, 0);
-        op_locations.insert(kajit_mir::cfg_mir::OpId::Term(block.term), term_key);
+        op_locations.insert(kajit_mir::ir::OpId::Term(block.term), term_key);
         fallback.insert(term_key, next_line);
         next_line += 1;
     }
@@ -1271,7 +1271,7 @@ fn step_to_next_mapped_line(
 }
 
 fn should_skip_fused_compare_value_check(
-    func: &kajit_mir::cfg_mir::Function,
+    func: &kajit_mir::ir::Function,
     loc: &kajit_mir::ProgramLocation,
     def_vreg: Option<kajit_ir::VReg>,
 ) -> bool {
@@ -1307,14 +1307,14 @@ fn should_skip_fused_compare_value_check(
     }
     matches!(
         &func.terms[block.term.index()],
-        kajit_mir::cfg_mir::Terminator::BranchIf { cond, .. }
-            | kajit_mir::cfg_mir::Terminator::BranchIfZero { cond, .. }
+        kajit_mir::ir::Terminator::BranchIf { cond, .. }
+            | kajit_mir::ir::Terminator::BranchIfZero { cond, .. }
             if *cond == def_vreg
     )
 }
 
 fn should_skip_branch_predicate_value_check(
-    func: &kajit_mir::cfg_mir::Function,
+    func: &kajit_mir::ir::Function,
     loc: &kajit_mir::ProgramLocation,
 ) -> bool {
     if !loc.at_terminator {
@@ -1325,13 +1325,12 @@ fn should_skip_branch_predicate_value_check(
     };
     matches!(
         &func.terms[block.term.index()],
-        kajit_mir::cfg_mir::Terminator::BranchIf { .. }
-            | kajit_mir::cfg_mir::Terminator::BranchIfZero { .. }
+        kajit_mir::ir::Terminator::BranchIf { .. } | kajit_mir::ir::Terminator::BranchIfZero { .. }
     )
 }
 
 fn should_skip_process_local_intrinsic_return_check(
-    func: &kajit_mir::cfg_mir::Function,
+    func: &kajit_mir::ir::Function,
     loc: &kajit_mir::ProgramLocation,
 ) -> bool {
     if loc.at_terminator {
@@ -1389,7 +1388,7 @@ fn is_process_local_pointer_intrinsic(func: kajit_ir::FnPtr) -> bool {
 
 fn observe_non_comparable_step(
     non_comparable_vregs: &mut std::collections::HashSet<u32>,
-    func: &kajit_mir::cfg_mir::Function,
+    func: &kajit_mir::ir::Function,
     loc_before: &kajit_mir::ProgramLocation,
     loc_after: &kajit_mir::ProgramLocation,
 ) {
@@ -1457,18 +1456,18 @@ fn op_produces_non_comparable_value(
 }
 
 fn chosen_edge_for_non_comparable<'a>(
-    func: &'a kajit_mir::cfg_mir::Function,
+    func: &'a kajit_mir::ir::Function,
     loc_before: &kajit_mir::ProgramLocation,
     loc_after: &kajit_mir::ProgramLocation,
-) -> Option<&'a kajit_mir::cfg_mir::Edge> {
+) -> Option<&'a kajit_mir::ir::Edge> {
     let block = func.blocks.get(loc_before.block.index())?;
     let term = func.terms.get(block.term.index())?;
     let edge_id = match term {
-        kajit_mir::cfg_mir::Terminator::Branch { edge } => Some(*edge),
-        kajit_mir::cfg_mir::Terminator::BranchIf {
+        kajit_mir::ir::Terminator::Branch { edge } => Some(*edge),
+        kajit_mir::ir::Terminator::BranchIf {
             taken, fallthrough, ..
         }
-        | kajit_mir::cfg_mir::Terminator::BranchIfZero {
+        | kajit_mir::ir::Terminator::BranchIfZero {
             taken, fallthrough, ..
         } => {
             let taken_edge = func.edges.get(taken.index())?;
@@ -1478,7 +1477,7 @@ fn chosen_edge_for_non_comparable<'a>(
                 Some(*fallthrough)
             }
         }
-        kajit_mir::cfg_mir::Terminator::JumpTable {
+        kajit_mir::ir::Terminator::JumpTable {
             targets, default, ..
         } => targets
             .iter()
@@ -1491,10 +1490,10 @@ fn chosen_edge_for_non_comparable<'a>(
 }
 
 fn op_def_vreg_at(
-    func: &kajit_mir::cfg_mir::Function,
+    func: &kajit_mir::ir::Function,
     loc: &kajit_mir::ProgramLocation,
 ) -> Option<kajit_ir::VReg> {
-    use kajit_mir::cfg_mir::OperandKind;
+    use kajit_mir::ir::OperandKind;
 
     if loc.at_terminator {
         return None;
@@ -1619,20 +1618,20 @@ fn read_vreg_live(
 
 /// Extract def vreg, use vregs, and whether this op produces a pointer value.
 pub fn op_def_uses_and_kind(
-    func: &kajit_mir::cfg_mir::Function,
+    func: &kajit_mir::ir::Function,
     loc: &kajit_mir::ProgramLocation,
 ) -> (Option<kajit_ir::VReg>, Vec<kajit_ir::VReg>, bool) {
     use kajit_lir::LinearOp;
-    use kajit_mir::cfg_mir::OperandKind;
+    use kajit_mir::ir::OperandKind;
 
     let block = &func.blocks[loc.block.index()];
 
     if loc.at_terminator {
         let term = &func.terms[block.term.index()];
         let uses = match term {
-            kajit_mir::cfg_mir::Terminator::BranchIf { cond, .. }
-            | kajit_mir::cfg_mir::Terminator::BranchIfZero { cond, .. } => vec![*cond],
-            kajit_mir::cfg_mir::Terminator::JumpTable { predicate, .. } => vec![*predicate],
+            kajit_mir::ir::Terminator::BranchIf { cond, .. }
+            | kajit_mir::ir::Terminator::BranchIfZero { cond, .. } => vec![*cond],
+            kajit_mir::ir::Terminator::JumpTable { predicate, .. } => vec![*predicate],
             _ => Vec::new(),
         };
         return (None, uses, false);

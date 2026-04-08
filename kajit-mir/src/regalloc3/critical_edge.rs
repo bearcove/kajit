@@ -16,7 +16,7 @@
 //! lives in explicit edge-copy blocks. This is the least clever and most
 //! debuggable approach.
 
-use crate::cfg_mir::{Block, BlockId, Edge, EdgeId, Function, TermId, Terminator};
+use crate::ir::{Block, BlockId, Edge, EdgeId, Function, TermId, Terminator};
 
 /// Check if an edge is critical
 ///
@@ -192,7 +192,7 @@ fn split_edge(func: &mut Function, edge_id: EdgeId) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cfg_mir::{EdgeArg, TermId};
+    use crate::ir::{EdgeArg, TermId};
     use kajit_ir::VReg;
 
     #[test]
@@ -210,7 +210,7 @@ mod tests {
         // Edge b0->b3 is critical (b0 has 2 succs, b3 has 2 preds)
 
         let func = Function {
-            id: crate::cfg_mir::FunctionId(0),
+            id: crate::ir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -323,7 +323,7 @@ mod tests {
         // Simpler test: just check that split_edge creates new block and edges
 
         let mut func = Function {
-            id: crate::cfg_mir::FunctionId(0),
+            id: crate::ir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],

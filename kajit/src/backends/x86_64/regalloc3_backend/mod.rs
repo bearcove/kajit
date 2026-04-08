@@ -8,7 +8,7 @@ mod inst;
 
 use kajit_emit::x64::{self, Mem};
 use kajit_lir::LinearOp;
-use kajit_mir::cfg_mir;
+use kajit_mir::ir;
 use kajit_mir::regalloc3_result::AllocatedCfgProgramRa3;
 use std::collections::HashMap;
 
@@ -144,7 +144,7 @@ pub fn compile_regalloc3(
 
         let (line_by_op, _) = super::build_debug_line_maps(program);
         let lambda_id = func.lambda_id.index() as u32;
-        let line_map: HashMap<cfg_mir::OpId, u32> = line_by_op
+        let line_map: HashMap<ir::OpId, u32> = line_by_op
             .iter()
             .filter(|((lid, _), _)| *lid == lambda_id)
             .map(|((_, op_id), &line)| (*op_id, line))
@@ -267,7 +267,7 @@ pub fn compile_regalloc3(
 fn emit_scalar_prologue(
     ectx: &mut EmitCtx,
     alloc: &AllocatedCfgProgramRa3,
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     extra_saved_pairs: u32,
     _is_leaf: bool,
 ) -> (u32, x64::LabelId) {
@@ -332,7 +332,7 @@ fn emit_scalar_prologue(
 fn emit_scalar_epilogue(
     ectx: &mut EmitCtx,
     alloc: &AllocatedCfgProgramRa3,
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     extra_saved_pairs: u32,
 ) {
     // Move data_results to rax, rdx.

@@ -3,35 +3,35 @@ use std::collections::HashMap;
 use kajit_lir::{BinOpKind, LinearOp};
 
 use crate::InterpreterTrap;
-use crate::cfg_mir;
+use crate::ir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebuggerError {
     NoFunctions,
     UnknownBlock {
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
     },
     UnknownEdge {
-        edge: cfg_mir::EdgeId,
+        edge: ir::EdgeId,
     },
     UnknownInst {
-        inst: cfg_mir::InstId,
+        inst: ir::InstId,
     },
     UnknownTerm {
-        term: cfg_mir::TermId,
+        term: ir::TermId,
     },
     EdgeArgArityMismatch {
-        from: cfg_mir::BlockId,
-        to: cfg_mir::BlockId,
+        from: ir::BlockId,
+        to: ir::BlockId,
         expected: usize,
         got: usize,
     },
     UnsupportedOp {
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
         op: String,
     },
     UnsupportedTerminator {
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
         term: String,
     },
 }
@@ -126,7 +126,7 @@ struct ShadowEntry {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProgramLocation {
-    pub block: cfg_mir::BlockId,
+    pub block: ir::BlockId,
     pub next_inst_index: usize,
     pub at_terminator: bool,
 }
@@ -165,7 +165,7 @@ pub struct StepEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunUntilTarget {
-    Block(cfg_mir::BlockId),
+    Block(ir::BlockId),
     Trap,
     Return,
 }
@@ -176,21 +176,21 @@ struct SessionSnapshot {
     vregs: Vec<TaggedValue>,
     trap: Option<InterpreterTrap>,
     returned: bool,
-    current: cfg_mir::BlockId,
+    current: ir::BlockId,
     next_inst: usize,
     steps: usize,
     pointer_shadow: HashMap<(PtrId, u64), ShadowEntry>,
 }
 
 pub struct DebuggerSession {
-    func: cfg_mir::Function,
-    block_indices: HashMap<cfg_mir::BlockId, usize>,
+    func: ir::Function,
+    block_indices: HashMap<ir::BlockId, usize>,
     /// Separate storage for slot values (not part of the output).
     slots: Vec<u8>,
     vregs: Vec<TaggedValue>,
     trap: Option<InterpreterTrap>,
     returned: bool,
-    current: cfg_mir::BlockId,
+    current: ir::BlockId,
     next_inst: usize,
     steps: usize,
     history: Vec<SessionSnapshot>,
@@ -213,7 +213,7 @@ pub struct DebuggerSession {
 
 impl DebuggerSession {
     pub fn new(
-        program: &cfg_mir::Program,
+        program: &ir::Program,
         args: &kajit_types::Arguments,
     ) -> Result<Self, DebuggerError> {
         tracing::info!("DebuggerSession::new start");
@@ -428,7 +428,7 @@ impl DebuggerSession {
         }
     }
 
-    fn current_block(&self) -> Result<&cfg_mir::Block, DebuggerError> {
+    fn current_block(&self) -> Result<&ir::Block, DebuggerError> {
         let idx = *self
             .block_indices
             .get(&self.current)
@@ -697,7 +697,7 @@ impl DebuggerSession {
         }
     }
 
-    fn execute_op(&mut self, block: cfg_mir::BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
+    fn execute_op(&mut self, block: ir::BlockId, op: &LinearOp) -> Result<(), DebuggerError> {
         match op {
             LinearOp::Const { dst, value } => self.write_vreg(dst.index(), *value),
             LinearOp::ExternAddr { dst, symbol } => {
@@ -1024,18 +1024,18 @@ impl DebuggerSession {
 
     fn execute_terminator(
         &mut self,
-        block_id: cfg_mir::BlockId,
-        term: &cfg_mir::Terminator,
+        block_id: ir::BlockId,
+        term: &ir::Terminator,
     ) -> Result<(), DebuggerError> {
         match term {
-            cfg_mir::Terminator::Return => {
+            ir::Terminator::Return => {
                 self.returned = true;
             }
-            cfg_mir::Terminator::Branch { edge } => {
+            ir::Terminator::Branch { edge } => {
                 self.apply_edge(*edge)?;
                 self.next_inst = 0;
             }
-            cfg_mir::Terminator::BranchIf {
+            ir::Terminator::BranchIf {
                 cond,
                 taken,
                 fallthrough,
@@ -1066,7 +1066,7 @@ impl DebuggerSession {
                 self.apply_edge(next)?;
                 self.next_inst = 0;
             }
-            cfg_mir::Terminator::BranchIfZero {
+            ir::Terminator::BranchIfZero {
                 cond,
                 taken,
                 fallthrough,
@@ -1090,7 +1090,7 @@ impl DebuggerSession {
         Ok(())
     }
 
-    fn apply_edge(&mut self, edge_id: cfg_mir::EdgeId) -> Result<(), DebuggerError> {
+    fn apply_edge(&mut self, edge_id: ir::EdgeId) -> Result<(), DebuggerError> {
         let edge = self
             .func
             .edge(edge_id)
@@ -1130,7 +1130,7 @@ impl DebuggerSession {
     }
 }
 
-fn build_block_index(func: &cfg_mir::Function) -> HashMap<cfg_mir::BlockId, usize> {
+fn build_block_index(func: &ir::Function) -> HashMap<ir::BlockId, usize> {
     let mut out = HashMap::with_capacity(func.blocks.len());
     for (idx, block) in func.blocks.iter().enumerate() {
         out.insert(block.id, idx);
@@ -1182,36 +1182,36 @@ mod tests {
     use kajit_ir::{LambdaId, VReg};
     use kajit_lir::LinearOp;
 
-    use crate::{DebuggerSession, cfg_mir};
+    use crate::{DebuggerSession, ir};
 
     fn v(index: u32) -> VReg {
         VReg::new(index)
     }
 
-    fn test_inst(id: u32, op: LinearOp) -> cfg_mir::Inst {
-        cfg_mir::Inst {
-            id: cfg_mir::InstId(id),
+    fn test_inst(id: u32, op: LinearOp) -> ir::Inst {
+        ir::Inst {
+            id: ir::InstId(id),
             op,
             operands: Vec::new(),
-            clobbers: cfg_mir::Clobbers::default(),
+            clobbers: ir::Clobbers::default(),
         }
     }
 
-    fn make_simple_program() -> cfg_mir::Program {
-        let b0 = cfg_mir::Block {
-            id: cfg_mir::BlockId(0),
+    fn make_simple_program() -> ir::Program {
+        let b0 = ir::Block {
+            id: ir::BlockId(0),
             params: Vec::new(),
-            insts: vec![cfg_mir::InstId(0)],
-            term: cfg_mir::TermId(0),
+            insts: vec![ir::InstId(0)],
+            term: ir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
             dead: false,
         };
-        cfg_mir::Program {
-            funcs: vec![cfg_mir::Function {
-                id: cfg_mir::FunctionId(0),
+        ir::Program {
+            funcs: vec![ir::Function {
+                id: ir::FunctionId(0),
                 lambda_id: LambdaId::new(0),
-                entry: cfg_mir::BlockId(0),
+                entry: ir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
                 output_size: 0,
@@ -1224,7 +1224,7 @@ mod tests {
                         value: 0x2a,
                     },
                 )],
-                terms: vec![cfg_mir::Terminator::Return],
+                terms: vec![ir::Terminator::Return],
             }],
             vreg_count: 1,
             slot_count: 0,
@@ -1238,21 +1238,21 @@ mod tests {
         }
     }
 
-    fn make_trap_program() -> cfg_mir::Program {
-        let b0 = cfg_mir::Block {
-            id: cfg_mir::BlockId(0),
+    fn make_trap_program() -> ir::Program {
+        let b0 = ir::Block {
+            id: ir::BlockId(0),
             params: Vec::new(),
-            insts: vec![cfg_mir::InstId(0)],
-            term: cfg_mir::TermId(0),
+            insts: vec![ir::InstId(0)],
+            term: ir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
             dead: false,
         };
-        cfg_mir::Program {
-            funcs: vec![cfg_mir::Function {
-                id: cfg_mir::FunctionId(0),
+        ir::Program {
+            funcs: vec![ir::Function {
+                id: ir::FunctionId(0),
                 lambda_id: LambdaId::new(0),
-                entry: cfg_mir::BlockId(0),
+                entry: ir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: Vec::new(),
                 output_size: 0,
@@ -1265,7 +1265,7 @@ mod tests {
                         value: 0,
                     },
                 )],
-                terms: vec![cfg_mir::Terminator::Return],
+                terms: vec![ir::Terminator::Return],
             }],
             vreg_count: 0,
             slot_count: 0,

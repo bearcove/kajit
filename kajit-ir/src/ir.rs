@@ -377,6 +377,7 @@ pub enum PortKind {
 }
 
 impl PortKind {
+    /// Returns whether this port participates in the effect/state chain.
     pub const fn is_state(self) -> bool {
         matches!(self, Self::State)
     }
@@ -388,14 +389,18 @@ impl PortKind {
 /// A reference to a node's output port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OutputRef {
+    /// Producing node.
     pub node: NodeId,
+    /// Output index within `node.outputs`.
     pub index: u16,
 }
 
 /// A reference to a region argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RegionArgRef {
+    /// Region that owns the argument.
     pub region: RegionId,
+    /// Argument ID inside `IrFunc.region_args`.
     pub arg: ArgId,
 }
 
@@ -414,13 +419,16 @@ pub enum PortSource {
 /// An input port on a node.
 #[derive(Debug, Clone)]
 pub struct InputPort {
+    /// Whether this edge carries a data value or an effect token.
     pub kind: PortKind,
+    /// The unique producer for this input.
     pub source: PortSource,
 }
 
 /// An output port on a node.
 #[derive(Debug, Clone)]
 pub struct OutputPort {
+    /// Whether this output produces a value or a state token.
     pub kind: PortKind,
     /// For data outputs, the VReg assigned to this output.
     pub vreg: Option<VReg>,
@@ -435,15 +443,20 @@ pub struct OutputPort {
 /// An argument entering a region from outside.
 #[derive(Debug, Clone)]
 pub struct RegionArg {
+    /// Port kind visible at the region boundary.
     pub kind: PortKind,
+    /// Assigned VReg for data arguments after vreg assignment.
     pub vreg: Option<VReg>,
+    /// Source-language/debug provenance for this argument, if known.
     pub debug_value: Option<DebugValueId>,
 }
 
 /// A result leaving a region to outside.
 #[derive(Debug, Clone)]
 pub struct RegionResult {
+    /// Port kind visible at the region boundary.
     pub kind: PortKind,
+    /// Source that flows out through this result.
     pub source: PortSource,
 }
 
@@ -537,7 +550,9 @@ pub enum ConsumerKind {
 /// A consumer of a node output.
 #[derive(Debug, Clone)]
 pub struct OutputConsumer {
+    /// Concrete consumer location.
     pub kind: ConsumerKind,
+    /// Semantic role of that use.
     pub use_kind: OutputUseKind,
 }
 
@@ -574,6 +589,7 @@ pub enum NodeKind {
         label: String,
         /// Minimum output buffer size in bytes for this function.
         output_size: usize,
+        /// Stable ID for use by `Apply`.
         lambda_id: LambdaId,
     },
 
@@ -833,6 +849,8 @@ impl IrFunc {
     }
 
     /// Register a lambda and return its ID.
+    ///
+    /// The lambda must already have been inserted as a `NodeKind::Lambda` node.
     pub fn register_lambda(&mut self, node: NodeId) -> LambdaId {
         let id = LambdaId::new(self.lambdas.len() as u32);
         self.lambdas.push(node);
@@ -998,6 +1016,7 @@ impl IrFunc {
         }
     }
 
+    /// Get the debug scope attached to a region.
     pub fn region_debug_scope(&self, region: RegionId) -> DebugScopeId {
         self.regions[region].debug_scope
     }
@@ -1016,10 +1035,12 @@ impl IrFunc {
             .map(|(nid, _)| nid)
     }
 
+    /// Get the debug scope attached to a node.
     pub fn node_debug_scope(&self, node: NodeId) -> DebugScopeId {
         self.nodes[node].debug_scope
     }
 
+    /// Get the debug scope attached to a particular node output.
     pub fn output_debug_scope(&self, output: OutputRef) -> DebugScopeId {
         self.nodes[output.node].outputs[output.index as usize].debug_scope
     }
@@ -1033,7 +1054,11 @@ pub struct IrBuilder {
 }
 
 impl IrBuilder {
-    /// Create a new builder for an IR function with the given debug label.
+    /// Create a new builder for an IR function with a root lambda.
+    ///
+    /// The root lambda starts with a single trailing state argument and no
+    /// leading data arguments. Use [`IrBuilder::new_with_data_args`] when the
+    /// root entrypoint should expose explicit value parameters.
     pub fn new(label: impl Into<String>, output_size: usize) -> Self {
         let mut func = IrFunc {
             nodes: Arena::new(),
@@ -1096,8 +1121,10 @@ impl IrBuilder {
         IrBuilder { func }
     }
 
-    /// Create a new builder with data args on the root lambda.
-    /// Returns the builder plus the `PortSource` for each data arg.
+    /// Create a new builder with leading data arguments on the root lambda.
+    ///
+    /// The returned `PortSource`s point at the newly created data arguments in
+    /// declaration order. The implicit state argument remains last.
     pub fn new_with_data_args(
         label: impl Into<String>,
         output_size: usize,
@@ -1131,13 +1158,17 @@ impl IrBuilder {
         self.lambda_region(LambdaId::new(0))
     }
 
-    /// Add a new named state domain before any lambda bodies are populated.
-    /// Create a new lambda and return its ID.
+    /// Create a new lambda with no explicit data parameters.
+    ///
+    /// Like the root lambda, each created lambda body ends with a trailing
+    /// state argument that callers thread automatically via `apply`.
     pub fn create_lambda(&mut self, label: impl Into<String>, output_size: usize) -> LambdaId {
         self.create_lambda_with_data_args(label, output_size, 0)
     }
 
-    /// Create a new lambda with `data_arg_count` leading data args.
+    /// Create a new lambda with `data_arg_count` leading data arguments.
+    ///
+    /// The lambda body argument order is `[data args..., state]`.
     pub fn create_lambda_with_data_args(
         &mut self,
         label: impl Into<String>,
@@ -1234,7 +1265,7 @@ impl<'a> RegionBuilder<'a> {
         self.region
     }
 
-    /// Current state token source.
+    /// Current state token source for the builder's implicit effect chain.
     pub fn memory_state(&self) -> PortSource {
         self.state_source
     }
@@ -1244,10 +1275,12 @@ impl<'a> RegionBuilder<'a> {
         self.func
     }
 
+    /// Get the builder's current debug scope.
     pub fn debug_scope(&self) -> DebugScopeId {
         self.debug_scope
     }
 
+    /// Get the currently active semantic debug value, if any.
     pub fn debug_value(&self) -> Option<DebugValueId> {
         self.debug_value
     }
@@ -1267,6 +1300,7 @@ impl<'a> RegionBuilder<'a> {
         }
     }
 
+    /// Define a field-like debug value rooted at a byte offset.
     pub fn define_debug_field(&mut self, name: impl Into<String>, offset: u32) -> DebugValueId {
         self.func.debug_values.push(DebugValue {
             name: name.into(),
@@ -1274,6 +1308,7 @@ impl<'a> RegionBuilder<'a> {
         })
     }
 
+    /// Define a named debug value with no field offset.
     pub fn define_debug_value(&mut self, name: impl Into<String>) -> DebugValueId {
         self.func.debug_values.push(DebugValue {
             name: name.into(),
@@ -1281,6 +1316,7 @@ impl<'a> RegionBuilder<'a> {
         })
     }
 
+    /// Temporarily override the active debug value while building nested nodes.
     pub fn with_debug_value<R>(
         &mut self,
         debug_value: Option<DebugValueId>,
@@ -1337,7 +1373,7 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
-    /// Register a constant data blob and return its blob_id.
+    /// Register an embedded constant blob and return its `DataAddr` handle.
     pub fn add_data_blob(&mut self, bytes: Vec<u8>) -> u32 {
         let id = self.func.data_blobs.len() as u32;
         self.func.data_blobs.push(bytes);
@@ -1372,7 +1408,7 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
-    /// Add a binary arithmetic op. Returns the data output.
+    /// Add a binary pure op. Returns the produced data value.
     pub fn binop(&mut self, op: IrOp, lhs: PortSource, rhs: PortSource) -> PortSource {
         debug_assert!(matches!(op.effect(), Effect::Pure));
         let out = self.data_output();
@@ -1396,7 +1432,7 @@ impl<'a> RegionBuilder<'a> {
         PortSource::Node(OutputRef { node, index: 0 })
     }
 
-    /// Add a unary pure op (`ZigzagDecode`, `SignExtend`). Returns the data output.
+    /// Add a unary pure op. Returns the produced data value.
     pub fn unary(&mut self, op: IrOp, src: PortSource) -> PortSource {
         debug_assert!(matches!(op.effect(), Effect::Pure));
         let out = self.data_output();
@@ -1488,7 +1524,7 @@ impl<'a> RegionBuilder<'a> {
 
     // ── Structured control flow ─────────────────────────────────────
 
-    /// Add a gamma node (conditional).
+    /// Add a gamma node (conditional multi-branch region).
     ///
     /// `predicate`: the branch selector.
     /// `passthrough`: data values available to all branches.
@@ -1613,7 +1649,7 @@ impl<'a> RegionBuilder<'a> {
         data_outputs
     }
 
-    /// Add a theta node (loop).
+    /// Add a theta node (tail-controlled loop region).
     ///
     /// `loop_vars`: initial values for loop-carried variables.
     /// `build_body`: called with a [`RegionBuilder`] for the body.
@@ -1754,7 +1790,7 @@ impl<'a> RegionBuilder<'a> {
         results
     }
 
-    /// Add an apply node (lambda call).
+    /// Add an apply node (call to another IR lambda).
     ///
     /// `args`: data arguments to pass to the callee.
     /// `result_count`: number of data results returned by the callee.
@@ -1830,8 +1866,10 @@ impl<'a> RegionBuilder<'a> {
         self.func.regions[self.region].results.push(state_result_id);
     }
 
-    /// Provide region argument sources for passthrough data values
-    /// inside a gamma/theta body. Returns sources for indices 0..count.
+    /// Return the first `count` region arguments as `PortSource`s.
+    ///
+    /// This is typically used inside gamma/theta bodies to access the leading
+    /// data arguments; it intentionally excludes the trailing state argument.
     pub fn region_args(&self, count: usize) -> Vec<PortSource> {
         let region = &self.func.regions[self.region];
         (0..count)
@@ -1861,7 +1899,9 @@ impl fmt::Display for IrFunc {
 /// Wrapper for displaying an [`IrFunc`] with an optional [`IntrinsicRegistry`]
 /// for resolving intrinsic names.
 pub struct IrFuncDisplay<'a> {
+    /// IR being rendered.
     pub func: &'a IrFunc,
+    /// Optional symbol/constant names used to pretty-print raw addresses.
     pub registry: Option<&'a IntrinsicRegistry>,
 }
 

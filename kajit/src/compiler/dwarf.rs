@@ -35,7 +35,7 @@ pub(super) struct CfgMirListing {
 }
 
 pub(super) fn build_cfg_mir_listing(
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     registry: Option<&crate::ir::IntrinsicRegistry>,
 ) -> CfgMirListing {
     let lines = program.debug_line_listing_with_registry(registry);
@@ -247,7 +247,7 @@ pub(super) fn scalar_field_dwarf_width(shape: &'static Shape) -> Option<u8> {
 
 pub(super) fn cfg_semantic_field_dwarf_variables(
     root_shape: &'static Shape,
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
@@ -344,7 +344,7 @@ pub(super) fn cfg_semantic_field_dwarf_variables(
             }
             for block in func.live_blocks() {
                 for inst_id in &block.insts {
-                    let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
+                    let op_id = crate::regalloc_engine::ir::OpId::Inst(*inst_id);
                     let Some(debug_value_id) = program.op_debug_value(func.lambda_id, op_id) else {
                         continue;
                     };
@@ -466,7 +466,7 @@ pub(super) fn dwarf_expr_for_vreg_location(
 pub(super) fn backend_op_ranges_by_op(
     backend_debug_info: &crate::ir_backend::BackendDebugInfo,
     code_ptr: *const u8,
-) -> BTreeMap<(u32, crate::regalloc_engine::cfg_mir::OpId), Vec<(u64, u64)>> {
+) -> BTreeMap<(u32, crate::regalloc_engine::ir::OpId), Vec<(u64, u64)>> {
     backend_debug_info
         .op_infos
         .iter()
@@ -490,7 +490,7 @@ pub(super) fn backend_op_ranges_by_op(
 
 pub(super) fn backend_line_by_op(
     backend_debug_info: &crate::ir_backend::BackendDebugInfo,
-) -> BTreeMap<(u32, crate::regalloc_engine::cfg_mir::OpId), u32> {
+) -> BTreeMap<(u32, crate::regalloc_engine::ir::OpId), u32> {
     backend_debug_info
         .op_infos
         .iter()
@@ -554,7 +554,7 @@ pub(super) fn merge_dwarf_location_ranges(
 }
 
 pub(super) fn common_debug_scope(
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     scopes: impl IntoIterator<Item = crate::ir::DebugScopeId>,
 ) -> Option<crate::ir::DebugScopeId> {
     let scopes = scopes.into_iter().collect::<Vec<_>>();
@@ -654,7 +654,7 @@ pub(super) fn build_variable_interval_blocks(
 }
 
 pub(super) fn scope_ranges_from_backend(
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     backend_debug_info: &crate::ir_backend::BackendDebugInfo,
     code_ptr: *const u8,
 ) -> BTreeMap<crate::ir::DebugScopeId, Vec<crate::jit_dwarf::JitDebugRange>> {
@@ -711,7 +711,7 @@ pub(super) fn scope_ranges_from_backend(
 }
 
 pub(super) fn cfg_vreg_dwarf_variable_infos(
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
@@ -733,25 +733,23 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
             let mut remaining_uses = BTreeMap::<crate::ir::VReg, usize>::new();
             for inst_id in &block.insts {
                 for operand in &func.insts[inst_id.index()].operands {
-                    if operand.kind == crate::regalloc_engine::cfg_mir::OperandKind::Use {
+                    if operand.kind == crate::regalloc_engine::ir::OperandKind::Use {
                         *remaining_uses.entry(operand.vreg).or_default() += 1;
                     }
                 }
             }
-            let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(block.term);
+            let term_op = crate::regalloc_engine::ir::OpId::Term(block.term);
             if let Some(term_inst) = func.term(block.term) {
                 match term_inst {
-                    crate::regalloc_engine::cfg_mir::Terminator::BranchIf { cond, .. }
-                    | crate::regalloc_engine::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                    crate::regalloc_engine::ir::Terminator::BranchIf { cond, .. }
+                    | crate::regalloc_engine::ir::Terminator::BranchIfZero { cond, .. } => {
                         *remaining_uses.entry(*cond).or_default() += 1;
                     }
-                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable {
-                        predicate, ..
-                    } => {
+                    crate::regalloc_engine::ir::Terminator::JumpTable { predicate, .. } => {
                         *remaining_uses.entry(*predicate).or_default() += 1;
                     }
-                    crate::regalloc_engine::cfg_mir::Terminator::Return
-                    | crate::regalloc_engine::cfg_mir::Terminator::Branch { .. } => {}
+                    crate::regalloc_engine::ir::Terminator::Return
+                    | crate::regalloc_engine::ir::Terminator::Branch { .. } => {}
                 }
             }
             for &edge_id in &block.succs {
@@ -778,7 +776,7 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
             }
 
             for inst_id in &block.insts {
-                let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(*inst_id);
+                let op_id = crate::regalloc_engine::ir::OpId::Inst(*inst_id);
                 let Some(op_ranges) = op_ranges.get(&(lambda_key, op_id)) else {
                     continue;
                 };
@@ -789,7 +787,7 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                 let mut defs_after = Vec::<crate::ir::VReg>::new();
                 for operand in &func.insts[inst_id.index()].operands {
                     match operand.kind {
-                        crate::regalloc_engine::cfg_mir::OperandKind::Use => {
+                        crate::regalloc_engine::ir::OperandKind::Use => {
                             if location_map
                                 .static_locations
                                 .contains_key(&(operand.vreg.index() as u32))
@@ -798,7 +796,7 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                             }
                             used_now.push(operand.vreg);
                         }
-                        crate::regalloc_engine::cfg_mir::OperandKind::Def => {
+                        crate::regalloc_engine::ir::OperandKind::Def => {
                             let dest = lexical_intro_ranges_by_vreg
                                 .entry(operand.vreg)
                                 .or_default();
@@ -856,8 +854,8 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
             let mut used_now = Vec::<crate::ir::VReg>::new();
             if let Some(term_inst) = func.term(block.term) {
                 match term_inst {
-                    crate::regalloc_engine::cfg_mir::Terminator::BranchIf { cond, .. }
-                    | crate::regalloc_engine::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+                    crate::regalloc_engine::ir::Terminator::BranchIf { cond, .. }
+                    | crate::regalloc_engine::ir::Terminator::BranchIfZero { cond, .. } => {
                         if location_map
                             .static_locations
                             .contains_key(&(cond.index() as u32))
@@ -866,9 +864,7 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                             used_now.push(*cond);
                         }
                     }
-                    crate::regalloc_engine::cfg_mir::Terminator::JumpTable {
-                        predicate, ..
-                    } => {
+                    crate::regalloc_engine::ir::Terminator::JumpTable { predicate, .. } => {
                         if location_map
                             .static_locations
                             .contains_key(&(predicate.index() as u32))
@@ -877,8 +873,8 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
                             used_now.push(*predicate);
                         }
                     }
-                    crate::regalloc_engine::cfg_mir::Terminator::Return
-                    | crate::regalloc_engine::cfg_mir::Terminator::Branch { .. } => {}
+                    crate::regalloc_engine::ir::Terminator::Return
+                    | crate::regalloc_engine::ir::Terminator::Branch { .. } => {}
                 }
             }
             for vreg in live_vregs.keys() {
@@ -926,7 +922,7 @@ pub(super) fn cfg_vreg_dwarf_variable_infos(
 }
 
 pub(super) fn cfg_value_dwarf_variables(
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
@@ -970,7 +966,7 @@ pub(super) fn cfg_value_dwarf_variables(
 }
 
 pub(super) fn cfg_semantic_named_dwarf_variables(
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
@@ -1040,7 +1036,7 @@ pub(super) fn cfg_semantic_named_dwarf_variables(
 
 pub(super) fn cfg_mir_dwarf_variables(
     root_shape: Option<&'static Shape>,
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     location_map: &crate::harness::LocationMap,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
@@ -1093,7 +1089,7 @@ pub(super) fn cfg_mir_dwarf_variables(
 }
 
 pub(super) fn cfg_mir_lexical_blocks(
-    program: &crate::regalloc_engine::cfg_mir::Program,
+    program: &crate::regalloc_engine::ir::Program,
     backend_debug_info: Option<&crate::ir_backend::BackendDebugInfo>,
     code_ptr: *const u8,
     cfg_variables: Vec<ScopedDwarfVariable>,
@@ -1137,7 +1133,7 @@ pub(super) fn cfg_mir_lexical_blocks(
 
     fn build_scope_blocks(
         scope_id: crate::ir::DebugScopeId,
-        program: &crate::regalloc_engine::cfg_mir::Program,
+        program: &crate::regalloc_engine::ir::Program,
         scope_ranges: &BTreeMap<crate::ir::DebugScopeId, Vec<crate::jit_dwarf::JitDebugRange>>,
         direct_vars_by_scope: &mut BTreeMap<
             crate::ir::DebugScopeId,

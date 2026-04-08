@@ -1023,7 +1023,7 @@ fn debug_postcard_borrowed_header_harness() {
     run_default_passes_from_env(&mut func);
     let linear = crate::linearize::linearize(&mut func);
     let hints = Default::default();
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let cfg_program = crate::regalloc_engine::ir::lower_and_optimize(&linear, hints);
     let ra3_alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .expect("regalloc3 should allocate BorrowedHeader cfg");
     let base_frame = crate::backends::aarch64::regalloc3_backend::compute_base_frame(&ra3_alloc);
@@ -1616,7 +1616,7 @@ fn postcard_hir_lowering_decodes_multi_options() {
     crate::compiler::run_default_passes_from_env(&mut ir);
     let linear = crate::linearize::linearize(&mut ir);
     let hints = Default::default();
-    let cfg = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let cfg = crate::regalloc_engine::ir::lower_and_optimize(&linear, hints);
     let ra3 = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg)
         .expect("regalloc3 should allocate postcard HIR-lowered MultiOpt cfg");
     if let Some(func) = ra3.functions.first() {
@@ -1938,18 +1938,18 @@ fn deser_dwarf_variables_cover_fixed_runtime_state() {
 #[test]
 fn cfg_value_dwarf_variables_cover_def_vregs() {
     let v0 = crate::ir::VReg::new(0);
-    let inst_id = crate::regalloc_engine::cfg_mir::InstId::new(0);
-    let inst_id_2 = crate::regalloc_engine::cfg_mir::InstId::new(1);
-    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
-    let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
-    let func = crate::regalloc_engine::cfg_mir::Function {
-        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+    let inst_id = crate::regalloc_engine::ir::InstId::new(0);
+    let inst_id_2 = crate::regalloc_engine::ir::InstId::new(1);
+    let term_id = crate::regalloc_engine::ir::TermId::new(0);
+    let block_id = crate::regalloc_engine::ir::BlockId::new(0);
+    let func = crate::regalloc_engine::ir::Function {
+        id: crate::regalloc_engine::ir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
         output_size: 0,
-        blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+        blocks: vec![crate::regalloc_engine::ir::Block {
             id: block_id,
             params: Vec::new(),
             insts: vec![inst_id, inst_id_2],
@@ -1960,41 +1960,41 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         }],
         edges: Vec::new(),
         insts: vec![
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_id,
                 op: crate::linearize::LinearOp::Const { dst: v0, value: 7 },
-                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                operands: vec![crate::regalloc_engine::ir::Operand {
                     vreg: v0,
-                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                    kind: crate::regalloc_engine::ir::OperandKind::Def,
+                    class: crate::regalloc_engine::ir::RegClass::Gpr,
                     fixed: None,
                 }],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_id_2,
                 op: crate::linearize::LinearOp::Copy {
                     dst: crate::ir::VReg::new(1),
                     src: v0,
                 },
                 operands: vec![
-                    crate::regalloc_engine::cfg_mir::Operand {
+                    crate::regalloc_engine::ir::Operand {
                         vreg: v0,
-                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Use,
-                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        kind: crate::regalloc_engine::ir::OperandKind::Use,
+                        class: crate::regalloc_engine::ir::RegClass::Gpr,
                         fixed: None,
                     },
-                    crate::regalloc_engine::cfg_mir::Operand {
+                    crate::regalloc_engine::ir::Operand {
                         vreg: crate::ir::VReg::new(1),
-                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        kind: crate::regalloc_engine::ir::OperandKind::Def,
+                        class: crate::regalloc_engine::ir::RegClass::Gpr,
                         fixed: None,
                     },
                 ],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
         ],
-        terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        terms: vec![crate::regalloc_engine::ir::Terminator::Return],
     };
     let root_scope = crate::ir::DebugScopeId::new(0);
     let block_scope = crate::ir::DebugScopeId::new(1);
@@ -2009,14 +2009,14 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
         parent: Some(root_scope),
         kind: crate::ir::DebugScopeKind::ThetaBody,
     });
-    let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id);
-    let op_id_2 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id_2);
-    let program = crate::regalloc_engine::cfg_mir::Program {
+    let op_id = crate::regalloc_engine::ir::OpId::Inst(inst_id);
+    let op_id_2 = crate::regalloc_engine::ir::OpId::Inst(inst_id_2);
+    let program = crate::regalloc_engine::ir::Program {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
-        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+        debug: crate::regalloc_engine::ir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
             root_scope: Some(root_scope),
@@ -2026,7 +2026,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
                 (
                     (
                         crate::ir::LambdaId::new(0),
-                        crate::regalloc_engine::cfg_mir::OpId::Term(term_id),
+                        crate::regalloc_engine::ir::OpId::Term(term_id),
                     ),
                     block_scope,
                 ),
@@ -2071,7 +2071,7 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
             },
             crate::ir_backend::BackendOpDebugInfo {
                 lambda_id: 0,
-                op_id: crate::regalloc_engine::cfg_mir::OpId::Term(term_id),
+                op_id: crate::regalloc_engine::ir::OpId::Term(term_id),
                 line: 3,
                 code_ranges: vec![crate::ir_backend::BackendCodeRange {
                     start_offset: 8,
@@ -2123,22 +2123,22 @@ fn cfg_value_dwarf_variables_cover_def_vregs() {
 fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
     let v0 = crate::ir::VReg::new(0);
     let v1 = crate::ir::VReg::new(1);
-    let inst_id = crate::regalloc_engine::cfg_mir::InstId::new(0);
-    let inst_id_2 = crate::regalloc_engine::cfg_mir::InstId::new(1);
-    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
-    let return_term_id = crate::regalloc_engine::cfg_mir::TermId::new(1);
-    let entry_block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
-    let exit_block_id = crate::regalloc_engine::cfg_mir::BlockId::new(1);
-    let edge_id = crate::regalloc_engine::cfg_mir::EdgeId::new(0);
-    let func = crate::regalloc_engine::cfg_mir::Function {
-        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+    let inst_id = crate::regalloc_engine::ir::InstId::new(0);
+    let inst_id_2 = crate::regalloc_engine::ir::InstId::new(1);
+    let term_id = crate::regalloc_engine::ir::TermId::new(0);
+    let return_term_id = crate::regalloc_engine::ir::TermId::new(1);
+    let entry_block_id = crate::regalloc_engine::ir::BlockId::new(0);
+    let exit_block_id = crate::regalloc_engine::ir::BlockId::new(1);
+    let edge_id = crate::regalloc_engine::ir::EdgeId::new(0);
+    let func = crate::regalloc_engine::ir::Function {
+        id: crate::regalloc_engine::ir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: entry_block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
         output_size: 0,
         blocks: vec![
-            crate::regalloc_engine::cfg_mir::Block {
+            crate::regalloc_engine::ir::Block {
                 id: entry_block_id,
                 params: Vec::new(),
                 insts: vec![inst_id, inst_id_2],
@@ -2147,7 +2147,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
                 succs: vec![edge_id],
                 dead: false,
             },
-            crate::regalloc_engine::cfg_mir::Block {
+            crate::regalloc_engine::ir::Block {
                 id: exit_block_id,
                 params: vec![v0],
                 insts: Vec::new(),
@@ -2157,46 +2157,46 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
                 dead: false,
             },
         ],
-        edges: vec![crate::regalloc_engine::cfg_mir::Edge {
+        edges: vec![crate::regalloc_engine::ir::Edge {
             id: edge_id,
             from: entry_block_id,
             to: exit_block_id,
-            args: vec![crate::regalloc_engine::cfg_mir::EdgeArg {
+            args: vec![crate::regalloc_engine::ir::EdgeArg {
                 target: v0,
                 source: v0,
             }],
         }],
         insts: vec![
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_id,
                 op: crate::linearize::LinearOp::Const { dst: v0, value: 7 },
-                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                operands: vec![crate::regalloc_engine::ir::Operand {
                     vreg: v0,
-                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                    kind: crate::regalloc_engine::ir::OperandKind::Def,
+                    class: crate::regalloc_engine::ir::RegClass::Gpr,
                     fixed: None,
                 }],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_id_2,
                 op: crate::linearize::LinearOp::Const { dst: v1, value: 9 },
-                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                operands: vec![crate::regalloc_engine::ir::Operand {
                     vreg: v1,
-                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                    kind: crate::regalloc_engine::ir::OperandKind::Def,
+                    class: crate::regalloc_engine::ir::RegClass::Gpr,
                     fixed: None,
                 }],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
         ],
         terms: vec![
-            crate::regalloc_engine::cfg_mir::Terminator::Branch { edge: edge_id },
-            crate::regalloc_engine::cfg_mir::Terminator::Return,
+            crate::regalloc_engine::ir::Terminator::Branch { edge: edge_id },
+            crate::regalloc_engine::ir::Terminator::Return,
         ],
     };
-    let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id);
-    let op_id_2 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id_2);
+    let op_id = crate::regalloc_engine::ir::OpId::Inst(inst_id);
+    let op_id_2 = crate::regalloc_engine::ir::OpId::Inst(inst_id_2);
     let root_scope = crate::ir::DebugScopeId::new(0);
     let block_scope = crate::ir::DebugScopeId::new(1);
     let mut scopes = crate::ir::Arena::new();
@@ -2210,12 +2210,12 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         parent: Some(root_scope),
         kind: crate::ir::DebugScopeKind::ThetaBody,
     });
-    let program = crate::regalloc_engine::cfg_mir::Program {
+    let program = crate::regalloc_engine::ir::Program {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
-        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+        debug: crate::regalloc_engine::ir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
             root_scope: Some(root_scope),
@@ -2225,7 +2225,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
                 (
                     (
                         crate::ir::LambdaId::new(0),
-                        crate::regalloc_engine::cfg_mir::OpId::Term(term_id),
+                        crate::regalloc_engine::ir::OpId::Term(term_id),
                     ),
                     block_scope,
                 ),
@@ -2240,7 +2240,7 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
         stack_allocs: vec![],
         data_arg_layouts: vec![],
     };
-    let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
+    let term_op = crate::regalloc_engine::ir::OpId::Term(term_id);
     #[cfg(target_arch = "aarch64")]
     let reg = kajit_mir::regalloc3::machine_inst::PReg(19);
     #[cfg(target_arch = "x86_64")]
@@ -2322,18 +2322,18 @@ fn cfg_value_dwarf_variables_keep_edge_carried_defs_live() {
 #[test]
 fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
     let v0 = crate::ir::VReg::new(0);
-    let inst_id = crate::regalloc_engine::cfg_mir::InstId::new(0);
-    let inst_id_2 = crate::regalloc_engine::cfg_mir::InstId::new(1);
-    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
-    let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
-    let func = crate::regalloc_engine::cfg_mir::Function {
-        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+    let inst_id = crate::regalloc_engine::ir::InstId::new(0);
+    let inst_id_2 = crate::regalloc_engine::ir::InstId::new(1);
+    let term_id = crate::regalloc_engine::ir::TermId::new(0);
+    let block_id = crate::regalloc_engine::ir::BlockId::new(0);
+    let func = crate::regalloc_engine::ir::Function {
+        id: crate::regalloc_engine::ir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
         output_size: 0,
-        blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+        blocks: vec![crate::regalloc_engine::ir::Block {
             id: block_id,
             params: Vec::new(),
             insts: vec![inst_id, inst_id_2],
@@ -2344,44 +2344,44 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         }],
         edges: Vec::new(),
         insts: vec![
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_id,
                 op: crate::linearize::LinearOp::Const { dst: v0, value: 7 },
-                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                operands: vec![crate::regalloc_engine::ir::Operand {
                     vreg: v0,
-                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                    kind: crate::regalloc_engine::ir::OperandKind::Def,
+                    class: crate::regalloc_engine::ir::RegClass::Gpr,
                     fixed: None,
                 }],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_id_2,
                 op: crate::linearize::LinearOp::Copy {
                     dst: crate::ir::VReg::new(1),
                     src: v0,
                 },
                 operands: vec![
-                    crate::regalloc_engine::cfg_mir::Operand {
+                    crate::regalloc_engine::ir::Operand {
                         vreg: v0,
-                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Use,
-                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        kind: crate::regalloc_engine::ir::OperandKind::Use,
+                        class: crate::regalloc_engine::ir::RegClass::Gpr,
                         fixed: None,
                     },
-                    crate::regalloc_engine::cfg_mir::Operand {
+                    crate::regalloc_engine::ir::Operand {
                         vreg: crate::ir::VReg::new(1),
-                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        kind: crate::regalloc_engine::ir::OperandKind::Def,
+                        class: crate::regalloc_engine::ir::RegClass::Gpr,
                         fixed: None,
                     },
                 ],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
         ],
-        terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        terms: vec![crate::regalloc_engine::ir::Terminator::Return],
     };
-    let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id);
-    let op_id_2 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id_2);
+    let op_id = crate::regalloc_engine::ir::OpId::Inst(inst_id);
+    let op_id_2 = crate::regalloc_engine::ir::OpId::Inst(inst_id_2);
     let root_scope = crate::ir::DebugScopeId::new(0);
     let block_scope = crate::ir::DebugScopeId::new(1);
     let mut scopes = crate::ir::Arena::new();
@@ -2395,12 +2395,12 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
         parent: Some(root_scope),
         kind: crate::ir::DebugScopeKind::ThetaBody,
     });
-    let program = crate::regalloc_engine::cfg_mir::Program {
+    let program = crate::regalloc_engine::ir::Program {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 0,
         param_slot_count: 0,
-        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+        debug: crate::regalloc_engine::ir::ProgramDebugProvenance {
             scopes,
             values: crate::ir::Arena::new(),
             root_scope: Some(root_scope),
@@ -2410,7 +2410,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
                 (
                     (
                         crate::ir::LambdaId::new(0),
-                        crate::regalloc_engine::cfg_mir::OpId::Term(term_id),
+                        crate::regalloc_engine::ir::OpId::Term(term_id),
                     ),
                     block_scope,
                 ),
@@ -2455,7 +2455,7 @@ fn cfg_mir_dwarf_variables_place_block_local_vregs_in_lexical_blocks() {
             },
             crate::ir_backend::BackendOpDebugInfo {
                 lambda_id: 0,
-                op_id: crate::regalloc_engine::cfg_mir::OpId::Term(term_id),
+                op_id: crate::regalloc_engine::ir::OpId::Term(term_id),
                 line: 3,
                 code_ranges: vec![crate::ir_backend::BackendCodeRange {
                     start_offset: 8,
@@ -2519,23 +2519,23 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         b: bool,
     }
 
-    let inst_a = crate::regalloc_engine::cfg_mir::InstId::new(0);
-    let inst_b = crate::regalloc_engine::cfg_mir::InstId::new(1);
-    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
-    let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
-    let op_a = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_a);
-    let op_b = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_b);
-    let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
+    let inst_a = crate::regalloc_engine::ir::InstId::new(0);
+    let inst_b = crate::regalloc_engine::ir::InstId::new(1);
+    let term_id = crate::regalloc_engine::ir::TermId::new(0);
+    let block_id = crate::regalloc_engine::ir::BlockId::new(0);
+    let op_a = crate::regalloc_engine::ir::OpId::Inst(inst_a);
+    let op_b = crate::regalloc_engine::ir::OpId::Inst(inst_b);
+    let term_op = crate::regalloc_engine::ir::OpId::Term(term_id);
     let root_scope = crate::ir::DebugScopeId::new(0);
 
-    let func = crate::regalloc_engine::cfg_mir::Function {
-        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+    let func = crate::regalloc_engine::ir::Function {
+        id: crate::regalloc_engine::ir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: block_id,
         data_args: vec![crate::ir::VReg::new(0)],
         data_results: Vec::new(),
         output_size: 0,
-        blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+        blocks: vec![crate::regalloc_engine::ir::Block {
             id: block_id,
             params: Vec::new(),
             insts: vec![inst_a, inst_b],
@@ -2546,7 +2546,7 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         }],
         edges: Vec::new(),
         insts: vec![
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_a,
                 op: crate::linearize::LinearOp::CallIntrinsic {
                     func: crate::ir::FnPtr(
@@ -2556,9 +2556,9 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
                     dst: None,
                 },
                 operands: Vec::new(),
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst_b,
                 op: crate::linearize::LinearOp::CallIntrinsic {
                     func: crate::ir::FnPtr(
@@ -2568,10 +2568,10 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
                     dst: None,
                 },
                 operands: Vec::new(),
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
         ],
-        terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        terms: vec![crate::regalloc_engine::ir::Terminator::Return],
     };
 
     let mut scopes = crate::ir::Arena::new();
@@ -2590,12 +2590,12 @@ fn cfg_semantic_field_dwarf_variables_follow_field_debug_values() {
         name: "b".to_string(),
         kind: crate::ir::DebugValueKind::Field { offset: 1 },
     });
-    let program = crate::regalloc_engine::cfg_mir::Program {
+    let program = crate::regalloc_engine::ir::Program {
         funcs: vec![func],
         vreg_count: 1,
         slot_count: 0,
         param_slot_count: 0,
-        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+        debug: crate::regalloc_engine::ir::ProgramDebugProvenance {
             scopes,
             values,
             root_scope: Some(root_scope),
@@ -2716,21 +2716,21 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
         a: bool,
     }
 
-    let inst_a = crate::regalloc_engine::cfg_mir::InstId::new(0);
-    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
-    let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
-    let op_a = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_a);
-    let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
+    let inst_a = crate::regalloc_engine::ir::InstId::new(0);
+    let term_id = crate::regalloc_engine::ir::TermId::new(0);
+    let block_id = crate::regalloc_engine::ir::BlockId::new(0);
+    let op_a = crate::regalloc_engine::ir::OpId::Inst(inst_a);
+    let term_op = crate::regalloc_engine::ir::OpId::Term(term_id);
     let root_scope = crate::ir::DebugScopeId::new(0);
 
-    let func = crate::regalloc_engine::cfg_mir::Function {
-        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+    let func = crate::regalloc_engine::ir::Function {
+        id: crate::regalloc_engine::ir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: block_id,
         data_args: vec![crate::ir::VReg::new(0)],
         data_results: Vec::new(),
         output_size: 0,
-        blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+        blocks: vec![crate::regalloc_engine::ir::Block {
             id: block_id,
             params: Vec::new(),
             insts: vec![inst_a],
@@ -2740,7 +2740,7 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
             dead: false,
         }],
         edges: Vec::new(),
-        insts: vec![crate::regalloc_engine::cfg_mir::Inst {
+        insts: vec![crate::regalloc_engine::ir::Inst {
             id: inst_a,
             op: crate::linearize::LinearOp::CallIntrinsic {
                 func: crate::ir::FnPtr(crate::intrinsics::kajit_read_bool as *const () as usize),
@@ -2748,9 +2748,9 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
                 dst: None,
             },
             operands: Vec::new(),
-            clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+            clobbers: crate::regalloc_engine::ir::Clobbers::default(),
         }],
-        terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        terms: vec![crate::regalloc_engine::ir::Terminator::Return],
     };
 
     let mut scopes = crate::ir::Arena::new();
@@ -2766,12 +2766,12 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
         kind: crate::ir::DebugValueKind::Field { offset: 0 },
     });
 
-    let program = crate::regalloc_engine::cfg_mir::Program {
+    let program = crate::regalloc_engine::ir::Program {
         funcs: vec![func],
         vreg_count: 1,
         slot_count: 0,
         param_slot_count: 0,
-        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+        debug: crate::regalloc_engine::ir::ProgramDebugProvenance {
             scopes,
             values,
             root_scope: Some(root_scope),
@@ -2853,20 +2853,20 @@ fn cfg_semantic_field_dwarf_variables_work_with_spilled_out_ptr() {
 #[test]
 fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
     let v0 = crate::ir::VReg::new(0);
-    let inst_id = crate::regalloc_engine::cfg_mir::InstId::new(0);
-    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
-    let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
-    let op_id = crate::regalloc_engine::cfg_mir::OpId::Inst(inst_id);
-    let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
+    let inst_id = crate::regalloc_engine::ir::InstId::new(0);
+    let term_id = crate::regalloc_engine::ir::TermId::new(0);
+    let block_id = crate::regalloc_engine::ir::BlockId::new(0);
+    let op_id = crate::regalloc_engine::ir::OpId::Inst(inst_id);
+    let term_op = crate::regalloc_engine::ir::OpId::Term(term_id);
     let root_scope = crate::ir::DebugScopeId::new(0);
-    let func = crate::regalloc_engine::cfg_mir::Function {
-        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+    let func = crate::regalloc_engine::ir::Function {
+        id: crate::regalloc_engine::ir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
         output_size: 0,
-        blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+        blocks: vec![crate::regalloc_engine::ir::Block {
             id: block_id,
             params: Vec::new(),
             insts: vec![inst_id],
@@ -2876,18 +2876,18 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
             dead: false,
         }],
         edges: Vec::new(),
-        insts: vec![crate::regalloc_engine::cfg_mir::Inst {
+        insts: vec![crate::regalloc_engine::ir::Inst {
             id: inst_id,
             op: crate::linearize::LinearOp::Const { dst: v0, value: 1 },
-            operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+            operands: vec![crate::regalloc_engine::ir::Operand {
                 vreg: v0,
-                kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                kind: crate::regalloc_engine::ir::OperandKind::Def,
+                class: crate::regalloc_engine::ir::RegClass::Gpr,
                 fixed: None,
             }],
-            clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+            clobbers: crate::regalloc_engine::ir::Clobbers::default(),
         }],
-        terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        terms: vec![crate::regalloc_engine::ir::Terminator::Return],
     };
     let mut scopes = crate::ir::Arena::new();
     scopes.push(crate::ir::DebugScope {
@@ -2901,12 +2901,12 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
         name: "a".to_string(),
         kind: crate::ir::DebugValueKind::Field { offset: 0 },
     });
-    let program = crate::regalloc_engine::cfg_mir::Program {
+    let program = crate::regalloc_engine::ir::Program {
         funcs: vec![func],
         vreg_count: 1,
         slot_count: 0,
         param_slot_count: 0,
-        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+        debug: crate::regalloc_engine::ir::ProgramDebugProvenance {
             scopes,
             values,
             root_scope: Some(root_scope),
@@ -2968,24 +2968,24 @@ fn cfg_value_dwarf_variables_can_hide_semantic_owned_vregs() {
 fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
     let v0 = crate::ir::VReg::new(0);
     let v1 = crate::ir::VReg::new(1);
-    let inst0 = crate::regalloc_engine::cfg_mir::InstId::new(0);
-    let inst1 = crate::regalloc_engine::cfg_mir::InstId::new(1);
-    let inst2 = crate::regalloc_engine::cfg_mir::InstId::new(2);
-    let term_id = crate::regalloc_engine::cfg_mir::TermId::new(0);
-    let block_id = crate::regalloc_engine::cfg_mir::BlockId::new(0);
-    let op0 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst0);
-    let op1 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst1);
-    let op2 = crate::regalloc_engine::cfg_mir::OpId::Inst(inst2);
-    let term_op = crate::regalloc_engine::cfg_mir::OpId::Term(term_id);
+    let inst0 = crate::regalloc_engine::ir::InstId::new(0);
+    let inst1 = crate::regalloc_engine::ir::InstId::new(1);
+    let inst2 = crate::regalloc_engine::ir::InstId::new(2);
+    let term_id = crate::regalloc_engine::ir::TermId::new(0);
+    let block_id = crate::regalloc_engine::ir::BlockId::new(0);
+    let op0 = crate::regalloc_engine::ir::OpId::Inst(inst0);
+    let op1 = crate::regalloc_engine::ir::OpId::Inst(inst1);
+    let op2 = crate::regalloc_engine::ir::OpId::Inst(inst2);
+    let term_op = crate::regalloc_engine::ir::OpId::Term(term_id);
     let root_scope = crate::ir::DebugScopeId::new(0);
-    let func = crate::regalloc_engine::cfg_mir::Function {
-        id: crate::regalloc_engine::cfg_mir::FunctionId::new(0),
+    let func = crate::regalloc_engine::ir::Function {
+        id: crate::regalloc_engine::ir::FunctionId::new(0),
         lambda_id: crate::ir::LambdaId::new(0),
         entry: block_id,
         data_args: Vec::new(),
         data_results: Vec::new(),
         output_size: 0,
-        blocks: vec![crate::regalloc_engine::cfg_mir::Block {
+        blocks: vec![crate::regalloc_engine::ir::Block {
             id: block_id,
             params: Vec::new(),
             insts: vec![inst0, inst1, inst2],
@@ -2996,52 +2996,52 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         }],
         edges: Vec::new(),
         insts: vec![
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst0,
                 op: crate::linearize::LinearOp::Const { dst: v0, value: 1 },
-                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                operands: vec![crate::regalloc_engine::ir::Operand {
                     vreg: v0,
-                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                    kind: crate::regalloc_engine::ir::OperandKind::Def,
+                    class: crate::regalloc_engine::ir::RegClass::Gpr,
                     fixed: None,
                 }],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst1,
                 op: crate::linearize::LinearOp::Copy { dst: v1, src: v0 },
                 operands: vec![
-                    crate::regalloc_engine::cfg_mir::Operand {
+                    crate::regalloc_engine::ir::Operand {
                         vreg: v0,
-                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Use,
-                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        kind: crate::regalloc_engine::ir::OperandKind::Use,
+                        class: crate::regalloc_engine::ir::RegClass::Gpr,
                         fixed: None,
                     },
-                    crate::regalloc_engine::cfg_mir::Operand {
+                    crate::regalloc_engine::ir::Operand {
                         vreg: v1,
-                        kind: crate::regalloc_engine::cfg_mir::OperandKind::Def,
-                        class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                        kind: crate::regalloc_engine::ir::OperandKind::Def,
+                        class: crate::regalloc_engine::ir::RegClass::Gpr,
                         fixed: None,
                     },
                 ],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
-            crate::regalloc_engine::cfg_mir::Inst {
+            crate::regalloc_engine::ir::Inst {
                 id: inst2,
                 op: crate::linearize::LinearOp::WriteToSlot {
                     src: v1,
                     slot: crate::ir::SlotId::new(0),
                 },
-                operands: vec![crate::regalloc_engine::cfg_mir::Operand {
+                operands: vec![crate::regalloc_engine::ir::Operand {
                     vreg: v1,
-                    kind: crate::regalloc_engine::cfg_mir::OperandKind::Use,
-                    class: crate::regalloc_engine::cfg_mir::RegClass::Gpr,
+                    kind: crate::regalloc_engine::ir::OperandKind::Use,
+                    class: crate::regalloc_engine::ir::RegClass::Gpr,
                     fixed: None,
                 }],
-                clobbers: crate::regalloc_engine::cfg_mir::Clobbers::default(),
+                clobbers: crate::regalloc_engine::ir::Clobbers::default(),
             },
         ],
-        terms: vec![crate::regalloc_engine::cfg_mir::Terminator::Return],
+        terms: vec![crate::regalloc_engine::ir::Terminator::Return],
     };
     let mut scopes = crate::ir::Arena::new();
     scopes.push(crate::ir::DebugScope {
@@ -3055,12 +3055,12 @@ fn cfg_semantic_named_dwarf_variables_merge_shared_vregs() {
         name: "flag".to_string(),
         kind: crate::ir::DebugValueKind::Named,
     });
-    let program = crate::regalloc_engine::cfg_mir::Program {
+    let program = crate::regalloc_engine::ir::Program {
         funcs: vec![func],
         vreg_count: 2,
         slot_count: 1,
         param_slot_count: 0,
-        debug: crate::regalloc_engine::cfg_mir::ProgramDebugProvenance {
+        debug: crate::regalloc_engine::ir::ProgramDebugProvenance {
             scopes,
             values,
             root_scope: Some(root_scope),

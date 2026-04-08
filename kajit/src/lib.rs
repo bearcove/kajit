@@ -167,13 +167,13 @@ pub fn debug_cfg_mir_text(shape: &'static facet::Shape, kind: DecoderKind) -> St
 pub fn debug_cfg_mir(
     shape: &'static facet::Shape,
     kind: DecoderKind,
-) -> regalloc_engine::cfg_mir::Program {
+) -> regalloc_engine::ir::Program {
     let (module, _symbol_table) = compiler::build_decoder_hir(shape, kind);
     let mut func = compiler::lower_hir_module(&module);
     compiler::run_default_passes_from_env(&mut func);
     let linear = linearize::linearize(&mut func);
     let hints = Default::default(); // TODO: Call analyze_spill_costs(&func) before linearization
-    regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints)
+    regalloc_engine::ir::lower_and_optimize(&linear, hints)
 }
 
 /// Build the current prototype postcard HIR for a shape.
@@ -624,7 +624,7 @@ pub fn differential_check_linear_ir_vs_jit_with_output_size(
     output_size: usize,
 ) -> Result<DifferentialReport, DifferentialHarnessError> {
     let hints = Default::default();
-    let cfg_program = regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
+    let cfg_program = regalloc_engine::ir::lower_and_optimize(ir, hints);
     let mut interp_cursor = RuntimeCursor::new(input);
     let mut interp_out = vec![0u8; output_size];
     let mut interp_ctx = DeserContext::from_bytes(input);

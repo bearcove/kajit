@@ -28,7 +28,7 @@
 //!
 //! If v1 == v10, naive ordering breaks! Use parallel_copy module to handle this.
 
-use crate::cfg_mir::{EdgeId, Function, Inst, InstId, Operand, OperandKind, RegClass};
+use crate::ir::{EdgeId, Function, Inst, InstId, Operand, OperandKind, RegClass};
 use crate::regalloc3::parallel_copy::{Copy, MoveOp, ParallelCopyResolver};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;

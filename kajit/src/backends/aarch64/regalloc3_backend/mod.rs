@@ -7,7 +7,7 @@ mod fusion;
 mod inst;
 
 use kajit_emit::aarch64::{Reg, Width};
-use kajit_mir::cfg_mir;
+use kajit_mir::ir;
 use kajit_mir::regalloc3_result::AllocatedCfgProgramRa3;
 
 use crate::arch::aarch64::EmitCtx;
@@ -221,7 +221,7 @@ pub fn compile_regalloc3(
         // Build debug line map for source location tracking
         let (line_by_op, _) = super::build_debug_line_maps(program);
         let lambda_id = func.lambda_id.index() as u32;
-        let line_map: HashMap<cfg_mir::OpId, u32> = line_by_op
+        let line_map: HashMap<ir::OpId, u32> = line_by_op
             .iter()
             .filter(|((lid, _), _)| *lid == lambda_id)
             .map(|((_, op_id), &line)| (*op_id, line))

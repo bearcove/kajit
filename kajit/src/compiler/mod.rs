@@ -204,7 +204,7 @@ pub struct PipelineArtifacts {
     pub backend_debug_info: Option<crate::ir_backend::BackendDebugInfo>,
     /// The post-optimization CFG-MIR program (same one the JIT compiled).
     /// Used by the lockstep debugger to run the interpreter on the exact same IR.
-    pub cfg_program: kajit_mir::cfg_mir::Program,
+    pub cfg_program: kajit_mir::ir::Program,
     /// The compiled decoder (ready to execute)
     pub decoder: CompiledDecoder,
 }
@@ -328,7 +328,7 @@ pub fn compile_hir_module(module: &kajit_hir::Module) -> CompiledFunction {
 
     // Phase 4: CFG-MIR lowering + optimization
     let hints = Default::default();
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let cfg_program = crate::regalloc_engine::ir::lower_and_optimize(&linear, hints);
 
     // Phase 5: Register allocation
     let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
@@ -415,7 +415,7 @@ pub fn compile_pipeline_from_hir_module(
 
     // Phase 5: CFG-MIR lowering + optimization (ONCE — used for everything)
     let hints = Default::default();
-    let mut cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(&linear, hints);
+    let mut cfg_program = crate::regalloc_engine::ir::lower_and_optimize(&linear, hints);
 
     // Attach data_arg layout metadata from HIR types (debug info for pointer tracking)
     cfg_program.data_arg_layouts = extract_data_arg_layouts(module);
@@ -506,7 +506,7 @@ pub fn compile_pre_opt_cfg(
     shape: &'static facet::Shape,
     kind: DecoderKind,
     pipeline_opts: &PipelineOptions,
-) -> kajit_mir::cfg_mir::Program {
+) -> kajit_mir::ir::Program {
     // Phase 1: HIR
     let (module, _symbol_table) = build_decoder_hir(shape, kind);
 
@@ -519,7 +519,7 @@ pub fn compile_pre_opt_cfg(
 
     // Phase 4: Lower to CFG-MIR (NO optimization passes)
     let hints = Default::default();
-    crate::regalloc_engine::cfg_mir::lower_linear_ir(&linear, hints)
+    crate::regalloc_engine::ir::lower_linear_ir(&linear, hints)
 }
 
 /// Compile a deserializer through RVSDG + linearization + backend adapter.
@@ -686,14 +686,14 @@ pub fn compile_linear_ir_decoder(
 /// This is primarily intended for regression tests and minimization workflows
 /// where a failing CFG-MIR program is edited by hand and recompiled quickly.
 pub fn compile_cfg_mir_decoder(
-    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+    cfg_program: &crate::regalloc_engine::ir::Program,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
     compile_cfg_mir_decoder_with_registry(cfg_program, None, trusted_utf8_input)
 }
 
 pub(crate) fn compile_cfg_mir_decoder_with_registry(
-    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+    cfg_program: &crate::regalloc_engine::ir::Program,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     trusted_utf8_input: bool,
 ) -> CompiledDecoder {
@@ -714,7 +714,7 @@ fn compile_linear_ir_decoder_with_options(
 ) -> CompiledDecoder {
     let jit_debug = jit_debug_enabled();
     let hints = Default::default(); // TODO: Call analyze_spill_costs before linearization
-    let cfg_program = crate::regalloc_engine::cfg_mir::lower_and_optimize(ir, hints);
+    let cfg_program = crate::regalloc_engine::ir::lower_and_optimize(ir, hints);
 
     let alloc = crate::regalloc_engine::allocate_cfg_program_regalloc3_native(&cfg_program)
         .unwrap_or_else(|err| panic!("regalloc3 allocation failed: {err}"));
@@ -806,7 +806,7 @@ fn compile_linear_ir_decoder_with_options(
 }
 
 fn compile_cfg_mir_decoder_with_options(
-    cfg_program: &crate::regalloc_engine::cfg_mir::Program,
+    cfg_program: &crate::regalloc_engine::ir::Program,
     registry: Option<&crate::ir::IntrinsicRegistry>,
     trusted_utf8_input: bool,
     pipeline_opts: PipelineOptions,

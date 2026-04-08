@@ -1,7 +1,7 @@
 //! Control flow emission for x86_64 regalloc3 backend.
 
 use kajit_emit::x64;
-use kajit_mir::cfg_mir::{self, Terminator};
+use kajit_mir::ir::{self, Terminator};
 
 use super::context::EmitContext;
 use super::inst::invert_condition;
@@ -39,7 +39,7 @@ impl<'a> EmitContext<'a> {
     }
 
     /// Emit a terminator. `next_block` is the block that follows in emission order.
-    pub fn emit_terminator(&mut self, term: &Terminator, next_block: Option<cfg_mir::BlockId>) {
+    pub fn emit_terminator(&mut self, term: &Terminator, next_block: Option<ir::BlockId>) {
         match term {
             Terminator::Return => {
                 if !self.is_last_emitted_block || !self.edge_trampoline_labels.is_empty() {
@@ -242,7 +242,7 @@ impl<'a> EmitContext<'a> {
                     self.emit_parallel_moves(&edits_here, R10);
                 }
 
-                let op_id = kajit_mir::cfg_mir::OpId::Inst(inst_id);
+                let op_id = kajit_mir::ir::OpId::Inst(inst_id);
                 if let Some(&line) = self.line_map.get(&op_id) {
                     self.ectx.set_source_location(kajit_emit::SourceLocation {
                         file: 1,
@@ -259,7 +259,7 @@ impl<'a> EmitContext<'a> {
                 .get(emit_idx + 1)
                 .map(|&idx| self.func.blocks[idx].id);
 
-            let term_op = kajit_mir::cfg_mir::OpId::Term(block.term);
+            let term_op = kajit_mir::ir::OpId::Term(block.term);
             if let Some(&line) = self.line_map.get(&term_op) {
                 self.ectx.set_source_location(kajit_emit::SourceLocation {
                     file: 1,

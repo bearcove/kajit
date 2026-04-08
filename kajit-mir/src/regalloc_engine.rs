@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 
-use crate::cfg_mir;
+use crate::ir;
 use crate::regalloc3::*;
 use crate::regalloc3_result::*;
 
@@ -26,7 +26,7 @@ impl std::error::Error for RegallocEngineError {}
 /// Run regalloc3 (native allocator) over canonical CFG MIR.
 /// Returns native regalloc3 allocation types.
 pub fn allocate_cfg_program_regalloc3_native(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
 ) -> Result<AllocatedCfgProgramRa3, RegallocEngineError> {
     program
         .validate()
@@ -194,7 +194,7 @@ pub fn allocate_cfg_program_regalloc3_native(
     }
 
     // Build modified program with phi copies inserted
-    let modified_program = cfg_mir::Program {
+    let modified_program = ir::Program {
         funcs: modified_funcs,
         vreg_count: program.vreg_count,
         slot_count: program.slot_count,
@@ -220,7 +220,7 @@ pub fn allocate_cfg_program_regalloc3_native(
 /// register need no copy, edge args that got different registers (or
 /// involve spilled values) need explicit Copy instructions.
 fn insert_phi_copies_with_coalescing(
-    func: &mut cfg_mir::Function,
+    func: &mut ir::Function,
     alloc_result: &crate::regalloc3::linear_scan::AllocationResult,
     temp_vreg: kajit_ir::VReg,
 ) {
@@ -244,7 +244,7 @@ fn insert_phi_copies_with_coalescing(
     crate::regalloc3::critical_edge::split_critical_edges(func);
 
     for edge_idx in 0..func.edges.len() {
-        let edge_id = cfg_mir::EdgeId(edge_idx as u32);
+        let edge_id = ir::EdgeId(edge_idx as u32);
         let edge = &func.edges[edge_idx];
 
         // Skip dead edges (from critical edge splitting) and edges with no args

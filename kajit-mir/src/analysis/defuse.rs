@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
-use crate::cfg_mir::{BlockId, EdgeId, Function, InstId, OperandKind};
+use crate::ir::{BlockId, EdgeId, Function, InstId, OperandKind};
 
 /// Def-use information for a function.
 #[derive(Debug, Clone)]
@@ -186,7 +186,7 @@ trait TerminatorCondition {
     fn condition_vreg(&self) -> Option<VReg>;
 }
 
-impl TerminatorCondition for crate::cfg_mir::Terminator {
+impl TerminatorCondition for crate::ir::Terminator {
     fn condition_vreg(&self) -> Option<VReg> {
         match self {
             Self::BranchIf { cond, .. } | Self::BranchIfZero { cond, .. } => Some(*cond),

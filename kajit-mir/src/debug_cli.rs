@@ -1,6 +1,5 @@
 use crate::{
-    InterpreterEventKind, InterpreterOutcome, cfg_mir, execute_program,
-    execute_program_with_event_trace,
+    InterpreterEventKind, InterpreterOutcome, execute_program, execute_program_with_event_trace, ir,
 };
 use kajit_ir::IntrinsicRegistry;
 use std::collections::BTreeMap;
@@ -15,12 +14,12 @@ pub enum DebugCfgMirCommand {
     },
     Block {
         lambda: kajit_ir::LambdaId,
-        block: cfg_mir::BlockId,
+        block: ir::BlockId,
     },
 }
 
 pub fn run_debug_cfg_mir_command(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     input: &[u8],
     command: &DebugCfgMirCommand,
 ) -> Result<String, String> {
@@ -28,7 +27,7 @@ pub fn run_debug_cfg_mir_command(
 }
 
 pub fn run_debug_cfg_mir_command_with_registry(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     input: &[u8],
     command: &DebugCfgMirCommand,
     registry: Option<&IntrinsicRegistry>,
@@ -96,7 +95,7 @@ pub fn run_debug_cfg_mir_command_with_registry(
 }
 
 fn render_lldb_reference(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     input: &[u8],
     registry: Option<&IntrinsicRegistry>,
 ) -> Result<String, String> {
@@ -167,9 +166,9 @@ struct LldbReferenceState {
 }
 
 fn build_debug_line_lookup(
-    program: &cfg_mir::Program,
+    program: &ir::Program,
     registry: Option<&IntrinsicRegistry>,
-) -> BTreeMap<(u32, cfg_mir::OpId), (u32, String)> {
+) -> BTreeMap<(u32, ir::OpId), (u32, String)> {
     let lines = program.debug_line_listing_with_registry(registry);
     let mut lookup = BTreeMap::new();
     let mut next_line = 1u32;
@@ -181,13 +180,13 @@ fn build_debug_line_lookup(
                 let text = line_iter
                     .next()
                     .expect("debug line listing should include every instruction");
-                lookup.insert((lambda, cfg_mir::OpId::Inst(*inst_id)), (next_line, text));
+                lookup.insert((lambda, ir::OpId::Inst(*inst_id)), (next_line, text));
                 next_line += 1;
             }
             let text = line_iter
                 .next()
                 .expect("debug line listing should include every terminator");
-            lookup.insert((lambda, cfg_mir::OpId::Term(block.term)), (next_line, text));
+            lookup.insert((lambda, ir::OpId::Term(block.term)), (next_line, text));
             next_line += 1;
         }
     }
@@ -195,13 +194,13 @@ fn build_debug_line_lookup(
 }
 
 fn line_lookup_for_location(
-    lookup: &BTreeMap<(u32, cfg_mir::OpId), (u32, String)>,
+    lookup: &BTreeMap<(u32, ir::OpId), (u32, String)>,
     location: crate::InterpreterTraceLocation,
 ) -> Option<(u32, &str)> {
     let op_id = match location.op {
         crate::InterpreterTraceOp::Entry => return None,
-        crate::InterpreterTraceOp::Inst { inst, .. } => cfg_mir::OpId::Inst(inst),
-        crate::InterpreterTraceOp::Term { term } => cfg_mir::OpId::Term(term),
+        crate::InterpreterTraceOp::Inst { inst, .. } => ir::OpId::Inst(inst),
+        crate::InterpreterTraceOp::Term { term } => ir::OpId::Term(term),
     };
     let (line, text) = lookup.get(&(location.lambda.index() as u32, op_id))?;
     Some((*line, text.as_str()))
@@ -265,7 +264,7 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::{DebugCfgMirCommand, run_debug_cfg_mir_command};
-    use crate::cfg_mir;
+    use crate::ir;
     use kajit_ir::{LambdaId, VReg};
     use kajit_lir::LinearOp;
 
@@ -273,31 +272,31 @@ mod tests {
         VReg::new(index)
     }
 
-    fn test_inst(id: u32, op: LinearOp) -> cfg_mir::Inst {
-        cfg_mir::Inst {
-            id: cfg_mir::InstId(id),
+    fn test_inst(id: u32, op: LinearOp) -> ir::Inst {
+        ir::Inst {
+            id: ir::InstId(id),
             op,
             operands: Vec::new(),
-            clobbers: cfg_mir::Clobbers::default(),
+            clobbers: ir::Clobbers::default(),
         }
     }
 
-    fn linear_program() -> cfg_mir::Program {
-        let block = cfg_mir::Block {
-            id: cfg_mir::BlockId(0),
+    fn linear_program() -> ir::Program {
+        let block = ir::Block {
+            id: ir::BlockId(0),
             params: Vec::new(),
-            insts: vec![cfg_mir::InstId(0), cfg_mir::InstId(1), cfg_mir::InstId(2)],
-            term: cfg_mir::TermId(0),
+            insts: vec![ir::InstId(0), ir::InstId(1), ir::InstId(2)],
+            term: ir::TermId(0),
             preds: Vec::new(),
             succs: Vec::new(),
             dead: false,
         };
 
-        cfg_mir::Program {
-            funcs: vec![cfg_mir::Function {
-                id: cfg_mir::FunctionId(0),
+        ir::Program {
+            funcs: vec![ir::Function {
+                id: ir::FunctionId(0),
                 lambda_id: LambdaId::new(0),
-                entry: cfg_mir::BlockId(0),
+                entry: ir::BlockId(0),
                 data_args: Vec::new(),
                 data_results: vec![v(0)],
                 output_size: 0,
@@ -310,7 +309,7 @@ mod tests {
                         value: 42,
                     },
                 )],
-                terms: vec![cfg_mir::Terminator::Return],
+                terms: vec![ir::Terminator::Return],
             }],
             vreg_count: 1,
             slot_count: 0,

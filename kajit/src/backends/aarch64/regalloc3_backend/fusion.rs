@@ -2,7 +2,7 @@
 //! Computes which instructions can be fused: cmp+branch, bfi, bit tests, addr offsets.
 
 use kajit_emit::aarch64::{Condition, Reg, Width};
-use kajit_mir::cfg_mir::{self, Function, Terminator};
+use kajit_mir::ir::{self, Function, Terminator};
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
 
 use kajit_lir::{BinOpKind, LinearOp};
@@ -417,22 +417,22 @@ impl<'a> EmitContext<'a> {
         let mut use_counts: HashMap<kajit_ir::VReg, usize> = HashMap::new();
         for inst in &func.insts {
             for op in &inst.operands {
-                if op.kind == cfg_mir::OperandKind::Use {
+                if op.kind == ir::OperandKind::Use {
                     *use_counts.entry(op.vreg).or_insert(0) += 1;
                 }
             }
         }
         for block in func.live_blocks() {
             let term = &func.terms[block.term.index()];
-            let edge_ids: Vec<cfg_mir::EdgeId> = match term {
-                cfg_mir::Terminator::Branch { edge } => vec![*edge],
-                cfg_mir::Terminator::BranchIf {
+            let edge_ids: Vec<ir::EdgeId> = match term {
+                ir::Terminator::Branch { edge } => vec![*edge],
+                ir::Terminator::BranchIf {
                     taken, fallthrough, ..
                 }
-                | cfg_mir::Terminator::BranchIfZero {
+                | ir::Terminator::BranchIfZero {
                     taken, fallthrough, ..
                 } => vec![*taken, *fallthrough],
-                cfg_mir::Terminator::JumpTable { targets, .. } => targets.clone(),
+                ir::Terminator::JumpTable { targets, .. } => targets.clone(),
                 _ => vec![],
             };
             for eid in edge_ids {

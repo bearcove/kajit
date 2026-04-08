@@ -1,4 +1,4 @@
-use crate::regalloc_engine::cfg_mir;
+use crate::regalloc_engine::ir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendCodeRange {
@@ -9,7 +9,7 @@ pub struct BackendCodeRange {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackendOpDebugInfo {
     pub lambda_id: u32,
-    pub op_id: cfg_mir::OpId,
+    pub op_id: ir::OpId,
     pub line: u32,
     pub code_ranges: Vec<BackendCodeRange>,
 }

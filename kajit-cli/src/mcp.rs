@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use kajit::lockstep::{JitDebugger, LockstepSession, LockstepSessionStatus};
 #[cfg(feature = "lldb")]
 use kajit_hir_text::parse_hir;
-use kajit_mir::cfg_mir::BlockId;
+use kajit_mir::ir::BlockId;
 use kajit_mir::{DebuggerSession, DebuggerState, RunUntilTarget, StepEvent};
 use rust_mcp_sdk::macros::{JsonSchema, mcp_tool};
 use rust_mcp_sdk::mcp_server::{McpServerOptions, ServerHandler, server_runtime};
@@ -1232,9 +1232,9 @@ impl DebugDiffSession {
         let func = self.lockstep.cfg_program.funcs.first()?;
         let block = func.blocks.get(loc.block.index())?;
         let op_id = if loc.at_terminator {
-            kajit_mir::cfg_mir::OpId::Term(block.term)
+            kajit_mir::ir::OpId::Term(block.term)
         } else {
-            kajit_mir::cfg_mir::OpId::Inst(*block.insts.get(loc.next_inst_index)?)
+            kajit_mir::ir::OpId::Inst(*block.insts.get(loc.next_inst_index)?)
         };
         let cfg_line = kajit::lockstep::loc_to_line(&self.lockstep.op_to_line, loc);
         let mut out = String::new();
@@ -1741,7 +1741,7 @@ fn format_cfg_vregs(
 
 #[cfg(feature = "lldb")]
 fn format_edge_args(
-    edge: &kajit_mir::cfg_mir::Edge,
+    edge: &kajit_mir::ir::Edge,
     state: &DebuggerState,
     lockstep: Option<&LockstepSession<LldbJitDebugger>>,
 ) -> String {

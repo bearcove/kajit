@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::cfg_mir::{BlockId, EdgeId, Function};
+use crate::ir::{BlockId, EdgeId, Function};
 
 use super::dominance::DominanceInfo;
 

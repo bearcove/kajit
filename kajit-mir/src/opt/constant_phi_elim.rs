@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use kajit_ir::VReg;
 
-use crate::cfg_mir::{BlockId, Function};
+use crate::ir::{BlockId, Function};
 
 /// Value lattice for dataflow analysis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -293,7 +293,7 @@ fn is_vreg_defined(func: &Function, vreg: VReg) -> bool {
     // Check instruction definitions
     for inst in &func.insts {
         for operand in &inst.operands {
-            if operand.vreg == vreg && operand.kind == crate::cfg_mir::OperandKind::Def {
+            if operand.vreg == vreg && operand.kind == crate::ir::OperandKind::Def {
                 return true;
             }
         }
@@ -328,7 +328,7 @@ fn find_def_block_for_vreg(func: &Function, vreg: VReg) -> Option<BlockId> {
         for &inst_id in &block.insts {
             let inst = &func.insts[inst_id.index()];
             for operand in &inst.operands {
-                if operand.vreg == vreg && operand.kind == crate::cfg_mir::OperandKind::Def {
+                if operand.vreg == vreg && operand.kind == crate::ir::OperandKind::Def {
                     return Some(block.id);
                 }
             }
@@ -406,13 +406,13 @@ pub fn replace_vregs_in_function(func: &mut Function, replacements: &HashMap<VRe
     // Replace in terminators
     for term in &mut func.terms {
         match term {
-            crate::cfg_mir::Terminator::BranchIf { cond, .. }
-            | crate::cfg_mir::Terminator::BranchIfZero { cond, .. } => {
+            crate::ir::Terminator::BranchIf { cond, .. }
+            | crate::ir::Terminator::BranchIfZero { cond, .. } => {
                 if let Some(&replacement) = replacements.get(cond) {
                     *cond = replacement;
                 }
             }
-            crate::cfg_mir::Terminator::JumpTable { predicate, .. } => {
+            crate::ir::Terminator::JumpTable { predicate, .. } => {
                 if let Some(&replacement) = replacements.get(predicate) {
                     *predicate = replacement;
                 }

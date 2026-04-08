@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::analysis::dominance::DominanceInfo;
-use crate::cfg_mir::{BlockId, EdgeArg, EdgeId, Function, OperandKind, Terminator};
+use crate::ir::{BlockId, EdgeArg, EdgeId, Function, OperandKind, Terminator};
 use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
@@ -45,7 +45,11 @@ fn verify_edge_arg_defs(func: &Function, context: &str) {
                 assert!(
                     def_map.contains_key(&arg.source),
                     "simplify_cfg [{}]: edge e{} (b{} -> b{}) has source vreg v{} which is not defined anywhere",
-                    context, eid.index(), edge.from.index(), edge.to.index(), arg.source.index()
+                    context,
+                    eid.index(),
+                    edge.from.index(),
+                    edge.to.index(),
+                    arg.source.index()
                 );
             }
         }
@@ -225,9 +229,8 @@ fn find_vregs_needing_threading(
         // An empty block might be forwarded/threaded later, killing the definition.
         if !existing_pred_blocks.is_empty() {
             let def_block_data = &func.blocks[def_block.index()];
-            let is_stable = def_block == func.entry
-                || !def_block_data.insts.is_empty()
-                || def_block_data.dead;
+            let is_stable =
+                def_block == func.entry || !def_block_data.insts.is_empty() || def_block_data.dead;
             if !is_stable {
                 // Def is in an empty block that might be killed — unsafe
                 return None;
@@ -425,7 +428,11 @@ fn forward_trampolines(func: &mut Function, vreg_count: &mut u32) -> bool {
                         assert!(
                             live_def_map.contains_key(&arg.source),
                             "simplify_cfg: edge e{} (b{} -> b{}) has source vreg v{} which is not defined anywhere (after forwarding trampoline b{})",
-                            eid.index(), edge.from.index(), edge.to.index(), arg.source.index(), trampoline_id.index()
+                            eid.index(),
+                            edge.from.index(),
+                            edge.to.index(),
+                            arg.source.index(),
+                            trampoline_id.index()
                         );
                     }
                 }
@@ -540,14 +547,9 @@ fn thread_phi_branches(func: &mut Function, vreg_count: &mut u32) -> bool {
 
     let mut target_threading: HashMap<BlockId, (Vec<VReg>, HashMap<VReg, VReg>)> = HashMap::new();
     for &target_id in &targets {
-        let Some(vregs_to_thread) = find_vregs_needing_threading(
-            func,
-            &dom,
-            &def_map,
-            block_id,
-            target_id,
-            &pred_blocks,
-        ) else {
+        let Some(vregs_to_thread) =
+            find_vregs_needing_threading(func, &dom, &def_map, block_id, target_id, &pred_blocks)
+        else {
             // Unsafe — can't thread this target
             return false;
         };

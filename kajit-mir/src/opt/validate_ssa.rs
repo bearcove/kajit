@@ -12,7 +12,7 @@ use kajit_ir::VReg;
 use kajit_lir::LinearOp;
 
 use crate::analysis::dominance::DominanceInfo;
-use crate::cfg_mir::{BlockId, EdgeId, Function, OperandKind, Terminator};
+use crate::ir::{BlockId, EdgeId, Function, OperandKind, Terminator};
 
 /// Helper trait to extract destination vreg from LinearOp.
 trait LinearOpDst {
@@ -300,11 +300,7 @@ impl SsaError {
 /// Instead of dumping the entire CFG (which can be 500+ lines for a u32 decoder),
 /// this prints only the blocks and edges relevant to each violation, with
 /// provenance info (debug scope/value names) and CFG-MIR listing line numbers.
-pub fn print_ssa_diagnostics(
-    func: &Function,
-    errors: &[SsaError],
-    program: &crate::cfg_mir::Program,
-) {
+pub fn print_ssa_diagnostics(func: &Function, errors: &[SsaError], program: &crate::ir::Program) {
     use std::collections::BTreeSet;
 
     let provenance = Some(&program.debug);
@@ -379,7 +375,7 @@ pub fn print_ssa_diagnostics(
                 })
                 .collect();
             let line_info = line_map
-                .get(&crate::cfg_mir::OpId::Inst(inst_id))
+                .get(&crate::ir::OpId::Inst(inst_id))
                 .map(|l| format!("L{l} "))
                 .unwrap_or_default();
             eprintln!(
@@ -393,7 +389,7 @@ pub fn print_ssa_diagnostics(
         // Show terminator
         let term = &func.terms[block.term.index()];
         let term_line = line_map
-            .get(&crate::cfg_mir::OpId::Term(block.term))
+            .get(&crate::ir::OpId::Term(block.term))
             .map(|l| format!("L{l} "))
             .unwrap_or_default();
         eprintln!("    {term_line}term: {}", terminator_summary(term));
@@ -414,7 +410,7 @@ pub fn print_ssa_diagnostics(
 
 fn vreg_provenance_string(
     vreg_idx: usize,
-    provenance: Option<&crate::cfg_mir::ProgramDebugProvenance>,
+    provenance: Option<&crate::ir::ProgramDebugProvenance>,
 ) -> String {
     let Some(prov) = provenance else {
         return String::new();
@@ -514,7 +510,7 @@ fn print_edge(
     edge_id: EdgeId,
     direction: &str,
     vregs_to_trace: &std::collections::BTreeSet<usize>,
-    provenance: Option<&crate::cfg_mir::ProgramDebugProvenance>,
+    provenance: Option<&crate::ir::ProgramDebugProvenance>,
 ) {
     let edge = &func.edges[edge_id.index()];
     let args: Vec<String> = edge
@@ -910,17 +906,17 @@ fn check_entry_liveness(func: &Function, errors: &mut Vec<SsaError>) {
 /// Build a map from OpId to 1-indexed line number in the debug listing.
 fn build_line_number_map(
     func: &Function,
-    program: &crate::cfg_mir::Program,
-) -> HashMap<crate::cfg_mir::OpId, usize> {
+    program: &crate::ir::Program,
+) -> HashMap<crate::ir::OpId, usize> {
     let mut map = HashMap::new();
     let mut line = 1usize; // 1-indexed like DWARF
     // Walk blocks in the same order as debug_line_listing_with_registry
     for block in &func.blocks {
         for &inst_id in &block.insts {
-            map.insert(crate::cfg_mir::OpId::Inst(inst_id), line);
+            map.insert(crate::ir::OpId::Inst(inst_id), line);
             line += 1;
         }
-        map.insert(crate::cfg_mir::OpId::Term(block.term), line);
+        map.insert(crate::ir::OpId::Term(block.term), line);
         line += 1;
     }
     let _ = program; // used for consistency with the listing generator

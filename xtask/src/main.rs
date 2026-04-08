@@ -204,7 +204,7 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
         "why-vreg" => DebugCfgMirCommand::WhyVreg { vreg: VReg::new(0) },
         "block" => DebugCfgMirCommand::Block {
             lambda: LambdaId::new(0),
-            block: kajit_mir::cfg_mir::BlockId(0),
+            block: kajit_mir::ir::BlockId(0),
         },
         _ => return None,
     };
@@ -261,7 +261,7 @@ fn parse_debug_cfg_mir_args(args: &[String]) -> Option<DebugCfgMirArgs> {
         },
         DebugCfgMirCommand::Block { .. } => DebugCfgMirCommand::Block {
             lambda: LambdaId::new(lambda as u32),
-            block: kajit_mir::cfg_mir::BlockId(block?),
+            block: kajit_mir::ir::BlockId(block?),
         },
     };
 
@@ -1138,7 +1138,7 @@ mod tests {
             parsed.command,
             DebugCfgMirCommand::Block {
                 lambda: LambdaId::new(1),
-                block: kajit_mir::cfg_mir::BlockId(17)
+                block: kajit_mir::ir::BlockId(17)
             }
         );
     }

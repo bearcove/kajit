@@ -3,6 +3,11 @@ use kajit_ir::{Arena, DebugScope, DebugScopeId, DebugValueId, Id, VReg, Width};
 // ─── LinearIr ────────────────────────────────────────────────────────────────
 
 /// The linearized form of an RVSDG function.
+///
+/// `LinearIr` is the bridge between structured RVSDG and lower control-flow
+/// based IRs. Structured regions have been flattened into a single instruction
+/// stream with explicit labels and branches, but values still live in virtual
+/// registers and stack allocations remain abstract.
 pub struct LinearIr {
     /// The flat instruction sequence.
     pub ops: Vec<LinearOp>,
@@ -22,14 +27,25 @@ pub struct LinearIr {
     pub stack_allocs: Vec<kajit_ir::StackAllocInfo>,
 }
 
+/// Debug provenance copied from RVSDG onto linear operations and vregs.
+///
+/// The linearizer preserves source/debug scope information so later stages can
+/// recover where a linear op or virtual register originated.
 #[derive(Clone, Default)]
 pub struct LinearDebugProvenance {
+    /// Scope arena copied from the source RVSDG.
     pub scopes: Arena<DebugScope>,
+    /// Semantic value labels copied from the source RVSDG.
     pub values: Arena<DebugValue>,
+    /// Root scope of the function, if known.
     pub root_scope: Option<DebugScopeId>,
+    /// Per-op scope provenance, indexed by `LinearIr::ops`.
     pub op_scopes: Vec<Option<DebugScopeId>>,
+    /// Per-op semantic value provenance, indexed by `LinearIr::ops`.
     pub op_values: Vec<Option<DebugValueId>>,
+    /// Scope provenance for each VReg index.
     pub vreg_scopes: Vec<Option<DebugScopeId>>,
+    /// Semantic value provenance for each VReg index.
     pub vreg_values: Vec<Option<DebugValueId>>,
 }
 
@@ -136,26 +152,42 @@ pub type LabelId = Id<LabelMarker>;
 /// Binary operation kind for linear IR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BinOpKind {
+    /// Integer addition.
     Add,
+    /// Integer subtraction.
     Sub,
+    /// Integer multiplication.
     Mul,
+    /// Bitwise AND.
     And,
+    /// Bitwise OR.
     Or,
+    /// Logical right shift.
     Shr,
+    /// Logical left shift.
     Shl,
+    /// Arithmetic right shift.
     Sar,
+    /// Bitwise XOR.
     Xor,
+    /// Equality comparison, producing 0/1.
     CmpEq,
+    /// Inequality comparison, producing 0/1.
     CmpNe,
+    /// Signed/unsigned less-than according to upstream semantics.
     CmpLt,
+    /// Signed/unsigned less-than-or-equal according to upstream semantics.
     CmpLe,
+    /// Signed/unsigned greater-than according to upstream semantics.
     CmpGt,
+    /// Signed/unsigned greater-than-or-equal according to upstream semantics.
     CmpGe,
 }
 
 /// Unary operation kind for linear IR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOpKind {
+    /// Extend a narrow integer to 64 bits using the source width's sign bit.
     SignExtend { from_width: Width },
 }
 
@@ -169,55 +201,45 @@ pub enum UnaryOpKind {
 #[derive(Debug, Clone)]
 pub enum LinearOp {
     // ── Values ──
-    Const {
-        dst: VReg,
-        value: u64,
-    },
+    /// Materialize an immediate constant.
+    Const { dst: VReg, value: u64 },
     /// Load the runtime address of an embedded data blob (relocation target).
-    DataAddr {
-        dst: VReg,
-        blob_id: u32,
-    },
+    DataAddr { dst: VReg, blob_id: u32 },
     /// Load the address of an external symbol (vtable function pointer etc.).
     /// The runtime address is resolved from a symbol table at emit/interpret time.
     ExternAddr {
         dst: VReg,
         symbol: kajit_types::SymbolName,
     },
+    /// Execute a binary arithmetic or comparison op.
     BinOp {
         op: BinOpKind,
         dst: VReg,
         lhs: VReg,
         rhs: VReg,
     },
+    /// Execute a unary op.
     UnaryOp {
         op: UnaryOpKind,
         dst: VReg,
         src: VReg,
     },
     /// Copy a value between virtual registers (for gamma merge / theta feedback).
-    Copy {
-        dst: VReg,
-        src: VReg,
-    },
+    Copy { dst: VReg, src: VReg },
 
     // ── Stack ──
+    /// Produce the address of an abstract stack allocation.
     StackAlloc {
         dst: VReg,
         id: kajit_ir::StackAllocId,
     },
-    StoreToAddr {
-        addr: VReg,
-        src: VReg,
-        width: Width,
-    },
-    LoadFromAddr {
-        dst: VReg,
-        addr: VReg,
-        width: Width,
-    },
+    /// Store a scalar value to memory.
+    StoreToAddr { addr: VReg, src: VReg, width: Width },
+    /// Load a scalar value from memory.
+    LoadFromAddr { dst: VReg, addr: VReg, width: Width },
 
     // ── Calls ──
+    /// Call an external/raw function pointer.
     Call {
         func: FnPtr,
         args: Vec<VReg>,
@@ -225,6 +247,7 @@ pub enum LinearOp {
     },
 
     // ── Control flow ──
+    /// Label marking a control-flow target.
     Label(LabelId),
     /// Unconditional branch. `phi_args` carry explicit (source → target_param)
     /// mappings for phi data flow; vregs not listed flow through unchanged.
@@ -255,6 +278,7 @@ pub enum LinearOp {
     },
 
     // ── Function structure ──
+    /// Delimit the start of a linearized lambda body.
     FuncStart {
         lambda_id: LambdaId,
         label: String,
@@ -264,7 +288,9 @@ pub enum LinearOp {
         data_args: Vec<VReg>,
         data_results: Vec<VReg>,
     },
+    /// Delimit the end of a linearized lambda body.
     FuncEnd,
+    /// Call another linearized IR lambda by ID.
     CallLambda {
         target: LambdaId,
         args: Vec<VReg>,
@@ -273,7 +299,10 @@ pub enum LinearOp {
 }
 
 impl LinearOp {
-    /// Visit every VReg *use* (read) in this op, mutably.
+    /// Visit every VReg use (read) in this op, mutably.
+    ///
+    /// Phi edges are represented explicitly as `(source, destination)` pairs on
+    /// branch instructions; this visitor sees only the source side as a use.
     pub fn for_each_use_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
         use LinearOp::*;
         match self {
@@ -351,20 +380,23 @@ impl LinearOp {
         }
     }
 
-    /// Visit every VReg *use* (read) in this op, immutably.
+    /// Visit every VReg use (read) in this op, immutably.
     pub fn for_each_use(&self, mut f: impl FnMut(&VReg)) {
         // Clone and delegate to mutable version (avoids duplicating the match)
         let mut clone = self.clone();
         clone.for_each_use_mut(|v| f(v));
     }
 
-    /// Visit every VReg *definition* (write) in this op, immutably.
+    /// Visit every VReg definition (write) in this op, immutably.
     pub fn for_each_def(&self, mut f: impl FnMut(&VReg)) {
         let mut clone = self.clone();
         clone.for_each_def_mut(|v| f(v));
     }
 
-    /// Visit every VReg *definition* (write) in this op, mutably.
+    /// Visit every VReg definition (write) in this op, mutably.
+    ///
+    /// For branches, the destination side of each phi pair counts as a def in
+    /// the successor environment.
     pub fn for_each_def_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
         use LinearOp::*;
         match self {
@@ -419,7 +451,7 @@ impl LinearOp {
         }
     }
 
-    /// Visit every VReg in this op (both uses and defs), mutably.
+    /// Visit every VReg mentioned by this op, including both uses and defs.
     pub fn for_each_vreg_mut(&mut self, mut f: impl FnMut(&mut VReg)) {
         use LinearOp::*;
         match self {

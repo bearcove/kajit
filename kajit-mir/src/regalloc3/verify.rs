@@ -22,7 +22,7 @@
 use kajit_ir::VReg;
 use std::collections::HashMap;
 
-use crate::cfg_mir::Function;
+use crate::ir::Function;
 
 use super::{
     linear_scan::{Allocation, AllocationResult},
@@ -359,10 +359,10 @@ mod tests {
     }
 
     fn create_test_function() -> Function {
-        use crate::cfg_mir::{Block, BlockId, Terminator};
+        use crate::ir::{Block, BlockId, Terminator};
 
         Function {
-            id: crate::cfg_mir::FunctionId(0),
+            id: crate::ir::FunctionId(0),
             lambda_id: kajit_ir::LambdaId::new(0),
             entry: BlockId(0),
             data_args: vec![],
@@ -372,7 +372,7 @@ mod tests {
                 id: BlockId(0),
                 params: vec![],
                 insts: vec![],
-                term: crate::cfg_mir::TermId(0),
+                term: crate::ir::TermId(0),
                 preds: vec![],
                 succs: vec![],
                 dead: false,

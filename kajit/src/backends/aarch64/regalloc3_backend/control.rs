@@ -1,7 +1,7 @@
 //! Control flow emission for aarch64 regalloc3 backend.
 
 use kajit_emit::aarch64::Reg;
-use kajit_mir::cfg_mir::{self, Terminator};
+use kajit_mir::ir::{self, Terminator};
 
 use super::context::EmitContext;
 
@@ -10,7 +10,7 @@ impl<'a> EmitContext<'a> {
     /// If `block_id` is a trampoline (no insts, Branch terminator) whose
     /// outgoing edge carries no value moves, follow the chain to the final
     /// non-trampoline target.
-    pub(super) fn resolve_trampoline(&self, mut block_id: cfg_mir::BlockId) -> cfg_mir::BlockId {
+    pub(super) fn resolve_trampoline(&self, mut block_id: ir::BlockId) -> ir::BlockId {
         for _ in 0..16 {
             let block = &self.func.blocks[block_id.index()];
             if !block.insts.is_empty() {
@@ -30,11 +30,7 @@ impl<'a> EmitContext<'a> {
     }
 
     /// Emit a terminator. `next_block` is the block that follows in emission order (for fallthrough elision).
-    pub(super) fn emit_terminator(
-        &mut self,
-        term: &Terminator,
-        next_block: Option<cfg_mir::BlockId>,
-    ) {
+    pub(super) fn emit_terminator(&mut self, term: &Terminator, next_block: Option<ir::BlockId>) {
         match term {
             Terminator::Return => {
                 // Elide the branch only when the success epilogue is the next
@@ -234,7 +230,7 @@ impl<'a> EmitContext<'a> {
                     self.emit_parallel_moves(&edits_here, Reg::X16);
                 }
 
-                let op_id = kajit_mir::cfg_mir::OpId::Inst(inst_id);
+                let op_id = kajit_mir::ir::OpId::Inst(inst_id);
                 if let Some(&line) = self.line_map.get(&op_id) {
                     self.ectx.set_source_location(kajit_emit::SourceLocation {
                         file: 1,
@@ -252,7 +248,7 @@ impl<'a> EmitContext<'a> {
                 .map(|&idx| self.func.blocks[idx].id);
 
             // Emit terminator with source location
-            let term_op = kajit_mir::cfg_mir::OpId::Term(block.term);
+            let term_op = kajit_mir::ir::OpId::Term(block.term);
             if let Some(&line) = self.line_map.get(&term_op) {
                 self.ectx.set_source_location(kajit_emit::SourceLocation {
                     file: 1,
