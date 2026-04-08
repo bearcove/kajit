@@ -1,1 +1,1 @@
-pub use kajit_reprs::lir::*;
+pub(crate) use kajit_reprs::lir::*;
