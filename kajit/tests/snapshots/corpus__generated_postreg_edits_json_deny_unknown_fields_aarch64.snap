@@ -1,6 +1,0 @@
----
-source: kajit/tests/corpus.rs
-assertion_line: 582
-expression: "format!(\"{edits}\")"
----
-35
