@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use facet::Facet;
 use facet_styx::RenderError;
-use styx_tree::Value;
+use styx_tree::{Document, Value};
 
 pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
     let schema_path = workspace_root.join("notes/unified-ast/pilot/hir.repr.styx");
@@ -17,7 +17,9 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
                 e.render(&schema_path.display().to_string(), &schema_source)
             )
         })?;
-    let repr = validate_hir_pilot_schema(&schema, &schema_path)?;
+    let document = Document::parse(&schema_source)
+        .map_err(|e| format!("failed to build Styx tree for {}: {e}", schema_path.display()))?;
+    let repr = validate_hir_pilot_schema(&schema, &document, &schema_path)?;
 
     let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src/schema_poc");
     fs::create_dir_all(&out_dir)
@@ -81,6 +83,7 @@ struct ReprSyntax {
 
 fn validate_hir_pilot_schema<'a>(
     schema: &'a PilotSchemaDocument,
+    document: &Document,
     path: &Path,
 ) -> Result<&'a ReprBody, String> {
     if schema.meta.id != "kajit:repr-schema/hir-pilot" {
@@ -131,14 +134,44 @@ fn validate_hir_pilot_schema<'a>(
         ));
     }
 
+    let repr_object = document
+        .root
+        .get("repr")
+        .ok_or_else(|| format!("expected {} to contain repr entry", path.display()))?;
+    if repr_object.tag_name() != Some("module") {
+        return Err(format!(
+            "expected {} repr entry to be tagged @module, got {:?}",
+            path.display(),
+            repr_object.tag_name()
+        ));
+    }
+    let repr_object = repr_object
+        .as_object()
+        .ok_or_else(|| format!("expected {} repr payload to be an object", path.display()))?;
+    let syntax = repr_object
+        .get("syntax")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("expected {} repr.syntax to be an object", path.display()))?;
+    let rules = syntax
+        .get("rules")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("expected {} syntax.rules to be an object", path.display()))?;
+    let canonical_print = syntax
+        .get("canonical_print")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            format!(
+                "expected {} syntax.canonical_print to be an object",
+                path.display()
+            )
+        })?;
+    let tokens = syntax
+        .get("tokens")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("expected {} syntax.tokens to be an object", path.display()))?;
+
     for rule_name in ["Module", "Function", "Param", "Block", "Stmt", "Expr"] {
-        if !repr
-            .syntax
-            .rules
-            .as_object()
-            .and_then(|rules| rules.get(rule_name))
-            .is_some()
-        {
+        if rules.get(rule_name).is_none() {
             return Err(format!(
                 "expected {} syntax.rules to contain {:?}",
                 path.display(),
@@ -148,13 +181,7 @@ fn validate_hir_pilot_schema<'a>(
     }
 
     for print_name in ["Module", "Function", "Stmt.Return", "Expr.Call"] {
-        if !repr
-            .syntax
-            .canonical_print
-            .as_object()
-            .and_then(|prints| prints.get(print_name))
-            .is_some()
-        {
+        if canonical_print.get(print_name).is_none() {
             return Err(format!(
                 "expected {} canonical_print to contain {:?}",
                 path.display(),
@@ -164,12 +191,7 @@ fn validate_hir_pilot_schema<'a>(
     }
 
     for token_name in ["ident", "symbol", "int"] {
-        let Some(token_spec) = repr
-            .syntax
-            .tokens
-            .as_object()
-            .and_then(|tokens| tokens.get(token_name))
-        else {
+        let Some(token_spec) = tokens.get(token_name) else {
             return Err(format!(
                 "expected {} syntax.tokens to contain {:?}",
                 path.display(),
@@ -259,11 +281,11 @@ pub enum Type {{
 
 impl fmt::Display for Module {{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {{
-        writeln!(f, "module {{")?;
+        writeln!(f, "module {{{{")?;
         for function in &self.functions {{
             writeln!(f, "{{}}", DisplayIndented(function, 1))?;
         }}
-        write!(f, "}}")
+        write!(f, "}}}}")
     }}
 }}
 
@@ -283,11 +305,11 @@ impl fmt::Display for DisplayIndented<'_, Function> {{
             }}
             write!(f, "{{param}}")?;
         }}
-        writeln!(f, ") -> {{}} {{", self.0.return_type)?;
+        writeln!(f, ") -> {{}} {{{{", self.0.return_type)?;
         for stmt in &self.0.body.statements {{
             writeln!(f, "{{}}", DisplayIndented(stmt, self.1 + 1))?;
         }}
-        write!(f, "{{pad}}}}")
+        write!(f, "{{pad}}}}}}")
     }}
 }}
 
