@@ -1321,6 +1321,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kajit-foundation-cli"
+version = "0.1.0"
+dependencies = [
+ "kajit-foundation",
+]
+
+[[package]]
 name = "kajit-hir"
 version = "0.1.0"
 dependencies = [
@@ -3108,7 +3115,6 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "kajit",
- "kajit-foundation",
  "kajit-mir",
  "kajit-reprs",
  "prettyplease",

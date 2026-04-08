@@ -1,8 +1,8 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use facet::Facet;
+use facet_styx::RenderError;
 use styx_tree::Value;
 
 pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -10,7 +10,13 @@ pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> 
     let schema_source = fs::read_to_string(&schema_path)
         .map_err(|e| format!("failed to read {}: {e}", schema_path.display()))?;
     let schema: PilotSchemaDocument = facet_styx::from_str(&schema_source)
-        .map_err(|e| format!("failed to parse {} as Styx: {e}", schema_path.display()))?;
+        .map_err(|e| {
+            format!(
+                "failed to parse {} as Styx\n{}",
+                schema_path.display(),
+                e.render(&schema_path.display().to_string(), &schema_source)
+            )
+        })?;
     let repr = validate_hir_pilot_schema(&schema, &schema_path)?;
 
     let out_dir = workspace_root.join("crates-kajit/kajit-reprs/src/schema_poc");
@@ -68,16 +74,9 @@ struct ReprContract {
 
 #[derive(Facet, Debug)]
 struct ReprSyntax {
-    tokens: BTreeMap<String, TokenSpec>,
-    rules: BTreeMap<String, Value>,
-    canonical_print: BTreeMap<String, String>,
-}
-
-#[derive(Facet, Debug)]
-#[facet(rename_all = "snake_case")]
-#[repr(u8)]
-enum TokenSpec {
-    Regex(String),
+    tokens: Value,
+    rules: Value,
+    canonical_print: Value,
 }
 
 fn validate_hir_pilot_schema<'a>(
@@ -133,7 +132,13 @@ fn validate_hir_pilot_schema<'a>(
     }
 
     for rule_name in ["Module", "Function", "Param", "Block", "Stmt", "Expr"] {
-        if !repr.syntax.rules.contains_key(rule_name) {
+        if !repr
+            .syntax
+            .rules
+            .as_object()
+            .and_then(|rules| rules.get(rule_name))
+            .is_some()
+        {
             return Err(format!(
                 "expected {} syntax.rules to contain {:?}",
                 path.display(),
@@ -143,7 +148,13 @@ fn validate_hir_pilot_schema<'a>(
     }
 
     for print_name in ["Module", "Function", "Stmt.Return", "Expr.Call"] {
-        if !repr.syntax.canonical_print.contains_key(print_name) {
+        if !repr
+            .syntax
+            .canonical_print
+            .as_object()
+            .and_then(|prints| prints.get(print_name))
+            .is_some()
+        {
             return Err(format!(
                 "expected {} canonical_print to contain {:?}",
                 path.display(),
@@ -153,7 +164,12 @@ fn validate_hir_pilot_schema<'a>(
     }
 
     for token_name in ["ident", "symbol", "int"] {
-        let Some(token_spec) = repr.syntax.tokens.get(token_name) else {
+        let Some(token_spec) = repr
+            .syntax
+            .tokens
+            .as_object()
+            .and_then(|tokens| tokens.get(token_name))
+        else {
             return Err(format!(
                 "expected {} syntax.tokens to contain {:?}",
                 path.display(),
@@ -161,15 +177,27 @@ fn validate_hir_pilot_schema<'a>(
             ));
         };
 
-        match token_spec {
-            TokenSpec::Regex(pattern) if !pattern.is_empty() => {}
-            TokenSpec::Regex(_) => {
-                return Err(format!(
-                    "expected {} syntax.tokens.{token_name} regex to be non-empty",
-                    path.display()
-                ));
-            }
+        if token_spec.tag_name() != Some("regex") {
+            return Err(format!(
+                "expected {} syntax.tokens.{token_name} to be @regex(...), got tag {:?}",
+                path.display(),
+                token_spec.tag_name()
+            ));
+        }
+
+        let Some(patterns) = token_spec.as_sequence() else {
+            return Err(format!(
+                "expected {} syntax.tokens.{token_name} to have sequence payload",
+                path.display()
+            ));
         };
+
+        if patterns.is_empty() || patterns.get(0).and_then(Value::scalar_text).unwrap_or("").is_empty() {
+            return Err(format!(
+                "expected {} syntax.tokens.{token_name} regex payload to be non-empty",
+                path.display()
+            ));
+        }
     }
 
     Ok(repr)
