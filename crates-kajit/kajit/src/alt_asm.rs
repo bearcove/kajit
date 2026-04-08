@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// A decoder compiled from hand-optimized assembly.
 #[cfg(target_arch = "aarch64")]
 pub struct AltDecoder {
-    buf: kajit_emit::aarch64::FinalizedEmission,
+    buf: kajit_asm::aarch64::FinalizedEmission,
     func: *const u8,
 }
 

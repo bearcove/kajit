@@ -45,9 +45,9 @@ pub struct ExternAddrRelocInfo {
 pub struct LinearBackendResult {
     pub buf: BackendBuf,
     pub entry: u32,
-    pub source_map: Option<kajit_emit::SourceMap>,
+    pub source_map: Option<kajit_asm::SourceMap>,
     pub backend_debug_info: Option<BackendDebugInfo>,
-    pub asm_program: Option<kajit_emit::aarch64_asm::Program>,
+    pub asm_program: Option<kajit_asm::aarch64_asm::Program>,
     pub intrinsic_call_sites: Vec<IntrinsicCallSiteInfo>,
     pub data_relocs: Vec<DataRelocInfo>,
     pub extern_addr_relocs: Vec<ExternAddrRelocInfo>,
@@ -55,8 +55,8 @@ pub struct LinearBackendResult {
 
 /// Architecture-specific finalized code buffer.
 pub enum BackendBuf {
-    X86_64(kajit_emit::x64::FinalizedEmission),
-    Aarch64(kajit_emit::aarch64::FinalizedEmission),
+    X86_64(kajit_asm::x64::FinalizedEmission),
+    Aarch64(kajit_asm::aarch64::FinalizedEmission),
 }
 
 impl BackendBuf {
@@ -82,7 +82,7 @@ impl BackendBuf {
         self.len() == 0
     }
 
-    pub fn source_map(&self) -> &kajit_emit::SourceMap {
+    pub fn source_map(&self) -> &kajit_asm::SourceMap {
         match self {
             BackendBuf::X86_64(buf) => &buf.source_map,
             BackendBuf::Aarch64(buf) => &buf.source_map,

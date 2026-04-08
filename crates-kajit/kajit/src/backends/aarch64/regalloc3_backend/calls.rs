@@ -1,6 +1,6 @@
 //! Call emission for aarch64 regalloc3 backend.
 
-use kajit_emit::aarch64::Reg;
+use kajit_asm::aarch64::Reg;
 
 use crate::ir_backend::IntrinsicCallSiteInfo;
 

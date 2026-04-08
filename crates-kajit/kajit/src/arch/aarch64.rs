@@ -1,4 +1,4 @@
-use kajit_emit::aarch64::{self, Emitter, LabelId, Reg};
+use kajit_asm::aarch64::{self, Emitter, LabelId, Reg};
 
 /// Base frame size: 3 pairs of callee-saved registers = 48 bytes.
 pub const BASE_FRAME: u32 = 48;
@@ -114,11 +114,11 @@ impl EmitCtx {
     }
 
     /// Set source location metadata for subsequent emitted instructions.
-    pub fn set_source_location(&mut self, location: kajit_emit::SourceLocation) {
+    pub fn set_source_location(&mut self, location: kajit_asm::SourceLocation) {
         self.emit.set_source_location(location);
     }
 
-    pub fn current_source_location(&self) -> kajit_emit::SourceLocation {
+    pub fn current_source_location(&self) -> kajit_asm::SourceLocation {
         self.emit.current_source_location()
     }
 
@@ -129,7 +129,7 @@ impl EmitCtx {
         mut self,
     ) -> (
         aarch64::FinalizedEmission,
-        Option<kajit_emit::aarch64_asm::Program>,
+        Option<kajit_asm::aarch64_asm::Program>,
     ) {
         let asm_program = self.emit.take_captured_program();
         let buf = self.emit.finalize().expect("failed to finalize assembly");

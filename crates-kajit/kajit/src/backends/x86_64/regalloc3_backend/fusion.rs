@@ -4,7 +4,7 @@
 //! - CmpXx + BranchIf/BranchIfZero → cmp + jcc (skip setcc)
 //! - Add(base, const) + LoadFromAddr → [base + offset] addressing
 
-use kajit_emit::x64;
+use kajit_asm::x64;
 use kajit_lir::{BinOpKind, LinearOp};
 use kajit_mir::ir::{self, Function, Terminator};
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;

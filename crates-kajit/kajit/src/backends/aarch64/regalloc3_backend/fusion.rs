@@ -1,7 +1,7 @@
 //! Instruction fusion analysis for aarch64 regalloc3 backend.
 //! Computes which instructions can be fused: cmp+branch, bfi, bit tests, addr offsets.
 
-use kajit_emit::aarch64::{Condition, Reg, Width};
+use kajit_asm::aarch64::{Condition, Reg, Width};
 use kajit_mir::ir::{self, Function, Terminator};
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
 
@@ -46,7 +46,7 @@ impl<'a> EmitContext<'a> {
     pub(super) fn emit_branch_cond(
         &mut self,
         cond: kajit_ir::VReg,
-        target: kajit_emit::aarch64::LabelId,
+        target: kajit_asm::aarch64::LabelId,
         invert: bool,
     ) {
         if let Some(&cc) = self.fused_cmps.get(&cond) {

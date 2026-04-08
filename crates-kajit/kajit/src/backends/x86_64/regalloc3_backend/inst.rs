@@ -1,6 +1,6 @@
 //! Instruction emission for x86_64 regalloc3 backend.
 
-use kajit_emit::x64::{self, Mem, Operand};
+use kajit_asm::x64::{self, Mem, Operand};
 use kajit_lir::{BinOpKind, LinearOp, UnaryOpKind};
 
 use super::context::EmitContext;

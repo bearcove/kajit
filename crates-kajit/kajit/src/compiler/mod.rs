@@ -17,7 +17,7 @@ use crate::ir::RegionBuilder;
 use crate::pipeline_opts::PipelineOptions;
 
 pub use hir_to_ir::lower_hir_module;
-pub(crate) use kajit_postcard::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
+pub(crate) use kafe_postcard::{build_postcard_decoder_hir, supports_postcard_decoder_hir};
 
 /// A compiled deserializer. Owns the executable buffer containing JIT'd machine code.
 pub struct CompiledDecoder {
@@ -27,7 +27,7 @@ pub struct CompiledDecoder {
     func: *const u8,
     trusted_utf8_input: bool,
     _jit_registration: Option<crate::jit_debug::JitRegistration>,
-    asm_program: Option<kajit_emit::aarch64_asm::Program>,
+    asm_program: Option<kajit_asm::aarch64_asm::Program>,
 }
 
 /// A compiled scalar function. Owns the executable buffer containing JIT'd machine code.
@@ -76,7 +76,7 @@ impl CompiledDecoder {
     }
 
     /// Deterministic machine-emission trace annotated with CFG-MIR provenance.
-    pub fn emission_trace_text(&self) -> Result<String, kajit_emit::TraceError> {
+    pub fn emission_trace_text(&self) -> Result<String, kajit_asm::TraceError> {
         let entries = match &self.buf {
             crate::ir_backend::BackendBuf::X86_64(buf) => buf.trace_entries()?,
             crate::ir_backend::BackendBuf::Aarch64(buf) => buf.trace_entries()?,
@@ -135,7 +135,7 @@ impl CompiledDecoder {
     }
 
     /// Source map (code offset → DWARF line).
-    fn source_map(&self) -> Option<&kajit_emit::SourceMap> {
+    fn source_map(&self) -> Option<&kajit_asm::SourceMap> {
         Some(self.buf.source_map())
     }
 
@@ -152,9 +152,9 @@ pub(crate) fn materialize_backend_result(
 ) -> (
     crate::ir_backend::BackendBuf,
     usize,
-    Option<kajit_emit::SourceMap>,
+    Option<kajit_asm::SourceMap>,
     Option<crate::ir_backend::BackendDebugInfo>,
-    Option<kajit_emit::aarch64_asm::Program>,
+    Option<kajit_asm::aarch64_asm::Program>,
 ) {
     let crate::ir_backend::LinearBackendResult {
         buf,

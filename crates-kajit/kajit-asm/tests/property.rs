@@ -1,5 +1,5 @@
-use kajit_emit::aarch64::{self, Reg, Width as A64Width};
-use kajit_emit::x64::{self, Emitter as X64Emitter};
+use kajit_asm::aarch64::{self, Reg, Width as A64Width};
+use kajit_asm::x64::{self, Emitter as X64Emitter};
 use proptest::prelude::*;
 
 fn sign_extend_u32(value: u32, bits: u8) -> i32 {

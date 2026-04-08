@@ -1,6 +1,6 @@
 //! EmitContext struct and helper methods for aarch64 regalloc3 backend.
 
-use kajit_emit::aarch64::{Reg, Width};
+use kajit_asm::aarch64::{Reg, Width};
 use kajit_mir::ir;
 use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
@@ -8,7 +8,7 @@ use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
 use crate::arch::aarch64::EmitCtx;
 use crate::harness::VRegLocation;
 use crate::ir_backend::{DataRelocInfo, ExternAddrRelocInfo, IntrinsicCallSiteInfo};
-use kajit_emit::aarch64::{Condition, LabelId};
+use kajit_asm::aarch64::{Condition, LabelId};
 use std::collections::HashMap;
 
 use super::BfiInfo;
@@ -56,7 +56,7 @@ pub(super) struct EmitContext<'a> {
     /// Allows Return terminator to fall through instead of branching.
     pub(super) is_last_emitted_block: bool,
     /// Per-edge trampoline labels for edges that need value delivery before control transfer.
-    pub(super) edge_trampoline_labels: HashMap<ir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
+    pub(super) edge_trampoline_labels: HashMap<ir::EdgeId, (LabelId, kajit_asm::SourceLocation)>,
     /// Actual source homes for edge arguments at predecessor exit.
     pub(super) edge_source_locations: HashMap<(ir::EdgeId, u32), VRegLocation>,
     /// Actual source homes for instruction use operands at instruction entry.
@@ -113,7 +113,7 @@ impl<'a> EmitContext<'a> {
         self.alloc_func.preg_for_vreg(vreg)
     }
 
-    /// Convert regalloc3 PReg to kajit_emit Reg.
+    /// Convert regalloc3 PReg to kajit_asm Reg.
     pub(super) fn preg_to_reg(&self, preg: PReg) -> Reg {
         Reg::from_raw(preg.0)
     }
@@ -476,7 +476,7 @@ impl<'a> EmitContext<'a> {
     }
 
     pub(super) fn emit_edge_trampolines(&mut self) {
-        let trampolines: Vec<(ir::EdgeId, LabelId, kajit_emit::SourceLocation)> = self
+        let trampolines: Vec<(ir::EdgeId, LabelId, kajit_asm::SourceLocation)> = self
             .edge_trampoline_labels
             .iter()
             .map(|(&edge_id, &(label, source_location))| (edge_id, label, source_location))

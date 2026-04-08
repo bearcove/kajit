@@ -3,18 +3,18 @@
 use std::collections::HashMap;
 
 use facet::{Def, EnumRepr, ListDef, ScalarType, Shape, Type, UserType};
-use kajit_format::{
+use kafe::{
     FieldEmitInfo, SkippedFieldInfo, VtableEntry, collect_variants, discriminant_size,
     get_option_def, get_pointer_def, is_unit, vtable_symbol_name,
 };
 use kajit_hir as hir;
 
-/// Wrapper around `kajit_format::collect_fields` using no-op default resolvers.
+/// Wrapper around `kafe::collect_fields` using no-op default resolvers.
 ///
 /// Postcard HIR generation asserts that no fields have defaults or are skipped,
 /// so the resolvers are never actually invoked.
 fn collect_fields(shape: &'static Shape) -> (Vec<FieldEmitInfo>, Vec<SkippedFieldInfo>) {
-    kajit_format::collect_fields(
+    kafe::collect_fields(
         shape,
         |_| None,
         |_| panic!("postcard HIR does not support custom defaults"),
@@ -49,8 +49,8 @@ impl PostcardHirLowerer {
     pub fn new() -> Self {
         let mut module = hir::Module::new();
         let input_region = module.add_region("input");
-        let cursor_type = kajit_format::hir_helpers::add_cursor_type(&mut module, input_region);
-        let deser_context_type = kajit_format::hir_helpers::add_deser_context_type(&mut module);
+        let cursor_type = kafe::hir_helpers::add_cursor_type(&mut module, input_region);
+        let deser_context_type = kafe::hir_helpers::add_deser_context_type(&mut module);
 
         Self {
             module,
@@ -215,7 +215,7 @@ impl PostcardHirLowerer {
         let shape_size = shape.layout.sized_layout().ok().map(|l| l.size() as u32);
 
         let kind = if let Def::List(list_def) = &shape.def {
-            let offsets = kajit_malum::discover_vec_offsets(list_def, shape);
+            let offsets = kafe_malum::discover_vec_offsets(list_def, shape);
             let mut fields = vec![
                 (
                     offsets.ptr_offset,
@@ -340,7 +340,7 @@ impl PostcardHirLowerer {
         if let Some(existing) = self.string_raw_type {
             return existing;
         }
-        let offsets = kajit_malum::discover_string_offsets();
+        let offsets = kafe_malum::discover_string_offsets();
         let mut fields = vec![
             (
                 offsets.ptr_offset,
@@ -2036,7 +2036,7 @@ impl PostcardHirLowerer {
                     return;
                 }
                 ScalarType::String => {
-                    let offsets = kajit_malum::discover_string_offsets();
+                    let offsets = kafe_malum::discover_string_offsets();
                     for (offset, field) in [
                         (offsets.ptr_offset as usize, "ptr"),
                         (offsets.len_offset as usize, "len"),
@@ -2231,7 +2231,7 @@ impl PostcardHirLowerer {
             },
         });
 
-        let offsets = kajit_malum::discover_vec_offsets(list_def, shape);
+        let offsets = kafe_malum::discover_vec_offsets(list_def, shape);
         let mut vec_fields = [
             ("ptr", offsets.ptr_offset),
             ("len", offsets.len_offset),

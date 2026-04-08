@@ -6,7 +6,7 @@
 //! linker can resolve.
 //!
 //! Symbol naming convention: `kajit_vtable_{entry}__{mangled_type}`
-//! where `{mangled_type}` is produced by `kajit_format::mangle_type_id`.
+//! where `{mangled_type}` is produced by `kafe::mangle_type_id`.
 
 macro_rules! export_option_vtable {
     ($T:ty, $mangled:ident) => {
@@ -44,7 +44,7 @@ macro_rules! export_option_vtable {
 }
 
 // Export vtable wrappers for all Option<T> types used in the corpus.
-// The mangled names must match what `kajit_format::mangle_type_id` produces
+// The mangled names must match what `kafe::mangle_type_id` produces
 // when given the Shape's Display output (e.g. "Option<u32>" → "Option_Lu32_R").
 export_option_vtable!(u32, Option_Lu32_R);
 export_option_vtable!(String, Option_LString_R);
@@ -59,7 +59,7 @@ export_option_vtable!(bool, Option_Lbool_R);
 
 #[cfg(test)]
 mod tests {
-    use kajit_format::{VtableEntry, vtable_symbol_name};
+    use kafe::{VtableEntry, vtable_symbol_name};
 
     /// Verify that the mangled symbol names match what `vtable_symbol_name` produces,
     /// and that the exported wrappers call through to the correct vtable entry.

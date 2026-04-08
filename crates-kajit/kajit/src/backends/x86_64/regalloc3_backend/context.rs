@@ -1,6 +1,6 @@
 //! EmitContext — core helpers for the x86_64 regalloc3 backend.
 
-use kajit_emit::x64::{self, LabelId, Mem};
+use kajit_asm::x64::{self, LabelId, Mem};
 use kajit_mir::ir::{self, Function};
 use kajit_mir::regalloc3::machine_inst::PReg;
 use kajit_mir::regalloc3_result::AllocatedCfgFunctionRa3;
@@ -42,7 +42,7 @@ pub(super) struct EmitContext<'a> {
     /// Set to true when emitting the last block before the success epilogue.
     pub is_last_emitted_block: bool,
     /// Per-edge trampoline labels for edges that need value delivery before control transfer.
-    pub edge_trampoline_labels: HashMap<ir::EdgeId, (LabelId, kajit_emit::SourceLocation)>,
+    pub edge_trampoline_labels: HashMap<ir::EdgeId, (LabelId, kajit_asm::SourceLocation)>,
     /// Actual source homes for edge arguments at predecessor exit.
     pub edge_source_locations: HashMap<(ir::EdgeId, u32), VRegLocation>,
     /// Actual source homes for instruction use operands at instruction entry.
@@ -349,7 +349,7 @@ impl<'a> EmitContext<'a> {
     }
 
     pub fn emit_edge_trampolines(&mut self) {
-        let trampolines: Vec<(ir::EdgeId, LabelId, kajit_emit::SourceLocation)> = self
+        let trampolines: Vec<(ir::EdgeId, LabelId, kajit_asm::SourceLocation)> = self
             .edge_trampoline_labels
             .iter()
             .map(|(&edge_id, &(label, source_location))| (edge_id, label, source_location))

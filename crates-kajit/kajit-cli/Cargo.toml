@@ -18,7 +18,7 @@ lldb = ["dep:lldb"]
 
 [dependencies]
 kajit = { path = "../kajit" }
-lldb = { path = "../vendor/lldb-rs", optional = true }
+lldb = { path = "../../vendor/lldb-rs", optional = true }
 kajit-hir = { path = "../kajit-hir" }
 kajit-ir = { path = "../kajit-ir" }
 kajit-hir-text = { path = "../kajit-hir-text" }

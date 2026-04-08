@@ -1,7 +1,7 @@
 use facet::Facet;
 use facet::Shape;
 use facet_testhelpers::test;
-use kajit_format::instantiated_shape_symbol_key;
+use kafe::instantiated_shape_symbol_key;
 use kajit_hir as hir;
 use kajit_hir_text::parse_hir;
 use serde::Serialize;
@@ -1806,17 +1806,17 @@ fn debug_scalar_array_emission_trace() {
 #[test]
 fn builds_dwarf_sections_from_source_map_lines() {
     let source_map = vec![
-        kajit_emit::SourceMapEntry {
+        kajit_asm::SourceMapEntry {
             offset: 0,
-            location: kajit_emit::SourceLocation {
+            location: kajit_asm::SourceLocation {
                 file: 0,
                 line: 1,
                 column: 1,
             },
         },
-        kajit_emit::SourceMapEntry {
+        kajit_asm::SourceMapEntry {
             offset: 8,
-            location: kajit_emit::SourceLocation {
+            location: kajit_asm::SourceLocation {
                 file: 0,
                 line: 2,
                 column: 1,
@@ -1854,17 +1854,17 @@ fn builds_dwarf_sections_from_source_map_lines() {
 #[test]
 fn debug_line_rows_cover_entry_prologue() {
     let rows = normalize_debug_line_rows(&vec![
-        kajit_emit::SourceMapEntry {
+        kajit_asm::SourceMapEntry {
             offset: 40,
-            location: kajit_emit::SourceLocation {
+            location: kajit_asm::SourceLocation {
                 file: 0,
                 line: 5,
                 column: 1,
             },
         },
-        kajit_emit::SourceMapEntry {
+        kajit_asm::SourceMapEntry {
             offset: 48,
-            location: kajit_emit::SourceLocation {
+            location: kajit_asm::SourceLocation {
                 file: 0,
                 line: 6,
                 column: 1,
@@ -1883,17 +1883,17 @@ fn debug_line_rows_cover_entry_prologue() {
 #[test]
 fn debug_line_rows_do_not_duplicate_existing_entry_mapping() {
     let rows = normalize_debug_line_rows(&vec![
-        kajit_emit::SourceMapEntry {
+        kajit_asm::SourceMapEntry {
             offset: 0,
-            location: kajit_emit::SourceLocation {
+            location: kajit_asm::SourceLocation {
                 file: 0,
                 line: 5,
                 column: 1,
             },
         },
-        kajit_emit::SourceMapEntry {
+        kajit_asm::SourceMapEntry {
             offset: 48,
-            location: kajit_emit::SourceLocation {
+            location: kajit_asm::SourceLocation {
                 file: 0,
                 line: 6,
                 column: 1,

@@ -1,6 +1,6 @@
 //! Control flow emission for x86_64 regalloc3 backend.
 
-use kajit_emit::x64;
+use kajit_asm::x64;
 use kajit_mir::ir::{self, Terminator};
 
 use super::context::EmitContext;
@@ -15,7 +15,7 @@ impl<'a> EmitContext<'a> {
     pub fn emit_branch_cond(
         &mut self,
         cond: kajit_ir::VReg,
-        target: kajit_emit::x64::LabelId,
+        target: kajit_asm::x64::LabelId,
         invert: bool,
     ) {
         // Fused cmp: the cmp was already emitted, just emit jcc.
@@ -244,7 +244,7 @@ impl<'a> EmitContext<'a> {
 
                 let op_id = kajit_mir::ir::OpId::Inst(inst_id);
                 if let Some(&line) = self.line_map.get(&op_id) {
-                    self.ectx.set_source_location(kajit_emit::SourceLocation {
+                    self.ectx.set_source_location(kajit_asm::SourceLocation {
                         file: 1,
                         line,
                         column: 0,
@@ -261,7 +261,7 @@ impl<'a> EmitContext<'a> {
 
             let term_op = kajit_mir::ir::OpId::Term(block.term);
             if let Some(&line) = self.line_map.get(&term_op) {
-                self.ectx.set_source_location(kajit_emit::SourceLocation {
+                self.ectx.set_source_location(kajit_asm::SourceLocation {
                     file: 1,
                     line,
                     column: 0,

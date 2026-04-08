@@ -1,6 +1,6 @@
 //! Instruction emission for aarch64 regalloc3 backend.
 
-use kajit_emit::aarch64::{Condition, Reg, Width};
+use kajit_asm::aarch64::{Condition, Reg, Width};
 use kajit_mir::ir::Inst;
 
 use crate::ir_backend::{DataRelocInfo, ExternAddrRelocInfo};

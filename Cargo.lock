@@ -1338,6 +1338,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "kafe"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kajit-hir",
+]
+
+[[package]]
+name = "kafe-malum"
+version = "0.1.0"
+dependencies = [
+ "facet",
+]
+
+[[package]]
+name = "kafe-postcard"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kafe",
+ "kafe-malum",
+ "kajit-hir",
+ "kajit-types",
+]
+
+[[package]]
+name = "kafe-vtables"
+version = "0.1.0"
+dependencies = [
+ "facet",
+ "kafe",
+ "paste",
+]
+
+[[package]]
 name = "kajit"
 version = "0.1.0"
 dependencies = [
@@ -1346,18 +1381,18 @@ dependencies = [
  "facet-testhelpers",
  "insta",
  "itoa",
- "kajit-emit",
- "kajit-emit-text",
- "kajit-format",
+ "kafe",
+ "kafe-malum",
+ "kafe-postcard",
+ "kajit-asm",
+ "kajit-asm-text",
  "kajit-hir",
  "kajit-hir-text",
  "kajit-ir",
  "kajit-ir-text",
  "kajit-lir",
- "kajit-malum",
  "kajit-mir",
  "kajit-mir-text",
- "kajit-postcard",
  "kajit-types",
  "libc",
  "object 0.36.7",
@@ -1371,6 +1406,22 @@ dependencies = [
  "yaxpeax-arm",
  "yaxpeax-x86",
  "zmij",
+]
+
+[[package]]
+name = "kajit-asm"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
+name = "kajit-asm-text"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "kajit-asm",
+ "kajit-parse-util",
 ]
 
 [[package]]
@@ -1396,30 +1447,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "kajit-emit"
-version = "0.1.0"
-dependencies = [
- "proptest",
-]
-
-[[package]]
-name = "kajit-emit-text"
-version = "0.1.0"
-dependencies = [
- "chumsky",
- "kajit-emit",
- "kajit-parse-util",
-]
-
-[[package]]
-name = "kajit-format"
-version = "0.1.0"
-dependencies = [
- "facet",
- "kajit-hir",
 ]
 
 [[package]]
@@ -1472,13 +1499,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kajit-malum"
-version = "0.1.0"
-dependencies = [
- "facet",
-]
-
-[[package]]
 name = "kajit-mir"
 version = "0.1.0"
 dependencies = [
@@ -1512,28 +1532,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "kajit-postcard"
-version = "0.1.0"
-dependencies = [
- "facet",
- "kajit-format",
- "kajit-hir",
- "kajit-malum",
- "kajit-types",
-]
-
-[[package]]
 name = "kajit-types"
 version = "0.1.0"
-
-[[package]]
-name = "kajit-vtables"
-version = "0.1.0"
-dependencies = [
- "facet",
- "kajit-format",
- "paste",
-]
 
 [[package]]
 name = "lazy_static"

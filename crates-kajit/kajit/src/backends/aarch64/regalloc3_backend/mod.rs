@@ -6,7 +6,7 @@ mod control;
 mod fusion;
 mod inst;
 
-use kajit_emit::aarch64::{Reg, Width};
+use kajit_asm::aarch64::{Reg, Width};
 use kajit_mir::ir;
 use kajit_mir::regalloc3_result::AllocatedCfgProgramRa3;
 

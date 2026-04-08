@@ -1,5 +1,5 @@
 [package]
-name = "kajit-vtables"
+name = "kafe-vtables"
 version = "0.1.0"
 edition = "2024"
 
@@ -13,4 +13,4 @@ facet = "0.44"
 paste = "1"
 
 [dev-dependencies]
-kajit-format = { path = "../kajit-format" }
+kafe = { path = "../kafe" }

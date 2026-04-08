@@ -50,7 +50,7 @@ pub(super) fn build_cfg_mir_listing(
 }
 
 pub(super) fn format_emission_trace_entries(
-    entries: &[kajit_emit::TraceEntry],
+    entries: &[kajit_asm::TraceEntry],
     cfg_mir_line_text_by_line: &[String],
 ) -> String {
     entries
@@ -110,7 +110,7 @@ pub(super) fn jit_dwarf_target_arch() -> crate::jit_dwarf::DwarfTargetArch {
 pub(super) fn build_jit_debug_info_from_source_map(
     code_ptr: *const u8,
     code_len: usize,
-    source_map: Option<&kajit_emit::SourceMap>,
+    source_map: Option<&kajit_asm::SourceMap>,
     listing_path: &Path,
     subprogram: crate::jit_dwarf::JitDebugSubprogram,
 ) -> Option<crate::jit_dwarf::JitDebugInfo> {
@@ -136,7 +136,7 @@ pub(super) fn build_jit_debug_info_from_source_map(
 }
 
 pub(super) fn normalize_debug_line_rows(
-    source_map: &kajit_emit::SourceMap,
+    source_map: &kajit_asm::SourceMap,
 ) -> Vec<crate::jit_dwarf::JitDebugLineRow> {
     let mut rows = source_map
         .iter()

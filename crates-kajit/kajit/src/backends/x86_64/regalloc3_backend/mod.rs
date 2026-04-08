@@ -6,7 +6,7 @@ mod control;
 mod fusion;
 mod inst;
 
-use kajit_emit::x64::{self, Mem};
+use kajit_asm::x64::{self, Mem};
 use kajit_lir::LinearOp;
 use kajit_mir::ir;
 use kajit_mir::regalloc3_result::AllocatedCfgProgramRa3;

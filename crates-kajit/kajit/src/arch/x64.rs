@@ -1,4 +1,4 @@
-use kajit_emit::x64::{Emitter, FinalizedEmission, LabelId};
+use kajit_asm::x64::{Emitter, FinalizedEmission, LabelId};
 
 /// Base frame size (non-leaf).
 ///
@@ -58,11 +58,11 @@ impl EmitCtx {
     }
 
     /// Set source location metadata for subsequent emitted instructions.
-    pub fn set_source_location(&mut self, location: kajit_emit::SourceLocation) {
+    pub fn set_source_location(&mut self, location: kajit_asm::SourceLocation) {
         self.emit.set_source_location(location);
     }
 
-    pub fn current_source_location(&self) -> kajit_emit::SourceLocation {
+    pub fn current_source_location(&self) -> kajit_asm::SourceLocation {
         self.emit.current_source_location()
     }
 

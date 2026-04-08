@@ -27,18 +27,18 @@ kajit-ir-text = { path = "../kajit-ir-text" }
 kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-mir-text = { path = "../kajit-mir-text" }
-kajit-emit = { path = "../kajit-emit" }
-kajit-emit-text = { path = "../kajit-emit-text" }
-kajit-format = { path = "../kajit-format" }
+kajit-asm = { path = "../kajit-asm" }
+kajit-asm-text = { path = "../kajit-asm-text" }
+kafe = { path = "../../crates-kafe/kafe" }
 kajit-hir = { path = "../kajit-hir" }
-kajit-malum = { path = "../kajit-malum" }
-kajit-postcard = { path = "../kajit-postcard" }
+kafe-malum = { path = "../../crates-kafe/kafe-malum" }
+kafe-postcard = { path = "../../crates-kafe/kafe-postcard" }
 kajit-types = { path = "../kajit-types" }
 tracing = "0.1"
 
 [dev-dependencies]
 kajit-hir-text = { path = "../kajit-hir-text" }
-kajit-emit-text = { path = "../kajit-emit-text" }
+kajit-asm-text = { path = "../kajit-asm-text" }
 libc = "0.2"
 postcard = { version = "1", features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }

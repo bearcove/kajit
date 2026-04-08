@@ -1,6 +1,6 @@
 //! Call emission for x86_64 regalloc3 backend.
 
-use kajit_emit::x64;
+use kajit_asm::x64;
 
 use super::context::EmitContext;
 use crate::ir_backend::IntrinsicCallSiteInfo;

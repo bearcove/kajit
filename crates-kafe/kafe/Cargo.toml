@@ -1,5 +1,5 @@
 [package]
-name = "kajit-format"
+name = "kafe"
 version = "0.1.0"
 edition = "2024"
 authors = ["Amos Wenger <amos@bearcove.eu>"]
@@ -14,4 +14,4 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
 [dependencies]
 facet = "0.44"
-kajit-hir = { path = "../kajit-hir" }
+kajit-hir = { path = "../../crates-kajit/kajit-hir" }

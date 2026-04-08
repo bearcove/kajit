@@ -1,6 +1,6 @@
 //! Control flow emission for aarch64 regalloc3 backend.
 
-use kajit_emit::aarch64::Reg;
+use kajit_asm::aarch64::Reg;
 use kajit_mir::ir::{self, Terminator};
 
 use super::context::EmitContext;
@@ -232,7 +232,7 @@ impl<'a> EmitContext<'a> {
 
                 let op_id = kajit_mir::ir::OpId::Inst(inst_id);
                 if let Some(&line) = self.line_map.get(&op_id) {
-                    self.ectx.set_source_location(kajit_emit::SourceLocation {
+                    self.ectx.set_source_location(kajit_asm::SourceLocation {
                         file: 1,
                         line,
                         column: 0,
@@ -250,7 +250,7 @@ impl<'a> EmitContext<'a> {
             // Emit terminator with source location
             let term_op = kajit_mir::ir::OpId::Term(block.term);
             if let Some(&line) = self.line_map.get(&term_op) {
-                self.ectx.set_source_location(kajit_emit::SourceLocation {
+                self.ectx.set_source_location(kajit_asm::SourceLocation {
                     file: 1,
                     line,
                     column: 0,

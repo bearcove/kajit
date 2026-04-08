@@ -1,5 +1,5 @@
 [package]
-name = "kajit-malum"
+name = "kafe-malum"
 version = "0.1.0"
 edition = "2024"
 authors = ["Amos Wenger <amos@bearcove.eu>"]
