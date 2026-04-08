@@ -1928,8 +1928,13 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
                     eprintln!("  {}. {}", i + 1, error);
                 }
                 eprintln!("\nRelevant blocks:");
-                crate::opt::validate_ssa::print_ssa_diagnostics(func, &errors, Some(&cfg.debug));
-                eprintln!("\nFull CFG-MIR ({} blocks):\n{cfg}", func.blocks.len());
+                crate::opt::validate_ssa::print_ssa_diagnostics(func, &errors, &cfg);
+                let dump_path = "/tmp/kajit-ssa-fail.vixen-mir";
+                std::fs::write(dump_path, format!("{cfg}")).ok();
+                eprintln!(
+                    "\nFull CFG-MIR ({} blocks) written to {dump_path}",
+                    func.blocks.len()
+                );
                 panic!("SSA validation failed before optimization passes");
             }
         }
@@ -1953,7 +1958,7 @@ pub fn lower_and_optimize(ir: &LinearIr, hints: crate::regalloc3::hints::HintMap
                     eprintln!("  {}. {}", i + 1, error);
                 }
                 eprintln!("\nRelevant blocks:");
-                crate::opt::validate_ssa::print_ssa_diagnostics(func, &errors, Some(&cfg.debug));
+                crate::opt::validate_ssa::print_ssa_diagnostics(func, &errors, cfg);
                 panic!("SSA validation failed after {}", pass_name);
             } else {
                 eprintln!("[SSA] ✓ Passed validation after {}", pass_name);

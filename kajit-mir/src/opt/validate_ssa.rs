@@ -298,13 +298,18 @@ impl SsaError {
 ///
 /// Instead of dumping the entire CFG (which can be 500+ lines for a u32 decoder),
 /// this prints only the blocks and edges relevant to each violation, with
-/// provenance info (debug scope/value names) for traced vregs.
+/// provenance info (debug scope/value names) and CFG-MIR listing line numbers.
 pub fn print_ssa_diagnostics(
     func: &Function,
     errors: &[SsaError],
-    provenance: Option<&crate::cfg_mir::ProgramDebugProvenance>,
+    program: &crate::cfg_mir::Program,
 ) {
     use std::collections::BTreeSet;
+
+    let provenance = Some(&program.debug);
+
+    // Build line number map from the debug listing
+    let line_map = build_line_number_map(func, program);
 
     // Collect all relevant blocks
     let mut blocks_to_show = BTreeSet::new();
@@ -372,8 +377,12 @@ pub fn print_ssa_diagnostics(
                     format!("{:?} v{}{}", op.kind, op.vreg.index(), marker)
                 })
                 .collect();
+            let line_info = line_map
+                .get(&crate::cfg_mir::OpId::Inst(inst_id))
+                .map(|l| format!("L{l} "))
+                .unwrap_or_default();
             eprintln!(
-                "    i{}: {} [{}]",
+                "    {line_info}i{}: {} [{}]",
                 inst_id.index(),
                 linear_op_summary(&inst.op),
                 operands.join(", ")
@@ -382,7 +391,11 @@ pub fn print_ssa_diagnostics(
 
         // Show terminator
         let term = &func.terms[block.term.index()];
-        eprintln!("    term: {}", terminator_summary(term));
+        let term_line = line_map
+            .get(&crate::cfg_mir::OpId::Term(block.term))
+            .map(|l| format!("L{l} "))
+            .unwrap_or_default();
+        eprintln!("    {term_line}term: {}", terminator_summary(term));
 
         // Show outgoing edges
         for &edge_id in &block.succs {
@@ -890,4 +903,24 @@ fn check_entry_liveness(func: &Function, errors: &mut Vec<SsaError>) {
             inst_index: entry_block.insts.len(),
         });
     }
+}
+
+/// Build a map from OpId to 1-indexed line number in the debug listing.
+fn build_line_number_map(
+    func: &Function,
+    program: &crate::cfg_mir::Program,
+) -> HashMap<crate::cfg_mir::OpId, usize> {
+    let mut map = HashMap::new();
+    let mut line = 1usize; // 1-indexed like DWARF
+    // Walk blocks in the same order as debug_line_listing_with_registry
+    for block in &func.blocks {
+        for &inst_id in &block.insts {
+            map.insert(crate::cfg_mir::OpId::Inst(inst_id), line);
+            line += 1;
+        }
+        map.insert(crate::cfg_mir::OpId::Term(block.term), line);
+        line += 1;
+    }
+    let _ = program; // used for consistency with the listing generator
+    map
 }
