@@ -11,23 +11,27 @@ lambda @0 @s0 (shape: "abs_diff") {
   region @s0 {
     args: [arg0, arg1, %ms]
     n1 = CmpGt [arg0, arg1] -> [v0]
-    n4 = gamma [
+    n2 = Const(0x0) [] -> [v1]
+    n5 = gamma [
       pred: v0
-      in0: %ms:arg
+      in0: arg0
+      in1: arg1
+      in2: v1
+      in3: %ms:arg
     ] {
       branch 0:
         region @s1 {
-          args: [%ms]
-          n2 = Sub [@s0.arg1, @s0.arg0] -> [v1]
-          results: [%ms:arg]
+          args: [arg0, arg1, arg2, %ms]
+          n3 = Sub [arg1, arg0] -> [v2]
+          results: [arg0, arg1, v2, %ms:arg]
         }
       branch 1:
         region @s2 {
-          args: [%ms]
-          n3 = Sub [@s0.arg0, @s0.arg1] -> [v2]
-          results: [%ms:arg]
+          args: [arg0, arg1, arg2, %ms]
+          n4 = Sub [arg0, arg1] -> [v3]
+          results: [arg0, arg1, v3, %ms:arg]
         }
-    } -> [%ms]
-    results: [v2, %ms:n4]
+    } -> [v4, v5, v6, %ms]
+    results: [v6, %ms:n5]
   }
 }

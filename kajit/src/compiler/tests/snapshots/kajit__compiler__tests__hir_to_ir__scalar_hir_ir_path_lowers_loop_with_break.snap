@@ -18,27 +18,28 @@ lambda @0 @s0 (shape: "count_to_five") {
   region @s0 {
     args: [%ms]
     n1 = Const(0x0) [] -> [v0]
-    n20 = theta [%ms:arg] {
+    n20 = theta [v0, %ms:arg] {
       region @s1 {
-        args: [%ms]
+        args: [arg0, %ms]
         n2 = Const(0x1) [] -> [v1]
         n3 = WriteToSlot(0) [v1, %ms:arg] -> [%ms]
         n4 = WriteToSlot(1) [v1, %ms:n3] -> [%ms]
         n5 = ReadFromSlot(0) [%ms:n4] -> [v2, %ms]
         n14 = gamma [
           pred: v2
-          in0: %ms:n5
+          in0: arg0
+          in1: %ms:n5
         ] {
           branch 0:
             region @s2 {
-              args: [%ms]
-              results: [%ms:arg]
+              args: [arg0, %ms]
+              results: [arg0, %ms:arg]
             }
           branch 1:
             region @s3 {
-              args: [%ms]
+              args: [arg0, %ms]
               n6 = Const(0x5) [] -> [v3]
-              n7 = CmpEq [v0, v3] -> [v4]
+              n7 = CmpEq [arg0, v3] -> [v4]
               n13 = gamma [
                 pred: v4
                 in0: %ms:arg
@@ -73,31 +74,32 @@ lambda @0 @s0 (shape: "count_to_five") {
                     results: [%ms:n12]
                   }
               } -> [%ms]
-              results: [%ms:n13]
+              results: [arg0, %ms:n13]
             }
-        } -> [%ms]
-        n15 = ReadFromSlot(0) [%ms:n14] -> [v7, %ms]
+        } -> [v7, %ms]
+        n15 = ReadFromSlot(0) [%ms:n14] -> [v8, %ms]
         n18 = gamma [
-          pred: v7
-          in0: %ms:n15
+          pred: v8
+          in0: v7
+          in1: %ms:n15
         ] {
           branch 0:
             region @s8 {
-              args: [%ms]
-              results: [%ms:arg]
+              args: [arg0, %ms]
+              results: [arg0, %ms:arg]
             }
           branch 1:
             region @s9 {
-              args: [%ms]
-              n16 = Const(0x1) [] -> [v8]
-              n17 = Add [v0, v8] -> [v9]
-              results: [%ms:arg]
+              args: [arg0, %ms]
+              n16 = Const(0x1) [] -> [v9]
+              n17 = Add [arg0, v9] -> [v10]
+              results: [v10, %ms:arg]
             }
-        } -> [%ms]
-        n19 = ReadFromSlot(1) [%ms:n18] -> [v10, %ms]
-        results: [v10, %ms:n19]
+        } -> [v11, %ms]
+        n19 = ReadFromSlot(1) [%ms:n18] -> [v12, %ms]
+        results: [v12, v11, %ms:n19]
       }
-    } -> [%ms]
-    results: [v9, %ms:n20]
+    } -> [v13, %ms]
+    results: [v13, %ms:n20]
   }
 }

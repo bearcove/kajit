@@ -5,12 +5,10 @@ expression: "format!(\"{}\",\nir.display_with_registry(&crate::ir::IntrinsicRegi
 scopes {
   s0 = lambda_body(@0)
 }
-lambda @0 @s0 (shape: "const_number", output_size: 4) {
+lambda @0 @s0 (shape: "const_number") {
   region @s0 {
     args: [arg0, arg1, %ms]
-    n1 = WriteToSlot(0) [arg1, %ms:arg] -> [%ms]
-    n2 = Const(0x2a) [] -> [v0]
-    n3 = StoreToAddr(W4) [arg0, v0, %ms:n1] -> [%ms]
-    results: [%ms:n3]
+    n1 = Const(0x2a) [] -> [v0]
+    results: [%ms:arg]
   }
 }
