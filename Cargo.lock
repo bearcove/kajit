@@ -1274,6 +1274,7 @@ dependencies = [
  "kajit-mir",
  "kajit-reprs",
  "kajit-types",
+ "kajit-wares",
  "libc",
  "object 0.36.7",
  "postcard",
@@ -1381,6 +1382,13 @@ dependencies = [
 [[package]]
 name = "kajit-types"
 version = "0.1.0"
+
+[[package]]
+name = "kajit-wares"
+version = "0.1.0"
+dependencies = [
+ "object 0.36.7",
+]
 
 [[package]]
 name = "lazy_static"

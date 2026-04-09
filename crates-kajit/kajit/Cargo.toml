@@ -26,6 +26,7 @@ kajit-ir = { path = "../kajit-ir" }
 kajit-lir = { path = "../kajit-lir" }
 kajit-mir = { path = "../kajit-mir" }
 kajit-asm = { path = "../kajit-asm" }
+kajit-wares = { path = "../kajit-wares" }
 kajit-reprs = { path = "../kajit-reprs" }
 kafe = { path = "../../crates-kafe/kafe" }
 kajit-hir = { path = "../kajit-hir" }

@@ -1220,350 +1220,76 @@ pub fn generate_harness(
 }
 
 pub fn build_object_file(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {
-    use object::write::{Object, Relocation, Symbol, SymbolSection};
-    use object::{
-        Architecture, BinaryFormat, Endianness, RelocationFlags, SectionKind, SymbolFlags,
-        SymbolKind, SymbolScope,
+    let dwarf = input
+        .dwarf
+        .as_ref()
+        .map(|dwarf| kajit_wares::DwarfSections {
+            debug_line: dwarf.debug_line.clone(),
+            debug_abbrev: dwarf.debug_abbrev.clone(),
+            debug_info: dwarf.debug_info.clone(),
+            debug_aranges: dwarf.debug_aranges.clone(),
+            debug_loc: dwarf.debug_loc.clone(),
+            debug_ranges: dwarf.debug_ranges.clone(),
+            relocations: dwarf
+                .relocations
+                .iter()
+                .map(|(section, reloc)| {
+                    let section = match section {
+                        crate::jit_dwarf::DwarfSection::DebugInfo => {
+                            kajit_wares::DwarfSection::DebugInfo
+                        }
+                        crate::jit_dwarf::DwarfSection::DebugLine => {
+                            kajit_wares::DwarfSection::DebugLine
+                        }
+                        crate::jit_dwarf::DwarfSection::DebugAranges => {
+                            kajit_wares::DwarfSection::DebugAranges
+                        }
+                    };
+                    (
+                        section,
+                        kajit_wares::DwarfRelocation {
+                            offset: reloc.offset,
+                            addend: reloc.addend,
+                        },
+                    )
+                })
+                .collect(),
+        });
+
+    let intrinsic_calls: Vec<kajit_wares::IntrinsicCallSite> = input
+        .intrinsic_calls
+        .iter()
+        .map(|site| kajit_wares::IntrinsicCallSite {
+            code_offset: site.code_offset,
+            baked_addr: site.baked_addr,
+            symbol_name: site.symbol_name.clone(),
+        })
+        .collect();
+
+    let extern_addr_relocs: Vec<kajit_wares::ExternAddrReloc> = input
+        .extern_addr_relocs
+        .iter()
+        .map(|reloc| kajit_wares::ExternAddrReloc {
+            code_offset: reloc.code_offset,
+            symbol: reloc.symbol.as_str().to_string(),
+        })
+        .collect();
+
+    let object_input = kajit_wares::ObjectInput {
+        target_arch: kajit_wares::TargetArch::Aarch64,
+        code: input.code,
+        entry_offset: input.entry_offset,
+        function_name: input.function_name,
+        dwarf: dwarf.as_ref(),
+        intrinsic_calls: &intrinsic_calls,
+        extern_addr_relocs: &extern_addr_relocs,
     };
 
-    let mut obj = Object::new(
-        BinaryFormat::native_object(),
-        Architecture::Aarch64,
-        Endianness::Little,
-    );
-
-    #[cfg(target_os = "macos")]
-    {
-        // Set macOS platform version (prevents "no platform load command" warning)
-        let mut build_ver = object::write::MachOBuildVersion::default();
-        build_ver.platform = object::macho::PLATFORM_MACOS;
-        build_ver.minos = 14 << 16; // macOS 14.0
-        build_ver.sdk = 14 << 16;
-        obj.set_macho_build_version(build_ver);
-    }
-
-    // Patch intrinsic call sites: replace movz/movk/movk with adrp/add/nop
-    // so the linker can resolve intrinsic symbols.
-    let mut code = input.code.to_vec();
-    let mut intrinsic_relocs: Vec<(usize, object::write::SymbolId)> = Vec::new();
-
-    for site in &input.intrinsic_calls {
-        // Add an undefined symbol for this intrinsic
-        let sym_id = obj.add_symbol(Symbol {
-            name: site.symbol_name.as_bytes().to_vec(),
-            value: 0,
-            size: 0,
-            kind: SymbolKind::Text,
-            scope: SymbolScope::Dynamic,
-            weak: false,
-            section: SymbolSection::Undefined,
-            flags: SymbolFlags::None,
-        });
-
-        // Rewrite movz/movk/movk (12 bytes) to adrp/add/nop (12 bytes).
-        let off = site.code_offset;
-        let adrp = 0x90000010u32; // adrp x16, #0 (imm filled by linker)
-        let add = 0x91000210u32; // add x16, x16, #0 (imm filled by linker)
-        let nop = 0xD503201Fu32; // nop
-        code[off..off + 4].copy_from_slice(&adrp.to_le_bytes());
-        code[off + 4..off + 8].copy_from_slice(&add.to_le_bytes());
-        code[off + 8..off + 12].copy_from_slice(&nop.to_le_bytes());
-        intrinsic_relocs.push((off, sym_id));
-    }
-
-    // Patch extern addr sites: replace movz/movk/movk/movk (16 bytes) with adrp/add/nop/nop
-    // so the linker can resolve vtable function pointer symbols.
-    let mut extern_addr_reloc_entries: Vec<(usize, object::write::SymbolId)> = Vec::new();
-
-    for reloc in &input.extern_addr_relocs {
-        let sym_id = obj.add_symbol(Symbol {
-            name: reloc.symbol.as_str().as_bytes().to_vec(),
-            value: 0,
-            size: 0,
-            kind: SymbolKind::Data,
-            scope: SymbolScope::Dynamic,
-            weak: false,
-            section: SymbolSection::Undefined,
-            flags: SymbolFlags::None,
-        });
-
-        // Rewrite movz/movk/movk/movk (16 bytes) to adrp/add/nop/nop (16 bytes).
-        let off = reloc.code_offset;
-        let adrp = 0x90000010u32; // adrp x16, #0 (imm filled by linker)
-        let add = 0x91000210u32; // add x16, x16, #0 (imm filled by linker)
-        let nop = 0xD503201Fu32; // nop
-        code[off..off + 4].copy_from_slice(&adrp.to_le_bytes());
-        code[off + 4..off + 8].copy_from_slice(&add.to_le_bytes());
-        code[off + 8..off + 12].copy_from_slice(&nop.to_le_bytes());
-        code[off + 12..off + 16].copy_from_slice(&nop.to_le_bytes());
-        extern_addr_reloc_entries.push((off, sym_id));
-    }
-
-    // Add .text section with (possibly patched) JIT code
-    let text_section = obj.section_id(object::write::StandardSection::Text);
-    obj.append_section_data(text_section, &code, 16);
-
-    // Add relocations for intrinsic call sites
-    for &(off, sym_id) in &intrinsic_relocs {
-        #[cfg(target_os = "macos")]
-        {
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: off as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::MachO {
-                        r_type: object::macho::ARM64_RELOC_PAGE21,
-                        r_pcrel: true,
-                        r_length: 2,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("adrp relocation");
-
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: (off + 4) as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::MachO {
-                        r_type: object::macho::ARM64_RELOC_PAGEOFF12,
-                        r_pcrel: false,
-                        r_length: 2,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("add relocation");
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: off as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::Elf {
-                        r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("adrp relocation");
-
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: (off + 4) as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::Elf {
-                        r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("add relocation");
-        }
-    }
-
-    // Add relocations for extern addr (vtable pointer) sites — same pattern as intrinsics
-    for &(off, sym_id) in &extern_addr_reloc_entries {
-        #[cfg(target_os = "macos")]
-        {
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: off as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::MachO {
-                        r_type: object::macho::ARM64_RELOC_PAGE21,
-                        r_pcrel: true,
-                        r_length: 2,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("extern addr adrp relocation");
-
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: (off + 4) as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::MachO {
-                        r_type: object::macho::ARM64_RELOC_PAGEOFF12,
-                        r_pcrel: false,
-                        r_length: 2,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("extern addr add relocation");
-        }
-
-        #[cfg(target_os = "linux")]
-        {
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: off as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::Elf {
-                        r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("extern addr adrp relocation");
-
-            obj.add_relocation(
-                text_section,
-                Relocation {
-                    offset: (off + 4) as u64,
-                    symbol: sym_id,
-                    flags: RelocationFlags::Elf {
-                        r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
-                    },
-                    addend: 0,
-                },
-            )
-            .expect("extern addr add relocation");
-        }
-    }
-
-    // Add the entry point symbol (global, so the C harness can call it)
-    let symbol_name = input.function_name.to_string();
-    let text_symbol = obj.add_symbol(Symbol {
-        name: symbol_name.into_bytes(),
-        value: input.entry_offset as u64,
-        size: (input.code.len() - input.entry_offset) as u64,
-        kind: SymbolKind::Text,
-        scope: SymbolScope::Dynamic,
-        weak: false,
-        section: SymbolSection::Section(text_section),
-        flags: SymbolFlags::None,
-    });
-
-    // Add DWARF sections with relocations
-    if let Some(dwarf) = &input.dwarf {
-        let mut debug_info_section_id = None;
-        let mut debug_line_section_id = None;
-
-        if !dwarf.debug_line.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment_name(),
-                dwarf_debug_section_name("debug_line"),
-                SectionKind::Debug,
-            );
-            obj.append_section_data(sid, &dwarf.debug_line, 1);
-            debug_line_section_id = Some(sid);
-        }
-        if !dwarf.debug_info.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment_name(),
-                dwarf_debug_section_name("debug_info"),
-                SectionKind::Debug,
-            );
-            obj.append_section_data(sid, &dwarf.debug_info, 1);
-            debug_info_section_id = Some(sid);
-        }
-        if !dwarf.debug_abbrev.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment_name(),
-                dwarf_debug_section_name("debug_abbrev"),
-                SectionKind::Debug,
-            );
-            obj.append_section_data(sid, &dwarf.debug_abbrev, 1);
-        }
-        let mut debug_aranges_section_id = None;
-        if !dwarf.debug_aranges.is_empty() {
-            let sid = obj.add_section(
-                dwarf_segment_name(),
-                dwarf_debug_section_name("debug_aranges"),
-                SectionKind::Debug,
-            );
-            obj.append_section_data(sid, &dwarf.debug_aranges, 1);
-            debug_aranges_section_id = Some(sid);
-        }
-
-        // Add relocations so the linker/dsymutil fixes up DWARF addresses
-        for (section, reloc) in &dwarf.relocations {
-            let target_section = match section {
-                crate::jit_dwarf::DwarfSection::DebugInfo => debug_info_section_id,
-                crate::jit_dwarf::DwarfSection::DebugLine => debug_line_section_id,
-                crate::jit_dwarf::DwarfSection::DebugAranges => debug_aranges_section_id,
-            };
-            if let Some(sid) = target_section {
-                obj.add_relocation(
-                    sid,
-                    dwarf_text_relocation(text_symbol, reloc, input.entry_offset),
-                )
-                .map_err(HarnessError::ObjectWrite)?;
-            }
-        }
-    }
-
-    let data = obj.write().map_err(HarnessError::ObjectWrite)?;
-    std::fs::write(path, data).map_err(|e| HarnessError::Io("write object", e))?;
-
-    Ok(())
-}
-
-fn dwarf_segment_name() -> Vec<u8> {
-    #[cfg(target_os = "macos")]
-    {
-        b"__DWARF".to_vec()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        Vec::new()
-    }
-}
-
-fn dwarf_debug_section_name(name: &str) -> Vec<u8> {
-    #[cfg(target_os = "macos")]
-    {
-        format!("__{name}").into_bytes()
-    }
-    #[cfg(target_os = "linux")]
-    {
-        format!(".{name}").into_bytes()
-    }
-}
-
-fn dwarf_text_relocation(
-    text_symbol: object::write::SymbolId,
-    reloc: &crate::jit_dwarf::DwarfRelocation,
-    entry_offset: usize,
-) -> object::write::Relocation {
-    #[cfg(target_os = "macos")]
-    {
-        object::write::Relocation {
-            offset: reloc.offset as u64,
-            symbol: text_symbol,
-            addend: reloc.addend + entry_offset as i64,
-            flags: object::RelocationFlags::MachO {
-                r_type: object::macho::ARM64_RELOC_UNSIGNED,
-                r_pcrel: false,
-                r_length: 3,
-            },
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        object::write::Relocation {
-            offset: reloc.offset as u64,
-            symbol: text_symbol,
-            addend: reloc.addend + entry_offset as i64,
-            flags: object::RelocationFlags::Generic {
-                kind: object::RelocationKind::Absolute,
-                encoding: object::RelocationEncoding::Generic,
-                size: 64,
-            },
-        }
-    }
+    kajit_wares::write_object_file(&object_input, path).map_err(|err| match err {
+        kajit_wares::WaresError::Io(ctx, e) => HarnessError::Io(ctx, e),
+        kajit_wares::WaresError::ObjectWrite(e) => HarnessError::ObjectWrite(e),
+        kajit_wares::WaresError::UnsupportedTarget(msg) => HarnessError::Link(msg.to_string()),
+    })
 }
 
 fn write_c_harness(input: &HarnessInput, path: &Path) -> Result<(), HarnessError> {

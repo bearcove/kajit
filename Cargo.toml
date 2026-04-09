@@ -2,6 +2,7 @@
 members = [
   "crates-kajit/kajit",
   "crates-kajit/kajit-asm",
+  "crates-kajit/kajit-wares",
   "crates-kajit/kajit-hir",
   "crates-kajit/kajit-ir",
   "crates-kajit/kajit-lir",
