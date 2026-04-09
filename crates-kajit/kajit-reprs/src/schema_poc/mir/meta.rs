@@ -784,6 +784,11 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         owner: "Terminator.Branch",
+        field: "id",
+        kind: "TermId",
+    },
+    FieldSpec {
+        owner: "Terminator.Branch",
         field: "prov",
         kind: "Prov",
     },
@@ -796,6 +801,11 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         owner: "Terminator.BranchIf",
         field: "fallthrough",
         kind: "ref<EdgeId -> Edge>",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIf",
+        field: "id",
+        kind: "TermId",
     },
     FieldSpec {
         owner: "Terminator.BranchIf",
@@ -816,6 +826,11 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         owner: "Terminator.BranchIfZero",
         field: "fallthrough",
         kind: "ref<EdgeId -> Edge>",
+    },
+    FieldSpec {
+        owner: "Terminator.BranchIfZero",
+        field: "id",
+        kind: "TermId",
     },
     FieldSpec {
         owner: "Terminator.BranchIfZero",
@@ -834,6 +849,11 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
     },
     FieldSpec {
         owner: "Terminator.JumpTable",
+        field: "id",
+        kind: "TermId",
+    },
+    FieldSpec {
+        owner: "Terminator.JumpTable",
         field: "predicate",
         kind: "VReg",
     },
@@ -846,6 +866,11 @@ pub static NODE_FIELDS: &[FieldSpec] = &[
         owner: "Terminator.JumpTable",
         field: "targets",
         kind: "order<ref<EdgeId -> Edge>>",
+    },
+    FieldSpec {
+        owner: "Terminator.Return",
+        field: "id",
+        kind: "TermId",
     },
     FieldSpec {
         owner: "Terminator.Return",
@@ -1115,23 +1140,23 @@ pub static CANONICAL_PRINT: &[PrintSpec] = &[
     },
     PrintSpec {
         name: "Terminator.Branch",
-        template: "branch e{edge}",
+        template: "term t{id}: branch e{edge}",
     },
     PrintSpec {
         name: "Terminator.BranchIf",
-        template: "branch_if {cond} -> e{taken}, fallthrough e{fallthrough}",
+        template: "term t{id}: branch_if {cond} -> e{taken}, fallthrough e{fallthrough}",
     },
     PrintSpec {
         name: "Terminator.BranchIfZero",
-        template: "branch_if_zero {cond} -> e{taken}, fallthrough e{fallthrough}",
+        template: "term t{id}: branch_if_zero {cond} -> e{taken}, fallthrough e{fallthrough}",
     },
     PrintSpec {
         name: "Terminator.JumpTable",
-        template: "jump_table {predicate} [{targets:, }], default e{default}",
+        template: "term t{id}: jump_table {predicate} [{targets:, }], default e{default}",
     },
     PrintSpec {
         name: "Terminator.Return",
-        template: "return",
+        template: "term t{id}: return",
     },
     PrintSpec {
         name: "UnaryOp.SignExtend",

@@ -343,16 +343,28 @@ repr @module{
             Terminator @choice(
                 /// Return from the current function.
                 @variant(Return @seq(
+                    "term"
+                    "t"
+                    @field(id @ref(TermId))
+                    ":"
                     "return"
                 ))
                 /// Unconditional branch to a single edge.
                 @variant(Branch @seq(
+                    "term"
+                    "t"
+                    @field(id @ref(TermId))
+                    ":"
                     "branch"
                     "e"
                     @field(edge @ref(EdgeId))
                 ))
                 /// Branch if the condition is nonzero.
                 @variant(BranchIf @seq(
+                    "term"
+                    "t"
+                    @field(id @ref(TermId))
+                    ":"
                     "branch_if"
                     @field(cond @ref(VReg))
                     "->"
@@ -365,6 +377,10 @@ repr @module{
                 ))
                 /// Branch if the condition is zero.
                 @variant(BranchIfZero @seq(
+                    "term"
+                    "t"
+                    @field(id @ref(TermId))
+                    ":"
                     "branch_if_zero"
                     @field(cond @ref(VReg))
                     "->"
@@ -377,6 +393,10 @@ repr @module{
                 ))
                 /// Jump through a table of edge targets.
                 @variant(JumpTable @seq(
+                    "term"
+                    "t"
+                    @field(id @ref(TermId))
+                    ":"
                     "jump_table"
                     @field(predicate @ref(VReg))
                     "["
@@ -414,15 +434,15 @@ repr @module{
             Inst "inst i{id}:{defs? : {defs:, } =}{op}{uses? : {uses:, }}{clobbers? : !{clobbers}}"
 
             /// Canonical return terminator layout.
-            Terminator.Return "return"
+            Terminator.Return "term t{id}: return"
             /// Canonical branch terminator layout.
-            Terminator.Branch "branch e{edge}"
+            Terminator.Branch "term t{id}: branch e{edge}"
             /// Canonical conditional branch layout.
-            Terminator.BranchIf "branch_if {cond} -> e{taken}, fallthrough e{fallthrough}"
+            Terminator.BranchIf "term t{id}: branch_if {cond} -> e{taken}, fallthrough e{fallthrough}"
             /// Canonical zero-test branch layout.
-            Terminator.BranchIfZero "branch_if_zero {cond} -> e{taken}, fallthrough e{fallthrough}"
+            Terminator.BranchIfZero "term t{id}: branch_if_zero {cond} -> e{taken}, fallthrough e{fallthrough}"
             /// Canonical jump-table layout.
-            Terminator.JumpTable "jump_table {predicate} [{targets:, }], default e{default}"
+            Terminator.JumpTable "term t{id}: jump_table {predicate} [{targets:, }], default e{default}"
 
             /// Canonical `EdgeArg` layout.
             EdgeArg.Identity "{vreg}"
@@ -909,15 +929,18 @@ repr @module{
             /// Return from the current function.
             Return @struct{
                 prov @Prov
+                id @TermId
             }
             /// Unconditional branch to a single edge.
             Branch @struct{
                 prov @Prov
+                id @TermId
                 edge @ref_to(@EdgeId @Edge)
             }
             /// Branch if the condition is nonzero.
             BranchIf @struct{
                 prov @Prov
+                id @TermId
                 cond @VReg
                 taken @ref_to(@EdgeId @Edge)
                 fallthrough @ref_to(@EdgeId @Edge)
@@ -925,6 +948,7 @@ repr @module{
             /// Branch if the condition is zero.
             BranchIfZero @struct{
                 prov @Prov
+                id @TermId
                 cond @VReg
                 taken @ref_to(@EdgeId @Edge)
                 fallthrough @ref_to(@EdgeId @Edge)
@@ -932,6 +956,7 @@ repr @module{
             /// Jump through a table of edge targets.
             JumpTable @struct{
                 prov @Prov
+                id @TermId
                 predicate @VReg
                 targets @order(@ref_to(@EdgeId @Edge))
                 default @ref_to(@EdgeId @Edge)

@@ -120,7 +120,7 @@ impl HasProvenance for Terminator {
             Self::BranchIf { prov, .. } => Some(prov),
             Self::BranchIfZero { prov, .. } => Some(prov),
             Self::JumpTable { prov, .. } => Some(prov),
-            Self::Return(value) => Some(&value.prov),
+            Self::Return { prov, .. } => Some(prov),
         }
     }
 }

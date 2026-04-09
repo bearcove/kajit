@@ -234,39 +234,47 @@ fn collect_program(source: &str, node: &Program, out: &mut Vec<SemanticToken>) {
 }
 fn collect_terminator(source: &str, node: &Terminator, out: &mut Vec<SemanticToken>) {
     match node {
-        Terminator::Branch { edge, prov } => {
+        Terminator::Branch { edge, id, prov } => {
             let current_prov = node.provenance();
+            emit_literal_token(source, current_prov, "term", "keyword", out);
             emit_literal_token(source, current_prov, "branch", "keyword", out);
         }
         Terminator::BranchIf {
             cond,
             fallthrough,
+            id,
             prov,
             taken,
         } => {
             let current_prov = node.provenance();
+            emit_literal_token(source, current_prov, "term", "keyword", out);
             emit_literal_token(source, current_prov, "branch_if", "keyword", out);
         }
         Terminator::BranchIfZero {
             cond,
             fallthrough,
+            id,
             prov,
             taken,
         } => {
             let current_prov = node.provenance();
+            emit_literal_token(source, current_prov, "term", "keyword", out);
             emit_literal_token(source, current_prov, "branch_if_zero", "keyword", out);
         }
         Terminator::JumpTable {
             default,
+            id,
             predicate,
             prov,
             targets,
         } => {
             let current_prov = node.provenance();
+            emit_literal_token(source, current_prov, "term", "keyword", out);
             emit_literal_token(source, current_prov, "jump_table", "keyword", out);
         }
-        Terminator::Return(value) => {
+        Terminator::Return { id, prov } => {
             let current_prov = node.provenance();
+            emit_literal_token(source, current_prov, "term", "keyword", out);
             emit_literal_token(source, current_prov, "return", "keyword", out);
         }
     }

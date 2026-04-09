@@ -524,21 +524,31 @@ pub fn parse_root_text_rich(
     )
     .boxed();
     let terminator_parser = choice((
-        (just("return").to(()))
-            .map_with(move |(), e| {
-                Terminator::Return(Return {
-                    prov: prov_from_span(e.span(), file_id),
-                })
-            })
-            .then_ignore(ws()),
-        ((just("branch").padded())
-            .ignore_then((just("e").padded()).ignore_then(edge_id_parser.clone())))
-        .map_with(move |edge, e| Terminator::Branch {
-            edge: edge,
+        ((((just("term").padded())
+            .ignore_then((just("t").padded()).ignore_then(term_id_parser.clone())))
+        .then_ignore(just(":").padded()))
+        .then_ignore(just("return").padded()))
+        .map_with(move |id, e| Terminator::Return {
+            id: id,
             prov: prov_from_span(e.span(), file_id),
         }),
-        (((((((((just("branch_if").padded()).ignore_then(v_reg_parser.clone()))
-            .then_ignore(just("->").padded()))
+        ((((((just("term").padded())
+            .ignore_then((just("t").padded()).ignore_then(term_id_parser.clone())))
+        .then_ignore(just(":").padded()))
+        .then_ignore(just("branch").padded()))
+        .then_ignore(just("e").padded()))
+        .then(edge_id_parser.clone()))
+        .map_with(move |(id, edge), e| Terminator::Branch {
+            edge: edge,
+            id: id,
+            prov: prov_from_span(e.span(), file_id),
+        }),
+        ((((((((((((just("term").padded())
+            .ignore_then((just("t").padded()).ignore_then(term_id_parser.clone())))
+        .then_ignore(just(":").padded()))
+        .then_ignore(just("branch_if").padded()))
+        .then(v_reg_parser.clone()))
+        .then_ignore(just("->").padded()))
         .then_ignore(just("e").padded()))
         .then(edge_id_parser.clone()))
         .then_ignore(just(",").padded()))
@@ -546,15 +556,20 @@ pub fn parse_root_text_rich(
         .then_ignore(just("e").padded()))
         .then(edge_id_parser.clone()))
         .map_with(
-            move |((cond, taken), fallthrough), e| Terminator::BranchIf {
+            move |(((id, cond), taken), fallthrough), e| Terminator::BranchIf {
                 cond: cond,
                 fallthrough: fallthrough,
+                id: id,
                 prov: prov_from_span(e.span(), file_id),
                 taken: taken,
             },
         ),
-        (((((((((just("branch_if_zero").padded()).ignore_then(v_reg_parser.clone()))
-            .then_ignore(just("->").padded()))
+        ((((((((((((just("term").padded())
+            .ignore_then((just("t").padded()).ignore_then(term_id_parser.clone())))
+        .then_ignore(just(":").padded()))
+        .then_ignore(just("branch_if_zero").padded()))
+        .then(v_reg_parser.clone()))
+        .then_ignore(just("->").padded()))
         .then_ignore(just("e").padded()))
         .then(edge_id_parser.clone()))
         .then_ignore(just(",").padded()))
@@ -562,15 +577,20 @@ pub fn parse_root_text_rich(
         .then_ignore(just("e").padded()))
         .then(edge_id_parser.clone()))
         .map_with(
-            move |((cond, taken), fallthrough), e| Terminator::BranchIfZero {
+            move |(((id, cond), taken), fallthrough), e| Terminator::BranchIfZero {
                 cond: cond,
                 fallthrough: fallthrough,
+                id: id,
                 prov: prov_from_span(e.span(), file_id),
                 taken: taken,
             },
         ),
-        (((((((((just("jump_table").padded()).ignore_then(v_reg_parser.clone()))
-            .then_ignore(just("[").padded()))
+        ((((((((((((just("term").padded())
+            .ignore_then((just("t").padded()).ignore_then(term_id_parser.clone())))
+        .then_ignore(just(":").padded()))
+        .then_ignore(just("jump_table").padded()))
+        .then(v_reg_parser.clone()))
+        .then_ignore(just("[").padded()))
         .then(
             ((edge_id_parser.clone())
                 .separated_by(just(",").padded())
@@ -584,8 +604,9 @@ pub fn parse_root_text_rich(
         .then_ignore(just("e").padded()))
         .then(edge_id_parser.clone()))
         .map_with(
-            move |((predicate, targets), default), e| Terminator::JumpTable {
+            move |(((id, predicate), targets), default), e| Terminator::JumpTable {
                 default: default,
+                id: id,
                 predicate: predicate,
                 prov: prov_from_span(e.span(), file_id),
                 targets: targets,

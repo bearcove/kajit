@@ -27,12 +27,12 @@ impl Symbol {
 /// A binary operator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinaryOp {
-    /// Integer subtraction.
-    #[default]
-    Sub,
-
     /// Integer addition.
+    #[default]
     Add,
+
+    /// Integer subtraction.
+    Sub,
 }
 
 /// A generic parameter name.
@@ -85,12 +85,12 @@ impl Type {
 /// The kind of type definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TypeDefKind {
-    /// A struct type definition.
-    #[default]
-    Struct,
-
     /// An enum type definition.
+    #[default]
     Enum,
+
+    /// A struct type definition.
+    Struct,
 
     /// A type alias definition.
     Alias,

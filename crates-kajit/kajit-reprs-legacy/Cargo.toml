@@ -1,5 +1,5 @@
 [package]
-name = "kajit-reprs"
+name = "kajit-reprs-legacy"
 version = "0.1.0"
 edition = "2024"
 
@@ -12,4 +12,3 @@ rustdoc-args = ["--html-in-header", "arborium-header.html"]
 ariadne = "0.5"
 chumsky = "1.0.0-alpha.8"
 kajit-types = { path = "../kajit-types" }
-kajit-reprs-legacy = { path = "../kajit-reprs-legacy" }

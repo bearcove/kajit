@@ -8,6 +8,7 @@ pub mod parse;
 pub mod provenance;
 pub mod resolve;
 pub mod semantic;
+pub mod validate;
 pub mod visit;
 
 pub use ast::*;
@@ -25,6 +26,8 @@ pub use provenance::*;
 pub use resolve::*;
 
 pub use semantic::*;
+
+pub use validate::*;
 
 pub use visit::*;
 #[cfg(test)]

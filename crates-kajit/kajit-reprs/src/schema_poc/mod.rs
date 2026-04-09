@@ -180,7 +180,7 @@ impl<'a, T> IntoIterator for &'a mut Order<T> {
     }
 }
 fn validate_hir(source: &str) -> Result<(), String> {
-    hir::parse_root_text(source).map(|_| ())
+    hir::validate_root_text(source)
 }
 fn format_hir(source: &str) -> Result<String, String> {
     let root = hir::parse_root_text(source)?;
@@ -196,7 +196,7 @@ fn resolve_hir(source: &str) -> Result<ResolutionSet, String> {
     hir::resolve(source)
 }
 fn validate_asm(source: &str) -> Result<(), String> {
-    asm::parse_root_text(source).map(|_| ())
+    asm::validate_root_text(source)
 }
 fn format_asm(source: &str) -> Result<String, String> {
     let root = asm::parse_root_text(source)?;
@@ -212,7 +212,7 @@ fn resolve_asm(source: &str) -> Result<ResolutionSet, String> {
     asm::resolve(source)
 }
 fn validate_mir(source: &str) -> Result<(), String> {
-    mir::parse_root_text(source).map(|_| ())
+    mir::validate_root_text(source)
 }
 fn format_mir(source: &str) -> Result<String, String> {
     let root = mir::parse_root_text(source)?;

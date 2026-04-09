@@ -1,10 +1,13 @@
 use crate::formatter_codegen::render_formatter_block;
 use crate::hover_codegen::render_hover_block;
-use crate::normalize::{NormalizedNodeDecl, NormalizedNodeKind, NormalizedRepr};
+use crate::normalize::SyntaxTypeUse;
+use crate::normalize::{
+    DocumentedValue, NormalizedNodeDecl, NormalizedNodeKind, NormalizedRepr, NormalizedSupportDecl,
+};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
     collect_syntax_type_tags, render_common_placeholder, render_node_decl, render_provenance_impl,
-    render_support_decl, render_type_use_kind, render_walk_fn, snake_case,
+    render_support_decl, render_type_use_kind, render_walk_fn, rust_ident, snake_case,
 };
 use crate::semantic_codegen::render_semantic_block;
 
@@ -60,6 +63,10 @@ pub(crate) fn render_repr_poc_files(reprs: &[NormalizedRepr]) -> Vec<GeneratedMo
                 relative_path: format!("{module_dir}/hover.rs"),
                 contents: format_generated_file(render_hover_file(&parts)),
             },
+            GeneratedModuleFile {
+                relative_path: format!("{module_dir}/validate.rs"),
+                contents: format_generated_file(render_validate_file(&parts)),
+            },
         ]);
         if repr.name == "HIR" {
             files.push(GeneratedModuleFile {
@@ -103,6 +110,501 @@ struct RenderParts {
     formatter_rows: String,
     semantic_rows: String,
     hover_rows: String,
+    validate_rows: String,
+}
+
+#[derive(Clone)]
+struct PoolInfo {
+    item: String,
+    key: String,
+}
+
+fn is_prov_only_struct(
+    fields: &std::collections::HashMap<String, DocumentedValue<SyntaxTypeUse>>,
+) -> bool {
+    fields.len() == 1
+        && matches!(
+            fields.get("prov"),
+            Some(DocumentedValue {
+                value: SyntaxTypeUse::Ref { .. },
+                ..
+            })
+        )
+}
+
+fn field_id_accessor(
+    item_name: &str,
+    decl: &NormalizedNodeDecl,
+    key_name: &str,
+) -> Result<String, String> {
+    match decl {
+        NormalizedNodeDecl::Record { fields, .. } => {
+            let matching_fields = fields
+                .iter()
+                .filter_map(|(field_name, ty)| match &ty.value {
+                    SyntaxTypeUse::Ref { name } if name == key_name => Some(field_name.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let key_field = matching_fields
+                .iter()
+                .find(|field_name| field_name.as_str() == "id")
+                .cloned()
+                .or_else(|| {
+                    if matching_fields.len() == 1 {
+                        matching_fields.first().cloned()
+                    } else {
+                        None
+                    }
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "keyed pool item {item_name} must expose a unique field of type {key_name}"
+                    )
+                })?;
+            Ok(format!("value.{}", rust_ident(&key_field)))
+        }
+        NormalizedNodeDecl::Enum(variants) => {
+            let mut arms = Vec::new();
+            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
+            variant_names.sort();
+            for variant_name in variant_names {
+                let variant = &variants[&variant_name].value;
+                match variant {
+                    NormalizedNodeDecl::Record { fields, .. } => {
+                        let matching_fields = fields
+                            .iter()
+                            .filter_map(|(field_name, ty)| match &ty.value {
+                                SyntaxTypeUse::Ref { name } if name == key_name => {
+                                    Some(field_name.clone())
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        let key_field = matching_fields
+                            .iter()
+                            .find(|field_name| field_name.as_str() == "id")
+                            .cloned()
+                            .or_else(|| {
+                                if matching_fields.len() == 1 {
+                                    matching_fields.first().cloned()
+                                } else {
+                                    None
+                                }
+                            })
+                            .ok_or_else(|| {
+                                format!(
+                                    "keyed pool item {item_name}.{variant_name} must expose a unique field of type {key_name}"
+                                )
+                            })?;
+                        arms.push(format!(
+                            "        {item_name}::{variant_name} {{ {}, .. }} => *{},",
+                            rust_ident(&key_field),
+                            rust_ident(&key_field),
+                        ));
+                    }
+                    NormalizedNodeDecl::Enum(_) => {
+                        return Err(format!(
+                            "keyed pool item {item_name}.{variant_name} cannot be nested enum"
+                        ));
+                    }
+                }
+            }
+            Ok(format!("match value {{\n{}\n    }}", arms.join("\n")))
+        }
+    }
+}
+
+fn collect_pool_infos(repr: &NormalizedRepr) -> std::collections::BTreeMap<String, PoolInfo> {
+    let mut out = std::collections::BTreeMap::new();
+    for decl in repr.nodes.values() {
+        let fields = match &decl.value {
+            NormalizedNodeDecl::Record { fields, .. } => Some(fields),
+            NormalizedNodeDecl::Enum(variants) => {
+                for variant in variants.values() {
+                    if let NormalizedNodeDecl::Record { fields, .. } = &variant.value {
+                        for ty in fields.values() {
+                            if let SyntaxTypeUse::Pool {
+                                item: inner,
+                                key: Some(key),
+                            } = &ty.value
+                                && let SyntaxTypeUse::Ref { name } = inner.as_ref()
+                            {
+                                out.insert(
+                                    name.clone(),
+                                    PoolInfo {
+                                        item: name.clone(),
+                                        key: key.clone(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                None
+            }
+        };
+        if let Some(fields) = fields {
+            for ty in fields.values() {
+                if let SyntaxTypeUse::Pool {
+                    item: inner,
+                    key: Some(key),
+                } = &ty.value
+                    && let SyntaxTypeUse::Ref { name } = inner.as_ref()
+                {
+                    out.insert(
+                        name.clone(),
+                        PoolInfo {
+                            item: name.clone(),
+                            key: key.clone(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+    out
+}
+
+fn render_validate_ref_check(id_expr: &str, target: &str, owner: &str, field: &str) -> String {
+    let ctx_name = format!("{}_ids", snake_case(target));
+    format!(
+        r#"if !ctx.{ctx_name}.iter().rev().any(|ids| ids.contains(&{id_expr})) {{
+    errors.push(format!(
+        "{}.{} references {{:?}} but no live {} pool in scope contains it",
+        {id_expr}
+    ));
+}}"#,
+        owner, field, target
+    )
+}
+
+fn render_validate_value(
+    expr: &str,
+    ty: &SyntaxTypeUse,
+    owner: &str,
+    field: &str,
+    node_names: &[String],
+    support_structs: &std::collections::BTreeSet<String>,
+) -> String {
+    match ty {
+        SyntaxTypeUse::Optional(inner) => {
+            let body =
+                render_validate_value("value", inner, owner, field, node_names, support_structs);
+            format!(
+                "if let Some(value) = {expr}.as_ref() {{\n{}\n}}",
+                indent_block(&body, 4)
+            )
+        }
+        SyntaxTypeUse::Seq(inner)
+        | SyntaxTypeUse::Order(inner)
+        | SyntaxTypeUse::Pool { item: inner, .. } => {
+            let body =
+                render_validate_value("value", inner, owner, field, node_names, support_structs);
+            format!(
+                "for value in {expr}.iter() {{\n{}\n}}",
+                indent_block(&body, 4)
+            )
+        }
+        SyntaxTypeUse::RefTo { target, .. } => {
+            render_validate_ref_check(expr, target, owner, field)
+        }
+        SyntaxTypeUse::Ref { name } if node_names.iter().any(|candidate| candidate == name) => {
+            let fn_name = snake_case(name);
+            format!("validate_{fn_name}(&{expr}, ctx, errors);")
+        }
+        SyntaxTypeUse::Ref { name } if support_structs.contains(name) => {
+            let fn_name = snake_case(name);
+            format!("validate_support_{fn_name}(&{expr}, ctx, errors);")
+        }
+        _ => String::new(),
+    }
+}
+
+fn render_record_validate_fn(
+    name: &str,
+    fields: &std::collections::HashMap<String, DocumentedValue<SyntaxTypeUse>>,
+    pool_infos: &std::collections::BTreeMap<String, PoolInfo>,
+    node_names: &[String],
+    support_structs: &std::collections::BTreeSet<String>,
+    receiver_type: &str,
+    fn_name: &str,
+    bound_fields: bool,
+) -> String {
+    let body = render_record_validate_body(
+        name,
+        fields,
+        pool_infos,
+        node_names,
+        support_structs,
+        bound_fields,
+    );
+    let body = if body.trim().is_empty() {
+        String::from("    let _ = (value, ctx, errors);")
+    } else {
+        indent_block(&body, 4)
+    };
+
+    format!(
+        "fn {fn_name}(value: &{receiver_type}, ctx: &mut ValidationContext, errors: &mut Vec<String>) {{\n{body}\n}}"
+    )
+}
+
+fn render_record_validate_body(
+    name: &str,
+    fields: &std::collections::HashMap<String, DocumentedValue<SyntaxTypeUse>>,
+    pool_infos: &std::collections::BTreeMap<String, PoolInfo>,
+    node_names: &[String],
+    support_structs: &std::collections::BTreeSet<String>,
+    bound_fields: bool,
+) -> String {
+    let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
+    field_names.sort();
+
+    let mut push_rows = Vec::new();
+    let mut body_rows = Vec::new();
+    let mut pop_rows = Vec::new();
+    for field_name in &field_names {
+        let ty = &fields[field_name].value;
+        let field_expr = if bound_fields {
+            rust_ident(field_name)
+        } else {
+            format!("value.{}", rust_ident(field_name))
+        };
+        if let SyntaxTypeUse::Pool {
+            item: inner,
+            key: Some(_),
+        } = ty
+            && let SyntaxTypeUse::Ref { name: target } = inner.as_ref()
+            && let Some(pool) = pool_infos.get(target)
+        {
+            let ctx_name = format!("{}_ids", snake_case(&pool.item));
+            let key_fn = format!("key_of_{}", snake_case(&pool.item));
+            push_rows.push(format!(
+                "ctx.{ctx_name}.push({field_expr}.iter().map({key_fn}).collect());"
+            ));
+            pop_rows.push(format!("ctx.{ctx_name}.pop();"));
+        }
+
+        let body = render_validate_value(
+            &field_expr,
+            ty,
+            name,
+            field_name,
+            node_names,
+            support_structs,
+        );
+        if !body.trim().is_empty() {
+            body_rows.push(body);
+        }
+    }
+
+    let mut rows = Vec::new();
+    rows.extend(push_rows);
+    rows.extend(body_rows);
+    rows.extend(pop_rows.into_iter().rev());
+    rows.join("\n")
+}
+
+fn render_node_validate_fn(
+    name: &str,
+    decl: &NormalizedNodeDecl,
+    pool_infos: &std::collections::BTreeMap<String, PoolInfo>,
+    node_names: &[String],
+    support_structs: &std::collections::BTreeSet<String>,
+) -> String {
+    let fn_name = format!("validate_{}", snake_case(name));
+    match decl {
+        NormalizedNodeDecl::Record { fields, .. } => render_record_validate_fn(
+            name,
+            fields,
+            pool_infos,
+            node_names,
+            support_structs,
+            name,
+            &fn_name,
+            false,
+        ),
+        NormalizedNodeDecl::Enum(variants) => {
+            let mut variant_names = variants.keys().cloned().collect::<Vec<_>>();
+            variant_names.sort();
+            let mut arms = Vec::new();
+            for variant_name in variant_names {
+                match &variants[&variant_name].value {
+                    NormalizedNodeDecl::Record { fields, .. } => {
+                        if is_prov_only_struct(fields) {
+                            arms.push((variant_name, "_inner".to_owned(), String::new(), true));
+                        } else {
+                            let mut bindings = fields.keys().cloned().collect::<Vec<_>>();
+                            bindings.sort();
+                            let binding_list = bindings
+                                .iter()
+                                .map(|field| rust_ident(field))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let body = render_record_validate_body(
+                                &format!("{name}.{variant_name}"),
+                                fields,
+                                pool_infos,
+                                node_names,
+                                support_structs,
+                                true,
+                            );
+                            arms.push((variant_name, binding_list, body, false));
+                        }
+                    }
+                    NormalizedNodeDecl::Enum(_) => {}
+                }
+            }
+
+            let mut out = format!(
+                "fn {fn_name}(value: &{name}, ctx: &mut ValidationContext, errors: &mut Vec<String>) {{\n    match value {{\n"
+            );
+            for (variant_name, binding_list, body, is_tuple) in arms {
+                let arm_body = if body.trim().is_empty() {
+                    "let _ = (ctx, errors);".to_owned()
+                } else {
+                    body
+                };
+                let pattern = if is_tuple {
+                    format!("{name}::{variant_name}({binding_list})")
+                } else {
+                    format!("{name}::{variant_name} {{ {binding_list}, .. }}")
+                };
+                out.push_str(&format!(
+                    "        {pattern} => {{\n{}\n        }},\n",
+                    indent_block(&arm_body, 12)
+                ));
+            }
+            out.push_str("    }\n}");
+            out
+        }
+    }
+}
+
+fn render_support_validate_fn(
+    name: &str,
+    decl: &NormalizedSupportDecl,
+    node_names: &[String],
+    support_structs: &std::collections::BTreeSet<String>,
+) -> Option<String> {
+    match decl {
+        NormalizedSupportDecl::Struct(fields) => Some(render_record_validate_fn(
+            name,
+            fields,
+            &std::collections::BTreeMap::new(),
+            node_names,
+            support_structs,
+            name,
+            &format!("validate_support_{}", snake_case(name)),
+            false,
+        )),
+        _ => None,
+    }
+}
+
+fn render_validate_block(repr: &NormalizedRepr, node_names: &[String]) -> Result<String, String> {
+    let pool_infos = collect_pool_infos(repr);
+    let support_structs = repr
+        .support
+        .iter()
+        .filter_map(|(name, decl)| {
+            matches!(decl.value, NormalizedSupportDecl::Struct(_)).then_some(name.clone())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let mut ctx_fields = Vec::new();
+    let mut key_fns = Vec::new();
+    let mut items = pool_infos.iter().collect::<Vec<_>>();
+    items.sort_by(|a, b| a.0.cmp(b.0));
+    for (item_name, pool) in items {
+        ctx_fields.push(format!(
+            "    {}_ids: Vec<std::collections::BTreeSet<{}>>,",
+            snake_case(item_name),
+            pool.key
+        ));
+        let decl = repr
+            .nodes
+            .get(item_name)
+            .ok_or_else(|| format!("keyed pool item {item_name} must be a declared node"))?;
+        let accessor = field_id_accessor(item_name, &decl.value, &pool.key)?;
+        key_fns.push(format!(
+            "fn key_of_{}(value: &{}) -> {} {{\n    {}\n}}",
+            snake_case(item_name),
+            item_name,
+            pool.key,
+            accessor
+        ));
+    }
+
+    let mut support_fns = repr
+        .support
+        .iter()
+        .filter_map(|(name, decl)| {
+            render_support_validate_fn(name, &decl.value, node_names, &support_structs)
+        })
+        .collect::<Vec<_>>();
+    support_fns.sort();
+
+    let mut node_fns = node_names
+        .iter()
+        .map(|name| {
+            render_node_validate_fn(
+                name,
+                &repr.nodes[name].value,
+                &pool_infos,
+                node_names,
+                &support_structs,
+            )
+        })
+        .collect::<Vec<_>>();
+    node_fns.sort();
+
+    let root_fn = format!(
+        r#"pub fn validate_root(root: &{root_name}) -> Result<(), String> {{
+    let mut ctx = ValidationContext::default();
+    let mut errors = Vec::new();
+    validate_{root_snake}(root, &mut ctx, &mut errors);
+    if errors.is_empty() {{
+        Ok(())
+    }} else {{
+        Err(errors.join("\n"))
+    }}
+}}
+
+pub fn validate_root_text(source: &str) -> Result<(), String> {{
+    let root = parse_root_text(source)?;
+    validate_root(&root)
+}}"#,
+        root_name = repr.syntax.root,
+        root_snake = snake_case(&repr.syntax.root),
+    );
+
+    Ok(format!(
+        r#"
+#![allow(dead_code, unused_variables)]
+
+use super::*;
+
+#[derive(Default)]
+struct ValidationContext {{
+{ctx_fields}
+}}
+
+{key_fns}
+
+{support_fns}
+
+{node_fns}
+
+{root_fn}
+"#,
+        ctx_fields = ctx_fields.join("\n"),
+        key_fns = key_fns.join("\n\n"),
+        support_fns = support_fns.join("\n\n"),
+        node_fns = node_fns.join("\n\n"),
+        root_fn = root_fn,
+    ))
 }
 
 fn collect_pool_specs(
@@ -122,6 +624,20 @@ fn collect_pool_specs(
         }
         _ => Vec::new(),
     }
+}
+
+fn indent_block(text: &str, spaces: usize) -> String {
+    let pad = " ".repeat(spaces);
+    text.lines()
+        .map(|line| {
+            if line.is_empty() {
+                String::new()
+            } else {
+                format!("{pad}{line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn collect_ref_specs(
@@ -550,6 +1066,8 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     let semantic_rows =
         render_semantic_block(repr, &node_names).expect("semantic block should render");
     let hover_rows = render_hover_block(repr, &node_names).expect("hover block should render");
+    let validate_rows =
+        render_validate_block(repr, &node_names).expect("validate block should render");
 
     RenderParts {
         module_doc_rows,
@@ -582,6 +1100,7 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         formatter_rows,
         semantic_rows,
         hover_rows,
+        validate_rows,
     }
 }
 
@@ -603,7 +1122,7 @@ fn render_root_mod_file(reprs: &[NormalizedRepr]) -> String {
             format!(
                 r#"
 fn validate_{module_name}(source: &str) -> Result<(), String> {{
-    {module_name}::parse_root_text(source).map(|_| ())
+    {module_name}::validate_root_text(source)
 }}
 
 fn format_{module_name}(source: &str) -> Result<String, String> {{
@@ -850,6 +1369,7 @@ pub mod parse;
 pub mod provenance;
 pub mod resolve;
 pub mod semantic;
+pub mod validate;
 pub mod visit;
 
 pub use ast::*;
@@ -860,6 +1380,7 @@ pub use parse::*;
 pub use provenance::*;
 pub use resolve::*;
 pub use semantic::*;
+pub use validate::*;
 pub use visit::*;
 {tests_row}"#
     ))
@@ -1110,6 +1631,10 @@ use super::provenance::HasProvenance;
     )
 }
 
+fn render_validate_file(parts: &RenderParts) -> String {
+    parts.validate_rows.clone()
+}
+
 fn render_tests_file() -> String {
     r#"
 use super::*;
@@ -1157,7 +1682,9 @@ pub fn resolve(_source: &str) -> Result<ResolutionSet, String> {
 }
 
 fn format_generated_file(raw: String) -> String {
-    let body = prettyplease::unparse(&syn::parse_file(&raw).expect("generated file should parse"));
+    let parsed = syn::parse_file(&raw)
+        .unwrap_or_else(|err| panic!("generated file should parse: {err}\n\n{raw}"));
+    let body = prettyplease::unparse(&parsed);
     let body = add_breathing_room(&body);
     format!("// @generated by kajit-foundation::generate_repr_poc. Do not edit manually.\n\n{body}")
 }

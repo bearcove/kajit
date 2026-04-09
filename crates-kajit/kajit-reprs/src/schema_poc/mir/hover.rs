@@ -366,7 +366,7 @@ fn collect_program(node: &Program, out: &mut Vec<HoverEntry>) {
 }
 fn collect_terminator(node: &Terminator, out: &mut Vec<HoverEntry>) {
     match node {
-        Terminator::Branch { edge, prov } => {
+        Terminator::Branch { edge, id, prov } => {
             if let Some(prov) = node.provenance() {
                 emit_hover(prov, "Unconditional branch to a single edge.", 40, out);
             }
@@ -374,6 +374,7 @@ fn collect_terminator(node: &Terminator, out: &mut Vec<HoverEntry>) {
         Terminator::BranchIf {
             cond,
             fallthrough,
+            id,
             prov,
             taken,
         } => {
@@ -384,6 +385,7 @@ fn collect_terminator(node: &Terminator, out: &mut Vec<HoverEntry>) {
         Terminator::BranchIfZero {
             cond,
             fallthrough,
+            id,
             prov,
             taken,
         } => {
@@ -393,6 +395,7 @@ fn collect_terminator(node: &Terminator, out: &mut Vec<HoverEntry>) {
         }
         Terminator::JumpTable {
             default,
+            id,
             predicate,
             prov,
             targets,
@@ -401,7 +404,7 @@ fn collect_terminator(node: &Terminator, out: &mut Vec<HoverEntry>) {
                 emit_hover(prov, "Jump through a table of edge targets.", 40, out);
             }
         }
-        Terminator::Return(value) => {
+        Terminator::Return { id, prov } => {
             if let Some(prov) = node.provenance() {
                 emit_hover(prov, "Return from the current function.", 40, out);
             }

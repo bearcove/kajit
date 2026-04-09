@@ -14,42 +14,39 @@ pub use kajit_types::{Prov, Span};
 /// The binary-op family used by the pilot text format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum BinOpKind {
-    /// Integer multiplication.
-    #[default]
-    Mul,
-
-    /// Less-than-or-equal comparison.
-    CmpLe,
-
-    /// Integer subtraction.
-    Sub,
-
     /// Integer addition.
+    #[default]
     Add,
 
-    /// Arithmetic right shift.
-    Sar,
-
-    /// Greater-than comparison.
-    CmpGt,
-
-    /// Logical left shift.
-    Shl,
-
-    /// Bitwise XOR.
-    Xor,
-
-    /// Less-than comparison.
-    CmpLt,
+    /// Equality comparison.
+    CmpEq,
 
     /// Bitwise OR.
     Or,
 
+    /// Integer subtraction.
+    Sub,
+
+    /// Logical left shift.
+    Shl,
+
+    /// Integer multiplication.
+    Mul,
+
+    /// Arithmetic right shift.
+    Sar,
+
+    /// Bitwise XOR.
+    Xor,
+
     /// Greater-than-or-equal comparison.
     CmpGe,
 
-    /// Logical right shift.
-    Shr,
+    /// Less-than comparison.
+    CmpLt,
+
+    /// Greater-than comparison.
+    CmpGt,
 
     /// Bitwise AND.
     And,
@@ -57,8 +54,11 @@ pub enum BinOpKind {
     /// Inequality comparison.
     CmpNe,
 
-    /// Equality comparison.
-    CmpEq,
+    /// Less-than-or-equal comparison.
+    CmpLe,
+
+    /// Logical right shift.
+    Shr,
 }
 
 /// An embedded data blob identifier.
@@ -90,12 +90,12 @@ impl BlockId {
 /// Named clobber groups printed after `!`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ClobberKind {
-    /// Caller-saved GPRs are clobbered.
-    #[default]
-    Gpr,
-
     /// Caller-saved SIMD registers are clobbered.
+    #[default]
     Simd,
+
+    /// Caller-saved GPRs are clobbered.
+    Gpr,
 
     /// Both caller-saved GPR and SIMD registers are clobbered.
     Both,
@@ -164,12 +164,12 @@ pub struct Nat {
 /// Required register class for an operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RegClass {
-    /// SIMD/vector registers.
-    #[default]
-    Simd,
-
     /// General-purpose registers.
+    #[default]
     Gpr,
+
+    /// SIMD/vector registers.
+    Simd,
 }
 
 /// A stack slot identifier.
@@ -241,15 +241,15 @@ impl VReg {
 /// A scalar width used by loads, stores, and sign extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Width {
-    /// Two bytes.
+    /// One byte.
     #[default]
+    W1,
+
+    /// Two bytes.
     W2,
 
     /// Eight bytes.
     W8,
-
-    /// One byte.
-    W1,
 
     /// Four bytes.
     W4,
@@ -551,21 +551,20 @@ pub struct Program {
 }
 
 /// A block terminator.
-/// Return from the current function.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Return {
-    pub prov: Prov,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Terminator {
     /// Unconditional branch to a single edge.
-    Branch { edge: EdgeId, prov: Prov },
+    Branch {
+        edge: EdgeId,
+        id: TermId,
+        prov: Prov,
+    },
 
     /// Branch if the condition is nonzero.
     BranchIf {
         cond: VReg,
         fallthrough: EdgeId,
+        id: TermId,
         prov: Prov,
         taken: EdgeId,
     },
@@ -574,6 +573,7 @@ pub enum Terminator {
     BranchIfZero {
         cond: VReg,
         fallthrough: EdgeId,
+        id: TermId,
         prov: Prov,
         taken: EdgeId,
     },
@@ -581,13 +581,14 @@ pub enum Terminator {
     /// Jump through a table of edge targets.
     JumpTable {
         default: EdgeId,
+        id: TermId,
         predicate: VReg,
         prov: Prov,
         targets: super::super::Order<EdgeId>,
     },
 
     /// Return from the current function.
-    Return(Return),
+    Return { id: TermId, prov: Prov },
 }
 
 /// Unary-op payloads used by the pilot text format.

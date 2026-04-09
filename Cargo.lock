@@ -1378,6 +1378,16 @@ version = "0.1.0"
 dependencies = [
  "ariadne 0.5.1",
  "chumsky",
+ "kajit-reprs-legacy",
+ "kajit-types",
+]
+
+[[package]]
+name = "kajit-reprs-legacy"
+version = "0.1.0"
+dependencies = [
+ "ariadne 0.5.1",
+ "chumsky",
  "kajit-types",
 ]
 

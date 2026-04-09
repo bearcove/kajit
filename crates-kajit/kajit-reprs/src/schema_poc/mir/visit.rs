@@ -207,7 +207,7 @@ pub fn walk_terminator<V: ?Sized + Visit>(v: &mut V, node: &Terminator) {
         Terminator::BranchIf { .. } => {}
         Terminator::BranchIfZero { .. } => {}
         Terminator::JumpTable { .. } => {}
-        Terminator::Return(..) => {}
+        Terminator::Return { .. } => {}
     }
 }
 pub fn walk_unary_op<V: ?Sized + Visit>(v: &mut V, node: &UnaryOp) {
@@ -324,7 +324,7 @@ pub fn walk_terminator_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut Terminato
         Terminator::BranchIf { .. } => {}
         Terminator::BranchIfZero { .. } => {}
         Terminator::JumpTable { .. } => {}
-        Terminator::Return(..) => {}
+        Terminator::Return { .. } => {}
     }
 }
 pub fn walk_unary_op_mut<V: ?Sized + VisitMut>(v: &mut V, node: &mut UnaryOp) {

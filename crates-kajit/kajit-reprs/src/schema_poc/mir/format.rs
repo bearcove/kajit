@@ -428,17 +428,22 @@ pub fn format_terminator(node: &Terminator) -> String {
 }
 fn write_terminator(w: &mut Writer, node: &Terminator) {
     match node {
-        Terminator::Branch { edge, .. } => {
-            w.text("branch e");
+        Terminator::Branch { edge, id, .. } => {
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": branch e");
             w.text(&edge.0.to_string());
         }
         Terminator::BranchIf {
             cond,
             fallthrough,
+            id,
             taken,
             ..
         } => {
-            w.text("branch_if ");
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": branch_if ");
             w.text(&cond.0.to_string());
             w.text(" -> e");
             w.text(&taken.0.to_string());
@@ -448,10 +453,13 @@ fn write_terminator(w: &mut Writer, node: &Terminator) {
         Terminator::BranchIfZero {
             cond,
             fallthrough,
+            id,
             taken,
             ..
         } => {
-            w.text("branch_if_zero ");
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": branch_if_zero ");
             w.text(&cond.0.to_string());
             w.text(" -> e");
             w.text(&taken.0.to_string());
@@ -460,11 +468,14 @@ fn write_terminator(w: &mut Writer, node: &Terminator) {
         }
         Terminator::JumpTable {
             default,
+            id,
             predicate,
             targets,
             ..
         } => {
-            w.text("jump_table ");
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": jump_table ");
             w.text(&predicate.0.to_string());
             w.text(" [");
             for (idx, value) in targets.iter().enumerate() {
@@ -476,8 +487,10 @@ fn write_terminator(w: &mut Writer, node: &Terminator) {
             w.text("], default e");
             w.text(&default.0.to_string());
         }
-        Terminator::Return(_value) => {
-            w.text("return");
+        Terminator::Return { id, .. } => {
+            w.text("term t");
+            w.text(&id.0.to_string());
+            w.text(": return");
         }
     }
 }
