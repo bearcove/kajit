@@ -7,6 +7,7 @@ use kajit_reprs::schema_poc::asm::{self as schema_asm, Program as AsmProgram};
 use kajit_reprs::schema_poc::hir::{self as schema_hir, Module};
 use kajit_reprs::schema_poc::{
     ResolutionSet, ResolvedRef, SemanticToken as GeneratedSemanticToken, SymbolDef,
+    SymbolKind as ResolvedSymbolKind,
 };
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
@@ -127,6 +128,7 @@ impl LanguageServer for KajitLanguageServer {
                 ),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -295,6 +297,34 @@ impl LanguageServer for KajitLanguageServer {
             &content,
             params.text_document_position_params.position,
         ))
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = &params.text_document.uri;
+        let Some(repr_kind) = repr_kind_for_uri(uri) else {
+            return Ok(None);
+        };
+
+        let maybe_doc = {
+            let docs = self.documents.read().await;
+            docs.get(uri).cloned()
+        };
+
+        let content = if let Some(doc) = maybe_doc {
+            doc.content
+        } else if let Ok(path) = uri.to_file_path() {
+            match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(_) => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+
+        Ok(compute_document_symbols(repr_kind, &content).map(DocumentSymbolResponse::Nested))
     }
 }
 
@@ -638,6 +668,47 @@ fn render_symbol_hover(definition: &SymbolDef) -> Option<String> {
     }
 }
 
+fn compute_document_symbols(repr_kind: ReprKind, content: &str) -> Option<Vec<DocumentSymbol>> {
+    let resolutions = resolve_document(repr_kind, content)?;
+    let mut symbols = resolutions
+        .definitions
+        .iter()
+        .map(|definition| DocumentSymbol {
+            name: definition.name.clone(),
+            detail: definition.detail.clone(),
+            kind: symbol_kind_to_document_symbol_kind(definition.kind),
+            tags: None,
+            deprecated: None,
+            range: Range {
+                start: offset_to_position(content, definition.start as usize),
+                end: offset_to_position(content, definition.end as usize),
+            },
+            selection_range: Range {
+                start: offset_to_position(content, definition.start as usize),
+                end: offset_to_position(content, definition.end as usize),
+            },
+            children: None,
+        })
+        .collect::<Vec<_>>();
+    symbols.sort_by_key(|symbol| {
+        (
+            symbol.range.start.line,
+            symbol.range.start.character,
+            symbol.range.end.line,
+            symbol.range.end.character,
+        )
+    });
+    Some(symbols)
+}
+
+fn symbol_kind_to_document_symbol_kind(kind: ResolvedSymbolKind) -> SymbolKind {
+    match kind {
+        ResolvedSymbolKind::Function => SymbolKind::FUNCTION,
+        ResolvedSymbolKind::Type => SymbolKind::CLASS,
+        ResolvedSymbolKind::Label => SymbolKind::KEY,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,5 +814,33 @@ mod tests {
         assert_eq!(location.uri, uri);
         assert_eq!(location.range.start, Position::new(1, 4));
         assert_eq!(location.range.end, Position::new(1, 9));
+    }
+
+    #[test]
+    fn goto_definition_for_hir_function_uses_shared_resolver() {
+        let source = "module {\n    fn build_vec(value: Value) -> Value {\n        return value\n    }\n\n    fn main(value: Value) -> Value {\n        return call @build_vec(value)\n    }\n}";
+        let uri = Url::parse("file:///tmp/test.k-hir").expect("valid uri");
+        let response = compute_goto_definition(ReprKind::Hir, &uri, source, Position::new(6, 22))
+            .expect("expected function definition");
+        let GotoDefinitionResponse::Scalar(location) = response else {
+            panic!("expected scalar location");
+        };
+        assert_eq!(location.uri, uri);
+        assert_eq!(location.range.start, Position::new(1, 7));
+        assert_eq!(location.range.end, Position::new(1, 16));
+    }
+
+    #[test]
+    fn document_symbols_come_from_shared_resolver_definitions() {
+        let source =
+            "module {\n    fn build_vec(value: Value) -> Value {\n        return value\n    }\n}";
+        let symbols = compute_document_symbols(ReprKind::Hir, source).expect("expected symbols");
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].name, "build_vec");
+        assert_eq!(symbols[0].kind, SymbolKind::FUNCTION);
+        assert_eq!(
+            symbols[0].detail.as_deref(),
+            Some("fn build_vec(value: Value) -> Value")
+        );
     }
 }

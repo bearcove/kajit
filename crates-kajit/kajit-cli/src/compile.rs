@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use kajit_asm::schema_poc::FinalizedSchemaPocEmission;
-use kajit_reprs::schema_poc;
+use kajit_reprs::schema_poc::{self, ResolutionSet};
 use kajit_wares::{ObjectInput, PrintMainExecutableInput, TargetArch};
 
 use crate::validate::path_matches_ext;
@@ -12,6 +12,9 @@ pub(crate) fn cmd_compile(path: &Path) -> Result<(), String> {
         fs::read_to_string(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
 
     let output = if path_matches_ext(path, schema_poc::asm::REPR_FILE_EXT) {
+        let resolutions = schema_poc::asm::resolve(&source)
+            .map_err(|err| format!("{}:\n{err}", path.display()))?;
+        ensure_all_references_resolved(path, &source, &resolutions)?;
         let program = schema_poc::asm::parse_root_text(&source)
             .map_err(|err| format!("{}:\n{err}", path.display()))?;
         kajit_asm::schema_poc::assemble_schema_poc_program(&program, &source)?
@@ -28,6 +31,52 @@ pub(crate) fn cmd_compile(path: &Path) -> Result<(), String> {
     let exe_path = write_schema_poc_asm_executable(path, &output)?;
     println!("{}", exe_path.display());
     Ok(())
+}
+
+fn ensure_all_references_resolved(
+    path: &Path,
+    source: &str,
+    resolutions: &ResolutionSet,
+) -> Result<(), String> {
+    let unresolved = resolutions
+        .references
+        .iter()
+        .filter(|reference| reference.target.is_none())
+        .collect::<Vec<_>>();
+    if unresolved.is_empty() {
+        return Ok(());
+    }
+
+    let messages = unresolved
+        .into_iter()
+        .map(|reference| {
+            let start = offset_to_line_col(source, reference.reference.start as usize);
+            format!(
+                "{}:{}:{}: unresolved {:?} reference `{}`",
+                path.display(),
+                start.0,
+                start.1,
+                reference.reference.kind,
+                reference.reference.name
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Err(messages)
+}
+
+fn offset_to_line_col(content: &str, offset: usize) -> (u32, u32) {
+    let mut line = 1_u32;
+    let mut col = 1_u32;
+    for ch in content[..offset.min(content.len())].chars() {
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
 }
 
 fn write_schema_poc_asm_executable(
@@ -100,5 +149,16 @@ mod tests {
         assert!(output.len() > 0);
         assert!(output.trace_text().is_ok());
         assert!(path_matches_ext(path, schema_poc::asm::REPR_FILE_EXT));
+    }
+
+    #[test]
+    fn compile_reuses_shared_resolver_for_unresolved_asm_labels() {
+        let path = Path::new("/tmp/broken.k-asm");
+        let source = "asm x86_64 { jmp missing }";
+        let resolutions = schema_poc::asm::resolve(source).expect("resolver should run");
+        let err = ensure_all_references_resolved(path, source, &resolutions)
+            .expect_err("expected unresolved label error");
+        assert!(err.contains("unresolved Label reference `missing`"));
+        assert!(err.contains("/tmp/broken.k-asm:1:"));
     }
 }
