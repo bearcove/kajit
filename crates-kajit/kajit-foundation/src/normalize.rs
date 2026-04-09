@@ -72,6 +72,7 @@ pub(crate) struct DocumentedValue<T> {
 pub(crate) enum NormalizedSupportDecl {
     String,
     Int,
+    Id,
     StringSeq,
     Unit,
     Enum(Vec<DocumentedValue<String>>),
@@ -82,17 +83,28 @@ pub(crate) enum NormalizedRefKind {
     Provenance,
     StringScalar,
     IntScalar,
+    Id,
     StringSeq,
     Unit,
     Enum,
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NormalizedNodeKind {
+    Node,
+    Struct,
+    Entity,
+    Slot,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum NormalizedNodeDecl {
-    Node(HashMap<String, DocumentedValue<SyntaxTypeUse>>),
+    Record {
+        kind: NormalizedNodeKind,
+        fields: HashMap<String, DocumentedValue<SyntaxTypeUse>>,
+    },
     Enum(HashMap<String, DocumentedValue<NormalizedNodeDecl>>),
-    Struct(HashMap<String, DocumentedValue<SyntaxTypeUse>>),
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +123,7 @@ fn normalize_support_decl(decl: &SupportDecl) -> Result<NormalizedSupportDecl, S
     match decl {
         SupportDecl::String => Ok(NormalizedSupportDecl::String),
         SupportDecl::Int => Ok(NormalizedSupportDecl::Int),
+        SupportDecl::Id => Ok(NormalizedSupportDecl::Id),
         SupportDecl::StringSeq => Ok(NormalizedSupportDecl::StringSeq),
         SupportDecl::Unit => Ok(NormalizedSupportDecl::Unit),
         SupportDecl::Enum(variants) if !variants.variants.is_empty() => {
@@ -223,8 +236,22 @@ pub(crate) fn normalize_node_fields(
 
 fn normalize_node_decl(decl: &NodeDecl) -> Result<NormalizedNodeDecl, String> {
     match decl {
-        NodeDecl::Node(fields) => Ok(NormalizedNodeDecl::Node(normalize_node_fields(fields)?)),
-        NodeDecl::Struct(fields) => Ok(NormalizedNodeDecl::Struct(normalize_node_fields(fields)?)),
+        NodeDecl::Node(fields) => Ok(NormalizedNodeDecl::Record {
+            kind: NormalizedNodeKind::Node,
+            fields: normalize_node_fields(fields)?,
+        }),
+        NodeDecl::Struct(fields) => Ok(NormalizedNodeDecl::Record {
+            kind: NormalizedNodeKind::Struct,
+            fields: normalize_node_fields(fields)?,
+        }),
+        NodeDecl::Entity(fields) => Ok(NormalizedNodeDecl::Record {
+            kind: NormalizedNodeKind::Entity,
+            fields: normalize_node_fields(fields)?,
+        }),
+        NodeDecl::Slot(fields) => Ok(NormalizedNodeDecl::Record {
+            kind: NormalizedNodeKind::Slot,
+            fields: normalize_node_fields(fields)?,
+        }),
         NodeDecl::Enum(variants) => {
             let mut out = HashMap::new();
             for (name, variant) in &variants.variants {
@@ -379,6 +406,7 @@ pub(crate) fn classify_ref_type(repr: &NormalizedRepr, name: &str) -> Normalized
     match repr.support.get(name).map(|decl| &decl.value) {
         Some(NormalizedSupportDecl::String) => NormalizedRefKind::StringScalar,
         Some(NormalizedSupportDecl::Int) => NormalizedRefKind::IntScalar,
+        Some(NormalizedSupportDecl::Id) => NormalizedRefKind::Id,
         Some(NormalizedSupportDecl::StringSeq) => NormalizedRefKind::StringSeq,
         Some(NormalizedSupportDecl::Unit) => NormalizedRefKind::Unit,
         Some(NormalizedSupportDecl::Enum(_)) => NormalizedRefKind::Enum,
@@ -392,6 +420,10 @@ pub(crate) fn is_string_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
 
 pub(crate) fn is_int_scalar_type(repr: &NormalizedRepr, name: &str) -> bool {
     classify_ref_type(repr, name) == NormalizedRefKind::IntScalar
+}
+
+pub(crate) fn is_id_type(repr: &NormalizedRepr, name: &str) -> bool {
+    classify_ref_type(repr, name) == NormalizedRefKind::Id
 }
 
 pub(crate) fn is_docs_type(repr: &NormalizedRepr, name: &str) -> bool {

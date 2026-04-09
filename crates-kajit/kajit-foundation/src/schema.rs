@@ -132,6 +132,7 @@ pub(crate) enum TypeUse {
 pub(crate) enum SupportDecl {
     String,
     Int,
+    Id,
     StringSeq,
     Unit,
     Enum(SupportVariants),
@@ -160,6 +161,8 @@ pub(crate) enum NodeDecl {
     Node(NodeFields),
     Enum(NodeVariants),
     Struct(NodeFields),
+    Entity(NodeFields),
+    Slot(NodeFields),
     #[facet(other)]
     Other {
         #[facet(tag)]
@@ -506,7 +509,10 @@ fn semantic_token_target_exists(repr: &ReprBody, target: &str) -> bool {
             [type_name, field_name] => nodes.iter().any(|(name, decl)| {
                 documented_name(name) == *type_name
                     && match decl {
-                        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => fields
+                        NodeDecl::Node(fields)
+                        | NodeDecl::Struct(fields)
+                        | NodeDecl::Entity(fields)
+                        | NodeDecl::Slot(fields) => fields
                             .fields
                             .keys()
                             .any(|field| documented_name(field) == *field_name),
@@ -520,7 +526,10 @@ fn semantic_token_target_exists(repr: &ReprBody, target: &str) -> bool {
                             variants.variants.iter().any(|(variant, decl)| {
                                 documented_name(variant) == *variant_name
                                     && match decl {
-                                        NodeDecl::Node(fields) | NodeDecl::Struct(fields) => fields
+                                        NodeDecl::Node(fields)
+                                        | NodeDecl::Struct(fields)
+                                        | NodeDecl::Entity(fields)
+                                        | NodeDecl::Slot(fields) => fields
                                             .fields
                                             .keys()
                                             .any(|field| documented_name(field) == *field_name),
@@ -528,7 +537,11 @@ fn semantic_token_target_exists(repr: &ReprBody, target: &str) -> bool {
                                     }
                             })
                         }
-                        NodeDecl::Node(_) | NodeDecl::Struct(_) | NodeDecl::Other { .. } => false,
+                        NodeDecl::Node(_)
+                        | NodeDecl::Struct(_)
+                        | NodeDecl::Entity(_)
+                        | NodeDecl::Slot(_)
+                        | NodeDecl::Other { .. } => false,
                     }
             }),
             _ => false,

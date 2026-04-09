@@ -1323,6 +1323,7 @@ dependencies = [
  "prettyplease",
  "styx-tree",
  "syn 2.0.117",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
 use crate::formatter_codegen::render_formatter_block;
 use crate::hover_codegen::render_hover_block;
-use crate::normalize::{NormalizedNodeDecl, NormalizedRepr};
+use crate::normalize::{NormalizedNodeDecl, NormalizedNodeKind, NormalizedRepr};
 use crate::parser_codegen::render_parser_block;
 use crate::render_helpers::{
     collect_syntax_type_tags, render_common_placeholder, render_node_decl, render_provenance_impl,
@@ -191,9 +191,13 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
         .iter()
         .map(|name| {
             let kind = match repr.nodes.get(name).map(|decl| &decl.value) {
-                Some(NormalizedNodeDecl::Node(_)) => "node",
+                Some(NormalizedNodeDecl::Record { kind, .. }) => match kind {
+                    NormalizedNodeKind::Node => "node",
+                    NormalizedNodeKind::Struct => "struct",
+                    NormalizedNodeKind::Entity => "entity",
+                    NormalizedNodeKind::Slot => "slot",
+                },
                 Some(NormalizedNodeDecl::Enum(_)) => "enum",
-                Some(NormalizedNodeDecl::Struct(_)) => "struct",
                 None => "<missing>",
             };
             format!("    NodeSpec {{ name: {name:?}, kind: {kind:?} }},")
@@ -219,16 +223,14 @@ fn render_parts(repr: &NormalizedRepr) -> RenderParts {
     }
     for decl in repr.nodes.values() {
         match &decl.value {
-            NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+            NormalizedNodeDecl::Record { fields, .. } => {
                 for ty in fields.values() {
                     collect_syntax_type_tags(&ty.value, &mut placeholder_names);
                 }
             }
             NormalizedNodeDecl::Enum(variants) => {
                 for variant in variants.values() {
-                    if let NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) =
-                        &variant.value
-                    {
+                    if let NormalizedNodeDecl::Record { fields, .. } = &variant.value {
                         for ty in fields.values() {
                             collect_syntax_type_tags(&ty.value, &mut placeholder_names);
                         }
@@ -622,6 +624,9 @@ fn render_ast_file(parts: &RenderParts) -> String {
     format!(
         r#"
 {module_doc_rows}
+
+pub trait EntityNode {{}}
+pub trait SlotNode {{}}
 
 {placeholder_rows}
 

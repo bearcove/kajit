@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::normalize::{
     DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, classify_ref_type,
-    is_int_scalar_type, is_string_scalar_type,
+    is_id_type, is_int_scalar_type, is_string_scalar_type,
 };
 use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
@@ -82,6 +82,7 @@ fn render_hover_line(
                 "emit_hover(&{expr}.prov, {markdown:?}, {priority}, out);"
             ))
         }
+        SyntaxTypeUse::Ref { name } if is_id_type(repr, name) => None,
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => Some(format!(
             "if let Some(prov) = {expr}.provenance() {{ emit_hover(prov, {markdown:?}, {priority}, out); }}"
         )),
@@ -169,7 +170,7 @@ pub(crate) fn render_hover_block(
         let method = snake_case(node_name);
 
         let body = match decl {
-            NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+            NormalizedNodeDecl::Record { fields, .. } => {
                 let mut rows = Vec::new();
                 if let Some(doc) = decl_doc {
                     rows.push(format!(
@@ -200,7 +201,7 @@ pub(crate) fn render_hover_block(
                         let variant_doc = variants[&variant_name].doc.as_deref();
                         let variant = &variants[&variant_name].value;
                         match variant {
-                            NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                            NormalizedNodeDecl::Record { fields, .. } => {
                                 let prov_tag = repr
                                     .common
                                     .get("provenance")

@@ -10,6 +10,9 @@ mod render_module;
 mod schema;
 mod semantic_codegen;
 
+#[cfg(test)]
+mod tests;
+
 pub fn generate_repr_poc(workspace_root: &Path) -> Result<Vec<PathBuf>, String> {
     let schema_paths = [
         workspace_root.join("notes/unified-ast/pilot/hir.repr.styx"),

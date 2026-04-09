@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::normalize::{
     DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxRule, SyntaxTypeUse,
-    classify_ref_type, is_int_scalar_type, is_string_scalar_type,
+    classify_ref_type, is_id_type, is_int_scalar_type, is_string_scalar_type,
 };
 use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
@@ -136,6 +136,7 @@ fn render_field_annotation_line(
         {
             Some(format!("emit_prov_token(&{expr}.prov, {kind:?}, out);"))
         }
+        SyntaxTypeUse::Ref { name } if is_id_type(repr, name) => None,
         SyntaxTypeUse::Ref { name } if node_names.iter().any(|node| node == name) => Some(format!(
             "if let Some(prov) = {expr}.provenance() {{ emit_prov_token(prov, {kind:?}, out); }}"
         )),
@@ -245,7 +246,7 @@ pub(crate) fn render_semantic_block(
             .collect::<Vec<_>>();
 
         let body = match decl {
-            NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+            NormalizedNodeDecl::Record { fields, .. } => {
                 let field_rows =
                     render_struct_field_annotations(repr, node_name, fields, node_names);
                 let recurse_rows = {
@@ -324,7 +325,7 @@ pub(crate) fn render_semantic_block(
                             None => String::new(),
                         };
                         match variant {
-                            NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                            NormalizedNodeDecl::Record { fields, .. } => {
                                 let prov_tag = repr
                                     .common
                                     .get("provenance")

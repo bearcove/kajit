@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::normalize::{
-    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, is_int_scalar_type,
-    is_string_scalar_type,
+    DocumentedValue, NormalizedNodeDecl, NormalizedRepr, SyntaxTypeUse, is_id_type,
+    is_int_scalar_type, is_string_scalar_type,
 };
 use crate::render_helpers::{is_prov_only_struct, rust_ident, snake_case};
 
@@ -113,7 +113,7 @@ fn render_node_formatter(
     let fn_name = format!("format_{}", snake_case(node_name));
     let write_name = format!("write_{}", snake_case(node_name));
     match decl {
-        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+        NormalizedNodeDecl::Record { fields, .. } => {
             if let Some(template) = repr.syntax.canonical_print.get(node_name) {
                 let parts = parse_template(template)?;
                 let body = render_template_lines(&parts, "node", fields, None, repr, node_names)?;
@@ -132,9 +132,7 @@ fn render_node_formatter(
             let mut arms = Vec::new();
             for variant_name in variant_names {
                 let variant_decl = variants.get(&variant_name).unwrap();
-                let (NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)) =
-                    &variant_decl.value
-                else {
+                let NormalizedNodeDecl::Record { fields, .. } = &variant_decl.value else {
                     return Err(format!(
                         "unsupported nested enum variant {node_name}.{variant_name}"
                     ));
@@ -377,6 +375,9 @@ fn render_value_write_lines(
             }
             _ if is_int_scalar_type(repr, name) => {
                 format!("    {writer_name}.text(&{expr}.value.to_string());")
+            }
+            _ if is_id_type(repr, name) => {
+                format!("    {writer_name}.text(&{expr}.0.to_string());")
             }
             _ => format!("    {writer_name}.text(&format!(\"{{:?}}\", {expr}));"),
         }]),

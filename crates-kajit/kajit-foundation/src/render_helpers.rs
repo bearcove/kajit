@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use crate::normalize::{DocumentedValue, NormalizedNodeDecl, NormalizedSupportDecl, SyntaxTypeUse};
+use crate::normalize::{
+    DocumentedValue, NormalizedNodeDecl, NormalizedNodeKind, NormalizedSupportDecl, SyntaxTypeUse,
+};
 
 pub(crate) fn rust_ident(name: &str) -> String {
     match name {
@@ -163,6 +165,9 @@ pub(crate) fn render_support_decl(
         NormalizedSupportDecl::Int => format!(
             "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name} {{\n    pub prov: Prov,\n    pub value: u64,\n}}"
         ),
+        NormalizedSupportDecl::Id => format!(
+            "#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]\npub struct {name}(pub u32);\n\nimpl {name} {{\n    pub const fn new(index: u32) -> Self {{\n        Self(index)\n    }}\n\n    pub const fn index(self) -> usize {{\n        self.0 as usize\n    }}\n}}"
+        ),
         NormalizedSupportDecl::StringSeq => format!(
             "#[derive(Debug, Clone, PartialEq, Eq, Default)]\npub struct {name}(pub Vec<String>);"
         ),
@@ -302,7 +307,7 @@ pub(crate) fn render_walk_fn(
         format!("&{name}")
     };
     match decl {
-        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+        NormalizedNodeDecl::Record { fields, .. } => {
             let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
             field_names.sort();
             let body_lines = field_names
@@ -336,7 +341,7 @@ pub(crate) fn render_walk_fn(
             let arms = variant_names
                 .iter()
                 .filter_map(|variant_name| match &variants.get(variant_name).unwrap().value {
-                    NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                    NormalizedNodeDecl::Record { fields, .. } => {
                         if is_prov_only_struct(fields, provenance_tag) {
                             return Some(format!(
                                 "        {name}::{variant_name}(..) => {{}}"
@@ -407,7 +412,7 @@ pub(crate) fn render_node_decl(
     provenance_tag: &str,
 ) -> String {
     match decl {
-        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+        NormalizedNodeDecl::Record { kind, fields } => {
             let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
             field_names.sort();
             let field_rows = field_names
@@ -425,8 +430,15 @@ pub(crate) fn render_node_decl(
                 .collect::<Vec<_>>()
                 .join("\n");
             let docs = render_doc_lines(doc, "");
+            let marker_impl = match kind {
+                NormalizedNodeKind::Entity => {
+                    format!("\n\nimpl EntityNode for {name} {{}}")
+                }
+                NormalizedNodeKind::Slot => format!("\n\nimpl SlotNode for {name} {{}}"),
+                NormalizedNodeKind::Node | NormalizedNodeKind::Struct => String::new(),
+            };
             let body = format!(
-                "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name} {{\n{field_rows}\n}}"
+                "#[derive(Debug, Clone, PartialEq, Eq)]\npub struct {name} {{\n{field_rows}\n}}{marker_impl}"
             );
             if docs.is_empty() {
                 body
@@ -440,7 +452,7 @@ pub(crate) fn render_node_decl(
             let leaf_struct_rows = variant_names
                 .iter()
                 .filter_map(|variant_name| match &variants.get(variant_name).unwrap().value {
-                    NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+                    NormalizedNodeDecl::Record { fields, .. }
                         if is_prov_only_struct(fields, provenance_tag) =>
                     {
                         let wrapper_name = leaf_variant_wrapper_name(name, variant_name);
@@ -465,7 +477,7 @@ pub(crate) fn render_node_decl(
                 .iter()
                 .map(
                     |variant_name| match &variants.get(variant_name).unwrap().value {
-                        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+                        NormalizedNodeDecl::Record { fields, .. }
                             if is_prov_only_struct(fields, provenance_tag) =>
                         {
                             let variant_docs = render_doc_lines(
@@ -479,7 +491,7 @@ pub(crate) fn render_node_decl(
                                 format!("{variant_docs}\n    {variant_name}({wrapper_name}),")
                             }
                         }
-                        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
+                        NormalizedNodeDecl::Record { fields, .. } => {
                             let mut field_names = fields.keys().cloned().collect::<Vec<_>>();
                             field_names.sort();
                             let rows = field_names
@@ -541,7 +553,7 @@ pub(crate) fn render_provenance_impl(
     provenance_tag: &str,
 ) -> Option<String> {
     match decl {
-        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+        NormalizedNodeDecl::Record { fields, .. }
             if node_fields_have_prov(fields, provenance_tag) =>
         {
             Some(format!(
@@ -552,7 +564,7 @@ pub(crate) fn render_provenance_impl(
             if variants.values().all(|variant| {
                 matches!(
                     &variant.value,
-                    NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+                    NormalizedNodeDecl::Record { fields, .. }
                         if node_fields_have_prov(fields, provenance_tag)
                 )
             }) =>
@@ -563,7 +575,7 @@ pub(crate) fn render_provenance_impl(
                 .iter()
                 .map(
                     |variant_name| match &variants.get(variant_name).unwrap().value {
-                        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields)
+                        NormalizedNodeDecl::Record { fields, .. }
                             if is_prov_only_struct(fields, provenance_tag) =>
                         {
                             format!("            Self::{variant_name}(value) => Some(&value.prov),")

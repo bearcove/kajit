@@ -2,7 +2,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::normalize::{
     DocumentedValue, NormalizedNodeDecl, NormalizedRepr, NormalizedTokenSpec, SyntaxRule,
-    SyntaxTypeUse, is_docs_type, is_int_scalar_type, is_string_scalar_type, render_default_value,
+    SyntaxTypeUse, is_docs_type, is_id_type, is_int_scalar_type, is_string_scalar_type,
+    render_default_value,
 };
 use crate::render_helpers::{
     is_prov_only_struct, leaf_variant_wrapper_name, rust_ident, snake_case,
@@ -28,6 +29,9 @@ fn render_wrapped_scalar_parser(
         )),
         SyntaxTypeUse::Ref { name } if is_int_scalar_type(repr, name) => Ok(format!(
             "{parser_fn_name}().try_map(move |text, span| {{\n            match text.parse::<u64>() {{\n                Ok(value) => Ok({name} {{ prov: prov_from_span(span, file_id), value }}),\n                Err(err) => Err(Rich::custom(span, format!(\"invalid integer literal {{text:?}}: {{err}}\"))),\n            }}\n        }}).then_ignore(ws())"
+        )),
+        SyntaxTypeUse::Ref { name } if is_id_type(repr, name) => Ok(format!(
+            "{parser_fn_name}().try_map(move |text, span| {{\n            match text.parse::<u32>() {{\n                Ok(value) => Ok({name}(value)),\n                Err(err) => Err(Rich::custom(span, format!(\"invalid id literal {{text:?}}: {{err}}\"))),\n            }}\n        }}).then_ignore(ws())"
         )),
         SyntaxTypeUse::Ref { name } => Err(format!(
             "token parser cannot construct non-scalar support type {name:?}"
@@ -348,9 +352,7 @@ fn render_enum_parser_expr(
                 "schema enum {enum_name} is missing variant declaration {variant_name:?}"
             ));
         };
-        let (NormalizedNodeDecl::Struct(fields) | NormalizedNodeDecl::Node(fields)) =
-            &variant_decl.value
-        else {
+        let NormalizedNodeDecl::Record { fields, .. } = &variant_decl.value else {
             return Err(format!(
                 "schema enum {enum_name} variant {variant_name:?} has unsupported declaration"
             ));
@@ -449,17 +451,15 @@ fn render_rule_parser_expr(
     provenance_tag: &str,
 ) -> Result<String, String> {
     match decl {
-        NormalizedNodeDecl::Node(fields) | NormalizedNodeDecl::Struct(fields) => {
-            render_struct_parser_expr(
-                repr,
-                rule_name,
-                fields,
-                rule,
-                rule_names,
-                node_names,
-                provenance_tag,
-            )
-        }
+        NormalizedNodeDecl::Record { fields, .. } => render_struct_parser_expr(
+            repr,
+            rule_name,
+            fields,
+            rule,
+            rule_names,
+            node_names,
+            provenance_tag,
+        ),
         NormalizedNodeDecl::Enum(variants) => render_enum_parser_expr(
             repr,
             rule_name,
