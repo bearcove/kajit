@@ -8,8 +8,13 @@ edition = "2024"
 [package.metadata."docs.rs"]
 rustdoc-args = ["--html-in-header", "arborium-header.html"]
 
+[features]
+default = []
+old-asm-adapter = []
+
 [dependencies]
 kajit-reprs = { path = "../kajit-reprs" }
+kajit-types = { path = "../kajit-types" }
 
 [dev-dependencies]
 proptest = "1"

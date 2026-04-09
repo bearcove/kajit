@@ -19,6 +19,7 @@ default = []
 chumsky = "1.0.0-alpha.8"
 facet = "0.44"
 figue = "2"
+kajit-asm = { path = "../kajit-asm" }
 kajit-reprs = { path = "../kajit-reprs" }
 tokio = { version = "1", features = ["io-std", "macros", "rt-multi-thread", "sync"] }
 tower-lsp = "0.20.0"

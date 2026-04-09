@@ -15,6 +15,127 @@ pub struct Prov {
     pub span: Option<Span>,
 }
 
+/// A resolved source location in a concrete text file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SourceLocation {
+    pub file: u16,
+    pub line: u32,
+    pub column: u32,
+}
+
+/// A mapping entry from emitted byte offset to source location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceMapEntry {
+    pub offset: u32,
+    pub location: SourceLocation,
+}
+
+pub type SourceMap = Vec<SourceMapEntry>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceMapError {
+    TruncatedBinary { len: usize },
+    UnsortedOffsets { previous: u32, next: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TraceError {
+    InvalidSourceMap(SourceMapError),
+    OffsetOutOfBounds { offset: u32, code_len: usize },
+}
+
+impl From<SourceMapError> for TraceError {
+    fn from(value: SourceMapError) -> Self {
+        Self::InvalidSourceMap(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceEntry {
+    pub offset: u32,
+    pub location: SourceLocation,
+    pub bytes: Vec<u8>,
+}
+
+pub fn validate_source_map(source_map: &[SourceMapEntry]) -> Result<(), SourceMapError> {
+    for window in source_map.windows(2) {
+        let previous = window[0].offset;
+        let next = window[1].offset;
+        if next <= previous {
+            return Err(SourceMapError::UnsortedOffsets { previous, next });
+        }
+    }
+    Ok(())
+}
+
+pub fn encode_source_map_le(source_map: &[SourceMapEntry]) -> Result<Vec<u8>, SourceMapError> {
+    validate_source_map(source_map)?;
+    let mut out = Vec::with_capacity(source_map.len() * 14);
+    for entry in source_map {
+        out.extend_from_slice(&entry.offset.to_le_bytes());
+        out.extend_from_slice(&entry.location.file.to_le_bytes());
+        out.extend_from_slice(&entry.location.line.to_le_bytes());
+        out.extend_from_slice(&entry.location.column.to_le_bytes());
+    }
+    Ok(out)
+}
+
+pub fn build_trace(
+    code: &[u8],
+    source_map: &[SourceMapEntry],
+) -> Result<Vec<TraceEntry>, TraceError> {
+    validate_source_map(source_map)?;
+    let mut out = Vec::with_capacity(source_map.len());
+    for (index, entry) in source_map.iter().copied().enumerate() {
+        if entry.offset as usize >= code.len() {
+            return Err(TraceError::OffsetOutOfBounds {
+                offset: entry.offset,
+                code_len: code.len(),
+            });
+        }
+        let next_offset = source_map
+            .get(index + 1)
+            .map(|next| next.offset as usize)
+            .unwrap_or(code.len());
+        if next_offset > code.len() {
+            return Err(TraceError::OffsetOutOfBounds {
+                offset: next_offset as u32,
+                code_len: code.len(),
+            });
+        }
+        let start = entry.offset as usize;
+        out.push(TraceEntry {
+            offset: entry.offset,
+            location: entry.location,
+            bytes: code[start..next_offset].to_vec(),
+        });
+    }
+    Ok(out)
+}
+
+pub fn format_trace_entries(entries: &[TraceEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            let hex = entry
+                .bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            format!(
+                "{:08x} file={} line={} col={} bytes={}",
+                entry.offset, entry.location.file, entry.location.line, entry.location.column, hex
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub fn format_trace(code: &[u8], source_map: &[SourceMapEntry]) -> Result<String, TraceError> {
+    let entries = build_trace(code, source_map)?;
+    Ok(format_trace_entries(&entries))
+}
+
 /// A single function argument value with its type.
 #[derive(Clone, Debug)]
 pub enum ArgValue {

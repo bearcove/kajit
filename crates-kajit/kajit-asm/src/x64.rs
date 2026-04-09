@@ -1,6 +1,9 @@
-use kajit_reprs::asm::{SourceLocation, SourceMap, SourceMapEntry};
-
 use std::ptr;
+
+use crate::common::EmissionState;
+use kajit_types::{
+    SourceLocation, SourceMap, SourceMapEntry, SourceMapError, TraceEntry, TraceError,
+};
 
 #[cfg(target_os = "macos")]
 const MAP_ANON: i32 = 0x1000;
@@ -180,18 +183,16 @@ impl FinalizedEmission {
         self.exec.is_empty()
     }
 
-    pub fn trace_entries(
-        &self,
-    ) -> Result<Vec<kajit_reprs::asm::TraceEntry>, kajit_reprs::asm::TraceError> {
-        kajit_reprs::asm::build_trace(self.exec.as_ref(), &self.source_map)
+    pub fn trace_entries(&self) -> Result<Vec<TraceEntry>, TraceError> {
+        kajit_types::build_trace(self.exec.as_ref(), &self.source_map)
     }
 
-    pub fn trace_text(&self) -> Result<String, kajit_reprs::asm::TraceError> {
-        kajit_reprs::asm::format_trace(self.exec.as_ref(), &self.source_map)
+    pub fn trace_text(&self) -> Result<String, TraceError> {
+        kajit_types::format_trace(self.exec.as_ref(), &self.source_map)
     }
 
-    pub fn source_map_le(&self) -> Result<Vec<u8>, kajit_reprs::asm::SourceMapError> {
-        kajit_reprs::asm::encode_source_map_le(&self.source_map)
+    pub fn source_map_le(&self) -> Result<Vec<u8>, SourceMapError> {
+        kajit_types::encode_source_map_le(&self.source_map)
     }
 }
 
@@ -275,11 +276,7 @@ struct Fixup {
 
 #[derive(Debug, Clone, Default)]
 pub struct Emitter {
-    buf: Vec<u8>,
-    source_map: SourceMap,
-    current_location: SourceLocation,
-    last_recorded_location: Option<SourceLocation>,
-    labels: Vec<Option<u32>>,
+    core: EmissionState,
     fixups: Vec<Fixup>,
 }
 
@@ -289,64 +286,50 @@ impl Emitter {
     }
 
     pub fn current_offset(&self) -> u32 {
-        self.buf.len() as u32
+        self.core.current_offset()
     }
 
     /// Current code buffer length in bytes.
     pub fn code_len(&self) -> usize {
-        self.buf.len()
+        self.core.code_len()
     }
 
     pub fn bytes(&self) -> &[u8] {
-        &self.buf
+        self.core.bytes()
     }
 
     /// Append raw bytes to the code buffer (for data sections appended after code).
     pub fn emit_raw_bytes(&mut self, bytes: &[u8]) {
-        self.buf.extend_from_slice(bytes);
+        self.core.emit_raw_bytes(bytes);
     }
 
     pub fn source_map(&self) -> &[SourceMapEntry] {
-        &self.source_map
+        self.core.source_map()
     }
 
     pub fn set_source_location(&mut self, loc: SourceLocation) {
-        self.current_location = loc;
+        self.core.set_source_location(loc);
     }
 
     pub fn current_source_location(&self) -> SourceLocation {
-        self.current_location
-    }
-
-    fn maybe_record_source_map(&mut self) {
-        if Some(self.current_location) != self.last_recorded_location {
-            self.source_map.push(SourceMapEntry {
-                offset: self.current_offset(),
-                location: self.current_location,
-            });
-            self.last_recorded_location = Some(self.current_location);
-        }
+        self.core.current_source_location()
     }
 
     pub fn new_label(&mut self) -> LabelId {
-        let id = LabelId(self.labels.len() as u32);
-        self.labels.push(None);
-        id
+        LabelId(self.core.new_label())
     }
 
     pub fn bind_label(&mut self, label: LabelId) -> Result<(), EmitError> {
-        let current_offset = self.current_offset();
-        let Some(slot) = self.labels.get_mut(label.0 as usize) else {
-            return Err(EmitError::LabelOutOfBounds { label });
-        };
-        if let Some(existing_offset) = *slot {
-            return Err(EmitError::LabelAlreadyBound {
-                label,
-                existing_offset,
-            });
-        }
-        *slot = Some(current_offset);
-        Ok(())
+        self.core
+            .bind_label(label.0)
+            .map(|_| ())
+            .map_err(|existing_offset| match existing_offset {
+                Some(existing_offset) => EmitError::LabelAlreadyBound {
+                    label,
+                    existing_offset,
+                },
+                None => EmitError::LabelOutOfBounds { label },
+            })
     }
 
     pub fn emit_with<F>(&mut self, f: F) -> Result<(), EmitError>
@@ -355,18 +338,18 @@ impl Emitter {
     {
         let mut inst = Vec::new();
         f(&mut inst)?;
-        self.maybe_record_source_map();
-        self.buf.extend_from_slice(&inst);
+        self.core.maybe_record_source_map();
+        self.core.extend_buffer(&inst);
         Ok(())
     }
 
     pub fn emit_bytes(&mut self, bytes: &[u8]) {
-        self.maybe_record_source_map();
-        self.buf.extend_from_slice(bytes);
+        self.core.maybe_record_source_map();
+        self.core.extend_buffer(bytes);
     }
 
     fn ensure_label_exists(&self, label: LabelId) -> Result<(), EmitError> {
-        if self.labels.get(label.0 as usize).is_some() {
+        if self.core.has_label(label.0) {
             Ok(())
         } else {
             Err(EmitError::LabelOutOfBounds { label })
@@ -452,8 +435,8 @@ impl Emitter {
     pub fn finalize(mut self) -> Result<FinalizedEmission, EmitError> {
         for fixup in self.fixups.iter().copied() {
             let target = self
-                .labels
-                .get(fixup.label.0 as usize)
+                .core
+                .label_offset(fixup.label.0)
                 .ok_or(EmitError::LabelOutOfBounds { label: fixup.label })?
                 .ok_or(EmitError::UnboundLabel { label: fixup.label })?;
 
@@ -467,13 +450,14 @@ impl Emitter {
             }
 
             let disp = (delta as i32).to_le_bytes();
-            self.buf[fixup.disp_offset as usize..fixup.disp_offset as usize + 4]
-                .copy_from_slice(&disp);
+            self.core.patch_buffer(fixup.disp_offset as usize, &disp);
         }
 
+        let (buf, source_map) = self.core.into_parts();
+
         Ok(FinalizedEmission {
-            exec: ExecutableBuffer::allocate(&self.buf),
-            source_map: self.source_map,
+            exec: ExecutableBuffer::allocate(&buf),
+            source_map,
         })
     }
 }

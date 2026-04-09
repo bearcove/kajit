@@ -5,12 +5,12 @@ use kajit_reprs::asm::aarch64_asm::{Instruction, Item, Label, Program};
 /// This function replays the program through an Emitter, handling label
 /// binding and resolution automatically.
 #[cfg(target_arch = "aarch64")]
-pub fn assemble(program: &Program) -> Result<kajit_asm::aarch64::FinalizedEmission, String> {
-    use kajit_asm::aarch64::Emitter;
+pub fn assemble(program: &Program) -> Result<crate::aarch64::FinalizedEmission, String> {
+    use crate::aarch64::Emitter;
     use std::collections::HashMap;
 
     let mut emitter = Emitter::new();
-    let mut label_map: HashMap<Label, kajit_asm::aarch64::LabelId> = HashMap::new();
+    let mut label_map: HashMap<Label, crate::aarch64::LabelId> = HashMap::new();
 
     // First pass: collect labels and allocate LabelIds
     for item in &program.items {
@@ -41,11 +41,11 @@ pub fn assemble(program: &Program) -> Result<kajit_asm::aarch64::FinalizedEmissi
 
 #[cfg(target_arch = "aarch64")]
 fn emit_instruction(
-    emitter: &mut kajit_asm::aarch64::Emitter,
+    emitter: &mut crate::aarch64::Emitter,
     inst: &Instruction,
-    label_map: &std::collections::HashMap<Label, kajit_asm::aarch64::LabelId>,
+    label_map: &std::collections::HashMap<Label, crate::aarch64::LabelId>,
 ) -> Result<(), String> {
-    let map_err = |e: kajit_asm::aarch64::EmitError| format!("{:?}", e);
+    let map_err = |e: crate::aarch64::EmitError| format!("{:?}", e);
 
     match inst {
         Instruction::Ret => emitter.emit_ret().map_err(map_err),

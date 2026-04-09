@@ -1,6 +1,9 @@
-use kajit_reprs::asm::{SourceLocation, SourceMap, SourceMapEntry};
-
 use std::ptr;
+
+use crate::common::EmissionState;
+use kajit_types::{
+    SourceLocation, SourceMap, SourceMapEntry, SourceMapError, TraceEntry, TraceError,
+};
 
 #[cfg(target_os = "macos")]
 const MAP_ANON: i32 = 0x1000;
@@ -336,18 +339,16 @@ impl FinalizedEmission {
         self.exec.is_empty()
     }
 
-    pub fn trace_entries(
-        &self,
-    ) -> Result<Vec<kajit_reprs::asm::TraceEntry>, kajit_reprs::asm::TraceError> {
-        kajit_reprs::asm::build_trace(&self.code, &self.source_map)
+    pub fn trace_entries(&self) -> Result<Vec<TraceEntry>, TraceError> {
+        kajit_types::build_trace(&self.code, &self.source_map)
     }
 
-    pub fn trace_text(&self) -> Result<String, kajit_reprs::asm::TraceError> {
-        kajit_reprs::asm::format_trace(&self.code, &self.source_map)
+    pub fn trace_text(&self) -> Result<String, TraceError> {
+        kajit_types::format_trace(&self.code, &self.source_map)
     }
 
-    pub fn source_map_le(&self) -> Result<Vec<u8>, kajit_reprs::asm::SourceMapError> {
-        kajit_reprs::asm::encode_source_map_le(&self.source_map)
+    pub fn source_map_le(&self) -> Result<Vec<u8>, SourceMapError> {
+        kajit_types::encode_source_map_le(&self.source_map)
     }
 }
 
@@ -412,15 +413,12 @@ struct Fixup {
 
 #[derive(Debug, Clone, Default)]
 pub struct Emitter {
-    buf: Vec<u8>,
-    source_map: SourceMap,
-    current_location: SourceLocation,
-    last_recorded_location: Option<SourceLocation>,
-    labels: Vec<Option<u32>>,
+    core: EmissionState,
     fixups: Vec<Fixup>,
     /// Label aliases: (from, to) — `from` resolves to whatever `to` resolves to.
     label_aliases: Vec<(LabelId, LabelId)>,
     /// Optional instruction capture for assembly dump/parse
+    #[cfg(feature = "old-asm-adapter")]
     captured_instructions: Option<Vec<kajit_reprs::asm::aarch64_asm::Item>>,
 }
 
@@ -431,20 +429,22 @@ impl Emitter {
 
     /// Current code buffer length (offset of next emitted instruction).
     pub fn code_len(&self) -> usize {
-        self.buf.len()
+        self.core.code_len()
     }
 
     /// Append raw bytes to the code buffer (for data sections appended after code).
     pub fn emit_raw_bytes(&mut self, bytes: &[u8]) {
-        self.buf.extend_from_slice(bytes);
+        self.core.emit_raw_bytes(bytes);
     }
 
     /// Enable instruction capture for assembly dump/parse workflow
+    #[cfg(feature = "old-asm-adapter")]
     pub fn enable_capture(&mut self) {
         self.captured_instructions = Some(Vec::new());
     }
 
     /// Get captured instructions and labels
+    #[cfg(feature = "old-asm-adapter")]
     pub fn take_captured_program(&mut self) -> Option<kajit_reprs::asm::aarch64_asm::Program> {
         self.captured_instructions
             .take()
@@ -452,6 +452,7 @@ impl Emitter {
     }
 
     /// Capture an instruction (if capture is enabled)
+    #[cfg(feature = "old-asm-adapter")]
     fn capture(&mut self, inst: kajit_reprs::asm::aarch64_asm::Instruction) {
         if let Some(ref mut captured) = self.captured_instructions {
             captured.push(kajit_reprs::asm::aarch64_asm::Item::Instruction(inst));
@@ -459,6 +460,7 @@ impl Emitter {
     }
 
     /// Capture a label (if capture is enabled)
+    #[cfg(feature = "old-asm-adapter")]
     fn capture_label(&mut self, label: LabelId) {
         if let Some(ref mut captured) = self.captured_instructions {
             captured.push(kajit_reprs::asm::aarch64_asm::Item::Label(
@@ -467,54 +469,43 @@ impl Emitter {
         }
     }
 
+    #[cfg(not(feature = "old-asm-adapter"))]
+    fn capture_label(&mut self, _label: LabelId) {}
+
     pub fn current_offset(&self) -> u32 {
-        self.buf.len() as u32
+        self.core.current_offset()
     }
 
     pub fn bytes(&self) -> &[u8] {
-        &self.buf
+        self.core.bytes()
     }
 
     pub fn source_map(&self) -> &[SourceMapEntry] {
-        &self.source_map
+        self.core.source_map()
     }
 
     pub fn set_source_location(&mut self, loc: SourceLocation) {
-        self.current_location = loc;
+        self.core.set_source_location(loc);
     }
 
     pub fn current_source_location(&self) -> SourceLocation {
-        self.current_location
-    }
-
-    fn maybe_record_source_map(&mut self) {
-        if Some(self.current_location) != self.last_recorded_location {
-            self.source_map.push(SourceMapEntry {
-                offset: self.current_offset(),
-                location: self.current_location,
-            });
-            self.last_recorded_location = Some(self.current_location);
-        }
+        self.core.current_source_location()
     }
 
     pub fn new_label(&mut self) -> LabelId {
-        let id = LabelId(self.labels.len() as u32);
-        self.labels.push(None);
-        id
+        LabelId(self.core.new_label())
     }
 
     pub fn bind_label(&mut self, label: LabelId) -> Result<(), EmitError> {
-        let current_offset = self.current_offset();
-        let Some(slot) = self.labels.get_mut(label.0 as usize) else {
-            return Err(EmitError::LabelOutOfBounds { label });
-        };
-        if let Some(existing_offset) = *slot {
-            return Err(EmitError::LabelAlreadyBound {
-                label,
-                existing_offset,
-            });
-        }
-        *slot = Some(current_offset);
+        self.core
+            .bind_label(label.0)
+            .map_err(|existing_offset| match existing_offset {
+                Some(existing_offset) => EmitError::LabelAlreadyBound {
+                    label,
+                    existing_offset,
+                },
+                None => EmitError::LabelOutOfBounds { label },
+            })?;
         self.capture_label(label);
         Ok(())
     }
@@ -528,14 +519,11 @@ impl Emitter {
     }
 
     pub(crate) fn emit_word(&mut self, word: u32) {
-        self.maybe_record_source_map();
-        self.buf.extend_from_slice(&word.to_le_bytes());
+        self.core.maybe_record_source_map();
+        self.core.extend_buffer(&word.to_le_bytes());
     }
 
     pub fn emit_b_label(&mut self, label: LabelId) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::B {
-            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
-        });
         self.emit_word(encode_b(0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -546,9 +534,6 @@ impl Emitter {
     }
 
     pub fn emit_bl_label(&mut self, label: LabelId) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Bl {
-            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
-        });
         self.emit_word(encode_bl(0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -564,11 +549,6 @@ impl Emitter {
         rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Cbz {
-            width,
-            rt,
-            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
-        });
         self.emit_word(encode_cbz(width, rt, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -584,11 +564,6 @@ impl Emitter {
         rt: Reg,
         label: LabelId,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Cbnz {
-            width,
-            rt,
-            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
-        });
         self.emit_word(encode_cbnz(width, rt, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -599,11 +574,6 @@ impl Emitter {
     }
 
     pub fn emit_tbz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Tbz {
-            rt,
-            bit,
-            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
-        });
         self.emit_word(encode_tbz(rt, bit, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -614,11 +584,6 @@ impl Emitter {
     }
 
     pub fn emit_tbnz_label(&mut self, rt: Reg, bit: u8, label: LabelId) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Tbnz {
-            rt,
-            bit,
-            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
-        });
         self.emit_word(encode_tbnz(rt, bit, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -629,10 +594,6 @@ impl Emitter {
     }
 
     pub fn emit_b_cond_label(&mut self, cond: Condition, label: LabelId) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::BCond {
-            cond,
-            target: kajit_reprs::asm::aarch64_asm::Label(label.0),
-        });
         self.emit_word(encode_b_cond(cond, 0)?);
         self.fixups.push(Fixup {
             at_offset: self.current_offset() - 4,
@@ -645,7 +606,6 @@ impl Emitter {
     // Non-branch instruction wrappers that capture + emit
 
     pub fn emit_mov_reg(&mut self, width: Width, rd: Reg, rm: Reg) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MovReg { width, rd, rm });
         self.emit_word(encode_mov_reg(width, rd, rm)?);
         Ok(())
     }
@@ -657,12 +617,6 @@ impl Emitter {
         imm: u16,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MovzImm {
-            width,
-            rd,
-            imm,
-            shift,
-        });
         self.emit_word(encode_movz(width, rd, imm, shift)?);
         Ok(())
     }
@@ -674,12 +628,6 @@ impl Emitter {
         imm: u16,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MovkImm {
-            width,
-            rd,
-            imm,
-            shift,
-        });
         self.emit_word(encode_movk(width, rd, imm, shift)?);
         Ok(())
     }
@@ -691,24 +639,16 @@ impl Emitter {
         rn: Reg,
         offset: u32,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LdrImm {
-            width,
-            rt,
-            rn,
-            offset,
-        });
         self.emit_word(encode_ldr_imm(width, rt, rn, offset)?);
         Ok(())
     }
 
     pub fn emit_ldrb_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LdrbImm { rt, rn, offset });
         self.emit_word(encode_ldrb_imm(rt, rn, offset)?);
         Ok(())
     }
 
     pub fn emit_ldrh_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LdrhImm { rt, rn, offset });
         self.emit_word(encode_ldrh_imm(rt, rn, offset)?);
         Ok(())
     }
@@ -720,24 +660,16 @@ impl Emitter {
         rn: Reg,
         offset: u32,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::StrImm {
-            width,
-            rt,
-            rn,
-            offset,
-        });
         self.emit_word(encode_str_imm(width, rt, rn, offset)?);
         Ok(())
     }
 
     pub fn emit_strb_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::StrbImm { rt, rn, offset });
         self.emit_word(encode_strb_imm(rt, rn, offset)?);
         Ok(())
     }
 
     pub fn emit_strh_imm(&mut self, rt: Reg, rn: Reg, offset: u32) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::StrhImm { rt, rn, offset });
         self.emit_word(encode_strh_imm(rt, rn, offset)?);
         Ok(())
     }
@@ -750,12 +682,6 @@ impl Emitter {
         imm: u16,
         shift: bool,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AddImm {
-            width,
-            rd,
-            rn,
-            imm: imm as u32,
-        });
         self.emit_word(encode_add_imm(width, rd, rn, imm, shift)?);
         Ok(())
     }
@@ -768,12 +694,6 @@ impl Emitter {
         imm: u16,
         shift: bool,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::SubImm {
-            width,
-            rd,
-            rn,
-            imm: imm as u32,
-        });
         self.emit_word(encode_sub_imm(width, rd, rn, imm, shift)?);
         Ok(())
     }
@@ -785,7 +705,6 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AddReg { width, rd, rn, rm });
         self.emit_word(encode_add_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -797,7 +716,6 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::SubReg { width, rd, rn, rm });
         self.emit_word(encode_sub_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -809,7 +727,6 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AndReg { width, rd, rn, rm });
         self.emit_word(encode_and_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
         Ok(())
     }
@@ -821,19 +738,16 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::OrrReg { width, rd, rn, rm });
         self.emit_word(encode_orr_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
         Ok(())
     }
 
     pub fn emit_ret(&mut self) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Ret);
         self.emit_word(encode_ret(Reg::X30)?); // X30 is the link register
         Ok(())
     }
 
     pub fn emit_nop(&mut self) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Nop);
         self.emit_word(encode_nop()?);
         Ok(())
     }
@@ -845,7 +759,6 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::EorReg { width, rd, rn, rm });
         self.emit_word(encode_eor_reg(width, rd, rn, rm, Shift::Lsl, 0)?);
         Ok(())
     }
@@ -859,13 +772,6 @@ impl Emitter {
         lsb: u8,
         bit_width: u8,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Bfi {
-            width,
-            rd,
-            rn,
-            lsb,
-            bit_width,
-        });
         self.emit_word(encode_bfi(width, rd, rn, lsb, bit_width)?);
         Ok(())
     }
@@ -877,7 +783,6 @@ impl Emitter {
         rn: Reg,
         imm: u64,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AndImm { width, rd, rn, imm });
         self.emit_word(encode_and_imm(width, rd, rn, imm)?);
         Ok(())
     }
@@ -889,7 +794,6 @@ impl Emitter {
         rn: Reg,
         imm: u64,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::OrrImm { width, rd, rn, imm });
         self.emit_word(encode_orr_imm(width, rd, rn, imm)?);
         Ok(())
     }
@@ -901,7 +805,6 @@ impl Emitter {
         rn: Reg,
         imm: u64,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::EorImm { width, rd, rn, imm });
         self.emit_word(encode_eor_imm(width, rd, rn, imm)?);
         Ok(())
     }
@@ -913,12 +816,6 @@ impl Emitter {
         rn: Reg,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LslImm {
-            width,
-            rd,
-            rn,
-            shift,
-        });
         self.emit_word(encode_lsl_imm(width, rd, rn, shift)?);
         Ok(())
     }
@@ -930,12 +827,6 @@ impl Emitter {
         rn: Reg,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LsrImm {
-            width,
-            rd,
-            rn,
-            shift,
-        });
         self.emit_word(encode_lsr_imm(width, rd, rn, shift)?);
         Ok(())
     }
@@ -947,7 +838,6 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LslReg { width, rd, rn, rm });
         self.emit_word(encode_lsl_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -959,7 +849,6 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LsrReg { width, rd, rn, rm });
         self.emit_word(encode_lsr_reg(width, rd, rn, rm)?);
         Ok(())
     }
@@ -971,12 +860,6 @@ impl Emitter {
         rn: Reg,
         shift: u8,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AsrImm {
-            width,
-            rd,
-            rn,
-            shift,
-        });
         self.emit_word(encode_asr_imm(width, rd, rn, shift)?);
         Ok(())
     }
@@ -988,29 +871,21 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::AsrReg { width, rd, rn, rm });
         self.emit_word(encode_asr_reg(width, rd, rn, rm)?);
         Ok(())
     }
 
     pub fn emit_neg_reg(&mut self, width: Width, rd: Reg, rm: Reg) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::NegReg { width, rd, rm });
         self.emit_word(encode_neg(width, rd, rm)?);
         Ok(())
     }
 
     pub fn emit_cmp_reg(&mut self, width: Width, rn: Reg, rm: Reg) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::CmpReg { width, rn, rm });
         self.emit_word(encode_cmp_reg(width, rn, rm)?);
         Ok(())
     }
 
     pub fn emit_cmp_imm(&mut self, width: Width, rn: Reg, imm: u16) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::CmpImm {
-            width,
-            rn,
-            imm: imm as u32,
-        });
         self.emit_word(encode_cmp_imm(width, rn, imm, false)?);
         Ok(())
     }
@@ -1022,31 +897,26 @@ impl Emitter {
         rn: Reg,
         rm: Reg,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::MulReg { width, rd, rn, rm });
         self.emit_word(encode_mul(width, rd, rn, rm)?);
         Ok(())
     }
 
     pub fn emit_cset(&mut self, width: Width, rd: Reg, cond: Condition) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Cset { width, rd, cond });
         self.emit_word(encode_cset(width, rd, cond)?);
         Ok(())
     }
 
     pub fn emit_sxtb(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Sxtb { width, rd, rn });
         self.emit_word(encode_sxtb(rd, rn)?);
         Ok(())
     }
 
     pub fn emit_sxth(&mut self, width: Width, rd: Reg, rn: Reg) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Sxth { width, rd, rn });
         self.emit_word(encode_sxth(rd, rn)?);
         Ok(())
     }
 
     pub fn emit_sxtw(&mut self, rd: Reg, rn: Reg) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Sxtw { rd, rn });
         self.emit_word(encode_sxtw(rd, rn)?);
         Ok(())
     }
@@ -1059,13 +929,6 @@ impl Emitter {
         rn: Reg,
         offset: i16,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Stp {
-            width,
-            rt1,
-            rt2,
-            rn,
-            offset,
-        });
         self.emit_word(encode_stp(width, rt1, rt2, rn, offset)?);
         Ok(())
     }
@@ -1078,13 +941,6 @@ impl Emitter {
         rn: Reg,
         offset: i16,
     ) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Ldp {
-            width,
-            rt1,
-            rt2,
-            rn,
-            offset,
-        });
         self.emit_word(encode_ldp(width, rt1, rt2, rn, offset)?);
         Ok(())
     }
@@ -1096,7 +952,6 @@ impl Emitter {
         addr: u64,
     ) -> Result<(), EmitError> {
         // Capture the symbolic LoadExtern instruction
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::LoadExtern { rd, symbol });
 
         // Emit the actual movz/movk sequence
         let p0 = (addr & 0xFFFF) as u16;
@@ -1119,7 +974,6 @@ impl Emitter {
     }
 
     pub fn emit_blr(&mut self, rn: Reg) -> Result<(), EmitError> {
-        self.capture(kajit_reprs::asm::aarch64_asm::Instruction::Blr { rn });
         self.emit_word(encode_blr(rn)?);
         Ok(())
     }
@@ -1130,10 +984,13 @@ impl Emitter {
         for _ in 0..16 {
             let mut resolved_any = false;
             for &(from, to) in &self.label_aliases {
-                if self.labels[from.0 as usize].is_none()
-                    && let Some(target_offset) = self.labels[to.0 as usize]
+                if self.core.label_offset(from.0) == Some(None)
+                    && let Some(Some(target_offset)) = self.core.label_offset(to.0)
                 {
-                    self.labels[from.0 as usize] = Some(target_offset);
+                    *self
+                        .core
+                        .label_slot_mut(from.0)
+                        .expect("alias source label should exist") = Some(target_offset);
                     resolved_any = true;
                 }
             }
@@ -1144,8 +1001,8 @@ impl Emitter {
 
         for fixup in self.fixups.iter().copied() {
             let target = self
-                .labels
-                .get(fixup.label.0 as usize)
+                .core
+                .label_offset(fixup.label.0)
                 .ok_or(EmitError::LabelOutOfBounds { label: fixup.label })?
                 .ok_or(EmitError::UnboundLabel { label: fixup.label })?;
 
@@ -1157,12 +1014,7 @@ impl Emitter {
             }
 
             let delta_words = (target as i64 - fixup.at_offset as i64) / 4;
-            let word = u32::from_le_bytes([
-                self.buf[fixup.at_offset as usize],
-                self.buf[fixup.at_offset as usize + 1],
-                self.buf[fixup.at_offset as usize + 2],
-                self.buf[fixup.at_offset as usize + 3],
-            ]);
+            let word = self.core.read_u32_le(fixup.at_offset as usize);
 
             let patched = match fixup.kind {
                 FixupKind::Imm26 => {
@@ -1179,16 +1031,16 @@ impl Emitter {
                 }
             };
 
-            self.buf[fixup.at_offset as usize..fixup.at_offset as usize + 4]
-                .copy_from_slice(&patched.to_le_bytes());
+            self.core
+                .patch_buffer(fixup.at_offset as usize, &patched.to_le_bytes());
         }
 
-        let code = std::mem::take(&mut self.buf);
+        let (code, source_map) = self.core.into_parts();
         let exec = ExecutableBuffer::allocate(&code);
         Ok(FinalizedEmission {
             code,
             exec,
-            source_map: self.source_map,
+            source_map,
         })
     }
 }

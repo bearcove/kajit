@@ -1293,6 +1293,7 @@ name = "kajit-asm"
 version = "0.1.0"
 dependencies = [
  "kajit-reprs",
+ "kajit-types",
  "proptest",
 ]
 
@@ -1303,6 +1304,7 @@ dependencies = [
  "chumsky",
  "facet",
  "figue",
+ "kajit-asm",
  "kajit-reprs",
  "tokio",
  "tower-lsp",
